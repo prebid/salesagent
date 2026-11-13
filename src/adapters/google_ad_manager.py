@@ -17,12 +17,11 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-import sqlalchemy.exc
-
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot
 
 from flask import Flask
+from pydantic import ValidationError
 
 from src.adapters.base import (
     AdapterCapabilities,
@@ -51,6 +50,7 @@ from src.adapters.gam.managers.orders import (
 )
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
 from src.adapters.gam_data_freshness import validate_and_log_freshness
+from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.core.audit_logger import AuditLogger
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.details import (
@@ -86,6 +86,7 @@ from src.core.schemas import (
     MediaPackage,
     ReportingPeriod,
 )
+from src.services.ai.config import SellerAIConfig
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -122,6 +123,7 @@ class GoogleAdManager(AdServerAdapter):
         tenant_id: str | None = None,
         targeting_config: dict[str, Any] | None = None,
         naming_templates: tuple[str | None, str | None] | None = None,
+        tenant_ai_config: SellerAIConfig,
     ):
         """Initialize Google Ad Manager adapter with modular managers.
 
@@ -137,6 +139,9 @@ class GoogleAdManager(AdServerAdapter):
                 If None, uses empty defaults (caller should pre-load via repository).
             naming_templates: Pre-loaded (order_template, line_item_template) tuple.
                 If None, uses (None, None) defaults.
+            tenant_ai_config: What AI the seller configured (``TenantContext.ai_config``),
+                for the order name's ``{auto_name}``. Required: ``None`` means the seller
+                configured nothing, so it is stated, never defaulted.
         """
         super().__init__(config, principal, None, tenant_id)
         assert self.tenant_id is not None  # Guaranteed by base class validation
@@ -170,6 +175,7 @@ class GoogleAdManager(AdServerAdapter):
         self._targeting_config = targeting_config
         self._order_name_template: str | None = naming_templates[0] if naming_templates else None
         self._line_item_name_template: str | None = naming_templates[1] if naming_templates else None
+        self._tenant_ai_config = tenant_ai_config
         self._placement_targeting_map: dict[str, str] = {}
 
         if not self.key_file and not self.service_account_json and not self.refresh_token:
@@ -241,9 +247,9 @@ class GoogleAdManager(AdServerAdapter):
         """Validate targeting and return unsupported features (delegated to targeting manager)."""
         return self.targeting_manager.validate_targeting(targeting_overlay)
 
-    def _build_targeting(self, targeting_overlay):
+    def _build_targeting(self, targeting_overlay, product_custom_targeting: CustomTargeting | None = None):
         """Build GAM targeting criteria from AdCP targeting (delegated to targeting manager)."""
-        return self.targeting_manager.build_targeting(targeting_overlay)
+        return self.targeting_manager.build_targeting(targeting_overlay, product_custom_targeting)
 
     # HITL (Human-in-the-Loop) support methods
     def _requires_manual_approval(self, operation: str) -> bool:
@@ -499,6 +505,7 @@ class GoogleAdManager(AdServerAdapter):
 
         # Validate products have required inventory targeting BEFORE creating order
         # This prevents the "hidden failure" where order is created but line items fail
+        product_custom_targeting: dict[str, CustomTargeting] = {}
         for package in packages:
             product_config = products_map.get(package.package_id)
             if not product_config:
@@ -529,6 +536,16 @@ class GoogleAdManager(AdServerAdapter):
                 )
                 self.log(f"[red]Error: {error_msg}[/red]")
                 raise AdCPProductUnavailableError()
+
+            # A product's custom targeting is the seller's configuration: one GAM cannot take
+            # is CONFIGURATION_ERROR, which the buyer cannot fix (enums/error-code.json at the
+            # pinned spec), refused here so it precedes the approval branch and every GAM write
+            try:
+                product_custom_targeting[package.package_id] = CustomTargeting.from_stored(
+                    product_impl_config.get("custom_targeting_keys") or {}
+                )
+            except ValidationError as exc:
+                raise AdCPConfigurationError(internal_detail=exc) from exc
 
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
         unsupported_features = []
@@ -561,6 +578,7 @@ class GoogleAdManager(AdServerAdapter):
                 end_time,
                 media_buy_id,
                 order_name_template=self._order_name_template,
+                tenant_ai_config=self._tenant_ai_config,
             )
 
             if step_id:
@@ -573,13 +591,9 @@ class GoogleAdManager(AdServerAdapter):
                 raise AdCPWorkflowError()
 
         # Automatic mode - create order directly
-        # Use pre-loaded naming template, or fallback to default
         from src.adapters.gam.utils.constants import GAM_NAME_LIMITS
         from src.adapters.gam.utils.naming import truncate_name_with_suffix
-        from src.core.utils.naming import apply_naming_template, build_order_name_context
-
-        order_name_template = self._order_name_template or "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
-        tenant_gemini_key = None
+        from src.core.utils.naming import render_order_name
 
         # Get currency from the request's package pricing (validated upstream in media_buy_create.py)
         # All packages in a media buy use the same currency
@@ -589,27 +603,17 @@ class GoogleAdManager(AdServerAdapter):
                 order_currency = pricing.get("currency", "USD")
                 break  # All packages have same currency
 
-        # Get tenant's Gemini key for auto_name generation
-        try:
-            from src.core.database.database_session import get_db_session
-            from src.core.database.models import Tenant
-
-            with get_db_session() as db_session:
-                from sqlalchemy import select
-
-                tenant_stmt = select(Tenant).filter_by(tenant_id=self.tenant_id)
-                tenant_obj = db_session.scalars(tenant_stmt).first()
-                if tenant_obj:
-                    tenant_gemini_key = tenant_obj.gemini_api_key
-        except sqlalchemy.exc.SQLAlchemyError as e:
-            logger.warning(f"Could not load tenant Gemini key: {e}")
-
         # Generate a pre-order media_buy_id for naming (GAM order_id replaces this in the response)
         pre_order_id = f"gam_{uuid.uuid4().hex[:8]}"
-        context = build_order_name_context(
-            request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key, media_buy_id=pre_order_id
+        base_order_name = render_order_name(
+            self._order_name_template,
+            request,
+            packages,
+            start_time,
+            end_time,
+            tenant_ai_config=self._tenant_ai_config,
+            media_buy_id=pre_order_id,
         )
-        base_order_name = apply_naming_template(order_name_template, context)
 
         # Add unique identifier to prevent duplicate order names
         unique_suffix = f"mb_{pre_order_id}"
@@ -621,6 +625,15 @@ class GoogleAdManager(AdServerAdapter):
         # Calculate total budget from package budgets (AdCP v2.2.0)
         total_budget_amount = request.total_budget
 
+        # Build targeting for each package (per AdCP spec, targeting is at package level):
+        # the buyer's overlay, ANDed with the product's own custom targeting. Built before
+        # the order, so targeting GAM refuses leaves no order behind.
+        package_targeting = {}
+        for package in packages:
+            targeting = self._build_targeting(package.targeting_overlay, product_custom_targeting[package.package_id])
+            if targeting:
+                package_targeting[package.package_id] = targeting
+
         order_id = self.orders_manager.create_order(
             order_name=order_name,
             total_budget=total_budget_amount,
@@ -630,12 +643,6 @@ class GoogleAdManager(AdServerAdapter):
         )
 
         self.log(f"✓ Created GAM Order ID: {order_id}")
-
-        # Build targeting for each package (per AdCP spec, targeting is at package level)
-        package_targeting = {}
-        for package in packages:
-            if package.targeting_overlay:
-                package_targeting[package.package_id] = self._build_targeting(package.targeting_overlay)
 
         # Build placement_targeting_map from all products' impl_configs (adcp#208)
         # This maps placement_id → targeting_name for creative-level targeting

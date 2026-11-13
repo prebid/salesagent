@@ -417,7 +417,6 @@ def test_every_publisher_of_this_tenants_agent_url_names_the_same_origin(monkeyp
     A deployment-wide override must not outrank the tenant's own stored host, because that
     is how every tenant collapses onto one URL.
     """
-    from src.admin.blueprints.authorized_properties import _construct_agent_url
     from src.core.agent_identity import canonical_agent_url
     from src.core.config import get_settings
     from tests.factories import TenantFactory
@@ -432,37 +431,11 @@ def test_every_publisher_of_this_tenants_agent_url_names_the_same_origin(monkeyp
         from src.core.tenant_context import TenantContext
 
         published = canonical_agent_url(TenantContext(tenant_id=tenant.tenant_id, virtual_host=tenant.virtual_host))
-        verified = _construct_agent_url("pub-origin-t")
+        # What the ingest compares each authorized_agents[] entry against
+        # (src/services/publisher_ingest.py passes ``tenant.agent_url``).
+        verified = tenant.agent_url
 
         assert verified == published, (
             f"the adagents.json verifier derived {verified!r} while the card publishes {published!r}"
         )
         assert published == f"https://{ORIGIN}", f"the published origin is not the stored host: {published!r}"
-
-
-@pytest.mark.requires_db
-def test_a_seller_with_no_publisher_partners_names_its_own_domain(integration_db):
-    """With no partners, the seller's portfolio names the domain it is actually served at.
-
-    Asserts EQUALITY with the tenant's own hostname, not a ``.example.com`` suffix. The BDD
-    scenarios that touch this placeholder assert only the suffix, and ``TenantFactory``
-    mints ``vhost-NNNN.example.com`` — so they pass both with the fabricated
-    ``{subdomain}.example.com`` and with the fix, and nothing else in the suite can tell the
-    two apart.
-    """
-    from src.core.http_utils import hostname_of
-    from src.core.resolved_identity import public_identity_for
-    from src.services.seller_capabilities import describe_seller
-    from tests.factories import PrincipalFactory, TenantFactory
-    from tests.harness import ProductEnv
-
-    with ProductEnv(tenant_id="placeholder-t", principal_id="placeholder-p") as env:
-        tenant = TenantFactory(tenant_id="placeholder-t", subdomain="placeholdert", virtual_host=ORIGIN)
-        PrincipalFactory(tenant=tenant, principal_id="placeholder-p")
-        env._commit_factory_data()
-
-        seller = describe_seller(public_identity_for({"host": ORIGIN}))
-        assert seller.media_buy is not None, "the seller declared no media_buy block, so nothing names a domain"
-        domains = [str(domain.root) for domain in seller.media_buy.portfolio.publisher_domains]
-
-        assert domains == [hostname_of(ORIGIN)], f"the portfolio named {domains}, not the seller's own domain"

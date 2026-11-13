@@ -5,21 +5,23 @@
  * - Multiple groups connected by OR logic
  * - Within each group, criteria connected by AND logic
  * - Each criterion: key selection, values (OR'd together), optional exclude
- * - Backward compatible with legacy and enhanced formats
  *
- * Data Structure (groups format):
+ * Data Structure (groups format, the only one this widget reads; for a stored product the
+ * server writes it from CustomTargeting.to_stored, whatever format the product was saved in):
  * {
  *   key_value_pairs: {
  *     groups: [
  *       {
  *         criteria: [
- *           { keyId: '123', values: ['v1', 'v2'] },
- *           { keyId: '456', values: ['v3'], exclude: true }
+ *           { keyId: '123', values: ['448512', '448513'] },
+ *           { keyId: '456', values: [{ name: 'sports' }], exclude: true }
  *         ]
  *       }
  *     ]
  *   }
  * }
+ *
+ * A value string is a GAM value ID; { name } is a value name, kept as the server wrote it.
  */
 
 class TargetingWidget {
@@ -60,8 +62,8 @@ class TargetingWidget {
     }
 
     /**
-     * Load existing targeting from hidden form field.
-     * Handles legacy, enhanced, and groups formats.
+     * Load existing targeting from hidden form field, in the groups format.
+     * Anything else is left in the field untouched, so saving cannot lose it.
      */
     loadExistingTargeting() {
         const hiddenField = document.getElementById('targeting-data');
@@ -81,53 +83,12 @@ class TargetingWidget {
                 return;
             }
 
-            // Groups format
-            if ('groups' in kvPairs && Array.isArray(kvPairs.groups)) {
-                this.selectedTargeting.key_value_pairs.groups = kvPairs.groups;
-                this.loadedSuccessfully = true;
-                console.log('[TargetingWidget] Loaded groups format:', this.selectedTargeting);
-                return;
+            if (!Array.isArray(kvPairs.groups)) {
+                throw new Error('key_value_pairs is not in the groups format');
             }
-
-            // Enhanced format (include/exclude) - convert to groups
-            if ('include' in kvPairs || 'exclude' in kvPairs) {
-                const criteria = [];
-                const include = kvPairs.include || {};
-                const exclude = kvPairs.exclude || {};
-
-                for (const [keyId, values] of Object.entries(include)) {
-                    if (values && values.length > 0) {
-                        criteria.push({ keyId, values: [...values] });
-                    }
-                }
-                for (const [keyId, values] of Object.entries(exclude)) {
-                    if (values && values.length > 0) {
-                        criteria.push({ keyId, values: [...values], exclude: true });
-                    }
-                }
-
-                if (criteria.length > 0) {
-                    this.selectedTargeting.key_value_pairs.groups = [{ criteria }];
-                }
-                this.loadedSuccessfully = true;
-                console.log('[TargetingWidget] Converted enhanced format to groups:', this.selectedTargeting);
-                return;
-            }
-
-            // Legacy format { keyId: value } - convert to groups
-            const criteria = [];
-            for (const [keyId, value] of Object.entries(kvPairs)) {
-                if (typeof value === 'string') {
-                    criteria.push({ keyId, values: [value] });
-                } else if (Array.isArray(value)) {
-                    criteria.push({ keyId, values: value });
-                }
-            }
-            if (criteria.length > 0) {
-                this.selectedTargeting.key_value_pairs.groups = [{ criteria }];
-            }
+            this.selectedTargeting.key_value_pairs.groups = kvPairs.groups;
             this.loadedSuccessfully = true;
-            console.log('[TargetingWidget] Converted legacy format to groups:', this.selectedTargeting);
+            console.log('[TargetingWidget] Loaded groups format:', this.selectedTargeting);
 
         } catch (error) {
             console.error('[TargetingWidget] Error loading existing targeting:', error);
@@ -152,12 +113,7 @@ class TargetingWidget {
                 name: key.name,
                 display_name: key.display_name || key.name
             };
-            // Index by GAM ID (for new data)
             this.keyMetadata[key.id] = metadata;
-            // Also index by key name (for legacy data migration)
-            if (key.name && key.name !== key.id) {
-                this.keyMetadata[key.name] = metadata;
-            }
         });
     }
 
@@ -299,7 +255,7 @@ class TargetingWidget {
         return criteria.map((criterion, criterionIndex) => {
             const keyMeta = this.keyMetadata[criterion.keyId] || { display_name: criterion.keyId };
             const valueNames = criterion.values.map(v =>
-                this.valueMetadata[criterion.keyId]?.[v] || v
+                typeof v === 'object' ? v.name : this.valueMetadata[criterion.keyId]?.[v] || v
             );
             const isEditing = this.editingCriterion &&
                 this.editingCriterion.groupIndex === groupIndex &&
@@ -845,14 +801,12 @@ class TargetingWidget {
         // Filter out empty groups
         const nonEmptyGroups = groups.filter(g => g.criteria && g.criteria.length > 0);
 
+        // Always the whole document, empty included: the server replaces the product's
+        // custom targeting with it, so removing the last criterion clears the targeting.
         if (hiddenField) {
-            if (nonEmptyGroups.length > 0) {
-                hiddenField.value = JSON.stringify({
-                    key_value_pairs: { groups: nonEmptyGroups }
-                });
-            } else {
-                hiddenField.value = '';
-            }
+            hiddenField.value = JSON.stringify({
+                key_value_pairs: { groups: nonEmptyGroups }
+            });
         }
     }
 }

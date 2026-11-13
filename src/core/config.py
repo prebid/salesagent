@@ -82,16 +82,6 @@ class RuntimeSettings(BaseSettings):
             "a grading deployment needs the first without claiming the second"
         ),
     )
-    publisher_auto_verify: bool | None = Field(
-        default=None,
-        description=(
-            "Whether a publisher partner is verified without reading its adagents.json, "
-            "stated explicitly. Unset (the normal case) it is DERIVED from is_production: a "
-            "local server is in nobody's file, so anywhere but production skips the check. "
-            "It exists so a non-production deployment can run the check without claiming "
-            "production"
-        ),
-    )
 
     @property
     def is_production(self) -> bool:
@@ -154,18 +144,6 @@ class RuntimeSettings(BaseSettings):
         favour of whichever was checked last.
         """
         return self.adcp_pydantic_extra_mode or ("ignore" if self.is_production else "forbid")
-
-    @property
-    def publisher_auto_verify_allowed(self) -> bool:
-        """A publisher partner is verified without an adagents.json check: a local server
-        is in nobody's file. Anywhere that is not production.
-
-        ``PUBLISHER_AUTO_VERIFY`` states it outright and wins, so a test deployment can
-        grade the check without claiming production.
-        """
-        if self.publisher_auto_verify is not None:
-            return self.publisher_auto_verify
-        return not self.is_production
 
 
 class TestingSettings(BaseSettings):
@@ -305,6 +283,13 @@ class AuthSettings(BaseSettings):
         return self.tenant_management_domains or self.super_admin_domains
 
 
+# The model that pairs with the Google provider, and so the deployment's default model.
+# Named once because a provider and a model must travel together: a model name is only
+# meaningful to the vendor it belongs to, so a Google client handed a "claude-*" name
+# 404s on every call. src/services/ai/config.py pairs it with the Google provider.
+DEFAULT_GOOGLE_MODEL = "gemini-2.0-flash"
+
+
 class IntegrationSettings(BaseSettings):
     """Other services this seller talks to."""
 
@@ -321,7 +306,7 @@ class IntegrationSettings(BaseSettings):
     approximated_backend_url: str = "adcp-sales-agent.fly.dev"
     approximated_proxy_ip: str = "37.16.24.200"
     pydantic_ai_provider: str = "gemini"
-    pydantic_ai_model: str = "gemini-2.0-flash"
+    pydantic_ai_model: str = DEFAULT_GOOGLE_MODEL
     logfire_token: str | None = None
     gemini_api_key: str | None = None
     openai_api_key: str | None = None
@@ -834,10 +819,6 @@ class Settings:
         return self.testing.adcp_testing and not self.database.database_url
 
     # --- production-derived selections ------------------------------------------------
-
-    @property
-    def publisher_auto_verify_allowed(self) -> bool:
-        return self.runtime.publisher_auto_verify_allowed
 
     @property
     def structured_logging(self) -> bool:

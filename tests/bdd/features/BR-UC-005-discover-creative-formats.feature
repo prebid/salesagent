@@ -234,7 +234,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | trailing root-label dot          | https://formats.agent.example/api | https://formats.agent.example/other | https://formats.agent.example./api     |
       | removable dot segment            | https://formats.agent.example/api | https://formats.agent.example/other | https://formats.agent.example/x/../api |
       | percent-encoded unreserved octet | https://formats.agent.example/api | https://formats.agent.example/other | https://formats.agent.example/%61pi    |
-      | root-label dot on an IDN host    | https://xn--bcher-kva.example/api | https://xn--bcher-kva.example/other | https://xn--bcher-kva.example./api     |
+      | root-label dot on an IDN host    | https://books-psatest.com/api | https://books-psatest.com/other | https://books-psatest.com./api     |
 
     # core/format-id.json (3.2.7), on agent_url: "Callers comparing two format-id values MUST
     # canonicalize agent_url per the AdCP URL canonicalization rules before treating two

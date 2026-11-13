@@ -56,6 +56,7 @@ from typing import Any
 
 import pytest
 
+from tests._collection_manifest import write_artifact
 from tests.factories.mint import begin_test, install_declaration_recording, minted_forms
 from tests.harness._base import json_safe
 
@@ -355,7 +356,5 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         return
 
     _SHARDS.update(_RECORDS)
-    path = artifact_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
     artifact = {"run": _run_scope(session), "nodes": {k: _SHARDS[k] for k in sorted(_SHARDS)}}
-    path.write_text(json.dumps(artifact, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    write_artifact(artifact_path(), json.dumps(artifact, indent=2, sort_keys=False) + "\n")

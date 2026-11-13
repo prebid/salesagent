@@ -45,7 +45,10 @@ BEHAVIORAL_MOCK_CONSTRUCTION_CAP: dict[str, int] = {
     "tests/integration/test_delivery_poll_behavioral.py": 2,
     "tests/integration/test_delivery_webhook_behavioral.py": 0,
     # 44 -> 40: TestAdapterSupportAnnotation deleted (it graded a field no model declares).
-    "tests/integration/test_get_products_behavioral.py": 39,
+    # 39 -> 38: test_zero_format_ids_raises_value_error (deleted by #2474: format_ids alone is
+    # legal under the 3.2 anyOf) and test_zero_properties_raises_value_error (deleted by #2330:
+    # conversion takes the resolved selectors and no longer refuses an empty list) both gone.
+    "tests/integration/test_get_products_behavioral.py": 38,
     # 17 -> 13: the filter, sort and advisory tests deleted with their registry-only
     # ``_call_impl`` helper. They are graded by BR-UC-005 scenarios on four transports or
     # by their CreativeFormatsEnv twins in tests/integration/ (the file's docstring maps each).

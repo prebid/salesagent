@@ -31,7 +31,7 @@ import json
 import pytest
 from sqlalchemy import select
 
-from src.core.database.models import InventoryProfile, Product, Tenant
+from src.core.database.models import InventoryProfile, Product
 from src.core.product_conversion import convert_product_model_to_schema
 from tests.factories import (
     InventoryProfileFactory,
@@ -41,10 +41,12 @@ from tests.factories import (
 )
 from tests.factories.core import seed_property_tag_selection
 from tests.factories.product import (
-    FIRST_PUBLISHER_LEADERBOARD,
+    FIRST_PUBLISHER_LEADERBOARD_KEY,
     PRODUCT_LOCAL_MREC,
     TWO_PUBLISHER_PROPERTIES,
+    catalog_first_publisher_leaderboard,
 )
+from tests.factories.publisher import declare_format_options
 from tests.helpers.admin_product_form import minimal_product_create_form, minimal_product_edit_form
 from tests.helpers.admin_session import admin_auth_session, admin_test_app
 
@@ -155,7 +157,9 @@ def test_the_operator_form_authors_a_canonical_only_product(operator, seller, fa
 
     # SERVABLE: the production conversion whose raise takes the whole tenant's discovery
     # down accepts this row, and carries the kind that was authored.
-    served = convert_product_model_to_schema(row, adapter_type="mock")
+    served = convert_product_model_to_schema(
+        row, adapter_type="mock", publisher_properties=row.stored_publisher_properties
+    )
     assert [declaration.format_kind for declaration in served.format_options] == ["image"]
 
 
@@ -194,7 +198,9 @@ def test_a_product_linked_to_a_canonical_profile_authors_no_declarations_of_its_
     assert row is not None, "the operator form refused a product whose profile declares its formats"
     assert row.format_options is None
     assert row.format_ids is None
-    served = convert_product_model_to_schema(row, adapter_type="mock")
+    served = convert_product_model_to_schema(
+        row, adapter_type="mock", publisher_properties=row.stored_publisher_properties
+    )
     assert [declaration.format_kind for declaration in served.format_options] == ["image"]
 
 
@@ -283,7 +289,9 @@ def test_the_edit_form_authors_the_canonical_arm_on_a_legacy_product(operator, s
 
     # Served through the production conversion: the legacy arm a 3.x buyer receives is the
     # declaration's asserted ref, as the pinned FormatReferenceStructuredObject.
-    served = convert_product_model_to_schema(row, adapter_type="mock")
+    served = convert_product_model_to_schema(
+        row, adapter_type="mock", publisher_properties=row.stored_publisher_properties
+    )
     assert [declaration.format_kind for declaration in served.format_options] == ["image"]
     assert [reference.id for reference in served.format_ids] == ["display_300x250_image"]
     assert type(served.format_ids[0]) is not dict
@@ -394,181 +402,58 @@ def test_editing_a_legacy_product_leaves_its_stored_arm_untouched(operator, sell
     assert row.name == "Renamed Legacy Product", "the edit did not take effect, so the arm survived vacuously"
 
 
-# ── RFC S3 (salesagent-ol033.20.3): options in this seller's own publisher namespace ───
+# ── A publisher's option is referenced by its key ──────────────────────────────────────
 #
-# adagents.json#/properties/formats: products selling this publisher's inventory SHOULD
-# reference its declarations "via inline format_options whose format_option_id matches an
-# entry here". The seller serves that file at its own host, so a declaration naming
-# ``publisher_domain == tenant.primary_domain`` must name an option its catalog publishes.
-# Whether the catalog is PUBLISHED is graded on the four transports by
-# tests/bdd/features/local-publisher-format-catalog.feature; these grade the authoring
-# refusals, which only a Flask client reaches.
+# core/product-format-declaration.json: "Publisher-scoped canonical declarations are
+# addressable only by the complete {publisher_domain, format_option_id} identity pair", and
+# adagents.json formats[] is the "Publisher-authoritative format catalog". So a product stores
+# the key alone, and is served the publisher's current entry; the form refuses anything more,
+# and a key no publisher's stored catalog answers (BR-ADMIN-INVENTORY-PROFILE-publishers grades
+# that refusal on both admin transports).
 
-#: One reusable publisher option, as the catalog stores it and the served formats[] carries it.
-CATALOG_OPTION = {"format_kind": "image", "format_option_id": "homepage_mrec", "params": {"width": 300, "height": 250}}
-
-
-def _stored_catalog(session, tenant_id: str) -> list | None:
-    """The tenant's catalog as the database now holds it."""
-    session.expire_all()
-    return session.get(Tenant, tenant_id).publisher_format_options
+#: One option a publisher's catalog declares.
+PUBLISHER_ENTRY = {"format_kind": "image", "format_option_id": "homepage_mrec", "params": {"width": 300, "height": 250}}
 
 
-@pytest.mark.parametrize(
-    ("catalog", "accepted"),
-    [([CATALOG_OPTION], True), (None, False)],
-    ids=["catalog_declares_it", "catalog_does_not"],
-)
-def test_an_own_publisher_option_must_be_one_the_catalog_publishes(
-    operator, seller, factory_session, catalog, accepted
-):
-    """The same declaration, stored or refused by what the seller's own catalog declares."""
+def _sold_option_key(tag_selection: str) -> dict:
+    """The key of :data:`PUBLISHER_ENTRY` at the publisher the seller fixture's tag selection sells."""
+    return {"publisher_domain": tag_selection.split(":", 1)[0], "format_option_id": "homepage_mrec"}
+
+
+def test_a_publishers_option_is_stored_as_its_key(operator, seller, factory_session):
     tenant, tag_selection = seller
-    tenant.publisher_format_options = catalog
-    factory_session.commit()
-    reference = {**CATALOG_OPTION, "publisher_domain": tenant.primary_domain}
+    key = _sold_option_key(tag_selection)
+    declare_format_options(tenant, key["publisher_domain"], [PUBLISHER_ENTRY])
 
     response = operator.post(
         f"/tenant/{tenant.tenant_id}/products/add",
         data=minimal_product_create_form(
-            tag_selection, product_id="own_option", format_options=json.dumps([reference])
-        ),
-    )
-
-    row = _stored(factory_session, tenant.tenant_id, "own_option")
-    if accepted:
-        assert response.status_code in (301, 302), response.data[:2000]
-        assert row is not None and row.format_options == [reference]
-    else:
-        assert response.status_code == 200, "a refusal re-renders the form rather than redirecting"
-        assert b"publisher format catalog does not declare" in response.data
-        assert row is None
-
-
-def test_another_publishers_option_is_not_resolved_against_this_sellers_catalog(operator, seller, factory_session):
-    """Only the seller's own namespace is checked: another publisher's file is the buyer's to resolve.
-
-    core/placement.json format_options: "buyers MUST also resolve" a publisher reference.
-    The tenant has NO catalog, so the same option under its own domain would be refused
-    (the parametrized test above); under a foreign domain it is stored.
-    """
-    tenant, tag_selection = seller
-    reference = {**CATALOG_OPTION, "publisher_domain": "another-publisher.example"}
-
-    response = operator.post(
-        f"/tenant/{tenant.tenant_id}/products/add",
-        data=minimal_product_create_form(
-            tag_selection, product_id="foreign_option", format_options=json.dumps([reference])
+            tag_selection, product_id="publisher_option", format_options=json.dumps([key])
         ),
     )
 
     assert response.status_code in (301, 302), response.data[:2000]
-    row = _stored(factory_session, tenant.tenant_id, "foreign_option")
-    assert row is not None and row.format_options == [reference]
+    row = _stored(factory_session, tenant.tenant_id, "publisher_option")
+    assert row is not None and row.format_options == [key]
 
 
-def test_the_operator_saves_the_publisher_format_catalog(operator, seller, factory_session):
-    tenant, _ = seller
-
-    response = operator.post(
-        f"/tenant/{tenant.tenant_id}/authorized-properties/format-catalog",
-        data={"publisher_format_options": json.dumps([CATALOG_OPTION])},
-        follow_redirects=True,
-    )
-
-    assert response.status_code == 200, response.data[:2000]
-    assert b"Publisher format catalog saved" in response.data
-    assert _stored_catalog(factory_session, tenant.tenant_id) == [CATALOG_OPTION]
-
-
-def test_a_catalog_option_without_an_id_is_refused(operator, seller, factory_session):
-    """An entry no {publisher_domain, format_option_id} can name is not a reusable option."""
-    tenant, _ = seller
-    unnamed = {key: value for key, value in CATALOG_OPTION.items() if key != "format_option_id"}
-
-    response = operator.post(
-        f"/tenant/{tenant.tenant_id}/authorized-properties/format-catalog",
-        data={"publisher_format_options": json.dumps([unnamed])},
-        follow_redirects=True,
-    )
-
-    assert b"needs a format_option_id" in response.data
-    assert _stored_catalog(factory_session, tenant.tenant_id) is None
-
-
-def test_withdrawing_an_option_a_product_names_is_refused(operator, seller, factory_session):
-    """A stored product never announces an own-namespace option its publisher file stopped declaring."""
-    tenant, _ = seller
-    tenant.publisher_format_options = [CATALOG_OPTION]
-    ProductFactory(
-        tenant=tenant,
-        product_id="names_the_option",
-        format_ids=None,
-        format_options=[{**CATALOG_OPTION, "publisher_domain": tenant.primary_domain}],
-    )
-    factory_session.commit()
-
-    response = operator.post(
-        f"/tenant/{tenant.tenant_id}/authorized-properties/format-catalog",
-        data={"publisher_format_options": ""},
-        follow_redirects=True,
-    )
-
-    assert b"products still reference it" in response.data
-    assert _stored_catalog(factory_session, tenant.tenant_id) == [CATALOG_OPTION]
-
-
-@pytest.mark.parametrize(
-    ("catalog", "accepted"),
-    [([CATALOG_OPTION], True), (None, False)],
-    ids=["catalog_declares_it", "catalog_withdrew_it"],
-)
-@pytest.mark.parametrize("route", ["create", "edit"])
-def test_linking_a_profile_whose_own_option_the_catalog_withdrew_is_refused(
-    operator, seller, factory_session, route, catalog, accepted
-):
-    """A linked profile announces its declarations on the product's behalf, so the link is checked.
-
-    The profile was authored while the catalog declared the option; the catalog then withdrew
-    it, which nothing refused because no product was linked. Linking a product now would serve
-    an own-namespace option the seller's adagents.json formats[] no longer declares. The
-    product's own arm is product-local, so only the profile's arm can decide the outcome.
-    """
+def test_a_publishers_option_carrying_more_than_its_key_is_refused(operator, seller, factory_session):
     tenant, tag_selection = seller
-    tenant.publisher_format_options = catalog
-    profile = InventoryProfileFactory(
-        tenant=tenant,
-        format_ids=None,
-        format_options=[{**CATALOG_OPTION, "publisher_domain": tenant.primary_domain}],
+    key = _sold_option_key(tag_selection)
+    declare_format_options(tenant, key["publisher_domain"], [PUBLISHER_ENTRY])
+
+    response = operator.post(
+        f"/tenant/{tenant.tenant_id}/products/add",
+        data=minimal_product_create_form(
+            tag_selection,
+            product_id="narrowed_option",
+            format_options=json.dumps([{**key, "format_kind": "image", "params": {"width": 1}}]),
+        ),
+        follow_redirects=True,
     )
-    if route == "edit":
-        ProductFactory(tenant=tenant, product_id="links_profile", format_ids=None, format_options=[IMAGE_DECLARATION])
-    factory_session.commit()
 
-    if route == "create":
-        response = operator.post(
-            f"/tenant/{tenant.tenant_id}/products/add",
-            data=minimal_product_create_form(
-                tag_selection,
-                product_id="links_profile",
-                format_options=json.dumps([IMAGE_DECLARATION]),
-                inventory_profile_id=str(profile.id),
-            ),
-            follow_redirects=True,
-        )
-    else:
-        response = operator.post(
-            f"/tenant/{tenant.tenant_id}/products/links_profile/edit",
-            data=minimal_product_edit_form(inventory_profile_id=str(profile.id)),
-            follow_redirects=True,
-        )
-
-    row = _stored(factory_session, tenant.tenant_id, "links_profile")
-    if accepted:
-        assert row is not None and row.inventory_profile_id == profile.id, response.data[:2000]
-    else:
-        assert b"publisher format catalog does not declare" in response.data
-        assert row is None if route == "create" else row.inventory_profile_id is None
+    assert b"carries only publisher_domain and format_option_id" in response.data, response.data[:2000]
+    assert _stored(factory_session, tenant.tenant_id, "narrowed_option") is None
 
 
 # ── RFC F3, author side (salesagent-ol033.20.8.2): the common intersection ───────────────
@@ -600,26 +485,28 @@ def test_editing_in_an_option_scoped_to_one_publisher(
 ):
     """Stored, or refused with the stored declarations left as they were."""
     tenant, _ = seller
+    catalog_first_publisher_leaderboard(tenant)
     ProductFactory(
         tenant=tenant,
         product_id="sliced",
         format_ids=None,
         format_options=[PRODUCT_LOCAL_MREC],
         properties=publishers,
-        property_tags=None,
         placements=placements,
     )
     factory_session.commit()
 
     response = operator.post(
         f"/tenant/{tenant.tenant_id}/products/sliced/edit",
-        data=minimal_product_edit_form(format_options=json.dumps([PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD])),
+        data=minimal_product_edit_form(
+            format_options=json.dumps([PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD_KEY])
+        ),
         follow_redirects=True,
     )
 
     stored = _stored(factory_session, tenant.tenant_id, "sliced").format_options
     if accepted:
-        assert stored == [PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD], response.data[:2000]
+        assert stored == [PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD_KEY], response.data[:2000]
     else:
         assert _INTERSECTION_REFUSAL in response.data
         assert stored == [PRODUCT_LOCAL_MREC]
@@ -639,6 +526,7 @@ def test_a_profile_scoping_an_option_is_refused_for_a_linked_product_without_pla
     placements differ, so the refusal is the product's rule and not a rule about profiles.
     """
     tenant, _ = seller
+    catalog_first_publisher_leaderboard(tenant)
     profile = InventoryProfileFactory(
         tenant=tenant,
         format_ids=None,
@@ -654,7 +542,7 @@ def test_a_profile_scoping_an_option_is_refused_for_a_linked_product_without_pla
             "name": profile.name,
             "targeted_ad_unit_ids": "[]",
             "targeted_placement_ids": "[]",
-            "format_options": json.dumps([PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD]),
+            "format_options": json.dumps([PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD_KEY]),
             "property_mode": "full",
             "publisher_properties": json.dumps(TWO_PUBLISHER_PROPERTIES),
         },
@@ -664,7 +552,7 @@ def test_a_profile_scoping_an_option_is_refused_for_a_linked_product_without_pla
     factory_session.expire_all()
     stored = factory_session.get(InventoryProfile, profile.id).format_options
     if accepted:
-        assert stored == [PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD], response.data[:2000]
+        assert stored == [PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD_KEY], response.data[:2000]
     else:
         assert _INTERSECTION_REFUSAL in response.data
         assert stored == [PRODUCT_LOCAL_MREC]
