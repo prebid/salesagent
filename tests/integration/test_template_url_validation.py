@@ -82,6 +82,14 @@ class TestTemplateUrlValidation:
                 params[argument] = f"test_{argument}"
         return params
 
+    def unresolvable(self, endpoint, tenant_id="test") -> str | None:
+        """Return the build refusal, using the same parameters for every scan."""
+        try:
+            url_for(endpoint, **self.placeholder_params(endpoint, tenant_id))
+        except BuildError as error:
+            return str(error)
+        return None
+
     def test_all_python_url_for_calls_resolve(self):
         """Every literal endpoint in admin Python must build against the live map."""
         admin_dir = Path(__file__).resolve().parents[2] / "src" / "admin"
@@ -101,9 +109,8 @@ class TestTemplateUrlValidation:
                     )
                     if not isinstance(endpoint, ast.Constant) or not isinstance(endpoint.value, str):
                         continue
-                    try:
-                        url_for(endpoint.value, **self.placeholder_params(endpoint.value))
-                    except BuildError as error:
+                    error = self.unresolvable(endpoint.value)
+                    if error is not None:
                         errors.append(f"{path.relative_to(admin_dir)}:{node.lineno}: {error}")
         assert not errors, "Unresolvable admin endpoints:\n" + "\n".join(errors)
 
@@ -115,15 +122,10 @@ class TestTemplateUrlValidation:
         with admin_app.test_request_context():
             for template_file, calls in url_for_calls.items():
                 for endpoint, params in calls:
-                    try:
-                        test_params = self.placeholder_params(endpoint, test_tenant_with_data["tenant_id"])
-
-                        # Try to build the URL
-                        url = url_for(endpoint, **test_params)
-
-                    except BuildError as e:
+                    error = self.unresolvable(endpoint, test_tenant_with_data["tenant_id"])
+                    if error is not None:
                         errors.append(
-                            {"template": template_file, "endpoint": endpoint, "params": params, "error": str(e)}
+                            {"template": template_file, "endpoint": endpoint, "params": params, "error": error}
                         )
 
         if errors:
@@ -180,11 +182,9 @@ class TestTemplateUrlValidation:
                 relative_path = template_file.relative_to(template_dir)
                 with admin_app.test_request_context():
                     for endpoint in matches:
-                        try:
-                            test_params = self.placeholder_params(endpoint)
-                            url_for(endpoint, **test_params)
-                        except BuildError as e:
-                            form_errors.append({"template": str(relative_path), "endpoint": endpoint, "error": str(e)})
+                        error = self.unresolvable(endpoint)
+                        if error is not None:
+                            form_errors.append({"template": str(relative_path), "endpoint": endpoint, "error": error})
 
         if form_errors:
             error_msg = "Found forms with invalid action endpoints:\n\n"

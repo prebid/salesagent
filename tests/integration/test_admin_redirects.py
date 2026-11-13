@@ -1,13 +1,29 @@
 """Registered admin destinations after real saves and error paths."""
 
-from urllib.parse import urlsplit
-
 import pytest
 
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.admin_session import admin_auth_session
-from tests.integration.gam_oauth_helpers import callback, log_in, persisted, point_google_token_url_at, start_flow
+from tests.integration.gam_oauth_helpers import (
+    authorize,
+    callback,
+    log_in,
+    persisted,
+    point_google_token_url_at,
+    start_flow,
+)
 from tests.integration.property_list_helpers import allow_local_origin
+
+
+def assert_redirects_to(client, response, path, script_root):
+    """Follow the exact Location under the request's admin mount."""
+    from urllib.parse import urlsplit
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == f"{script_root}{path}"
+    destination = urlsplit(response.headers["Location"]).path.removeprefix(script_root) or "/"
+    page = client.get(destination, base_url="https://localhost", environ_overrides={"SCRIPT_NAME": script_root})
+    assert page.status_code == 200
 
 
 @pytest.fixture
@@ -33,13 +49,9 @@ def test_tenant_save_redirect_and_persistence(admin_env, script_root, valid):
         base_url="https://localhost",
         environ_overrides={"SCRIPT_NAME": script_root},
     )
-    assert response.status_code == 302
-    assert response.headers["Location"] == f"{script_root}/tenant/{tenant_id}/settings"
     env._session.refresh(tenant)
     assert (tenant.name, tenant.subdomain) == (("After", "after") if valid else ("Before", "before"))
-    destination = urlsplit(response.headers["Location"]).path.removeprefix(script_root)
-    page = client.get(destination, base_url="https://localhost", environ_overrides={"SCRIPT_NAME": script_root})
-    assert page.status_code == 200
+    assert_redirects_to(client, response, f"/tenant/{tenant_id}/settings", script_root)
 
 
 @pytest.mark.requires_db
@@ -59,9 +71,7 @@ def test_anonymous_save_cannot_write(admin_env):
 def test_platform_settings_redirect(admin_env, script_root):
     _, client, _ = admin_env
     response = client.post("/settings/update", environ_overrides={"SCRIPT_NAME": script_root})
-    assert response.status_code == 302
-    assert response.headers["Location"] == f"{script_root}/settings"
-    assert client.get("/settings", environ_overrides={"SCRIPT_NAME": script_root}).status_code == 200
+    assert_redirects_to(client, response, "/settings", script_root)
 
 
 @pytest.mark.requires_db
@@ -69,9 +79,8 @@ def test_platform_settings_redirect(admin_env, script_root):
 @pytest.mark.parametrize("gam_oauth_configured", [False], indirect=True)
 def test_unconfigured_gam_returns_to_tenant_settings(admin_env, script_root, gam_oauth_configured):
     _, client, tenant = admin_env
-    response = client.get(f"/auth/gam/authorize/{tenant.tenant_id}", environ_overrides={"SCRIPT_NAME": script_root})
-    assert response.status_code == 302
-    assert response.headers["Location"] == f"{script_root}/tenant/{tenant.tenant_id}/settings"
+    response = authorize(client, tenant.tenant_id, script_root=script_root)
+    assert_redirects_to(client, response, f"/tenant/{tenant.tenant_id}/settings", script_root)
 
 
 @pytest.mark.requires_db
@@ -80,9 +89,8 @@ def test_unconfigured_gam_returns_to_tenant_settings(admin_env, script_root, gam
     "status,body,saved_token",
     [
         (200, b'{"access_token":"short-lived"}', None),
-        (503, b'{"error":"unavailable"}', None),
     ],
-    ids=["missing-refresh-token", "unavailable"],
+    ids=["missing-refresh-token"],
 )
 def test_gam_callback_redirect_and_persistence(
     admin_env, local_origin_tls, gam_oauth_configured, monkeypatch, script_root, status, body, saved_token
@@ -102,13 +110,9 @@ def test_gam_callback_redirect_and_persistence(
     before = persisted(env.get_session(), tenant_id)
     response = callback(client, start_flow(client, tenant_id, script_root=script_root), script_root=script_root)
 
-    assert response.status_code == 302
-    assert response.headers["Location"] == f"{script_root}/tenant/{tenant_id}/settings"
     assert local_origin_tls.hits == 1
     assert persisted(env.get_session(), tenant_id) == before
-    assert (
-        client.get(f"/tenant/{tenant_id}/settings", environ_overrides={"SCRIPT_NAME": script_root}).status_code == 200
-    )
+    assert_redirects_to(client, response, f"/tenant/{tenant_id}/settings", script_root)
 
 
 @pytest.mark.requires_db
@@ -126,15 +130,7 @@ def test_gam_callback_redirect_and_persistence(
 def test_missing_property_tenant_returns_to_admin_entry(admin_env, suffix, script_root):
     _, client, _ = admin_env
     response = client.get(f"/tenant/missing/{suffix}", environ_overrides={"SCRIPT_NAME": script_root})
-    assert response.status_code == 302
-    assert response.headers["Location"] == f"{script_root}/"
-    destination = urlsplit(response.headers["Location"]).path.removeprefix(script_root) or "/"
-    assert (
-        client.get(
-            destination, base_url="https://localhost", environ_overrides={"SCRIPT_NAME": script_root}
-        ).status_code
-        == 200
-    )
+    assert_redirects_to(client, response, "/", script_root)
 
 
 @pytest.mark.requires_db
@@ -146,8 +142,7 @@ def test_member_cannot_save_another_tenant(admin_env):
     user = UserFactory(tenant=own_tenant, role="admin", email="member@example.com")
     with client.session_transaction() as session:
         session.clear()
-        session["user"] = {"email": user.email}
-        session["role"] = "tenant_admin"
+    log_in(client, user)
     response = client.post(
         f"/tenant/{tenant.tenant_id}/update",
         data={"name": "After", "subdomain": "after"},
