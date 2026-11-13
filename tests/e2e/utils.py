@@ -1,16 +1,15 @@
-import shutil
 import subprocess
 import time
 from contextlib import contextmanager
+from urllib.parse import urlparse
 
-import httpx
 import psycopg2
-import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from sqlalchemy import select
 
 from scripts.setup.init_database_ci import CI_TEST_TENANT_ID
+from tests.e2e.stack_readiness import compose_exec_argv, use_container_exec
 from tests.helpers.credentials import credential_headers
 
 
@@ -230,34 +229,6 @@ def wait_until(predicate, timeout_seconds: float, poll_interval: float = 0.5) ->
     return bool(predicate())
 
 
-def wait_for_server_readiness(mcp_url: str, timeout: int = 60):
-    """
-    Wait for the MCP server to become ready by checking its health endpoint.
-
-    Args:
-        mcp_url: Base URL of the MCP server (e.g., http://localhost:8080)
-        timeout: Maximum time to wait in seconds (default: 60)
-
-    Raises:
-        pytest.fail if server does not become ready within timeout
-    """
-    print(f"Waiting for MCP server at {mcp_url}...")
-    for _ in range(timeout):
-        try:
-            # Synchronous wait logic using httpx for simplicity in sync/async contexts
-            # But since we are in a helper, we can use sync httpx.Client or requests
-            with httpx.Client() as client:
-                resp = client.get(f"{mcp_url}/health", timeout=1.0)
-                if resp.status_code == 200:
-                    print("✓ Server is ready")
-                    return
-        except Exception:
-            pass
-        time.sleep(1)
-
-    pytest.fail(f"Server at {mcp_url} did not become ready within {timeout} seconds")
-
-
 def force_approve_media_buy_in_db(live_server: dict, media_buy_id: str):
     """
     Force approve media buy in database to bypass approval workflow.
@@ -340,9 +311,9 @@ except Exception as e:
     # directly, so exec the update inside the adcp-server container. In-network
     # there is no docker-compose binary and the runner CAN reach the server DB by
     # service name — go straight to the direct update (mirrors the conftest seed).
-    if shutil.which("docker-compose"):
+    if use_container_exec(urlparse(live_server["mcp"]).hostname or "localhost"):
         try:
-            cmd = ["docker-compose", "exec", "-T", "adcp-server", "python", "-c", update_script]
+            cmd = compose_exec_argv("adcp-server", "python", "-c", update_script)
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             print(result.stdout)
         except subprocess.CalledProcessError as e:
