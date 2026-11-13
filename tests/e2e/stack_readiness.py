@@ -11,8 +11,8 @@ import shutil
 import socket
 import subprocess
 import time
-from collections.abc import Sequence
-from typing import Final, NamedTuple, Protocol, TypedDict
+from collections.abc import Callable, Sequence
+from typing import Final, Literal, NamedTuple, Protocol, TypedDict
 from urllib.parse import urlparse
 
 import httpx
@@ -36,6 +36,9 @@ DEFAULT_E2E_COMPOSE_FILES: Final[tuple[str, ...]] = (
 BASE_E2E_COMPOSE_FILE: Final[str] = DEFAULT_E2E_COMPOSE_FILES[0]
 
 _CREATIVE_AGENT_IN_NETWORK_HEALTH: Final[str] = "http://creative-agent:8080/api/creative-agent/health"
+_DEFAULT_DB_USER: Final[str] = "adcp_user"
+_DEFAULT_DB_PASSWORD: Final[str] = "secure_password_change_me"
+_DEFAULT_DB_NAME: Final[str] = "adcp"
 
 
 class E2EPorts(TypedDict):
@@ -57,7 +60,6 @@ class _Probe(Protocol):
         *,
         ports: E2EPorts,
         host: str,
-        compose_files: Sequence[str],
     ) -> bool: ...
 
 
@@ -79,7 +81,7 @@ class E2EDatabase(NamedTuple):
 
 def e2e_db_url_build(*, host: str = "localhost", port: int = 5432) -> str:
     """Build the canonical e2e Postgres URL without reading the environment."""
-    return f"postgresql://adcp_user:secure_password_change_me@{_http_authority(host, port)}/adcp"
+    return f"postgresql://{_DEFAULT_DB_USER}:{_DEFAULT_DB_PASSWORD}@{_http_authority(host, port)}/{_DEFAULT_DB_NAME}"
 
 
 def resolve_e2e_db(*, fallback_host: str = "localhost", fallback_port: int = 5432) -> E2EDatabase:
@@ -94,15 +96,10 @@ def resolve_e2e_db(*, fallback_host: str = "localhost", fallback_port: int = 543
         url=url,
         host=parsed.hostname or fallback_host,
         port=parsed.port or fallback_port,
-        user=parsed.username or "adcp_user",
-        password=parsed.password or "secure_password_change_me",
-        dbname=parsed.path.lstrip("/") or "adcp",
+        user=parsed.username or _DEFAULT_DB_USER,
+        password=parsed.password or _DEFAULT_DB_PASSWORD,
+        dbname=parsed.path.lstrip("/") or _DEFAULT_DB_NAME,
     )
-
-
-def e2e_db_url_default(*, fallback_host: str = "localhost", fallback_port: int = 5432) -> str:
-    """Full Postgres URL from the same connection resolver the probe uses."""
-    return resolve_e2e_db(fallback_host=fallback_host, fallback_port=fallback_port).url
 
 
 def in_network(host: str) -> bool:
@@ -230,52 +227,50 @@ def _http_ok(url: str, *, timeout_s: float = 2.0) -> bool:
         return False
 
 
+def _published_port_ready(
+    ports: E2EPorts,
+    key: Literal["postgres", "creative_agent", "mcp"],
+    probe: Callable[[int], bool],
+) -> bool:
+    """An absent published port fails closed without dialing another endpoint."""
+    port = ports.get(key)
+    return port is not None and probe(int(port))
+
+
 def _probe_postgres(
     *,
     ports: E2EPorts,
     host: str,
-    compose_files: Sequence[str],
 ) -> bool:
-    del compose_files  # host path must use the published port — no compose-health degrade
     if in_network(host):
         # Runner is on the compose network — shared env/default endpoint SSOT.
         connection = resolve_e2e_db(fallback_host="postgres", fallback_port=5432)
         return _tcp_open(connection.host, connection.port)
 
-    postgres_port = ports.get("postgres")
-    if postgres_port is None:
-        # Absent key must fail closed — never silently fall through to compose health.
-        return False
-    return _tcp_open(host, int(postgres_port))
+    return _published_port_ready(ports, "postgres", lambda port: _tcp_open(host, port))
 
 
 def _probe_creative_agent(
     *,
     ports: E2EPorts,
     host: str,
-    compose_files: Sequence[str],
 ) -> bool:
-    del compose_files
     if in_network(host):
         return _http_ok(_CREATIVE_AGENT_IN_NETWORK_HEALTH)
 
-    port = ports.get("creative_agent")
-    if port is None:
-        return False
-    return _http_ok(f"http://{_http_authority(host, int(port))}/api/creative-agent/health")
+    return _published_port_ready(
+        ports,
+        "creative_agent",
+        lambda port: _http_ok(f"http://{_http_authority(host, port)}/api/creative-agent/health"),
+    )
 
 
 def _probe_adcp_health(
     *,
     ports: E2EPorts,
     host: str,
-    compose_files: Sequence[str],
 ) -> bool:
-    del compose_files  # adcp readiness is HTTP /health on the published port
-    port = ports.get("mcp")
-    if port is None:
-        return False
-    return _http_ok(f"http://{_http_authority(host, int(port))}/health")
+    return _published_port_ready(ports, "mcp", lambda port: _http_ok(f"http://{_http_authority(host, port)}/health"))
 
 
 # An ordered tuple binds each name to its implementation; there is no second
@@ -306,7 +301,7 @@ def wait_for_e2e_stack(
     print(f"Waiting for E2E stack readiness (timeout={timeout_s}s, host={host})...")
     while time.monotonic() < deadline:
         for name, probe in _PROBES:
-            if not probe(ports=ports, host=host, compose_files=compose_files):
+            if not probe(ports=ports, host=host):
                 failed = name
                 break
         else:

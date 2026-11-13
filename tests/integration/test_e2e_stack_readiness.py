@@ -147,7 +147,7 @@ def test_db_url_fallback_reads_each_setting_once(readiness, monkeypatch):
     monkeypatch.delenv("E2E_DATABASE_URL", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     reads = _count_env_reads(monkeypatch)
-    assert readiness.e2e_db_url_default(fallback_host="::1", fallback_port=5456) == (
+    assert readiness.resolve_e2e_db(fallback_host="::1", fallback_port=5456).url == (
         "postgresql://adcp_user:secure_password_change_me@[::1]:5456/adcp"
     )
     assert reads == {"E2E_DATABASE_URL": 1, "DATABASE_URL": 1}
@@ -157,7 +157,7 @@ def test_db_url_precedence_and_fallback_match(readiness, monkeypatch):
     monkeypatch.setenv("E2E_DATABASE_URL", "postgresql://u:p@e2e-db:5433/adcp")
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@suite-db:5434/test")
     assert readiness.resolve_e2e_db()[1:] == ("e2e-db", 5433, "u", "p", "adcp")
-    assert readiness.e2e_db_url_default() == "postgresql://u:p@e2e-db:5433/adcp"
+    assert readiness.resolve_e2e_db().url == "postgresql://u:p@e2e-db:5433/adcp"
     monkeypatch.delenv("E2E_DATABASE_URL")
     assert readiness.resolve_e2e_db()[1:] == ("suite-db", 5434, "u", "p", "test")
     monkeypatch.delenv("DATABASE_URL")
@@ -168,7 +168,7 @@ def test_db_url_precedence_and_fallback_match(readiness, monkeypatch):
         "secure_password_change_me",
         "adcp",
     )
-    assert readiness.e2e_db_url_default(fallback_port=5456).endswith("@localhost:5456/adcp")
+    assert readiness.resolve_e2e_db(fallback_port=5456).url.endswith("@localhost:5456/adcp")
 
 
 def test_db_record_fills_missing_url_fields_without_rewriting_dsn(readiness, monkeypatch):
