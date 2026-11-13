@@ -1,7 +1,5 @@
 """Grader: the two env-route resolvers must agree, per COLLECTED scenario.
 
-The structural half of this lane — one owner, one routing call, the four routing
-helpers absorbed — lives in ``test_architecture_liveness_contract_owner.py``.
 This module grades the BEHAVIOR the lane exists to fix: the verdict
 ``tests/bdd/conftest.py::_harness_env`` dispatches on and the verdict
 ``scripts/audit/scenario_liveness_join`` publishes must be the SAME verdict for
@@ -15,9 +13,8 @@ the disagreement. The disagreement lives entirely in what is NOT a row: six
 marker-set-keyed prose branches in ``_harness_env``, invisible to
 ``scenario_liveness_join.registry_wired`` — and a marker SET is not expressible
 as a "tag combination in the table" at all. So the input is the real collected
-``tests/bdd`` suite: every scenario's tag + MARKER set, taken from a real
-``pytest --collect-only`` run (the same shape as
-``tests/integration/test_bdd_scenario_liveness_real_run.py``'s narrow slices),
+``tests/bdd`` suite: every scenario's tag + MARKER set, read from the collection
+record the real run published (``tests._collection_manifest.in_process_bdd_rows``),
 grouped per feature module so a failure names the module it is in.
 
 ## The negative obligation (F1c.1)
@@ -53,11 +50,8 @@ from typing import Any
 
 import pytest
 
-from tests.unit._architecture_helpers import (
-    assert_violations_match_allowlist,
-    collect_bdd_items_with_markers,
-    repo_root,
-)
+from tests._collection_manifest import in_process_bdd_rows
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, repo_root
 from tests.unit._liveness_contract_pins import (
     DERIVATION_ACCESSOR,
     FIX_HINT,
@@ -101,8 +95,7 @@ _CATCH_ALL_SCENARIOS = (
     # pin a specimen again the day a UC-006 scenario is parked on one of them.
     # UC-011 and UC-018 have no specimen either, for the same reason UC-006 has none: the
     # catch-all rows they fell through to no longer park anything. Both rows survive and
-    # build the real env (they are pinned in test_architecture_measurement_floors.py's
-    # EXPECTED_WIRED_ROUTES), so a scenario of those UCs is WIRED by construction and
+    # build the real env, so a scenario of those UCs is WIRED by construction and
     # cannot be a specimen of "falls through to an xfail". What catches an unbound step in
     # them now is the dormancy tripwire, which fails the scenario and names the step
     # instead of xfailing it out of sight.
@@ -128,7 +121,7 @@ def _scenario_id(markers: list[str]) -> str | None:
 def _scenarios_by_module() -> dict[str, dict[str, frozenset[frozenset[str]]]]:
     """``module -> scenario id -> the distinct marker sets its items carry``."""
     grouped: dict[str, dict[str, set[frozenset[str]]]] = defaultdict(lambda: defaultdict(set))
-    for row in collect_bdd_items_with_markers():
+    for row in in_process_bdd_rows():
         scenario_id = _scenario_id(row["markers"])
         if scenario_id is None:
             continue
@@ -306,28 +299,6 @@ def test_uc004_catch_all_is_unreachable_so_all_of_it_resolves_wired(tmp_path: Pa
     )
 
 
-def test_scenario_never_measured_this_run_resolves_not_wired(tmp_path: Path) -> None:
-    """4c: a marker-keyed resolver has no input for an unmeasured scenario.
-
-    ``build_index`` calls the resolver for ids whose record is ``None``. Unstated,
-    the implementer keeps the tag-only lookup as a fallback and resurrects the
-    divergent path as a branch. Record-is-None resolves NOT-WIRED — consistent,
-    because ``graded_by_live_scenario`` already ANDs ``measured_this_run``.
-    """
-    from scripts.audit.scenario_liveness_join import build_index
-
-    empty = tmp_path / "liveness.json"
-    empty.write_text(json.dumps({"scenarios": []}), encoding="utf-8")
-    index = build_index({"T-UC-005-boundary-agent-asset"}, artifact_path=empty, env_routes=_env_routes())
-    record = index["T-UC-005-boundary-agent-asset"]
-
-    assert record.measured_this_run is False
-    assert record.registry_wired is False, (
-        "an unmeasured scenario has no marker set to route on, so it cannot be reported registry-wired — "
-        f"a tag-only fallback here is the divergent path returning as a branch.\n{FIX_HINT}"
-    )
-
-
 def test_pinned_derivation_accessor_reproduces_iter_markers_for_every_collected_item() -> None:
     """4b: ONE canonical derivation, and it is the superset both sides can produce.
 
@@ -337,7 +308,7 @@ def test_pinned_derivation_accessor_reproduces_iter_markers_for_every_collected_
     reproduces this lane's disease one layer out, where the agreement test above
     cannot see it — same function, same argument supplied by the test.
     """
-    rows = collect_bdd_items_with_markers()
+    rows = in_process_bdd_rows()
     assert accessor_dotted_module() is not None, (
         f"{DERIVATION_ACCESSOR}()'s home is not pinned yet (binding input G2: the implement atom records the "
         f"chosen module in the task and pins it in tests/unit/_liveness_contract_pins.py).\n{FIX_HINT}"

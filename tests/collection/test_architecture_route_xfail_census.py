@@ -38,9 +38,10 @@ guard controls. This counts the combination -- the nodeid with its transport
 parametrization removed -- which is identical either way.
 
 DERIVED, NEVER DECLARED, AND FROM ONE COLLECTION. The rows come from
-``collect_bdd_items_with_markers`` -- the SAME nested collection
-``test_architecture_env_route_agreement`` grades on, which already carries its own
-truncation floor and emits each item's marker set through the pinned accessor. The verdict
+``tests._collection_manifest.in_process_bdd_rows`` -- the collection record the real run
+published, read through the SAME function ``test_architecture_env_route_agreement`` grades
+on, which carries the truncation floor and each item's marker set as the pinned accessor
+derives it. Nothing here starts a nested ``pytest --collect-only``. The verdict
 per row comes from the PRODUCTION resolver, ``storyboard_spec.resolve_env_route`` over the
 live ``ENV_ROUTES``. A hand-written list of UCs, or a second collector, would be a second
 derivation and would drift from the routing it claims to describe.
@@ -49,8 +50,9 @@ WHY THIS IS NOT A ``RatchetCounter``. ``test_architecture_ratchet_enforcement`` 
 every registered ratchet to name an enforcement that actually runs, because a ratchet filed
 only under ``stages: [pre-push]`` fires nowhere in this workflow. Its own message names the
 two acceptable homes: "'guard' (a test in the always-run unit suite)" or "'gate' (the
-quality tox env)". This is the first -- it runs on every unit-suite invocation, in ~13s --
-so it needs no ``.pre-commit-coverage-map.yml`` entry and no committed baseline file. The
+quality tox env)". It runs in the ``collection`` tox env instead, on every full run, after
+the BDD session whose record it reads -- so it needs no ``.pre-commit-coverage-map.yml``
+entry and no committed baseline file. The
 counters registered there are line-counting hooks over source text; this one derives its
 population from a collection, which is a different shape with the same discipline.
 """
@@ -65,10 +67,8 @@ from typing import Any
 
 import pytest
 
-from tests.unit._architecture_helpers import (
-    assert_violations_match_allowlist,
-    collect_bdd_items_with_markers,
-)
+from tests._collection_manifest import in_process_bdd_rows
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
 
 #: Per-route ceiling on routed (function, non-transport-parametrization) combinations.
 #:
@@ -121,7 +121,7 @@ _MIN_ROUTED_COMBINATIONS = 15
 #:
 #: The nodeid count is over the four transports every UC-002 / UC-003 scenario runs on,
 #: rebuilt from each collected combination, so it is the same with ``BDD_E2E_ENABLED`` on
-#: or off (the nested collection drops it). Measured by resolving both lists over the bound
+#: or off (``in_process_bdd_rows`` drops the e2e rows). Measured by resolving both lists over the bound
 #: features at the commit that named each park's rows (measure_innet_291026_1202).
 _LEDGER_CEILINGS: dict[str, tuple[int, int]] = {
     # Wave 5 graduated 65 ledger and 52 park entries (integrate/wave1 a3687d971), measured
@@ -196,7 +196,7 @@ class _Census:
 
 @pytest.fixture(scope="module")
 def census() -> _Census:
-    return _Census(collect_bdd_items_with_markers())
+    return _Census(in_process_bdd_rows())
 
 
 @pytest.mark.arch_guard
@@ -374,7 +374,7 @@ def test_the_uc002_uc003_ledger_only_shrinks() -> None:
         "_UC002_UC003_VACUOUS_PARKS": _UC002_UC003_VACUOUS_PARKS,
         "_TRANSPORT_INEXPRESSIBLE_ROWS": _TRANSPORT_INEXPRESSIBLE_ROWS,
     }
-    violations = _ledger_violations(collect_bdd_items_with_markers(), lists, _LEDGER_CEILINGS)
+    violations = _ledger_violations(in_process_bdd_rows(), lists, _LEDGER_CEILINGS)
     assert not violations, (
         "the explicit row lists broke their rules. A failing scenario is fixed or measured, "
         "not added; a park names the rows it parks; never raise a ceiling:\n  " + "\n  ".join(violations)
