@@ -6,6 +6,12 @@ from tests.bdd.steps._outcome_helpers import wire_field
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
 
+def _wire_variant(ctx, expected_ids):
+    products = wire_field(ctx, "products")
+    assert sorted(product["product_id"] for product in products) == sorted(expected_ids)
+    return next(product for product in products if product["product_id"] == ctx["env"].variant_id)
+
+
 @given("a signal driven catalogue with a new variant")
 def given_new_catalog(ctx):
     ctx["env"].seed_catalog()
@@ -55,9 +61,7 @@ def when_discover_twice(ctx):
 
 @then("the catalogue includes static inventory and one priced variant")
 def then_priced_variant(ctx):
-    products = wire_field(ctx, "products")
-    assert sorted(p["product_id"] for p in products) == ["static", "template", ctx["env"].variant_id]
-    variant = next(p for p in products if p["product_id"] == ctx["env"].variant_id)
+    variant = _wire_variant(ctx, ["static", "template", ctx["env"].variant_id])
     assert sorted((o["pricing_option_id"], o["fixed_price"]) for o in variant["pricing_options"]) == [
         ("click-rate", 1.35),
         ("negotiated-cpm", 7.25),
@@ -71,9 +75,7 @@ def then_stored_options(ctx):
 
 @then("the variant retains only its negotiated buyer-contract price of 12.50")
 def then_existing_price(ctx):
-    products = wire_field(ctx, "products")
-    assert sorted(p["product_id"] for p in products) == ["static", "template", ctx["env"].variant_id]
-    variant = next(p for p in products if p["product_id"] == ctx["env"].variant_id)
+    variant = _wire_variant(ctx, ["static", "template", ctx["env"].variant_id])
     assert [(o["pricing_option_id"], o["fixed_price"]) for o in variant["pricing_options"]] == [
         ("buyer-contract", 12.5)
     ]
@@ -87,7 +89,7 @@ def then_only_static(ctx):
 
 @then(parsers.parse('the variant name is "{name}"'))
 def then_variant_name(ctx, name):
-    variant = next(p for p in wire_field(ctx, "products") if p["product_id"] == ctx["env"].variant_id)
+    variant = _wire_variant(ctx, ["static", "template", ctx["env"].variant_id])
     assert variant["name"] == name
 
 

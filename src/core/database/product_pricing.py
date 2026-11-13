@@ -4,6 +4,7 @@ Handles transition from legacy pricing fields to pricing_options table.
 """
 
 import logging
+from collections.abc import Collection
 from copy import deepcopy
 from typing import Any
 
@@ -80,6 +81,15 @@ PRICING_TERM_COLUMNS = tuple(
 )
 
 
+def mapped_column_values(row: Any, exclude: Collection[str]) -> dict[str, Any]:
+    """Copy mapped values without sharing nested JSON with their source row."""
+    return {
+        column.key: deepcopy(getattr(row, column.key))
+        for column in inspect(type(row)).column_attrs
+        if column.key not in exclude
+    }
+
+
 def pricing_option_terms(option: PricingOption) -> dict[str, Any]:
     """Copy the model's pricing terms without sharing nested mutable values."""
-    return {column: deepcopy(getattr(option, column)) for column in PRICING_TERM_COLUMNS}
+    return mapped_column_values(option, PRICING_IDENTITY_COLUMNS)

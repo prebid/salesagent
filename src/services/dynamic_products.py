@@ -17,48 +17,60 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from functools import partial
 
-from sqlalchemy import inspect, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import select
 from sqlalchemy.orm import attributes
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product
+from src.core.database.product_pricing import mapped_column_values
 from src.core.database.repositories.product import ProductRepository
 from src.core.signals_agent_registry import get_signals_agent_registry
 
 logger = logging.getLogger(__name__)
 
 
+def _draws_signals(template: Product) -> bool:
+    """An absent agent list uses tenant defaults; an empty list opts out."""
+    return template.signals_agent_ids is None or bool(template.signals_agent_ids)
+
+
 async def generate_variants_for_brief(tenant_id: str, brief: str, our_agent_url: str | None = None) -> None:
-    """Persist variants before the caller reads and converts the complete catalogue."""
+    """Persist priced variants, allowing only external availability failures to degrade."""
     from src.core.database.repositories.uow import ProductUoW
 
+    with ProductUoW(tenant_id) as uow:
+        assert uow.products is not None
+        template_ids = {
+            template.product_id for template in uow.products.list_dynamic_templates() if _draws_signals(template)
+        }
+    if not template_ids:
+        return
+
+    # No transaction spans the remote call. Programming and database failures
+    # reach the boundary under the seller's #1093 error policy.
     try:
-        with ProductUoW(tenant_id) as uow:
-            assert uow.products is not None
-            template_ids = {
-                template.product_id
-                for template in uow.products.list_dynamic_templates()
-                if template.signals_agent_ids is None or template.signals_agent_ids
-            }
-        if not template_ids:
-            return
-
-        # No database transaction spans the external MCP request.
         signals = await get_signals_agent_registry().get_signals(brief=brief, tenant_id=tenant_id)
+    except (RuntimeError, OSError):
+        logger.exception("Signals service unavailable for tenant %s; serving the persisted catalogue", tenant_id)
+        return
 
-        with ProductUoW(tenant_id) as uow:
-            assert uow.products is not None
-            for template in uow.products.list_dynamic_templates():
-                if template.product_id not in template_ids or template.signals_agent_ids == []:
-                    continue
-                generate_variants_from_signals(
-                    uow.products, template, signals[: template.max_signals], brief, our_agent_url
-                )
-    except SQLAlchemyError:
-        raise
-    except Exception:
-        logger.exception("Dynamic generation failed for tenant %s; serving the persisted catalogue", tenant_id)
+    with ProductUoW(tenant_id) as uow:
+        assert uow.products is not None
+        for template in uow.products.list_dynamic_templates():
+            if template.product_id not in template_ids or not _draws_signals(template):
+                continue
+            generate_variants_from_signals(
+                uow.products, template, signals[: template.max_signals], brief, our_agent_url
+            )
+
+
+def _refresh_variant_lifecycle(variant: Product, template: Product) -> None:
+    """Refresh new and reused rows with the same seller-local TTL policy."""
+    now = datetime.now(UTC)
+    variant.last_synced_at = now
+    expiration = now + timedelta(days=template.variant_ttl_days or 30)
+    if variant.expires_at is None or variant.expires_at < expiration:
+        variant.expires_at = expiration
 
 
 def generate_variants_from_signals(
@@ -110,6 +122,7 @@ def generate_variants_from_signals(
                 variant_id,
                 partial(create_variant_from_template, template, signal, activation_key, variant_id, brief),
             )
+            _refresh_variant_lifecycle(variant, template)
             variants.append(variant)
 
             logger.info(
@@ -117,10 +130,8 @@ def generate_variants_from_signals(
                 f"for signal {signal.get('signal_agent_segment_id')}"
             )
 
-        except SQLAlchemyError:
-            raise
-        except Exception as e:
-            logger.error(f"Error generating variant from signal: {e}", exc_info=True)
+        except (RuntimeError, OSError, ValueError):
+            logger.exception("Failed to generate a variant for template %s", template.product_id)
             continue
 
     return variants
@@ -206,8 +217,6 @@ _VARIANT_OWNED_COLUMNS = frozenset(
         "product_id",
         "name",
         "description",
-        "format_ids",
-        "format_options",
         "allowed_principal_ids",
         "is_custom",
         "is_dynamic",
@@ -244,22 +253,20 @@ def create_variant_from_template(
     Returns:
         New Product variant
     """
+    name = customize_name(template.name, signal, activation_key, template.variant_name_template)
+    name_limit = Product.name.property.columns[0].type.length
+    if len(name) > name_limit:
+        raise ValueError(f"Signal-generated product name exceeds the stored limit of {name_limit} characters")
+
     # Inherit mapped data by default. Variant identity, lifecycle and access have explicit owners.
-    contract = template.format_contract
-    variant_data = {
-        column.key: deepcopy(getattr(template, column.key))
-        for column in inspect(Product).column_attrs
-        if column.key not in _VARIANT_OWNED_COLUMNS
-    }
+    variant_data = mapped_column_values(template, _VARIANT_OWNED_COLUMNS)
     variant_data.update(
         tenant_id=template.tenant_id,
         product_id=variant_id,
-        name=customize_name(template.name, signal, activation_key, template.variant_name_template),
+        name=name,
         description=customize_description(
             template.description, signal, activation_key, brief, template.variant_description_template
         ),
-        format_ids=None if contract.format_options else deepcopy(list(contract.format_ids) or None),
-        format_options=deepcopy(list(contract.format_options)) if contract.format_options else None,
         allowed_principal_ids=None,
         is_custom=False,
         is_dynamic=False,
@@ -270,8 +277,6 @@ def create_variant_from_template(
             key: deepcopy(signal.get(key))
             for key in ("signal_agent_segment_id", "name", "description", "data_provider", "coverage_percentage")
         },
-        last_synced_at=datetime.now(UTC),
-        expires_at=datetime.now(UTC) + timedelta(days=template.variant_ttl_days or 30),
     )
 
     return Product(**variant_data)

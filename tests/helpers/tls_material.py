@@ -87,7 +87,7 @@ def start_tls_origin(
     *,
     listen_host: str = "127.0.0.1",
     tools: Mapping[str, Callable[..., Any]] | None = None,
-    public_host: str = "127.0.0.1",
+    public_host: str | None = None,
 ) -> LocalOrigin | MCPOrigin:
     """Start a local origin serving the shared test leaf over TLS, released through *guard*.
 
@@ -95,8 +95,11 @@ def start_tls_origin(
     so whichever path releases the env -- a clean exit or a failed enter -- closes it.
     Bind ``0.0.0.0`` when the client dialing the origin is another container.
     """
+    advertised_host = public_host or listen_host
     if tools is None:
-        context = run_local_origin(listen_host=listen_host, ssl_context=_ready_server_context())
+        context = run_local_origin(
+            listen_host=listen_host, public_host=advertised_host, ssl_context=_ready_server_context()
+        )
     else:
         from tests.helpers.local_mcp_origin import run_mcp_origin
 
@@ -107,7 +110,7 @@ def start_tls_origin(
             certfile=tls.SERVER_CERT,
             keyfile=tls.SERVER_KEY,
             listen_host=listen_host,
-            public_host=public_host,
+            public_host=advertised_host,
         )
     origin = context.__enter__()
 

@@ -334,6 +334,7 @@ class TestGenerateVariantsFromSignals:
         assert "Premium" in v.name
         assert v.activation_key is not None
         assert v.signal_metadata["signal_agent_segment_id"] == "seg_1"
+        assert v.expires_at - v.last_synced_at == timedelta(days=template.variant_ttl_days)
         factory_env._session.commit()
 
     def test_updates_existing_variant(self, factory_env):
@@ -568,7 +569,6 @@ class TestCreateVariantFromTemplate:
         assert variant.parent_product_id == "template_1"
         assert variant.activation_key == ak
         assert variant.signal_metadata["name"] == "Premium Users"
-        assert variant.expires_at is not None
 
     def test_a_canonically_authored_template_produces_variants_that_carry_its_declarations(self, factory_env):
         """The variant inherits the CANONICAL format arm, not only the deprecated one.
@@ -603,13 +603,7 @@ class TestCreateVariantFromTemplate:
         assert variant.format_ids is None
 
     def test_a_profile_linked_template_produces_variants_that_carry_its_profiles_declarations(self, factory_env):
-        """The variant takes the template's CONTRACT, which a linked profile supplies.
-
-        A template linked to an inventory profile is served the profile's declarations
-        (``Product.format_contract``), and the variant does not carry the link. The
-        template's own arms differ from the profile's here, so a copy of the template's
-        columns hands the variant a contract the template was never served.
-        """
+        """The persisted variant follows its inherited profile, without a format snapshot."""
         tenant = TenantFactory(tenant_id="test-cvft-profile", subdomain="cvft-profile")
         profile_declarations = [{"format_kind": "image", "params": {"width": 728, "height": 90}}]
         profile = InventoryProfileFactory(tenant=tenant, format_ids=None, format_options=profile_declarations)
@@ -626,5 +620,7 @@ class TestCreateVariantFromTemplate:
             "video ads",
         )
 
-        assert variant.format_options == profile_declarations
-        assert variant.format_ids is None
+        _products(factory_env, template).create(variant)
+        factory_env.get_session().flush()
+        assert variant.inventory_profile_id == profile.id
+        assert list(variant.format_contract.format_options) == profile_declarations

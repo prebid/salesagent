@@ -413,18 +413,10 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     # Resolve adapter type for delivery_measurement defaults
     tenant_adapter_type = tenant.ad_server
 
-    # Generate dynamic product variants from signals agents
-    try:
-        from src.services.dynamic_products import generate_variants_for_brief
+    # Match deployments against the URL advertised by the agent card.
+    from src.services.dynamic_products import generate_variants_for_brief
 
-        # Match deployments against the same public URL advertised by the agent card.
-        our_agent_url = tenant.agent_url
-
-        await generate_variants_for_brief(tenant.tenant_id, brief_text, our_agent_url)
-    except (ImportError, RuntimeError, OSError) as e:
-        # structural-guard: optional generation may fail without discarding stored inventory.
-        # These are local generation regressions, not an AdCP generation requirement.
-        logger.warning(f"Failed to generate dynamic product variants: {e}. Continuing with static products only.")
+    await generate_variants_for_brief(tenant.tenant_id, brief_text, tenant.agent_url)
 
     # Query products via repository (tenant-scoped)
     from src.core.database.repositories.uow import ProductUoW

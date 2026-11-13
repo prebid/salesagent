@@ -66,9 +66,11 @@ def _publisher_origin_address(env: PublisherAdagentsMixin, publisher: str) -> st
         from tests.helpers.tls_material import start_tls_origin
 
         # 0.0.0.0, not loopback: the server dialing it is another container.
-        origin = start_tls_origin(env._guard, f"publisher_origin:{publisher}", listen_host="0.0.0.0")
+        origin = start_tls_origin(
+            env._guard, f"publisher_origin:{publisher}", listen_host="0.0.0.0", public_host=PUBLISHER_ORIGIN_HOST
+        )
         env._publisher_origins[publisher] = origin
-    return f"{PUBLISHER_ORIGIN_HOST}:{origin.port}"
+    return origin.address
 
 
 def _serve_from_origins(env: PublisherAdagentsMixin) -> None:

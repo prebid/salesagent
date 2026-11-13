@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.schemas import GetProductsRequest
-from tests.factories import ProductFactory
+from tests.harness.product_unit import ProductEnv
 from tests.helpers.unit_identity import fabricated_identity
 
 
@@ -46,14 +46,7 @@ def _mock_uow_with_products(products):
     mock_uow.__exit__ = MagicMock(return_value=False)
     mock_uow.schemas = {product.product_id: product for product in products}
     mock_uow.products.list_all.return_value = [
-        ProductFactory.build(
-            tenant=None,
-            tenant_id="test-tenant",
-            product_id=product.product_id,
-            allowed_principal_ids=product.allowed_principal_ids,
-            is_dynamic_variant=False,
-        )
-        for product in products
+        ProductEnv.catalog_row_for(product, "test-tenant") for product in products
     ]
     return mock_uow
 
@@ -66,84 +59,6 @@ def _base_patches(mock_uow, convert_fn=None):
         patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
         patch("src.core.tools.products.convert_product_model_to_schema", side_effect=convert_fn),
     ]
-
-
-class TestDynamicVariantsExceptionPropagation:
-    """Dynamic variant generation fail-open.
-
-    Covers: UC-001-MAIN-41
-    """
-
-    @pytest.mark.asyncio
-    async def test_type_error_propagates(self):
-        """TypeError (bug) propagates, not swallowed.
-
-        Covers: UC-001-MAIN-41
-        """
-        from tests.helpers.adcp_factories import create_test_product
-
-        product = create_test_product(product_id="p1")
-        mock_uow = _mock_uow_with_products([product])
-
-        patches = _base_patches(mock_uow) + [
-            patch(
-                "src.services.dynamic_products.generate_variants_for_brief",
-                new_callable=AsyncMock,
-                side_effect=TypeError("NoneType has no attribute 'product_id'"),
-            ),
-            patch(
-                "src.services.dynamic_pricing_service.DynamicPricingService",
-                **{
-                    "return_value.enrich_products_with_pricing.side_effect": lambda products, **kw: products,
-                },
-            ),
-        ]
-
-        import contextlib
-
-        from src.core.tools.products import _get_products_impl
-
-        with contextlib.ExitStack() as stack:
-            for p in patches:
-                stack.enter_context(p)
-            with pytest.raises(TypeError, match="NoneType"):
-                await _get_products_impl(_make_request(), _make_identity())
-
-    @pytest.mark.asyncio
-    async def test_runtime_error_is_graceful(self):
-        """RuntimeError (service failure) degrades gracefully.
-
-        Covers: UC-001-MAIN-41
-        """
-        from tests.helpers.adcp_factories import create_test_product
-
-        product = create_test_product(product_id="p1")
-        mock_uow = _mock_uow_with_products([product])
-
-        patches = _base_patches(mock_uow) + [
-            patch(
-                "src.services.dynamic_products.generate_variants_for_brief",
-                new_callable=AsyncMock,
-                side_effect=RuntimeError("Connection refused"),
-            ),
-            patch(
-                "src.services.dynamic_pricing_service.DynamicPricingService",
-                **{
-                    "return_value.enrich_products_with_pricing.side_effect": lambda products, **kw: products,
-                },
-            ),
-        ]
-
-        import contextlib
-
-        from src.core.tools.products import _get_products_impl
-
-        with contextlib.ExitStack() as stack:
-            for p in patches:
-                stack.enter_context(p)
-            result = await _get_products_impl(_make_request(), _make_identity())
-            # Should still return the static product despite variant failure
-            assert len(result.products) == 1
 
 
 class TestDynamicPricingExceptionPropagation:

@@ -867,7 +867,6 @@ _PRODUCTS_REL = "src/core/tools/products.py"
 # the first handler, which shifts every line below it. Order is source order.
 _PRODUCTS_DEGRADATION_SUBJECTS = (
     "Policy check failed for tenant",  # policy service unreachable -> fail open
-    "Failed to generate dynamic product variants",  # variants dropped
     "Failed to enrich products with dynamic pricing",  # pricing enrichment dropped
     "Failed to apply AI product ranking",  # ranking dropped (superset still returned)
     # "Failed to annotate pricing options with adapter support" is gone with the

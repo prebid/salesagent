@@ -148,6 +148,24 @@ class ProductEnv(ProductMixin, BaseTestEnv):
         # Product mixin defaults (policy, variants, pricing, ranking, property list)
         self._configure_product_mocks()
 
+    @staticmethod
+    def catalog_row_for(
+        product: Product,
+        tenant_id: str,
+        *,
+        parent_product_id: str | None = None,
+        is_dynamic_variant: bool = False,
+    ) -> ProductModel:
+        """Adapt a schema to the catalog row used by every unit catalog."""
+        return ProductFactory.build(
+            tenant=None,
+            tenant_id=tenant_id,
+            product_id=product.product_id,
+            allowed_principal_ids=product.allowed_principal_ids,
+            parent_product_id=parent_product_id,
+            is_dynamic_variant=is_dynamic_variant,
+        )
+
     def add_product(
         self,
         product_id: str = "prod_001",
@@ -187,11 +205,9 @@ class ProductEnv(ProductMixin, BaseTestEnv):
         )
         self._products.append(product)
         self._catalog_rows.append(
-            ProductFactory.build(
-                tenant=None,
-                tenant_id=self._tenant_id,
-                product_id=product_id,
-                allowed_principal_ids=allowed_principal_ids,
+            self.catalog_row_for(
+                product,
+                self._tenant_id,
                 parent_product_id=parent_product_id,
                 is_dynamic_variant=is_dynamic_variant,
             )

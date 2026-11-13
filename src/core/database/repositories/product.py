@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -163,10 +162,6 @@ class ProductRepository(SessionEffectsMixin):
                 constraint=("products_pkey", "uq_pricing_options_option_id"),
             )
             variant = existing if existing is not None else candidate
-            variant.last_synced_at = datetime.now(UTC)
-            expiration = datetime.now(UTC) + timedelta(days=template.variant_ttl_days or 30)
-            if variant.expires_at is None or variant.expires_at < expiration:
-                variant.expires_at = expiration
         return variant
 
     def create(self, product: Product) -> Product:

@@ -6,6 +6,7 @@ from threading import Barrier
 
 import pytest
 
+from src.core.database.product_pricing import PRICING_TERM_COLUMNS
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.uow import ProductUoW
 from src.services.dynamic_products import generate_variant_id, generate_variants_from_signals
@@ -38,16 +39,7 @@ def test_inherited_pricing_owns_new_rows_and_json(integration_db, is_fixed):
         repository.inherit_missing_variant_pricing(variant, template)
         inherited = variant.pricing_options[0]
         assert inherited.id is None
-        for field in (
-            "pricing_option_id",
-            "pricing_model",
-            "currency",
-            "is_fixed",
-            "rate",
-            "price_guidance",
-            "parameters",
-            "min_spend_per_package",
-        ):
+        for field in ("pricing_option_id", *PRICING_TERM_COLUMNS):
             assert getattr(inherited, field) == getattr(source, field)
         assert inherited.product_id == "variant"
         inherited.price_guidance["floor"] = 3.5
