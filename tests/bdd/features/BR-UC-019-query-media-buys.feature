@@ -1009,7 +1009,7 @@ Feature: BR-UC-019 Query Media Buys
     And the response should include media buy "mb-good"
     And the response should not include media buy "mb-broken"
     And the response errors should name the omitted media buy "mb-broken"
-    And the response errors array should include error code "CONFIGURATION_ERROR"
+    And response.errors[] should carry exactly 1 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
     # HAND-EDITED, pending the bulk upstream copy to adcp-req. Authored here rather than
     # upstream by owner ruling; the @hand-edited marker keeps compile_bdd.py --merge from
     # classifying it LEGACY-DELETE in the meantime. Expected, not stray.
@@ -1327,53 +1327,33 @@ Feature: BR-UC-019 Query Media Buys
     And the response should include media buy "mb-002" with package "pkg-002"
     And the package "pkg-001" targeting_overlay should carry a frequency cap of 3 impressions
 
+  # AdCP 3.2.7 error-handling: usable results may carry terminal platform advisories.
+  # Stored-value rehydration is ungraded by the upstream storyboard (BR-RULE-294).
   @T-UC-019-partition-targeting-rehydration @partition @targeting_overlay @schema-v3.1
   Scenario Outline: targeting_overlay rehydration - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
-    And package "pkg-001" persisted package_config has <persisted_state>
+    And <persisted_state>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
-    And <expected_outcome>
-    # BR-RULE-294: per-package fail-soft; TypeError caught narrowly; ValidationError NOT caught
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
-    # graded: unit — tests/unit/test_get_media_buys.py (BDD errors[] steps not wired; scenario dormant/xfail)
+    And the package "pkg-001" wire field targeting_overlay should equal the JSON value <overlay>
+    And response.errors[] should carry exactly <count> advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
 
-    Examples: Valid partitions
-      | partition                            | persisted_state                                       | expected_outcome                                                                                                                                                |
-      | no_targeting_persisted               | no targeting_overlay and no legacy targeting          | the package "pkg-001" targeting_overlay should be null and no error should appear in response.errors[] for "pkg-001"                                            |
-      | targeting_rehydrates_cleanly         | targeting_overlay {geo:['US']}                        | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                            |
-      | legacy_targeting_key                 | no targeting_overlay but legacy targeting {geo:['US']} | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                            |
-      | rehydration_typeerror_partial_success | targeting_overlay set to the string 'not a dict'      | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with details.reason "targeting_rehydration_failed" |
+    Examples:
+      | partition                            | persisted_state                                                                                                 | overlay                    | count |
+      | no_targeting_persisted                | package "pkg-001" package_config has no targeting_overlay key but has legacy targeting null                        | null                       | 0     |
+      | targeting_rehydrates_cleanly          | package "pkg-001" package_config key targeting_overlay holds the JSON value {"geo_countries": ["US"]}             | {"geo_countries": ["US"]}  | 0     |
+      | legacy_targeting_key                  | package "pkg-001" package_config has no targeting_overlay key but has legacy targeting {"geo_countries": ["US"]} | {"geo_countries": ["US"]}  | 0     |
+      | rehydration_typeerror_partial_success  | package "pkg-001" package_config key targeting_overlay holds the JSON value "not a dict"                         | null                       | 1     |
 
-  # AdCP 3.1.1 core/error.json: the error-code vocabulary is OPEN — error.code is a wire-typed
-  # string, the published enum is documentary, and a receiver decodes an unknown code by reading
-  # error.recovery. INTERNAL_ERROR is absent from the enum but IS emittable, and since the code
-  # rewriters were deleted it reaches the buyer as itself rather than being collapsed to
-  # SERVICE_UNAVAILABLE.
-  # graded: unit — tests/unit/test_get_media_buys.py (BDD errors[] steps not wired; scenario dormant/xfail)
   @T-UC-019-inv-294-3 @invariant @BR-RULE-294 @error @schema-v3.1
-  Scenario: INV-3 holds - TypeError during Targeting instantiation yields non-fatal SERVICE_UNAVAILABLE + null overlay
+  Scenario: INV-3 holds - corrupt targeting yields a terminal persisted-value advisory and null overlay
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
-    And package "pkg-001" persisted targeting_overlay is a string (will raise TypeError on Targeting(**str))
+    And package "pkg-001" package_config key targeting_overlay holds the JSON value "not a dict"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
-    And a warning should be logged with media_buy_id "mb-001" and package_id "pkg-001"
-    And response.errors[] should include an entry with code "SERVICE_UNAVAILABLE"
-    And that errors[] entry details "reason" should be "targeting_rehydration_failed"
-    And that errors[] entry field selector should be "media_buys[].packages[pkg-001].targeting_overlay"
-    And the package "pkg-001" targeting_overlay should be null
-    And the error should include a "suggestion" field
-    # BR-RULE-294 INV-3: narrow TypeError catch -> warn + non-fatal Error + null overlay
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
-    # SUPERSEDED CODE: this scenario is DORMANT — its Given has no
-    # step definition, so every parametrization reports xfail "Step definition not found"
-    # and none of the assertions below has ever executed. Its "SERVICE_UNAVAILABLE" is the
-    # defect zkde1.6 fixes: recovery "transient" advises a retry that can never repair a
-    # corrupt row in the SELLER's store. The live grader of this advisory's code and
-    # recovery is the targeting_overlay row of @T-UC-019-blob-degraded-package-field
-    # above, which asserts CONFIGURATION_ERROR / "terminal" off the wire. Wiring the rest
-    # of THIS scenario (the logging and "suggestion" obligations it also states) is a
-    # separate graduation, deliberately out of zkde1.6's scope.
+    And the package "pkg-001" wire field targeting_overlay should be null or absent
+    And response.errors[] should carry exactly 1 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And the persisted-value advisory for field targeting_overlay should identify media buy "mb-001" package "pkg-001"
 
   # ISOLATION IS THE OBLIGATION, and it was ungraded. The degradation of ONE corrupt
   # package_config cell is graded by @T-UC-019-blob-degraded-package-field below, but
@@ -1382,17 +1362,11 @@ Feature: BR-UC-019 Query Media Buys
   # listing (INV-6) — was covered anywhere. Production could start failing a whole
   # listing over one corrupt sibling and nothing would go red.
   #
-  # CODE CORRECTED: these two scenarios demanded a `TARGETING_REHYDRATION_FAILED`
-  # advisory. There is no such code. Pinned
-  # `adcp/_schemas/3.1/enums/error-code.json` declares 92 codes and that is not one
-  # of them, and `Error.code` is typed `ErrorCodeT` (src/core/schemas/_base.py:225),
-  # so an advisory carrying it is unconstructible rather than merely non-standard.
-  # The code for a corrupt cell in the SELLER's own store is CONFIGURATION_ERROR,
-  # recovery "terminal" — settled, with its full reasoning, in the
-  # @T-UC-019-blob-degraded-package-field comment block below, which these scenarios
-  # now share a Then sentence with rather than restating. What survives of the
-  # original sentence is its quantifier: EXACTLY ONE advisory in the whole document,
-  # which is the half that grades "isolation" as opposed to "an advisory exists".
+  # AdCP 3.2.7 L3/error-handling.mdx: payload advisories preserve a usable result;
+  # CONFIGURATION_ERROR instead requires transport failure. This seller's terminal
+  # PERSISTED_VALUE_UNRENDERABLE code identifies unreadable stored values. The open
+  # error.code vocabulary permits it. BR-RULE-294 is upstream-storyboard ungraded.
+  # Source: https://github.com/adcontextprotocol/adcp/blob/v3.2.7/docs/building/by-layer/L3/error-handling.mdx
   #
   # GEO SPELLING CORRECTED: the valid sibling was spelled `{geo:["US"]}`. Pinned
   # `core/targeting.json` declares no `geo` field at all — the v3 spelling is
@@ -1403,36 +1377,38 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-inv-294-5 @invariant @BR-RULE-294 @error @schema-v3.1
   Scenario: INV-5 holds - one corrupted package does not break sibling packages in the same buy
     Given the principal "buyer-001" owns media buy "mb-001" with packages "pkg-001" and "pkg-002"
-    And package "pkg-001" package_config key targeting_overlay holds the JSON value "not a dict"
-    And package "pkg-002" package_config key targeting_overlay holds the JSON value {"geo_countries": ["US"]}
+    And package "pkg-002" package_config key targeting_overlay holds the JSON value "not a dict"
+    And package "pkg-001" package_config key targeting_overlay holds the JSON value {"geo_countries": ["US"]}
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
-    And the response should include media buy "mb-001" with package "pkg-001"
-    And the package "pkg-001" wire field targeting_overlay should be null or absent
-    And the package "pkg-002" targeting_overlay should carry geo_countries ["US"]
-    And response.errors[] should carry exactly one advisory for package "pkg-001" field targeting_overlay with code "CONFIGURATION_ERROR" and recovery "terminal"
+    And the response should include media buy "mb-001" with package "pkg-002"
+    And the package "pkg-002" wire field targeting_overlay should be null or absent
+    And the package "pkg-001" targeting_overlay should carry geo_countries ["US"]
+    And response.errors[] should carry exactly 1 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And the persisted-value advisory for field targeting_overlay should identify media buy "mb-001" package "pkg-002"
     # BR-RULE-294 INV-5: per-package failure isolation
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-294-6 @invariant @BR-RULE-294 @error @schema-v3.1
-  Scenario: INV-6 holds - one buy with a corrupted package does not break sibling buys
-    # Two buys seeded one Given each, rather than through a two-buy sentence of its
-    # own: the per-buy seeder already exists and already registers the package, so
-    # "mb-002 has valid persisted state" becomes a value the scenario STATES instead
-    # of a phrase whose meaning lived in a step body. The When names no
-    # media_buy_ids on purpose — this is the unfiltered listing path, where a row
-    # that fails to render takes the whole tenant's listing with it.
+  Scenario: INV-6 holds - corrupted buys do not break healthy sibling buys
+    # Two corrupt buys guarantee a nonzero advisory position regardless of query order.
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And the principal "buyer-001" owns media buy "mb-002" with package "pkg-002"
-    And package "pkg-001" package_config key targeting_overlay holds the JSON value "not a dict"
-    And package "pkg-002" package_config key targeting_overlay holds the JSON value {"geo_countries": ["US"]}
+    And the principal "buyer-001" owns media buy "mb-003" with package "pkg-003"
+    And package "pkg-001" package_config key targeting_overlay holds the JSON value {"geo_countries": ["US"]}
+    And package "pkg-002" package_config key targeting_overlay holds the JSON value "not a dict"
+    And package "pkg-003" package_config key targeting_overlay holds the JSON value ["not", "a", "dict"]
     When the Buyer Agent sends a get_media_buys request
     Then the response is compliant with the get_media_buys spec
     And the response should include media buy "mb-001" with package "pkg-001"
-    And the package "pkg-001" wire field targeting_overlay should be null or absent
+    And the package "pkg-001" targeting_overlay should carry geo_countries ["US"]
     And the response should include media buy "mb-002" with package "pkg-002"
-    And the package "pkg-002" targeting_overlay should carry geo_countries ["US"]
-    And response.errors[] should carry exactly one advisory for package "pkg-001" field targeting_overlay with code "CONFIGURATION_ERROR" and recovery "terminal"
+    And the package "pkg-002" wire field targeting_overlay should be null or absent
+    And the response should include media buy "mb-003" with package "pkg-003"
+    And the package "pkg-003" wire field targeting_overlay should be null or absent
+    And response.errors[] should carry exactly 2 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And the persisted-value advisory for field targeting_overlay should identify media buy "mb-002" package "pkg-002"
+    And the persisted-value advisory for field targeting_overlay should identify media buy "mb-003" package "pkg-003"
     # BR-RULE-294 INV-6: per-buy failure isolation across the response
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -1468,36 +1444,12 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the response should include media buy "mb-001" with package "pkg-001"
     And the package "pkg-001" wire field <field> should be null or absent
-    And response.errors[] should carry exactly one advisory for package "pkg-001" field <field> with code "CONFIGURATION_ERROR" and recovery "terminal"
-    And response.errors[] should carry no advisory with code "SERVICE_UNAVAILABLE"
-    # THE BLOB RULE. `package_config` is an untyped JSON column, so
-    # every value read out of it is a legacy value the current pinned types may reject.
-    # The pinned item schema (media-buy/get-media-buys-response.json) lists ONLY
-    # `package_id` in packages.items.required, so `product_id` / `start_time` /
-    # `end_time` / `paused` each have a legal absent rendering — a degraded field plus a
-    # non-fatal advisory is a schema-legal document, and failing the WHOLE listing over
-    # one legacy cell in one package is not.
-    #
-    # Stated as a RULE, not a roster: the four rows below are today's blob-sourced
-    # values, and the criterion is met only if it also holds for a fifth added later.
-    # `targeting_overlay` is the fifth row on purpose — it is the one blob value already
-    # resolved before the constructor, so it grades the code/recovery half of the same
-    # contract rather than the whole-listing half.
-    #
-    # CODE AND RECOVERY, NOT MERELY "AN ADVISORY EXISTS". A corrupt cell in the SELLER's
-    # own store is not buyer-remediable, so VALIDATION_ERROR / recovery "correctable"
-    # ("review error details and fix field values") is the wrong answer — it is the exact
-    # defect recorded under the revision outline below, where the response-model boundary
-    # translated a seller-side defect into buyer-directed advice. Pinned
-    # enums/error-code.json gives CONFIGURATION_ERROR recovery "terminal", and
-    # core/error.json makes the wire `recovery` authoritative with enumMetadata only its
-    # documentary mirror — so the grader reads `recovery` off the wire.
-    #
-    # `creative_deadline` is a sixth blob-sourced package value, and the rule above
-    # applies to it unchanged. It is optional in packages.items, and "next Friday" is not
-    # a date-time. Its row came here from @T-UC-019-partition-package-creative-deadline,
-    # which now grades only the values that render.
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    And response.errors[] should carry exactly 1 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And the persisted-value advisory for field <field> should identify media buy "mb-001" package "pkg-001"
+    # All optional persisted values share one advisory class. CONFIGURATION_ERROR
+    # requires transport failure under AdCP 3.2.7 L3/error-handling.mdx; this result
+    # remains usable. core/error.json permits a platform code and positional field.
+    # Every other blob field has a valid seeded value, so collateral degradation fails.
 
     Examples:
       | field             | legacy_value          |
@@ -1527,7 +1479,36 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the response should include media buy "mb-001" with package "pkg-001"
     And the media buy "mb-001" wire field buyer_campaign_ref should be null or absent
-    And response.errors[] should carry exactly one advisory for media buy "mb-001" field buyer_campaign_ref with code "CONFIGURATION_ERROR" and recovery "terminal"
+    And response.errors[] should carry exactly 1 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And the persisted-value advisory should identify media buy "mb-001" field buyer_campaign_ref
+
+  @T-UC-019-mixed-persisted-value-advisories @invariant @BR-RULE-294 @error @schema-v3.1
+  Scenario: Mixed persisted-value advisories identify nonzero buy and package positions
+    Given the principal "buyer-001" owns media buy "mb-001" with packages "pkg-001" and "pkg-0010"
+    And the principal "buyer-001" owns media buy "mb-002" with packages "pkg-002" and "pkg-0020"
+    And package "pkg-001" package_config key paused holds the legacy JSON value "maybe"
+    And package "pkg-0010" package_config key creative_deadline holds the legacy JSON value "next Friday"
+    And package "pkg-002" package_config key paused holds the legacy JSON value "maybe"
+    And package "pkg-0020" package_config key creative_deadline holds the legacy JSON value "next Friday"
+    And media buy "mb-001" raw_request key buyer_campaign_ref holds the legacy JSON value 123
+    And media buy "mb-002" raw_request key buyer_campaign_ref holds the legacy JSON value 456
+    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001", "mb-002"]
+    Then the response is compliant with the get_media_buys spec
+    And response.errors[] should carry exactly 6 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And the persisted-value advisory for field paused should identify media buy "mb-001" package "pkg-001"
+    And the persisted-value advisory for field creative_deadline should identify media buy "mb-001" package "pkg-0010"
+    And the persisted-value advisory for field paused should identify media buy "mb-002" package "pkg-002"
+    And the persisted-value advisory for field creative_deadline should identify media buy "mb-002" package "pkg-0020"
+    And the persisted-value advisory should identify media buy "mb-001" field buyer_campaign_ref
+    And the persisted-value advisory should identify media buy "mb-002" field buyer_campaign_ref
+    And the package "pkg-001" wire field paused should be null or absent
+    And the package "pkg-0010" wire field creative_deadline should be null or absent
+    And the package "pkg-002" wire field paused should be null or absent
+    And the package "pkg-0020" wire field creative_deadline should be null or absent
+    And the media buy "mb-001" wire field buyer_campaign_ref should be null or absent
+    And the media buy "mb-002" wire field buyer_campaign_ref should be null or absent
+    And the package "pkg-001" targeting_overlay should carry geo_countries ["US"]
+    And the package "pkg-0020" wire field product_id should equal the JSON value "guaranteed_display"
 
   @T-UC-019-partition-delivery-status @partition @delivery_status @snapshot @schema-v3.1
   Scenario Outline: snapshot.delivery_status partitions - <partition>
@@ -1784,23 +1765,25 @@ Feature: BR-UC-019 Query Media Buys
   # rewriters were deleted it reaches the buyer as itself rather than being collapsed to
   # SERVICE_UNAVAILABLE.
   @T-UC-019-boundary-targeting-overlay @boundary @targeting_overlay @br-rule-294 @schema-v3.1
-  Scenario Outline: targeting_overlay rehydration boundary - <boundary_point>
-    Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
-    And package "pkg-001" persisted package_config has <persisted_state>
+  Scenario Outline: targeting_overlay rehydration boundary - two corrupt packages containing <value>
+    # Both package positions are graded, independent of database return order.
+    # Clean and legacy-key boundaries are covered by partition-targeting-rehydration;
+    # INV-6 covers corruption beside a healthy buy in the same listing.
+    Given the principal "buyer-001" owns media buy "mb-001" with packages "pkg-001" and "pkg-0010"
+    And package "pkg-001" package_config key targeting_overlay holds the JSON value <value>
+    And package "pkg-0010" package_config key targeting_overlay holds the JSON value <value>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
-    And <expected_outcome>
-    # BR-RULE-294 BVA: per-package fail-soft on TypeError; clean rehydration otherwise
+    And the package "pkg-001" wire field targeting_overlay should be null or absent
+    And the package "pkg-0010" wire field targeting_overlay should be null or absent
+    And response.errors[] should carry exactly 2 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And the persisted-value advisory for field targeting_overlay should identify media buy "mb-001" package "pkg-001"
+    And the persisted-value advisory for field targeting_overlay should identify media buy "mb-001" package "pkg-0010"
 
-    Examples: Boundary values
-      | boundary_point                                                                 | persisted_state                                              | expected_outcome                                                                                                                                                                                                                       |
-      | targeting_overlay key absent, targeting key absent                             | no targeting_overlay and no legacy targeting                  | the package "pkg-001" targeting_overlay should be null and no error should appear in response.errors[] for "pkg-001"                                                                                                                    |
-      | targeting_overlay key present and parseable                                    | targeting_overlay {geo:['US']}                                | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                                                                                                    |
-      | targeting_overlay key absent, targeting key present                            | no targeting_overlay but legacy targeting {geo:['US']}        | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                                                                                                    |
-      | targeting_overlay is a string (TypeError on Targeting(**str))                  | targeting_overlay set to the string 'not a dict'              | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with details.reason "targeting_rehydration_failed"          |
-      | targeting_overlay is a list (TypeError on Targeting(**list))                   | targeting_overlay set to the list ['not','a','dict']          | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with details.reason "targeting_rehydration_failed"          |
-      | two packages in same buy both raise TypeError                                  | two packages "pkg-001" and "pkg-002" both with corrupted targeting_overlay strings | both packages' targeting_overlay should be null and response.errors[] should include two SERVICE_UNAVAILABLE entries (one per package) each with a "suggestion" field referencing "package_config"                              |
-      | one of N buys has one bad package                                              | one of two buys "mb-001"/"mb-002" has package "pkg-001" with corrupted targeting_overlay and the other buy is clean | the corrupted package's targeting_overlay should be null, sibling buys should render normally, and response.errors[] should include exactly one SERVICE_UNAVAILABLE entry with a "suggestion" field referencing "package_config"             |
+    Examples:
+      | value                |
+      | "not a dict"         |
+      | ["not", "a", "dict"] |
 
   @T-UC-019-storyboard-post-create-status-poll @storyboard-v3.1 @v3-1 @post-create-poll
   Scenario: get_media_buys called immediately after create_media_buy resolves the freshly-created buy by media_buy_id

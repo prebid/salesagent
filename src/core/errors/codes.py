@@ -167,6 +167,15 @@ class AppErrorCode(StrEnum):
             status=500,
         ),
     )
+    PERSISTED_VALUE_UNRENDERABLE = (
+        "PERSISTED_VALUE_UNRENDERABLE",
+        CodeEntry(
+            recovery=Recovery.TERMINAL,
+            suggestion="Contact the seller to repair the stored data; retrying this request cannot repair it",
+            message="Stored data could not be returned; the rest of the result remains usable",
+            status=500,
+        ),
+    )
     TENANT_UNDEFINED = (
         "TENANT_UNDEFINED",
         CodeEntry(

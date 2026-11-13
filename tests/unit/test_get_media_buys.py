@@ -294,7 +294,7 @@ class TestFetchTargetMediaBuys:
         assert [b.media_buy_id for b in result] == ["buy_good"]
         assert len(self.advisories) == 1
         advisory = self.advisories[0]
-        assert advisory.code == "CONFIGURATION_ERROR"
+        assert advisory.code == "PERSISTED_VALUE_UNRENDERABLE"
         assert advisory.recovery == "terminal", (
             "a persisted-state defect cannot be retried into success; the advisory must say so"
         )
@@ -308,7 +308,7 @@ class TestFetchTargetMediaBuys:
             "tell whether the buy they are looking for is missing or was never there"
         )
         assert advisory.details["reasons"] == ["MEDIA_BUY_UNRENDERABLE"]
-        assert advisory.field == "media_buys[]"
+        assert advisory.field == "media_buys"
 
     def test_a_null_revision_is_refused_like_a_below_minimum_one(self):
         """The ``revision is None`` operand has an oracle now.
@@ -683,17 +683,12 @@ class TestTargetingOverlayRoundTrip:
         assert good_response_pkg.targeting_overlay.property_list.list_id == "v1"
 
         # Failure surfaced via the response errors channel — buyer can reconcile.
-        # CONFIGURATION_ERROR / recovery "terminal", not the sibling per-creative
-        # advisory's SERVICE_UNAVAILABLE. Selected by lookup rather than by name: the
-        # pin gives SERVICE_UNAVAILABLE recovery "transient", which advises a retry that
-        # can never succeed against a permanently corrupt stored blob. Both halves are
-        # asserted because the code alone cannot carry the claim -- core/error.json makes
-        # error.recovery authoritative and enumMetadata only its documentary mirror, so a
-        # test checking the code would pass with the buyer still told to retry forever.
+        # The terminal platform advisory preserves the listing's success while
+        # distinguishing a corrupt package from a seller deployment failure.
         assert response.errors is not None
         assert len(response.errors) == 1
         err = response.errors[0]
-        assert err.code == "CONFIGURATION_ERROR"
+        assert err.code == "PERSISTED_VALUE_UNRENDERABLE"
         assert err.recovery == "terminal", "a row the buyer cannot repair must not invite a retry"
         # The discriminator is ``details.reasons``, not the message: ``message`` is
         # derived from CODE_TABLE, so no raise site can stamp a

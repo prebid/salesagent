@@ -1743,33 +1743,9 @@ def then_response_errors_include(ctx: dict, code: str) -> None:
 
 @then(parsers.parse('the response errors should name the omitted media buy "{mb_id}"'))
 def then_errors_name_omitted_media_buy(ctx: dict, mb_id: str) -> None:
-    """Assert an advisory on the BUYER'S WIRE names the row that was left out.
-
-    Reads ``wire_dict`` rather than the typed payload: the advisory only does its job
-    if it reaches the buyer, and a re-serialized payload would report success on a
-    transport that never framed the ``errors`` channel at all.
-
-    The id matters more than the code here. An advisory saying a row was dropped
-    without saying WHICH row cannot be reconciled against — the buyer has no way to
-    tell whether the buy they wanted is broken or simply does not exist.
-
-    The whole advisory OBJECT is searched, not its ``message`` alone, and that is the
-    obligation rather than a loosening of it: ``Error`` derives
-    ``message``/``suggestion``/``recovery`` from ``CODE_TABLE`` and DISCARDS anything a
-    call site passes for them, so an id can only reach the buyer as data — in
-    ``details``. A message-only read graded a slot production is structurally unable to
-    put the id in, and would have gone on passing an advisory that named no row at all
-    once the code table answered "Configuration error" for every one of them. Same
-    wire-first, whole-object shape as ``then_request_refused_for_media_buy``.
-    """
-    real_id = _resolve_media_buy_id(ctx, mb_id)
-    errors = _wire_advisories(ctx)
-    haystacks = [json.dumps(advisory, default=str) for advisory in errors]
-    assert any(real_id in haystack for haystack in haystacks), (
-        f"expected an advisory naming the omitted media buy {real_id!r} — in `details`, since "
-        f"`message` is derived from the code table and cannot carry it; the response carried "
-        f"{len(errors)} advisory/advisories: {haystacks}"
-    )
+    """An omitted row has no response index; identify it in details on the collection."""
+    advisory = _wire_advisory(ctx, None, mb_id=mb_id)
+    assert advisory.get("code") == "PERSISTED_VALUE_UNRENDERABLE"
 
 
 def _response_approvals(ctx: dict) -> list[Any]:
@@ -3225,75 +3201,44 @@ def then_media_buy_wire_field_degraded(ctx: dict, mb_id: str, field: str) -> Non
     )
 
 
-@then(
-    parsers.parse(
-        'response.errors[] should carry exactly one advisory for media buy "{mb_id}" '
-        'field {field} with code "{code}" and recovery "{recovery}"'
-    )
-)
-def then_raw_request_advisory_code_and_recovery(ctx: dict, mb_id: str, field: str, code: str, recovery: str) -> None:
-    """Every half the sentence names, off the wire, and exactly one advisory in the document.
+@then(parsers.parse('the persisted-value advisory should identify media buy "{mb_id}" field {field}'))
+def then_buy_field_advisory_identity(ctx: dict, mb_id: str, field: str) -> None:
+    """Grade the code and buy-level field identity independently of other advisories."""
+    advisory = _wire_advisory(ctx, field, mb_id=mb_id)
+    assert advisory.get("code") == "PERSISTED_VALUE_UNRENDERABLE"
 
-    The document-wide count is what grades "alone" here, for the same reason it does on
-    the package rows: without it an implementation that degrades every blob value passes.
 
-    ``mb_id`` is graded too, which it was not: the sentence says "for media buy X" and the
-    step only substring-matched the FIELD half, so an advisory naming a different media buy
-    satisfied it. Production emits the pointer as
-    ``media_buys[<media_buy_id>].<field>`` (media_buy_list.py's ``field_path`` for the
-    raw_request blob rule), so both halves are on the wire and both are asserted. Membership
-    rather than exact-template equality: the identity is what the scenario names, and the
-    pointer's spelling is production's to change.
-    """
-    advisories = _wire_advisories(ctx)
-
-    assert len(advisories) == 1, (
-        f"expected exactly ONE advisory in the whole response — a legacy-invalid "
-        f"{field!r} must degrade that field ALONE — got {len(advisories)}: {advisories!r}"
-    )
-    advisory = advisories[0]
-    pointer = str(advisory.get("field", ""))
-    assert field in pointer, f"expected the advisory to name field {field!r}; got {advisory.get('field')!r}"
-    assert mb_id in pointer, (
-        f"expected the advisory pointer to name media buy {mb_id!r} — the sentence grades the "
-        f"advisory raised FOR that buy, and one naming another buy is a different defect; "
-        f"got {advisory.get('field')!r}"
-    )
-    assert advisory.get("code") == code, (
-        f"expected advisory code {code!r} for a defect in the seller's own store, got {advisory.get('code')!r}"
-    )
-    assert advisory.get("recovery") == recovery, (
-        f"expected advisory recovery {recovery!r} — the code alone leaves the buyer "
-        f"inferring retry semantics; got {advisory.get('recovery')!r}"
-    )
+def _wire_media_buy_position(ctx: dict, mb_id: str) -> int:
+    """Resolve a buy label to exactly one position in the buyer's document."""
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    matching = [i for i, buy in enumerate(wire_field(ctx, "media_buys")) if buy.get("media_buy_id") == real_id]
+    assert len(matching) == 1, f"expected exactly one media buy {mb_id!r}; got positions {matching}"
+    return matching[0]
 
 
 def _wire_media_buy(ctx: dict, mb_id: str) -> dict:
-    """Return the media buy the buyer received on the wire, by Gherkin label."""
-    real_id = _resolve_media_buy_id(ctx, mb_id)
-    document = wire_dict(ctx)
-    matching = [buy for buy in document.get("media_buys", []) if buy.get("media_buy_id") == real_id]
-    assert len(matching) == 1, (
-        f"expected exactly one media_buys[] entry for {mb_id!r} (real_id={real_id!r}); got "
-        f"{len(matching)} in {[b.get('media_buy_id') for b in document.get('media_buys', [])]!r}"
-    )
+    """Return the uniquely identified media buy on the wire."""
+    return wire_field(ctx, "media_buys")[_wire_media_buy_position(ctx, mb_id)]
+
+
+def _wire_package_position(ctx: dict, pkg_id: str, *, mb_id: str | None = None) -> tuple[int, int]:
+    """Resolve a package to exactly one buy/package position, optionally scoped to a buy."""
+    buys = wire_field(ctx, "media_buys")
+    buy_indices = [_wire_media_buy_position(ctx, mb_id)] if mb_id is not None else range(len(buys))
+    matching = [
+        (buy_i, pkg_i)
+        for buy_i in buy_indices
+        for pkg_i, package in enumerate(buys[buy_i].get("packages", []))
+        if package.get("package_id") == pkg_id
+    ]
+    assert len(matching) == 1, f"expected exactly one package {pkg_id!r}; got positions {matching}"
     return matching[0]
 
 
 def _wire_package(ctx: dict, pkg_id: str, *, mb_id: str | None = None) -> dict:
-    """Return the package the buyer received on the wire, by Gherkin label.
-
-    ``mb_id`` scopes the search to one media buy when the step text names it;
-    without it the whole document is searched, and the "exactly one" assertion
-    still refuses an ambiguous match.
-    """
-    buys = [_wire_media_buy(ctx, mb_id)] if mb_id is not None else wire_dict(ctx).get("media_buys", [])
-    matching = [pkg for buy in buys for pkg in buy.get("packages", []) if pkg.get("package_id") == pkg_id]
-    assert len(matching) == 1, (
-        f"expected exactly one packages[] entry for {pkg_id!r} across {len(buys)} media buy(s) on the "
-        f"wire; got {len(matching)}: {[p.get('package_id') for buy in buys for p in buy.get('packages', [])]!r}"
-    )
-    return matching[0]
+    """Return the uniquely identified package on the wire."""
+    buy_i, pkg_i = _wire_package_position(ctx, pkg_id, mb_id=mb_id)
+    return wire_field(ctx, "media_buys")[buy_i]["packages"][pkg_i]
 
 
 def _reported_creative_ids(ctx: dict, pkg_id: str) -> list[str]:
@@ -3385,64 +3330,32 @@ def then_package_targeting_overlay_geo_countries(ctx: dict, pkg_id: str, countri
     )
 
 
-def _advisories_naming(advisories: list[dict], pkg_id: str, field: str) -> list[dict]:
-    """The advisories that identify BOTH the package and the field they degrade.
-
-    Matched across ``field`` and ``message`` together, so a selector-shaped
-    advisory and a prose-shaped one both count — what the obligation requires is
-    that the buyer can reconcile WHICH field of WHICH package went missing, not a
-    particular selector spelling.
-    """
-    out = []
-    for advisory in advisories:
-        haystack = " ".join(str(advisory.get(key) or "") for key in ("field", "message"))
-        if pkg_id in haystack and field in haystack:
-            out.append(advisory)
-    return out
-
-
-@then(
-    parsers.parse(
-        'response.errors[] should carry exactly one advisory for package "{pkg_id}" field {field} '
-        'with code "{code}" and recovery "{recovery}"'
-    )
-)
-def then_blob_advisory_code_and_recovery(ctx: dict, pkg_id: str, field: str, code: str, recovery: str) -> None:
-    """Assert the degraded field's advisory carries the pinned code AND recovery.
-
-    Both, off the wire. ``recovery`` is the half a code-counting assertion cannot
-    see: pinned ``core/error.json`` makes the wire ``recovery`` authoritative and
-    ``enumMetadata`` only its documentary mirror, so an advisory that names
-    CONFIGURATION_ERROR while omitting ``recovery`` still leaves the buyer inferring
-    retry semantics. ``correctable`` here would tell the buyer to "fix field values"
-    for a cell in the SELLER's store.
-    """
-    advisories = _wire_advisories(ctx)
-    # The WHOLE document carries exactly one advisory, before we filter to the one
-    # naming this field. This assertion is what grades the word "alone" in the
-    # scenario's own title, and without it the row is satisfiable by an implementation
-    # that degrades EVERY blob value on every row: the sibling advisories such an
-    # implementation emits are filtered out by _advisories_naming below, so the
-    # per-field count still reads 1 and the row passes while the buyer loses every
-    # package_config value in the listing. Measured: that implementation passes all
-    # five rows without this line and fails eight of ten with it.
-    assert len(advisories) == 1, (
-        f"expected exactly ONE advisory in the whole response — a legacy-invalid "
-        f"{field!r} must degrade that field ALONE — got {len(advisories)}: {advisories!r}"
-    )
-    matching = _advisories_naming(advisories, pkg_id, field)
+def _wire_advisory(ctx: dict, field: str | None, *, mb_id: str | None = None, pkg_id: str | None = None) -> dict:
+    """Find exactly one advisory by its positional field and structured identity."""
+    field_path = "media_buys"
+    if pkg_id is not None:
+        buy_i, pkg_i = _wire_package_position(ctx, pkg_id, mb_id=mb_id)
+        real_id = wire_field(ctx, "media_buys")[buy_i]["media_buy_id"]
+        field_path += f"[{buy_i}].packages[{pkg_i}]"
+    else:
+        assert mb_id is not None, "a buy-level advisory requires a media buy id"
+        real_id = _resolve_media_buy_id(ctx, mb_id)
+        if field is not None:
+            field_path += f"[{_wire_media_buy_position(ctx, mb_id)}]"
+    if field is not None:
+        field_path += f".{field}"
+    matching = [
+        advisory
+        for advisory in _wire_advisories(ctx)
+        if advisory.get("field") == field_path
+        and (advisory.get("details") or {}).get("media_buy_id") == real_id
+        and (pkg_id is None or (advisory.get("details") or {}).get("package_id") == pkg_id)
+    ]
     assert len(matching) == 1, (
-        f"expected exactly one errors[] advisory naming package {pkg_id!r} and field {field!r}; "
-        f"got {len(matching)} of {len(advisories)} advisories: {advisories!r}"
+        f"expected exactly one advisory for {field_path!r} on media buy {real_id!r}, "
+        f"package {pkg_id!r}; got {matching!r}"
     )
-    advisory = matching[0]
-    assert advisory.get("code") == code, (
-        f"expected advisory code {code!r} for a defect in the seller's own store, got {advisory.get('code')!r}"
-    )
-    assert advisory.get("recovery") == recovery, (
-        f"expected advisory recovery {recovery!r} on the wire (pinned core/error.json makes the wire "
-        f"field authoritative), got {advisory.get('recovery')!r} on code {advisory.get('code')!r}"
-    )
+    return matching[0]
 
 
 @then(parsers.parse('response.errors[] should carry no advisory with code "{code}"'))
@@ -3453,6 +3366,23 @@ def then_no_advisory_with_code(ctx: dict, code: str) -> None:
         f"expected no errors[] advisory with code {code!r} — its pinned recovery advises a retry "
         f"that can never repair a seller-side defect; got {offending!r}"
     )
+
+
+@then(
+    parsers.parse(
+        'the persisted-value advisory for field {field} should identify media buy "{mb_id}" package "{pkg_id}"'
+    )
+)
+def then_persisted_value_advisory_identity(ctx: dict, field: str, mb_id: str, pkg_id: str) -> None:
+    """Grade the code and exact identity of a persisted package field advisory."""
+    advisory = _wire_advisory(ctx, field, mb_id=mb_id, pkg_id=pkg_id)
+    assert advisory.get("code") == "PERSISTED_VALUE_UNRENDERABLE"
+
+
+@then(parsers.parse('the package "{pkg_id}" wire field {field} should equal the JSON value {expected_json}'))
+def then_package_wire_field_equals_json(ctx: dict, pkg_id: str, field: str, expected_json: str) -> None:
+    """Read the returned field, including the legal absent rendering of an optional value."""
+    assert _wire_package(ctx, pkg_id).get(field) == json.loads(expected_json)
 
 
 # ── creative_deadline: buy level and package level ────────────────────
@@ -3657,6 +3587,18 @@ def then_package_creative_deadline_overrides_buy(ctx: dict, pkg_id: str, timesta
         f"the buy-level creative_deadline {buy_deadline!r} equals the package's {timestamp!r}, so no "
         "override is observable"
     )
+
+
+@then(
+    parsers.parse(
+        'response.errors[] should carry exactly {count:d} advisories with code "{code}" and recovery "{recovery}"'
+    )
+)
+def then_advisory_count_and_classification(ctx: dict, count: int, code: str, recovery: str) -> None:
+    """Assert the whole advisory array, including missing or duplicated entries."""
+    advisories = _wire_advisories(ctx)
+    assert len(advisories) == count
+    assert [(advisory.get("code"), advisory.get("recovery")) for advisory in advisories] == [(code, recovery)] * count
 
 
 @then(
