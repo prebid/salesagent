@@ -24,8 +24,8 @@ rename. Two invariants, enforced in two places:
 
 from pathlib import Path
 
+from tests._collection_manifest import BDD_TREE, load, manifest_dir
 from tests.helpers.ledger import load_ledger_nodeids
-from tests.unit._architecture_helpers import collect_bdd_node_ids_with_e2e_enabled
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _LEDGER = _REPO_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
@@ -34,7 +34,14 @@ _LEDGER = _REPO_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
 def test_every_ledger_entry_resolves_to_a_collected_item():
     entries = load_ledger_nodeids(_LEDGER)
 
-    collected = set(collect_bdd_node_ids_with_e2e_enabled("tests/bdd"))
+    # The ledger's nodeids only EXIST in a collection with the e2e_rest
+    # transport on, so demand that stamp rather than infer it. Asking for
+    # e2e_enabled=True makes a host run -- where docker-compose does not set
+    # BDD_E2E_ENABLED, so the record has no e2e_rest rows at all -- raise with
+    # a cause, instead of quietly reporting every ledger entry as stale.
+    collected_rows = load(manifest_dir(), target=BDD_TREE, e2e_enabled=True)
+
+    collected = {row["nodeid"] for row in collected_rows}
     stale = sorted(e for e in entries if e not in collected)
     assert not stale, (
         f"{len(stale)} stale e2e_rest ledger nodeid(s) resolve to no collected test "

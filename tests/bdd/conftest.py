@@ -1854,7 +1854,7 @@ def parse_xfail_reason(reason: str) -> XfailReason | None:
 # Both lists may only SHRINK. A scenario that newly fails is not added here; it is fixed, or
 # its cause is measured and given its own entry with that cause. The entry counts, the
 # nodeids each list matches, the no-overlap rule and the outline-rows rule are pinned by
-# tests/unit/test_architecture_route_xfail_census.py.
+# tests/collection/test_architecture_route_xfail_census.py.
 #
 # Reasons avoid the words the dormancy tripwire (_classify_strict_xfail_dormancy) reads as a
 # claim about production, because several entries ARE test-wiring and say so.
@@ -2176,7 +2176,7 @@ _NO_UPDATE_WITHOUT_ID_ON_REST = (
 #: failure (the ledger) nor a pass that grades nothing (the parks); nothing is wrong on either
 #: side. Each entry names its rows and its transports, the row is xfail(run=False) on exactly
 #: those transports with the reason below, and it runs and grades on every other transport.
-#: Pinned by tests/unit/test_architecture_route_xfail_census.py with the two lists above.
+#: Pinned by tests/collection/test_architecture_route_xfail_census.py with the two lists above.
 _TRANSPORT_INEXPRESSIBLE_ROWS: tuple[_CatchallXfail, ...] = (
     _X(
         "T-UC-003-partition-media-buy-identification",
@@ -5595,7 +5595,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if "ctx" not in metafunc.fixturenames:
         return
 
-    from tests.harness.transport import Transport
+    from tests.harness.transport import BDD_IN_PROCESS_TRANSPORTS, Transport
 
     marker_names = {m.name for m in metafunc.definition.iter_markers()}
     if marker_names & _TRANSPORT_SPECIFIC_TAGS:
@@ -5633,7 +5633,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # wire envelope (so it can't participate in error-envelope assertions). The six
     # truthful transports are a2a/mcp/rest in process, plus e2e_rest/e2e_mcp/e2e_a2a
     # over real HTTP (added below when enabled).
-    transports = [Transport.A2A, Transport.MCP, Transport.REST]
+    transports = list(BDD_IN_PROCESS_TRANSPORTS)
 
     # EVERY tool is reachable on EVERY transport, so no scenario is withheld from one.
     # A per-UC exclusion for tools with no REST route, driven by a hand-maintained
@@ -5648,7 +5648,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # it is exactly as ungraded as an xfail, but INVISIBLE to both escape-hatch detectors
     # in test_architecture_e2e_rest_escape_hatches.py, which walk xfail conditions and
     # E2EUnsupportedSetup sites and never see a scenario that was never parametrized.
-    # That is what tests/unit/test_e2e_rest_ssrf_blocked_scenario_collected.py pins.
+    # That is what tests/collection/test_e2e_rest_ssrf_blocked_scenario_collected.py pins.
     #
     # A tool that genuinely lost a wrapper is a PRODUCTION gap. Add the route.
     # e2e_mcp and e2e_a2a are OPT-IN, and that is a capacity decision rather than a
