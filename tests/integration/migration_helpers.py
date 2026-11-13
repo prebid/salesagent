@@ -13,6 +13,7 @@ fixtures from conftest without explicit imports, avoiding F811 lint errors).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -114,28 +115,47 @@ def reset_to_revision(
     engine, db_url = migration_db
     run_alembic_upgrade(db_url, revision)
     run_alembic_downgrade(db_url, revision)
-    # virtual_host is NOT NULL from revision 7f31c0ab94d2, which also adds virtual_host_name
-    # (NOT NULL, UNIQUE). The host is derived from the tenant_id so it stays distinct across
-    # seeded tenants, and the name is derived from the host by the function production uses.
-    # Which columns exist depends on ``revision``, so the row states the ones the table has.
+    with engine.begin() as conn:
+        # Clear every tenant-owned child in the same transaction as the replacement.
+        conn.execute(text("TRUNCATE TABLE tenants CASCADE"))
+        seed_tenant(conn, tenant_id=tenant_id, tenant_name=tenant_name, subdomain=subdomain)
+    return engine, db_url
+
+
+def seed_tenant(conn, *, tenant_id: str, tenant_name: str, subdomain: str) -> None:
+    """Insert a historical tenant using the columns present at this revision.
+
+    Accept a connection so reset's truncate and replacement remain atomic, while
+    a caller can seed a second tenant without clearing the first.
+    """
     vhost = vhost_for(tenant_id)
     row = {"tenant_id": tenant_id, "name": tenant_name, "subdomain": subdomain, "virtual_host": vhost}
+    if any(column["name"] == "virtual_host_name" for column in inspect(conn).get_columns("tenants")):
+        row["virtual_host_name"] = hostname_of(vhost)
+    conn.execute(
+        text(
+            f"INSERT INTO tenants ({', '.join(row)}, ad_server, is_active) "
+            f"VALUES ({', '.join(f':{column}' for column in row)}, 'mock', true)"
+        ),
+        row,
+    )
+
+
+def seed_principal(engine, *, tenant_id: str, principal_id: str, name: str = "Buyer") -> None:
+    """Insert a principal without depending on the current ORM shape."""
     with engine.begin() as conn:
-        if any(column["name"] == "virtual_host_name" for column in inspect(conn).get_columns("tenants")):
-            row["virtual_host_name"] = hostname_of(vhost)
-        # CASCADE, not a DELETE per known child table: every row a previous test seeded
-        # belongs to a tenant (accounts, products, ...), and a DELETE list names only the
-        # children its author knew of -- the placements tests' products outlived it and
-        # every later reset failed on products_tenant_id_fkey.
-        conn.execute(text("TRUNCATE TABLE tenants CASCADE"))
         conn.execute(
             text(
-                f"INSERT INTO tenants ({', '.join(row)}, ad_server, is_active) "
-                f"VALUES ({', '.join(f':{column}' for column in row)}, 'mock', true)"
+                "INSERT INTO principals (tenant_id, principal_id, name, platform_mappings, token_hash, token_prefix) "
+                "VALUES (:tenant, :principal, :name, '{}', :token_hash, 'mig_token')"
             ),
-            row,
+            {
+                "tenant": tenant_id,
+                "principal": principal_id,
+                "name": name,
+                "token_hash": hashlib.sha256(f"{tenant_id}:{principal_id}".encode()).hexdigest(),
+            },
         )
-    return engine, db_url
 
 
 def seed_account(
@@ -148,6 +168,8 @@ def seed_account(
     brand_id: str | None = None,
     name: str | None = None,
     billing: str | None = None,
+    sandbox: bool | None = False,
+    created_at: str | None = None,
 ) -> None:
     """Insert an accounts row directly — a migration's subject is rows, not callers.
 
@@ -174,11 +196,13 @@ def seed_account(
             payload["brand_id"] = brand_id
         brand = json.dumps(payload)
 
+    timestamp_column = ", created_at" if created_at is not None else ""
+    timestamp_value = ", :created_at" if created_at is not None else ""
     with engine.begin() as conn:
         conn.execute(
             text(
-                "INSERT INTO accounts (tenant_id, account_id, name, status, operator, brand, billing) "
-                "VALUES (:tid, :aid, :name, 'active', :operator, CAST(:brand AS jsonb), :billing)"
+                f"INSERT INTO accounts (tenant_id, account_id, name, status, operator, brand, billing, sandbox{timestamp_column}) "
+                f"VALUES (:tid, :aid, :name, 'active', :operator, CAST(:brand AS jsonb), :billing, :sandbox{timestamp_value})"
             ),
             {
                 "tid": tenant_id,
@@ -187,6 +211,8 @@ def seed_account(
                 "operator": operator,
                 "brand": brand,
                 "billing": billing,
+                "sandbox": sandbox,
+                "created_at": created_at,
             },
         )
 

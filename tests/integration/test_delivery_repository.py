@@ -24,8 +24,9 @@ from src.core.database.models import (
 )
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext
-from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, AccountFactory
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import plaintext_token_for
+from tests.utils.database_helpers import bind_factories_to_session
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -59,7 +60,6 @@ def tenant_a(integration_db):
             is_active=True,
             ad_server="mock",
         )
-        tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
         session.add(tenant)
         session.commit()
     yield tenant_id
@@ -79,7 +79,6 @@ def tenant_b(integration_db):
             is_active=True,
             ad_server="mock",
         )
-        tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
         session.add(tenant)
         session.commit()
     yield tenant_id
@@ -99,7 +98,10 @@ def principal_a(tenant_a):
             platform_mappings={"mock": {"advertiser_id": "del_adv_a"}},
         )
         session.add(principal)
-        session.commit()
+        session.flush()
+        with bind_factories_to_session(session):
+            seed_default_account(tenant_a, principal_id)
+
     yield principal_id
 
 
@@ -116,7 +118,10 @@ def principal_b(tenant_b):
             platform_mappings={"mock": {"advertiser_id": "del_adv_b"}},
         )
         session.add(principal)
-        session.commit()
+        session.flush()
+        with bind_factories_to_session(session):
+            seed_default_account(tenant_b, principal_id)
+
     yield principal_id
 
 

@@ -114,8 +114,8 @@ def seed_data(tenant_a, tenant_b, principal_a, principal_b):
     """
     with get_db_session() as session:
         # Tenant A media buys
-        mb_a1 = make_media_buy(tenant_a, principal_a, "mb_a1", status="draft", account_id=DEFAULT_TEST_ACCOUNT_ID)
-        mb_a2 = make_media_buy(tenant_a, principal_a, "mb_a2", status="active", account_id=DEFAULT_TEST_ACCOUNT_ID)
+        mb_a1 = make_media_buy(tenant_a, principal_a, "mb_a1", status="draft")
+        mb_a2 = make_media_buy(tenant_a, principal_a, "mb_a2", status="active")
         session.add_all([mb_a1, mb_a2])
         session.flush()
 
@@ -125,7 +125,7 @@ def seed_data(tenant_a, tenant_b, principal_a, principal_b):
         session.add_all([pkg_a1_1, pkg_a1_2])
 
         # Tenant B media buys
-        mb_b1 = make_media_buy(tenant_b, principal_b, "mb_b1", status="draft", account_id=DEFAULT_TEST_ACCOUNT_ID)
+        mb_b1 = make_media_buy(tenant_b, principal_b, "mb_b1", status="draft")
         session.add(mb_b1)
         session.flush()
 
@@ -343,7 +343,7 @@ class TestMediaBuyUoW:
 
         # Create a media buy inside UoW via repository
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_uow_test", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_uow_test")
             uow.media_buys.create(mb)
 
         # Verify it persisted (outside the UoW)
@@ -361,7 +361,7 @@ class TestMediaBuyUoW:
 
         with pytest.raises(ValueError, match="intentional"):
             with MediaBuyUoW(tenant_a) as uow:
-                mb = make_media_buy(tenant_a, principal_a, "mb_uow_rollback", account_id=DEFAULT_TEST_ACCOUNT_ID)
+                mb = make_media_buy(tenant_a, principal_a, "mb_uow_rollback")
                 uow.media_buys.create(mb)
                 raise ValueError("intentional")
 
@@ -389,9 +389,7 @@ class TestIdempotencyKeyLookup:
 
         idem_key = "test-uuid-1234567890abcdef"
         with get_db_session() as session:
-            buy = make_media_buy(
-                tenant_a, principal_a, "mb_idem_1", idempotency_key=idem_key, account_id=DEFAULT_TEST_ACCOUNT_ID
-            )
+            buy = make_media_buy(tenant_a, principal_a, "mb_idem_1", idempotency_key=idem_key)
             session.add(buy)
             session.commit()
 
@@ -407,7 +405,9 @@ class TestIdempotencyKeyLookup:
 
         with get_db_session() as session:
             repo = MediaBuyRepository(session, tenant_a)
-            found = repo.find_by_idempotency_key("nonexistent-key-1234", principal_a)
+            found = repo.find_by_idempotency_key(
+                "nonexistent-key-1234", principal_a, account_id=DEFAULT_TEST_ACCOUNT_ID
+            )
             assert found is None
 
     def test_idempotency_key_scoped_to_tenant(self, tenant_a, tenant_b, principal_a, principal_b):
@@ -416,12 +416,8 @@ class TestIdempotencyKeyLookup:
 
         idem_key = "shared-uuid-1234567890ab"
         with get_db_session() as session:
-            buy_a = make_media_buy(
-                tenant_a, principal_a, "mb_idem_a", idempotency_key=idem_key, account_id=DEFAULT_TEST_ACCOUNT_ID
-            )
-            buy_b = make_media_buy(
-                tenant_b, principal_b, "mb_idem_b", idempotency_key=idem_key, account_id=DEFAULT_TEST_ACCOUNT_ID
-            )
+            buy_a = make_media_buy(tenant_a, principal_a, "mb_idem_a", idempotency_key=idem_key)
+            buy_b = make_media_buy(tenant_b, principal_b, "mb_idem_b", idempotency_key=idem_key)
             session.add(buy_a)
             session.add(buy_b)
             session.commit()
@@ -501,7 +497,8 @@ class TestIdempotencyKeyLookup:
             assert found is not None
             assert found.media_buy_id == "mb_acct_scoped"
 
-            # The default (no account) renders IS NULL — it must NOT match the
-            # account-scoped row (the silent narrowing the threading prevents).
-            assert repo.get_by_id_or_idempotency_key(idem_key, principal_id) is None
+            with pytest.raises(TypeError, match="account_id"):
+                repo.find_by_idempotency_key(idem_key, principal_id)
+            with pytest.raises(TypeError, match="account_id"):
+                repo.get_by_id_or_idempotency_key(idem_key, principal_id)
             assert repo.get_by_id_or_idempotency_key(idem_key, principal_id, account_id="other") is None

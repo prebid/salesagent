@@ -94,7 +94,7 @@ class TestResolveIdempotencyRaceOrRaise:
                 "tenant_x",
                 idempotency_key="key-1234567890123456",
                 principal_id="prin_x",
-                account_id=None,
+                account_id="acct_test",
             )
         # Re-raised verbatim — not translated, not swallowed into a replay.
         assert caught.value is exc

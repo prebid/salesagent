@@ -11,9 +11,9 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Principal, Tenant
-from tests.factories import AccountFactory
-from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import plaintext_token_for
+from tests.utils.database_helpers import bind_factories_to_session
 
 
 @pytest.mark.requires_db
@@ -54,7 +54,6 @@ class TestTenantDashboard:
                 human_review_required=False,
                 auto_approve_format_ids=["display_300x250"],
             )
-            tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
             db_session.add(tenant)
 
             # Create principal with valid platform mapping
@@ -66,6 +65,9 @@ class TestTenantDashboard:
                 platform_mappings={"mock": {"advertiser_id": "test_advertiser"}},  # Valid mapping
             )
             db_session.add(principal)
+            db_session.flush()
+            with bind_factories_to_session(db_session):
+                seed_default_account("test_dashboard", "test_principal")
 
             # Create media buy with CORRECT field names
             media_buy = MediaBuy(
@@ -110,7 +112,6 @@ class TestTenantDashboard:
                 virtual_host="test-metrics.adcp.test",
                 is_active=True,
             )
-            tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
             db_session.add(tenant)
 
             # Create principals first (required for foreign key)
@@ -123,6 +124,9 @@ class TestTenantDashboard:
                     platform_mappings={"mock": {"id": f"advertiser_{i}"}},
                 )
                 db_session.add(principal)
+                db_session.flush()
+                with bind_factories_to_session(db_session):
+                    seed_default_account("test_metrics", f"principal_{i}")
 
             # Create multiple media buys
             for i in range(3):

@@ -16,7 +16,7 @@ app = create_app()
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Product, TenantManagementConfig
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
-from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, AccountFactory
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.harness._base import IntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -39,8 +39,9 @@ def test_tenant_and_products(integration_db):
     """Create a test tenant with products for deletion tests."""
     with IntegrationEnv() as _env:
         tenant = TenantFactory(tenant_id="test_delete", subdomain="test-delete")
-        AccountFactory(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID)
         PrincipalFactory(tenant=tenant, principal_id="test_principal")
+        tenant_id = tenant.tenant_id
+        seed_default_account(tenant_id, "test_principal")
 
         p1 = ProductFactory(
             tenant=tenant,

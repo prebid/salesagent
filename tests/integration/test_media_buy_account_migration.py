@@ -12,7 +12,14 @@ import pytest
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
-from tests.integration.migration_helpers import reset_to_revision, run_alembic_downgrade, run_alembic_upgrade
+from tests.integration.migration_helpers import (
+    reset_to_revision,
+    run_alembic_downgrade,
+    run_alembic_upgrade,
+    seed_account,
+    seed_principal,
+    seed_tenant,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -31,24 +38,27 @@ def legacy(migration_db):
         tenant_name="Account migration",
         subdomain="account-migration",
     )
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO principals (tenant_id, principal_id, name, platform_mappings, token_hash, token_prefix) "
-                "VALUES (:tenant, :principal, 'Buyer', '{}', repeat('a', 64), 'mig_token')"
-            ),
-            {"tenant": _TENANT, "principal": _PRINCIPAL},
-        )
-        conn.execute(
-            text(
-                "INSERT INTO accounts (tenant_id, account_id, name, status, sandbox, operator, brand, created_at) "
-                "VALUES (:tenant, 'acc_live', 'Live', 'active', NULL, 'agent.example', "
-                "'{\"domain\":\"brand.example\"}', '2026-01-01'), "
-                "(:tenant, 'acc_sandbox', 'Sandbox', 'active', true, 'agent.example', "
-                "'{\"domain\":\"brand.example\"}', '2026-01-01')"
-            ),
-            {"tenant": _TENANT},
-        )
+    seed_principal(engine, tenant_id=_TENANT, principal_id=_PRINCIPAL)
+    seed_account(
+        engine,
+        tenant_id=_TENANT,
+        account_id="acc_live",
+        name="Live",
+        domain="brand.example",
+        operator="agent.example",
+        sandbox=None,
+        created_at="2026-01-01",
+    )
+    seed_account(
+        engine,
+        tenant_id=_TENANT,
+        account_id="acc_sandbox",
+        name="Sandbox",
+        domain="brand.example",
+        operator="agent.example",
+        sandbox=True,
+        created_at="2026-01-01",
+    )
     return engine, url
 
 
@@ -197,8 +207,15 @@ def test_natural_key_mode_requires_independent_resolved_id(legacy, mode, account
     assert _accounts(engine) == {"buy": account}
 
 
-@pytest.mark.parametrize("payload", [{}, {"account": {"account_id": "acc_sandbox"}}, {"account": _ref(True)}])
-def test_unproven_ownership_or_mode_refuses_without_guessing(legacy, payload):
+@pytest.mark.parametrize(
+    "payload,reason",
+    [
+        ({}, "account_identity_unproven"),
+        ({"account": {"account_id": "acc_sandbox"}}, "historical_mode_unproven"),
+        ({"account": _ref(True)}, "account_identity_unproven"),
+    ],
+)
+def test_unproven_ownership_or_mode_refuses_without_guessing(legacy, payload, reason):
     engine, url = legacy
     _buy(engine, request=payload)
     # Even a single current grant cannot establish the original account/mode.
@@ -210,7 +227,7 @@ def test_unproven_ownership_or_mode_refuses_without_guessing(legacy, payload):
             ),
             {"tenant": _TENANT, "principal": _PRINCIPAL},
         )
-    with pytest.raises(RuntimeError) as failure:
+    with pytest.raises(RuntimeError, match=reason) as failure:
         run_alembic_upgrade(url, _REVISION)
     assert all(value in str(failure.value) for value in (_TENANT, _PRINCIPAL, "buy"))
     assert _accounts(engine) == {"buy": None}
@@ -221,7 +238,7 @@ def test_unknown_or_malformed_natural_mode_is_not_live_evidence(legacy, mode):
     engine, url = legacy
     _buy(engine, request={"account": _ref(mode)})
     _cache(engine, account="acc_live", response={"media_buy_id": "buy"})
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="historical_mode_unproven"):
         run_alembic_upgrade(url, _REVISION)
     assert _accounts(engine) == {"buy": None}
 
@@ -239,13 +256,21 @@ def test_unrelated_cache_cannot_supply_ownership(legacy, change):
         else None,
         tool="update_media_buy" if change == "other_tool" else "create_media_buy",
     )
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="account_identity_unproven"):
         run_alembic_upgrade(url, _REVISION)
     assert _accounts(engine) == {"buy": None}
 
 
-@pytest.mark.parametrize("kind", ["account", "mode", "missing_account", "natural_key"])
-def test_conflicting_evidence_aborts_entire_upgrade(legacy, kind):
+@pytest.mark.parametrize(
+    "kind,reason",
+    [
+        ("account", "account_evidence_conflict"),
+        ("mode", "mode_evidence_conflict"),
+        ("missing_account", "account_missing"),
+        ("natural_key", "natural_key_mismatch"),
+    ],
+)
+def test_conflicting_evidence_aborts_entire_upgrade(legacy, kind, reason):
     engine, url = legacy
     _buy(engine, "safe")
     _cache(engine, "safe", key="safe_key")
@@ -260,7 +285,7 @@ def test_conflicting_evidence_aborts_entire_upgrade(legacy, kind):
             request["account"]["operator"] = "wrong.example"
     _buy(engine, "unsafe", request=request)
     _cache(engine, "unsafe", account="missing" if kind == "missing_account" else "acc_sandbox")
-    with pytest.raises(RuntimeError) as failure:
+    with pytest.raises(RuntimeError, match=reason) as failure:
         run_alembic_upgrade(url, _REVISION)
     assert "unsafe" in str(failure.value)
     assert _accounts(engine) == {"safe": None, "unsafe": None}
@@ -273,7 +298,9 @@ def test_projected_idempotency_collision_names_both_buys_and_rolls_back(legacy):
     _buy(engine, "old", account="acc_sandbox", key="shared")
     _buy(engine, "recover", key="shared")
     _cache(engine, "recover", key="shared")
-    with pytest.raises(RuntimeError) as failure:
+    with pytest.raises(
+        RuntimeError, match="Account recovery would collide with idx_media_buys_idempotency_key"
+    ) as failure:
         run_alembic_upgrade(url, _REVISION)
     assert all(value in str(failure.value) for value in ("idx_media_buys_idempotency_key", "old", "recover"))
     assert _accounts(engine) == {"old": "acc_sandbox", "recover": None}
@@ -284,10 +311,13 @@ def test_constraint_and_downgrade_preserve_recovered_account(legacy):
     _buy(engine)
     _cache(engine)
     run_alembic_upgrade(url, _REVISION)
+    fk = next(fk for fk in inspect(engine).get_foreign_keys("media_buys") if fk["name"] == "fk_media_buys_account")
+    assert fk["options"]["ondelete"] == "RESTRICT"
     with pytest.raises(IntegrityError):
         _buy(engine, "new_null")
-    with pytest.raises(IntegrityError), engine.begin() as conn:
+    with pytest.raises(IntegrityError) as failure, engine.begin() as conn:
         conn.execute(text("DELETE FROM accounts WHERE account_id='acc_sandbox'"))
+    assert failure.value.orig.pgcode == "23503"
     run_alembic_downgrade(url, _PREVIOUS)
     assert _accounts(engine) == {"buy": "acc_sandbox"}
     columns = {column["name"]: column for column in inspect(engine).get_columns("media_buys")}
@@ -338,21 +368,10 @@ def test_evidence_is_scoped_to_the_buy_tenant_and_principal(legacy, source, fore
     engine, url = legacy
     other_tenant = "other_tenant" if foreign_tenant else _TENANT
     other_principal = _PRINCIPAL if foreign_tenant else "other_principal"
-    with engine.begin() as conn:
-        if foreign_tenant:
-            conn.execute(
-                text(
-                    "INSERT INTO tenants (tenant_id, name, subdomain, virtual_host, virtual_host_name, ad_server, is_active) "
-                    "VALUES ('other_tenant', 'Other', 'other', 'https://other.example', 'other.example', 'mock', true)"
-                )
-            )
-        conn.execute(
-            text(
-                "INSERT INTO principals (tenant_id, principal_id, name, platform_mappings, token_hash, token_prefix) "
-                "VALUES (:tenant, :principal, 'Other', '{}', repeat('b', 64), 'other')"
-            ),
-            {"tenant": other_tenant, "principal": other_principal},
-        )
+    if foreign_tenant:
+        with engine.begin() as conn:
+            seed_tenant(conn, tenant_id=other_tenant, tenant_name="Other", subdomain="other")
+    seed_principal(engine, tenant_id=other_tenant, principal_id=other_principal, name="Other")
     _buy(engine, request={"account": _ref(True)})
     if source == "workflow":
         _workflow(
@@ -360,7 +379,7 @@ def test_evidence_is_scoped_to_the_buy_tenant_and_principal(legacy, source, fore
         )
     else:
         _cache(engine, tenant=other_tenant, principal=other_principal)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="account_identity_unproven"):
         run_alembic_upgrade(url, _REVISION)
     assert _accounts(engine) == {"buy": None}
 
@@ -370,7 +389,7 @@ def test_non_creation_workflow_cannot_supply_ownership(legacy, override):
     engine, url = legacy
     _buy(engine, request={"account": _ref(True)})
     _workflow(engine, request={"account": {"account_id": "acc_sandbox"}}, **override)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="account_identity_unproven"):
         run_alembic_upgrade(url, _REVISION)
 
 
@@ -387,7 +406,7 @@ def test_submitted_task_mapped_to_multiple_buys_is_ambiguous(legacy):
             {"step": step},
         )
     _cache(engine, response={"task_id": step})
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="account_identity_unproven"):
         run_alembic_upgrade(url, _REVISION)
 
 
@@ -416,11 +435,12 @@ def test_workflow_account_disagreement_is_not_hidden_by_cache(legacy):
 @pytest.mark.parametrize("arm", ["submitted_with_buy_id", "submitted_mode_only", "completed_with_task_id"])
 def test_cache_response_arm_must_match_its_persisted_status(legacy, arm):
     engine, url = legacy
-    _buy(engine)
-    step = _workflow(engine)
+    _buy(engine, "mb_legacy_1", request={"account": _ref(True)})
+    step = _workflow(engine, "mb_legacy_1")
     _cache(
         engine,
-        response={"media_buy_id": "buy", "sandbox": True}
+        "mb_legacy_1",
+        response={"media_buy_id": "mb_legacy_1", "sandbox": True}
         if arm == "submitted_with_buy_id"
         else {"task_id": step, "sandbox": True},
     )
@@ -434,10 +454,10 @@ def test_cache_response_arm_must_match_its_persisted_status(legacy, arm):
                 ),
                 {"status": status},
             )
-    with pytest.raises(RuntimeError) as failure:
+    with pytest.raises(RuntimeError, match="conflicting_create_response") as failure:
         run_alembic_upgrade(url, _REVISION)
-    assert "buy" in str(failure.value)
-    assert _accounts(engine) == {"buy": None}
+    assert "mb_legacy_1" in str(failure.value)
+    assert _accounts(engine) == {"mb_legacy_1": None}
 
 
 @pytest.mark.parametrize("submitted", [False, True])

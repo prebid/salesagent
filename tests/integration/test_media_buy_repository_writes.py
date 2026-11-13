@@ -15,9 +15,10 @@ import pytest
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal, Tenant
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
-from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, AccountFactory
+from tests.factories.account import seed_default_account
 from tests.factories.principal import plaintext_token_for
 from tests.integration.conftest import cleanup_tenant, make_media_buy, make_package
+from tests.utils.database_helpers import bind_factories_to_session
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -40,7 +41,6 @@ def tenant_a(integration_db):
             is_active=True,
             ad_server="mock",
         )
-        tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
         session.add(tenant)
         session.commit()
     yield tenant_id
@@ -60,7 +60,6 @@ def tenant_b(integration_db):
             is_active=True,
             ad_server="mock",
         )
-        tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
         session.add(tenant)
         session.commit()
     yield tenant_id
@@ -81,6 +80,8 @@ def principal_a(tenant_a):
         )
         session.add(principal)
         session.commit()
+        with bind_factories_to_session(session):
+            seed_default_account(tenant_a, principal_id)
     yield principal_id
 
 
@@ -98,6 +99,8 @@ def principal_b(tenant_b):
         )
         session.add(principal)
         session.commit()
+        with bind_factories_to_session(session):
+            seed_default_account(tenant_b, principal_id)
     yield principal_id
 
 
@@ -112,7 +115,7 @@ class TestCreateMediaBuy:
     def test_roundtrip_create_and_read_back(self, tenant_a, principal_a):
         """Create via repository, read back, verify all fields match."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_create_1", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_create_1")
             result = uow.media_buys.create(mb)
             assert result is mb
 
@@ -130,14 +133,14 @@ class TestCreateMediaBuy:
     def test_tenant_mismatch_raises(self, tenant_a, tenant_b, principal_a):
         """Creating a media buy with wrong tenant_id raises ValueError."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_b, principal_a, "mb_wrong_tenant", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_b, principal_a, "mb_wrong_tenant")
             with pytest.raises(ValueError, match="Tenant mismatch"):
                 uow.media_buys.create(mb)
 
     def test_tenant_isolation_on_create(self, tenant_a, tenant_b, principal_a, principal_b):
         """Media buy created in tenant A is not visible to tenant B."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_isolated", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_isolated")
             uow.media_buys.create(mb)
 
         with get_db_session() as session:
@@ -148,7 +151,7 @@ class TestCreateMediaBuy:
         """If exception is raised inside UoW, the create is rolled back."""
         with pytest.raises(RuntimeError, match="intentional"):
             with MediaBuyUoW(tenant_a) as uow:
-                mb = make_media_buy(tenant_a, principal_a, "mb_rollback_create", account_id=DEFAULT_TEST_ACCOUNT_ID)
+                mb = make_media_buy(tenant_a, principal_a, "mb_rollback_create")
                 uow.media_buys.create(mb)
                 raise RuntimeError("intentional")
 
@@ -169,7 +172,7 @@ class TestUpdateStatus:
         """Update status and verify fields persisted."""
         # Seed a media buy
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_status_1", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_status_1")
             uow.media_buys.create(mb)
 
         # Update status
@@ -203,7 +206,7 @@ class TestUpdateStatus:
         """Cannot update status of media buy in another tenant."""
         # Create in tenant A
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_cross_status", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_cross_status")
             uow.media_buys.create(mb)
 
         # Try to update from tenant B
@@ -221,7 +224,7 @@ class TestUpdateStatus:
     def test_update_status_only_changes_status(self, tenant_a, principal_a):
         """update_status without approved_at/approved_by only changes status."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_status_only", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_status_only")
             uow.media_buys.create(mb)
 
         with MediaBuyUoW(tenant_a) as uow:
@@ -243,7 +246,7 @@ class TestUpdateFields:
     def test_roundtrip_update_fields(self, tenant_a, principal_a):
         """Update multiple fields and verify persistence."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_fields_1", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_fields_1")
             uow.media_buys.create(mb)
 
         with MediaBuyUoW(tenant_a) as uow:
@@ -274,7 +277,7 @@ class TestUpdateFields:
     def test_update_fields_invalid_attribute_raises(self, tenant_a, principal_a):
         """Updating a nonexistent attribute raises ValueError."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_invalid_field", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_invalid_field")
             uow.media_buys.create(mb)
 
         with pytest.raises(ValueError, match="has no attribute"):
@@ -284,7 +287,7 @@ class TestUpdateFields:
     def test_update_fields_tenant_isolation(self, tenant_a, tenant_b, principal_a, principal_b):
         """Cannot update fields of media buy in another tenant."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_fields_iso", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_fields_iso")
             uow.media_buys.create(mb)
 
         with MediaBuyUoW(tenant_b) as uow:
@@ -309,7 +312,7 @@ class TestCreatePackage:
     def test_roundtrip_create_package(self, tenant_a, principal_a):
         """Create a package and read it back."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_pkg_create", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_pkg_create")
             uow.media_buys.create(mb)
 
         with MediaBuyUoW(tenant_a) as uow:
@@ -349,7 +352,7 @@ class TestCreatePackage:
         """Creating a package for another tenant's media buy raises ValueError."""
         # Create media buy in tenant B
         with MediaBuyUoW(tenant_b) as uow:
-            mb = make_media_buy(tenant_b, principal_b, "mb_other_tenant_pkg", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_b, principal_b, "mb_other_tenant_pkg")
             uow.media_buys.create(mb)
 
         # Try to create package from tenant A
@@ -364,7 +367,7 @@ class TestCreatePackage:
     def test_create_package_with_no_optional_fields(self, tenant_a, principal_a):
         """Create a package with only required fields (no budget/bid_price/pacing)."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_pkg_minimal", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_pkg_minimal")
             uow.media_buys.create(mb)
 
         with MediaBuyUoW(tenant_a) as uow:
@@ -389,7 +392,7 @@ class TestUpdatePackageConfig:
     def test_roundtrip_update_config(self, tenant_a, principal_a):
         """Update package_config and read back."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_upd_cfg", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_upd_cfg")
             uow.media_buys.create(mb)
 
         with MediaBuyUoW(tenant_a) as uow:
@@ -415,7 +418,7 @@ class TestUpdatePackageConfig:
     def test_update_config_nonexistent_returns_none(self, tenant_a, principal_a):
         """Updating config of nonexistent package returns None."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_no_pkg_cfg", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_no_pkg_cfg")
             uow.media_buys.create(mb)
 
         with MediaBuyUoW(tenant_a) as uow:
@@ -425,7 +428,7 @@ class TestUpdatePackageConfig:
     def test_update_config_other_tenant_returns_none(self, tenant_a, tenant_b, principal_a, principal_b):
         """Cannot update package config via another tenant's repository."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_cfg_iso", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_cfg_iso")
             uow.media_buys.create(mb)
 
         with MediaBuyUoW(tenant_a) as uow:
@@ -458,7 +461,7 @@ class TestUpdatePackageFields:
     def test_roundtrip_update_package_fields(self, tenant_a, principal_a):
         """Update package fields and verify persistence."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_pkg_fields", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_pkg_fields")
             uow.media_buys.create(mb)
 
         with MediaBuyUoW(tenant_a) as uow:
@@ -491,7 +494,7 @@ class TestUpdatePackageFields:
     def test_update_package_fields_nonexistent_returns_none(self, tenant_a, principal_a):
         """Updating fields of nonexistent package returns None."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_no_pkg_fld", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_no_pkg_fld")
             uow.media_buys.create(mb)
 
         with MediaBuyUoW(tenant_a) as uow:
@@ -501,7 +504,7 @@ class TestUpdatePackageFields:
     def test_update_package_fields_invalid_attribute_raises(self, tenant_a, principal_a):
         """Updating a nonexistent package attribute raises ValueError."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_pkg_bad_attr", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_pkg_bad_attr")
             uow.media_buys.create(mb)
 
         with MediaBuyUoW(tenant_a) as uow:
@@ -527,7 +530,7 @@ class TestCreatePackagesBulk:
     def test_roundtrip_bulk_create(self, tenant_a, principal_a):
         """Bulk create packages and read them all back."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_bulk", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_bulk")
             uow.media_buys.create(mb)
 
         packages = [
@@ -558,7 +561,7 @@ class TestCreatePackagesBulk:
     def test_bulk_create_media_buy_id_mismatch_raises(self, tenant_a, principal_a):
         """Bulk creating with mismatched media_buy_id raises ValueError."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_bulk_mismatch", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_bulk_mismatch")
             uow.media_buys.create(mb)
 
         packages = [
@@ -573,7 +576,7 @@ class TestCreatePackagesBulk:
     def test_bulk_create_empty_list(self, tenant_a, principal_a):
         """Bulk creating with empty list succeeds and returns empty."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_bulk_empty", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_a, principal_a, "mb_bulk_empty")
             uow.media_buys.create(mb)
 
         with MediaBuyUoW(tenant_a) as uow:
@@ -583,7 +586,7 @@ class TestCreatePackagesBulk:
     def test_bulk_create_tenant_isolation(self, tenant_a, tenant_b, principal_a, principal_b):
         """Cannot bulk create packages via another tenant's repository."""
         with MediaBuyUoW(tenant_b) as uow:
-            mb = make_media_buy(tenant_b, principal_b, "mb_bulk_iso", account_id=DEFAULT_TEST_ACCOUNT_ID)
+            mb = make_media_buy(tenant_b, principal_b, "mb_bulk_iso")
             uow.media_buys.create(mb)
 
         packages = [make_package("mb_bulk_iso", "pkg_iso")]

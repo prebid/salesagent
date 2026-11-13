@@ -356,7 +356,7 @@ def test_media_buy(db_session, test_tenant, test_principal, test_product):
     tenant_id = test_tenant.tenant_id
     principal_id = test_principal.principal_id
     with bind_factories_to_session(db_session):
-        account_id = seed_default_account(tenant_id)
+        account_id = seed_default_account(tenant_id, principal_id)
 
     unique_id = str(uuid.uuid4())[:8]
     now = datetime.now(UTC)

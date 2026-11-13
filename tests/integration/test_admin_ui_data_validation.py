@@ -11,6 +11,7 @@ import pytest
 
 from tests.factories.account import seed_default_account
 from tests.factories.principal import plaintext_token_for
+from tests.utils.database_helpers import bind_factories_to_session
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -438,7 +439,6 @@ class TestDashboardDataValidation:
         from src.core.database.models import MediaBuy, Principal
 
         tenant_id = test_tenant_with_data["tenant_id"]
-        account_id = seed_default_account(tenant_id)
 
         # Create principal first
         with get_db_session() as db_session:
@@ -450,6 +450,9 @@ class TestDashboardDataValidation:
                 platform_mappings={"mock": {"id": "test"}},
             )
             db_session.add(principal)
+            db_session.flush()
+            with bind_factories_to_session(db_session):
+                account_id = seed_default_account(tenant_id, "test_principal_dashboard")
 
             # Create 5 media buys
             for i in range(5):
@@ -499,7 +502,6 @@ class TestMediaBuysDataValidation:
         from src.core.database.models import MediaBuy, Principal
 
         tenant_id = test_tenant_with_data["tenant_id"]
-        account_id = seed_default_account(tenant_id)
 
         # Create principal first
         with get_db_session() as db_session:
@@ -511,6 +513,9 @@ class TestMediaBuysDataValidation:
                 platform_mappings={"mock": {"id": "test"}},
             )
             db_session.add(principal)
+            db_session.flush()
+            with bind_factories_to_session(db_session):
+                account_id = seed_default_account(tenant_id, "test_principal_mb")
 
             # Create media buy with complex raw_request (packages, creatives)
             media_buy = MediaBuy(
@@ -559,7 +564,6 @@ class TestMediaBuysDataValidation:
         from src.core.database.models import MediaBuy, Principal
 
         tenant_id = test_tenant_with_data["tenant_id"]
-        account_id = seed_default_account(tenant_id)
 
         # Create principal
         with get_db_session() as db_session:
@@ -571,6 +575,9 @@ class TestMediaBuysDataValidation:
                 platform_mappings={"mock": {"id": "test"}},
             )
             db_session.add(principal)
+            db_session.flush()
+            with bind_factories_to_session(db_session):
+                account_id = seed_default_account(tenant_id, "test_principal_status")
 
             # Create media buys with different statuses
             statuses = ["draft", "live", "paused", "completed", "cancelled"]

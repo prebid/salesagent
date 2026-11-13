@@ -20,10 +20,10 @@ from src.core.database.models import MediaBuy, Principal
 from src.core.exceptions import AdCPMediaBuyNotFoundError
 from src.core.schemas import ListCreativesResponse, UpdateMediaBuyRequest
 from src.core.schemas.creative import ListCreativesRequest
-from tests.factories import AccountFactory, stamp_format_identity
-from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
+from tests.factories import stamp_format_identity
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
-from tests.utils.database_helpers import create_tenant_with_timestamps
+from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -48,7 +48,6 @@ class TestCrossPrincipalSecurity:
                 auto_approve_format_ids=["display_300x250"],
                 human_review_required=False,
             )
-            tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=DEFAULT_TEST_ACCOUNT_ID))
             session.add(tenant)
 
             # Create two different principals (advertisers)
@@ -70,6 +69,8 @@ class TestCrossPrincipalSecurity:
 
             # Commit principals before creating dependent data (FK constraint)
             session.commit()
+            with bind_factories_to_session(session):
+                seed_default_account("security_test_tenant", "advertiser_a")
 
             # Create creative owned by Advertiser A
             creative_a = DBCreative(

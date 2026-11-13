@@ -25,9 +25,9 @@ from src.core.resolved_identity import AccountIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.schemas.account import Account
 from src.core.tools.media_buy_update import _update_media_buy_impl
-from tests.factories import AccountFactory
+from tests.factories.account import seed_default_account
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
-from tests.utils.database_helpers import vhost_for
+from tests.utils.database_helpers import bind_factories_to_session, vhost_for
 
 # Note: _verify_principal is now internal to _update_media_buy_impl
 # Tests that used _verify_principal directly will need to test through the public API
@@ -68,7 +68,6 @@ def test_tenant_setup(integration_db):
             auto_approve_format_ids=[],
             policy_settings={},
         )
-        tenant.accounts.append(AccountFactory.build(tenant=tenant, account_id=_ACCOUNT_ID))
         session.add(tenant)
 
         # Create principal
@@ -90,6 +89,8 @@ def test_tenant_setup(integration_db):
         session.add(currency_limit)
 
         session.commit()
+        with bind_factories_to_session(session):
+            seed_default_account(tenant_id, principal_id, account_id=_ACCOUNT_ID)
 
     yield {
         "tenant_id": tenant_id,
