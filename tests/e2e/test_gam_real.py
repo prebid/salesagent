@@ -160,6 +160,7 @@ class TestGAMAdapter:
             network_code=GAM_TEST_NETWORK_CODE,
             advertiser_id=GAM_TEST_ADVERTISER_ID,
             tenant_id="e2e_test",
+            tenant_ai_config=None,
         )
 
     def test_adapter_initialization(self, gam_service_account_json):

@@ -414,6 +414,11 @@ fi
 # salesagent-mp53.8's counterparty walk is the first leg that actually needs an
 # origin up, and it failed exactly this way.)
 #
+# scripted-llm: the model every server here calls (GOOGLE_GEMINI_BASE_URL), by service
+# name with no TLS front. Absent, every get_products ranking and policy scenario on
+# e2e_rest falls back to catalog order or skips its policy check, and fails as a
+# production defect three assertions later.
+#
 # tls-proxy fronts all four SNI names in this list — proxy.adcp.test,
 # creative-agent.adcp.test, storyboard.adcp.test, and the webhook-capture /
 # counterparty-origin routes — so one missing service here is a green run on the
@@ -421,7 +426,7 @@ fi
 # tests/unit/test_architecture_e2e_origin_services_start.py pins the pairing in
 # both directions: every SNI-routed upstream is started, and every name started
 # here exists in compose. It matches the FIRST `dc up -d` line in this file.
-dc up -d postgres adcp-server adcp-server-storyboard proxy tls-proxy creative-pg creative-agent webhook-capture counterparty-origin
+dc up -d postgres adcp-server adcp-server-storyboard proxy tls-proxy creative-pg creative-agent webhook-capture counterparty-origin scripted-llm
 
 echo "Waiting for Postgres + server health (in-network)..."
 deadline=$(( $(date +%s) + 360 ))

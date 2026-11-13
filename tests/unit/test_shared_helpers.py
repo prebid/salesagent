@@ -190,6 +190,8 @@ def _make_adapter_instance() -> Any:
         config={"enabled": True},
         principal=principal,
         tenant_id="test-tenant",
+        order_name_template=None,
+        tenant_ai_config=None,
     )
 
 

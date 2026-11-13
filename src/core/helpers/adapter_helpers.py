@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from src.core.database.models import AdapterConfig as DBAdapterConfig
     from src.core.database.models import Tenant as DBTenant
     from src.core.resolved_identity import ResolvedIdentity
-    from src.core.schemas import Format
+    from src.core.schemas import Format, Principal
     from src.core.tenant_context import TenantContext
     from src.core.utils.mcp_client import SignMcpAttempt
 
@@ -409,7 +409,7 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
         # the non-sandbox branch's answer for the same absent row (salesagent-6d07f).
         if config_row is None:
             raise AdCPConfigurationError(internal_detail=ValueError(f"tenant {tenant_id} has no adapter_config row"))
-        return MockAdServerAdapter(_simulating_adapter_config(config_row), principal, tenant_id=tenant_id)
+        return _mock_adapter(_simulating_adapter_config(config_row), principal, tenant)
 
     adapter_config: dict[str, object] = {"enabled": True}
     if config_row:
@@ -465,7 +465,7 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
     logger.info(f"[ADAPTER_SELECT] FINAL selected_adapter: {selected_adapter}")
     if selected_adapter == "mock":
         logger.info("[ADAPTER_SELECT] Instantiating MockAdServerAdapter")
-        return MockAdServerAdapter(adapter_config, principal, tenant_id=tenant_id)
+        return _mock_adapter(adapter_config, principal, tenant)
     elif selected_adapter == "google_ad_manager":
         # network_code is required for GoogleAdManager
         network_code = adapter_config.get("network_code")
@@ -490,6 +490,7 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
             tenant_id=tenant_id,
             targeting_config=targeting_config,
             naming_templates=naming_templates,
+            tenant_ai_config=tenant.ai_config,
         )
     elif selected_adapter == "kevel":
         return Kevel(adapter_config, principal, tenant_id=tenant_id)
@@ -497,4 +498,17 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
         return TritonDigital(adapter_config, principal, tenant_id=tenant_id)
     else:
         # Default to mock for unsupported adapters
-        return MockAdServerAdapter(adapter_config, principal, tenant_id=tenant_id)
+        return _mock_adapter(adapter_config, principal, tenant)
+
+
+def _mock_adapter(
+    adapter_config: dict[str, object], principal: Principal, tenant: TenantContext
+) -> MockAdServerAdapter:
+    """The mock adapter for ``tenant``, with the tenant's order-name template and AI configuration."""
+    return MockAdServerAdapter(
+        adapter_config,
+        principal,
+        tenant_id=tenant.tenant_id,
+        order_name_template=tenant.order_name_template,
+        tenant_ai_config=tenant.ai_config,
+    )

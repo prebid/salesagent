@@ -35,6 +35,7 @@ def gam_adapter(mock_principal):
         advertiser_id="789",
         trafficker_id="101112",
         tenant_id="test_tenant",
+        tenant_ai_config=None,
     )
 
 
@@ -87,6 +88,7 @@ def test_get_media_buy_delivery_with_real_gam_data(mock_reporting_service_class,
             advertiser_id="789",
             trafficker_id="101112",
             tenant_id="test_tenant",
+            tenant_ai_config=None,
         )
         adapter.client = mock_client
 

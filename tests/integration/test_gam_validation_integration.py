@@ -34,6 +34,7 @@ def _build_adapter(principal, config, *, line_items=()):
             advertiser_id=principal.platform_mappings["google_ad_manager"]["advertiser_id"],
             trafficker_id=config["trafficker_id"],
             tenant_id="test_tenant",
+            tenant_ai_config=None,
         )
 
 
@@ -300,6 +301,7 @@ class TestGAMValidationIntegration:
                     advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                     trafficker_id=self.config["trafficker_id"],
                     tenant_id="test_tenant",
+                    tenant_ai_config=None,
                 )
 
                 result = adapter.add_creative_assets("123", [invalid_asset], None)

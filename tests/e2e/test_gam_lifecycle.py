@@ -359,6 +359,7 @@ def gam_adapter(gam_lifecycle_db, gam_service_account_json):
         network_code=GAM_TEST_NETWORK_CODE,
         advertiser_id=GAM_TEST_ADVERTISER_ID,
         tenant_id=GAM_LIFECYCLE_TENANT_ID,
+        tenant_ai_config=None,
     )
 
     return adapter

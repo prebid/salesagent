@@ -504,6 +504,7 @@ def get_gam_advertisers(tenant_id):
                     advertiser_id=None,
                     trafficker_id=tenant.adapter_config.gam_trafficker_id,
                     tenant_id=tenant_id,
+                    tenant_ai_config=None,  # names no order, so no AI configuration is read
                 )
 
                 # Get advertisers (companies) from GAM with filtering support

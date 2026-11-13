@@ -1144,6 +1144,7 @@ def test_gam_connection(tenant_id):
                     advertiser_id=None,
                     trafficker_id=None,
                     tenant_id=tenant_id,
+                    tenant_ai_config=None,  # names no order, so no AI configuration is read
                 )
 
                 # Fetch ALL advertisers using shared implementation (with pagination)

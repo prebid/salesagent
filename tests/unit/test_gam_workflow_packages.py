@@ -111,6 +111,7 @@ def _build_gam_adapter(mock_principal):
             advertiser_id="789",
             trafficker_id="456",
             tenant_id="tenant_123",
+            tenant_ai_config=None,
         )
 
 
@@ -122,8 +123,6 @@ def _make_configured_product():
     product = Mock()
     product.product_id = "prod_test"
     product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
-    product.gemini_api_key = None
-    product.order_name_template = None
     return product
 
 
@@ -170,6 +169,7 @@ class TestGAMManualApprovalPath:
                 advertiser_id="789",
                 trafficker_id="456",
                 tenant_id="tenant_123",
+                tenant_ai_config=None,
             )
 
             # Mock _requires_manual_approval to return True
@@ -208,6 +208,7 @@ class TestGAMManualApprovalPath:
                     end_time,
                     response.media_buy_id,
                     order_name_template=None,
+                    tenant_ai_config=None,
                 )
 
     def test_manual_approval_failure_still_returns_packages(
@@ -225,6 +226,7 @@ class TestGAMManualApprovalPath:
                 advertiser_id="789",
                 trafficker_id="456",
                 tenant_id="tenant_123",
+                tenant_ai_config=None,
             )
 
             # Mock workflow manager to fail
@@ -278,6 +280,7 @@ class TestGAMActivationWorkflowPath:
                 advertiser_id="789",
                 trafficker_id="456",
                 tenant_id="tenant_123",
+                tenant_ai_config=None,
             )
 
             # Mock the order creation
@@ -304,12 +307,7 @@ class TestGAMActivationWorkflowPath:
                 mock_db_session.return_value.__enter__.return_value = mock_session
 
                 # Create mock products with inventory targeting (required by validation)
-                mock_product = Mock()
-                mock_product.product_id = "prod_test"
-                mock_product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
-                # Prevent MagicMock auto-generation for tenant attributes
-                mock_product.gemini_api_key = None
-                mock_product.order_name_template = None
+                mock_product = _make_configured_product()
 
                 # Simpler approach: Always return mock_product for .first(), empty for .all()
                 mock_result = Mock()
@@ -361,6 +359,7 @@ class TestGAMSuccessPath:
                 advertiser_id="789",
                 trafficker_id="456",
                 tenant_id="tenant_123",
+                tenant_ai_config=None,
             )
 
             # Mock the order creation
@@ -384,12 +383,7 @@ class TestGAMSuccessPath:
                 mock_db_session.return_value.__enter__.return_value = mock_session
 
                 # Create mock products with inventory targeting (required by validation)
-                mock_product = Mock()
-                mock_product.product_id = "prod_test"
-                mock_product.implementation_config = {"targeted_ad_unit_ids": ["123456"]}
-                # Prevent MagicMock auto-generation for tenant attributes
-                mock_product.gemini_api_key = None
-                mock_product.order_name_template = None
+                mock_product = _make_configured_product()
 
                 # Simpler approach: Always return mock_product for .first(), empty for .all()
                 mock_result = Mock()

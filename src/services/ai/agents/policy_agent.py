@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from pydantic_ai import Agent
-
-logger = logging.getLogger(__name__)
 
 
 class PolicyAnalysis(BaseModel):
@@ -114,16 +111,10 @@ async def check_policy_compliance(
     Returns:
         PolicyAnalysis with compliance result
     """
-    prompt = build_policy_prompt(text, tenant_policies)
+    from src.services.ai.factory import run_agent
 
-    try:
-        result = await agent.run(prompt)
-        # pydantic-ai 1.x uses .output for structured data
-        return result.output
-    except Exception as e:
-        logger.error(f"Policy agent failed: {e}")
-        # Return allowed with warning on failure
-        return PolicyAnalysis(
-            status="allowed",
-            warnings=[f"AI policy check unavailable: {str(e)}"],
-        )
+    prompt = build_policy_prompt(text, tenant_policies)
+    # A provider failure raises AIProviderError; the caller (get_products) fails open on it.
+    result = await run_agent(agent, prompt)
+    # pydantic-ai 1.x uses .output for structured data
+    return result.output

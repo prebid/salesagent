@@ -89,9 +89,9 @@ class TestConfiguration:
         ContextVar with its setter (commit 76c2a96fb), and the file-based config loader
         before it. What the module still owns is tenant LOOKUP, which the resolver calls.
         """
-        from src.core.config_loader import get_tenant_by_id, tenant_id_for
+        from src.core.config_loader import get_tenant_context, tenant_id_for
 
-        assert callable(get_tenant_by_id)
+        assert callable(get_tenant_context)
         assert callable(tenant_id_for)
 
 
@@ -128,7 +128,9 @@ class TestCriticalPaths:
 
         # Should be able to create adapter
         config = {"enabled": True}
-        adapter = MockAdServer(config=config, principal=principal, tenant_id="test_tenant")
+        adapter = MockAdServer(
+            config=config, principal=principal, tenant_id="test_tenant", order_name_template=None, tenant_ai_config=None
+        )
         assert adapter is not None
 
     @pytest.mark.smoke

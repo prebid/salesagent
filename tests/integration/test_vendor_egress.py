@@ -231,7 +231,9 @@ def _mock_ad_server(origin: LocalOrigin):
             }
         },
     )
-    return MockAdServer(config={}, principal=principal, tenant_id="test_tenant")
+    return MockAdServer(
+        config={}, principal=principal, tenant_id="test_tenant", order_name_template=None, tenant_ai_config=None
+    )
 
 
 def _broadstreet(origin: LocalOrigin):

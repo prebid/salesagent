@@ -58,13 +58,12 @@ would run that package's ``__init__``, which transitively pulls in ``factory-boy
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import threading
-from collections.abc import Iterator
+from contextlib import AbstractContextManager
 
-from tests.e2e._stdlib_json_http import JsonRequestHandler, compose_project_name, serve_forever_in_thread
+from tests.e2e._stdlib_json_http import JsonRequestHandler, run_origin, serve_until_killed
 
 #: The public origin the SERVER walks. Read from the environment so the compose
 #: service, the nginx SNI map and this module cannot drift apart silently: every
@@ -78,7 +77,6 @@ BRAND_JSON_PATH = "/.well-known/brand.json"
 BRAND_UNLISTED_PATH = "/.well-known/brand-unlisted.json"
 JWKS_PATH = "/.well-known/jwks.json"
 JWKS_CONTROL_PATH = "/_control/jwks"
-HEALTH_PATH = "/health"
 
 #: The one tool this origin implements, and the one AdCP 3.2.1 hop 1 names.
 CAPABILITIES_TOOL = "get_adcp_capabilities"
@@ -249,7 +247,7 @@ class _CounterpartyHandler(JsonRequestHandler):
         ``Content-Length`` the rest of the module already relies on.
         """
         store: _JwksStore = self.server.jwks_store  # type: ignore[attr-defined]
-        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        path = self._bare_path.rstrip("/") or "/"
         document, refusal = self._agent_capabilities(store, path)
         if document is None:
             self._write_json(404, refusal or {"error": f"no MCP endpoint at {self.path!r}"})
@@ -338,8 +336,10 @@ class _CounterpartyHandler(JsonRequestHandler):
         self._write_json(200, {"terminated": True})
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler name
+        if self._answer_health():
+            return
         store: _JwksStore = self.server.jwks_store  # type: ignore[attr-defined]
-        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        path = self._bare_path.rstrip("/") or "/"
 
         agent_document, agent_refusal = self._agent_capabilities(store, path)
         if (agent_document is not None or agent_refusal is not None) and self._wants_event_stream():
@@ -379,9 +379,7 @@ class _CounterpartyHandler(JsonRequestHandler):
             self._write_json(200 if agent_document is not None else 404, agent_document or agent_refusal or {})
             return
 
-        if path == HEALTH_PATH:
-            self._write_json(200, {"compose_project_name": self.server.compose_project_name})  # type: ignore[attr-defined]
-        elif path == BRAND_JSON_PATH:
+        if path == BRAND_JSON_PATH:
             self._write_json(200, _brand_json(f"{PUBLIC_ORIGIN}{LISTED_AGENT_PATH}"))
         elif path == BRAND_UNLISTED_PATH:
             self._write_json(200, _brand_json(None))
@@ -408,7 +406,7 @@ class _CounterpartyHandler(JsonRequestHandler):
         self._write_json(200, document)
 
     def do_PUT(self) -> None:  # noqa: N802 - stdlib handler name
-        path = self.path.split("?", 1)[0].rstrip("/")
+        path = self._bare_path.rstrip("/")
         slot = ""
         if path.startswith(SLOT_CONTROL_PREFIX):
             slot = path[len(SLOT_CONTROL_PREFIX) :]
@@ -429,32 +427,19 @@ class _CounterpartyHandler(JsonRequestHandler):
         self._write_json(200, {"installed": len(jwks.get("keys", [])), "slot": slot})
 
 
-@contextlib.contextmanager
-def run_counterparty_origin(*, host: str = "0.0.0.0", port: int = 8080) -> Iterator[str]:
+def run_counterparty_origin(*, host: str = "0.0.0.0", port: int = 8080) -> AbstractContextManager[str]:
     """Run the counterparty origin, yielding its base URL (``http://host:port``).
 
     Plaintext by design: TLS is terminated by the shared ``tls-proxy`` front,
     which routes ``counterparty.adcp-e2e.dev`` here by SNI. The origin never holds a
     certificate — one terminator, one leaf, one place to keep in step.
     """
-    server = serve_forever_in_thread(
-        _CounterpartyHandler,
-        host=host,
-        port=port,
-        server_attrs={"jwks_store": _JwksStore(), "compose_project_name": compose_project_name()},
-    )
-    try:
-        yield f"http://{host}:{server.server_address[1]}"
-    finally:
-        server.shutdown()
-        server.server_close()
+    return run_origin(_CounterpartyHandler, host=host, port=port, server_attrs={"jwks_store": _JwksStore()})
 
 
 def main() -> None:
     """Entry point for ``python -m tests.e2e.counterparty_origin_service``."""
-    port = int(os.environ.get("PORT", "8080"))
-    with run_counterparty_origin(host="0.0.0.0", port=port):
-        threading.Event().wait()
+    serve_until_killed(run_counterparty_origin)
 
 
 if __name__ == "__main__":
