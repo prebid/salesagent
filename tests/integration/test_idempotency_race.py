@@ -16,6 +16,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from tests.factories.account import seed_default_account
 from tests.harness._base import DEFAULT_TEST_ACCOUNT_ID, BareIntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -47,6 +48,7 @@ class TestIdempotencyRaceDbLevel:
             principal = PrincipalFactory(tenant=tenant)
             principal_id = principal.principal_id
             principal_name = principal.name
+            account_id = seed_default_account(tenant_id, principal_id)
             env.get_session()  # commit factory data
 
         # Use separate UoW instances (like production code) to test the constraint
@@ -54,6 +56,7 @@ class TestIdempotencyRaceDbLevel:
             assert uow1.media_buys is not None
             uow1.media_buys.create_from_request(
                 media_buy_id=f"mb_winner_{uuid.uuid4().hex[:8]}",
+                account_id=account_id,
                 req=_FakeRequest(idempotency_key=idem_key),
                 principal_id=principal_id,
                 advertiser_name=principal_name,
@@ -70,6 +73,7 @@ class TestIdempotencyRaceDbLevel:
                 assert uow2.media_buys is not None
                 uow2.media_buys.create_from_request(
                     media_buy_id=f"mb_loser_{uuid.uuid4().hex[:8]}",
+                    account_id=account_id,
                     req=_FakeRequest(idempotency_key=idem_key),
                     principal_id=principal_id,
                     advertiser_name=principal_name,
@@ -202,20 +206,15 @@ class TestIdempotencyRaceRecovery:
             principal = PrincipalFactory(tenant=tenant)
             principal_id = principal.principal_id
 
-            # Create the "winner" media buy with idempotency_key.
-            # account_id=None DELIBERATELY, against the factory's default: this test grades
-            # the DB unique constraint on the key, and the loser below is written by
-            # ``create_from_request``, which carries no account. Two rows in two different
-            # account scopes do not collide, so the duplicate would simply insert and the
-            # IntegrityError this test exists for would never fire.
+            # Winner and loser must share the account-scoped idempotency tuple.
             winner = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 idempotency_key=idem_key,
                 status="active",
-                account_id=None,
             )
             winner_id = winner.media_buy_id
+            account_id = winner.account_id
             MediaPackageFactory(media_buy=winner, package_id="pkg_race_1")
             env.get_session()  # commit
 
@@ -226,6 +225,7 @@ class TestIdempotencyRaceRecovery:
                 assert uow.media_buys is not None
                 uow.media_buys.create_from_request(
                     media_buy_id=f"mb_loser_{uuid.uuid4().hex[:8]}",
+                    account_id=account_id,
                     req=_FakeRequest(idempotency_key=idem_key),
                     principal_id=principal_id,
                     advertiser_name="Loser",
@@ -246,8 +246,7 @@ class TestIdempotencyRaceRecovery:
                     tenant_id,
                     idem_key,
                     principal_id,
-                    # Matches the winner's scope above, which is deliberately account-less.
-                    account_id=None,
+                    account_id=account_id,
                 )
             assert exc_info.value.error_code == "IDEMPOTENCY_IN_FLIGHT"
 
@@ -256,8 +255,7 @@ class TestIdempotencyRaceRecovery:
         # Verify only ONE media buy exists for this key
         with MediaBuyUoW(tenant_id) as verify_uow:
             assert verify_uow.media_buys is not None
-            # None, matching the deliberately account-less winner seeded above.
-            existing = verify_uow.media_buys.find_by_idempotency_key(idem_key, principal_id, account_id=None)
+            existing = verify_uow.media_buys.find_by_idempotency_key(idem_key, principal_id, account_id=account_id)
             assert existing is not None
             assert existing.media_buy_id == winner_id
 

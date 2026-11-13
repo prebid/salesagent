@@ -15,6 +15,7 @@ from sqlalchemy import delete
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, PersistedMediaBuyStatus, Principal, Tenant
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import plaintext_token_for
 from tests.integration.conftest import cleanup_tenant, make_media_buy, make_package
 from tests.utils.database_helpers import vhost_for
@@ -67,7 +68,7 @@ def tenant_b(integration_db):
 
 
 @pytest.fixture
-def principal_a(tenant_a):
+def principal_a(tenant_a, bound_factory_session):
     """Create a principal in tenant A."""
     principal_id = "principal_a"
     with get_db_session() as session:
@@ -80,11 +81,13 @@ def principal_a(tenant_a):
         )
         session.add(principal)
         session.commit()
+    seed_default_account(tenant_a, principal_id)
+    bound_factory_session.commit()
     yield principal_id
 
 
 @pytest.fixture
-def principal_b(tenant_b):
+def principal_b(tenant_b, bound_factory_session):
     """Create a principal in tenant B."""
     principal_id = "principal_b"
     with get_db_session() as session:
@@ -97,6 +100,8 @@ def principal_b(tenant_b):
         )
         session.add(principal)
         session.commit()
+    seed_default_account(tenant_b, principal_id)
+    bound_factory_session.commit()
     yield principal_id
 
 
@@ -390,7 +395,7 @@ class TestIdempotencyKeyLookup:
 
         with get_db_session() as session:
             repo = MediaBuyRepository(session, tenant_a)
-            found = repo.find_by_idempotency_key(idem_key, principal_a)
+            found = repo.find_by_idempotency_key(idem_key, principal_a, account_id=DEFAULT_TEST_ACCOUNT_ID)
             assert found is not None
             assert found.media_buy_id == "mb_idem_1"
 
@@ -400,7 +405,9 @@ class TestIdempotencyKeyLookup:
 
         with get_db_session() as session:
             repo = MediaBuyRepository(session, tenant_a)
-            found = repo.find_by_idempotency_key("nonexistent-key-1234", principal_a)
+            found = repo.find_by_idempotency_key(
+                "nonexistent-key-1234", principal_a, account_id=DEFAULT_TEST_ACCOUNT_ID
+            )
             assert found is None
 
     def test_idempotency_key_scoped_to_tenant(self, tenant_a, tenant_b, principal_a, principal_b):
@@ -417,12 +424,12 @@ class TestIdempotencyKeyLookup:
 
         with get_db_session() as session:
             repo_a = MediaBuyRepository(session, tenant_a)
-            found_a = repo_a.find_by_idempotency_key(idem_key, principal_a)
+            found_a = repo_a.find_by_idempotency_key(idem_key, principal_a, account_id=DEFAULT_TEST_ACCOUNT_ID)
             assert found_a is not None
             assert found_a.media_buy_id == "mb_idem_a"
 
             repo_b = MediaBuyRepository(session, tenant_b)
-            found_b = repo_b.find_by_idempotency_key(idem_key, principal_b)
+            found_b = repo_b.find_by_idempotency_key(idem_key, principal_b, account_id=DEFAULT_TEST_ACCOUNT_ID)
             assert found_b is not None
             assert found_b.media_buy_id == "mb_idem_b"
 
@@ -433,6 +440,7 @@ class TestIdempotencyKeyLookup:
         from src.core.database.repositories.media_buy import MediaBuyRepository
 
         idem_key = "create-test-uuid-123456"
+        account_id = DEFAULT_TEST_ACCOUNT_ID
         mock_req = MagicMock()
         mock_req.model_dump.return_value = {"test": True}
         mock_req.po_number = None
@@ -445,6 +453,7 @@ class TestIdempotencyKeyLookup:
             repo = MediaBuyRepository(session, tenant_a)
             buy = repo.create_from_request(
                 media_buy_id="mb_idem_create",
+                account_id=account_id,
                 req=mock_req,
                 principal_id=principal_a,
                 advertiser_name="Test",
@@ -459,7 +468,7 @@ class TestIdempotencyKeyLookup:
         # Verify persisted
         with get_db_session() as session:
             repo = MediaBuyRepository(session, tenant_a)
-            found = repo.find_by_idempotency_key(idem_key, principal_a)
+            found = repo.find_by_idempotency_key(idem_key, principal_a, account_id=account_id)
             assert found is not None
             assert found.media_buy_id == "mb_idem_create"
 
@@ -488,7 +497,8 @@ class TestIdempotencyKeyLookup:
             assert found is not None
             assert found.media_buy_id == "mb_acct_scoped"
 
-            # The default (no account) renders IS NULL — it must NOT match the
-            # account-scoped row (the silent narrowing the threading prevents).
-            assert repo.get_by_id_or_idempotency_key(idem_key, principal_id) is None
+            with pytest.raises(TypeError, match="account_id"):
+                repo.find_by_idempotency_key(idem_key, principal_id)
+            with pytest.raises(TypeError, match="account_id"):
+                repo.get_by_id_or_idempotency_key(idem_key, principal_id)
             assert repo.get_by_id_or_idempotency_key(idem_key, principal_id, account_id="other") is None

@@ -109,35 +109,27 @@ class MediaBuyRepository:
             .with_for_update(key_share=True)
         ).first()
 
-    def find_by_idempotency_key(
-        self, idempotency_key: str, principal_id: str, account_id: str | None = None
-    ) -> MediaBuy | None:
+    def find_by_idempotency_key(self, idempotency_key: str, principal_id: str, account_id: str) -> MediaBuy | None:
         """Find an existing media buy by idempotency_key within (tenant, principal, account).
 
         The AdCP idempotency scope is (agent, account, key): the same key under a
-        different account is an independent request, never a hit. ``account_id is
-        None`` matches rows stored with no account (``IS NULL``), mirroring the
-        NULLS NOT DISTINCT unique backstop index.
+        different account is an independent request, never a hit.
         """
         return self._session.scalars(
             select(MediaBuy).where(
                 MediaBuy.tenant_id == self._tenant_id,
                 MediaBuy.principal_id == principal_id,
-                # SQLAlchemy renders ``== None`` as ``IS NULL`` — matches no-account rows.
                 MediaBuy.account_id == account_id,
                 MediaBuy.idempotency_key == idempotency_key,
             )
         ).first()
 
-    def get_by_id_or_idempotency_key(
-        self, identifier: str, principal_id: str, account_id: str | None = None
-    ) -> MediaBuy | None:
+    def get_by_id_or_idempotency_key(self, identifier: str, principal_id: str, account_id: str) -> MediaBuy | None:
         """Get a media buy by ID first, then fall back to idempotency_key.
 
         ``account_id`` scopes the idempotency-key fallback to the spec's
         (agent, account, key) tuple. It is threaded through to
-        ``find_by_idempotency_key`` rather than dropped — otherwise the
-        fallback would silently match only no-account (``IS NULL``) rows.
+        ``find_by_idempotency_key`` so the fallback uses the booking account.
         """
         result = self.get_by_id(identifier)
         if result is None:
@@ -362,7 +354,7 @@ class MediaBuyRepository:
         package_id_map: dict[int, str] | None = None,
         by_alias: bool = False,
         created_at: datetime.datetime | None = None,
-        account_id: str | None = None,
+        account_id: str,
         creative_deadline: datetime.datetime | None = None,
     ) -> MediaBuy:
         """Create a MediaBuy from a request model, serializing raw_request at the DB boundary.
@@ -404,6 +396,7 @@ class MediaBuyRepository:
             "media_buy_id": media_buy_id,
             "tenant_id": self._tenant_id,
             "principal_id": principal_id,
+            "account_id": account_id,
             "idempotency_key": getattr(req, "idempotency_key", None),
             "order_name": order_name or getattr(req, "po_number", None) or f"Order-{media_buy_id}",
             "name": getattr(req, "name", None),
@@ -435,9 +428,6 @@ class MediaBuyRepository:
             kwargs["kpi_goal"] = kpi_goal
         if created_at is not None:
             kwargs["created_at"] = created_at
-        if account_id is not None:
-            kwargs["account_id"] = account_id
-
         media_buy = MediaBuy(**kwargs)
         self._stamp_confirmation_if_needed(media_buy, seller_committed=seller_committed)
         self._session.add(media_buy)

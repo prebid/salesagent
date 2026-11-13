@@ -581,8 +581,12 @@ class TestFormatCompatibility:
             )
             session.add(product)
 
+            session.commit()
+            _seed_account_for(self.TENANT_ID, (self.PRINCIPAL_ID,))
+
             # Media buy with package pointing to the video-only product
             mb = MediaBuy(
+                account_id=ACCOUNT_ID,
                 tenant_id=self.TENANT_ID,
                 media_buy_id="mb_fmt_test",
                 principal_id=self.PRINCIPAL_ID,
@@ -604,11 +608,6 @@ class TestFormatCompatibility:
             )
             session.add(pkg)
             session.commit()
-
-        # ``account`` is in sync-creatives-request.json /required, so every sync call in
-        # this file needs one that the calling principal can reach. Seeded through the
-        # factories (CLAUDE.md) rather than extending the hand-rolled block above.
-        _seed_account_for(self.TENANT_ID, (self.PRINCIPAL_ID,))
 
     def test_format_mismatch_strict_raises(self):
         """Strict mode: display creative assigned to video-only package raises error.
@@ -715,8 +714,12 @@ class TestMediaBuyStatusTransition:
             )
             session.add(product)
 
+            session.commit()
+            _seed_account_for(self.TENANT_ID, (self.PRINCIPAL_ID,))
+
             # Draft media buy WITH approved_at set
             mb = MediaBuy(
+                account_id=ACCOUNT_ID,
                 tenant_id=self.TENANT_ID,
                 media_buy_id="mb_draft_approved",
                 principal_id=self.PRINCIPAL_ID,
@@ -739,11 +742,6 @@ class TestMediaBuyStatusTransition:
             )
             session.add(pkg)
             session.commit()
-
-        # ``account`` is in sync-creatives-request.json /required, so every sync call in
-        # this file needs one that the calling principal can reach. Seeded through the
-        # factories (CLAUDE.md) rather than extending the hand-rolled block above.
-        _seed_account_for(self.TENANT_ID, (self.PRINCIPAL_ID,))
 
     def test_draft_with_approved_at_transitions(self):
         """Draft media buy with approved_at transitions to pending_creatives on assignment.

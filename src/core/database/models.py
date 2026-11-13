@@ -1537,7 +1537,7 @@ class MediaBuy(Base):
     raw_request: Mapped[dict] = mapped_column(JSONType, nullable=False)
     strategy_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
-    account_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    account_id: Mapped[str] = mapped_column(String(100), nullable=False)
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Canonical hash of the request as hashed by the idempotency probe (see
     # src.core.idempotency_canonical). raw_request is NOT canonicalizable —
@@ -1589,7 +1589,7 @@ class MediaBuy(Base):
         ForeignKeyConstraint(
             ["tenant_id", "account_id"],
             ["accounts.tenant_id", "accounts.account_id"],
-            ondelete="SET NULL",
+            ondelete="RESTRICT",
         ),
         Index("idx_media_buys_tenant", "tenant_id"),
         Index("idx_media_buys_status", "status"),
@@ -1597,9 +1597,8 @@ class MediaBuy(Base):
         Index("idx_media_buys_account", "account_id"),
         # Dup-booking backstop, scoped per the spec's idempotency tuple
         # (agent + account + key) EXACTLY — no extra dimensions in uniqueness.
-        # NULLS NOT DISTINCT so a NULL account (no sub-account) still enforces
-        # uniqueness on the rest of the tuple; partial so keyless legacy rows
-        # stay out of the index.
+        # Every buy carries an account. The existing NULLS NOT DISTINCT index
+        # remains unchanged; its partial predicate excludes keyless legacy rows.
         Index(
             "idx_media_buys_idempotency_key",
             "tenant_id",

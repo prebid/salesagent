@@ -15,8 +15,10 @@ import pytest
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal, Tenant
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
+from tests.factories.account import seed_default_account
 from tests.factories.principal import plaintext_token_for
 from tests.integration.conftest import cleanup_tenant, make_media_buy, make_package
+from tests.utils.database_helpers import bind_factories_to_session
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -78,6 +80,8 @@ def principal_a(tenant_a):
         )
         session.add(principal)
         session.commit()
+        with bind_factories_to_session(session):
+            seed_default_account(tenant_a, principal_id)
     yield principal_id
 
 
@@ -95,6 +99,8 @@ def principal_b(tenant_b):
         )
         session.add(principal)
         session.commit()
+        with bind_factories_to_session(session):
+            seed_default_account(tenant_b, principal_id)
     yield principal_id
 
 

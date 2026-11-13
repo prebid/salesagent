@@ -12,8 +12,9 @@ from src.admin.services.media_buy_readiness_service import MediaBuyReadinessServ
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, Principal, Tenant
 from tests.factories import stamp_format_identity
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import plaintext_token_for
-from tests.utils.database_helpers import vhost_for
+from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -23,12 +24,11 @@ def test_tenant(integration_db, request):
     """Create a test tenant (requires integration_db fixture)."""
     tenant_id = f"test_readiness_{request.node.name[-20:]}"  # Truncate to avoid long names
     with get_db_session() as session:
-        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
-        tenant = Tenant(
+        tenant = create_tenant_with_timestamps(
             tenant_id=tenant_id,
             name="Test Tenant",
             subdomain="test",
-            virtual_host=vhost_for(tenant_id),
+            billing_plan="standard",
             is_active=True,
             ad_server="mock",
         )
@@ -57,6 +57,8 @@ def test_principal(integration_db, test_tenant):
         )
         session.add(principal)
         session.commit()
+        with bind_factories_to_session(session):
+            seed_default_account(test_tenant, principal_id)
 
     yield principal_id
 
@@ -86,6 +88,7 @@ class TestMediaBuyReadinessService:
         with get_db_session() as session:
             # Create media buy with no packages
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 media_buy_id=media_buy_id,
                 tenant_id=test_tenant,
                 principal_id=test_principal,
@@ -121,6 +124,7 @@ class TestMediaBuyReadinessService:
         with get_db_session() as session:
             # Create media buy with packages but no creative assignments
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 media_buy_id=media_buy_id,
                 tenant_id=test_tenant,
                 principal_id=test_principal,
@@ -158,6 +162,7 @@ class TestMediaBuyReadinessService:
         with get_db_session() as session:
             # Create media buy with pending_approval status
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 media_buy_id=media_buy_id,
                 tenant_id=test_tenant,
                 principal_id=test_principal,
@@ -193,6 +198,7 @@ class TestMediaBuyReadinessService:
         with get_db_session() as session:
             # Create media buy starting in future
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 media_buy_id=media_buy_id,
                 tenant_id=test_tenant,
                 principal_id=test_principal,
@@ -256,6 +262,7 @@ class TestMediaBuyReadinessService:
         with get_db_session() as session:
             # Create media buy currently in flight
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 media_buy_id=media_buy_id,
                 tenant_id=test_tenant,
                 principal_id=test_principal,
@@ -316,6 +323,7 @@ class TestMediaBuyReadinessService:
         with get_db_session() as session:
             # Create media buy that ended yesterday
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 media_buy_id=media_buy_id,
                 tenant_id=test_tenant,
                 principal_id=test_principal,
@@ -349,6 +357,7 @@ class TestMediaBuyReadinessService:
             # Create multiple media buys in different states
             media_buys = [
                 MediaBuy(
+                    account_id=DEFAULT_TEST_ACCOUNT_ID,
                     media_buy_id="mb_live_1",
                     tenant_id=test_tenant,
                     principal_id=test_principal,
@@ -363,6 +372,7 @@ class TestMediaBuyReadinessService:
                     raw_request={"packages": []},
                 ),
                 MediaBuy(
+                    account_id=DEFAULT_TEST_ACCOUNT_ID,
                     media_buy_id="mb_completed_1",
                     tenant_id=test_tenant,
                     principal_id=test_principal,

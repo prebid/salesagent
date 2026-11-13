@@ -21,8 +21,9 @@ from src.core.exceptions import AdCPMediaBuyNotFoundError
 from src.core.schemas import ListCreativesResponse, UpdateMediaBuyRequest
 from src.core.schemas.creative import ListCreativesRequest
 from tests.factories import stamp_format_identity
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
-from tests.utils.database_helpers import create_tenant_with_timestamps
+from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -68,6 +69,8 @@ class TestCrossPrincipalSecurity:
 
             # Commit principals before creating dependent data (FK constraint)
             session.commit()
+            with bind_factories_to_session(session):
+                seed_default_account("security_test_tenant", "advertiser_a")
 
             # Create creative owned by Advertiser A
             creative_a = DBCreative(
@@ -89,6 +92,7 @@ class TestCrossPrincipalSecurity:
 
             # Create media buy owned by Advertiser A
             media_buy_a = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 tenant_id="security_test_tenant",
                 media_buy_id="media_buy_a",
                 principal_id="advertiser_a",

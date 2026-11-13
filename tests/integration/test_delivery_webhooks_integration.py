@@ -24,9 +24,10 @@ from src.core.database.models import (
 )
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 from tests.factories import PricingOptionFactory
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import plaintext_token_for
 from tests.factories.webhook import ReportingWebhookRequestFactory
-from tests.utils.database_helpers import vhost_for
+from tests.utils.database_helpers import bind_factories_to_session, vhost_for
 
 
 def _create_test_tenant_and_principal(ad_server: str | None = None) -> tuple[str, str]:
@@ -62,6 +63,8 @@ def _create_test_tenant_and_principal(ad_server: str | None = None) -> tuple[str
         session.add(tenant)
         session.add(principal)
         session.commit()
+        with bind_factories_to_session(session):
+            seed_default_account(tenant_id, principal_id)
 
     return tenant_id, principal_id
 
@@ -113,6 +116,7 @@ def _create_basic_media_buy_with_webhook(
         )
 
         media_buy = MediaBuy(
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
             media_buy_id=media_buy_id,
             tenant_id=tenant_id,
             principal_id=principal_id,

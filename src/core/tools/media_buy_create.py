@@ -1361,16 +1361,6 @@ def execute_approved_media_buy(
             # detaches when this block commits); the executor acts on it below.
             buy_account_id = media_buy.account_id
 
-            # ``account`` is resolved from the PERSISTED ROW, never synthesised:
-            # MediaBuy.account_id is what the boundary resolved this buy's reference to,
-            # so it is the same account. A row with no account_id is a seller-side store
-            # defect and is refused (No Quiet Failures), not given a stand-in; the
-            # census of such rows is a ticket question, not a code path.
-            if buy_account_id is None:
-                # The buy's id is a fact, so it rides the declared details class;
-                # nothing here was caught, so there is no cause to chain.
-                raise AdCPPersistedStateError(details=ConfigurationDetails(media_buy_id=media_buy_id))
-
             # What the adapter reads, built from the ROW through the carrier's own
             # persisted-request constructor. This replay is not a request: it reruns a
             # buy the seller already accepted, so it builds the adapter carrier and
@@ -1931,8 +1921,7 @@ def execute_approved_media_buy(
             )
 
     except AdCPPersistedStateError as e:
-        # The persisted row refused reconstruction (a NULL account_id, above); no adapter
-        # ran, so this is a store defect and not an adapter failure. The buy stays
+        # The persisted row refused reconstruction; this is a store defect. The buy stays
         # pending_approval so an operator who repairs the row can retry.
         error_msg = f"Persisted media buy {media_buy_id} cannot be acted on: {e}"
         logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
@@ -2415,7 +2404,7 @@ def _raise_degraded_replay_outcome(
     idempotency_key: str,
     principal_id: str,
     *,
-    account_id: str | None = None,
+    account_id: str,
     req: CreateMediaBuyRequest | None = None,
 ) -> NoReturn:
     """Fail closed when the dup-booking backstop fired.
@@ -2534,7 +2523,7 @@ def _resolve_idempotency_race_or_raise(
     *,
     idempotency_key: str | None,
     principal_id: str,
-    account_id: str | None,
+    account_id: str,
     req: CreateMediaBuyRequest | None = None,
     media_buy_id: str | None = None,
 ) -> NoReturn:

@@ -24,7 +24,9 @@ from src.core.database.models import (
 )
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import plaintext_token_for
+from tests.utils.database_helpers import bind_factories_to_session
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -96,7 +98,10 @@ def principal_a(tenant_a):
             platform_mappings={"mock": {"advertiser_id": "del_adv_a"}},
         )
         session.add(principal)
-        session.commit()
+        session.flush()
+        with bind_factories_to_session(session):
+            seed_default_account(tenant_a, principal_id)
+
     yield principal_id
 
 
@@ -113,7 +118,10 @@ def principal_b(tenant_b):
             platform_mappings={"mock": {"advertiser_id": "del_adv_b"}},
         )
         session.add(principal)
-        session.commit()
+        session.flush()
+        with bind_factories_to_session(session):
+            seed_default_account(tenant_b, principal_id)
+
     yield principal_id
 
 
@@ -123,6 +131,7 @@ def media_buy_a(tenant_a, principal_a):
     media_buy_id = "del_mb_a"
     with get_db_session() as session:
         mb = MediaBuy(
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
             media_buy_id=media_buy_id,
             tenant_id=tenant_a,
             principal_id=principal_a,
@@ -144,6 +153,7 @@ def media_buy_b(tenant_b, principal_b):
     media_buy_id = "del_mb_b"
     with get_db_session() as session:
         mb = MediaBuy(
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
             media_buy_id=media_buy_id,
             tenant_id=tenant_b,
             principal_id=principal_b,

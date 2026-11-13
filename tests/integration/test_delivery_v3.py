@@ -31,9 +31,14 @@ from src.core.schemas import (
 )
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.factories import PricingOptionFactory
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.media_buy import request_package
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
-from tests.utils.database_helpers import add_product_prerequisites, create_tenant_with_timestamps
+from tests.utils.database_helpers import (
+    add_product_prerequisites,
+    bind_factories_to_session,
+    create_tenant_with_timestamps,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -159,14 +164,17 @@ def _setup_base_state(session) -> dict:
     session.add(pricing_option)
     session.flush()
 
+    pricing_option_id = pricing_option.pricing_option_id
     session.commit()
+    with bind_factories_to_session(session):
+        seed_default_account(tenant_id, principal_id)
 
     return {
         "tenant_id": tenant_id,
         "principal_id": principal_id,
         "product_id": "prod_display",
         # The id a package names this option by, read off the row rather than rebuilt.
-        "pricing_option_id": pricing_option.pricing_option_id,
+        "pricing_option_id": pricing_option_id,
     }
 
 
@@ -190,6 +198,7 @@ def _create_media_buy(
         raw_request = {"packages": [request_package(package_id=f"pkg_{media_buy_id}", product_id="prod_display")]}
 
     buy = MediaBuy(
+        account_id=DEFAULT_TEST_ACCOUNT_ID,
         media_buy_id=media_buy_id,
         tenant_id=tenant_id,
         principal_id=principal_id,
