@@ -2,21 +2,26 @@
 
 import json
 import logging
-import uuid
+import re
 from datetime import UTC, datetime
+from typing import cast
 
 from adcp.types import AuthenticationScheme
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
-from sqlalchemy import func, select
+from sqlalchemy import String, func, select
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.admin.services import DashboardService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
+from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy, PushNotificationConfig, Tenant
+from src.core.database.models import AuditLog, MediaBuy, PushNotificationConfig, Tenant
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.uow import PushNotificationConfigUoW
 from src.core.exceptions import AdCPValidationError
+from src.core.platform_mappings import MOCK_ADVERTISER_PREFIX, mock_platform_mapping
+from src.core.principal_ids import PRINCIPAL_ID_CHARACTERS
 from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_primitives
 
@@ -119,6 +124,50 @@ def list_principals(tenant_id):
         return redirect(url_for("core.index"))
 
 
+# Leave room for the mock advertiser prefix in the narrowest derived-ID column.
+_ADAPTER_ID_TYPE = cast(String, AuditLog.__table__.c.adapter_id.type)
+assert _ADAPTER_ID_TYPE.length is not None
+ADVERTISER_ID_MAX_LENGTH = _ADAPTER_ID_TYPE.length - len(MOCK_ADVERTISER_PREFIX)
+ADVERTISER_ID_PATTERN = rf"{PRINCIPAL_ID_CHARACTERS}{{1,{ADVERTISER_ID_MAX_LENGTH}}}"
+
+#: Literals audit rows carry in ``principal_id`` when the actor is not an advertiser:
+#: unauthenticated calls, and creative reviews from the admin UI. The dashboard names the
+#: actor by looking the id up among the tenant's advertisers, so an advertiser holding one
+#: would inherit that activity.
+_AUDIT_SENTINEL_IDS = frozenset({"anonymous", "unknown", "admin"})
+
+
+def _advertiser_id_refusal(principal_id: str) -> str | None:
+    """Why ``principal_id`` cannot name a new advertiser, or ``None`` when it can."""
+    if not re.fullmatch(ADVERTISER_ID_PATTERN, principal_id):
+        return f"Advertiser ID must contain 1 to {ADVERTISER_ID_MAX_LENGTH} letters, numbers, underscores, or hyphens"
+    if principal_id in _AUDIT_SENTINEL_IDS:
+        return f"Advertiser ID '{principal_id}' is reserved"
+    return None
+
+
+def _refuse_create(tenant_id: str, message: str, reason: object = None):
+    """Flash ``message``, record the create as failed, and send the operator back to the form."""
+    record_admin_action_failure(message if reason is None else reason)
+    flash(message, "error")
+    return redirect(url_for("principals.create_principal", tenant_id=tenant_id))
+
+
+def _platform_mappings_from_form(principal_id: str) -> tuple[dict, str | None]:
+    """Parse the shared create/edit mapping fields, returning an operator refusal."""
+    mappings = {}
+    gam_id = request.form.get("gam_advertiser_id", "").strip()
+    if gam_id:
+        try:
+            int(gam_id)
+        except ValueError:
+            return {}, "GAM Advertiser ID must be numeric"
+        mappings["google_ad_manager"] = {"advertiser_id": gam_id, "enabled": True}
+    if request.form.get("enable_mock"):
+        mappings["mock"] = mock_platform_mapping(principal_id)
+    return mappings, None if mappings else "Select at least one platform mapping"
+
+
 @principals_bp.route("/principals/create", methods=["GET", "POST"])
 @require_tenant_access()
 @log_admin_action(
@@ -143,45 +192,24 @@ def create_principal(tenant_id):
                 tenant_id=tenant_id,
                 tenant_name=tenant.name,
                 has_gam=has_gam,
+                advertiser_id_pattern=ADVERTISER_ID_PATTERN,
+                advertiser_id_max_length=ADVERTISER_ID_MAX_LENGTH,
             )
 
     # POST - Create the principal
     try:
         principal_name = request.form.get("name", "").strip()
         if not principal_name:
-            flash("Principal name is required", "error")
-            return redirect(request.url)
+            return _refuse_create(tenant_id, "Principal name is required")
 
-        principal_id = f"prin_{uuid.uuid4().hex[:8]}"
+        principal_id = request.form.get("principal_id", "")
+        id_refusal = _advertiser_id_refusal(principal_id)
+        if id_refusal is not None:
+            return _refuse_create(tenant_id, id_refusal)
 
-        # Build platform mappings
-        platform_mappings = {}
-
-        # GAM advertiser mapping
-        gam_advertiser_id = request.form.get("gam_advertiser_id", "").strip()
-        if gam_advertiser_id:
-            # Validate it's numeric (GAM expects integer company IDs)
-            try:
-                int(gam_advertiser_id)
-            except (ValueError, TypeError):
-                flash(
-                    f"GAM Advertiser ID must be numeric (got: '{gam_advertiser_id}'). "
-                    "Please select a valid advertiser from the dropdown.",
-                    "error",
-                )
-                return redirect(request.url)
-
-            platform_mappings["google_ad_manager"] = {
-                "advertiser_id": gam_advertiser_id,
-                "enabled": True,
-            }
-
-        # Mock adapter mapping (for testing)
-        if request.form.get("enable_mock"):
-            platform_mappings["mock"] = {
-                "advertiser_id": f"mock_{principal_id}",
-                "enabled": True,
-            }
+        platform_mappings, mapping_refusal = _platform_mappings_from_form(principal_id)
+        if mapping_refusal is not None:
+            return _refuse_create(tenant_id, mapping_refusal)
 
         with get_db_session() as db_session:
             # No duplicate-name pre-check: advertiser names are human-readable
@@ -193,13 +221,15 @@ def create_principal(tenant_id):
 
             # The token is minted here and shown ONCE, in the flash below; the row keeps
             # its hash. An operator who loses it rotates it.
-            principal, token = PrincipalRepository(db_session, tenant_id).issue(
-                principal_id=principal_id,
+            token = PrincipalRepository(db_session, tenant_id).issue_unless_taken(
+                principal_id,
                 name=principal_name,
                 platform_mappings=platform_mappings,  # JSONType handles serialization
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
+            if token is None:
+                return _refuse_create(tenant_id, "Advertiser ID is already in use")
             db_session.commit()
 
             flash(
@@ -208,10 +238,9 @@ def create_principal(tenant_id):
             )
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="advertisers"))
 
-    except Exception as e:
+    except SQLAlchemyError as e:
         logger.error(f"Error creating principal: {e}", exc_info=True)
-        flash("Error creating advertiser", "error")
-        return redirect(request.url)
+        return _refuse_create(tenant_id, "Error creating advertiser", safe_error_message(e))
 
 
 @principals_bp.route("/principals/<principal_id>/edit", methods=["GET", "POST"])
@@ -256,6 +285,12 @@ def edit_principal(tenant_id, principal_id):
 
     # POST - Update the principal
     try:
+        platform_mappings, mapping_refusal = _platform_mappings_from_form(principal_id)
+        if mapping_refusal is not None:
+            record_admin_action_failure(mapping_refusal)
+            flash(mapping_refusal, "error")
+            return redirect(request.url)
+
         with get_db_session() as db_session:
             principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
             if not principal:
@@ -267,23 +302,6 @@ def edit_principal(tenant_id, principal_id):
             if principal_name:
                 principal.name = principal_name
 
-            # Build platform mappings from scratch (don't preserve old mappings)
-            platform_mappings = {}
-
-            # GAM advertiser mapping
-            gam_advertiser_id = request.form.get("gam_advertiser_id", "").strip()
-            if gam_advertiser_id:
-                try:
-                    int(gam_advertiser_id)
-                except (ValueError, TypeError):
-                    flash("GAM Advertiser ID must be numeric", "error")
-                    return redirect(request.url)
-
-                platform_mappings["google_ad_manager"] = {
-                    "advertiser_id": gam_advertiser_id,
-                    "enabled": True,
-                }
-
             principal.platform_mappings = platform_mappings
             principal.updated_at = datetime.now(UTC)
             db_session.commit()
@@ -291,8 +309,9 @@ def edit_principal(tenant_id, principal_id):
             flash(f"Advertiser '{principal.name}' updated successfully", "success")
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="advertisers"))
 
-    except Exception as e:
+    except SQLAlchemyError as e:
         logger.error(f"Error updating principal: {e}", exc_info=True)
+        record_admin_action_failure(safe_error_message(e))
         flash("Error updating advertiser", "error")
         return redirect(request.url)
 
@@ -589,7 +608,7 @@ def save_testing_config(tenant_id, principal_id):
 
             # Ensure mock adapter exists
             if "mock" not in platform_mappings:
-                platform_mappings["mock"] = {"advertiser_id": f"mock_{principal_id}", "enabled": True}
+                platform_mappings["mock"] = mock_platform_mapping(principal_id)
 
             # Update hitl_config
             platform_mappings["mock"]["hitl_config"] = hitl_config

@@ -99,6 +99,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc010_capabilities",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
+    "tests.bdd.steps.domain.admin_principals",
     "tests.bdd.steps.domain.admin_inventory_profiles",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
@@ -6742,6 +6743,11 @@ _UC006_WIRED_SCENARIOS = frozenset(
 )
 
 ENV_ROUTES: list[EnvRoute] = [
+    EnvRoute(
+        tag="admin-principals",
+        when=lambda markers: "admin-principals" in markers,
+        env_builder=_env("tests.harness.admin_principal.AdminPrincipalEnv"),
+    ),
     # ── @ctxecho (local context-echo-on-every-outcome feature) ──────────────
     # Same reason the @egress rows below are UNSCOPED `when` rows: these
     # scenarios carry T-CTXECHO-* identity tags, not T-UC-<n>, so

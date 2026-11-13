@@ -7222,6 +7222,54 @@ mappings:
       upstream_refs: ["BR-UC-011-main-sync", "BR-RULE-209"]
       business_rules: ["BR-RULE-209"]
       status: new
+    - adcp_scenario_id: "T-ADMIN-PRIN-001"
+      adcp_feature: "BR-ADMIN-PRINCIPALS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-PRIN-002"
+      adcp_feature: "BR-ADMIN-PRINCIPALS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-PRIN-003"
+      adcp_feature: "BR-ADMIN-PRINCIPALS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-PRIN-004"
+      adcp_feature: "BR-ADMIN-PRINCIPALS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-PRIN-005"
+      adcp_feature: "BR-ADMIN-PRINCIPALS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-PRIN-006"
+      adcp_feature: "BR-ADMIN-PRINCIPALS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-PRIN-007"
+      adcp_feature: "BR-ADMIN-PRINCIPALS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-PRIN-008"
+      adcp_feature: "BR-ADMIN-PRINCIPALS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-ADMIN-ACCT-001"
       adcp_feature: "BR-ADMIN-ACCOUNTS.feature"
       obligation_id: null

@@ -22,50 +22,21 @@ direction, without naming the key it is defending.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from datetime import UTC, datetime
 
 import pytest
 
-from src.adapters.base import AdapterCreateRequest
 from src.adapters.mock_ad_server import MockAdServer
-from src.core.schemas import FormatId, MediaPackage, Principal
+from src.core.schemas import Principal
 from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
 from tests.helpers.media_buy_approval import uploadable_creative
+from tests.helpers.mock_adapter import create_mock_media_buy
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 #: The package the asset is assigned to. One name, used by the buy and by the assignment,
 #: because an adapter that cannot find the package drops the asset for that reason instead.
 PACKAGE_ID = "pkg_asset_contract"
-
-
-def _live_buy(adapter: MockAdServer) -> str:
-    """A buy registered through the adapter's OWN create path.
-
-    Seeding ``adapter._media_buys`` directly would be shorter and is what an older test in
-    this suite does, but then the upload runs against a store no production call wrote —
-    and ``_add_creative_assets_immediate`` refuses an unknown buy, which is the one thing
-    this test must not be grading.
-    """
-    start = datetime.now(UTC)
-    result = adapter.create_media_buy(
-        AdapterCreateRequest(brand={"domain": "example.com"}, total_budget=Decimal("5000.00")),
-        [
-            MediaPackage(
-                package_id=PACKAGE_ID,
-                name="Asset contract",
-                delivery_type="guaranteed",
-                cpm=5.0,
-                impressions=10000,
-                format_ids=[FormatId(agent_url="https://creative.test", id="display_300x250")],
-                product_id="prod_asset_contract",
-            )
-        ],
-        start,
-        start + timedelta(days=30),
-    )
-    return result.media_buy_id
 
 
 def test_the_adapter_names_the_creative_the_builder_named(bound_factory_session):
@@ -97,6 +68,8 @@ def test_the_adapter_names_the_creative_the_builder_named(bound_factory_session)
         tenant_ai_config=None,
     )
 
-    statuses = adapter.add_creative_assets(_live_buy(adapter), [asset], datetime.now(UTC))
+    statuses = adapter.add_creative_assets(
+        create_mock_media_buy(adapter, package_id=PACKAGE_ID), [asset], datetime.now(UTC)
+    )
 
     assert [status.creative_id for status in statuses] == [creative.creative_id]

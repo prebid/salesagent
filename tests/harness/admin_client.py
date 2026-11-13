@@ -152,6 +152,10 @@ class AdminClient:
         response = self._http.request(
             method, f"{self._base_url}{path}", data=data, json=json, headers=headers, allow_redirects=False, timeout=60
         )
+        if "session" in response.cookies:
+            from tests.helpers.admin_session import drop_stated_session_cookie
+
+            drop_stated_session_cookie(self._http)
         return AdminResponse.from_requests(response)
 
     def submit(self, path: str, data: dict[str, Any]) -> AdminResponse:
