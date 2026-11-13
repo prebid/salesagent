@@ -2860,13 +2860,14 @@ class BaseTestEnv:
         with preserved_global_app_state(), TestClient(app, follow_redirects=False) as client:
             return client.post(path, json=body, headers=headers)
 
-    def list_mcp_tools(self) -> dict[str, str | None]:
-        """Each MCP tool's advertised description, by name, as a client's ``tools/list`` answers.
+    def list_mcp_tools(self) -> dict[str, Any]:
+        """Each MCP tool as a client's ``tools/list`` answers it (an ``mcp.types.Tool``), by name.
 
         Like the card, ``tools/list`` is not a registry tool and so not reachable through
         ``call_via``. It runs over FastMCP's in-memory client against the server the MCP
-        transport dispatches to, so the answer is the MCP wire's, not a read of the registry.
-        In-process only: e2e serves no MCP transport to grade.
+        transport dispatches to, middleware chain included, so the answer is the MCP wire's,
+        not a read of the registry. The listing needs no credential. In-process only: e2e
+        serves no MCP transport to grade.
         """
         assert not self.is_e2e, "list_mcp_tools() reads the in-process MCP server; e2e dispatches no MCP"
         import asyncio
@@ -2875,9 +2876,11 @@ class BaseTestEnv:
 
         from src.core.main import mcp
 
-        async def _list() -> dict[str, str | None]:
+        self._commit_factory_data()
+
+        async def _list() -> dict[str, Any]:
             async with Client(mcp) as client:
-                return {tool.name: tool.description for tool in await client.list_tools()}
+                return {tool.name: tool for tool in await client.list_tools()}
 
         return asyncio.run(_list())
 

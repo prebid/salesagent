@@ -108,6 +108,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.local_context_echo",
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
+    "tests.bdd.steps.domain.mcp_tool_discovery",
     "tests.bdd.steps.domain.mcp_endpoint_paths",
     "tests.bdd.steps.domain.publisher_authorization",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
@@ -5234,6 +5235,9 @@ _SINGLE_TRANSPORT_TAGS = {
     "predispatch-rest": "REST",
     "predispatch-a2a": "A2A",
     "predispatch-mcp": "MCP",
+    # local-mcp-tool-discovery.feature: tools/list is MCP's own discovery frame and exists on
+    # no other transport.
+    "mcptools": "MCP",
 }
 
 # UC + tag combinations that should run IMPL-only (no 4-way parametrization).
@@ -6823,6 +6827,18 @@ ENV_ROUTES: list[EnvRoute] = [
     EnvRoute(
         tag="tenantid",
         when=lambda m: "tenantid" in m,
+        env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @mcptools (local mcp-tool-discovery feature) ────────────────────────
+    # An UNSCOPED `when` row: the scenario carries a T-MCPTOOLS-* identity tag, so
+    # detect_uc returns None and no coarse bucket claims it. The capabilities env, for the
+    # one thing a listing needs from an env: `list_mcp_tools`, which sends `tools/list`
+    # through the in-memory FastMCP Client. The listing is NOT dispatched as a tool, so
+    # which tool this env would dispatch is irrelevant.
+    EnvRoute(
+        tag="mcptools",
+        when=lambda m: "mcptools" in m,
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
     ),
