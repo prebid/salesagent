@@ -97,11 +97,12 @@ Each shard runs against a GitHub Actions service container (Postgres 15).
 
 ## E2E Tests
 
-The workflow sets `ADCP_TESTING: true` at the top level for integration/BDD/smoke
-jobs. The **E2E job overrides this to empty** so `tests/e2e/conftest.py` starts
-`docker-compose.e2e.yml` itself (same as legacy `test.yml`). Do not set
-`ADCP_TESTING=true` on the E2E pytest step — that path assumes an already-running
-stack on `ADCP_SALES_PORT` and fails with "Server not ready after 60s".
+The **E2E job** runs in-network: `./run_all_tests.sh e2e` builds the image,
+starts `docker-compose.e2e.yml`, and runs pytest inside the compose network.
+Host pytest cannot resolve compose-only names such as
+`counterparty.adcp-e2e.dev`, so do not add a host-side "start the stack, then
+pytest" step. The job frees runner disk (`.github/actions/_free-disk`) before
+the image build.
 
 ## Reference Creative Agent
 
