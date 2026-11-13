@@ -11,6 +11,7 @@ header, and by nothing else.
 """
 
 from src.core.config import get_settings
+from src.core.http_utils import same_hostname
 
 
 def _is_localhost(domain: str | None) -> bool:
@@ -116,7 +117,7 @@ def is_admin_domain(host: str) -> bool:
     admin_domain = get_admin_domain()
     if not admin_domain:
         return False
-    return host == admin_domain or host.startswith(f"{admin_domain}:")
+    return same_hostname(host, admin_domain)
 
 
 def get_oauth_redirect_uri(protocol: str = "https") -> str | None:

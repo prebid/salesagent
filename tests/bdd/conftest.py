@@ -36,6 +36,11 @@ from tests.helpers.bdd_transport import NODEID_TRANSPORTS, transport_of
 from tests.helpers.ledger import load_ledger_nodeids
 from tests.helpers.marker_names import derive_marker_names
 
+# ``src.app`` reads this when it is imported and mounts GET /tls/ask from it, as a deployment
+# does. local-tls-ask.feature grades that composed app, so it is set before anything imports
+# ``src.app``. docker-compose.e2e.yml sets the same on the live stack.
+os.environ["TLS_ASK_ENABLED"] = "true"
+
 # Known mock-incompatible e2e_rest BDD scenarios — these dispatch over real HTTP
 # to the separate server, so in-process mock injection (set_registry_formats /
 # set_adapter_response / account billing-state fixtures) is invisible to it and
@@ -116,6 +121,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.security_wire_safety",
     "tests.bdd.steps.domain.security_tenant_isolation",
     "tests.bdd.steps.domain.database_fail_fast",
+    "tests.bdd.steps.domain.tls_ask",
     "tests.bdd.steps.domain.protocol_version_negotiation",
 ]
 
@@ -6803,6 +6809,16 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="agentcard",
         when=lambda m: "agentcard" in m,
         env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @tlsask (local on-demand TLS gate feature) ──────────────────────────
+    # An UNSCOPED `when` row for the same reason as the rows around it: T-TLSASK-* identity
+    # tags, so detect_uc returns None. The gate is a root endpoint, not a tool, so the env
+    # dispatches nothing; it owns the GET and the database faults.
+    EnvRoute(
+        tag="tlsask",
+        when=lambda m: "tlsask" in m,
+        env_builder=_env("tests.harness.tls_gate.TlsGateEnv"),
         seed=_seed_tenant_and_principal,
     ),
     # ── @mcppath (local MCP endpoint paths feature) ─────────────────────────

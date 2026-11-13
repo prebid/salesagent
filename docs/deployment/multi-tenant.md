@@ -98,6 +98,34 @@ fly ips list --app your-app-name
 - **AWS**: ACM wildcard certificate on the ALB, plus one certificate per custom domain; see the [AWS guide](aws.md#tenant-tls-and-custom-domains)
 - **Docker**: Use Caddy, nginx with certbot, or a reverse proxy with a wildcard certificate. The [single VM walkthrough](vm.md) is a complete Caddy setup.
 
+#### Caddy on-demand TLS (no wildcard certificate)
+
+Caddy can issue a certificate for each hostname the first time a client connects to it, which covers every tenant host without a DNS-01 wildcard. Caddy must first ask whether the hostname is yours, or anyone who points a domain at the server makes Caddy request certificates for it. The sales agent answers that question at `GET /tls/ask?domain=<host>` when `TLS_ASK_ENABLED=true`:
+
+- **200** for `SALES_AGENT_DOMAIN`, the admin domain (`ADMIN_DOMAIN`, or `admin.<SALES_AGENT_DOMAIN>`), and the `virtual_host` of an active tenant (a port stored with it is ignored, because a certificate names only the host).
+- **403** for anything else, including an inactive tenant's host and `<subdomain>.<SALES_AGENT_DOMAIN>` for a tenant that does not declare it as its `virtual_host`: a tenant is served at the host it declares and nowhere else. If the database is unreachable, it answers 500, which Caddy also treats as a refusal.
+
+```caddyfile
+{
+    on_demand_tls {
+        ask http://sales-agent-backend:8000/tls/ask
+    }
+}
+
+https:// {
+    tls {
+        on_demand
+    }
+    reverse_proxy sales-agent-backend:8000
+}
+```
+
+Replace `sales-agent-backend:8000` with the address Caddy reaches the deployment at.
+
+The endpoint is off by default, and with `TLS_ASK_ENABLED` unset `/tls/ask` answers 404 like any unknown path. Turn it on only when a proxy issues certificates on demand, as Caddy does here. A load balancer or proxy that holds a certificate for each domain you configure (Fly.io, Cloud Load Balancer, nginx with certbot) never asks, so it does not need the endpoint.
+
+The endpoint is unauthenticated: it reveals only whether a hostname is a tenant hostname, which that hostname's DNS already shows. It refuses a malformed hostname without querying the database and otherwise runs one lookup on the unique host-name index. Keep it reachable only from Caddy where you can, because Caddy calls it on every handshake for a hostname that has no certificate yet.
+
 ## Step 4: Optional: custom domains with Approximated
 
 Approximated is a proxy service that lets tenants use their own custom domains (for example, `sales.publisher.com`) instead of subdomains.
