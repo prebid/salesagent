@@ -1365,45 +1365,6 @@ def then_response_contains_task_id(ctx: dict) -> None:
     )
 
 
-def _assert_a2a_submitted_task_has_no_artifacts(ctx: dict) -> None:
-    """Defense-in-depth for the A2A submitted case: grade the REAL protobuf Task.
-
-    On A2A a submitted outcome is conveyed via the Task state and the transport
-    clears artifacts (``del task.artifacts[:]``), so the NOT-contain checks over
-    the synthesized wire dict are architecturally vacuous on that transport.
-    Assert on ``env.last_a2a_task`` (the actual transport object, stashed by the
-    dispatcher) that no artifact leaked — mirroring the update path's guard
-    (test_a2a_update_media_buy_submitted_guard.py). PR #1567 round-3.
-    """
-    from tests.harness.transport import Transport
-
-    # The A2A branch below is a LEGITIMATE transport-aware assertion (see the
-    # docstring): on A2A the wire-dict NOT-contain checks are vacuous, so the real
-    # Task is graded instead. What is NOT legitimate is reaching it with the
-    # transport unset — `None is not Transport.A2A` silently reads as "some other
-    # transport" and returns, grading nothing on the only transport this guard
-    # exists for. An unset transport is a wiring bug; report it (salesagent-n78j0.1.5).
-    transport = ctx.get("transport")
-    if transport is None:
-        raise AssertionError(
-            "A2A submitted-artifact guard reached with ctx['transport'] unset — the "
-            "check would silently downgrade to 'not A2A' and grade nothing. Dispatch "
-            "through dispatch_request (which raises on an unset transport) or set "
-            "ctx['transport'] explicitly."
-        )
-    if transport is not Transport.A2A:
-        return
-    if wire_dict(ctx).get("status") != "submitted":
-        return
-    env = ctx.get("env")
-    task = getattr(env, "last_a2a_task", None)
-    assert task is not None, "A2A submitted case must stash the real Task (env.last_a2a_task)"
-    assert not task.artifacts, (
-        f"A2A submitted Task must carry NO artifacts (submitted is conveyed via the Task "
-        f"state; an artifact would leak a premature result), got {task.artifacts!r}"
-    )
-
-
 @then(
     parsers.re(
         r'(?:the response should NOT (?:contain|have an) "(?P<field_name>[a-z_]+)" field'
@@ -1432,7 +1393,6 @@ def then_response_field_absent(ctx: dict, field_name: str | None, path: str | No
     assert member is not None
     if payload_or_none(ctx) is not None:
         wire_absent(ctx, member)
-        _assert_a2a_submitted_task_has_no_artifacts(ctx)
         return
     # Error-path response (BR-RULE-018 INV-2) — the envelope the buyer received.
     envelope = ctx["result"].error_envelope()

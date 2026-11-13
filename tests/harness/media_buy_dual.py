@@ -282,13 +282,9 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # the true artifact DataPart as the wire_response. A prior version synthesized
         # the wire via update_media_buy_raw(...).model_dump(), which tracked the return
         # model rather than the assembled envelope — an update-envelope regression
-        # would not be caught. A SUBMITTED update never carries an artifact body:
-        # on_message_send early-returns a Task (state=SUBMITTED, no artifacts) whose
-        # payload rides in ``status.message.parts``, where L0/a2a-response-format.mdx puts
-        # an interim status's data, and the base handler reads it from there
-        # (tests/harness/_base.py). Completed/error results DO carry an artifact, stashed as
-        # wire_response; _parse_update_rest_response recovers the union from the
-        # flattened artifact (needs the top-level status the plain model drops).
+        # would not be caught. Submitted AdCP work also travels in an artifact,
+        # on a completed native Task; _parse_update_rest_response recovers the
+        # submitted union member from that payload's own status.
         return self._run_a2a_handler(
             "update_media_buy",
             lambda **data: self._parse_update_rest_response(data),
@@ -388,8 +384,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         branches inherit (``_BRANCH_ADAPTERS``, src/core/schemas/_base.py), so the
         wrapper has no ``response`` field to fill and the ladder has nothing left to
         decide. This serves the REST wire and the A2A submitted payload alike — the
-        latter read off ``status.message.parts``, which is where A2A puts an interim
-        status's data and where production writes it.
+        latter read from the completed native Task's artifact DataPart.
         """
         from src.core.schemas._base import UpdateMediaBuyResult
 

@@ -22,6 +22,8 @@ Multi-transport support (subclasses may also override):
 
 from __future__ import annotations
 
+import copy
+import json
 import os
 import uuid
 from collections.abc import Callable, Sequence
@@ -290,14 +292,6 @@ _A2A_PATH = "/a2a"
 #: ``VersionNotSupportedError``.
 _A2A_VERSION_HEADER = {"A2A-Version": "1.0"}
 
-#: The A2A task states both legs normalize onto, keyed by the PROTOBUF ENUM NAME.
-#: That key is what proto JSON puts on the HTTP wire verbatim, and what
-#: ``TaskState.Name()`` gives the in-process leg for the same enum — so one table
-#: serves both and the two legs cannot disagree about which outcome a task had.
-#: Anything absent normalizes to ``""``, which ``_a2a_task_outcome`` reads as
-#: "completed, grade the artifact".
-_A2A_TASK_STATES = {"TASK_STATE_FAILED": "failed", "TASK_STATE_SUBMITTED": "submitted"}
-
 #: The MCP streamable-HTTP endpoint. WITH the trailing slash, same reason: the
 #: mount answers ``/mcp`` with a 307 to ``/mcp/``.
 _MCP_PATH = "/mcp/"
@@ -412,45 +406,38 @@ def _a2a_message_send_body(skill_name: str, parameters: dict[str, Any]) -> dict[
     return _a2a_jsonrpc_body("SendMessage", request)
 
 
-def _a2a_jsonrpc_result(response: Any) -> dict[str, Any]:
-    """The ``result`` of an ``/a2a`` answer, or its ``error`` raised as a CARRIER.
+def _a2a_first_data_part(task: dict[str, Any]) -> dict[str, Any]:
+    """Read the one artifact DataPart of a finished native invocation.
 
-    One reader for every method this harness POSTs to ``/a2a``. Both refusal arms
-    carry *response*, and that is the whole contract of this function:
-
-    * an HTTP refusal that never produced a JSON-RPC envelope at all surfaces as
-      :class:`WireRefusal` (raised by :func:`_jsonrpc_body`);
-    * a JSON-RPC ``error`` frame surfaces as :class:`WireError` when its ``data``
-      holds a real two-layer AdCP envelope, and as :class:`WireRefusal` when it does
-      not -- the SDK's own protocol errors (``-32601 Method not found``,
-      ``PushNotificationNotSupportedError``) carry no ``adcp_error``, and
-      SYNTHESIZING one would hand a scenario an envelope the seller never emitted;
-    * anything else is the result object.
-
-    It used to raise a reconstructed ``AdCPSalesAgentError`` here and DROP the
-    response. That is the lossy reconstruction tests/CLAUDE.md § "Error
-    Verification Policy" rules out: an error frame answered at HTTP 401 carries its
-    ``WWW-Authenticate: Signature error="<code>"`` in the headers, not in the body,
-    so raising past the response left ``assert_signature_challenge`` with nothing to
-    read and it refused to grade -- reporting a real wire refusal as "no wire".
+    AdCP 3.2.7 L0/a2a-profile-extension.mdx completes each invocation,
+    including submitted work and polls. Both HTTP and protobuf readers use
+    this check, so neither can accept the retired status-message payload.
     """
-    envelope = _jsonrpc_body(response, surface=_A2A_PATH)
-    if "error" in envelope:
-        error = envelope["error"]
-        data = error.get("data") if isinstance(error, dict) else None
-        wire = _wire_envelope(data) if isinstance(data, dict) else None
-        if wire is not None:
-            raise WireError(wire, response)
-        raise WireRefusal(f"{_A2A_PATH} answered JSON-RPC error: {error!r}", response)
-    return envelope.get("result") or {}
+    status = task.get("status")
+    if not isinstance(status, dict):
+        raise ValueError("Expected an A2A Task status object")
+    state = status.get("state")
+    if state not in {"TASK_STATE_COMPLETED", "TASK_STATE_FAILED"}:
+        raise ValueError(f"Expected a completed or failed native A2A Task, got {state!r}")
+    artifacts = task.get("artifacts")
+    if not isinstance(artifacts, list) or len(artifacts) != 1 or not isinstance(artifacts[0], dict):
+        raise ValueError("Expected exactly one A2A artifact object")
+    parts = artifacts[0].get("parts")
+    if not isinstance(parts, list) or any(not isinstance(part, dict) for part in parts):
+        raise ValueError("Expected an A2A artifact parts array")
+    data = [part["data"] for part in parts if "data" in part]
+    if len(data) != 1 or not isinstance(data[0], dict):
+        raise ValueError("Expected exactly one object DataPart in the A2A artifact")
+    return data[0]
 
 
-def _a2a_first_data_part(artifact: dict[str, Any]) -> dict[str, Any] | None:
-    """The first ``data`` part of an artifact as the ``/a2a`` HTTP wire renders it."""
-    for part in artifact.get("parts") or []:
-        if isinstance(part, dict) and isinstance(part.get("data"), dict):
-            return dict(part["data"])
-    return None
+def _a2a_protobuf_data(task: Any) -> dict[str, Any]:
+    """Match the HTTP route's integer restoration at the protobuf conversion edge."""
+    from google.protobuf import json_format
+
+    from src.a2a_server.adcp_a2a_server import restore_a2a_integer_types
+
+    return restore_a2a_integer_types(_a2a_first_data_part(json_format.MessageToDict(task)))
 
 
 def _mcp_jsonrpc_request(request_id: int, method: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -779,6 +766,7 @@ class BaseTestEnv:
     # contract lives at dispatchers.py's getattr(env, "REST_METHOD", "post").
     MCP_TOOL: str = ""
     A2A_SKILL: str = ""
+    A2A_OVER_HTTP: bool = False
     # The parser the base delegation feeds wire dicts to. Declared per env
     # because envs parse into their LOCAL response subclass, which is not always
     # the tool's pinned SDK model — defaulting to the pinned model would quietly
@@ -816,10 +804,8 @@ class BaseTestEnv:
         self._unit_principals: dict[tuple[str, str], Any] = {}
         self._rest_client: Any = None  # Lazy-created TestClient
         self.clock = _TestClock()  # BDD steps may use env.clock for date tokens
-        # Raw A2A Task returned by the last _run_a2a_handler call. The submitted
-        # (manual-approval) contract lives on the Task itself — state=SUBMITTED
-        # with NO artifacts, its payload in status.message.parts — and the parsed
-        # wire cannot prove artifact ABSENCE, so guards assert on this captured Task.
+        # Raw A2A Task from the last dispatch, available for framing assertions
+        # independently of the parsed AdCP artifact payload.
         self._last_a2a_task: Any = None
         # WHICH signature realization the dispatch currently in flight carries —
         # not whether it asked for one. It holds one of False / True /
@@ -1740,7 +1726,7 @@ class BaseTestEnv:
             )
         return model
 
-    def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
+    def deliver_a2a(self, **kwargs: Any) -> DeliverResult | TransportResult:
         """Dispatch through the real A2A pipeline, returning payload AND wire.
 
         THE override point for A2A. The dispatchers call this and read both
@@ -1766,10 +1752,7 @@ class BaseTestEnv:
     def last_a2a_task(self) -> Any:
         """Raw A2A Task from the last ``_run_a2a_handler`` dispatch (or None).
 
-        Public accessor for Task-level contract assertions — e.g. the submitted
-        (manual-approval) contract, where state=TASK_STATE_SUBMITTED with NO
-        artifacts IS the wire and the parsed response is a harness synthesis
-        that cannot prove artifact absence.
+        Provides the transport framing independently of the parsed AdCP payload.
         """
         return self._last_a2a_task
 
@@ -1791,7 +1774,7 @@ class BaseTestEnv:
 
         return self._deliver_via_client(Transport.MCP, self.MCP_TOOL, kwargs)
 
-    def _deliver_via_client(self, transport: Any, tool: str, kwargs: dict[str, Any]) -> DeliverResult:
+    def _deliver_via_client(self, transport: Any, tool: str, kwargs: dict[str, Any]) -> DeliverResult | TransportResult:
         """Dispatch through THE one client core, then parse with this env's parser.
 
         This is The harness's single-dispatch invariant, made literal: ``AdCPTestClient`` is the
@@ -1806,13 +1789,12 @@ class BaseTestEnv:
         that type. The core still owns the DISPATCH; the env owns only how its
         own wire is typed.
 
-        Errors are re-RAISED rather than returned, because the dispatchers'
-        contract is that deliver_* raises and they translate — the core folds
-        errors into a TransportResult, so unfolding it here keeps the exception
-        (and the wire envelope stashed on it) flowing to the same handler.
+        A2A HTTP results retain their response and native Task metadata through
+        the local parse. Errors raise with their received response attached, so
+        legacy callers raise and dispatchers can recover the same wire evidence.
         """
         from tests.harness.client import _dispatch_core
-        from tests.harness.transport import NO_IDENTITY_OVERRIDE
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
 
         payload = dict(kwargs)
         credential = payload.pop("credential", NO_IDENTITY_OVERRIDE)
@@ -1835,7 +1817,15 @@ class BaseTestEnv:
         # the rest through the same refusing constructor, and re-attaches the value.
         parser = self.response_parser(tool)
         revive = getattr(parser, "revive", None)
-        return DeliverResult(payload=revive(wire) if revive is not None else parser(**wire), wire_response=wire)
+        parse_response = revive if revive is not None else lambda data: parser(**data)
+        if transport is Transport.A2A and result.raw_response is not None:
+            from tests.harness.client import _parse_a2a_http_result
+
+            result = _parse_a2a_http_result(result, parse_response)
+            if result.error is not None:
+                raise result.error
+            return result
+        return DeliverResult(payload=parse_response(wire), wire_response=wire)
 
     def call_mcp(self, **kwargs: Any) -> Any:
         """The parsed MCP payload. Defined ONCE; never override — override
@@ -1873,16 +1863,16 @@ class BaseTestEnv:
                 :func:`_a2a_send_message_configuration`) rather than as a skill
                 parameter; remaining kwargs become skill parameters.
         """
-        if self.can_sign:
+        if self.can_sign or self.A2A_OVER_HTTP:
             return self._run_a2a_over_http(skill_name, response_cls, **kwargs)
 
         import asyncio
 
-        from a2a.types import SendMessageRequest, Task
+        from a2a.types import SendMessageRequest, Task, TaskState
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from tests.harness.transport import NO_IDENTITY_OVERRIDE
-        from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
+        from tests.utils.a2a_helpers import create_a2a_message_with_skill
 
         self._commit_factory_data()
 
@@ -1933,27 +1923,13 @@ class BaseTestEnv:
         # (state, artifact absence) that the parsed response cannot prove.
         self._last_a2a_task = task_result
 
-        from a2a.types import TaskState
-
-        return self._a2a_task_outcome(
-            # Through the SAME table the HTTP leg uses, keyed by the protobuf enum
-            # NAME. The local dict this replaces was keyed by the enum VALUE and
-            # mapped onto the v0.3 spelling, which was only shareable while the HTTP
-            # leg spoke 0.3; it does not (``_a2a_message_send_body``).
-            state=_A2A_TASK_STATES.get(TaskState.Name(task_result.status.state), ""),
-            status=task_result.status,
-            task_id=task_result.id,
-            artifact_data=(extract_data_from_artifact(task_result.artifacts[0]) if task_result.artifacts else None),
-            # An interim status carries its payload here rather than in artifacts. Read
-            # through the same extractor: ``Artifact`` and ``Message`` both expose ``parts``,
-            # so one reader covers both homes and cannot read them differently.
-            status_data=(
-                extract_data_from_artifact(task_result.status.message)
-                if task_result.status.HasField("message")
-                else None
-            ),
-            response_cls=response_cls,
-        )
+        data = _a2a_protobuf_data(task_result)
+        if task_result.status.state == TaskState.TASK_STATE_FAILED:
+            envelope = _wire_envelope(data)
+            if envelope is None:
+                raise ValueError("Failed A2A Task carried no AdCP error envelope")
+            raise WireError(envelope)
+        return DeliverResult(payload=response_cls(**copy.deepcopy(data)), wire_response=data)
 
     @staticmethod
     def _a2a_skill_parameters(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -1969,165 +1945,53 @@ class BaseTestEnv:
             return {**req_fields, **kwargs}
         return dict(kwargs)
 
-    def _a2a_task_outcome(
-        self,
-        *,
-        state: str,
-        status: Any,
-        task_id: str,
-        artifact_data: dict[str, Any] | None,
-        status_data: dict[str, Any] | None,
-        response_cls: type,
-        response: Any = None,
+    def post_a2a(
+        self, body: dict[str, Any], credential: dict[str, str], *, signed: SignatureRealization = False
     ) -> Any:
-        """Turn one A2A Task into a parsed response, a raise, or the submitted wire.
+        """Send one native A2A frame through the shared HTTP/signing route."""
+        from urllib.parse import urlsplit
 
-        Stated ONCE for both A2A legs. The in-process leg reads a protobuf
-        ``Task``, the HTTP leg reads the v0.3 JSON the ``/a2a`` route serializes;
-        the three OUTCOMES (failed → :class:`WireError` carrying the envelope the
-        buyer received, submitted → the status-message DataPart, otherwise → the
-        stripped artifact DataPart) are the same contract, and a second copy of
-        them is how the two legs would drift into grading different things.
+        import httpx
 
-        *state* is the normalized A2A task state — the v0.3 spelling
-        (``"failed"`` / ``"submitted"``), which the protobuf leg maps onto with
-        the ``protobuf_states`` table in :meth:`_run_a2a_handler`.
+        origin = self.e2e_config.base_url if self.is_e2e else None
+        if self.can_sign:
+            from tests.helpers.signing import WIRE_ORIGIN
 
-        *response* is the raw HTTP response the Task arrived on, and is how the
-        failed branch's :class:`WireError` keeps the ``WWW-Authenticate`` challenge
-        reachable: a refusal renders as a FAILED Task like any other failure, so
-        this is the path a signature refusal takes on the HTTP leg. ``None`` from
-        the in-process leg, which reads a protobuf ``Task`` and has no response —
-        the asymmetry is the legs', not this contract's, which is why it is a
-        parameter here rather than a second raise site there.
-        """
-        # AdCP-domain errors surface as a FAILED Task with the two-layer envelope
-        # in the artifact DataPart. The ENVELOPE is what is raised, not a
-        # reconstructed production exception: rebuilding an AdCPSalesAgentError from
-        # wire bytes graded our own class hierarchy through a lossy copy of
-        # production's constructor (see :func:`_wire_envelope`), and the envelope is
-        # what the buyer actually received.
-        if state == "failed":
-            from src.core.exceptions import AdCPInternalError
-
-            if artifact_data:
-                envelope = _wire_envelope(artifact_data)
-                if envelope is not None:
-                    raise WireError(envelope, response)
-            # A failed task with no envelope artifact: nothing was caught, so there is
-            # no exception to hand to ``internal_detail``; the code is the diagnosis.
-            raise AdCPInternalError()
-
-        if state == "submitted":
-            # Async manual-approval path: the server returns a submitted Task with NO
-            # artifacts, because L0/a2a-response-format.mdx gives an INTERIM status its
-            # data in ``status.message.parts[]`` and reserves ``artifacts`` for the final
-            # deliverable. So the wire is READ from there: a wire the harness composed
-            # would grade the harness, leaving every field the server actually sent invisible
-            # -- including the envelope ``context`` the buyer is owed on every outcome.
-            if status_data is None:
-                raise ValueError(
-                    "a submitted A2A Task carried no data part in status.message.parts — "
-                    "the interim payload L0/a2a-response-format.mdx requires is missing, "
-                    f"so there is no wire to grade (task_id={task_id!r})"
-                )
-            return DeliverResult(payload=response_cls(**status_data), wire_response=dict(status_data))
-
-        if artifact_data is None:
-            raise ValueError(f"Task has no artifacts. Status: {status}")
-        # Surface the full, unstripped artifact DataPart as the real A2A wire for
-        # success-path assertions. Captured BEFORE stripping so siblings that need
-        # the top-level envelope fields (message/success) still see them.
-        wire_response = dict(artifact_data)
-        # Strip protocol fields the A2A wire adds in _dispatch_skill → to_wire (message, success).
-        # These are populated by the protocol layer per the pin's Protocol
-        # Envelope branch (see tests/helpers/adcp_schema_validator.py) — not
-        # declared on the Pydantic response model — and cause ValidationError
-        # under extra="forbid" in non-production mode.
-        return DeliverResult(payload=response_cls(**artifact_data), wire_response=wire_response)
+            host = next((value for name, value in credential.items() if name.lower() == "host"), None)
+            signing_origin = f"{urlsplit(origin or WIRE_ORIGIN).scheme}://{host}" if host else origin
+            raw, headers = self.wire_request(
+                path=_A2A_PATH,
+                body=body,
+                extra={**_A2A_VERSION_HEADER, **credential},
+                signed=signed,
+                credentialed=False,
+                origin=signing_origin,
+            )
+        else:
+            if signed:
+                self.signing  # raises with the missing capability  # noqa: B018
+            raw = json.dumps(body).encode()
+            headers = {"Content-Type": "application/json", **_A2A_VERSION_HEADER, **credential}
+        if origin is not None:
+            with httpx.Client(base_url=origin, timeout=30) as client:
+                return client.post(_A2A_PATH, content=raw, headers=headers)
+        return self.get_rest_client().post(_A2A_PATH, content=raw, headers=headers)
 
     def _run_a2a_over_http(self, skill_name: str, response_cls: type, **kwargs: Any) -> Any:
-        """A2A dispatch as a real POST to ``/a2a`` on ``src.app.app``.
+        """Dispatch through the real A2A HTTP route and retain its native receipt."""
+        from tests.harness.client import _parse_a2a_http_result, jsonrpc_http_result
+        from tests.harness.transport import Transport
 
-        The leg the signing capability needs, and strictly MORE production than
-        the in-process one: the request traverses ``UnifiedAuthMiddleware`` → the
-        SDK's JSON-RPC route → the integer-restoring wrapper (``src/app.py``) → the
-        same ``AdCPRequestHandler`` → ``invoke_tool`` → ``_resolve_identity``, where
-        the verifier runs. Identity is not fabricated here — it is resolved from the
-        real bearer ``wire_request`` puts on ``Authorization``, by the same
-        ``AdCPCallContextBuilder`` a live buyer would meet.
-
-        The wire method is the a2a-sdk 1.0 native ``SendMessage``, because that is
-        the only family ``/a2a`` serves (``src/app.py`` passes no
-        ``enable_v0_3_compat``). This leg used to send the 0.3 ``message/send`` on
-        the reasoning that ``SendMessage`` is unrepresentable in a
-        ``protocol_methods_*`` bucket (the pinned capabilities schema constrains
-        those with ``pattern: ^[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$``) and so could only
-        land in ``none``, making a signing assertion vacuous. That reasoning
-        described a verifier reading the JSON-RPC METHOD off an ASGI middleware, and
-        #1721 has no such middleware: the verifier runs inside ``_resolve_identity``,
-        which ``invoke_tool`` reaches only once ``TOOLS[tool_name]`` resolved, so the
-        operation graded against the posture is the SKILL and the ``protocol_methods_*``
-        namespace is never consulted at all — ``bucket_for`` takes an AdCP operation and
-        reads the AdCP buckets, so there is no argument at that boundary that COULD be
-        graded against the protocol trio.
-
-        Meanwhile ``message/send`` was not merely representable but unserved: the
-        dispatcher routes by method name before any version check, answers an unknown
-        name ``-32601 Method not found`` at HTTP 200, and nothing downstream runs. A
-        signing scenario read that as a seller that declined to refuse.
-        """
         credential = self._pop_credential(kwargs)
         self._commit_factory_data()
         self._seed_ambient_tenant(credential)
-
-        # ``push_notification_config`` is NOT lifted out: it is a declared field of the
-        # AdCP request and travels in the DataPart with the rest of it, which is what the
-        # in-process leg has always done and what production reads. See
-        # ``_a2a_message_send_body``.
-        parameters = self._a2a_skill_parameters(kwargs)
-        body = _a2a_message_send_body(skill_name, parameters)
-        # /a2a with NO trailing slash: src/app.py 307-redirects /a2a/, and httpx
-        # would replay the pre-redirect signature against the new target-uri —
-        # a genuine signature failing as request_signature_invalid.
-        #
-        # ``credential={}`` means "send without a credential" everywhere else in the
-        # harness, so it decides ``credentialed`` here too rather than the leg
-        # quietly attaching the capability's bearer to a call the caller asked to
-        # make anonymous. It is the only way this leg reaches the composition rule's
-        # refusal branch at all: security.mdx :1269 makes an unsigned request
-        # carrying a valid bearer a spec-correct 200.
-        raw, headers = self.wire_request(
-            path=_A2A_PATH,
-            body=body,
-            # Merged BEFORE signing, like every other transport's framing headers, so
-            # the header set the signature covers is the one sent (``wire_request``
-            # rule 1 applied to headers).
-            extra=dict(_A2A_VERSION_HEADER),
-            signed=self._signed_dispatch,
-            credentialed=_presents_a_credential(credential),
-        )
-        response = self.get_rest_client().post(_A2A_PATH, content=raw, headers=headers)
-
-        result = _a2a_jsonrpc_result(response)
-        # ``SendMessageResponse`` is a oneof: proto JSON renders the task arm as
-        # ``{"task": {...}}``. Accept a bare task too, so a oneof rendered without its
-        # wrapper does not silently parse as an empty task.
-        task = result.get("task", result)
-        artifacts = task.get("artifacts") or []
-        artifact_data = _a2a_first_data_part(artifacts[0]) if artifacts else None
-        task_status = task.get("status") or {}
-        return self._a2a_task_outcome(
-            state=_A2A_TASK_STATES.get(task_status.get("state", ""), ""),
-            status=task.get("status"),
-            task_id=task.get("id", ""),
-            artifact_data=artifact_data,
-            # Same home as the in-process leg reads, in the JSON the ``/a2a`` route
-            # serializes: an interim status puts its payload in ``status.message.parts``.
-            status_data=_a2a_first_data_part(task_status.get("message") or {}),
-            response_cls=response_cls,
-            response=response,
-        )
+        body = _a2a_message_send_body(skill_name, self._a2a_skill_parameters(kwargs))
+        response = self.post_a2a(body, credential, signed=self._signed_dispatch)
+        transport = Transport.E2E_A2A if self.is_e2e else Transport.A2A
+        result = _parse_a2a_http_result(jsonrpc_http_result(transport, response), lambda data: response_cls(**data))
+        if result.error is not None:
+            raise result.error
+        return result
 
     def _run_mcp_client(
         self,

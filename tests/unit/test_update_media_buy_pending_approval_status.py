@@ -12,15 +12,10 @@ Spec 3.1.1 models a not-yet-applied update as UpdateMediaBuySubmitted
 path returns CreateMediaBuyResult(status="submitted") whose _serialize overrides
 the envelope status. update_media_buy has no such wrapper.
 
-Wire faithfulness, per transport: on REST the model_dump IS the HTTP body; on
-MCP the wrapper does ToolResult(structured_content=response)
-(media_buy_update.py:1421), serialized via pydantic to_jsonable_python — NOT
-model_dump, though for this model the two agree (no model_dump override); on
-A2A a submitted result is conveyed by the Task object itself (state=SUBMITTED,
-no artifacts — the early-return in on_message_send), so no serialized response
-body crosses the A2A wire at all. This unit test asserts the shared _impl's
-serialized envelope; the per-transport wire is graded by the wired BR-UC-003
-manual-approval BDD scenarios (1b2f03bc9).
+This unit test asserts the shared implementation's serialized AdCP envelope.
+The per-transport wire is graded by the BR-UC-003 manual-approval BDD scenarios;
+AdCP 3.2.7 carries the submitted payload inside a completed native A2A Task.
+
 """
 
 from __future__ import annotations

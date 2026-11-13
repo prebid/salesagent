@@ -656,24 +656,10 @@ async def post_a2a(client: httpx.AsyncClient, message: dict[str, Any], *, leg: s
 
 
 def a2a_data_part(a2a_response: dict[str, Any]) -> dict[str, Any] | None:
-    """The AdCP payload out of an A2A 1.0 JSON-RPC result's first artifact.
+    """Read the finished native Task through the shared artifact validator."""
+    from tests.harness._base import _a2a_first_data_part
 
-    This walked ``result.artifacts`` matching ``part["kind"] == "data"`` — the A2A 0.3
-    shape — and so returned ``None`` against every 1.0 response: on 1.0 the Task is
-    WRAPPED (``result.task.artifacts``) and ``json_format.MessageToDict`` emits the part's
-    payload under a bare ``data`` key carrying no ``kind`` at all. A ``None`` here reads
-    downstream as an empty payload, which is how a refused call arrives at a caller as
-    "zero results" rather than as a failure.
-
-    The part read is delegated to ``tests.harness.client._artifact_data_from_json``, the one
-    producer that already owns that decoding, so only the Task unwrap lives here. This is
-    the single home for the read: ``test_webhook_signature_e2e`` carried a private
-    ``_adcp_payload`` copy precisely because this one was stale, and that copy is gone.
-    """
-    from tests.harness.client import _artifact_data_from_json
-
-    artifacts = ((a2a_response.get("result") or {}).get("task") or {}).get("artifacts") or []
-    return _artifact_data_from_json(artifacts[0]) if artifacts else None
+    return _a2a_first_data_part(a2a_response["result"]["task"])
 
 
 def assert_a2a_task_did_not_fail(result: dict[str, Any], *, leg: str) -> None:

@@ -10,7 +10,7 @@ import uuid
 from collections.abc import AsyncGenerator, Mapping
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
-from typing import Any
+from typing import Any, NoReturn
 
 from a2a.server.context import ServerCallContext
 from a2a.server.events.event_queue import Event
@@ -36,7 +36,6 @@ from a2a.types import (
     MethodNotFoundError,
     Part,
     PushNotificationNotSupportedError,
-    Role,
     SendMessageRequest,
     SubscribeToTaskRequest,
     Task,
@@ -48,15 +47,6 @@ from a2a.types import (
 )
 from a2a.utils.errors import A2AError
 from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
-
-# The spec's nine-value task status, off the PUBLIC surface. Until the pinned SDK,
-# ``adcp.types.TaskStatus`` resolved to a hand-written five-value enum and the real one was
-# reachable only through the private generated tree, which is why this import used to go
-# there. the pinned SDK deletes the hand-written enum outright and ``GeneratedTaskStatus`` is the
-# public name for the generated one (identity-checked: it IS
-# ``adcp.types.domains.enums.task_status.TaskStatus``). The local ALIAS stays, because
-# ``TaskStatus`` above is a2a's protobuf message of the same name.
-from adcp.types import GeneratedTaskStatus as LibraryTaskStatus
 from google.protobuf import json_format, struct_pb2
 
 from src.a2a_server.context_builder import EXCHANGE_STATE_KEY
@@ -154,28 +144,6 @@ A2A_WIRE_INTEGER_FIELDS = frozenset(
 )
 
 
-#: AdCP envelope status -> A2A Task state. The mapping A2A's Task state IS, declared once.
-#:
-#: TOTAL over ``enums/task-status.json``: all nine members are keys, because the consumer
-#: subscripts it. A partial mapping plus a default is how a status nobody had thought about
-#: came to report COMPLETED, and it is what the inline ``== "submitted"`` compares this
-#: replaces did for seven of the nine.
-#:
-#: The two vocabularies turn out to be the same set, one name apart, so every row is an exact
-#: counterpart rather than a judgement. ``unknown`` -> ``UNSPECIFIED`` is the only rename.
-_TASK_STATE_BY_ADCP_STATUS: dict[LibraryTaskStatus, TaskState] = {
-    LibraryTaskStatus.submitted: TaskState.TASK_STATE_SUBMITTED,
-    LibraryTaskStatus.working: TaskState.TASK_STATE_WORKING,
-    LibraryTaskStatus.input_required: TaskState.TASK_STATE_INPUT_REQUIRED,
-    LibraryTaskStatus.completed: TaskState.TASK_STATE_COMPLETED,
-    LibraryTaskStatus.canceled: TaskState.TASK_STATE_CANCELED,
-    LibraryTaskStatus.failed: TaskState.TASK_STATE_FAILED,
-    LibraryTaskStatus.rejected: TaskState.TASK_STATE_REJECTED,
-    LibraryTaskStatus.auth_required: TaskState.TASK_STATE_AUTH_REQUIRED,
-    LibraryTaskStatus.unknown: TaskState.TASK_STATE_UNSPECIFIED,
-}
-
-
 def restore_a2a_integer_types(data: Any, integer_field_names: frozenset[str] = A2A_WIRE_INTEGER_FIELDS) -> Any:
     """Recursively coerce known integer-typed fields back to ``int``.
 
@@ -246,13 +214,6 @@ def _parse_skill_invocation(message: Message) -> tuple[list[str], str, Any]:
 class AdCPRequestHandler(RequestHandler):
     """Request handler for AdCP A2A operations supporting JSON-RPC 2.0."""
 
-    def __init__(self):
-        """Initialize the AdCP A2A request handler."""
-        self.tasks: dict[str, Task] = {}  # In-memory task storage
-        # The VALUE, not the raw protobuf: what is stashed here is handed straight
-        # to the sender, so it must carry the gate's receipt.
-        logger.info("AdCP Request Handler initialized for direct function calls")
-
     def _headers_of(self, context: ServerCallContext) -> Mapping[str, str]:
         """The request headers the SDK's context builder placed on the call context.
 
@@ -313,61 +274,21 @@ class AdCPRequestHandler(RequestHandler):
 
             # No ``except`` around this. A refused credential, a malformed payload and a failing
             # tool all leave ``serve`` as ``AdcpFailure``, which ``_dispatch_skill`` serializes
-            # into the answer like any other response; the Task state below is read off that
-            # answer's own ``status``. An unknown skill is an ``A2AError`` and propagates to the
-            # JSON-RPC layer. AuthChallengeResponder reads a refused credential off the artifact
+            # into the answer and marks as a failed invocation. A successful invocation is
+            # completed even when its AdCP operation is still pending. An unknown skill is
+            # an ``A2AError`` and propagates to JSON-RPC. AuthChallengeResponder reads a refused
+            # credential off the artifact
             # (``adcp_error_code_in``, shape 4), so the 401 handshake needs no branch here keyed
             # on an error class.
-            result = await self._dispatch_skill(skill, parameters, headers, exchange)
+            result, state = await self._dispatch_skill(skill, parameters, headers, exchange)
 
-            # An async operation returns a Task with status=submitted and NO artifacts. The
-            # SAME read the final state uses, so the two cannot disagree.
-            #
-            # The payload still travels, in ``status.message.parts``. Pinned
-            # L0/a2a-response-format.mdx puts submitted among the INTERIM statuses, whose
-            # data is "carried in `status.message.parts[]` (not in `artifacts`)" because
-            # "artifacts ... are read as the final deliverable once the task reaches a
-            # terminal state", and its quick-reference row for submitted returns
-            # ``{ status, taskId, message, data? }``. What travels there is the AdCP envelope
-            # the boundary built -- its ``task_id``, its ``message``, and the buyer's own
-            # ``context``, which core/context.json says the agent MUST preserve unchanged in
-            # the response.
-            status = LibraryTaskStatus(result["status"])
-            if status is LibraryTaskStatus.submitted:
-                task.status.CopyFrom(
-                    TaskStatus(
-                        state=TaskState.TASK_STATE_SUBMITTED,
-                        message=Message(
-                            message_id=f"msg_{uuid.uuid4().hex[:12]}",
-                            context_id=task.context_id,
-                            task_id=task_id,
-                            role=Role.ROLE_AGENT,
-                            parts=_result_parts(result),
-                        ),
-                    )
-                )
-                logger.info("Task %s requires manual approval, returning status=submitted with no artifacts", task_id)
-            else:
-                task.artifacts.append(
-                    Artifact(artifact_id="skill_result_1", name=f"{skill}_result", parts=_result_parts(result))
-                )
-
-                # The Task state is the RESPONSE's own status, mapped once. ``status`` is required
-                # on the response envelope and defaulted to ``completed``, so it is never absent;
-                # subscripted, not ``.get``-with-a-default, because a missing ``status`` would mean
-                # a response that did not come from the boundary, and answering COMPLETED for it
-                # would report success for something never examined.
-                #
-                # A per-creative ``pending_review`` deliberately does NOT make the Task
-                # ``submitted``. Pinned ``creative/sync-creatives-response.json`` declares three
-                # branches: a synchronous success required to carry ``creatives`` ("best-effort
-                # processing with per-item status/failures"), a terminal failure carrying
-                # ``errors``, and a submitted envelope whose ``status`` is ``const: "submitted"``
-                # and which carries ``task_id`` and NO creatives. Per-creative review state is
-                # therefore per-item information inside branch one, and promoting it to a
-                # task-level status would claim the shape that cannot carry the creatives it just
-                # processed.
-                task.status.CopyFrom(TaskStatus(state=_TASK_STATE_BY_ADCP_STATUS[status]))
+            # The direct AdCP payload is the invocation's result, including a submitted
+            # operation's durable task_id and buyer context (AdCP 3.2.7 A2A profile,
+            # "Submitted AdCP work"). Native A2A task IDs never identify that operation.
+            task.artifacts.append(
+                Artifact(artifact_id="skill_result_1", name=f"{skill}_result", parts=_result_parts(result))
+            )
+            task.status.CopyFrom(TaskStatus(state=state))
 
         except A2AError:
             raise
@@ -381,8 +302,6 @@ class AdCPRequestHandler(RequestHandler):
                 message=f"message processing failed: {response.errors[0].message}", data=to_wire(response)
             ) from e
 
-        # Register only at the return site: protocol errors expose no Task to track.
-        self.tasks[task_id] = task
         return task
 
     async def on_message_send_stream(
@@ -407,62 +326,31 @@ class AdCPRequestHandler(RequestHandler):
         # result is already Task | Message — yield it directly
         yield result
 
-    def _get_task_or_raise(self, task_id: str) -> Task:
-        """Return the in-memory task, or raise ``TaskNotFoundError``.
+    @staticmethod
+    def _task_not_found(task_id: str) -> NoReturn:
+        """Native receipts are not retained; durable work is queried through AdCP.
 
-        A bare ``None`` return makes the SDK synthesize a generic internal error;
-        the A2A spec defines ``TaskNotFoundError`` for an unknown task id, so
-        raising it is the correct thing to do here and is what an A2A client
-        should be able to react to precisely.
-
-        A client sees the spec's ``-32001``, because the SDK's own dispatcher maps
-        ``A2AError -> code``. The routes must not carry ``enable_v0_3_compat=True``: that
-        dispatches through ``a2a.compat.v0_3.jsonrpc_adapter``, whose ``handle_request``
-        ends in a bare ``except Exception -> CoreInternalError`` with no such mapping, so
-        every raise here would reach the client as ``-32603`` (#1670).
-
-        The requested id rides both the message and structured ``data``, and both reach a
-        client. The same compat adapter would rebuild the error as
-        ``CoreInternalError(message=str(e))``, dropping ``data`` and returning
-        ``data: null`` on the real route.
-
-        Shared by ``on_get_task`` and ``on_cancel_task`` so both surface the
-        same error.
+        A2A 1.0 permits TaskNotFound for completed tasks that have been purged.
+        The SDK serializes this error as JSON-RPC -32001, preserving the
+        caller-supplied ID in both the message and structured data.
         """
-        task = self.tasks.get(task_id)
-        if task is None:
-            raise TaskNotFoundError(message=f"Task not found: {task_id}", data={"task_id": task_id})
-        return task
+        raise TaskNotFoundError(message=f"Task not found: {task_id}", data={"task_id": task_id})
 
     async def on_get_task(
         self,
         params: GetTaskRequest,
         context: ServerCallContext,
     ) -> Task:
-        """Handle 'tasks/get' method to retrieve task status.
-
-        Raises ``TaskNotFoundError`` for an unknown task id — see
-        ``_get_task_or_raise`` (and #1670 for why the wire code is still -32603).
-        """
-        return self._get_task_or_raise(params.id)
+        """Native receipts have no retrievable lifecycle after the invocation."""
+        self._task_not_found(params.id)
 
     async def on_cancel_task(
         self,
         params: CancelTaskRequest,
         context: ServerCallContext,
     ) -> Task:
-        """Handle 'tasks/cancel' method to cancel a task.
-
-        Raises ``TaskNotFoundError`` for an unknown task id — cancelling a task
-        that does not exist is the same not-found condition as get, not a silent
-        no-op. See ``_get_task_or_raise`` (and #1670 for why the wire code is
-        still -32603).
-        """
-        task = self._get_task_or_raise(params.id)
-        # CopyFrom mutates the stored Task in place — self.tasks already holds
-        # this exact reference, so re-storing it would rebind the same object.
-        task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
-        return task
+        """Native cancellation cannot mutate a durable AdCP operation."""
+        self._task_not_found(params.id)
 
     async def on_list_tasks(
         self,
@@ -555,8 +443,8 @@ class AdCPRequestHandler(RequestHandler):
         parameters: Any,
         headers: Mapping[str, str],
         exchange: HttpExchange | None = None,
-    ) -> dict[str, Any]:
-        """Run one skill through ``serve`` and return the body the artifact DataPart carries.
+    ) -> tuple[dict[str, Any], TaskState]:
+        """Return the direct AdCP body and the state of this native invocation.
 
         The whole of A2A's request path. A row with ``a2a=True`` IS dispatchable: the registry
         says which tools this transport serves and the card is derived from the same rows, so
@@ -574,10 +462,10 @@ class AdCPRequestHandler(RequestHandler):
         try:
             response = await serve(skill_name, parameters, headers, TransportProtocol.A2A, exchange)
         except AdcpFailure as failure:
-            # A2A's wire failure marker is the Task STATE, set by the caller from the
-            # response's own ``status``. This transport adds nothing to the BODY.
-            return to_wire(failure.response)
-        return to_wire(response)
+            return to_wire(failure.response), TaskState.TASK_STATE_FAILED
+        # AdCP 3.2.7 A2A profile, Response mapping: every successful invocation,
+        # including get_task_status polls, completes independently of business status.
+        return to_wire(response), TaskState.TASK_STATE_COMPLETED
 
 
 def _derived_skills() -> list[AgentSkill]:

@@ -189,16 +189,12 @@ def a2a_transport_result(call: Callable[[], DeliverResult | Any]) -> TransportRe
     try:
         delivered = call()
     except Exception as exc:
-        # ONE A2A error unwrap for both dispatch paths (client.py). This used to
-        # be a second copy of that body, which is how the derived status ended up
-        # on this path and not on AdCPTestClient.call — the path the graded
-        # storyboard scenarios actually take. It reads the REAL envelope off the
-        # exception and must never hand back a synthesized stand-in under
-        # ``wire_error_envelope`` — see the module note above. It declares
-        # ``has_wire=False`` at its own construction site, and re-attaching the
-        # refusal response leaves that declaration alone: a catch-all cannot tell
-        # whether bytes moved before the raise.
+        # The shared unwrap reads a carried HTTP response through the A2A reader.
+        # Exceptions with no observed response retain the no-wire declaration;
+        # neither path synthesizes a wire envelope from a domain exception.
         return _carrying_refusal_response(unwrap_a2a_error(exc, Transport.A2A), exc)
+    if isinstance(delivered, TransportResult):
+        return delivered
     if isinstance(delivered, DeliverResult):
         # Real A2A wire: the artifact DataPart dict, carried back on the SAME
         # return value as the payload. It used to be read off
