@@ -18,13 +18,11 @@ from __future__ import annotations
 import ast
 import functools
 import importlib.util
-import json
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import uuid
 import warnings
 from collections.abc import Callable, Iterable, Iterator
@@ -32,6 +30,8 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import yaml
+
+from tests._collection_manifest import unpublished_env
 
 # ---------------------------------------------------------------------------
 # Repo-root anchor
@@ -811,7 +811,7 @@ def iter_architecture_guard_trees(
     """Yield ``(parsed_tree, repo_relative_path)`` for each ``test_architecture_*.py`` module."""
     repo = repo_root()
     skip = set(exempt or ())
-    for path in sorted((repo / "tests" / "unit").glob("test_architecture_*.py")):
+    for path in sorted((repo / "tests").glob("*/test_architecture_*.py")):
         rel = path.relative_to(repo)
         if rel in skip:
             continue
@@ -1778,18 +1778,16 @@ def collect_bdd_node_ids_with_e2e_enabled(
 ) -> list[str]:
     """Collect pytest node ids under *target* with BDD_E2E_ENABLED=true.
 
-    Shared by the e2e_rest known-failures ledger fitness function and any
-    test asserting a specific scenario's transport parametrization —
-    same subprocess invocation, same env, same flags (-n0 satisfies the
-    BDD_E2E_ENABLED xdist guard; addopts is cleared so -q prints bare
-    nodeids).
+    For a test that compares two seeded collections of one module, which one real
+    run cannot answer: it has one seed. -n0 satisfies the BDD_E2E_ENABLED xdist
+    guard; addopts is cleared so -q prints bare nodeids.
 
     *randomly_seed* selects the collection ORDER. The default (``None``)
     disables pytest-randomly, which is what a caller asserting "this scenario
     is collected" wants: one stable order. A caller asserting that collection
     does not DEPEND on order passes two different seeds and compares — the
     suite runs with pytest-randomly live and a fresh seed per run
-    (``tox.ini`` [testenv:bdd_inprocess] does not pass ``-p no:randomly``), so
+    (``tox.ini`` [testenv:bdd-inprocess-s{1,2}] does not pass ``-p no:randomly``), so
     order-sensitive collection shows up there as a per-run flap.
     """
     order = ["-p", "no:randomly"] if randomly_seed is None else ["-p", "randomly", f"--randomly-seed={randomly_seed}"]
@@ -1807,7 +1805,7 @@ def collect_bdd_node_ids_with_e2e_enabled(
             "-n0",
         ],
         cwd=repo_root(),
-        env={**os.environ, "BDD_E2E_ENABLED": "true", "BDD_XDIST_N": "0"},
+        env={**unpublished_env(), "BDD_E2E_ENABLED": "true", "BDD_XDIST_N": "0"},
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -1992,129 +1990,46 @@ def write_ast_grep_probe(root: Path, rel_dir: str, source: str, *, stem: str = "
     return rel_path
 
 
-# ---------------------------------------------------------------------------
-# The one BDD collection that yields MARKER SETS (D25 helper home)
-#
-# Two guards need it and must not each have their own: test_architecture_env_route_agreement
-# grades whether the two env-route resolvers agree per collected scenario, and
-# test_architecture_route_xfail_census counts how many scenarios each setup-xfail route
-# claims. A second collector would drift about the ``BDD_E2E_ENABLED`` pop below, which
-# decides the SCOPE every count derived from it is quoted against (salesagent-8qela.151) --
-# three in-process transports or four.
-#
-# It lives here rather than in either test module because a module whose job is to BE a test
-# must not also be a helper library (test_architecture_no_cross_test_module_imports).
-# ---------------------------------------------------------------------------
-_BDD_SUITE_DIR = Path("tests/bdd")
+# ── run_all_tests.sh: which services the in-network runner starts ───────────
 
-# The nested collection yields ~7.2k items today (7223 at authoring time).
-_MINIMUM_COLLECTED_ITEMS = 6000
+#: The line that brings the in-network stack up. Matched rather than parsed: the
+#: runner is a shell script, and the service list is the one thing here that has
+#: to stay in step with compose.
+_RUNNER_UP_LINE_RE = re.compile(r"^dc up -d (?P<services>.+)$", re.MULTILINE)
 
-# BDD modules whose scenarios carry NO ``T-`` identity tag. They are outside the
-# join by construction — ``scenario_liveness._scenario_identifier`` returns None,
-# so no artifact record is ever written for them and no verdict is ever
-# published. Pinned as an exact set rather than skipped silently: a module
-# sliding into this bucket is a scenario losing its identity, which is a
-# regression, not a shrug.
-_MODULES_WITHOUT_SCENARIO_IDENTITY = frozenset(
-    {
-        "tests/bdd/test_get_products_inventory_profile.py",
-    }
-)
-
-# A pytest plugin, written to a tmp dir and loaded with -p, that dumps every
-# collected item's marker set — and, once the pinned accessor exists, the set
-# that accessor derives for the same node. `pytest_collection_finish` runs after
-# every `pytest_collection_modifyitems`, so the auto-applied entity markers
-# (tests/conftest.py) and conftest's own deselection are already reflected.
-_COLLECTOR_PLUGIN = """
-import importlib
-import json
-import os
+#: A ``dc run --use-aliases ... <service> <cmd>`` invocation. A run container started
+#: WITH ``--use-aliases`` joins the network under its compose service's aliases, so nginx
+#: resolves an SNI route to it exactly as it does to an ``up -d`` service. Without the flag
+#: it would not, which is why the flag is what this matches on rather than ``dc run`` alone.
+_RUNNER_RUN_ALIASED_RE = re.compile(r"^dc run\b(?P<args>[^\n]*--use-aliases[^\n]*)$", re.MULTILINE)
 
 
-def pytest_collection_finish(session):
-    dotted = os.environ.get("LANE_F_ACCESSOR_MODULE") or ""
-    accessor = getattr(importlib.import_module(dotted), os.environ["LANE_F_ACCESSOR_NAME"]) if dotted else None
-    rows = []
-    for item in session.items:
-        rows.append(
-            {
-                "nodeid": item.nodeid,
-                "markers": sorted({m.name for m in item.iter_markers()}),
-                "derived": None if accessor is None else sorted(accessor(item)),
-            }
-        )
-    with open(os.environ["LANE_F_DUMP"], "w", encoding="utf-8") as handle:
-        json.dump(rows, handle)
-"""
+def runner_started_services(source: str) -> list[str]:
+    """Every service ``run_all_tests.sh`` makes reachable on the network.
 
-
-@functools.lru_cache(maxsize=1)
-def collect_bdd_items_with_markers() -> tuple[dict[str, Any], ...]:
-    """Every collected ``tests/bdd`` item with its marker set, from a real run.
-
-    PUBLIC because a second guard consumes it: ``test_architecture_route_xfail_census``
-    counts how many scenarios each setup-xfail route claims, and it needs the same
-    (nodeid, derived marker set) rows this already produces. A second collector would
-    drift about the ``BDD_E2E_ENABLED`` pop below, which decides the scope every count
-    is quoted against (salesagent-8qela.151).
+    TWO START FORMS, because the runner uses two. ``dc up -d`` names long-lived
+    services. ``dc run --use-aliases`` starts the suite container, and the flag is
+    what puts it on the network under its compose aliases — so nginx resolves an SNI
+    route to it identically. Reading only the ``up`` line reported the suite container
+    as never started, which is a false 502 warning for a service the server really can
+    dial (the storyboard runner's own webhook receiver is routed to it).
     """
-    repo = repo_root()
-    # A private dir per invocation: under xdist each worker runs its own nested
-    # collection, and two workers sharing one dump would race.
-    plugin_dir = Path(tempfile.mkdtemp(prefix="lane_f_collect_"))
-    (plugin_dir / "lane_f_collector.py").write_text(_COLLECTOR_PLUGIN, encoding="utf-8")
-    dump = plugin_dir / "collected.json"
-
-    env = dict(os.environ)
-    # The nested collection must not inherit the outer suite's e2e switch: with
-    # it on, scenarios additionally parametrize over e2e_rest and the collected
-    # marker sets stop being the in-process ones this grader reasons about.
-    env.pop("BDD_E2E_ENABLED", None)
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(plugin_dir), env.get("PYTHONPATH", "")]))
-    env["LANE_F_DUMP"] = str(dump)
-    from tests.unit._liveness_contract_pins import DERIVATION_ACCESSOR, accessor_dotted_module
-
-    env["LANE_F_ACCESSOR_NAME"] = DERIVATION_ACCESSOR
-    dotted = accessor_dotted_module()
-    if dotted is not None:
-        env["LANE_F_ACCESSOR_MODULE"] = dotted
-    env.setdefault("ADCP_TESTING", "true")
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            str(_BDD_SUITE_DIR),
-            "--collect-only",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-            "-p",
-            "no:randomly",
-            "-p",
-            "lane_f_collector",
-        ],
-        cwd=repo,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    context = f"stdout:\n{result.stdout[-4000:]}\nstderr:\n{result.stderr[-4000:]}"
-    assert result.returncode == 0, (
-        f"the nested `pytest --collect-only {_BDD_SUITE_DIR}` exited {result.returncode}. A partial collection would "
-        f"silently shrink this grader's input.\n{context}"
-    )
-    assert dump.is_file(), f"the nested `pytest --collect-only {_BDD_SUITE_DIR}` did not write {dump}.\n{context}"
-    rows = json.loads(dump.read_text(encoding="utf-8"))
-    shutil.rmtree(plugin_dir, ignore_errors=True)
-    # The suite collects ~7.2k items today. A floor well under that still catches
-    # a truncated collection, which would make every verdict below vacuous.
-    assert len(rows) > _MINIMUM_COLLECTED_ITEMS, (
-        f"the nested collection produced only {len(rows)} items (expected > {_MINIMUM_COLLECTED_ITEMS}) — "
-        f"the grader would be reasoning about a truncated suite.\n{context}"
-    )
-    return tuple(rows)
+    match = _RUNNER_UP_LINE_RE.search(source)
+    started = match.group("services").split() if match else []
+    for run in _RUNNER_RUN_ALIASED_RE.finditer(source):
+        # The service name is the first bare word after the flags and any `-e K=V`
+        # pairs; everything after it is the command to run inside the container.
+        tokens = run.group("args").split()
+        skip_next = False
+        for token in tokens:
+            if skip_next:
+                skip_next = False
+                continue
+            if token in {"-e", "--env", "-v", "--volume", "-w", "--workdir"}:
+                skip_next = True
+                continue
+            if token.startswith("-") or token.startswith("$"):
+                continue
+            started.append(token)
+            break
+    return started

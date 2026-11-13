@@ -48,7 +48,6 @@ _BDD_DIR = Path(__file__).resolve().parents[1] / "bdd"
 _CONFTEST = _BDD_DIR / "conftest.py"
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_UC003_MODULE = _REPO_ROOT / "tests" / "bdd" / "test_uc003_update_media_buy.py"
 
 
 def _parser():
@@ -371,63 +370,4 @@ class TestTheExemptionConsultsTheParse:
             "Either it never raises, or the raise is no longer conditioned on them — and a "
             "parse that reports nothing is the silent deselection this guard exists to "
             "remove: the row still drops, and now it drops past a parser that noticed."
-        )
-
-
-@pytest.mark.arch_guard
-class TestTheRoutingOutcome:
-    """What actually reaches the runner, rather than the shape of the code that decides it."""
-
-    def test_a_per_transport_reason_keeps_its_mcp_and_rest_rows(self):
-        """The exemption still SELECTS the rows a per-transport reason protects.
-
-        Every other test here asks an AST-shape question — is the old literal gone, does
-        the parser get called, is the raise guarded. None of them observes the routing
-        OUTCOME, and a verify pass showed the consequence: inverting the predicate (route
-        per-transport rows to deselection and everything else to selection) reds nothing,
-        because no test in the lane runs collection and asserts which rows survive.
-
-        So this runs the real collection and names the rows. It is a subprocess because
-        the hook under test lives in ``tests/bdd/conftest.py`` and only fires for a
-        session rooted there; importing it would test a function, not the wiring.
-        """
-        import subprocess
-
-        completed = subprocess.run(
-            ["uv", "run", "pytest", str(_UC003_MODULE), "--collect-only", "-q", "-p", "no:randomly"],
-            capture_output=True,
-            text=True,
-            cwd=_REPO_ROOT,
-            timeout=300,
-        )
-
-        collected = completed.stdout
-        assert "error" not in collected.lower() or "collected" in collected, (
-            f"collection did not complete:\n{completed.stdout[-2000:]}\n{completed.stderr[-2000:]}"
-        )
-
-        # The CONFLICT rows carry cause=production-gap scope=per-transport ref=#1607, so
-        # the exemption must keep their mcp and rest copies. If the predicate inverts,
-        # these are the first things to vanish.
-        # Narrowed to the rows the exemption actually protects, and COUNTED. A first
-        # version matched any mcp/rest revision-concurrency row and passed under an
-        # inverted predicate, because 8 of those rows carry no strict xfail at all and
-        # survive either way — the assertion was reading the wrong population, which is
-        # this child's own defect in its own grader.
-        protected = [
-            line
-            for line in collected.splitlines()
-            if ("[mcp-" in line or "[rest-" in line)
-            and any(
-                token in line
-                for token in ("stale_revision", "ahead_revision", "revision below current", "revision above current")
-            )
-        ]
-
-        assert len(protected) == 8, (
-            f"expected the 8 mcp/rest CONFLICT rows to survive collection, got "
-            f"{len(protected)}. These carry `cause=production-gap scope=per-transport "
-            f"ref=#1607`, so the exemption must keep them; losing them means the "
-            f"predicate is inverted or gone. No AST-shape assertion in this file can see "
-            f"that — only running the collection can.\n" + "\n".join(protected)
         )

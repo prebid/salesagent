@@ -22,12 +22,13 @@ processes, and an in-process assertion cannot reach it.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from tests._collection_manifest import unpublished_env
 
 #: Three small modules that between them dispatch on some nodeids and not others, so the
 #: run exercises both the recorded and the deliberately-empty row.
@@ -47,7 +48,7 @@ def test_dispatches_survive_the_worker_to_controller_trip(tmp_path: Path, integr
     del integration_db
     artifact = tmp_path / "payloads.json"
     env = {
-        **os.environ,
+        **unpublished_env(),
         "BDD_PAYLOAD_ARTIFACT": str(artifact),
         # Redirected for the same reason as the payload artifact above, and this one is
         # NOT optional: the nested pytest writes a liveness artifact too, this test never

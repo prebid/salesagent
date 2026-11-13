@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from functools import cache
 from pathlib import Path
 
@@ -35,6 +36,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PLAIN_SCENARIO = re.compile(r"^\s*Scenario:\s", re.MULTILINE)
 _SCENARIO_OUTLINE = re.compile(r"^\s*Scenario Outline:", re.MULTILINE)
 _SCENARIOS_CALL = re.compile(r"""scenarios\s*\(\s*["'](features/[^"']+)["']""")
+#: ``@scenario(FEATURE, "name")``: a module binding a feature one scenario at a time, because
+#: most of that feature has no steps yet. Each decorator is one bound scenario.
+_SCENARIO_DECORATOR = re.compile(r"^@scenario\s*\(", re.MULTILINE)
 
 # Keep in sync with strategy.matrix.shard in .github/workflows/ci.yml
 # (bdd-tests-shard). Pinned by test_ci_bdd_matrix_matches_shard_config.
@@ -66,13 +70,32 @@ def list_suite_files(suite: str, repo_root: Path | None = None) -> list[str]:
     return sorted(str(p.relative_to(root)) for p in root.glob(SUITE_GLOBS[suite]))
 
 
+def targets_cover_suite(suite: str, targets: Iterable[str], repo_root: Path | None = None) -> bool:
+    """True when these pytest invocation paths account for every file of the suite.
+
+    Two shapes reach here. A session invoked on the DIRECTORY (`pytest tests/bdd`, or an
+    ancestor: `tests`, or `.` for the repo root) names one target that is a prefix of every
+    module. Sharded sessions each name their own files, and must union to the whole set.
+    """
+    named = set(targets)
+    if not named:
+        return False
+    return all(
+        any(t in {".", module} or module.startswith(f"{t}/") for t in named)
+        for module in (Path(f).as_posix() for f in list_suite_files(suite, repo_root=repo_root))
+    )
+
+
 def bdd_scenario_count(test_path: str, repo_root: Path | None = None) -> int:
     """Return the number of Gherkin scenarios bound by a BDD test module."""
     root = repo_root or _REPO_ROOT
     text = (root / test_path).read_text(encoding="utf-8")
     match = _SCENARIOS_CALL.search(text)
     if match is None:
-        raise ValueError(f"No scenarios() feature binding found in {test_path}")
+        bound_by_name = len(_SCENARIO_DECORATOR.findall(text))
+        if bound_by_name:
+            return bound_by_name
+        raise ValueError(f"No scenarios() or @scenario() feature binding found in {test_path}")
     feature_path = root / "tests/bdd" / match.group(1)
     if not feature_path.is_file():
         raise ValueError(f"Feature file not found for {test_path}: {feature_path}")

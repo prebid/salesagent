@@ -50,6 +50,8 @@ def mock_adapter(integration_db):
             principal=principal,
             config=config,
             tenant_id=tenant.tenant_id,
+            order_name_template=None,
+            tenant_ai_config=None,
         )
 
         yield adapter
