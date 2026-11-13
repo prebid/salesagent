@@ -1352,7 +1352,7 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
     And the package "pkg-001" wire field targeting_overlay should be null or absent
-    And response.errors[] should carry exactly one advisory for package "pkg-001" field targeting_overlay with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And response.errors[] should carry exactly 1 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
     And the persisted-value advisory for field targeting_overlay should identify media buy "mb-001" package "pkg-001"
 
   # ISOLATION IS THE OBLIGATION, and it was ungraded. The degradation of ONE corrupt
@@ -1384,7 +1384,7 @@ Feature: BR-UC-019 Query Media Buys
     And the response should include media buy "mb-001" with package "pkg-002"
     And the package "pkg-002" wire field targeting_overlay should be null or absent
     And the package "pkg-001" targeting_overlay should carry geo_countries ["US"]
-    And response.errors[] should carry exactly one advisory for package "pkg-002" field targeting_overlay with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And response.errors[] should carry exactly 1 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
     And the persisted-value advisory for field targeting_overlay should identify media buy "mb-001" package "pkg-002"
     # BR-RULE-294 INV-5: per-package failure isolation
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
@@ -1444,7 +1444,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the response should include media buy "mb-001" with package "pkg-001"
     And the package "pkg-001" wire field <field> should be null or absent
-    And response.errors[] should carry exactly one advisory for package "pkg-001" field <field> with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And response.errors[] should carry exactly 1 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
     And the persisted-value advisory for field <field> should identify media buy "mb-001" package "pkg-001"
     # All optional persisted values share one advisory class. CONFIGURATION_ERROR
     # requires transport failure under AdCP 3.2.7 L3/error-handling.mdx; this result
@@ -1479,7 +1479,8 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the response should include media buy "mb-001" with package "pkg-001"
     And the media buy "mb-001" wire field buyer_campaign_ref should be null or absent
-    And response.errors[] should carry exactly one advisory for media buy "mb-001" field buyer_campaign_ref with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And response.errors[] should carry exactly 1 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And the persisted-value advisory should identify media buy "mb-001" field buyer_campaign_ref
 
   @T-UC-019-mixed-persisted-value-advisories @invariant @BR-RULE-294 @error @schema-v3.1
   Scenario: Mixed persisted-value advisories identify nonzero buy and package positions

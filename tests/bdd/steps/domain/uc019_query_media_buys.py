@@ -3201,19 +3201,6 @@ def then_media_buy_wire_field_degraded(ctx: dict, mb_id: str, field: str) -> Non
     )
 
 
-@then(
-    parsers.parse(
-        'response.errors[] should carry exactly one advisory for media buy "{mb_id}" '
-        'field {field} with code "{code}" and recovery "{recovery}"'
-    )
-)
-def then_raw_request_advisory_code_and_recovery(ctx: dict, mb_id: str, field: str, code: str, recovery: str) -> None:
-    """Grade the code and positional selector on the successful wire response."""
-    then_advisory_count_and_classification(ctx, 1, code, recovery)
-    advisory = _wire_advisory(ctx, field, mb_id=mb_id)
-    assert advisory.get("code") == code
-
-
 @then(parsers.parse('the persisted-value advisory should identify media buy "{mb_id}" field {field}'))
 def then_buy_field_advisory_identity(ctx: dict, mb_id: str, field: str) -> None:
     """Grade the code and buy-level field identity independently of other advisories."""
@@ -3369,19 +3356,6 @@ def _wire_advisory(ctx: dict, field: str | None, *, mb_id: str | None = None, pk
         f"package {pkg_id!r}; got {matching!r}"
     )
     return matching[0]
-
-
-@then(
-    parsers.parse(
-        'response.errors[] should carry exactly one advisory for package "{pkg_id}" field {field} '
-        'with code "{code}" and recovery "{recovery}"'
-    )
-)
-def then_blob_advisory_code_and_recovery(ctx: dict, pkg_id: str, field: str, code: str, recovery: str) -> None:
-    """Grade the whole-array count/classification and the degraded package field."""
-    then_advisory_count_and_classification(ctx, 1, code, recovery)
-    advisory = _wire_advisory(ctx, field, pkg_id=pkg_id)
-    assert advisory.get("code") == code
 
 
 @then(parsers.parse('response.errors[] should carry no advisory with code "{code}"'))
