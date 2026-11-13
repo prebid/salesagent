@@ -2446,7 +2446,9 @@ def coverage_publishers(product: Any) -> list[dict[str, Any]] | None:
         return None
     if not any(d.publisher_domain for d in product_declarations(product.format_contract.format_options)):
         return None
-    return list(product.effective_properties or [])
+    from src.core.helpers.publisher_property_helpers import ensure_selection_type
+
+    return ensure_selection_type(product.stored_publisher_properties) or []
 
 
 def publisher_slice_layers(

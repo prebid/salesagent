@@ -96,7 +96,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
   Scenario: not_provided — Not provided (no protocol filter), discover complete capabilities
     Given a tenant is resolvable from the request context
     And the tenant offers products in channels "display", "social", "ctv"
-    And the tenant has registered publisher partnerships with domains "news.com", "sports.com"
+    And the tenant has verified publisher partnerships with domains "news.com", "sports.com"
     And the tenant uses the mock adapter with full capabilities configured
     And the adapter provides targeting capabilities including geo
     And the tenant billing policy is configured as operator, agent
@@ -152,7 +152,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-degradation-no-cascade @extension @degradation @partition @boundary
   Scenario: one adapter-derived section degrading does not take the others with it
     Given a tenant is resolvable from the request context
-    And the tenant has registered publisher partnerships with domains "degradation-fixture.com"
+    And the tenant has verified publisher partnerships with domains "degradation-fixture.com"
     And the tenant uses the mock adapter with full capabilities configured
     And the adapter resolves but enumerating its channels fails
     When the Buyer Agent calls get_adcp_capabilities
@@ -417,31 +417,40 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-ext-b-degradation @extension @ext-b @degradation @invariant @partition @boundary
   Scenario Outline: Graceful degradation when dependencies fail
     Given a tenant is resolvable from the request context
-    And the adapter is in <adapter_state> state
-    And the database is in <db_state> state
+    And the tenant has <partnership_state> publisher partnerships with domains "news.com", "sports.com"
+    And <dependency_state>
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And the response should pass schema validation for get-adcp-capabilities-response
-    And primary_channels should be <expected_channels>
-    And publisher_domains should be <expected_domains>
+    And <portfolio_outcome>
     # NOT-IN-SPEC: degradation policy is spec-silent — production authoritative; the one hard
     # spec invariant is that every response still validates against the response schema.
-    # Symbolic expectations concretized 2026-07-13: fixture seeds channels
-    # "display, social, ctv" on the adapter and domains "news.com, sports.com" in the DB;
-    # placeholder domain is "example.com" (pin to production's actual placeholder on wiring).
-    # An unavailable adapter leaves no channel evidence, so primary_channels is absent (the
-    # pin: "Omission means channel scope is unknown"), never a guessed display-only allowlist.
-    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/universal/capability-discovery.yaml pointer=/phases/0/steps/0/validations (response_schema)
+    # What a failed dependency does to media_buy.portfolio is graded on the wire. An adapter
+    # failure or a missing principal leaves the publisher lookup intact, so the verified
+    # publishers are still named (INV-4: an anonymous caller is served the same data). With
+    # the database down no verified publisher can be read, and with none verified there is
+    # none to name: publisher_domains is REQUIRED+minItems:1 whenever portfolio is present,
+    # so portfolio is omitted. No placeholder domain and never the seller's own host: a
+    # tenant is a sales agent, its host is not a publisher.
+    # Channels are not graded here. primary_channels is the union over the product catalog
+    # and the adapter's defaults are only the fallback for an empty one, so the adapter
+    # column does not move it while a catalog exists. Where an unavailable adapter leaves no
+    # channel evidence, primary_channels is omitted (the pin: "Omission means channel scope
+    # is unknown"), never a guessed display-only allowlist; that omission is graded by
+    # @T-UC-010-degradation-partitions and the no-cascade rule by
+    # @T-UC-010-degradation-no-cascade.
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/capability-discovery.yaml pointer=/phases/0/steps/0/validations (check: response_schema)
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/publisher_domains (required, minItems 1)
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/primary_channels
 
     Examples:
-      | partition_boundary                                         | adapter_state | db_state  | expected_channels    | expected_domains       |
-      | full_response tenant resolved adapter succeeds DB succeeds | available     | available | display, social, ctv | news.com, sports.com   |
-      | adapter_fail adapter fails                                 | unavailable   | available | absent               | news.com, sports.com   |
-      | db_fail DB fails                                           | available     | failure   | display, social, ctv | example.com            |
-      | adapter_and_db_fail adapter AND DB fail                    | unavailable   | failure   | absent               | example.com            |
-      | no_principal no auth principal available                   | no_principal  | available | display              | news.com, sports.com   |
-      | db_empty adapter fails DB has no partnerships              | unavailable   | empty     | absent               | example.com            |
+      | partition_boundary                                         | partnership_state | dependency_state                                        | portfolio_outcome                                                                         |
+      | full_response tenant resolved adapter succeeds DB succeeds | verified          | the adapter is in available state                       | the response should include media_buy.portfolio with publisher_domains "news.com", "sports.com" |
+      | adapter_fail adapter fails                                 | verified          | the adapter is in unavailable state                     | the response should include media_buy.portfolio with publisher_domains "news.com", "sports.com" |
+      | db_fail DB fails                                           | verified          | the database query fails                                | media_buy.portfolio should be omitted                                                     |
+      | adapter_and_db_fail adapter AND DB fail                    | verified          | a tenant is resolvable but both adapter and DB fail     | media_buy.portfolio should be omitted                                                     |
+      | no_principal no auth principal available                   | verified          | a tenant is resolvable but no auth principal available  | the response should include media_buy.portfolio with publisher_domains "news.com", "sports.com" |
+      | db_empty adapter fails DB has no verified partnerships     | unverified        | the adapter is in unavailable state                     | media_buy.portfolio should be omitted                                                     |
 
   @T-UC-010-ext-b-schema-valid @extension @ext-b @degradation @invariant
   Scenario: Degraded response is always schema-valid
@@ -452,6 +461,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And the response should pass schema validation for get-adcp-capabilities-response
     And the wire response should not contain an adcp_error field
+    And media_buy.portfolio should be omitted
+    And the response should include errors as an array of error objects
     # INV-5 (local): degrade-don't-error; the schema-validity half is the spec-hard invariant
     # (storyboard validation check: response_schema). Rewritten (salesagent-ytq6): the two
     # vague Thens ("no error should be propagated", "degradation warnings should be logged
@@ -459,21 +470,144 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # adcp_error for a non-failure (protocol-envelope). "degradation warnings logged internally"
     # was intentionally NOT re-added: internal logs are not on the wire, so the degradation is
     # graded by its observable output rather than by an untestable internal-log side effect.
-    # This scenario grades SCHEMA VALIDITY under a double degradation, and nothing about
-    # portfolio. It used to also assert that portfolio was omitted here, reasoning that with
-    # both the adapter and the partner query down no real publisher_domain had been read, so
-    # emitting one meant emitting a fabricated placeholder -- and publisher_domains is
-    # REQUIRED+minItems:1 whenever portfolio is present. That state no longer exists:
-    # virtual_host is mandatory, so Tenant.primary_domain always answers with the
-    # operator-visible host the tenant declares, which is real data neither lookup had to
-    # supply. Portfolio is present and correct here, and an omission assertion would grade
-    # the absence of a fabrication that can no longer occur --
-    # tests/unit/test_guards_no_fabricated_example_domain.py holds that, with an empty
-    # allowlist. What publisher_domains CARRIES is graded where it belongs, on the rows that
-    # declare a domain: @T-UC-010-degradation-no-cascade and the ext-b outline.
+    # With the database down, no publisher's verification could be read, so the seller has
+    # no publisher domain it can name. publisher_domains is REQUIRED+minItems:1 whenever
+    # portfolio is present, so portfolio is omitted, and the advisory in errors[] tells the
+    # buyer that the lookup failed rather than that the seller represents nobody. The
+    # seller's own host is never a stand-in: a tenant is a sales agent, its host is not a
+    # publisher, and a buyer that fetches that host's adagents.json finds no authorization
+    # (authorized-properties.mdx "Missing adagents.json: Treat as unauthorized (fail closed)").
     # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/capability-discovery.yaml pointer=/phases/0/steps/0/validations (check: response_schema)
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/publisher_domains (required, minItems 1)
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/protocol-envelope.json pointer=/properties/adcp_error (envelope error-signal for fatal failures — absent on a successful degraded response)
+    # @source repo=adcp ref=v3.2.7 path=docs/governance/property/authorized-properties.mdx section="Error Handling"
+
+  @T-UC-010-portfolio-verified-publishers @main-flow @post-s6 @partition @boundary
+  Scenario: portfolio names each publisher that has verified the seller, once
+    Given a tenant is resolvable from the request context
+    And the publisher "news-psatest.com" lists property "news_home" named "News home" in its adagents.json
+    And the publisher "news-psatest.com" authorizes this agent for properties "news_home"
+    And the seller ingested the adagents.json of "news-psatest.com"
+    And the publisher "sports-psatest.com" lists property "sports_home" named "Sports home" in its adagents.json
+    And the publisher "sports-psatest.com" authorizes this agent for properties "sports_home"
+    And the seller ingested the adagents.json of "sports-psatest.com"
+    And the publisher "partner-psatest.com" lists property "partner_home" named "Partner home" in its adagents.json
+    And the publisher "partner-psatest.com" authorizes this agent for properties "partner_home"
+    And the seller ingested the adagents.json of "partner-psatest.com"
+    And the tenant holds an authorized property on "pending-psatest.com" with verification status "pending"
+    And the publisher "failed-psatest.com" now answers 404
+    And the seller ingested the adagents.json of "failed-psatest.com"
+    And the publisher "unverified-psatest.com" authorizes no agent in its adagents.json
+    And the seller ingested the adagents.json of "unverified-psatest.com"
+    When the Buyer Agent calls get_adcp_capabilities
+    Then the response is compliant with the get_adcp_capabilities spec
+    And the response should include media_buy.portfolio with publisher_domains "news-psatest.com", "partner-psatest.com", "sports-psatest.com"
+    # publisher_domains are the publishers this seller is AUTHORIZED to represent, and a
+    # buyer checks each one by fetching https://<domain>/.well-known/adagents.json. A domain
+    # whose stored adagents.json does not authorize this seller now (never fetched, or its
+    # last fetch failed with nothing stored) is not one it can claim. A publisher is one row
+    # (canonical domain), so it is listed once. Every file is
+    # one the publisher serves and the seller ingests (on e2e_rest the live server fetches
+    # it); "pending" is a publisher held and never fetched.
+    # Ungraded by storyboards: the one pinned compliance yaml that reads portfolio
+    # (media-buy scenarios/portfolio_routing_scope.yaml) grades only its routing allowlists,
+    # never publisher_domains.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/publisher_domains
+    # @source repo=adcp ref=v3.2.7 path=docs/protocol/get_adcp_capabilities.mdx (L1149 "Publisher domains this seller represents")
+    # @source repo=adcp ref=v3.2.7 path=docs/governance/property/authorized-properties.mdx section="Authorization Validation Workflow"
+
+  @T-UC-010-portfolio-no-verified-publisher @main-flow @post-s6 @partition @boundary
+  Scenario: a seller no publisher has verified omits portfolio instead of naming its own host
+    Given a tenant is resolvable from the request context
+    And the tenant holds an authorized property on "pending-psatest.com" with verification status "pending"
+    And the tenant has unverified publisher partnerships with domains "unverified-psatest.com"
+    When the Buyer Agent calls get_adcp_capabilities
+    Then the response is compliant with the get_adcp_capabilities spec
+    And media_buy.portfolio should be omitted
+    And the response should NOT contain "errors" field
+    # A seller that represents no verified publisher has no value publisher_domains can
+    # hold (REQUIRED, minItems 1), so portfolio is omitted. The seller's own host is not a
+    # substitute: a tenant is a sales agent, and its host is not a publisher. This is the
+    # seller's real state rather than a degradation, so no advisory is emitted; the advisory
+    # is reserved for a lookup that failed (@T-UC-010-ext-b-schema-valid).
+    # Ungraded by storyboards: the one pinned compliance yaml that reads portfolio
+    # (media-buy scenarios/portfolio_routing_scope.yaml) grades only its routing allowlists,
+    # never publisher_domains.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/required
+    # @source repo=adcp ref=v3.2.7 path=docs/brand-protocol/seller-setup.mdx (L29 "Who publishes what": a sales representative publishes adagents.json "Usually no, unless it also owns properties")
+
+  @T-UC-010-portfolio-canonical-domain @main-flow @post-s6 @partition @boundary
+  Scenario Outline: portfolio names a verified publisher by its canonical domain
+    Given a tenant is resolvable from the request context
+    And the tenant holds an authorized property on "<property>" with verification status "verified"
+    And the tenant has verified publisher partnerships with domains <partner>
+    When the Buyer Agent calls get_adcp_capabilities
+    Then the response is compliant with the get_adcp_capabilities spec
+    And the response should pass schema validation for get-adcp-capabilities-response
+    And the response should include media_buy.portfolio with publisher_domains <named>
+    And the response should NOT contain "errors" field
+    # publisher_domains admits only lower-case hostnames (items.pattern), and the admin
+    # paths store a domain as typed: the sync and the property form only strip it. Such a row
+    # still reaches `verified`, because the fetch normalizes the domain before it dials. So
+    # the seller names the host the fetch verified, and two spellings of one host are one
+    # publisher. Ungraded by storyboards: the one pinned compliance yaml that reads portfolio
+    # (media-buy scenarios/portfolio_routing_scope.yaml) grades only its routing allowlists,
+    # never publisher_domains.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/publisher_domains/items/pattern
+
+    Examples:
+      | partition               | property                      | partner              | named                                 |
+      | property mixed case     | News.Psatest.com              | "partner-psatest.com"    | "news.psatest.com", "partner-psatest.com" |
+      | property trailing dot   | news.psatest.com.             | "partner-psatest.com"    | "news.psatest.com", "partner-psatest.com" |
+      | property scheme path    | https://news.psatest.com/path | "partner-psatest.com"    | "news.psatest.com", "partner-psatest.com" |
+      | partner mixed case      | partner-psatest.com               | "News.Psatest.com"   | "news.psatest.com", "partner-psatest.com" |
+      | partner trailing dot    | partner-psatest.com               | "news.psatest.com."  | "news.psatest.com", "partner-psatest.com" |
+      | partner edge spaces     | partner-psatest.com               | " news.psatest.com " | "news.psatest.com", "partner-psatest.com" |
+      | one host, two spellings | News.Psatest.com              | "news.psatest.com."  | "news.psatest.com"                    |
+
+  @T-UC-010-portfolio-rejected-domain @extension @degradation @partition @boundary @post-s6
+  Scenario Outline: a verified domain the pattern rejects is left out and reported, and the other publishers are still named
+    Given a tenant is resolvable from the request context
+    And the tenant has verified publisher partnerships with domains "partner-psatest.com"
+    And <rejected_row>
+    When the Buyer Agent calls get_adcp_capabilities
+    Then the response is compliant with the get_adcp_capabilities spec
+    And the response should pass schema validation for get-adcp-capabilities-response
+    And the response should include media_buy.portfolio with publisher_domains "partner-psatest.com"
+    And the response should carry one SERVICE_UNAVAILABLE advisory for capability "publisher domains"
+    # A port survives canonicalization and is not admitted by the pattern. It is a different
+    # origin from the bare host the buyer would fetch, so the port is not dropped to make the
+    # row fit. (An empty domain is refused when the operator adds a publisher and cannot be
+    # fetched, so it never authorizes this seller and has no row here.) One bad row costs that
+    # row: the valid publishers stay on the wire, and the advisory tells the buyer that the
+    # read degraded (errors: "Task-specific errors and warnings").
+    # Ungraded by storyboards: the one pinned compliance yaml that reads portfolio
+    # (media-buy scenarios/portfolio_routing_scope.yaml) grades only its routing allowlists,
+    # never publisher_domains.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/publisher_domains/items/pattern
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/errors
+
+    Examples:
+      | partition        | rejected_row                                                                                            |
+      | partner on port  | the tenant has verified publisher partnerships with domains "news.psatest.com:8443"                     |
+      | property on port | the tenant holds an authorized property on "news.psatest.com:8443" with verification status "verified"  |
+
+  @T-UC-010-portfolio-only-rejected-domain @extension @degradation @partition @boundary @post-s6
+  Scenario: a seller whose only verified domain the pattern rejects omits portfolio and reports the degradation
+    Given a tenant is resolvable from the request context
+    And the tenant has verified publisher partnerships with domains "news.psatest.com:8443"
+    When the Buyer Agent calls get_adcp_capabilities
+    Then the response is compliant with the get_adcp_capabilities spec
+    And the response should pass schema validation for get-adcp-capabilities-response
+    And media_buy.portfolio should be omitted
+    And the response should carry one SERVICE_UNAVAILABLE advisory for capability "publisher domains"
+    # publisher_domains is REQUIRED with minItems 1, so nothing nameable means no portfolio.
+    # Unlike @T-UC-010-portfolio-no-verified-publisher this seller does have a verified
+    # publisher, so the omission carries the advisory.
+    # Ungraded by storyboards: the one pinned compliance yaml that reads portfolio
+    # (media-buy scenarios/portfolio_routing_scope.yaml) grades only its routing allowlists,
+    # never publisher_domains.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/required
 
   @T-UC-010-degradation-account @extension @degradation @partition @boundary @post-s3
   Scenario Outline: Account section presence depends on tenant resolution
@@ -685,7 +819,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-channel-mapping @channel @invariant @partition @boundary
   Scenario Outline: Channel name resolution from the catalog to the channels enum
     Given a tenant is resolvable from the request context
-    And the tenant has registered publisher partnerships with domains "channel-fixture.com"
+    And the tenant has verified publisher partnerships with domains "channel-fixture.com"
     And the tenant offers products in channels <catalog_channels>
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
@@ -728,7 +862,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-channel-all-canonical @channel @boundary
   Scenario: All 20 canonical channels enum values are valid
     Given a tenant is resolvable from the request context
-    And the tenant has registered publisher partnerships with domains "verified-partner.com"
+    And the tenant has verified publisher partnerships with domains "verified-partner.com"
     And the tenant offers products spanning all 20 channels enum values
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
@@ -929,8 +1063,9 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # no_principal "default targeting" → the exact production default {geo_countries: true,
     # geo_regions: true} (spec-silent on degradation — production authoritative; the same
     # concrete value is pinned by @T-UC-010-targeting-partitions' adapter_unavailable_defaults
-    # row); db_fail "other sections unaffected" → the two observables (placeholder
-    # publisher_domains + intact [display, social, ctv] channels). PRODUCTION GAPS (strict
+    # row); db_fail and adapter_and_db_fail → portfolio omitted, because with the database
+    # down no verified publisher can be read and publisher_domains has no value to hold
+    # (never a placeholder, and never the seller's own host). PRODUCTION GAPS (strict
     # per-row xfail via conftest _SELECTIVE_XFAIL): no_tenant's top-level response carries
     # extra keys beyond the minimal contract; no_principal does not degrade at all
     # (INV-4 keeps the adapter principal-free); account_degraded's account block always
@@ -948,8 +1083,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | partition                  | precondition                                                                | expected_degradation                                                                                                      |
       | full_response              | a tenant is resolvable and adapter and DB are available with all features   | top-level keys include adcp, supported_protocols, account, media_buy and last_updated with account.supported_billing non-empty and adcp.idempotency present |
       | adapter_fail               | a tenant is resolvable but adapter is unavailable                           | primary_channels absent and targeting equals exactly {geo_countries: true, geo_regions: true} with no reporting_delivery_methods, audience_targeting or conversion_tracking |
-      | db_fail                    | the database query fails | publisher_domains equals the placeholder domain and primary_channels equals [display, social, ctv]                        |
-      | adapter_and_db_fail        | a tenant is resolvable but both adapter and DB fail                         | primary_channels absent and publisher_domains equals the placeholder domain, adapter-dependent sections absent          |
+      | db_fail                    | the database query fails                                                    | media_buy.portfolio is omitted (no real publisher domain, never fabricated)                                               |
+      | adapter_and_db_fail        | a tenant is resolvable but both adapter and DB fail                         | media_buy.portfolio is omitted (no real publisher domain, never fabricated), adapter-dependent sections absent            |
       | no_principal               | a tenant is resolvable but no auth principal available                      | primary_channels absent and targeting equals exactly {geo_countries: true, geo_regions: true} with no reporting_delivery_methods, audience_targeting or conversion_tracking |
       | account_degraded           | a tenant is resolvable with partial account config                          | account present with non-empty supported_billing and no optional account fields                                           |
       | audience_targeting_absent  | a tenant is resolvable but adapter unavailable or audience targeting disabled | media_buy.audience_targeting absent                                                                                       |

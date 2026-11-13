@@ -5,9 +5,22 @@ This module defines the structure of implementation_config for GAM products.
 Based on analysis of Prebid Line Item Manager patterns.
 """
 
-from typing import Any
+from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from collections.abc import Sequence
+from typing import Annotated, Any, Literal
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    TypeAdapter,
+    field_serializer,
+    field_validator,
+)
 
 
 class CreativePlaceholder(BaseModel):
@@ -44,6 +57,175 @@ class PlacementTargeting(BaseModel):
     targeting: dict[str, Any] = Field(
         default_factory=dict, description="GAM targeting criteria (customTargeting, geoTargeting, etc.)"
     )
+
+
+#: A custom targeting value as GAM targets it: an ``int`` is a GAM value ID, a ``str`` is a
+#: value name the adapter looks up (or creates). Strict, so a string of digits never becomes an
+#: ID by coercion; the stored format decides which one a value is.
+CustomTargetingValue = StrictInt | StrictStr
+
+
+class CustomCriterion(BaseModel):
+    """One GAM ``CustomCriteria``: the key is one of ``values``, or with ``exclude`` none of them."""
+
+    model_config = ConfigDict(frozen=True)
+
+    key_id: StrictInt
+    values: tuple[CustomTargetingValue, ...] = Field(min_length=1)
+    exclude: bool = False
+
+
+class CustomTargeting(BaseModel):
+    """GAM custom targeting: an OR of branches, each an AND of criteria.
+
+    This is the one shape GAM takes. ``LineItemService.Targeting.customTargeting`` (GAM API
+    v202602, the version the pinned googleads 49.0.0 calls) is at most three levels deep: an
+    OR set of AND sets of ``CustomCriteria``. No branches means no custom targeting.
+
+    A product's ``custom_targeting_keys`` is stored in one of three formats, all read by
+    ``from_stored``; ``to_stored`` writes the groups one, which the targeting widget edits.
+    Buyer key-values and AXE segments are the legacy one, ``from_key_values``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    branches: tuple[Annotated[tuple[CustomCriterion, ...], Field(min_length=1)], ...] = ()
+
+    def __and__(self, other: CustomTargeting) -> CustomTargeting:
+        """Targeting that matches only where both do.
+
+        ``(A1 OR A2) AND B`` is ``(A1 AND B) OR (A2 AND B)``, so n branches ANDed with m
+        become n*m.
+        """
+        if not self.branches:
+            return other
+        if not other.branches:
+            return self
+        return CustomTargeting(branches=tuple(mine + theirs for mine in self.branches for theirs in other.branches))
+
+    @classmethod
+    def from_stored(cls, stored: object) -> CustomTargeting:
+        """Read a product's ``custom_targeting_keys`` in any of its three stored formats.
+
+        - groups, what the targeting widget saves:
+          ``{"groups": [{"criteria": [{"keyId": ..., "values": [...], "exclude": bool}]}]}``,
+          the groups ORed and the criteria in a group ANDed;
+        - include/exclude: ``{"include": {key_id: [values]}, "exclude": {...}, "operator": "AND" | "OR"}``;
+        - legacy key-values, as ``from_key_values`` reads them.
+
+        In the first two, a value of digits is a GAM value ID and anything else a value name.
+        In groups, ``{"name": ...}`` is a value name whatever it is spelled with; that is how
+        ``to_stored`` keeps a name of digits a name. A criterion with no values, and a group
+        with no criteria, is left out: the widget saves those while a row is still being
+        filled in. Anything else malformed, an unknown key included, raises
+        ``pydantic.ValidationError``, as does a document that is not an object.
+        """
+        stored = _STORED_DOCUMENT.validate_python(stored)
+        if "groups" in stored:
+            groups = _StoredGroups.model_validate(stored).groups
+            return cls(
+                branches=tuple(
+                    branch
+                    for group in groups
+                    if (branch := tuple(_criterion(c.key_id, c.values, c.exclude) for c in group.criteria if c.values))
+                )
+            )
+        if "include" in stored or "exclude" in stored:
+            config = _StoredIncludeExclude.model_validate(stored)
+            criteria = [_criterion(key_id, values, False) for key_id, values in config.include.items() if values]
+            criteria += [_criterion(key_id, values, True) for key_id, values in config.exclude.items() if values]
+            if config.operator == "OR":
+                return cls(branches=tuple((criterion,) for criterion in criteria))
+            return cls(branches=(tuple(criteria),) if criteria else ())
+        return cls.from_key_values(stored)
+
+    @classmethod
+    def from_key_values(cls, key_values: dict[str, Any]) -> CustomTargeting:
+        """Read legacy key-values: ``{key_id: value_name}``, a ``NOT_<key_id>`` key excluding.
+
+        Every key is ANDed in one branch, and every value is a value name, even one of digits.
+        """
+        names = _LEGACY_KEY_VALUES.validate_python(key_values)
+        criteria = tuple(
+            CustomCriterion(key_id=_gam_id(key.removeprefix("NOT_")), values=(name,), exclude=key.startswith("NOT_"))
+            for key, name in names.items()
+        )
+        return cls(branches=(criteria,) if criteria else ())
+
+    def to_stored(self) -> dict[str, Any]:
+        """This targeting in the groups format, which ``from_stored`` reads back unchanged.
+
+        Key and value IDs are written as strings of digits, the way the widget writes the IDs
+        it is given; a value name is written ``{"name": ...}``, so a name of digits stays a name.
+        """
+        return {
+            "groups": [
+                {
+                    "criteria": [
+                        {
+                            "keyId": str(criterion.key_id),
+                            "values": [str(v) if isinstance(v, int) else {"name": v} for v in criterion.values],
+                            "exclude": criterion.exclude,
+                        }
+                        for criterion in branch
+                    ]
+                }
+                for branch in self.branches
+            ]
+        }
+
+
+def _gam_id(id_or_name: str | int) -> int | str:
+    """A string of digits as the int GAM ID it spells; anything else unchanged."""
+    if isinstance(id_or_name, str) and id_or_name.isascii() and id_or_name.isdecimal():
+        return int(id_or_name)
+    return id_or_name
+
+
+def _criterion(key_id: str | int, values: Sequence[_StoredValue], exclude: bool) -> CustomCriterion:
+    """A criterion from the groups or include/exclude format, where a value of digits is a GAM value ID."""
+    return CustomCriterion(
+        key_id=_gam_id(key_id),
+        values=tuple(v.name if isinstance(v, _StoredName) else _gam_id(v) for v in values),
+        exclude=exclude,
+    )
+
+
+class _Stored(BaseModel):
+    """A stored format refuses a key it does not know, rather than serve without it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class _StoredName(_Stored):
+    name: Annotated[StrictStr, Field(min_length=1)]
+
+
+_StoredValue = StrictInt | StrictStr | _StoredName
+
+
+class _StoredCriterion(_Stored):
+    key_id: StrictStr | StrictInt = Field(alias="keyId")
+    values: list[_StoredValue] = Field(default_factory=list)
+    exclude: StrictBool = False
+
+
+class _StoredGroup(_Stored):
+    criteria: list[_StoredCriterion] = Field(default_factory=list)
+
+
+class _StoredGroups(_Stored):
+    groups: list[_StoredGroup]
+
+
+class _StoredIncludeExclude(_Stored):
+    include: dict[str, list[CustomTargetingValue]] = Field(default_factory=dict)
+    exclude: dict[str, list[CustomTargetingValue]] = Field(default_factory=dict)
+    operator: Literal["AND", "OR"] = "AND"
+
+
+_STORED_DOCUMENT = TypeAdapter(dict[str, Any])
+_LEGACY_KEY_VALUES = TypeAdapter(dict[str, Annotated[StrictStr, Field(min_length=1)]])
 
 
 class GAMImplementationConfig(BaseModel):
@@ -116,8 +298,12 @@ class GAMImplementationConfig(BaseModel):
     skip_inventory_check: bool = Field(False, description="Skip inventory availability check")
 
     # Custom targeting template
-    custom_targeting_keys: dict[str, Any] = Field(
-        default_factory=dict, description="Custom key-value pairs for targeting"
+    custom_targeting_keys: CustomTargeting = Field(
+        default_factory=CustomTargeting,
+        description=(
+            "Custom targeting every line item must match, ANDed with the buyer's. Stored in the "
+            "groups format the targeting widget saves, or the older legacy or include/exclude format"
+        ),
     )
 
     # Native ad settings
@@ -134,6 +320,17 @@ class GAMImplementationConfig(BaseModel):
         "manual",
         description="Automation mode for non-guaranteed line item types: 'automatic' (instant activation), 'confirmation_required' (human approval then auto-activation), 'manual' (human handles all steps)",
     )
+
+    @field_validator("custom_targeting_keys", mode="before")
+    @classmethod
+    def read_stored_custom_targeting(cls, stored: object) -> CustomTargeting:
+        """Stored rows keep their format; all three are read into the model."""
+        return stored if isinstance(stored, CustomTargeting) else CustomTargeting.from_stored(stored)
+
+    @field_serializer("custom_targeting_keys")
+    def write_stored_custom_targeting(self, custom_targeting: CustomTargeting) -> dict[str, Any]:
+        """Written in the groups format, so a dumped config reads back as the same config."""
+        return custom_targeting.to_stored()
 
     @field_validator("line_item_type")
     def validate_line_item_type(cls, v):

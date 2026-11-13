@@ -41,7 +41,7 @@ _FORMAT_OPTION_REFS_BY_SCOPE: dict[str, dict[str, str]] = {
     "product": {"scope": "product", "format_option_id": "opt_hero_image"},
     "publisher": {
         "scope": "publisher",
-        "publisher_domain": "example.com",
+        "publisher_domain": "psatest.com",
         "format_option_id": "opt_hero_image",
     },
 }

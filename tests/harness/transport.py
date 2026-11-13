@@ -142,6 +142,10 @@ TRANSPORT_PROTOCOL: dict[Transport, str] = {
     Transport.E2E_A2A: "a2a",
 }
 
+# The transports a BDD scenario runs on with no server: the parametrize list in
+# tests/bdd/conftest.py, and the projection tests/bdd/scenario_liveness.py grades.
+BDD_IN_PROCESS_TRANSPORTS = (Transport.A2A, Transport.MCP, Transport.REST)
+
 
 # The ONE credential-argument omission sentinel for the whole dispatch core
 # (tests/harness/client.py, dispatchers.py, raw_wire.py, _base.py, _mixins.py).
@@ -190,12 +194,17 @@ class E2EConfig:
         ca_bundle: ABSOLUTE path to the CA that signed the stack's leaf. Absolute
             because pytest does not always run from the repo root. ``None`` when
             there is no TLS listener to verify.
+        server_host: The container that serves ``base_url``'s requests and dials
+            outbound, by its network name -- what a test publisher's origin keys the
+            files it serves by (tests/harness/publisher_authorization.py). ``None`` when
+            the stack does not say.
     """
 
     base_url: str
     postgres_url: str
     tls_base_url: str | None = None
     ca_bundle: str | None = None
+    server_host: str | None = None
 
 
 # The two values TransportResult.envelope["status"] may take. A DERIVED enum,

@@ -2,10 +2,8 @@
 
 Pure-logic, offline tests for the join primitives: the ``ENV_ROUTES`` registry data
 lookup (never reason-text matching), the artifact loader's conservative
-missing-file/missing-scenario behavior, and ``ScenarioLiveness.graded_by_live_scenario``'s
-three-way AND. The real end-to-end proof — that this join actually changes
-``storyboard_check_index.build()``'s published totals and per-record fields — lives in
-``tests/unit/test_architecture_storyboard_check_index_liveness.py``.
+missing-file/missing-scenario behavior and its refusal of an artifact one shard wrote, and
+``ScenarioLiveness.graded_by_live_scenario``'s three-way AND.
 """
 
 from __future__ import annotations
@@ -13,7 +11,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts.audit import scenario_liveness_join as slj
+from scripts.audit import storyboard_spec
 
 
 def _route(xfail_reason: str | None = None, *, uc: str | None = None, when=None) -> object:
@@ -177,3 +178,26 @@ def test_build_index_joins_artifact_and_registry(tmp_path: Path) -> None:
     assert index["T-UC-006-y"].registry_wired is False
     assert index["T-UC-006-y"].graded_by_live_scenario is False
     assert index["T-UC-006-y"].ledgered is True
+
+
+# --- _reject_narrowed_run: a shard is a narrowing too ---
+
+
+def test_one_shard_of_the_suite_is_refused_like_any_other_narrowing(tmp_path: Path) -> None:
+    """A shard narrows by neither -k nor -m: it is handed a file list."""
+    artifact = tmp_path / "bdd_scenario_liveness.json"
+    run = {"collected": 266, "selection": "", "markers": "", "target": ["tests/bdd/test_uc001_get_products.py"]}
+    artifact.write_text(json.dumps({"run": run, "scenarios": [{"scenario_id": "T-UC-001-x"}]}), encoding="utf-8")
+
+    with pytest.raises(storyboard_spec.StoryboardAuditError, match="one shard"):
+        slj.load_artifact(artifact)
+
+
+@pytest.mark.parametrize("target", [["tests/bdd"], ["tests"], ["."]])
+def test_a_whole_tree_target_is_a_measurement_of_the_suite(tmp_path: Path, target: list[str]) -> None:
+    """The suite directory or any ancestor of it, the repo root included, asked the whole question."""
+    artifact = tmp_path / "bdd_scenario_liveness.json"
+    run = {"collected": 8000, "selection": "", "markers": "", "target": target}
+    artifact.write_text(json.dumps({"run": run, "scenarios": [{"scenario_id": "T-UC-001-x"}]}), encoding="utf-8")
+
+    assert set(slj.load_artifact(artifact)) == {"T-UC-001-x"}

@@ -52,7 +52,7 @@ def test_mock_ad_server_create_media_buy(sample_packages, mocker):
 
     # No tenant patch: the adapter is given its tenant_id, and the ambient tenant
     # ContextVar an adapter used to read is deleted.
-    adapter = MockAdServer({}, principal, tenant_id="test_tenant")
+    adapter = MockAdServer({}, principal, tenant_id="test_tenant", order_name_template=None, tenant_ai_config=None)
     start_time = datetime.now(UTC)
     end_time = start_time + timedelta(days=30)
 

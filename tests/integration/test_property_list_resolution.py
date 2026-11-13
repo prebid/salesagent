@@ -22,10 +22,15 @@ from decimal import Decimal
 import pytest
 
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories.product import authorize_publishers, authorize_selected_properties
 from tests.harness.product import ProductEnv
 from tests.integration.property_list_helpers import allow_local_origin, origin_ref, property_list_body
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+#: Every publisher these tests' products name; the seller holds a verified property on each,
+#: so property-list filtering is what decides which products are offered (#1845).
+_PUBLISHERS = ("psatest.com", "other.com", "us-publisher.com", "eu-publisher.com")
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +69,7 @@ class TestPropertyListResolution:
         """
         with ProductEnv(tenant_id="proplist-resolve", principal_id="proplist-principal") as env:
             tenant = TenantFactory(tenant_id="proplist-resolve", subdomain="proplist-resolve")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="proplist-principal")
 
             # Product with specific property IDs via by_id selector
@@ -71,10 +77,9 @@ class TestPropertyListResolution:
                 tenant=tenant,
                 product_id="prop_matching",
                 name="Matching Product",
-                property_tags=None,
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_alpha", "prop_beta"],
                         "selection_type": "by_id",
                     }
@@ -82,13 +87,13 @@ class TestPropertyListResolution:
                 property_targeting_allowed=False,
             )
             PricingOptionFactory(product=p1, pricing_model="cpm", rate=Decimal("10.0"), is_fixed=True)
+            authorize_selected_properties(tenant, p1.stored_publisher_properties)
 
             # Product with non-matching property IDs
             p2 = ProductFactory(
                 tenant=tenant,
                 product_id="prop_nonmatch",
                 name="Non-Matching Product",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "other.com",
@@ -99,21 +104,22 @@ class TestPropertyListResolution:
                 property_targeting_allowed=False,
             )
             PricingOptionFactory(product=p2, pricing_model="cpm", rate=Decimal("10.0"), is_fixed=True)
+            authorize_selected_properties(tenant, p2.stored_publisher_properties)
 
             # Product with selection_type="all" (always matches)
             p3 = ProductFactory(
                 tenant=tenant,
                 product_id="prop_all",
                 name="All Properties Product",
-                property_tags=None,
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "selection_type": "all",
                     }
                 ],
             )
             PricingOptionFactory(product=p3, pricing_model="cpm", rate=Decimal("10.0"), is_fixed=True)
+            authorize_selected_properties(tenant, p3.stored_publisher_properties)
 
             # Mock resolve_property_list to return identifiers matching p1
             env.set_property_list(["prop_alpha", "prop_beta"])
@@ -233,6 +239,7 @@ class TestPropertyListResolution:
         """
         with ProductEnv(tenant_id="proplist-filter", principal_id="proplist-filter-principal") as env:
             tenant = TenantFactory(tenant_id="proplist-filter", subdomain="proplist-filter")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="proplist-filter-principal")
 
             # Product targeting US sites (specific property IDs)
@@ -240,7 +247,6 @@ class TestPropertyListResolution:
                 tenant=tenant,
                 product_id="us_sites_product",
                 name="US Sites Only",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "us-publisher.com",
@@ -252,13 +258,13 @@ class TestPropertyListResolution:
                 countries=["US"],
             )
             PricingOptionFactory(product=p_us, pricing_model="cpm", rate=Decimal("12.0"), is_fixed=True)
+            authorize_selected_properties(tenant, p_us.stored_publisher_properties)
 
             # Product targeting EU sites (different property IDs)
             p_eu = ProductFactory(
                 tenant=tenant,
                 product_id="eu_sites_product",
                 name="EU Sites Only",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "eu-publisher.com",
@@ -270,23 +276,24 @@ class TestPropertyListResolution:
                 countries=["DE", "FR"],
             )
             PricingOptionFactory(product=p_eu, pricing_model="cpm", rate=Decimal("12.0"), is_fixed=True)
+            authorize_selected_properties(tenant, p_eu.stored_publisher_properties)
 
             # Product with partial overlap (property_targeting_allowed=True means ANY match)
             p_mixed = ProductFactory(
                 tenant=tenant,
                 product_id="mixed_sites_product",
                 name="Mixed Sites",
-                property_tags=None,
                 properties=[
                     {
-                        "publisher_domain": "mixed-publisher.com",
-                        "property_ids": ["us_site_1", "eu_site_1", "other_site"],
+                        "publisher_domain": "us-publisher.com",
+                        "property_ids": ["us_site_1", "us_site_3"],
                         "selection_type": "by_id",
                     }
                 ],
                 property_targeting_allowed=True,
             )
             PricingOptionFactory(product=p_mixed, pricing_model="cpm", rate=Decimal("12.0"), is_fixed=True)
+            authorize_selected_properties(tenant, p_mixed.stored_publisher_properties)
 
             # Simulate resolution returning only US identifiers
             # The external service has already applied countries_all=["US"] AND channels_any=["web"]
@@ -320,6 +327,7 @@ class TestPropertyListResolution:
         """
         with ProductEnv(tenant_id="proplist-empty", principal_id="proplist-empty-principal") as env:
             tenant = TenantFactory(tenant_id="proplist-empty", subdomain="proplist-empty")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="proplist-empty-principal")
 
             # Product with selection_type="all" (always matches)
@@ -327,31 +335,31 @@ class TestPropertyListResolution:
                 tenant=tenant,
                 product_id="all_selector_product",
                 name="All Properties",
-                property_tags=None,
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "selection_type": "all",
                     }
                 ],
             )
             PricingOptionFactory(product=p_all, pricing_model="cpm", rate=Decimal("10.0"), is_fixed=True)
+            authorize_selected_properties(tenant, p_all.stored_publisher_properties)
 
             # Product with specific property IDs
             p_specific = ProductFactory(
                 tenant=tenant,
                 product_id="specific_product",
                 name="Specific Properties",
-                property_tags=None,
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_x"],
                         "selection_type": "by_id",
                     }
                 ],
             )
             PricingOptionFactory(product=p_specific, pricing_model="cpm", rate=Decimal("10.0"), is_fixed=True)
+            authorize_selected_properties(tenant, p_specific.stored_publisher_properties)
 
             # Resolve returns empty set (no matching identifiers)
             env.set_property_list([])
