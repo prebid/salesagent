@@ -1170,7 +1170,8 @@ class AdCPPersistedStateError(AdCPConfigurationError):
     reaches the buyer in both envelope layers — the pinned ``CONFIGURATION_ERROR``
     metadata permits that payload, so the contract is wider than "two doors of
     status" and this docstring says so rather than describing the narrower case it
-    was written for.
+    was written for. A package row without the pricing terms a delivery report reads is
+    the same defect with no value to name, so its ``details`` name the package.
     All are SELLER-side store defects — the buyer neither supplied the value nor can
     correct it — so this inherits ``CONFIGURATION_ERROR`` / ``terminal`` from
     ``AdCPConfigurationError`` rather than restating them. That is also what the

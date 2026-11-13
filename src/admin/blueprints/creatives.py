@@ -51,8 +51,9 @@ from src.core.tools.media_buy_create import execute_approved_media_buy, push_cre
 
 logger = logging.getLogger(__name__)
 
-# Buy statuses where the order is live in the ad server (retroactive creative push, #1038)
-_LIVE_BUY_STATUSES: frozenset[str] = frozenset({"active", "scheduled", "paused"})
+# Buy statuses where the order is live in the ad server (retroactive creative push, #1038).
+# pending_start is booked and has not started: a change approved now reaches GAM before it serves.
+_LIVE_BUY_STATUSES: frozenset[str] = frozenset({"active", "scheduled", "paused", "pending_start"})
 
 # Create Blueprint
 creatives_bp = Blueprint("creatives", __name__)
@@ -681,14 +682,15 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
         for buy_id in buys_to_push:
             logger.info(f"[CREATIVE APPROVAL] Retroactive push: creative {creative_id} → live buy {buy_id}")
-            push_success, push_err = push_creative_to_existing_buy(
+            push_failure = push_creative_to_existing_buy(
                 creative_id=creative_id,
                 media_buy_id=buy_id,
                 tenant_id=tenant_id,
             )
-            if not push_success:
+            if push_failure is not None:
                 logger.error(
-                    f"[CREATIVE APPROVAL] Retroactive push failed for creative {creative_id} → buy {buy_id}: {push_err}"
+                    f"[CREATIVE APPROVAL] Retroactive push failed for creative {creative_id} → buy {buy_id}: "
+                    f"{push_failure.reason}"
                 )
                 push_warnings.append(f"Creative push to buy {buy_id} failed — see server logs for details")
 

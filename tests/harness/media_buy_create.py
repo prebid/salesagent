@@ -1,7 +1,13 @@
 """MediaBuyCreateEnv — integration test environment for _create_media_buy_impl.
 
-Patches: adapter, audit logger, slack notifier, context manager.
+Patches: adapter, slack notifier, context manager, Google's GAM SOAP client. A creative
+agent is really dialled: ``PeerCreativeAgentMixin`` points the operator agent at a stand-in on
+the worker's peer, which answers previews.
 Real: get_db_session, MediaBuyRepository, all validation (all hit real DB).
+``GamSellerMixin.sell_through_tenant_adapter`` (``tests/harness/gam.py``) turns the adapter
+patch into production's ``get_adapter``, so the tenant's own adapter runs: the real Mock
+adapter, or after ``sell_through_gam`` the real ``GoogleAdManager`` adapter over the stand-in
+SOAP client.
 
 Requires: integration_db fixture.
 
@@ -11,8 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime
-from typing import Any, cast
+from collections.abc import Mapping, Sequence
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock
 
 from src.adapters.base import AdapterCreateResult, ResponsePackage
@@ -23,9 +30,13 @@ from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
 from tests.harness._realize import realize_e2e
 from tests.harness.admin_client import AdminOperatorMixin
+from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.peer_agent import PeerCreativeAgentMixin
 from tests.harness.publisher_authorization import PublisherAdagentsMixin
 from tests.harness.transport import DeliverResult
+
+if TYPE_CHECKING:
+    from src.core.tools.media_buy_create import ApprovalResult
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
 # request with NO key (the schema rejects it as "Field required" — AdCP 3.0.1).
@@ -177,7 +188,9 @@ def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> N
             flat_pkgs[i]["creative_ids"] = cids
 
 
-class MediaBuyCreateEnv(PublisherAdagentsMixin, AdminOperatorMixin, PeerCreativeAgentMixin, IntegrationEnv):
+class MediaBuyCreateEnv(
+    GamSellerMixin, PublisherAdagentsMixin, AdminOperatorMixin, PeerCreativeAgentMixin, IntegrationEnv
+):
     """Integration test environment for _create_media_buy_impl.
 
     Mocks external services (adapter, audit, slack, context manager).
@@ -196,6 +209,7 @@ class MediaBuyCreateEnv(PublisherAdagentsMixin, AdminOperatorMixin, PeerCreative
         "slack": "src.core.tools.media_buy_create.get_slack_notifier",
         "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
         "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
+        **GAM_CLIENT_PATCH,
     }
     REST_ENDPOINT = "/api/v1/media-buys"
 
@@ -289,15 +303,19 @@ class MediaBuyCreateEnv(PublisherAdagentsMixin, AdminOperatorMixin, PeerCreative
         currency: str = "USD",
         with_pricing: bool = True,
         format_ids: list[dict[str, str]] | None = None,
+        delivery_type: str = "non_guaranteed",
+        pricing_options: Sequence[Mapping[str, Any]] = ({},),
     ) -> tuple:
         """Seed a real PropertyTag ("all_inventory") + Product + PricingOption row set.
 
         The "all_inventory" tag is created once per env (idempotent across repeated
-        calls). Returns ``(product, pricing_option)``; ``pricing_option`` is ``None``
-        when ``with_pricing=False``.
+        calls). *pricing_options* holds one mapping of ``PricingOptionFactory`` fields per
+        option, over a fixed CPM option in *currency*; the default is that one option.
+        Returns ``(product, pricing_option)``, the product's first option; ``pricing_option``
+        is ``None`` when ``with_pricing=False``.
         """
-        from tests.factories import PricingOptionFactory, ProductFactory
         from tests.factories.core import PropertyTagFactory
+        from tests.factories.product import priced_product
 
         if not getattr(self, "_seeded_all_inventory_tag", False):
             PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
@@ -316,18 +334,17 @@ class MediaBuyCreateEnv(PublisherAdagentsMixin, AdminOperatorMixin, PeerCreative
             # tests/factories/product.py.
             format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]
 
-        product = ProductFactory(
-            tenant=tenant,
+        product, options = priced_product(
+            tenant,
             product_id=product_id,
-            delivery_type="non_guaranteed",
+            delivery_type=delivery_type,
             format_ids=format_ids,
+            pricing_options=[
+                {"pricing_model": "cpm", "currency": currency, "is_fixed": True, **terms}
+                for terms in (pricing_options if with_pricing else ())
+            ],
         )
-        pricing_option = None
-        if with_pricing:
-            pricing_option = PricingOptionFactory(
-                product=product, pricing_model="cpm", currency=currency, is_fixed=True
-            )
-        return product, pricing_option
+        return product, options[0] if options else None
 
     def _persist_product_format_ids(self, product_id: str, format_ids: list[dict[str, str]]) -> None:
         """Change the real catalog row every transport reads, the live server included."""
@@ -421,6 +438,42 @@ class MediaBuyCreateEnv(PublisherAdagentsMixin, AdminOperatorMixin, PeerCreative
             payload_hash=payload_hash,
         )
 
+    def media_buys_awaiting_approval(self) -> list[Any]:
+        """The media buys of this env's tenant whose status is ``pending_approval``.
+
+        Read on the env's own session, so no unit of work commits and closes beside it.
+        """
+        from src.core.database.models import PersistedMediaBuyStatus
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        return MediaBuyRepository(self.get_session(), self._tenant_id).list_by_statuses(
+            [PersistedMediaBuyStatus.PENDING_APPROVAL]
+        )
+
+    def move_pending_flight_back(self, days: int) -> None:
+        """Move the flight of the one media buy awaiting approval *days* into the past."""
+        (media_buy,) = self.media_buys_awaiting_approval()
+        shift = timedelta(days=days)
+        media_buy.start_date -= shift
+        media_buy.end_date -= shift
+        media_buy.start_time -= shift
+        media_buy.end_time -= shift
+        self.get_session().commit()
+
+    def approve_pending_media_buy(self) -> ApprovalResult:
+        """Approve the one media buy of this env's tenant that awaits approval, as an Admin UI route does.
+
+        Every admin approval route calls ``execute_approved_media_buy``; ``run_approval`` is
+        the one spelling of that call in tests. Raises ``RuntimeError`` unless exactly one
+        buy awaits approval.
+        """
+        from tests.helpers.media_buy_approval import run_approval
+
+        pending = self.media_buys_awaiting_approval()
+        if len(pending) != 1:
+            raise RuntimeError(f"expected exactly one media buy awaiting approval; found {len(pending)}")
+        return run_approval(pending[0].media_buy_id, self._tenant_id)
+
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
         # Adapter: mock create_media_buy — the side_effect returns one response
@@ -501,6 +554,8 @@ class MediaBuyCreateEnv(PublisherAdagentsMixin, AdminOperatorMixin, PeerCreative
         # linked to a media buy, so no real ObjectWorkflowMapping FK row is needed.
         self.mock["context_mgr"].return_value = self._build_mock_context_manager(tool_name="create_media_buy")
 
+        self._configure_gam_client()
+
         # Setup checklist: pass by default
 
         # Format spec: mock _get_format_spec_sync to avoid asyncio.run() inside a running
@@ -519,13 +574,10 @@ class MediaBuyCreateEnv(PublisherAdagentsMixin, AdminOperatorMixin, PeerCreative
         # blindness; a scenario needing a format the capture lacks wants its own finding
         # filed, not a stand-in.
         def _format_spec_side_effect(agent_url: str, format_id: str, *, provenance: Any = None) -> Any:
-            from src.core.format_cache import load_reference_formats
+            from tests.factories.format import reference_format
 
-            for fmt in load_reference_formats():
-                if fmt.format_id.id == format_id:
-                    return fmt
-            # Unresolvable, exactly as the live server answers for an id it does not serve.
-            return None
+            # None when unresolvable, exactly as the live server answers for an id it does not serve.
+            return reference_format(format_id)
 
         self.mock["format_spec"].side_effect = _format_spec_side_effect
 

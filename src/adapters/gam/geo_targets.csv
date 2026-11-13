@@ -1,0 +1,296 @@
+Criteria ID,Name,Canonical Name,Parent ID,Country Code,Target Type,Status
+"20034","Australian Capital Territory","Australian Capital Territory,Australia","2036","AU","State",Active
+"20035","New South Wales","New South Wales,Australia","2036","AU","State",Active
+"20036","Northern Territory","Northern Territory,Australia","2036","AU","State",Active
+"20037","Queensland","Queensland,Australia","2036","AU","State",Active
+"20038","South Australia","South Australia,Australia","2036","AU","State",Active
+"20039","Tasmania","Tasmania,Australia","2036","AU","State",Active
+"2004","Afghanistan","Afghanistan","","AF","Country",Active
+"20040","Victoria","Victoria,Australia","2036","AU","State",Active
+"20041","Western Australia","Western Australia,Australia","2036","AU","State",Active
+"2008","Albania","Albania","","AL","Country",Active
+"2010","Antarctica","Antarctica","","AQ","Country",Active
+"20113","Alberta","Alberta,Canada","2124","CA","Province",Active
+"20114","British Columbia","British Columbia,Canada","2124","CA","Province",Active
+"20115","Manitoba","Manitoba,Canada","2124","CA","Province",Active
+"20116","New Brunswick","New Brunswick,Canada","2124","CA","Province",Active
+"20117","Newfoundland and Labrador","Newfoundland and Labrador,Canada","2124","CA","Province",Active
+"20118","Nova Scotia","Nova Scotia,Canada","2124","CA","Province",Active
+"20119","Northwest Territories","Northwest Territories,Canada","2124","CA","Territory",Active
+"2012","Algeria","Algeria","","DZ","Country",Active
+"20120","Nunavut","Nunavut,Canada","2124","CA","Territory",Active
+"20121","Ontario","Ontario,Canada","2124","CA","Province",Active
+"20122","Prince Edward Island","Prince Edward Island,Canada","2124","CA","Province",Active
+"20123","Quebec","Quebec,Canada","2124","CA","Province",Active
+"20124","Saskatchewan","Saskatchewan,Canada","2124","CA","Province",Active
+"20125","Yukon","Yukon,Canada","2124","CA","Territory",Active
+"2016","American Samoa","American Samoa","","AS","Country",Active
+"2020","Andorra","Andorra","","AD","Country",Active
+"2024","Angola","Angola","","AO","Country",Active
+"2028","Antigua and Barbuda","Antigua and Barbuda","","AG","Country",Active
+"2031","Azerbaijan","Azerbaijan","","AZ","Country",Active
+"2032","Argentina","Argentina","","AR","Country",Active
+"20339","England","England,United Kingdom","2826","GB","Province",Active
+"20341","Northern Ireland","Northern Ireland,United Kingdom","2826","GB","Province",Active
+"20342","Scotland","Scotland,United Kingdom","2826","GB","Province",Active
+"20343","Wales","Wales,United Kingdom","2826","GB","Province",Active
+"2036","Australia","Australia","","AU","Country",Active
+"2040","Austria","Austria","","AT","Country",Active
+"2044","The Bahamas","The Bahamas","","BS","Country",Active
+"2048","Bahrain","Bahrain","","BH","Country",Active
+"2050","Bangladesh","Bangladesh","","BD","Country",Active
+"2051","Armenia","Armenia","","AM","Country",Active
+"2052","Barbados","Barbados","","BB","Country",Active
+"2056","Belgium","Belgium","","BE","Country",Active
+"2064","Bhutan","Bhutan","","BT","Country",Active
+"2068","Bolivia","Bolivia","","BO","Country",Active
+"2070","Bosnia and Herzegovina","Bosnia and Herzegovina","","BA","Country",Active
+"2072","Botswana","Botswana","","BW","Country",Active
+"2076","Brazil","Brazil","","BR","Country",Active
+"2084","Belize","Belize","","BZ","Country",Active
+"2090","Solomon Islands","Solomon Islands","","SB","Country",Active
+"2096","Brunei","Brunei","","BN","Country",Active
+"2100","Bulgaria","Bulgaria","","BG","Country",Active
+"2104","Myanmar (Burma)","Myanmar (Burma)","","MM","Country",Active
+"2108","Burundi","Burundi","","BI","Country",Active
+"2112","Belarus","Belarus","","BY","Country",Active
+"21132","Alaska","Alaska,United States","2840","US","State",Active
+"21133","Alabama","Alabama,United States","2840","US","State",Active
+"21135","Arkansas","Arkansas,United States","2840","US","State",Active
+"21136","Arizona","Arizona,United States","2840","US","State",Active
+"21137","California","California,United States","2840","US","State",Active
+"21138","Colorado","Colorado,United States","2840","US","State",Active
+"21139","Connecticut","Connecticut,United States","2840","US","State",Active
+"21140","District of Columbia","District of Columbia,United States","2840","US","State",Active
+"21141","Delaware","Delaware,United States","2840","US","State",Active
+"21142","Florida","Florida,United States","2840","US","State",Active
+"21143","Georgia","Georgia,United States","2840","US","State",Active
+"21144","Hawaii","Hawaii,United States","2840","US","State",Active
+"21145","Iowa","Iowa,United States","2840","US","State",Active
+"21146","Idaho","Idaho,United States","2840","US","State",Active
+"21147","Illinois","Illinois,United States","2840","US","State",Active
+"21148","Indiana","Indiana,United States","2840","US","State",Active
+"21149","Kansas","Kansas,United States","2840","US","State",Active
+"21150","Kentucky","Kentucky,United States","2840","US","State",Active
+"21151","Louisiana","Louisiana,United States","2840","US","State",Active
+"21152","Massachusetts","Massachusetts,United States","2840","US","State",Active
+"21153","Maryland","Maryland,United States","2840","US","State",Active
+"21154","Maine","Maine,United States","2840","US","State",Active
+"21155","Michigan","Michigan,United States","2840","US","State",Active
+"21156","Minnesota","Minnesota,United States","2840","US","State",Active
+"21157","Missouri","Missouri,United States","2840","US","State",Active
+"21158","Mississippi","Mississippi,United States","2840","US","State",Active
+"21159","Montana","Montana,United States","2840","US","State",Active
+"2116","Cambodia","Cambodia","","KH","Country",Active
+"21160","North Carolina","North Carolina,United States","2840","US","State",Active
+"21161","North Dakota","North Dakota,United States","2840","US","State",Active
+"21162","Nebraska","Nebraska,United States","2840","US","State",Active
+"21163","New Hampshire","New Hampshire,United States","2840","US","State",Active
+"21164","New Jersey","New Jersey,United States","2840","US","State",Active
+"21165","New Mexico","New Mexico,United States","2840","US","State",Active
+"21166","Nevada","Nevada,United States","2840","US","State",Active
+"21167","New York","New York,United States","2840","US","State",Active
+"21168","Ohio","Ohio,United States","2840","US","State",Active
+"21169","Oklahoma","Oklahoma,United States","2840","US","State",Active
+"21170","Oregon","Oregon,United States","2840","US","State",Active
+"21171","Pennsylvania","Pennsylvania,United States","2840","US","State",Active
+"21172","Rhode Island","Rhode Island,United States","2840","US","State",Active
+"21173","South Carolina","South Carolina,United States","2840","US","State",Active
+"21174","South Dakota","South Dakota,United States","2840","US","State",Active
+"21175","Tennessee","Tennessee,United States","2840","US","State",Active
+"21176","Texas","Texas,United States","2840","US","State",Active
+"21177","Utah","Utah,United States","2840","US","State",Active
+"21178","Virginia","Virginia,United States","2840","US","State",Active
+"21179","Vermont","Vermont,United States","2840","US","State",Active
+"21180","Washington","Washington,United States","2840","US","State",Active
+"21182","Wisconsin","Wisconsin,United States","2840","US","State",Active
+"21183","West Virginia","West Virginia,United States","2840","US","State",Active
+"21184","Wyoming","Wyoming,United States","2840","US","State",Active
+"2120","Cameroon","Cameroon","","CM","Country",Active
+"2124","Canada","Canada","","CA","Country",Active
+"2132","Cabo Verde","Cabo Verde","","CV","Country",Active
+"2140","Central African Republic","Central African Republic","","CF","Country",Active
+"2144","Sri Lanka","Sri Lanka","","LK","Country",Active
+"2148","Chad","Chad","","TD","Country",Active
+"2152","Chile","Chile","","CL","Country",Active
+"2156","China","China","","CN","Country",Active
+"2162","Christmas Island","Christmas Island","","CX","Country",Active
+"2166","Cocos (Keeling) Islands","Cocos (Keeling) Islands","","CC","Country",Active
+"2170","Colombia","Colombia","","CO","Country",Active
+"2174","Comoros","Comoros","","KM","Country",Active
+"2178","Republic of the Congo","Republic of the Congo","","CG","Country",Active
+"2180","Democratic Republic of the Congo","Democratic Republic of the Congo","","CD","Country",Active
+"2184","Cook Islands","Cook Islands","","CK","Country",Active
+"2188","Costa Rica","Costa Rica","","CR","Country",Active
+"2191","Croatia","Croatia","","HR","Country",Active
+"2196","Cyprus","Cyprus","","CY","Country",Active
+"2203","Czechia","Czechia","","CZ","Country",Active
+"2204","Benin","Benin","","BJ","Country",Active
+"2208","Denmark","Denmark","","DK","Country",Active
+"2212","Dominica","Dominica","","DM","Country",Active
+"2214","Dominican Republic","Dominican Republic","","DO","Country",Active
+"2218","Ecuador","Ecuador","","EC","Country",Active
+"2222","El Salvador","El Salvador","","SV","Country",Active
+"2226","Equatorial Guinea","Equatorial Guinea","","GQ","Country",Active
+"2231","Ethiopia","Ethiopia","","ET","Country",Active
+"2232","Eritrea","Eritrea","","ER","Country",Active
+"2233","Estonia","Estonia","","EE","Country",Active
+"2239","South Georgia and the South Sandwich Islands","South Georgia and the South Sandwich Islands","","GS","Country",Active
+"2242","Fiji","Fiji","","FJ","Country",Active
+"2246","Finland","Finland","","FI","Country",Active
+"2250","France","France","","FR","Country",Active
+"2258","French Polynesia","French Polynesia","","PF","Country",Active
+"2260","French Southern and Antarctic Lands","French Southern and Antarctic Lands","","TF","Country",Active
+"2262","Djibouti","Djibouti","","DJ","Country",Active
+"2266","Gabon","Gabon","","GA","Country",Active
+"2268","Georgia","Georgia","","GE","Country",Active
+"2270","The Gambia","The Gambia","","GM","Country",Active
+"2276","Germany","Germany","","DE","Country",Active
+"2288","Ghana","Ghana","","GH","Country",Active
+"2296","Kiribati","Kiribati","","KI","Country",Active
+"2300","Greece","Greece","","GR","Country",Active
+"2308","Grenada","Grenada","","GD","Country",Active
+"2316","Guam","Guam","","GU","Country",Active
+"2320","Guatemala","Guatemala","","GT","Country",Active
+"2324","Guinea","Guinea","","GN","Country",Active
+"2328","Guyana","Guyana","","GY","Country",Active
+"2332","Haiti","Haiti","","HT","Country",Active
+"2334","Heard Island and McDonald Islands","Heard Island and McDonald Islands","","HM","Country",Active
+"2336","Vatican City","Vatican City","","VA","Country",Active
+"2340","Honduras","Honduras","","HN","Country",Active
+"2348","Hungary","Hungary","","HU","Country",Active
+"2352","Iceland","Iceland","","IS","Country",Active
+"2356","India","India","","IN","Country",Active
+"2360","Indonesia","Indonesia","","ID","Country",Active
+"2368","Iraq","Iraq","","IQ","Country",Active
+"2372","Ireland","Ireland","","IE","Country",Active
+"2376","Israel","Israel","","IL","Country",Active
+"2380","Italy","Italy","","IT","Country",Active
+"2384","Cote d'Ivoire","Cote d'Ivoire","","CI","Country",Active
+"2388","Jamaica","Jamaica","","JM","Country",Active
+"2392","Japan","Japan","","JP","Country",Active
+"2398","Kazakhstan","Kazakhstan","","KZ","Country",Active
+"2400","Jordan","Jordan","","JO","Country",Active
+"2404","Kenya","Kenya","","KE","Country",Active
+"2410","South Korea","South Korea","","KR","Country",Active
+"2414","Kuwait","Kuwait","","KW","Country",Active
+"2417","Kyrgyzstan","Kyrgyzstan","","KG","Country",Active
+"2418","Laos","Laos","","LA","Country",Active
+"2422","Lebanon","Lebanon","","LB","Country",Active
+"2426","Lesotho","Lesotho","","LS","Country",Active
+"2428","Latvia","Latvia","","LV","Country",Active
+"2430","Liberia","Liberia","","LR","Country",Active
+"2434","Libya","Libya","","LY","Country",Active
+"2438","Liechtenstein","Liechtenstein","","LI","Country",Active
+"2440","Lithuania","Lithuania","","LT","Country",Active
+"2442","Luxembourg","Luxembourg","","LU","Country",Active
+"2450","Madagascar","Madagascar","","MG","Country",Active
+"2454","Malawi","Malawi","","MW","Country",Active
+"2458","Malaysia","Malaysia","","MY","Country",Active
+"2462","Maldives","Maldives","","MV","Country",Active
+"2466","Mali","Mali","","ML","Country",Active
+"2470","Malta","Malta","","MT","Country",Active
+"2478","Mauritania","Mauritania","","MR","Country",Active
+"2480","Mauritius","Mauritius","","MU","Country",Active
+"2484","Mexico","Mexico","","MX","Country",Active
+"2492","Monaco","Monaco","","MC","Country",Active
+"2496","Mongolia","Mongolia","","MN","Country",Active
+"2498","Moldova","Moldova","","MD","Country",Active
+"2499","Montenegro","Montenegro","","ME","Country",Active
+"2504","Morocco","Morocco","","MA","Country",Active
+"2508","Mozambique","Mozambique","","MZ","Country",Active
+"2512","Oman","Oman","","OM","Country",Active
+"2516","Namibia","Namibia","","NA","Country",Active
+"2520","Nauru","Nauru","","NR","Country",Active
+"2524","Nepal","Nepal","","NP","Country",Active
+"2528","Netherlands","Netherlands","","NL","Country",Active
+"2531","Curacao","Curacao","","CW","Country",Active
+"2534","Sint Maarten","Sint Maarten","","SX","Country",Active
+"2535","Caribbean Netherlands","Caribbean Netherlands","","BQ","Country",Active
+"2540","New Caledonia","New Caledonia","","NC","Country",Active
+"2548","Vanuatu","Vanuatu","","VU","Country",Active
+"2554","New Zealand","New Zealand","","NZ","Country",Active
+"2558","Nicaragua","Nicaragua","","NI","Country",Active
+"2562","Niger","Niger","","NE","Country",Active
+"2566","Nigeria","Nigeria","","NG","Country",Active
+"2570","Niue","Niue","","NU","Country",Active
+"2574","Norfolk Island","Norfolk Island","","NF","Country",Active
+"2578","Norway","Norway","","NO","Country",Active
+"2580","Northern Mariana Islands","Northern Mariana Islands","","MP","Country",Active
+"2581","United States Minor Outlying Islands","United States Minor Outlying Islands","","UM","Country",Active
+"2583","Micronesia","Micronesia","","FM","Country",Active
+"2584","Marshall Islands","Marshall Islands","","MH","Country",Active
+"2585","Palau","Palau","","PW","Country",Active
+"2586","Pakistan","Pakistan","","PK","Country",Active
+"2591","Panama","Panama","","PA","Country",Active
+"2598","Papua New Guinea","Papua New Guinea","","PG","Country",Active
+"2600","Paraguay","Paraguay","","PY","Country",Active
+"2604","Peru","Peru","","PE","Country",Active
+"2608","Philippines","Philippines","","PH","Country",Active
+"2612","Pitcairn Islands","Pitcairn Islands","","PN","Country",Active
+"2616","Poland","Poland","","PL","Country",Active
+"2620","Portugal","Portugal","","PT","Country",Active
+"2624","Guinea-Bissau","Guinea-Bissau","","GW","Country",Active
+"2626","Timor-Leste","Timor-Leste","","TL","Country",Active
+"2634","Qatar","Qatar","","QA","Country",Active
+"2642","Romania","Romania","","RO","Country",Active
+"2643","Russia","Russia","","RU","Country",Active
+"2646","Rwanda","Rwanda","","RW","Country",Active
+"2652","Saint Barthelemy","Saint Barthelemy","","BL","Country",Active
+"2654","Saint Helena, Ascension and Tristan da Cunha","Saint Helena, Ascension and Tristan da Cunha","","SH","Country",Active
+"2659","Saint Kitts and Nevis","Saint Kitts and Nevis","","KN","Country",Active
+"2662","Saint Lucia","Saint Lucia","","LC","Country",Active
+"2663","Saint Martin","Saint Martin","","MF","Country",Active
+"2666","Saint Pierre and Miquelon","Saint Pierre and Miquelon","","PM","Country",Active
+"2670","Saint Vincent and the Grenadines","Saint Vincent and the Grenadines","","VC","Country",Active
+"2674","San Marino","San Marino","","SM","Country",Active
+"2678","Sao Tome and Principe","Sao Tome and Principe","","ST","Country",Active
+"2682","Saudi Arabia","Saudi Arabia","","SA","Country",Active
+"2686","Senegal","Senegal","","SN","Country",Active
+"2688","Serbia","Serbia","","RS","Country",Active
+"2690","Seychelles","Seychelles","","SC","Country",Active
+"2694","Sierra Leone","Sierra Leone","","SL","Country",Active
+"2702","Singapore","Singapore","","SG","Country",Active
+"2703","Slovakia","Slovakia","","SK","Country",Active
+"2704","Vietnam","Vietnam","","VN","Country",Active
+"2705","Slovenia","Slovenia","","SI","Country",Active
+"2706","Somalia","Somalia","","SO","Country",Active
+"2710","South Africa","South Africa","","ZA","Country",Active
+"2716","Zimbabwe","Zimbabwe","","ZW","Country",Active
+"2724","Spain","Spain","","ES","Country",Active
+"2728","South Sudan","South Sudan","","SS","Country",Active
+"2736","Sudan","Sudan","","SD","Country",Active
+"2740","Suriname","Suriname","","SR","Country",Active
+"2748","Eswatini","Eswatini","","SZ","Country",Active
+"2752","Sweden","Sweden","","SE","Country",Active
+"2756","Switzerland","Switzerland","","CH","Country",Active
+"2760","Syria","Syria","","SY","Country",Active
+"2762","Tajikistan","Tajikistan","","TJ","Country",Active
+"2764","Thailand","Thailand","","TH","Country",Active
+"2768","Togo","Togo","","TG","Country",Active
+"2772","Tokelau","Tokelau","","TK","Country",Active
+"2776","Tonga","Tonga","","TO","Country",Active
+"2780","Trinidad and Tobago","Trinidad and Tobago","","TT","Country",Active
+"2784","United Arab Emirates","United Arab Emirates","","AE","Country",Active
+"2788","Tunisia","Tunisia","","TN","Country",Active
+"2792","Turkiye","Turkiye","","TR","Country",Active
+"2795","Turkmenistan","Turkmenistan","","TM","Country",Active
+"2798","Tuvalu","Tuvalu","","TV","Country",Active
+"2800","Uganda","Uganda","","UG","Country",Active
+"2804","Ukraine","Ukraine","","UA","Country",Active
+"2807","North Macedonia","North Macedonia","","MK","Country",Active
+"2818","Egypt","Egypt","","EG","Country",Active
+"2826","United Kingdom","United Kingdom","","GB","Country",Active
+"2831","Guernsey","Guernsey","","GG","Country",Active
+"2832","Jersey","Jersey","","JE","Country",Active
+"2833","Isle of Man","Isle of Man","","IM","Country",Active
+"2834","Tanzania","Tanzania","","TZ","Country",Active
+"2840","United States","United States","","US","Country",Active
+"2854","Burkina Faso","Burkina Faso","","BF","Country",Active
+"2858","Uruguay","Uruguay","","UY","Country",Active
+"2860","Uzbekistan","Uzbekistan","","UZ","Country",Active
+"2862","Venezuela","Venezuela","","VE","Country",Active
+"2876","Wallis and Futuna","Wallis and Futuna","","WF","Country",Active
+"2882","Samoa","Samoa","","WS","Country",Active
+"2887","Yemen","Yemen","","YE","Country",Active
+"2894","Zambia","Zambia","","ZM","Country",Active

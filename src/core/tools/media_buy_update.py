@@ -715,6 +715,67 @@ def _validate_creatives_for_assignment(
         )
 
 
+def _validated_package_budget(uow: "MediaBuyUoW", req: UpdateMediaBuyRequest, pkg_update: Any, pkg_index: int) -> float:
+    """The package's new budget amount, once the seller has checked it can take it.
+
+    Refuses BUDGET_TOO_LOW for a budget that is not positive or is under the currency's
+    minimum, and PACKAGE_NOT_FOUND for a package the buy does not hold, in that order.
+    """
+    assert uow.media_buys is not None
+    # Extract budget amount - handle both float and Budget object
+    budget_amount: float
+    currency: str
+    if isinstance(pkg_update.budget, int | float):
+        budget_amount = float(pkg_update.budget)
+        # F-07: preserve existing DB currency rather than defaulting to USD
+        _existing_mb = uow.media_buys.get_by_id(req.media_buy_id)
+        currency = str(_existing_mb.currency) if _existing_mb and _existing_mb.currency else "USD"
+    else:
+        # Budget object with .total and .currency attributes
+        budget_amount = float(pkg_update.budget.total)
+        currency = str(pkg_update.budget.currency) if pkg_update.budget.currency else "USD"
+
+    # A zero or negative budget is BUDGET_TOO_LOW, not a fall-through.
+    # This check existed only on the campaign-level path, which AdCP
+    # 3.1.1 does not define -- so removing that path took the only
+    # positivity guard with it, and `if pkg_update.budget:` skipped 0.0 as
+    # falsy, leaving a zero budget to surface later as INVALID_STATE.
+    budget_positive_err = validate_budget_positive(
+        Decimal(str(budget_amount)), field=package_field_path("budget", pkg_index)
+    )
+    if budget_positive_err:
+        raise AdCPBudgetTooLowError(field=package_field_path("budget", pkg_index))
+
+    assert uow.currency_limits is not None
+    _cl = uow.currency_limits.get_for_currency(currency)
+    if _cl and _cl.min_package_budget:
+        # `currency` is keyword-only and REQUIRED; this call omitted it.
+        # It never raised because the enclosing guard was
+        # `if pkg_update.budget:` -- truthy-only, so a 0 budget (the one
+        # value that reliably reaches the minimum check) was skipped and
+        # the broken call was unreachable. Fixing the guard to
+        # `is not None` exposed it.
+        package_min_budget_error: str | None = validate_min_package_budget(
+            package_budget=Decimal(str(budget_amount)),
+            min_package_budget=Decimal(str(_cl.min_package_budget)),
+            currency=currency,
+        )
+        raise_if_validation_failed(
+            package_min_budget_error,
+            exc_type=AdCPBudgetTooLowError,
+            requested_budget=Decimal(str(budget_amount)),
+            budget_limit=Decimal(str(_cl.min_package_budget)),
+        )
+
+    # The package must exist in the media buy before we hand the
+    # budget change to the adapter — otherwise the adapter silently
+    # no-ops (quiet failure). Checked after the budget-value
+    # validation so a malformed budget still surfaces BUDGET_TOO_LOW.
+    # Raise PACKAGE_NOT_FOUND (BR-UC-003 ext-l).
+    uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
+    return budget_amount
+
+
 def _verify_principal(
     media_buy_id: str,
     identity: "ResolvedIdentity",
@@ -1135,126 +1196,16 @@ def _update_media_buy_impl(
 
             # Handle package-level updates
             if req.packages:
-                # enumerate so a per-package rejection can name WHICH package failed:
-                # the pointer is packages[N].package_id, never packages[].package_id,
-                # which named neither the array nor an element.
+                # Every package's creatives first: they can refuse the request, and nothing has
+                # reached the ad server yet. update_media_buy.mdx (v3.2.7) § Compatibility
+                # transaction boundary: "The seller validates the complete post-update state
+                # before applying any field. Invalid inline creative bodies or creative
+                # assignments therefore fail the entire request, including otherwise-valid
+                # budget, targeting, catalog, pause, and billing changes in the same payload."
+                # This unit rolls back what it wrote; it cannot roll back the ad server. These
+                # branches write no package row, which the ad server calls below write in
+                # sessions of their own.
                 for pkg_index, pkg_update in enumerate(req.packages):
-                    # Handle paused state
-                    if pkg_update.paused is not None:
-                        # the pinned SDK+: paused=True means pause, paused=False means resume
-                        action = "pause_package" if pkg_update.paused else "resume_package"
-                        # Failure is raised by the adapter, never returned.
-                        adapter.update_media_buy(
-                            media_buy_id=req.media_buy_id,
-                            action=action,
-                            package_id=pkg_update.package_id,
-                            budget=None,
-                            today=utc_flight_start(today),
-                        )
-
-                        # This branch modified a package, so the response says which one
-                        # and in what state. It used to apply the pause through the adapter
-                        # and record NOTHING, which is the one shape the pin's
-                        # affected_packages description does not allow outside a
-                        # campaign-level update (see _affected_package). ``paused`` is
-                        # carried, not re-read: it is the value this branch just caused.
-                        record = _package_changes(changes_by_package, pkg_update.package_id)
-                        record.paused = pkg_update.paused
-
-                    # Handle budget updates
-                    if pkg_update.budget is not None:
-                        # Validate package_id is provided (required for budget updates)
-                        if not pkg_update.package_id:
-                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
-                        # Extract budget amount - handle both float and Budget object
-                        budget_amount: float
-                        currency: str
-                        if isinstance(pkg_update.budget, int | float):
-                            budget_amount = float(pkg_update.budget)
-                            # F-07: preserve existing DB currency rather than defaulting to USD
-                            _existing_mb = uow.media_buys.get_by_id(req.media_buy_id)
-                            currency = str(_existing_mb.currency) if _existing_mb and _existing_mb.currency else "USD"
-                        else:
-                            # Budget object with .total and .currency attributes
-                            budget_amount = float(pkg_update.budget.total)
-                            currency = str(pkg_update.budget.currency) if pkg_update.budget.currency else "USD"
-
-                        # A zero or negative budget is BUDGET_TOO_LOW, not a fall-through.
-                        # This check existed only on the campaign-level path, which AdCP
-                        # 3.1.1 does not define -- so removing that path took the only
-                        # positivity guard with it, and `if pkg_update.budget:` skipped 0.0 as
-                        # falsy, leaving a zero budget to surface later as INVALID_STATE.
-                        budget_positive_err = validate_budget_positive(
-                            Decimal(str(budget_amount)), field=package_field_path("budget", pkg_index)
-                        )
-                        if budget_positive_err:
-                            raise AdCPBudgetTooLowError(field=package_field_path("budget", pkg_index))
-
-                        assert uow.currency_limits is not None
-                        _cl = uow.currency_limits.get_for_currency(currency)
-                        if _cl and _cl.min_package_budget:
-                            # `currency` is keyword-only and REQUIRED; this call omitted it.
-                            # It never raised because the enclosing guard was
-                            # `if pkg_update.budget:` -- truthy-only, so a 0 budget (the one
-                            # value that reliably reaches the minimum check) was skipped and
-                            # the broken call was unreachable. Fixing the guard to
-                            # `is not None` exposed it.
-                            package_min_budget_error: str | None = validate_min_package_budget(
-                                package_budget=Decimal(str(budget_amount)),
-                                min_package_budget=Decimal(str(_cl.min_package_budget)),
-                                currency=currency,
-                            )
-                            raise_if_validation_failed(
-                                package_min_budget_error,
-                                exc_type=AdCPBudgetTooLowError,
-                                requested_budget=Decimal(str(budget_amount)),
-                                budget_limit=Decimal(str(_cl.min_package_budget)),
-                            )
-
-                        # The package must exist in the media buy before we hand the
-                        # budget change to the adapter — otherwise the adapter silently
-                        # no-ops (quiet failure). Checked after the budget-value
-                        # validation so a malformed budget still surfaces BUDGET_TOO_LOW.
-                        # Raise PACKAGE_NOT_FOUND (BR-UC-003 ext-l).
-                        uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
-
-                        # Failure is raised by the adapter, never returned.
-                        adapter.update_media_buy(
-                            media_buy_id=req.media_buy_id,
-                            action="update_package_budget",
-                            package_id=pkg_update.package_id,
-                            budget=int(budget_amount),
-                            today=utc_flight_start(today),
-                        )
-
-                        # The seller's budget column is written HERE, inside this request's
-                        # unit of work, once the ad server has accepted the change, and
-                        # nowhere else: no adapter writes media_packages.budget. It was left
-                        # to each adapter, and they disagreed: Kevel wrote nothing, GAM and
-                        # Broadstreet wrote only package_config["budget"] while get_media_buys
-                        # reads the column, and the mock wrote both in its own session. Pinned
-                        # update_media_buy.mdx (v3.2.7) makes the request "one atomic mutation"
-                        # in which no package field from a rejected update may change, and
-                        # "every mutating update increments revision": update_package_fields
-                        # writes the column and moves the revision, and both roll back with
-                        # the UoW. The UoW owns only that: the adapter call above has already
-                        # reached the ad server when a later branch refuses, and GAM and
-                        # Broadstreet still commit package_config["budget"] in their own
-                        # sessions.
-                        uow.media_buys.update_package_fields(
-                            req.media_buy_id,
-                            pkg_update.package_id,
-                            budget=Decimal(str(budget_amount)),
-                        )
-
-                        # Track budget update in affected_packages. ``budget`` is carried
-                        # (the value just applied); ``paused`` is read off the record,
-                        # because a budget change does not alter it and the literal
-                        # ``False`` that stood here reported an already-paused package as
-                        # active.
-                        record = _package_changes(changes_by_package, pkg_update.package_id)
-                        record.budget = budget_amount
-
                     # Handle creative_ids updates (AdCP v2.2.0+)
                     if pkg_update.creative_ids is not None:
                         # Validate package_id is provided
@@ -1377,6 +1328,12 @@ def _update_media_buy_impl(
 
                         # Check for sync errors
                         failed_creatives = [r for r in sync_response.creatives if r.action == "failed"]
+                        # A creative in active delivery is the buyer's to pause or replace, not an
+                        # ad server failure to retry (sync_creatives.mdx v3.2.7, best practice 6).
+                        # The creative's own refusal is raised, with the buy, package and status it named.
+                        for r in failed_creatives:
+                            if isinstance(r.cause, AdCPGoneError):
+                                raise r.cause
                         if failed_creatives:
                             raise AdCPAdapterError(
                                 # ``e.code`` rather than ``e.message``: the message is a
@@ -1573,6 +1530,151 @@ def _update_media_buy_impl(
                         # Track in affected_packages
                         _package_changes(changes_by_package, pkg_update.package_id)
 
+            # Then the flight, and every package the ad server loop below names, before anything
+            # reaches the ad server, for the transaction boundary cited above: a refusal that fires
+            # after an earlier package's pause or budget change has been sent leaves the ad server
+            # holding a change the seller refused. The dates write no package row.
+            # Handle start_time/end_time updates
+            if req.start_time is not None or req.end_time is not None:
+                # TODO: Sync date changes to GAM order
+                # Currently only updates database - does NOT sync to GAM API
+                # This creates data inconsistency between our database and GAM
+                # Need to implement: adapter.orders_manager.update_order_dates(order_id, start_time, end_time)
+
+                update_values: dict[str, Any] = {}
+                if req.start_time is not None:
+                    # Parse start_time (handle 'asap' and datetime strings)
+                    if isinstance(req.start_time, str):
+                        if req.start_time == "asap":
+                            update_values["start_time"] = datetime.now(UTC)
+                        else:
+                            update_values["start_time"] = datetime.fromisoformat(req.start_time.replace("Z", "+00:00"))
+                    elif isinstance(req.start_time, datetime):
+                        update_values["start_time"] = req.start_time
+
+                if req.end_time is not None:
+                    # Parse end_time (datetime string or datetime object)
+                    if isinstance(req.end_time, str):
+                        update_values["end_time"] = datetime.fromisoformat(req.end_time.replace("Z", "+00:00"))
+                    elif isinstance(req.end_time, datetime):
+                        update_values["end_time"] = req.end_time
+
+                if update_values:
+                    # Get existing media buy to check date range consistency
+                    existing_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id)
+
+                    # Validate date range: end_time must be after start_time
+                    # Type guard: Ensure we're working with datetime objects (not SQLAlchemy DateTime)
+                    start_val = update_values.get("start_time", existing_mb.start_time)
+                    end_val = update_values.get("end_time", existing_mb.end_time)
+
+                    # Convert to Python datetime if needed (handle SQLAlchemy DateTime)
+                    final_start_time: datetime | None = None
+                    final_end_time: datetime | None = None
+
+                    if start_val is not None:
+                        final_start_time = (
+                            start_val if isinstance(start_val, datetime) else datetime.fromisoformat(str(start_val))
+                        )
+                    if end_val is not None:
+                        final_end_time = (
+                            end_val if isinstance(end_val, datetime) else datetime.fromisoformat(str(end_val))
+                        )
+
+                    if final_start_time and final_end_time:
+                        refuse_inverted_flight(final_start_time, final_end_time)
+
+                    uow.media_buys.update_fields(req.media_buy_id, **update_values)
+                    logger.warning(
+                        f"Updated MediaBuy {req.media_buy_id} dates in database ONLY: "
+                        f"start_time={update_values.get('start_time')}, end_time={update_values.get('end_time')}"
+                    )
+                    logger.warning("GAM sync NOT implemented - GAM still has old dates")
+
+            if req.packages:
+                # A package the buy does not hold, and a budget the seller does not take.
+                budgets: dict[int, float] = {}
+                for pkg_index, pkg_update in enumerate(req.packages):
+                    if pkg_update.budget is not None:
+                        budgets[pkg_index] = _validated_package_budget(uow, req, pkg_update, pkg_index)
+                    elif (
+                        pkg_update.paused is not None
+                        or pkg_update.targeting_overlay is not None
+                        or pkg_update.pacing is not None
+                        or pkg_update.catalogs is not None
+                    ):
+                        uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
+
+                # enumerate so a per-package rejection can name WHICH package failed:
+                # the pointer is packages[N].package_id, never packages[].package_id,
+                # which named neither the array nor an element.
+                for pkg_index, pkg_update in enumerate(req.packages):
+                    # Handle paused state
+                    if pkg_update.paused is not None:
+                        # the pinned SDK+: paused=True means pause, paused=False means resume
+                        action = "pause_package" if pkg_update.paused else "resume_package"
+                        # Failure is raised by the adapter, never returned.
+                        adapter.update_media_buy(
+                            media_buy_id=req.media_buy_id,
+                            action=action,
+                            package_id=pkg_update.package_id,
+                            budget=None,
+                            today=utc_flight_start(today),
+                        )
+
+                        # This branch modified a package, so the response says which one
+                        # and in what state. It used to apply the pause through the adapter
+                        # and record NOTHING, which is the one shape the pin's
+                        # affected_packages description does not allow outside a
+                        # campaign-level update (see _affected_package). ``paused`` is
+                        # carried, not re-read: it is the value this branch just caused.
+                        record = _package_changes(changes_by_package, pkg_update.package_id)
+                        record.paused = pkg_update.paused
+
+                    # Handle budget updates
+                    if pkg_update.budget is not None:
+                        # Validate package_id is provided (required for budget updates)
+                        if not pkg_update.package_id:
+                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
+                        budget_amount = budgets[pkg_index]
+
+                        # Failure is raised by the adapter, never returned.
+                        adapter.update_media_buy(
+                            media_buy_id=req.media_buy_id,
+                            action="update_package_budget",
+                            package_id=pkg_update.package_id,
+                            budget=int(budget_amount),
+                            today=utc_flight_start(today),
+                        )
+
+                        # The seller's budget column is written HERE, inside this request's
+                        # unit of work, once the ad server has accepted the change, and
+                        # nowhere else: no adapter writes media_packages.budget. It was left
+                        # to each adapter, and they disagreed: Kevel wrote nothing, GAM and
+                        # Broadstreet wrote only package_config["budget"] while get_media_buys
+                        # reads the column, and the mock wrote both in its own session. Pinned
+                        # update_media_buy.mdx (v3.2.7) makes the request "one atomic mutation"
+                        # in which no package field from a rejected update may change, and
+                        # "every mutating update increments revision": update_package_fields
+                        # writes the column and moves the revision, and both roll back with
+                        # the UoW. The UoW owns only that: the adapter call above has already
+                        # reached the ad server when a later branch refuses, and GAM and
+                        # Broadstreet still commit package_config["budget"] in their own
+                        # sessions.
+                        uow.media_buys.update_package_fields(
+                            req.media_buy_id,
+                            pkg_update.package_id,
+                            budget=Decimal(str(budget_amount)),
+                        )
+
+                        # Track budget update in affected_packages. ``budget`` is carried
+                        # (the value just applied); ``paused`` is read off the record,
+                        # because a budget change does not alter it and the literal
+                        # ``False`` that stood here reported an already-paused package as
+                        # active.
+                        record = _package_changes(changes_by_package, pkg_update.package_id)
+                        record.budget = budget_amount
+
                     # Handle targeting_overlay updates
                     if pkg_update.targeting_overlay is not None:
                         # Validate package_id is provided
@@ -1651,63 +1753,6 @@ def _update_media_buy_impl(
             # and persisting req.budget, then marking every package affected -- had no way to
             # be reached by a conformant buyer. Package budgets are handled above, per
             # package, where the spec puts them (package-update.json /properties/budget).
-            # Handle start_time/end_time updates
-            if req.start_time is not None or req.end_time is not None:
-                # TODO: Sync date changes to GAM order
-                # Currently only updates database - does NOT sync to GAM API
-                # This creates data inconsistency between our database and GAM
-                # Need to implement: adapter.orders_manager.update_order_dates(order_id, start_time, end_time)
-
-                update_values: dict[str, Any] = {}
-                if req.start_time is not None:
-                    # Parse start_time (handle 'asap' and datetime strings)
-                    if isinstance(req.start_time, str):
-                        if req.start_time == "asap":
-                            update_values["start_time"] = datetime.now(UTC)
-                        else:
-                            update_values["start_time"] = datetime.fromisoformat(req.start_time.replace("Z", "+00:00"))
-                    elif isinstance(req.start_time, datetime):
-                        update_values["start_time"] = req.start_time
-
-                if req.end_time is not None:
-                    # Parse end_time (datetime string or datetime object)
-                    if isinstance(req.end_time, str):
-                        update_values["end_time"] = datetime.fromisoformat(req.end_time.replace("Z", "+00:00"))
-                    elif isinstance(req.end_time, datetime):
-                        update_values["end_time"] = req.end_time
-
-                if update_values:
-                    # Get existing media buy to check date range consistency
-                    existing_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id)
-
-                    # Validate date range: end_time must be after start_time
-                    # Type guard: Ensure we're working with datetime objects (not SQLAlchemy DateTime)
-                    start_val = update_values.get("start_time", existing_mb.start_time)
-                    end_val = update_values.get("end_time", existing_mb.end_time)
-
-                    # Convert to Python datetime if needed (handle SQLAlchemy DateTime)
-                    final_start_time: datetime | None = None
-                    final_end_time: datetime | None = None
-
-                    if start_val is not None:
-                        final_start_time = (
-                            start_val if isinstance(start_val, datetime) else datetime.fromisoformat(str(start_val))
-                        )
-                    if end_val is not None:
-                        final_end_time = (
-                            end_val if isinstance(end_val, datetime) else datetime.fromisoformat(str(end_val))
-                        )
-
-                    if final_start_time and final_end_time:
-                        refuse_inverted_flight(final_start_time, final_end_time)
-
-                    uow.media_buys.update_fields(req.media_buy_id, **update_values)
-                    logger.warning(
-                        f"Updated MediaBuy {req.media_buy_id} dates in database ONLY: "
-                        f"start_time={update_values.get('start_time')}, end_time={update_values.get('end_time')}"
-                    )
-                    logger.warning("GAM sync NOT implemented - GAM still has old dates")
-
             # Campaign-level pause/resume, applied LAST so every package and date change in
             # the same request is validated and applied first. update_media_buy.mdx
             # § Compatibility transaction boundary: "One update_media_buy request is one

@@ -115,7 +115,7 @@ class TestGAMValidationIntegration:
             "format": "display_970x250",
             "media_url": "https://example.com/creative.html",
             "click_url": "https://example.com/landing",
-            "package_assignments": ["test_package"],
+            "package_assignments": [{"package_id": "test_package", "weight": 100, "platform_line_item_id": "1001"}],
         }
 
         # Check that it's detected as HTML5
@@ -145,7 +145,7 @@ class TestGAMValidationIntegration:
             "media_url": "https://example.com/creative.zip",
             "click_url": "https://example.com/landing",
             "backup_image_url": "https://example.com/backup.jpg",
-            "package_assignments": ["test_package"],
+            "package_assignments": [{"package_id": "test_package", "weight": 100, "platform_line_item_id": "1001"}],
         }
 
         # Should be detected as HTML5
@@ -180,7 +180,7 @@ class TestGAMValidationIntegration:
             "format": "display_970x250",
             "media_url": "https://example.com/creative.html",
             "click_url": "https://example.com/landing",
-            "package_assignments": ["test_package"],
+            "package_assignments": [{"package_id": "test_package", "weight": 100, "platform_line_item_id": "1001"}],
         }
 
         with patch.object(adapter, "_validate_creative_for_gam", return_value=[]):
@@ -248,7 +248,7 @@ class TestGAMValidationIntegration:
             "url": "http://example.com/banner.jpg",  # HTTP not allowed
             "width": 2000,  # Too wide
             "height": 90,
-            "package_assignments": ["mock_package"],  # Assign to mock package
+            "package_assignments": [{"package_id": "mock_package", "weight": 100, "platform_line_item_id": "1001"}],
         }
 
         adapter = _build_adapter()

@@ -7,11 +7,7 @@ import logging
 
 import pytest
 
-from src.adapters.gam.managers.creatives import (
-    GAMCreativesManager,
-    _extract_package_info,
-    _get_package_ids,
-)
+from src.adapters.gam.managers.creatives import GAMCreativesManager, _line_item_weights
 
 
 @pytest.fixture(autouse=True)
@@ -21,82 +17,30 @@ def capture_gam_logs(caplog):
 
 
 class TestPackageInfoExtraction:
-    """Test helper functions for extracting package info from adapter input.
+    """The (line item id, weight) pairs the adapter reads off an asset's package assignments.
 
-    The adapter receives package_assignments in one of two formats:
-    - String format: ["pkg_id1", "pkg_id2"] - weights default to 100
-    - Dict format: [{"package_id": "...", "weight": N}] - explicit weights
-
-    Both formats are internal to the adapter interface, not AdCP spec formats.
-    AdCP uses CreativeAssignment for weights in update_media_buy.
+    The line item id is the package's ``platform_line_item_id`` -- the seller's own
+    package -> line item mapping -- never anything derived from the package id.
     """
 
-    def test_string_format_defaults_weight(self):
-        """String-only format defaults weight to 100."""
-        assignments = ["pkg_prod_abc_123_1", "pkg_prod_def_456_2"]
-        result = _extract_package_info(assignments)
-
-        assert result == [
-            ("pkg_prod_abc_123_1", 100),  # Default weight
-            ("pkg_prod_def_456_2", 100),
-        ]
-
     def test_dict_format_with_weights(self):
-        """Dict format with explicit weights."""
+        """Explicit weights ride with each package's line item."""
         assignments = [
-            {"package_id": "pkg_prod_abc_123_1", "weight": 70},
-            {"package_id": "pkg_prod_def_456_2", "weight": 30},
+            {"package_id": "pkg_a_1", "weight": 70, "platform_line_item_id": "111"},
+            {"package_id": "pkg_b_2", "weight": 30, "platform_line_item_id": "222"},
         ]
-        result = _extract_package_info(assignments)
 
-        assert result == [
-            ("pkg_prod_abc_123_1", 70),
-            ("pkg_prod_def_456_2", 30),
-        ]
+        assert _line_item_weights(assignments) == [("111", 70), ("222", 30)]
 
     def test_dict_format_missing_weight_defaults(self):
-        """Dict format with missing weight defaults to 100."""
-        assignments = [
-            {"package_id": "pkg_prod_abc_123_1"},  # No weight
-            {"package_id": "pkg_prod_def_456_2", "weight": 50},
-        ]
-        result = _extract_package_info(assignments)
+        """A missing weight defaults to 100."""
+        assignments = [{"package_id": "pkg_a_1", "platform_line_item_id": "111"}]
 
-        assert result == [
-            ("pkg_prod_abc_123_1", 100),  # Default
-            ("pkg_prod_def_456_2", 50),
-        ]
+        assert _line_item_weights(assignments) == [("111", 100)]
 
     def test_empty_assignments(self):
         """Empty list returns empty result."""
-        assert _extract_package_info([]) == []
-
-    def test_mixed_formats_handles_gracefully(self):
-        """Mixed formats are unusual but handled gracefully."""
-        # In practice all assignments should be same format
-        assignments = [
-            "pkg_prod_string_1",
-            {"package_id": "pkg_prod_dict_2", "weight": 60},
-        ]
-        result = _extract_package_info(assignments)
-
-        assert result == [
-            ("pkg_prod_string_1", 100),
-            ("pkg_prod_dict_2", 60),
-        ]
-
-    def test_get_package_ids_extracts_only_ids(self):
-        """_get_package_ids should return just the IDs, ignoring weights."""
-        assignments = [
-            {"package_id": "pkg1", "weight": 70},
-            {"package_id": "pkg2", "weight": 30},
-        ]
-        assert _get_package_ids(assignments) == ["pkg1", "pkg2"]
-
-    def test_get_package_ids_string_format(self):
-        """_get_package_ids works with string format."""
-        assignments = ["pkg1", "pkg2", "pkg3"]
-        assert _get_package_ids(assignments) == ["pkg1", "pkg2", "pkg3"]
+        assert _line_item_weights([]) == []
 
 
 class TestCreativeRotationLogic:
@@ -155,16 +99,17 @@ class TestCreativeRotationLogic:
         assets = [
             {
                 "creative_id": f"cr_{index}",
-                "package_assignments": [{"package_id": "pkg_prod_abc_123_1", "weight": weight}],
+                "package_assignments": [
+                    {"package_id": "pkg_abc_1", "weight": weight, "platform_line_item_id": "5551234"}
+                ],
             }
             for index, weight in enumerate(weights)
         ]
-        line_item_map = {"Campaign - prod_abc": "5551234"}
         line_item = {"id": "5551234", "creativeRotationType": "EVEN"}
         line_item_service = mocker.MagicMock()
         line_item_service.getLineItemsByStatement.return_value = mocker.MagicMock(results=[line_item])
 
-        creatives_manager._update_line_items_for_weighted_creatives(assets, line_item_map, line_item_service)
+        creatives_manager._update_line_items_for_weighted_creatives(assets, line_item_service)
 
         if expect_manual:
             line_item_service.updateLineItems.assert_called_once_with(
@@ -210,16 +155,13 @@ class TestLICACreationActualPayload:
         asset = {
             "creative_id": "cr_1",
             "package_assignments": [
-                {"package_id": "pkg_prod_abc_123_1", "weight": 70},
+                {"package_id": "pkg_abc_1", "weight": 70, "platform_line_item_id": "li_123"},
             ],
         }
-
-        line_item_map = {"Campaign - prod_abc": "li_123"}
 
         creatives_manager_non_dry_run._associate_creative_with_line_items(
             gam_creative_id="gam_cr_999",
             asset=asset,
-            line_item_map=line_item_map,
             lica_service=mock_lica_service,
         )
 
@@ -238,16 +180,13 @@ class TestLICACreationActualPayload:
         asset = {
             "creative_id": "cr_1",
             "package_assignments": [
-                {"package_id": "pkg_prod_abc_123_1", "weight": 100},
+                {"package_id": "pkg_abc_1", "weight": 100, "platform_line_item_id": "li_123"},
             ],
         }
-
-        line_item_map = {"Campaign - prod_abc": "li_123"}
 
         creatives_manager_non_dry_run._associate_creative_with_line_items(
             gam_creative_id="gam_cr_999",
             asset=asset,
-            line_item_map=line_item_map,
             lica_service=mock_lica_service,
         )
 
@@ -261,43 +200,3 @@ class TestLICACreationActualPayload:
         assert association["lineItemId"] == "li_123"
         # Weight should NOT be included for default value
         assert "manualCreativeRotationWeight" not in association
-
-
-class TestBackwardCompatibility:
-    """Ensure backward compatibility with legacy formats."""
-
-    @pytest.fixture
-    def mock_client_manager(self, mocker):
-        """Create a mock GAM client manager."""
-        client_manager = mocker.MagicMock()
-        return client_manager
-
-    @pytest.fixture
-    def creatives_manager(self, mock_client_manager):
-        """Create a GAMCreativesManager instance for testing."""
-        return GAMCreativesManager(
-            client_manager=mock_client_manager,
-            advertiser_id="12345",
-        )
-
-    def test_string_assignments_work(self, creatives_manager, mocker):
-        """String format still associates, at the default weight (so no weight field)."""
-        asset = {
-            "creative_id": "cr_1",
-            # String format: just package IDs
-            "package_assignments": ["pkg_prod_abc_123_1"],
-        }
-
-        line_item_map = {"Campaign - prod_abc": "li_123"}
-        lica_service = mocker.MagicMock()
-
-        creatives_manager._associate_creative_with_line_items(
-            gam_creative_id="gam_cr_999",
-            asset=asset,
-            line_item_map=line_item_map,
-            lica_service=lica_service,
-        )
-
-        lica_service.createLineItemCreativeAssociations.assert_called_once_with(
-            [{"creativeId": "gam_cr_999", "lineItemId": "li_123"}]
-        )

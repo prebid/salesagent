@@ -522,19 +522,16 @@ def given_request_no_updatable_fields(ctx: dict) -> None:
     kwargs["media_buy_id"] = media_buy_id
 
 
-@given(parsers.parse("the request includes 1 package update with:"))
-def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> None:
-    """Add a package update to the request from a data table."""
-    import json
-
-    # product_id is intentionally accepted here so the immutable-field override
-    # reaches production. AdCPPackageUpdate forbids it (extra=forbid), so it is
-    # rejected — currently as VALIDATION_ERROR rather than the spec-expected
-    # INVALID_REQUEST (BR-RULE-198), so T-UC-003-ext-w is xfailed (#1417).
-    # canceled and start_time are package-update.json properties (adcp v3.2.7), sent as
-    # written: start_time's literal "asap" is the value the package-scope row exists to
-    # show refused (``not: {const: asap}``), so it is not resolved as a date token.
-    _supported_pkg_fields = {
+#: The package-update.json members a scenario table may set on one package.
+#: product_id is intentionally accepted so the immutable-field override reaches production.
+#: AdCPPackageUpdate forbids it (extra=forbid), so it is rejected -- currently as
+#: VALIDATION_ERROR rather than the spec-expected INVALID_REQUEST (BR-RULE-198), so
+#: T-UC-003-ext-w is xfailed (#1417). canceled and start_time are package-update.json
+#: properties (adcp v3.2.7), sent as written: start_time's literal "asap" is the value the
+#: package-scope row exists to show refused (``not: {const: asap}``), so it is not resolved
+#: as a date token.
+_SUPPORTED_PACKAGE_FIELDS = frozenset(
+    {
         "package_id",
         "budget",
         "paused",
@@ -543,30 +540,54 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
         "product_id",
         "canceled",
         "start_time",
+        "pacing",
     }
+)
+
+
+def _set_package_field(pkg_update: dict[str, Any], field: str, value: str) -> None:
+    """Set one package-update member from a scenario table cell, as a buyer would send it."""
+    import json
+
+    assert field in _SUPPORTED_PACKAGE_FIELDS, (
+        f"Unrecognized package field '{field}' in datatable — "
+        f"supported: {sorted(_SUPPORTED_PACKAGE_FIELDS)}. "
+        f"Add handling for '{field}' if it's a valid package update field."
+    )
+    if field == "budget":
+        pkg_update["budget"] = float(value)
+    elif field in ("paused", "canceled"):
+        pkg_update[field] = as_bool(value)
+    elif field in ("targeting_overlay", "catalogs"):
+        pkg_update[field] = json.loads(value)
+    else:
+        pkg_update[field] = value
+
+
+@given(parsers.parse("the request includes 1 package update with:"))
+def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> None:
+    """Add a package update to the request from a data table."""
     kwargs = _ensure_update_defaults(ctx)
     pkg_update: dict[str, Any] = {}
     # Skip header row if present (pytest-bdd datatables include header as first row)
-    rows = drop_header_if(datatable, "field")
-    for row in rows:
-        field, value = row[0].strip(), row[1].strip()
-        assert field in _supported_pkg_fields, (
-            f"Unrecognized package field '{field}' in datatable — "
-            f"supported: {sorted(_supported_pkg_fields)}. "
-            f"Add handling for '{field}' if it's a valid package update field."
-        )
-        if field == "package_id":
-            pkg_update["package_id"] = value
-        elif field == "budget":
-            pkg_update["budget"] = float(value)
-        elif field in ("paused", "canceled"):
-            pkg_update[field] = as_bool(value)
-        elif field in ("targeting_overlay", "catalogs"):
-            pkg_update[field] = json.loads(value)
-        elif field in ("product_id", "start_time"):
-            pkg_update[field] = value
+    for row in drop_header_if(datatable, "field"):
+        _set_package_field(pkg_update, row[0].strip(), row[1].strip())
     assert pkg_update, "Datatable produced empty package update — check table format"
     kwargs["packages"] = [pkg_update]
+
+
+@given("the request updates these packages, in order:")
+def given_package_updates_in_order(ctx: dict, datatable: list[list[str]]) -> None:
+    """Replace the request's packages with one update per package_id, members in table order.
+
+    Columns: ``package_id | field | value``; consecutive rows of one package_id build one update.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    packages: dict[str, dict[str, Any]] = {}
+    for row in drop_header_if(datatable, "package_id"):
+        package_id, field, value = (cell.strip() for cell in row)
+        _set_package_field(packages.setdefault(package_id, {"package_id": package_id}), field, value)
+    kwargs["packages"] = list(packages.values())
 
 
 @given(parsers.parse('the package "{package_id}" exists in the media buy'))
@@ -1547,7 +1568,7 @@ def then_old_assignments_removed(ctx: dict, old_ids: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _inline_creative_payload(creative_id: str, name: str) -> dict[str, Any]:
+def _inline_creative_payload(creative_id: str, name: str, media_url: str | None = None) -> dict[str, Any]:
     """One valid inline display creative, as a package update's ``creatives`` item carries it.
 
     The ``asset_type`` discriminator comes from ``image_spec``: a hand-built asset map
@@ -1560,7 +1581,9 @@ def _inline_creative_payload(creative_id: str, name: str) -> dict[str, Any]:
         creative_id=creative_id,
         name=name,
         format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-        assets=named_format_assets("display_300x250_image", media_url=f"https://example.com/{creative_id}.png"),
+        assets=named_format_assets(
+            "display_300x250_image", media_url=media_url or f"https://example.com/{creative_id}.png"
+        ),
     )
 
 
@@ -1609,6 +1632,34 @@ def given_earlier_inline_creative(ctx: dict, package_id: str, creative_id: str) 
     """The package's prior creative arrived inline, as in the pin's storyboard
     (inline_creatives_without_sync: an inline creative, then a replacement inline update)."""
     _send_earlier_update(ctx, package_id, creatives=[_inline_creative_payload(creative_id, "Earlier inline creative")])
+
+
+@given(parsers.parse('the package update sends inline creative "{creative_id}" showing "{media_url}"'))
+def given_package_update_inline_creative_showing(ctx: dict, creative_id: str, media_url: str) -> None:
+    """The first package update carries this one inline creative, with this image."""
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["packages"][0]["creatives"] = [_inline_creative_payload(creative_id, "Inline Creative", media_url)]
+
+
+@then(
+    parsers.parse(
+        'the refusal is INVALID_STATE for creative "{creative_id}" on package "{package}" '
+        'of media buy "{label}" in status "{status}"'
+    )
+)
+def then_refusal_names_the_delivering_package(
+    ctx: dict, creative_id: str, package: str, label: str, status: str
+) -> None:
+    """The wire error is INVALID_STATE, and its details name the creative, the buy, the package and its status."""
+    ctx["result"].assert_wire_error(
+        "INVALID_STATE",
+        details={
+            "creative_id": creative_id,
+            "media_buy_id": _resolve_media_buy_id(ctx, label),
+            "package_id": _resolve_package_id(ctx, package),
+            "current_status": status,
+        },
+    )
 
 
 @given(parsers.parse('an earlier update gave package "{package_id}" the targeting_overlay {overlay}'))
@@ -1913,7 +1964,8 @@ def given_negative_keywords_remove_param(ctx: dict, nk_value: str) -> None:
 def given_targeting_overlay(ctx: dict, overlay_value: str) -> None:
     """Set the full targeting_overlay on the first package update.
 
-    Accepts a JSON object or '<not provided>' (omit the field).
+    Accepts a JSON object or '<not provided>' (omit the field). The create request's
+    overlay is ``the package targeting_overlay is {...}`` (given_media_buy.py).
     """
     import json
 

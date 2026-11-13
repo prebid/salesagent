@@ -79,6 +79,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_v31_request",
     "tests.bdd.steps.domain.uc002_v31_proposal_targeting",
     "tests.bdd.steps.domain.uc002_invariants",
+    "tests.bdd.steps.domain.gam_seller",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc003_storyboard_generic_client",
@@ -5536,6 +5537,10 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-v31-request-signing-migrated-digest",
             "T-UC-010-v31-request-signing-subset",
             "T-UC-010-v31-webhook-signing",
+            # Batch 17 — a GAM seller declares only the geo targeting it books
+            # (local-uc010-declaration-backing.feature): the real GoogleAdManager class
+            # answers get_targeting_capabilities.
+            "T-UC-010-local-gam-postal",
         }
     )
     return _UC010_WIRED_TAGS
@@ -6264,6 +6269,18 @@ def _seed_media_buy_chain_create_dispatch(ctx: dict, env: object) -> None:
     ctx["dispatch_mode"] = "create"
 
 
+def _seed_buy_readback(ctx: dict, env: object) -> None:
+    """The create chain on a seller whose adapter is production's, on every transport.
+
+    The read-back scenarios grade what a real adapter's create leaves behind, so the
+    in-process transports run the tenant's own adapter as the live server does: the Mock
+    adapter (whose creative upload is #2420), or ``GoogleAdManager`` once a Given makes the
+    tenant a GAM seller.
+    """
+    _seed_media_buy_chain_create_dispatch(ctx, env)
+    env.sell_through_tenant_adapter()
+
+
 def _seed_media_buy_chain_full_create(ctx: dict, env: object) -> None:
     """The chain, plus the manual-approval full-create flag (PR #1567)."""
     _seed_media_buy_chain(ctx, env)
@@ -6631,6 +6648,9 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-local-assignment-only-existing-creative",
         "T-UC-006-local-failed-creative-assignment",
         "T-UC-006-local-dryrun-parity",
+        # delete_missing and active delivery: plain syncs CreativeSyncEnv serves on every transport.
+        "T-UC-006-local-delete-missing-active-delivery",
+        "T-UC-006-local-delete-missing-not-delivering",
         # The format/validation error paths, corrected to the pinned enum (INVALID_REQUEST
         # for schema violations at the request, REFERENCE_NOT_FOUND / VALIDATION_ERROR on
         # the creative's entry, SERVICE_UNAVAILABLE for an agent that does not answer) and
@@ -6782,6 +6802,17 @@ ENV_ROUTES: list[EnvRoute] = [
         when=lambda m: "ctxecho-packages" in m,
         env_builder=_build_media_buy_create_list_env,
         seed=_seed_media_buy_chain,
+    ),
+    # A real create through the scenario's transport, then a read of that buy on the same
+    # env and identity: the initial status (get_media_buys) and a GAM buy's packages
+    # (get_media_buy_delivery). A factory-seeded buy cannot stand in, because it carries its
+    # package ids in raw_request and so cannot show what create persisted. Unscoped and
+    # ahead of the UC rows, so neither uc002-not-wired nor uc004-poll claims these tags.
+    EnvRoute(
+        tag="local-buy-readback",
+        when=lambda m: any(t.startswith(("T-UC-002-local-initial-status-", "T-UC-004-local-gam-readback-")) for t in m),
+        env_builder=_build_media_buy_create_list_env,
+        seed=_seed_buy_readback,
     ),
     # ── @tenantid (local tenant-identification-routes feature) ──────────────
     # An UNSCOPED `when` row for the same reason as the rows above and below: the
@@ -7220,6 +7251,11 @@ ENV_ROUTES: list[EnvRoute] = [
                 # the record is with the _UC002_VALIDATION_XFAIL block.
                 or "T-UC-002-partition-creative-asset" in m
                 or "T-UC-002-boundary-creative-asset" in m
+                # Every scenario of local-gam-seller.feature needs exactly this row: the
+                # create chain, and dispatch_mode="create" so the shared When dispatches the
+                # request the Givens built. The row claims that feature's tag prefix once, so
+                # a new GAM scenario joins it without editing this predicate.
+                or any(t.startswith("T-UC-002-local-gam-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
@@ -7408,6 +7444,11 @@ ENV_ROUTES: list[EnvRoute] = [
                 # Plus the scenarios named one by one, because the family tags do not
                 # partition along the wired boundary -- see _UC006_WIRED_SCENARIOS.
                 or bool(m & _UC006_WIRED_SCENARIOS)
+                # Every scenario of local-uc006-gam-assignment-trafficking.feature needs
+                # exactly this row: the sync chain on the tenant's own adapter. The row claims
+                # that feature's tag prefix once, so a new scenario joins it without editing
+                # this predicate.
+                or any(t.startswith("T-UC-006-local-gam-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),

@@ -13,7 +13,11 @@ Eliminates the 7-line boilerplate repeated 49 times in test_delivery_behavioral.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
+from typing import Any
 from unittest.mock import MagicMock
+
+from tests.factories.media_buy import package_rows_for
 
 
 def wire_effect_boundary(repo: MagicMock, *, preview: bool = False) -> None:
@@ -89,3 +93,28 @@ def make_mock_uow(
     mock_uow_cls = MagicMock(return_value=mock_uow)
 
     return mock_uow_cls, mock_uow
+
+
+def serve_package_rows(repo: MagicMock, rows_by_buy: Mapping[str, list[Any]]) -> None:
+    """Answer the mocked repo's ``get_packages_for_ids`` with *rows_by_buy*, for the buys asked for.
+
+    A buy's rows are its packages. Left unset, the mock hands back a ``MagicMock``, which
+    the delivery service reads as a buy with no packages only by accident. *rows_by_buy* is
+    read at call time, so rows registered after this call are served too.
+    """
+    repo.get_packages_for_ids.side_effect = lambda ids: {i: rows_by_buy[i] for i in ids if i in rows_by_buy}
+
+
+def delivery_mock_uow(target_buys: Iterable[tuple[str, Any]]) -> MagicMock:
+    """A mocked ``MediaBuyUoW`` for the delivery service over ``(media_buy_id, buy)`` pairs.
+
+    Its repository serves, for each buy, the package rows the buy's stored request names
+    (``package_rows_for``), each carrying the terms create stores with it. A buy whose
+    request names no package is served no rows.
+    """
+    _, mock_uow = make_mock_uow()
+    serve_package_rows(
+        mock_uow.media_buys,
+        {mb_id: package_rows_for(mb_id, (buy.raw_request or {}).get("packages", [])) for mb_id, buy in target_buys},
+    )
+    return mock_uow

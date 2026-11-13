@@ -146,8 +146,6 @@ class TestRawFaultIsClassified:
             manager.create_order(
                 order_name="test-order",
                 total_budget=5000.0,
-                start_time=datetime.now(UTC) + timedelta(days=1),
-                end_time=datetime.now(UTC) + timedelta(days=8),
             )
 
 
