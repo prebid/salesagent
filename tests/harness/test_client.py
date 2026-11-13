@@ -516,7 +516,7 @@ class TestClientE2eMcpHttpRefusals:
             b"not json",
             {"detail": "unauthorized"},
             {"result": {"isError": False}},
-            {"result": {"isError": True, "content": [{"type": "text", "text": "('AUTH_MISSING', 'no token')"}]}},
+            b"('AUTH_MISSING', 'no token')",
         ],
     )
     def test_http_status_alone_never_becomes_an_adcp_error(self, monkeypatch, body):
@@ -524,6 +524,23 @@ class TestClientE2eMcpHttpRefusals:
 
         assert result.raw_response.status_code == 401
         assert result.wire_error_envelope is None
+
+    def test_legacy_tuple_in_an_mcp_error_frame_uses_the_shared_parser(self, monkeypatch):
+        result = self._dispatch(
+            monkeypatch,
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {"isError": True, "content": [{"type": "text", "text": "('AUTH_MISSING', 'no token')"}]},
+            },
+        )
+        assert result.is_error is True
+        assert result.wire_error_envelope == {
+            "adcp_error": {"code": "AUTH_MISSING"},
+            "errors": [{"code": "AUTH_MISSING"}],
+        }
+        assert result.raw_response.status_code == 401
+        assert result.raw_response.headers["www-authenticate"] == "Bearer"
 
     @staticmethod
     def _dispatch(monkeypatch, refusal):

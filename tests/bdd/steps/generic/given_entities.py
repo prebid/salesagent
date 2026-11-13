@@ -42,6 +42,7 @@ def given_seller_operational(ctx: dict) -> None:
     )
 
 
+@given("a tenant exists with completed setup checklist")
 @given("a tenant is resolvable from the request context")
 def given_tenant_resolvable(ctx: dict) -> None:
     """Seed the seller, so the sentence is true.
@@ -58,14 +59,7 @@ def given_tenant_resolvable(ctx: dict) -> None:
     ``env.credential()`` addresses — rather than the ctx string, which is what makes the
     request resolve.
     """
-    tenant, _principal = ctx["env"].setup_default_data()
-    ctx.setdefault("tenant_id", tenant.tenant_id)
-
-
-@given("a tenant exists with completed setup checklist")
-def given_tenant_setup_complete(ctx: dict) -> None:
-    """Tenant has completed all setup steps (Background)."""
-    ctx.setdefault("tenant_id", "test_tenant")
+    ctx["env"].setup_default_data()
 
 
 @given(parsers.parse('the principal "{principal_id}" exists in the tenant database'))

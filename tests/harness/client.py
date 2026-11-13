@@ -322,17 +322,22 @@ def _deliver_e2e_mcp(
 
         from tests.harness._base import WireRefusal, _mcp_jsonrpc_result
 
-        if refusals:
-            response = refusals[-1]
-            _mcp_jsonrpc_result(response)
+        response = (
+            refusals[-1]
+            if refusals
+            else exc.response
+            if isinstance(exc, httpx.HTTPStatusError | httpx2.HTTPStatusError)
+            else None
+        )
+        if response is not None:
+            try:
+                _mcp_jsonrpc_result(response)
+            except (httpx.ResponseNotRead, httpx2.ResponseNotRead):
+                pass
             raise WireRefusal(f"MCP HTTP {response.status_code} without an AdCP error envelope", response) from exc
-
-        response = exc.response if isinstance(exc, httpx.HTTPStatusError | httpx2.HTTPStatusError) else None
-        wire_error = _mcp_wire_error(exc, response)
+        wire_error = _mcp_wire_error(exc)
         if wire_error is not exc:
             raise wire_error from exc
-        if response is not None:
-            raise WireRefusal(str(exc), response) from exc
         raise
 
 

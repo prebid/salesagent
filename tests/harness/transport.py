@@ -209,14 +209,10 @@ class E2EConfig:
 
         base_url = os.environ.get("E2E_BASE_URL")
         postgres_url = os.environ.get("E2E_POSTGRES_URL")
-        sales_port = os.environ.get("ADCP_SALES_PORT")
-        pg_port = os.environ.get("POSTGRES_PORT")
-        if not base_url and not sales_port:
+        if not base_url:
             return None
-        base_url = base_url or f"http://localhost:{sales_port}"
-        postgres_url = (
-            postgres_url or f"postgresql://adcp_user:secure_password_change_me@localhost:{pg_port or '5435'}/adcp"
-        )
+        if not postgres_url:
+            raise RuntimeError("The configured E2E stack requires E2E_POSTGRES_URL")
         ca_bundle = os.environ.get("E2E_CA_BUNDLE")
         tls_base_url = os.environ.get("E2E_TLS_BASE_URL")
         worker = os.environ.get("PYTEST_XDIST_WORKER", "")

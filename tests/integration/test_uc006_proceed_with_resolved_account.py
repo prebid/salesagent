@@ -12,6 +12,7 @@ This test pins the corrected behavior: when the persisted creative is scoped to
 a DIFFERENT principal than the resolved one, the step MUST fail. The resolved
 principal reaches the step as ``ctx["principal_id"]``, the key the Given steps
 write; there is no identity object in ctx for it to fall back to.
+The harness seeds and owns the tenant and authenticated principal used by both tests.
 
 """
 
@@ -22,7 +23,7 @@ import pytest
 from src.core.schemas import SyncCreativesResponse
 from src.core.schemas.creative import SyncCreativeResult
 from tests.bdd.steps.domain.uc006_sync_creatives import then_proceed_with_resolved_account
-from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
+from tests.factories import CreativeFactory, PrincipalFactory
 from tests.harness import CreativeSyncEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -37,8 +38,7 @@ def test_step_fails_when_creative_scoped_to_wrong_principal(integration_db):
     principal.
     """
     with CreativeSyncEnv() as env:
-        tenant = TenantFactory()
-        expected = PrincipalFactory(tenant=tenant)
+        tenant, expected = env.setup_default_data()
         wrong = PrincipalFactory(tenant=tenant)
         CreativeFactory(tenant=tenant, principal=wrong, creative_id="cr1")
 
@@ -51,7 +51,6 @@ def test_step_fails_when_creative_scoped_to_wrong_principal(integration_db):
             "self_dispatched_response": resp,
             "creatives": [{"creative_id": "cr1"}],
             "principal_id": expected.principal_id,
-            "tenant_id": tenant.tenant_id,
         }
 
         with pytest.raises(AssertionError, match="principal"):
@@ -64,8 +63,7 @@ def test_step_passes_when_creative_scoped_to_resolved_principal(integration_db):
     Guards against over-correction: the fix must still accept the legitimate case.
     """
     with CreativeSyncEnv() as env:
-        tenant = TenantFactory()
-        resolved = PrincipalFactory(tenant=tenant)
+        tenant, resolved = env.setup_default_data()
         CreativeFactory(tenant=tenant, principal=resolved, creative_id="cr1")
 
         resp = SyncCreativesResponse(creatives=[SyncCreativeResult(creative_id="cr1", action="created")])
@@ -77,7 +75,6 @@ def test_step_passes_when_creative_scoped_to_resolved_principal(integration_db):
             "self_dispatched_response": resp,
             "creatives": [{"creative_id": "cr1"}],
             "principal_id": resolved.principal_id,
-            "tenant_id": tenant.tenant_id,
         }
 
         # Must not raise — account resolution scoped the creative correctly.

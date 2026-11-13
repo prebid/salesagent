@@ -4037,11 +4037,11 @@ def _ensure_media_buy_in_db(
 
     from datetime import date as _date
 
-    from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+    from tests.factories import MediaBuyFactory, PrincipalFactory
 
     # Ensure tenant exists
     if "db_tenant" not in ctx:
-        ctx["db_tenant"] = TenantFactory(tenant_id=ctx.get("tenant_id", "test_tenant"))
+        ctx["db_tenant"] = env.ensure_tenant()
 
     # Ensure principal exists
     principal_key = f"db_principal_{owner}"

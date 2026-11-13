@@ -2,6 +2,7 @@
 
 import pytest
 
+from tests.e2e.conftest import e2e_ca_bundle
 from tests.factories import PricingOptionFactory, ProductFactory
 from tests.harness.account_list import AccountListEnv
 from tests.harness.client import AdCPTestClient
@@ -10,12 +11,14 @@ from tests.harness.transport import E2EConfig, Transport
 from tests.helpers.transport_parity import _assert_error_equivalent, _assert_success_equivalent
 
 
-@pytest.fixture(scope="module")
-def e2e_live_config():
-    config = E2EConfig.from_environment()
-    if config is None:
-        pytest.skip("No E2E stack configured; run with make test-stack-up or run_all_tests.sh")
-    return config
+@pytest.fixture
+def e2e_live_config(live_server):
+    return E2EConfig(
+        base_url=live_server["a2a"],
+        postgres_url=live_server["postgres"],
+        tls_base_url=live_server.get("tls"),
+        ca_bundle=e2e_ca_bundle(),
+    )
 
 
 @pytest.mark.parametrize("transport", [Transport.E2E_REST, Transport.E2E_MCP, Transport.E2E_A2A])

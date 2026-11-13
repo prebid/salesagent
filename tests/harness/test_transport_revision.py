@@ -1,6 +1,7 @@
 """Regression checks for shared wire readers and configured-stack failures."""
 
 import json
+import ssl
 
 import httpx
 import pytest
@@ -24,8 +25,25 @@ def test_mcp_protocol_refusal_preserves_response_and_message(frame, sse):
     assert ("unauthorized" if isinstance(frame["error"], str) else "bad method") in str(caught.value)
 
 
+@pytest.mark.parametrize(
+    "text", [json.dumps({"errors": [{"code": "AUTH_MISSING"}]}), "('AUTH_MISSING', 'missing token')"]
+)
+@pytest.mark.parametrize("frame_kind", ["error", "result"])
+def test_mcp_http_and_tool_error_text_have_the_same_envelope(text, frame_kind):
+    from fastmcp.exceptions import ToolError
+
+    expected = _base._mcp_wire_envelope(ToolError(text))
+    payload = {"isError": True, "content": [{"type": "text", "text": text}]}
+    frame = {frame_kind: payload}
+    response = httpx.Response(200, json=frame)
+    with pytest.raises(_base.WireError) as caught:
+        _base._mcp_jsonrpc_result(response)
+    assert caught.value.envelope == expected
+    assert caught.value.response is response
+
+
 def test_mcp_jsonrpc_message_is_retained():
-    assert str(_base._mcp_error_to_exception({"message": "unknown tool"})) == "unknown tool"
+    assert _base._mcp_error_text({"message": "unknown tool"}) == "unknown tool"
 
 
 @pytest.fixture
@@ -47,12 +65,16 @@ def test_absent_stack_is_optional(no_stack):
     assert E2EConfig.from_environment() is None
 
 
-def test_configured_unreachable_stack_fails(no_stack, monkeypatch):
+@pytest.mark.parametrize(
+    "failure",
+    [httpx.ConnectError("connection refused"), httpx.ConnectTimeout("timed out"), httpx.ReadTimeout("timed out")],
+)
+def test_configured_unreachable_stack_fails(no_stack, monkeypatch, failure):
     monkeypatch.setenv("E2E_BASE_URL", "http://configured.test")
     monkeypatch.setenv("E2E_POSTGRES_URL", "postgresql://test/adcp")
 
     def refuse(*args, **kwargs):
-        raise httpx.ConnectError("connection refused")
+        raise failure
 
     monkeypatch.setattr(httpx, "get", refuse)
     with pytest.raises(RuntimeError, match="configured.*unreachable"):
@@ -106,3 +128,53 @@ def test_auth_challenge_accepts_observed_bearer_refusal():
         raw_response=httpx.Response(401, headers={"WWW-Authenticate": "Bearer"}),
     )
     result.assert_auth_challenge("AUTH_MISSING")
+
+
+def test_leftover_ports_do_not_configure_a_stack(no_stack, monkeypatch):
+    monkeypatch.setenv("ADCP_SALES_PORT", "12345")
+    monkeypatch.setenv("POSTGRES_PORT", "5432")
+    assert E2EConfig.from_environment() is None
+
+
+def test_configured_stack_requires_its_database_url(no_stack, monkeypatch):
+    monkeypatch.setenv("E2E_BASE_URL", "http://configured.test")
+    with pytest.raises(RuntimeError, match="requires E2E_POSTGRES_URL"):
+        E2EConfig.from_environment()
+
+
+@pytest.fixture
+def configured_stack(no_stack, monkeypatch):
+    url = "https://probe-host.adcp.test:8443"
+    monkeypatch.setenv("E2E_BASE_URL", url)
+    monkeypatch.setenv("E2E_POSTGRES_URL", "postgresql://db/adcp")
+    monkeypatch.setenv("E2E_CA_BUNDLE", "/app/.test-tls/ca.pem")
+    return url
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_tls_failure_keeps_the_url_ca_and_underlying_error(configured_stack, monkeypatch, wrapped):
+    cause = ssl.SSLCertVerificationError(1, "certificate verify failed")
+    failure = httpx.ConnectError("certificate verify failed") if wrapped else cause
+    if wrapped:
+        failure.__cause__ = cause
+
+    def refuse(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(httpx, "get", refuse)
+    with pytest.raises(RuntimeError) as caught:
+        E2EConfig.from_environment()
+    assert configured_stack in str(caught.value)
+    assert "E2E_CA_BUNDLE" in str(caught.value)
+    assert "/app/.test-tls/ca.pem" in str(caught.value)
+    assert caught.value.__cause__ is failure
+    assert (failure.__cause__ if wrapped else failure) is cause
+
+
+def test_unrecognized_stack_probe_error_propagates(configured_stack, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise ValueError("probe bug")
+
+    monkeypatch.setattr(httpx, "get", refuse)
+    with pytest.raises(ValueError, match="probe bug"):
+        E2EConfig.from_environment()
