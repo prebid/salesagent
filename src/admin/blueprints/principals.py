@@ -146,11 +146,11 @@ def _advertiser_id_refusal(principal_id: str) -> str | None:
     return None
 
 
-def _refuse_create(tenant_id: str, message: str, reason: object = None):
-    """Flash ``message``, record the create as failed, and send the operator back to the form."""
+def _refuse(message: str, back_to: str, reason: str | None = None):
+    """Record one failed form action and return the operator to its form."""
     record_admin_action_failure(message if reason is None else reason)
     flash(message, "error")
-    return redirect(url_for("principals.create_principal", tenant_id=tenant_id))
+    return redirect(back_to)
 
 
 def _platform_mappings_from_form(principal_id: str) -> tuple[dict, str | None]:
@@ -197,19 +197,20 @@ def create_principal(tenant_id):
             )
 
     # POST - Create the principal
+    back_to = url_for("principals.create_principal", tenant_id=tenant_id)
     try:
         principal_name = request.form.get("name", "").strip()
         if not principal_name:
-            return _refuse_create(tenant_id, "Principal name is required")
+            return _refuse("Principal name is required", back_to)
 
         principal_id = request.form.get("principal_id", "")
         id_refusal = _advertiser_id_refusal(principal_id)
         if id_refusal is not None:
-            return _refuse_create(tenant_id, id_refusal)
+            return _refuse(id_refusal, back_to)
 
         platform_mappings, mapping_refusal = _platform_mappings_from_form(principal_id)
         if mapping_refusal is not None:
-            return _refuse_create(tenant_id, mapping_refusal)
+            return _refuse(mapping_refusal, back_to)
 
         with get_db_session() as db_session:
             # No duplicate-name pre-check: advertiser names are human-readable
@@ -229,7 +230,7 @@ def create_principal(tenant_id):
                 updated_at=datetime.now(UTC),
             )
             if token is None:
-                return _refuse_create(tenant_id, "Advertiser ID is already in use")
+                return _refuse("Advertiser ID is already in use", back_to)
             db_session.commit()
 
             flash(
@@ -240,7 +241,7 @@ def create_principal(tenant_id):
 
     except SQLAlchemyError as e:
         logger.error(f"Error creating principal: {e}", exc_info=True)
-        return _refuse_create(tenant_id, "Error creating advertiser", safe_error_message(e))
+        return _refuse("Error creating advertiser", back_to, safe_error_message(e))
 
 
 @principals_bp.route("/principals/<principal_id>/edit", methods=["GET", "POST"])
@@ -284,12 +285,11 @@ def edit_principal(tenant_id, principal_id):
             )
 
     # POST - Update the principal
+    back_to = url_for("principals.edit_principal", tenant_id=tenant_id, principal_id=principal_id)
     try:
         platform_mappings, mapping_refusal = _platform_mappings_from_form(principal_id)
         if mapping_refusal is not None:
-            record_admin_action_failure(mapping_refusal)
-            flash(mapping_refusal, "error")
-            return redirect(request.url)
+            return _refuse(mapping_refusal, back_to)
 
         with get_db_session() as db_session:
             principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
@@ -311,9 +311,7 @@ def edit_principal(tenant_id, principal_id):
 
     except SQLAlchemyError as e:
         logger.error(f"Error updating principal: {e}", exc_info=True)
-        record_admin_action_failure(safe_error_message(e))
-        flash("Error updating advertiser", "error")
-        return redirect(request.url)
+        return _refuse("Error updating advertiser", back_to, safe_error_message(e))
 
 
 @principals_bp.route("/principal/<principal_id>", methods=["GET"])

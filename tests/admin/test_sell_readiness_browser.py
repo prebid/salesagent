@@ -21,7 +21,7 @@ from tests.admin.browser_flow_helpers import (
     media_buy_for_task,
 )
 from tests.e2e.adcp_request_builder import build_adcp_media_buy_request, get_test_date_range, parse_tool_result
-from tests.helpers.credentials import credential_headers
+from tests.helpers.credentials import credential_headers, displayed_token
 
 pytestmark = [
     pytest.mark.admin,
@@ -256,7 +256,7 @@ def _create_pending_media_buy(live_server: dict[str, str], auth_token: str) -> s
     # the wire response carries a task_id; media_buy_id arrives after approval.
     assert create_result["status"] == "submitted"
     assert "media_buy_id" not in create_result
-    media_buy_id = media_buy_for_task(live_server["postgres"], TENANT_ID, create_result["task_id"])
+    media_buy_id = media_buy_for_task(live_server, TENANT_ID, create_result["task_id"])
     state = _get_media_buy_state(live_server, media_buy_id)
     assert state["media_buy_status"] == "pending_approval", (
         f"Expected pending approval media buy, got {state['media_buy_status']}"
@@ -380,9 +380,7 @@ def test_create_principal_browser_flow(docker_services_e2e, live_server):
         page.wait_for_url(f"**/tenant/{TENANT_ID}/settings/advertisers", wait_until="domcontentloaded")
         page.wait_for_selector(f"text={principal_name}")
         token_notice = page.get_by_text(re.compile("Its API token, shown only now:")).inner_text()
-        token_match = re.search(r"shown only now: (tok_[A-Za-z0-9_-]+)", token_notice)
-        assert token_match, "The new principal's token must be shown once"
-        issued_token = token_match.group(1)
+        issued_token = displayed_token(token_notice)
 
     record = _get_principal_record(live_server, principal_id)
     assert record is not None, "Principal should be persisted"

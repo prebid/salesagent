@@ -68,21 +68,15 @@ def build_admin_test_session(base_url: str, tenant_id: str) -> requests.Session:
     return authenticate_http_session(requests.Session(), base_url, tenant_id)
 
 
-def media_buy_for_task(database_url: str, tenant_id: str, task_id: str) -> str:
+def media_buy_for_task(live_server: dict, tenant_id: str, task_id: str) -> str:
     """Resolve the submitted task through the tenant-scoped production repository.
 
     The current spec no longer exposes associated_objects in get_task_status.
     """
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import Session
-
     from src.core.database.repositories.workflow import WorkflowRepository
+    from tests.e2e.utils import live_repo_session
 
-    engine = create_engine(database_url)
-    try:
-        with Session(engine) as session:
-            mappings = WorkflowRepository(session, tenant_id).get_mappings_for_step(task_id)
-            (media_buy_id,) = [row.object_id for row in mappings if row.object_type == "media_buy"]
-            return media_buy_id
-    finally:
-        engine.dispose()
+    with live_repo_session(live_server) as env:
+        mappings = WorkflowRepository(env.get_session(), tenant_id).get_mappings_for_step(task_id)
+        (media_buy_id,) = [row.object_id for row in mappings if row.object_type == "media_buy"]
+        return media_buy_id

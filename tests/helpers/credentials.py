@@ -14,6 +14,8 @@ Enforced by ``.ast-grep/rules/test-credential-header-single-producer.yml``, whic
 
 from __future__ import annotations
 
+import re
+
 
 def credential_headers(
     *,
@@ -77,3 +79,11 @@ def credential_headers(
     if tenant and (host_resolves_nothing or not host):
         headers["x-adcp-tenant"] = tenant
     return headers
+
+
+def displayed_token(text: str) -> str:
+    """Read the actual credential shown once after creating an advertiser."""
+    match = re.search(r"shown only now: (tok_[A-Za-z0-9_-]+)", text)
+    if match is None:
+        raise AssertionError("The successful form must show the actual issued token")
+    return match.group(1)

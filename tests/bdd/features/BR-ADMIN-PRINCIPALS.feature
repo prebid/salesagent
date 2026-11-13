@@ -73,10 +73,18 @@ Feature: BR-ADMIN-PRINCIPALS Advertiser identity and credentials
 
   @T-ADMIN-PRIN-007
   Scenario: An anonymous form post cannot create an advertiser
-    Given the advertiser operator signs out
+    Given the admin user is not authenticated
     When the advertiser form submits ID "buyer"
-    Then the advertiser post requires login without an audit success
+    Then the page returns a redirect to the login page
+    And the advertiser post creates neither a row nor an audit success
 
   @T-ADMIN-PRIN-008
   Scenario: The browser receives the server ID rule
     Then the advertiser form exposes the shared ID rule
+
+
+  @T-ADMIN-PRIN-009
+  Scenario: An audit writer identity cannot become an advertiser
+    Given an unauthenticated product request has written an audit row
+    When the advertiser form submits that audit principal ID
+    Then the advertiser create is refused as a reserved audit identity

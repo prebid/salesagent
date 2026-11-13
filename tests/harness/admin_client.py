@@ -174,15 +174,32 @@ class AdminOperatorMixin:
     """
 
     _admin: AdminClient | None = None
+    _admin_auth_cleared: bool = False
 
-    def admin_request(
-        self, tenant_id: str, method: str, path: str, *, data: dict[str, str] | None = None
-    ) -> AdminResponse:
-        """One authenticated request to *tenant_id*'s admin route at *path*."""
+    def admin_client(self, tenant_id: str) -> AdminClient:
+        """Open the guarded operator client after committing factory rows."""
         self._commit_factory_data()  # type: ignore[attr-defined]
         if self._admin is None:
             e2e_config = self.e2e_config  # type: ignore[attr-defined]
             self._admin = AdminClient(e2e_config.base_url if e2e_config is not None else None)
             self._guard("admin_client", self._admin.close)  # type: ignore[attr-defined]
-            self._admin.authenticate(tenant_id)
-        return self._admin.request(method, f"/tenant/{tenant_id}/{path}", data=data)
+            if not self._admin_auth_cleared:
+                self._admin.authenticate(tenant_id)
+        return self._admin
+
+    def authenticate(self, tenant_id: str) -> None:
+        """Authenticate again after an explicit sign-out or tenant change."""
+        self._admin_auth_cleared = False
+        self.admin_client(tenant_id).authenticate(tenant_id)
+
+    def clear_auth(self) -> None:
+        """Clear the existing operator credentials without replacing the client."""
+        self._admin_auth_cleared = True
+        if self._admin is not None:
+            self._admin.clear_auth()
+
+    def admin_request(
+        self, tenant_id: str, method: str, path: str, *, data: dict[str, str] | None = None
+    ) -> AdminResponse:
+        """One request to the tenant's admin route, retaining its authentication state."""
+        return self.admin_client(tenant_id).request(method, f"/tenant/{tenant_id}/{path}", data=data)

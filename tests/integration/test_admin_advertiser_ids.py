@@ -39,15 +39,24 @@ def test_race_loser_gets_the_precheck_answer(creation_env):
     assert [row.success for row in env.audit_rows(CREATE_OPERATION, method="POST")] == [False, False]
 
 
-def test_database_error_is_audited_without_the_driver_message(creation_env):
+@pytest.mark.parametrize("operation", ["create", "edit"])
+def test_database_error_is_audited_without_the_driver_message(creation_env, operation):
     env = creation_env
+    if operation == "edit":
+        env.seed_principal(principal_id="fault_buyer")
     env.interrupt_next_statement(terminate=False, table="principals", sending="fault_buyer")
-    response = env.post_create(principal_id="fault_buyer")
+    response = (
+        env.post_create(principal_id="fault_buyer")
+        if operation == "create"
+        else env.post_edit("fault_buyer", name="Replacement", enable_mock="1")
+    )
     assert response.status_code == 302
-    assert b"Error creating advertiser" in env.follow(response).data
-    (row,) = env.audit_rows(CREATE_OPERATION, method="POST")
+    message = b"Error creating advertiser" if operation == "create" else b"Error updating advertiser"
+    assert message in env.follow(response).data
+    (row,) = env.audit_rows(f"AdminUI.{operation}_principal", method="POST")
     assert (row.success, row.error_message) == (False, "A database error occurred. The details have been logged.")
     assert env.principals(name="Created Advertiser") == []
+    assert env.principals(name="Replacement") == []
 
 
 def test_longest_id_fits_the_real_mock_adapter_audit(creation_env):
