@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     MediaBuy,
@@ -140,7 +141,7 @@ def _setup_base_state(session) -> dict:
         format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
         targeting_template={},
         delivery_type="guaranteed",
-        property_tags=["all_inventory"],
+        publisher_selections=whole_publisher_selections(session, tenant_id),
         is_custom=False,
         countries=["US"],
     )

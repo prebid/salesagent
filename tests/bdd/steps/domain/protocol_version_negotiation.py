@@ -19,7 +19,9 @@ Reused rather than redefined:
 
 Given: "a tenant is configured for product discovery", "an inventory profile with only
     domain ...", and "a product linked to that inventory profile with pricing", all from
-    tests/bdd/steps/domain/uc_get_products_inventory.py.
+    tests/bdd/steps/domain/uc_get_products_inventory.py; "the seller is authorized for property
+    ..." from tests/bdd/steps/domain/uc_get_products_publisher_domain.py, because a profile's
+    publisher is offered only where the seller holds a verified property (#1845).
 When: ``_call_get_products`` -- the same single funnel the inventory scenarios use, so
     these requests reach the wire by the identical path and differ only in the pins.
 Then: "the response contains error code ..." and "the response arrives" come from

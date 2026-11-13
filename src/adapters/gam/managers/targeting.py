@@ -11,13 +11,16 @@ import os
 from typing import Any
 
 from adcp.types.domains.enums.metro_system import MetroAreaSystem
+from pydantic import ValidationError
 
+from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.core.errors.details import CapabilityRefusalDetails
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
     AdCPSalesAgentError,
+    AdCPValidationError,
 )
 
 logger = logging.getLogger(__name__)
@@ -337,261 +340,97 @@ class GAMTargetingManager:
             logger.error(f"Failed to get/create custom targeting value '{value_name}': {e}", exc_info=True)
             raise AdCPAdapterError(internal_detail=e) from e
 
-    def _build_custom_targeting_structure(
-        self, custom_targeting_dict: dict[str, Any], logical_operator: str = "AND"
-    ) -> dict[str, Any]:
-        """Convert custom targeting dict to GAM CustomCriteria structure.
+    def _buyer_custom_targeting(self, targeting_overlay) -> CustomTargeting:
+        """The buyer's GAM key-values and AXE segments, as legacy key-values.
 
-        GAM API expects custom targeting in this format:
-        {
-            "logicalOperator": "AND" | "OR",
+        A key-value that is not a GAM key ID and a value name is the buyer's to correct.
+        """
+        key_values: dict[str, Any] = {}
+
+        # Platform-specific custom targeting
+        if targeting_overlay.custom and "gam" in targeting_overlay.custom:
+            key_values.update(targeting_overlay.custom["gam"].get("key_values", {}))
+
+        # AXE segment targeting (AdCP pre-3.0 axe_include_segment/axe_exclude_segment;
+        # deprecated in 3.0.x in favor of TMP provider fields)
+        # Per AdCP spec, three separate keys are required for include, exclude, and macro segments
+        if targeting_overlay.axe_include_segment:
+            if not self.axe_include_key:
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(capability="axe_include_segment")
+                )
+            # Resolve key name to GAM key ID
+            try:
+                key_id = self.resolve_custom_targeting_key_id(self.axe_include_key)
+                key_values[key_id] = targeting_overlay.axe_include_segment
+                logger.info(
+                    f"Adding AXE include segment targeting: {self.axe_include_key} (ID: {key_id})={targeting_overlay.axe_include_segment}"
+                )
+            except AdCPConfigurationError:
+                logger.error(f"Failed to resolve AXE include key '{self.axe_include_key}'")
+                raise
+
+        if targeting_overlay.axe_exclude_segment:
+            if not self.axe_exclude_key:
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(capability="axe_exclude_segment")
+                )
+            # Resolve key name to GAM key ID
+            try:
+                key_id = self.resolve_custom_targeting_key_id(self.axe_exclude_key)
+                # GAM supports negative targeting via NOT_ prefix on the KEY ID
+                exclude_key_id = f"NOT_{key_id}"
+                key_values[exclude_key_id] = targeting_overlay.axe_exclude_segment
+                logger.info(
+                    f"Adding AXE exclude segment targeting: {self.axe_exclude_key} (ID: {key_id}, negated)={targeting_overlay.axe_exclude_segment}"
+                )
+            except AdCPConfigurationError:
+                logger.error(f"Failed to resolve AXE exclude key '{self.axe_exclude_key}'")
+                raise
+
+        try:
+            return CustomTargeting.from_key_values(key_values)
+        except ValidationError as exc:
+            raise AdCPValidationError(internal_detail=exc) from exc
+
+    def _custom_targeting_entry(self, custom_targeting: CustomTargeting) -> dict[str, Any]:
+        """``{"customTargeting": <GAM tree>}``, or nothing when there is no custom targeting."""
+        if not custom_targeting.branches:
+            return {}
+        return {"customTargeting": self._render_custom_targeting(custom_targeting)}
+
+    def _render_custom_targeting(self, custom_targeting: CustomTargeting) -> dict[str, Any]:
+        """The GAM tree for ``custom_targeting``: an OR set of AND sets of ``CustomCriteria``.
+
+        The one place a value name becomes a GAM value ID. A name and the ID it resolves to
+        can both be listed for one key, so each ID is sent once.
+        """
+        return {
+            "xsi_type": "CustomCriteriaSet",  # Explicit types for zeep SOAP serialization
+            "logicalOperator": "OR",
             "children": [
                 {
-                    "xsi_type": "CustomCriteria",
-                    "keyId": "123456",
-                    "operator": "IS" | "IS_NOT",
-                    "valueIds": [value_id1, value_id2]
+                    "xsi_type": "CustomCriteriaSet",
+                    "logicalOperator": "AND",
+                    "children": [
+                        {
+                            "xsi_type": "CustomCriteria",
+                            "keyId": criterion.key_id,
+                            "operator": "IS_NOT" if criterion.exclude else "IS",
+                            "valueIds": list(
+                                dict.fromkeys(
+                                    value
+                                    if isinstance(value, int)
+                                    else self._get_or_create_custom_targeting_value(str(criterion.key_id), value)
+                                    for value in criterion.values
+                                )
+                            ),
+                        }
+                        for criterion in branch
+                    ],
                 }
-            ]
-        }
-
-        Supports three input formats:
-
-        Legacy format (dict[str, str]):
-            {'key_id': 'value_name', 'NOT_key_id': 'value_name'}
-
-        Enhanced format (dict with include/exclude):
-            {
-                'include': {'key_id': ['value1', 'value2']},
-                'exclude': {'key_id': ['value3']},
-                'operator': 'AND' | 'OR'
-            }
-
-        Groups format (GAM-style nested groups):
-            {
-                'groups': [
-                    {
-                        'criteria': [
-                            {'keyId': '123', 'values': ['v1', 'v2']},
-                            {'keyId': '456', 'values': ['v3'], 'exclude': True}
-                        ]
-                    }
-                ]
-            }
-            Groups are OR'd together; criteria within groups are AND'd.
-
-        Args:
-            custom_targeting_dict: Custom targeting configuration in any format
-            logical_operator: Default operator for combining criteria (AND/OR)
-
-        Returns:
-            GAM CustomCriteria structure
-        """
-        children = []
-
-        # Check if this is the groups format (GAM-style nested)
-        if "groups" in custom_targeting_dict:
-            return self._build_groups_custom_targeting_structure(custom_targeting_dict)
-
-        # Check if this is the enhanced format with include/exclude
-        if "include" in custom_targeting_dict or "exclude" in custom_targeting_dict:
-            return self._build_enhanced_custom_targeting_structure(custom_targeting_dict)
-
-        # Legacy format: {'key_id': 'value_name', 'NOT_key_id': 'value_name'}
-        for key, value_name in custom_targeting_dict.items():
-            # Check for negative targeting (NOT_ prefix)
-            is_negative = key.startswith("NOT_")
-            key_id = key[4:] if is_negative else key  # Remove NOT_ prefix
-
-            # Build custom criteria object
-            # For custom targeting values, GAM requires value IDs (not names)
-            # We need to create or lookup the value ID for the value name
-            value_id = self._get_or_create_custom_targeting_value(key_id, value_name)
-
-            criteria = {
-                "xsi_type": "CustomCriteria",  # Explicit type for zeep SOAP serialization
-                "keyId": int(key_id),  # GAM expects integer key ID
-                "operator": "IS_NOT" if is_negative else "IS",
-                "valueIds": [value_id],  # Custom targeting value ID
-            }
-            children.append(criteria)
-
-        return {
-            "xsi_type": "CustomCriteriaSet",  # Explicit type for zeep
-            "logicalOperator": logical_operator,
-            "children": children,
-        }
-
-    def _build_enhanced_custom_targeting_structure(self, targeting_config: dict[str, Any]) -> dict[str, Any]:
-        """Build GAM targeting structure from enhanced format with include/exclude.
-
-        Enhanced format:
-            {
-                'include': {'key_id': ['value1', 'value2']},  # Multiple values = OR within key
-                'exclude': {'key_id': ['value3']},
-                'operator': 'AND' | 'OR'  # How to combine different keys
-            }
-
-        Values can be either:
-        - Numeric GAM value IDs (e.g., "451005167391") - used directly
-        - Value names (e.g., "sports") - looked up via _get_or_create_custom_targeting_value
-
-        Args:
-            targeting_config: Enhanced targeting configuration
-
-        Returns:
-            GAM CustomCriteria structure with proper nesting for OR/AND logic
-        """
-        include_dict = targeting_config.get("include", {})
-        exclude_dict = targeting_config.get("exclude", {})
-        operator = targeting_config.get("operator", "AND")
-
-        children = []
-
-        # Process include criteria
-        for key_id, values in include_dict.items():
-            if not values:
-                continue
-
-            # Multiple values for same key are OR'd together (IS operator with multiple valueIds)
-            value_ids = []
-            for value in values:
-                # Check if value is already a numeric GAM ID
-                if str(value).isdigit():
-                    value_ids.append(int(value))
-                else:
-                    # Value is a name, need to look up or create
-                    value_id = self._get_or_create_custom_targeting_value(key_id, value)
-                    value_ids.append(value_id)
-
-            criteria = {
-                "xsi_type": "CustomCriteria",
-                "keyId": int(key_id),
-                "operator": "IS",
-                "valueIds": value_ids,  # Multiple values = OR logic in GAM
-            }
-            children.append(criteria)
-
-        # Process exclude criteria
-        for key_id, values in exclude_dict.items():
-            if not values:
-                continue
-
-            # For exclusions, each value gets IS_NOT
-            # Multiple excluded values for same key means "NOT value1 AND NOT value2"
-            value_ids = []
-            for value in values:
-                # Check if value is already a numeric GAM ID
-                if str(value).isdigit():
-                    value_ids.append(int(value))
-                else:
-                    # Value is a name, need to look up or create
-                    value_id = self._get_or_create_custom_targeting_value(key_id, value)
-                    value_ids.append(value_id)
-
-            criteria = {
-                "xsi_type": "CustomCriteria",
-                "keyId": int(key_id),
-                "operator": "IS_NOT",
-                "valueIds": value_ids,
-            }
-            children.append(criteria)
-
-        if not children:
-            return {}
-
-        return {
-            "xsi_type": "CustomCriteriaSet",
-            "logicalOperator": operator,
-            "children": children,
-        }
-
-    def _build_groups_custom_targeting_structure(self, targeting_config: dict[str, Any]) -> dict[str, Any]:
-        """Build GAM targeting structure from groups format (GAM-style nested).
-
-        Groups format supports nested targeting with OR between groups and AND within groups:
-            {
-                'groups': [
-                    {
-                        'criteria': [
-                            {'keyId': '123', 'values': ['v1', 'v2']},
-                            {'keyId': '456', 'values': ['v3'], 'exclude': True}
-                        ]
-                    },
-                    {
-                        'criteria': [
-                            {'keyId': '789', 'values': ['v4']}
-                        ]
-                    }
-                ]
-            }
-
-        This translates to: (key123 IS v1|v2 AND key456 IS_NOT v3) OR (key789 IS v4)
-
-        Values can be either:
-        - Numeric GAM value IDs (e.g., "451005167391") - used directly
-        - Value names (e.g., "sports") - looked up via _get_or_create_custom_targeting_value
-
-        Args:
-            targeting_config: Groups targeting configuration
-
-        Returns:
-            GAM CustomCriteria structure with nested CustomCriteriaSets
-        """
-        groups = targeting_config.get("groups", [])
-        group_children = []
-
-        for group in groups:
-            criteria_list = group.get("criteria", [])
-            criteria_children = []
-
-            for criterion in criteria_list:
-                key_id = criterion.get("keyId")
-                values = criterion.get("values", [])
-                is_exclude = criterion.get("exclude", False)
-
-                if not key_id or not values:
-                    logger.warning(f"Skipping malformed criterion in groups targeting: keyId={key_id}, values={values}")
-                    continue
-
-                # Resolve values to GAM value IDs
-                value_ids = []
-                for value in values:
-                    if str(value).isdigit():
-                        value_ids.append(int(value))
-                    else:
-                        value_id = self._get_or_create_custom_targeting_value(key_id, value)
-                        value_ids.append(value_id)
-
-                if not value_ids:
-                    continue
-
-                criteria_children.append(
-                    {
-                        "xsi_type": "CustomCriteria",
-                        "keyId": int(key_id),
-                        "operator": "IS_NOT" if is_exclude else "IS",
-                        "valueIds": value_ids,
-                    }
-                )
-
-            # Only add groups that have criteria
-            if criteria_children:
-                group_children.append(
-                    {
-                        "xsi_type": "CustomCriteriaSet",
-                        "logicalOperator": "AND",  # Criteria within group are AND'd
-                        "children": criteria_children,
-                    }
-                )
-
-        if not group_children:
-            return {}
-
-        return {
-            "xsi_type": "CustomCriteriaSet",
-            "logicalOperator": "OR",  # Groups are OR'd together
-            "children": group_children,
+                for branch in custom_targeting.branches
+            ],
         }
 
     def _lookup_region_id(self, region_code: str) -> str | None:
@@ -653,11 +492,15 @@ class GAMTargetingManager:
 
         return unsupported
 
-    def build_targeting(self, targeting_overlay) -> dict[str, Any]:
+    def build_targeting(
+        self, targeting_overlay, product_custom_targeting: CustomTargeting | None = None
+    ) -> dict[str, Any]:
         """Build GAM targeting criteria from AdCP targeting.
 
         Args:
             targeting_overlay: AdCP targeting overlay object
+            product_custom_targeting: the product's own custom targeting, which a line item
+                has to match as well as the buyer's
 
         Returns:
             Dictionary containing GAM targeting configuration
@@ -665,8 +508,9 @@ class GAMTargetingManager:
         Raises:
             ValueError: If unsupported targeting is requested (no quiet failures)
         """
+        product_custom_targeting = product_custom_targeting or CustomTargeting()
         if not targeting_overlay:
-            return {}
+            return self._custom_targeting_entry(product_custom_targeting)
 
         gam_targeting: dict[str, Any] = {}
 
@@ -809,55 +653,9 @@ class GAMTargetingManager:
                 )
             )
 
-        # Custom key-value targeting
-        custom_targeting = {}
-
-        # Platform-specific custom targeting
-        if targeting_overlay.custom and "gam" in targeting_overlay.custom:
-            custom_targeting.update(targeting_overlay.custom["gam"].get("key_values", {}))
-
-        # AXE segment targeting (AdCP pre-3.0 axe_include_segment/axe_exclude_segment;
-        # deprecated in 3.0.x in favor of TMP provider fields)
-        # Per AdCP spec, three separate keys are required for include, exclude, and macro segments
-        if targeting_overlay.axe_include_segment:
-            if not self.axe_include_key:
-                raise AdCPCapabilityNotSupportedError(
-                    details=CapabilityRefusalDetails(capability="axe_include_segment")
-                )
-            # Resolve key name to GAM key ID
-            try:
-                key_id = self.resolve_custom_targeting_key_id(self.axe_include_key)
-                custom_targeting[key_id] = targeting_overlay.axe_include_segment
-                logger.info(
-                    f"Adding AXE include segment targeting: {self.axe_include_key} (ID: {key_id})={targeting_overlay.axe_include_segment}"
-                )
-            except AdCPConfigurationError:
-                logger.error(f"Failed to resolve AXE include key '{self.axe_include_key}'")
-                raise
-
-        if targeting_overlay.axe_exclude_segment:
-            if not self.axe_exclude_key:
-                raise AdCPCapabilityNotSupportedError(
-                    details=CapabilityRefusalDetails(capability="axe_exclude_segment")
-                )
-            # Resolve key name to GAM key ID
-            try:
-                key_id = self.resolve_custom_targeting_key_id(self.axe_exclude_key)
-                # GAM supports negative targeting via NOT_ prefix on the KEY ID
-                exclude_key_id = f"NOT_{key_id}"
-                custom_targeting[exclude_key_id] = targeting_overlay.axe_exclude_segment
-                logger.info(
-                    f"Adding AXE exclude segment targeting: {self.axe_exclude_key} (ID: {key_id}, negated)={targeting_overlay.axe_exclude_segment}"
-                )
-            except AdCPConfigurationError:
-                logger.error(f"Failed to resolve AXE exclude key '{self.axe_exclude_key}'")
-                raise
-
-        if custom_targeting:
-            # Convert simple dict to GAM CustomCriteria structure
-            # GAM expects: {logicalOperator, children: [{keyId, operator, valueIds, valueNames}]}
-            # Our dict: {'key_id': 'value_name', 'NOT_key_id': 'value_name'}
-            gam_targeting["customTargeting"] = self._build_custom_targeting_structure(custom_targeting)
+        gam_targeting.update(
+            self._custom_targeting_entry(self._buyer_custom_targeting(targeting_overlay) & product_custom_targeting)
+        )
 
         # Audience segment targeting
         # Map AdCP audiences_any_of and signals to GAM audience segment IDs
@@ -945,22 +743,5 @@ class GAMTargetingManager:
 
         if inventory_targeting:
             targeting["inventoryTargeting"] = inventory_targeting
-
-        return targeting
-
-    def add_custom_targeting(self, targeting: dict[str, Any], custom_keys: dict[str, Any]) -> dict[str, Any]:
-        """Add custom targeting keys to GAM targeting configuration.
-
-        Args:
-            targeting: Existing GAM targeting configuration
-            custom_keys: Dictionary of custom targeting key-value pairs
-
-        Returns:
-            Updated targeting configuration with custom targeting
-        """
-        if custom_keys:
-            if "customTargeting" not in targeting:
-                targeting["customTargeting"] = {}
-            targeting["customTargeting"].update(custom_keys)
 
         return targeting

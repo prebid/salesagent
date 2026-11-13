@@ -291,9 +291,14 @@ class TestCreativeLifecycleMCP:
             session.add(package_2)
             session.add(package_buyer_ref)
 
-            # Create test product for create_media_buy tests
-            # (create_media_buy queries DB directly, not get_product_catalog)
-            # Include all formats from sample_creatives fixture
+            # Create test product for create_media_buy tests, offered because the publisher it
+            # names authorizes the seller in its stored adagents.json (create_media_buy reads
+            # offered products only, #1845). Include all formats from sample_creatives fixture.
+            from scripts.setup.seed_products import seed_verified_website
+            from src.core.database.models import ProductPublisherSelection
+
+            session.flush()
+            seed_verified_website(session, "creative_test", "test.com")
             test_product = DBProduct(
                 tenant_id="creative_test",
                 product_id="prod_1",
@@ -306,7 +311,9 @@ class TestCreativeLifecycleMCP:
                 ],
                 targeting_template={},
                 delivery_type="non_guaranteed",
-                properties=[{"publisher_domain": "test.com", "selection_type": "all"}],
+                publisher_selections=ProductPublisherSelection.from_selectors(
+                    "creative_test", [{"publisher_domain": "test.com", "selection_type": "all"}]
+                ),
             )
             session.add(test_product)
 

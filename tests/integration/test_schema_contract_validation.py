@@ -196,7 +196,7 @@ class TestProductSchemaContract:
             },
             "is_custom": False,
             "publisher_properties": [
-                {"publisher_domain": "example.com", "selection_type": "all"}
+                {"publisher_domain": "psatest.com", "selection_type": "all"}
             ],  # Required per AdCP spec
             "brief_relevance": "Highly relevant for display advertising",
             "reporting_capabilities": default_reporting_capabilities(),
@@ -247,7 +247,7 @@ class TestProductSchemaContract:
             "delivery_measurement": {"provider": "Google Ad Manager"},
             "is_custom": True,
             "publisher_properties": [
-                {"publisher_domain": "example.com", "selection_type": "all"}
+                {"publisher_domain": "psatest.com", "selection_type": "all"}
             ],  # Required per AdCP spec
             "reporting_capabilities": default_reporting_capabilities(),
             "pricing_options": [
@@ -297,7 +297,7 @@ class TestProductSchemaContract:
             },
             "is_custom": True,
             "publisher_properties": [
-                {"publisher_domain": "example.com", "selection_type": "all"}
+                {"publisher_domain": "psatest.com", "selection_type": "all"}
             ],  # Required per AdCP spec
             "brief_relevance": "Perfect match for multi-format campaign requirements",
             "reporting_capabilities": default_reporting_capabilities(),
@@ -331,7 +331,7 @@ class TestProductSchemaContract:
             "delivery_measurement": {"provider": "Google Ad Manager"},
             "is_custom": False,
             "publisher_properties": [
-                {"publisher_domain": "example.com", "selection_type": "all"}
+                {"publisher_domain": "psatest.com", "selection_type": "all"}
             ],  # Required per AdCP spec
             "reporting_capabilities": default_reporting_capabilities(),
             "pricing_options": [
@@ -557,7 +557,7 @@ class TestGetProductsResponseContract:
                 delivery_measurement={"provider": "Google Ad Manager"},
                 is_custom=False,
                 publisher_properties=[
-                    {"publisher_domain": "example.com", "selection_type": "all"}
+                    {"publisher_domain": "psatest.com", "selection_type": "all"}
                 ],  # Required per AdCP spec
                 reporting_capabilities=default_reporting_capabilities(),
                 pricing_options=[
@@ -581,7 +581,7 @@ class TestGetProductsResponseContract:
                 delivery_measurement={"provider": "Google Ad Manager"},
                 is_custom=True,
                 publisher_properties=[
-                    {"publisher_domain": "example.com", "selection_type": "all"}
+                    {"publisher_domain": "psatest.com", "selection_type": "all"}
                 ],  # Required per AdCP spec
                 reporting_capabilities=default_reporting_capabilities(),
                 pricing_options=[
@@ -638,7 +638,7 @@ class TestSchemaEvolutionSafety:
             "delivery_measurement": {"provider": "Google Ad Manager"},
             "is_custom": False,
             "publisher_properties": [
-                {"publisher_domain": "example.com", "selection_type": "all"}
+                {"publisher_domain": "psatest.com", "selection_type": "all"}
             ],  # Required per AdCP spec
             "reporting_capabilities": default_reporting_capabilities(),
             "pricing_options": [
@@ -675,7 +675,7 @@ class TestSchemaEvolutionSafety:
             "delivery_measurement": {"provider": "Google Ad Manager"},
             "is_custom": False,
             "publisher_properties": [
-                {"publisher_domain": "example.com", "selection_type": "all"}
+                {"publisher_domain": "psatest.com", "selection_type": "all"}
             ],  # Required per AdCP spec
             "reporting_capabilities": default_reporting_capabilities(),
             "pricing_options": [
@@ -713,7 +713,7 @@ class TestSchemaEvolutionSafety:
             delivery_measurement={"provider": "Google Ad Manager"},
             is_custom=False,
             publisher_properties=[
-                {"publisher_domain": "example.com", "selection_type": "all"}
+                {"publisher_domain": "psatest.com", "selection_type": "all"}
             ],  # Required per AdCP spec
             reporting_capabilities=default_reporting_capabilities(),
             pricing_options=[

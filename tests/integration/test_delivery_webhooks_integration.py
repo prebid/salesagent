@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from freezegun import freeze_time
 
+from scripts.setup.seed_products import whole_publisher_selections
 from src.adapters.gam_reporting_service import ReportingData
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
@@ -96,7 +97,7 @@ def _create_basic_media_buy_with_webhook(
             delivery_type="",
             # ck_product_properties_xor: a product states EITHER properties OR
             # property_tags, never neither.
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, tenant_id),
         )
 
         pricing_option = PricingOptionFactory.build(

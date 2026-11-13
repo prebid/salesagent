@@ -82,16 +82,6 @@ class RuntimeSettings(BaseSettings):
             "a grading deployment needs the first without claiming the second"
         ),
     )
-    publisher_auto_verify: bool | None = Field(
-        default=None,
-        description=(
-            "Whether a publisher partner is verified without reading its adagents.json, "
-            "stated explicitly. Unset (the normal case) it is DERIVED from is_production: a "
-            "local server is in nobody's file, so anywhere but production skips the check. "
-            "It exists so a non-production deployment can run the check without claiming "
-            "production"
-        ),
-    )
 
     @property
     def is_production(self) -> bool:
@@ -154,18 +144,6 @@ class RuntimeSettings(BaseSettings):
         favour of whichever was checked last.
         """
         return self.adcp_pydantic_extra_mode or ("ignore" if self.is_production else "forbid")
-
-    @property
-    def publisher_auto_verify_allowed(self) -> bool:
-        """A publisher partner is verified without an adagents.json check: a local server
-        is in nobody's file. Anywhere that is not production.
-
-        ``PUBLISHER_AUTO_VERIFY`` states it outright and wins, so a test deployment can
-        grade the check without claiming production.
-        """
-        if self.publisher_auto_verify is not None:
-            return self.publisher_auto_verify
-        return not self.is_production
 
 
 class TestingSettings(BaseSettings):
@@ -841,10 +819,6 @@ class Settings:
         return self.testing.adcp_testing and not self.database.database_url
 
     # --- production-derived selections ------------------------------------------------
-
-    @property
-    def publisher_auto_verify_allowed(self) -> bool:
-        return self.runtime.publisher_auto_verify_allowed
 
     @property
     def structured_logging(self) -> bool:

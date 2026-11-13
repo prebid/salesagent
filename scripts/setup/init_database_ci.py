@@ -48,6 +48,76 @@ ISO_TEST_VIRTUAL_HOST = "iso-test.adcp.test"
 CI_TEST_TOKEN = "ci-test-token"
 
 
+#: The CI seed's one publisher.
+CI_PUBLISHER = "psatest.com"
+
+
+def _ensure_seed_publisher(session, tenant_id: str) -> None:
+    """Give *tenant_id* the CI seed's one publisher, :data:`CI_PUBLISHER`, unless it has it.
+
+    The setup checklist counts authorized properties, and a product names only publishers
+    whose stored adagents.json authorizes this agent (#1845).
+    """
+    from scripts.setup.seed_products import seed_verified_website
+
+    if not seed_verified_website(session, tenant_id, CI_PUBLISHER, name="PSA Test Website"):
+        print(f"  ℹ️  Publisher already held: {CI_PUBLISHER}")
+        return
+    session.commit()
+    print(f"  ✓ Held publisher: {CI_PUBLISHER}")
+
+
+def seed_catalog(session, tenant_id: str, products: list[dict]) -> None:
+    """Hold the CI publisher for *tenant_id*, then seed *products*, each selling it whole.
+
+    The publisher first: a seeded product sells every publisher the tenant holds
+    (seed_products.publishers_whole), and it is the setup checklist's authorized property.
+    Commits.
+    """
+    from scripts.setup.seed_products import seed_product
+
+    _ensure_seed_publisher(session, tenant_id)
+    for p in products:
+        if seed_product(session, tenant_id, p):
+            print(f"  ✓ Created product and pricing_option: {p['name']}")
+        else:
+            print(f"  ℹ️  Product already exists: {p['name']}")
+    session.commit()
+
+
+def ci_products() -> list[dict]:
+    """The ci-test tenant's catalogue: what the e2e and storyboard stacks sell."""
+    from scripts.setup.seed_products import canonical_declaration
+
+    return [
+        {
+            "product_id": "prod_display_premium",
+            "name": "Premium Display Advertising",
+            "description": "High-impact display ads across premium content",
+            "format_options": [
+                canonical_declaration("image", "display_300x250_image", width=300, height=250),
+                canonical_declaration("image", "display_728x90_image", width=728, height=90),
+                canonical_declaration("image", "display_160x600_image", width=160, height=600),
+            ],
+            "targeting_template": {"geo": ["US"], "device_type": "any"},
+            "delivery_type": "guaranteed",
+            "pricing": {"model": "cpm", "rate": 15.0, "is_fixed": True},
+        },
+        {
+            "product_id": "prod_video_premium",
+            "name": "Premium Video Advertising",
+            "description": "Pre-roll video ads with guaranteed completion rates",
+            "format_options": [
+                canonical_declaration("video_hosted", "video_standard_15s", duration_ms_exact=15000),
+                canonical_declaration("video_hosted", "video_standard_30s", duration_ms_exact=30000),
+            ],
+            "targeting_template": {"geo": ["US"], "device_type": "any"},
+            "delivery_type": "guaranteed",
+            "pricing": {"model": "cpm", "rate": 25.0, "is_fixed": True},
+        },
+    ]
+
+
 def init_db_ci():
     """Initialize database with migrations only for CI testing."""
     try:
@@ -59,13 +129,12 @@ def init_db_ci():
         from sqlalchemy import select
 
         from scripts.ops.migrate import run_migrations
-        from scripts.setup.seed_products import canonical_declaration, seed_product
+        from scripts.setup.seed_products import canonical_declaration
         from src.core.credentials import hash_token
         from src.core.database.database_session import get_db_session
         from src.core.database.models import (
             Account,
             AgentAccountAccess,
-            AuthorizedProperty,
             CurrencyLimit,
             GAMInventory,
             Product,
@@ -380,67 +449,12 @@ def init_db_ci():
 
             print("All prerequisites validated successfully")
 
-            # Create default products for testing.
+            # Create default products for testing, each selling the CI publisher whole.
             # KEEP IN SYNC: tests/e2e/test_tenant_isolation.py CI_TEST_PRODUCT_IDS
             # asserts the ci-test tenant sees EXACTLY this product-id set. If you
             # add/remove/rename a ci-test product here, update that set too.
             print(f"Creating default products for CI on tenant: {tenant_id}...")
-            products_data = [
-                {
-                    "product_id": "prod_display_premium",
-                    "name": "Premium Display Advertising",
-                    "description": "High-impact display ads across premium content",
-                    "format_options": [
-                        canonical_declaration("image", "display_300x250_image", width=300, height=250),
-                        canonical_declaration("image", "display_728x90_image", width=728, height=90),
-                        canonical_declaration("image", "display_160x600_image", width=160, height=600),
-                    ],
-                    "targeting_template": {"geo": ["US"], "device_type": "any"},
-                    "delivery_type": "guaranteed",
-                    "pricing": {"model": "cpm", "rate": 15.0, "is_fixed": True},
-                },
-                {
-                    "product_id": "prod_video_premium",
-                    "name": "Premium Video Advertising",
-                    "description": "Pre-roll video ads with guaranteed completion rates",
-                    "format_options": [
-                        canonical_declaration("video_hosted", "video_standard_15s", duration_ms_exact=15000),
-                        canonical_declaration("video_hosted", "video_standard_30s", duration_ms_exact=30000),
-                    ],
-                    "targeting_template": {"geo": ["US"], "device_type": "any"},
-                    "delivery_type": "guaranteed",
-                    "pricing": {"model": "cpm", "rate": 25.0, "is_fixed": True},
-                },
-            ]
-
-            for p in products_data:
-                if seed_product(session, tenant_id, p):
-                    print(f"  ✓ Created product and pricing_option: {p['name']}")
-                else:
-                    print(f"  ℹ️  Product already exists: {p['name']}")
-
-            session.commit()
-
-            # Create authorized property for setup checklist completion
-            print("\nCreating authorized property for setup checklist...")
-            stmt_check_property = select(AuthorizedProperty).filter_by(tenant_id=tenant_id, property_id="example_com")
-            existing_property = session.scalars(stmt_check_property).first()
-
-            if not existing_property:
-                authorized_prop = AuthorizedProperty(
-                    tenant_id=tenant_id,
-                    property_id="example_com",
-                    property_type="website",
-                    name="Example Website",
-                    identifiers=[{"type": "domain", "value": "example.com"}],
-                    publisher_domain="example.com",
-                    verification_status="verified",
-                )
-                session.add(authorized_prop)
-                session.commit()
-                print("  ✓ Created authorized property: example.com")
-            else:
-                print("  ℹ️  Authorized property already exists: example.com")
+            seed_catalog(session, tenant_id, ci_products())
 
             # Create GAM inventory for setup checklist completion (inventory sync)
             print("\nCreating GAM inventory for setup checklist...")
@@ -500,7 +514,7 @@ def init_db_ci():
             saved_products = session.scalars(stmt_verify).all()
             print(f"\n✅ Verification: {len(saved_products)} products found in database for tenant {tenant_id}")
             for prod in saved_products:
-                print(f"   - {prod.product_id}: {prod.name}, property_tags={prod.property_tags}")
+                print(f"   - {prod.product_id}: {prod.name}, publishers={prod.stored_publisher_properties}")
 
             # Also verify pricing_options exist
             from src.core.database.models import PricingOption as PricingOptionModel
@@ -512,23 +526,21 @@ def init_db_ci():
             # CRITICAL: Fail if no products were created
             if len(saved_products) == 0:
                 print("\n❌ CRITICAL ERROR: No products found in database after initialization!")
-                print(f"   Expected {len(products_data)} products but found 0")
+                print(f"   Expected {len(ci_products())} products but found 0")
                 print(f"   Tenant ID: {tenant_id}")
                 sys.exit(1)
 
             # CRITICAL: Fail if products missing property authorization
             for prod in saved_products:
-                if not prod.property_tags and not prod.properties:
-                    print(f"\n❌ CRITICAL ERROR: Product {prod.product_id} missing property authorization!")
-                    print(f"   property_tags: {prod.property_tags}")
-                    print(f"   properties: {prod.properties}")
-                    print("   Products must have either property_tags or properties per AdCP spec")
+                if not prod.stored_publisher_properties:
+                    print(f"\n❌ CRITICAL ERROR: Product {prod.product_id} names no publisher!")
+                    print("   Products must name their publishers per AdCP spec")
                     sys.exit(1)
 
             print("\n✅ Database initialization complete:")
             print(f"   - Tenant ID: {tenant_id}")
             print(f"   - Principal ID: {principal_id}")
-            print(f"   - Products created: {len(products_data)}")
+            print(f"   - Products created: {len(ci_products())}")
             print(f"   - Products verified: {len(saved_products)}")
 
         # ==================================================================
@@ -654,13 +666,9 @@ def init_db_ci():
                 },
             ]
 
-            for p in iso_products_data:
-                if seed_product(iso_session, iso_tenant_id, p):
-                    print(f"  ✓ Created isolation product and pricing_option: {p['name']}")
-                else:
-                    print(f"  ℹ️  Isolation product already exists: {p['name']}")
-
-            iso_session.commit()
+            # The isolation tenant's products name a publisher too: a product no authorized
+            # property backs is not offered (#1845), and this tenant's catalogue is graded.
+            seed_catalog(iso_session, iso_tenant_id, iso_products_data)
 
             # Verify isolation tenant products
             stmt_iso_verify = select(Product).filter_by(tenant_id=iso_tenant_id)
