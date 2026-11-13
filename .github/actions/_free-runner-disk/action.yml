@@ -14,7 +14,17 @@ runs:
         # 25% headroom, rounded up to the next GiB: ceil(60.67 * 1.25) = 76.
         min_gib=76
         min_bytes=$((min_gib * 1024 * 1024 * 1024))
-        available_bytes() { df -B1 --output=avail / | tail -1; }
+        available_bytes() {
+          local available
+          available="$(df -B1 --output=avail / | tail -1)" || return 1
+          # GNU df right-aligns short counts under the Avail heading.
+          read -r available <<< "$available"
+          if [[ ! "$available" =~ ^[0-9]+$ ]]; then
+            echo "::error::Disk probe did not return an integer byte count." >&2
+            return 1
+          fi
+          printf '%s\n' "$available"
+        }
         before="$(available_bytes)"
         if (( before >= min_bytes )); then
           echo "Free space ${before} bytes meets ${min_gib} GiB floor; skipping reclaim."

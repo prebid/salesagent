@@ -16,6 +16,7 @@ import yaml
     [
         ([85 * 1024**3, 85 * 1024**3], 0, 0, False),
         ([14 * 1024**3, 85 * 1024**3], 0, 0, True),
+        (["    1", 85 * 1024**3], 0, 0, True),
         ([76 * 1024**3, 76 * 1024**3], 0, 0, False),
         ([14 * 1024**3, 76 * 1024**3], 0, 0, True),
         ([76 * 1024**3 - 1, 76 * 1024**3 - 1], 0, 1, True),
@@ -23,11 +24,14 @@ import yaml
         ([1024**3, 1024**3], 0, 1, True),
         ([], 0, 1, False),
         ([1024**3], 0, 1, True),
+        (["12abc"], 0, 1, False),
+        ([1024**3, "12abc"], 0, 1, True),
         ([1024**3, 85 * 1024**3], 1, 1, True),
     ],
     ids=[
         "enough-before-cleanup",
         "reclaim-sufficient",
+        "padded-byte-count",
         "exact-floor-before-cleanup",
         "exact-floor-after-cleanup",
         "one-byte-below-floor",
@@ -35,11 +39,13 @@ import yaml
         "reclaim-insufficient",
         "initial-probe-fails",
         "post-reclaim-probe-fails",
+        "initial-probe-noninteger",
+        "post-reclaim-probe-noninteger",
         "cleanup-command-fails",
     ],
 )
 def test_free_runner_disk_action(
-    tmp_path: Path, readings: list[int], cleanup_status: int, expected_status: int, reclaims: bool
+    tmp_path: Path, readings: list[int | str], cleanup_status: int, expected_status: int, reclaims: bool
 ) -> None:
     action_path = Path(__file__).resolve().parents[2] / ".github/actions/_free-runner-disk/action.yml"
     script = yaml.safe_load(action_path.read_text())["runs"]["steps"][0]["run"]
@@ -48,13 +54,14 @@ def test_free_runner_disk_action(
     # Probe state lives on disk because command substitutions run in subshells.
     commands = """
     df() {
+      [[ "$*" == "-B1 --output=avail /" ]] || return 2
       local available
-      read -r available < readings || return 1
+      IFS= read -r available < readings || return 1
       tail -n +2 readings > remaining
       mv remaining readings
       printf 'Avail\\n%s\\n' "$available"
     }
-    sudo() { printf 'reclaim\\n' >> cleanup; return "$(cat cleanup_status)"; }
+    sudo() { printf '%s\\n' "$*" >> cleanup; return "$(cat cleanup_status)"; }
     """
     result = subprocess.run(
         ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", commands + script],
@@ -67,4 +74,6 @@ def test_free_runner_disk_action(
     cleanup = tmp_path / "cleanup"
     assert cleanup.exists() is reclaims
     if reclaims:
-        assert cleanup.read_text().splitlines() == ["reclaim"]
+        assert cleanup.read_text().splitlines() == [
+            "rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup"
+        ]
