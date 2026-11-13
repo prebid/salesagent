@@ -104,6 +104,7 @@ from tests.harness._base import BareIntegrationEnv
 # The seams, the shared tenant/surface constants and the shared request builders all come
 # from their single home (salesagent-z6nr.14 step 2). What stays below is only what this
 # suite alone uses — the per-surface paths and payload overrides.
+from tests.helpers.metrics import counter_total, samples_with
 from tests.helpers.signing import (
     CAPABILITIES_ADCP_PATH,
     COUNTERPARTY_KID,
@@ -111,12 +112,10 @@ from tests.helpers.signing import (
     SIGNING_PRINCIPAL_ID,
     SIGNING_TENANT_ID,
     bucketed_declaration,
-    counter_total,
     counterparty_key,
     keypair_for,
     narrowed_none,
     request_headers,
-    samples_with,
     seed_principal,
     signed_headers,
     signing_config,
@@ -301,7 +300,7 @@ def _assert_verifier_looked() -> Iterator[None]:
     that decides an unsigned request may proceed. A boundary that returned early emits nothing
     and the delta is zero.
 
-    Reads the counter through ``counter_total`` (tests/helpers/signing.py) rather than
+    Reads the counter through ``counter_total`` (tests/helpers/metrics.py) rather than
     hand-rolling a before/after pair — that idiom was open-coded at eight sites across three
     modules, and a ninth would make it worse.
     """

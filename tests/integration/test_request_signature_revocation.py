@@ -179,6 +179,8 @@ from src.core.signing.revocation import (
 from src.core.signing.verifier import AGENT_RESOLUTION_CACHE
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.log_capture import LogCaptureHandler
+from tests.helpers.metrics import assert_counter_delta
+from tests.helpers.metrics import counter_total as _counter_total
 
 # tests/helpers/signing.py owns the wire plumbing for signed requests
 # (declaration seam, counterparty resolution seam, signing, rejection-code
@@ -194,16 +196,12 @@ from tests.helpers.signing import (
     LADDER_OPERATIONS,
     SIGNING_PRINCIPAL_ID,
     SIGNING_TENANT_ID,
-    assert_counter_delta,
     bucketed_declaration,
     counterparty_key,
     keypair_for,
     seed_principal,
     seeded_cache_entry,
     signed_headers,
-)
-from tests.helpers.signing import (
-    counter_total as _counter_total,
 )
 from tests.helpers.signing import (
     declared_posture as _declared_posture,

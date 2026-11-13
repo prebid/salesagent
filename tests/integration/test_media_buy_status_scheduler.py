@@ -9,12 +9,11 @@ based on flight dates:
 Uses real PostgreSQL database via integration_db fixture.
 """
 
-import logging
-import re
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import text
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
@@ -26,12 +25,24 @@ from src.core.database.models import (
     Tenant,
 )
 from src.core.database.repositories import MediaBuyRepository
-from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
+from src.services.media_buy_status_scheduler import (
+    STATUS_BATCH_SUMMARY_PREFIX,
+    MediaBuyStatusScheduler,
+)
 from tests.factories import stamp_format_identity
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
     read_media_buy_state,
+)
+from tests.helpers.metrics import counter_value
+from tests.helpers.scheduler_isolation import (
+    INVALIDATED_ESCAPE_ERROR_TYPES,
+    assert_propagated_session_error,
+    logged,
+    run_status_tick,
+    seed_active_expired_buys,
+    statement_failure,
 )
 from tests.utils.database_helpers import add_product_prerequisites, vhost_for
 
@@ -415,17 +426,12 @@ async def test_active_transitions_to_completed_when_end_time_passed(integration_
     tenant_id = _create_test_tenant("tenant_active_completed")
     principal_id = _create_test_principal(tenant_id)
 
-    # Create media buy with end_time in the past
-    past_start = datetime.now(UTC) - timedelta(days=7)
-    past_end = datetime.now(UTC) - timedelta(hours=1)
-
-    media_buy_id = _create_media_buy(
+    media_buy_id = "mb_active_to_completed"
+    seed_active_expired_buys(
+        _create_media_buy,
         tenant_id=tenant_id,
         principal_id=principal_id,
-        media_buy_id="mb_active_to_completed",
-        status="active",
-        start_time=past_start,
-        end_time=past_end,
+        buy_ids=[media_buy_id],
     )
 
     # Verify initial status
@@ -527,6 +533,225 @@ async def test_scheduler_updates_multiple_media_buys(integration_db):
     assert read_media_buy_state(tenant_id, "mb_multi_1").status == "active"
     assert read_media_buy_state(tenant_id, "mb_multi_2").status == "completed"
     assert read_media_buy_state(tenant_id, "mb_multi_3").status == "scheduled"  # No change
+
+
+# =============================================================================
+# Test: Per-buy failure isolation (#1714)
+# =============================================================================
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["division", "statement_timeout"])
+@pytest.mark.parametrize("raiser_slot", [0, 1, 2])
+async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db, fault, raiser_slot):
+    """A DB error on one buy must not discard sibling status flips.
+
+    Uses a SAVEPOINT-backed per-buy body. Division by zero and a statement
+    timeout (SQLSTATE 57014) are both answers the server gave, so the buy is
+    isolated, its siblings still flip, and the fail-fast stays unarmed.
+    """
+    tenant_id = _create_test_tenant(f"iso_{fault[:3]}_{raiser_slot}")
+    principal_id = _create_test_principal(tenant_id)
+
+    buy_ids = [
+        f"mb_{fault[:3]}_{raiser_slot}_a",
+        f"mb_{fault[:3]}_{raiser_slot}_b",
+        f"mb_{fault[:3]}_{raiser_slot}_c",
+    ]
+    bad_buy_id = buy_ids[raiser_slot]
+    good_ids = [mid for mid in buy_ids if mid != bad_buy_id]
+
+    seed_active_expired_buys(
+        _create_media_buy,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        buy_ids=buy_ids,
+    )
+
+    for mid in buy_ids:
+        assert read_media_buy_state(tenant_id, mid).status == "active"
+
+    scheduler = MediaBuyStatusScheduler()
+    real_compute = scheduler._compute_new_status
+    processed: list[str] = []
+
+    def _compute_with_raiser(media_buy, now_arg, session):
+        processed.append(media_buy.media_buy_id)
+        if media_buy.media_buy_id == bad_buy_id:
+            if fault == "division":
+                session.execute(text("SELECT 1/0"))
+            else:
+                raise statement_failure()
+        return real_compute(media_buy, now_arg, session)
+
+    metric_before = counter_value("media_buy_status", tenant_id, "db_error")
+    records: list = []
+
+    async def _run() -> None:
+        with patch.object(scheduler, "_compute_new_status", side_effect=_compute_with_raiser):
+            records.extend(await run_status_tick(scheduler))
+
+    await assert_propagated_session_error(_run, trips_fail_fast=False)
+
+    assert set(processed) == set(buy_ids)
+    for mid in good_ids:
+        assert read_media_buy_state(tenant_id, mid).status == "completed"
+    assert read_media_buy_state(tenant_id, bad_buy_id).status == "active"
+
+    errors = [record for record in records if record.levelname == "ERROR"]
+    assert len(errors) == 1
+    err_msg = errors[0].getMessage()
+    assert f"tenant_id={tenant_id}" in err_msg
+    assert f"principal_id={principal_id}" in err_msg
+    assert f"media_buy_id={bad_buy_id}" in err_msg
+    assert errors[0].exc_info
+
+    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == [
+        f"{STATUS_BATCH_SUMMARY_PREFIX}: 2 updated, 1 errors"
+    ]
+    assert logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX) == []
+
+    assert counter_value("media_buy_status", tenant_id, "db_error") == metric_before + 1
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_all_failing_flips_emit_warning_summary(integration_db):
+    """All-fail batch must WARNING the summary; INFO must not carry it."""
+    tenant_id = _create_test_tenant("tenant_isolation_all_fail_1714")
+    principal_id = _create_test_principal(tenant_id)
+
+    buy_ids = ["mb_all_fail_a", "mb_all_fail_b", "mb_all_fail_c"]
+    seed_active_expired_buys(
+        _create_media_buy,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        buy_ids=buy_ids,
+    )
+
+    scheduler = MediaBuyStatusScheduler()
+
+    def _always_fail(_media_buy, _now_arg, _session):
+        raise ValueError("flip failed")
+
+    metric_before = counter_value("media_buy_status", tenant_id, "other")
+
+    with patch.object(scheduler, "_compute_new_status", side_effect=_always_fail):
+        records = await run_status_tick(scheduler)
+
+    warning_msgs = logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX)
+    info_msgs = logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX)
+    assert warning_msgs == [f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"]
+    assert info_msgs == []
+    # Non-SQLAlchemyError → _classify_scheduler_error → "other"
+    assert counter_value("media_buy_status", tenant_id, "other") == metric_before + 3
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_savepoint_release_failure_not_counted_processed_and_warns(integration_db):
+    """BLOCKER oracle: on-enum write + flush failure at SAVEPOINT release.
+
+    ``PersistedMediaBuyStatus.parse`` refuses off-enum values before any flush, so
+    an over-length status string no longer reaches release. Keep the injected
+    status inside the pinned enum, let ``update_status`` succeed, then dirty a
+    non-status ``String(255)`` column so the RELEASE flush raises
+    ``DataError`` / truncation — grading the release path, not parse.
+    """
+    from src.core.database.models import PersistedMediaBuyStatus
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
+    tenant_id = _create_test_tenant("tenant_isolation_release_fail_1714")
+    principal_id = _create_test_principal(tenant_id)
+
+    buy_ids = ["mb_rel_a", "mb_rel_b", "mb_rel_c"]
+    seed_active_expired_buys(
+        _create_media_buy,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        buy_ids=buy_ids,
+    )
+
+    scheduler = MediaBuyStatusScheduler()
+    real_update = MediaBuyRepository.update_status
+
+    def _update_then_poison_order_name(self, media_buy_id, status, **kwargs):
+        updated = real_update(self, media_buy_id, status, **kwargs)
+        if updated is not None:
+            # order_name is String(255); over-length dirties the unit so the
+            # SAVEPOINT RELEASE flush fails after the on-enum status write.
+            updated.order_name = "x" * 300
+        return updated
+
+    with (
+        patch.object(scheduler, "_compute_new_status", return_value=PersistedMediaBuyStatus.COMPLETED),
+        patch.object(MediaBuyRepository, "update_status", _update_then_poison_order_name),
+    ):
+        records = await run_status_tick(scheduler)
+
+    for mid in buy_ids:
+        assert read_media_buy_state(tenant_id, mid).status == "active"
+
+    warning_msgs = logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX)
+    assert warning_msgs == [f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"]
+    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert logged(records, "INFO", "Updated media buy ") == []
+
+
+def _propagated_session_cases():
+    for exc_type in INVALIDATED_ESCAPE_ERROR_TYPES:
+        yield pytest.param(exc_type.__name__, False, id=exc_type.__name__)
+    yield pytest.param("server_never_answered", True, id="server_never_answered")
+    yield pytest.param("DisconnectionError", False, id="DisconnectionError")
+
+
+def _propagated_session_error(kind: str):
+    from tests.helpers.scheduler_isolation import (
+        bare_disconnection_error,
+        invalidated_dbapi_error,
+        server_never_answered_error,
+    )
+
+    if kind == "server_never_answered":
+        return server_never_answered_error()
+    if kind == "DisconnectionError":
+        return bare_disconnection_error()
+    exc_type = next(exc_type for exc_type in INVALIDATED_ESCAPE_ERROR_TYPES if exc_type.__name__ == kind)
+    return invalidated_dbapi_error(exc_type)
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("kind", "trips_fail_fast"), _propagated_session_cases())
+async def test_propagated_session_error_stops_the_tick(integration_db, kind, trips_fail_fast):
+    """A session-level database error stops the tick.
+
+    A discarded connection and a dropped connection leave the fail-fast unarmed.
+    An OperationalError with no SQLSTATE is a connect the server never answered,
+    and that one trips it. Later buys in the tick do not run.
+    """
+    from tests.helpers.scheduler_isolation import assert_propagated_failure_stops_batch
+
+    exc = _propagated_session_error(kind)
+    tenant_id = _create_test_tenant(f"iso_{kind}_{int(trips_fail_fast)}")
+    principal_id = _create_test_principal(tenant_id)
+    buy_ids = [f"mb_{kind}_a", f"mb_{kind}_b"]
+
+    seed_active_expired_buys(
+        _create_media_buy,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        buy_ids=buy_ids,
+    )
+
+    await assert_propagated_failure_stops_batch(
+        MediaBuyStatusScheduler(),
+        exc,
+        tenant_id=tenant_id,
+        trips_fail_fast=trips_fail_fast,
+        buy_count=len(buy_ids),
+    )
 
 
 # =============================================================================
@@ -635,14 +860,13 @@ async def test_scheduler_idempotent(integration_db):
 
 @pytest.mark.requires_db
 @pytest.mark.asyncio
-async def test_sweep_does_not_count_a_write_the_repository_declined(integration_db, caplog):
-    """A ``None`` from ``update_status`` must be reported, not counted.
+async def test_sweep_does_not_count_a_write_the_repository_declined(integration_db):
+    """A ``None`` from ``update_status`` is an isolated error, not a flip.
 
     ``MediaBuyRepository.update_status`` returns ``None`` when the row is not
-    found within the repository's tenant. The sweep is cross-tenant while the
-    repository is tenant-scoped, so the sweep MUST read that return: counting the
-    row anyway would make the run report ``Updated 1 media buy status(es)`` for a
-    row whose status never moved — a sweep silently lying about its own work.
+    found within the repository's tenant. The sweep raises inside the savepoint
+    so the buy rolls back, the batch summary reports ``0 updated, 1 errors``,
+    and the isolation counter increments with ``error_type`` ``other``.
     """
     tenant_id = _create_test_tenant("tenant_declined_write")
     principal_id = _create_test_principal(tenant_id)
@@ -664,12 +888,10 @@ async def test_sweep_does_not_count_a_write_the_repository_declined(integration_
     assert before.status == "scheduled"
 
     scheduler = MediaBuyStatusScheduler()
+    metric_before = counter_value("media_buy_status", tenant_id, "other")
 
-    with (
-        patch.object(MediaBuyRepository, "update_status", return_value=None) as mock_update,
-        caplog.at_level(logging.INFO, logger="src.services.media_buy_status_scheduler"),
-    ):
-        await scheduler._update_statuses()
+    with patch.object(MediaBuyRepository, "update_status", return_value=None) as mock_update:
+        records = await run_status_tick(scheduler)
 
     # The sweep did reach the write — otherwise the rest of this test is vacuous.
     # seller_committed=True is asserted, not tolerated: the pin forbids a null
@@ -677,27 +899,18 @@ async def test_sweep_does_not_count_a_write_the_repository_declined(integration_
     # claiming the commitment could put a schema-invalid document on the wire.
     mock_update.assert_called_once_with(media_buy_id, PersistedMediaBuyStatus.ACTIVE, seller_committed=True)
 
-    messages = [record.getMessage() for record in caplog.records]
-
-    # (a) The declined write is not counted: neither the per-row transition line
-    #     nor the run total may claim an update happened.
-    assert not [m for m in messages if m.startswith(f"Updated media buy {media_buy_id} status:")], (
-        f"sweep logged a transition for a write the repository declined: {messages}"
-    )
-    assert not [m for m in messages if re.fullmatch(r"Updated \d+ media buy status\(es\)", m)], (
-        f"sweep reported a non-zero updated count for a write the repository declined: {messages}"
-    )
-
-    # (b) It is reported rather than swallowed.
-    errors = [
-        record.getMessage()
-        for record in caplog.records
-        if record.levelno == logging.ERROR and "vanished from its own tenant" in record.getMessage()
+    assert logged(records, "INFO", "Updated media buy ") == []
+    assert logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX) == [
+        f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 1 errors"
     ]
-    assert len(errors) == 1, f"expected exactly one 'vanished from its own tenant' ERROR, got: {messages}"
-    assert media_buy_id in errors[0] and repr(tenant_id) in errors[0], (
-        f"the error must name the row and the tenant it was scoped to, got: {errors[0]}"
-    )
+    assert counter_value("media_buy_status", tenant_id, "other") == metric_before + 1
+
+    errors = [record for record in records if record.levelname == "ERROR"]
+    assert len(errors) == 1
+    err_msg = errors[0].getMessage()
+    assert f"tenant_id={tenant_id}" in err_msg
+    assert f"principal_id={principal_id}" in err_msg
+    assert f"media_buy_id={media_buy_id}" in err_msg
 
     # (c) The row itself is untouched — status, and the bookkeeping a real move carries.
     after = read_media_buy_state(tenant_id, media_buy_id)
