@@ -590,7 +590,7 @@ class TestGetLogsByWebhookId:
             repo = DeliveryRepository(session, tenant_a)
             for _i in range(3):
                 repo.record_outcome(
-                    ctx=_ctx(tenant_a, principal_a, media_buy_a),
+                    ctx=_ctx(tenant_a, principal_a, media_buy_a, sequence_number=_i + 1),
                     log_id=str(uuid4()),
                     webhook_url="https://example.com",
                     outcome=_outcome("success"),
