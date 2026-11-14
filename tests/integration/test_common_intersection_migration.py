@@ -18,7 +18,12 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 
-from tests.integration.migration_helpers import reset_to_revision, run_alembic_upgrade
+from tests.integration.migration_helpers import (
+    reset_to_revision,
+    run_alembic_upgrade,
+    seed_inventory_profile,
+    stored_format_options,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -31,9 +36,9 @@ _SCOPED = {
     "format_kind": "image",
     "format_option_id": "leaderboard",
     "params": {"width": 728, "height": 90},
-    "publisher_domain": "first.example",
+    "publisher_domain": "first-psatest.com",
 }
-_TWO = [{"publisher_domain": d, "selection_type": "all"} for d in ("first.example", "second.example")]
+_TWO = [{"publisher_domain": d, "selection_type": "all"} for d in ("first-psatest.com", "second-psatest.com")]
 _PLACEMENT = [{"kind": "seller_inline", "mode": "included", "placement_id": "hero", "name": "Hero"}]
 
 
@@ -42,20 +47,13 @@ def _json(value: Any) -> str | None:
 
 
 def _insert_profile(engine, profile_id: str, format_options: Any, publisher_properties: Any) -> int:
-    with engine.begin() as conn:
-        return conn.execute(
-            text(
-                "INSERT INTO inventory_profiles (tenant_id, profile_id, name, inventory_config, format_options, "
-                "publisher_properties, created_at, updated_at) VALUES (:tid, :pid, :pid, '{}'::jsonb, "
-                "CAST(:options AS jsonb), CAST(:properties AS jsonb), now(), now()) RETURNING id"
-            ),
-            {
-                "tid": _TENANT,
-                "pid": profile_id,
-                "options": _json(format_options),
-                "properties": _json(publisher_properties),
-            },
-        ).scalar_one()
+    return seed_inventory_profile(
+        engine,
+        tenant_id=_TENANT,
+        profile_id=profile_id,
+        format_options=format_options,
+        publisher_properties=publisher_properties,
+    )
 
 
 def _insert_product(
@@ -81,9 +79,7 @@ def _insert_product(
         )
 
 
-def _options(engine, table: str, where: str, key: Any) -> Any:
-    with engine.begin() as conn:
-        return conn.execute(text(f"SELECT format_options FROM {table} WHERE {where} = :key"), {"key": key}).scalar_one()
+_options = stored_format_options
 
 
 def test_the_upgrade_keeps_the_common_intersection_where_the_contract_is_stored(migration_db):

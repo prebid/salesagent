@@ -6,14 +6,14 @@ approve_order, and archive_order with proper validation.
 """
 
 from datetime import UTC, datetime
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.adapters.constants import UPDATE_ACTIONS
-from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.exceptions import AdCPAuthorizationError, AdCPCapabilityNotSupportedError
 from src.core.schemas import Principal
+from tests.helpers.gam_client import build_gam_adapter
 
 
 class TestGAMOrderLifecycleIntegration:
@@ -54,42 +54,23 @@ class TestGAMOrderLifecycleIntegration:
 
     def test_admin_detection_real_business_logic(self, test_principals, gam_config):
         """Test admin principal detection using real business logic."""
-        with patch("src.adapters.google_ad_manager.GoogleAdManager._init_client"):
-            # Test regular user - not admin
-            regular_adapter = GoogleAdManager(
-                config=gam_config,
-                principal=test_principals["regular"],
-                network_code=gam_config["network_code"],
-                advertiser_id=test_principals["regular"].platform_mappings["google_ad_manager"]["advertiser_id"],
-                trafficker_id=gam_config["trafficker_id"],
-                tenant_id="test",
-                tenant_ai_config=None,
-            )
-            assert regular_adapter._is_admin_principal() is False
+        # Test regular user - not admin
+        regular_adapter = build_gam_adapter(
+            MagicMock(), principal=test_principals["regular"], config=gam_config, tenant_id="test"
+        )
+        assert regular_adapter._is_admin_principal() is False
 
-            # Test gam_admin flag - should be admin
-            gam_admin_adapter = GoogleAdManager(
-                config=gam_config,
-                principal=test_principals["gam_admin"],
-                network_code=gam_config["network_code"],
-                advertiser_id=test_principals["gam_admin"].platform_mappings["google_ad_manager"]["advertiser_id"],
-                trafficker_id=gam_config["trafficker_id"],
-                tenant_id="test",
-                tenant_ai_config=None,
-            )
-            assert gam_admin_adapter._is_admin_principal() is True
+        # Test gam_admin flag - should be admin
+        gam_admin_adapter = build_gam_adapter(
+            MagicMock(), principal=test_principals["gam_admin"], config=gam_config, tenant_id="test"
+        )
+        assert gam_admin_adapter._is_admin_principal() is True
 
-            # Test is_admin flag - should be admin
-            is_admin_adapter = GoogleAdManager(
-                config=gam_config,
-                principal=test_principals["is_admin"],
-                network_code=gam_config["network_code"],
-                advertiser_id=test_principals["is_admin"].platform_mappings["google_ad_manager"]["advertiser_id"],
-                trafficker_id=gam_config["trafficker_id"],
-                tenant_id="test",
-                tenant_ai_config=None,
-            )
-            assert is_admin_adapter._is_admin_principal() is True
+        # Test is_admin flag - should be admin
+        is_admin_adapter = build_gam_adapter(
+            MagicMock(), principal=test_principals["is_admin"], config=gam_config, tenant_id="test"
+        )
+        assert is_admin_adapter._is_admin_principal() is True
 
     @pytest.mark.requires_db
     def test_lifecycle_workflow_validation(self, test_principals, gam_config):
@@ -99,61 +80,48 @@ class TestGAMOrderLifecycleIntegration:
         unsupported actions and authorization failures. Only ``approve_order``,
         ``activate_order``, and ``update_package_budget`` are supported.
         """
-        with patch("src.adapters.google_ad_manager.GoogleAdManager._init_client"):
-            # Test regular user with different actions
-            regular_adapter = GoogleAdManager(
-                config=gam_config,
-                principal=test_principals["regular"],
-                network_code=gam_config["network_code"],
-                advertiser_id=test_principals["regular"].platform_mappings["google_ad_manager"]["advertiser_id"],
-                trafficker_id=gam_config["trafficker_id"],
-                tenant_id="test",
-                tenant_ai_config=None,
-            )
+        # Test regular user with different actions
+        regular_adapter = build_gam_adapter(
+            MagicMock(), principal=test_principals["regular"], config=gam_config, tenant_id="test"
+        )
 
-            # submit_for_approval and archive_order are NOT supported by GAM.
-            unsupported_actions = ["submit_for_approval", "archive_order"]
-            for action in unsupported_actions:
-                with pytest.raises(AdCPCapabilityNotSupportedError):
-                    regular_adapter.update_media_buy(
-                        media_buy_id="12345",
-                        action=action,
-                        package_id=None,
-                        budget=None,
-                        today=datetime.now(UTC),
-                    )
-
-            # approve_order is admin-only — non-admin gets AdCPAuthorizationError.
-            with pytest.raises(AdCPAuthorizationError):
+        # submit_for_approval and archive_order are NOT supported by GAM.
+        unsupported_actions = ["submit_for_approval", "archive_order"]
+        for action in unsupported_actions:
+            with pytest.raises(AdCPCapabilityNotSupportedError):
                 regular_adapter.update_media_buy(
                     media_buy_id="12345",
-                    action="approve_order",
+                    action=action,
                     package_id=None,
                     budget=None,
                     today=datetime.now(UTC),
                 )
 
-            # Admin user passes the admin_only_actions gate, but approve_order has
-            # no dedicated handler in the adapter so it falls through to the
-            # AdCPCapabilityNotSupportedError path. Documenting current behavior:
-            # the admin gate exists but no implementation backs it.
-            admin_adapter = GoogleAdManager(
-                config=gam_config,
-                principal=test_principals["gam_admin"],
-                network_code=gam_config["network_code"],
-                advertiser_id=test_principals["gam_admin"].platform_mappings["google_ad_manager"]["advertiser_id"],
-                trafficker_id=gam_config["trafficker_id"],
-                tenant_id="test",
-                tenant_ai_config=None,
+        # approve_order is admin-only — non-admin gets AdCPAuthorizationError.
+        with pytest.raises(AdCPAuthorizationError):
+            regular_adapter.update_media_buy(
+                media_buy_id="12345",
+                action="approve_order",
+                package_id=None,
+                budget=None,
+                today=datetime.now(UTC),
             )
-            with pytest.raises(AdCPCapabilityNotSupportedError):
-                admin_adapter.update_media_buy(
-                    media_buy_id="12345",
-                    action="approve_order",
-                    package_id=None,
-                    budget=None,
-                    today=datetime.now(UTC),
-                )
+
+        # Admin user passes the admin_only_actions gate, but approve_order has
+        # no dedicated handler in the adapter so it falls through to the
+        # AdCPCapabilityNotSupportedError path. Documenting current behavior:
+        # the admin gate exists but no implementation backs it.
+        admin_adapter = build_gam_adapter(
+            MagicMock(), principal=test_principals["gam_admin"], config=gam_config, tenant_id="test"
+        )
+        with pytest.raises(AdCPCapabilityNotSupportedError):
+            admin_adapter.update_media_buy(
+                media_buy_id="12345",
+                action="approve_order",
+                package_id=None,
+                budget=None,
+                today=datetime.now(UTC),
+            )
 
     def test_guaranteed_line_item_classification(self):
         """Test line item type classification logic with real data structures."""
@@ -191,43 +159,36 @@ class TestGAMOrderLifecycleIntegration:
         when there are no guaranteed items (the code path only handles the
         guaranteed-items case explicitly). That raise is what this test grades.
         """
-        with patch("src.adapters.google_ad_manager.GoogleAdManager._init_client"):
-            adapter = GoogleAdManager(
-                config=gam_config,
-                principal=test_principals["regular"],
-                network_code=gam_config["network_code"],
-                advertiser_id=test_principals["regular"].platform_mappings["google_ad_manager"]["advertiser_id"],
-                trafficker_id=gam_config["trafficker_id"],
-                tenant_id="test",
-                tenant_ai_config=None,
-            )
+        adapter = build_gam_adapter(
+            MagicMock(), principal=test_principals["regular"], config=gam_config, tenant_id="test"
+        )
 
-            # Test activation with non-guaranteed items — no special handling, raises.
-            with patch.object(adapter, "_check_order_has_guaranteed_items", return_value=(False, [])):
-                with pytest.raises(AdCPCapabilityNotSupportedError):
-                    adapter.update_media_buy(
-                        media_buy_id="12345",
-                        action="activate_order",
-                        package_id=None,
-                        budget=None,
-                        today=datetime.now(UTC),
-                    )
+        # Test activation with non-guaranteed items — no special handling, raises.
+        with patch.object(adapter, "_check_order_has_guaranteed_items", return_value=(False, [])):
+            with pytest.raises(AdCPCapabilityNotSupportedError):
+                adapter.update_media_buy(
+                    media_buy_id="12345",
+                    action="activate_order",
+                    package_id=None,
+                    budget=None,
+                    today=datetime.now(UTC),
+                )
 
-            # The guaranteed-items half is deleted, not repaired. It asserted
-            # ``response.workflow_step_id``, and ``AdapterUpdateResult`` declares
-            # exactly ``media_buy_id`` and ``affected_packages`` under
-            # ``extra="forbid"`` -- the carrier holds only what the tool reads off
-            # an adapter, and no adapter return path carries a workflow step id
-            # (``workflow_step_id`` appears nowhere in ``src/adapters/`` outside two
-            # mock_ad_server comments). Creating the activation workflow step is a
-            # PERSISTENCE side effect now, and the test patched
-            # ``create_activation_workflow_step`` away "to avoid database foreign key
-            # issues", so it had nothing observable left to assert.
-            #
-            # Grading it properly means reading the workflow_steps row, which belongs
-            # in a test that seeds the FKs instead of patching the writer. Until then
-            # the GAM guaranteed-activation path is UNGRADED: BR-UC-003 covers the
-            # ``pending_activation`` status rows, not this behavior.
+        # The guaranteed-items half is deleted, not repaired. It asserted
+        # ``response.workflow_step_id``, and ``AdapterUpdateResult`` declares
+        # exactly ``media_buy_id`` and ``affected_packages`` under
+        # ``extra="forbid"`` -- the carrier holds only what the tool reads off
+        # an adapter, and no adapter return path carries a workflow step id
+        # (``workflow_step_id`` appears nowhere in ``src/adapters/`` outside two
+        # mock_ad_server comments). Creating the activation workflow step is a
+        # PERSISTENCE side effect now, and the test patched
+        # ``create_activation_workflow_step`` away "to avoid database foreign key
+        # issues", so it had nothing observable left to assert.
+        #
+        # Grading it properly means reading the workflow_steps row, which belongs
+        # in a test that seeds the FKs instead of patching the writer. Until then
+        # the GAM guaranteed-activation path is UNGRADED: BR-UC-003 covers the
+        # ``pending_activation`` status rows, not this behavior.
 
     # Helper method for line item classification (no external dependencies)
     def _classify_line_items(self, line_items):

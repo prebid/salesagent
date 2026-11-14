@@ -26,7 +26,7 @@ from adcp.types.domains.core.publisher_property_selector import (  # TODO: no st
 from src.core.schemas import GetProductsRequest
 
 
-def _make_selector_all(domain: str = "example.com") -> PublisherPropertySelector:
+def _make_selector_all(domain: str = "psatest.com") -> PublisherPropertySelector:
     """Create a 'select all' publisher property selector."""
     return PublisherPropertySelector1(
         publisher_domain=domain,
@@ -34,7 +34,7 @@ def _make_selector_all(domain: str = "example.com") -> PublisherPropertySelector
     )
 
 
-def _make_selector_by_id(property_ids: list[str], domain: str = "example.com") -> PublisherPropertySelector:
+def _make_selector_by_id(property_ids: list[str], domain: str = "psatest.com") -> PublisherPropertySelector:
     """Create a 'by_id' publisher property selector."""
     return PublisherPropertySelector2(
         publisher_domain=domain,

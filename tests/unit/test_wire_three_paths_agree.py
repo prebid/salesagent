@@ -50,7 +50,7 @@ def _product(**overrides) -> Product:
         "format_ids": [_FORMAT_ID],
         "delivery_type": "guaranteed",
         "delivery_measurement": {"provider": "publisher"},
-        "publisher_properties": [create_test_publisher_properties_by_tag(publisher_domain="example.com")],
+        "publisher_properties": [create_test_publisher_properties_by_tag(publisher_domain="psatest.com")],
         "pricing_options": [
             create_test_cpm_pricing_option(pricing_option_id="cpm_usd_fixed", currency="USD", rate=10.0),
         ],

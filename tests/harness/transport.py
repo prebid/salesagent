@@ -142,6 +142,10 @@ TRANSPORT_PROTOCOL: dict[Transport, str] = {
     Transport.E2E_A2A: "a2a",
 }
 
+# The transports a BDD scenario runs on with no server: the parametrize list in
+# tests/bdd/conftest.py, and the projection tests/bdd/scenario_liveness.py grades.
+BDD_IN_PROCESS_TRANSPORTS = (Transport.A2A, Transport.MCP, Transport.REST)
+
 
 # The ONE credential-argument omission sentinel for the whole dispatch core
 # (tests/harness/client.py, dispatchers.py, raw_wire.py, _base.py, _mixins.py).
@@ -190,12 +194,17 @@ class E2EConfig:
         ca_bundle: ABSOLUTE path to the CA that signed the stack's leaf. Absolute
             because pytest does not always run from the repo root. ``None`` when
             there is no TLS listener to verify.
+        server_host: The container that serves ``base_url``'s requests and dials
+            outbound, by its network name -- what a test publisher's origin keys the
+            files it serves by (tests/harness/publisher_authorization.py). ``None`` when
+            the stack does not say.
     """
 
     base_url: str
     postgres_url: str
     tls_base_url: str | None = None
     ca_bundle: str | None = None
+    server_host: str | None = None
 
     @classmethod
     def from_environment(cls) -> E2EConfig | None:
@@ -215,11 +224,13 @@ class E2EConfig:
             raise RuntimeError("The configured E2E stack requires E2E_POSTGRES_URL")
         ca_bundle = os.environ.get("E2E_CA_BUNDLE")
         tls_base_url = os.environ.get("E2E_TLS_BASE_URL")
+        server_host = os.environ.get("E2E_SERVER_HOST")
         worker = os.environ.get("PYTEST_XDIST_WORKER", "")
         if os.environ.get("E2E_PER_WORKER") == "1" and worker.startswith("gw"):
             project = os.environ.get("COMPOSE_PROJECT_NAME", "")
             prefix = f"{project}-" if project else ""
-            base_url = f"http://{prefix}server-{worker}:8080"
+            server_host = f"{prefix}server-{worker}"
+            base_url = f"http://{server_host}:8080"
             postgres_url = re.sub(r"/[^/?]+(\?|$)", rf"/adcp_{worker}\1", postgres_url, count=1)
             if tls_base_url:
                 tls_base_url = f"https://{prefix}tls-{worker}.adcp.test:8443"
@@ -234,7 +245,7 @@ class E2EConfig:
             ) from exc
         except httpx.HTTPStatusError as exc:
             raise RuntimeError(f"The configured E2E stack failed health at {base_url}/health") from exc
-        return cls(base_url, postgres_url, tls_base_url, ca_bundle)
+        return cls(base_url, postgres_url, tls_base_url, ca_bundle, server_host)
 
 
 # The two values TransportResult.envelope["status"] may take. A DERIVED enum,

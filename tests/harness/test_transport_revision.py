@@ -55,6 +55,8 @@ def no_stack(monkeypatch):
         "POSTGRES_PORT",
         "E2E_TLS_BASE_URL",
         "E2E_CA_BUNDLE",
+        "E2E_SERVER_HOST",
+        "COMPOSE_PROJECT_NAME",
         "E2E_PER_WORKER",
         "PYTEST_XDIST_WORKER",
     ):
@@ -81,14 +83,30 @@ def test_configured_unreachable_stack_fails(no_stack, monkeypatch, failure):
         E2EConfig.from_environment()
 
 
-def test_worker_stack_keeps_tls_and_uses_own_database(no_stack, monkeypatch):
+@pytest.mark.parametrize(
+    "worker,base_url,postgres_url,tls_base_url,server_host",
+    [
+        ("", "http://shared.test", "postgresql://db/adcp?sslmode=disable", "https://tls.test", "shared-server"),
+        (
+            "gw2",
+            "http://revision-server-gw2:8080",
+            "postgresql://db/adcp_gw2?sslmode=disable",
+            "https://revision-tls-gw2.adcp.test:8443",
+            "revision-server-gw2",
+        ),
+    ],
+)
+def test_stack_keeps_tls_database_and_seller_host(
+    no_stack, monkeypatch, worker, base_url, postgres_url, tls_base_url, server_host
+):
     for key, value in {
         "E2E_BASE_URL": "http://shared.test",
         "E2E_POSTGRES_URL": "postgresql://db/adcp?sslmode=disable",
         "E2E_TLS_BASE_URL": "https://tls.test",
         "E2E_CA_BUNDLE": "/tmp/test-ca.pem",
+        "E2E_SERVER_HOST": "shared-server",
         "E2E_PER_WORKER": "1",
-        "PYTEST_XDIST_WORKER": "gw2",
+        "PYTEST_XDIST_WORKER": worker,
         "COMPOSE_PROJECT_NAME": "revision",
     }.items():
         monkeypatch.setenv(key, value)
@@ -100,10 +118,12 @@ def test_worker_stack_keeps_tls_and_uses_own_database(no_stack, monkeypatch):
 
     monkeypatch.setattr(httpx, "get", healthy)
     config = E2EConfig.from_environment()
-    assert seen == ["http://revision-server-gw2:8080/health"]
-    assert config.postgres_url == "postgresql://db/adcp_gw2?sslmode=disable"
-    assert config.tls_base_url == "https://revision-tls-gw2.adcp.test:8443"
+    assert seen == [f"{base_url}/health"]
+    assert config.base_url == base_url
+    assert config.postgres_url == postgres_url
+    assert config.tls_base_url == tls_base_url
     assert config.ca_bundle == "/tmp/test-ca.pem"
+    assert config.server_host == server_host
 
 
 @pytest.mark.parametrize("status,header", [(200, "Bearer"), (401, None), (401, 'Signature error="wrong"')])
