@@ -8,8 +8,6 @@ SQLAlchemy relationship between Product and InventoryProfile models.
 
 Tests cover:
 - effective_formats: Returns profile.format_ids or product.format_ids
-- effective_properties: Returns profile.publisher_properties or product.properties
-- effective_property_tags: Returns None for profiles, product.property_tags for custom
 - effective_implementation_config: Builds GAM config from profile or returns custom config
 """
 
@@ -18,9 +16,9 @@ from decimal import Decimal
 import pytest
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import InventoryProfile, Product, Tenant
+from src.core.database.models import InventoryProfile, InventoryProfilePublisherSelection, Product, Tenant
 from tests.factories import PricingOptionFactory
-from tests.helpers import assert_effective_properties_normalized
+from tests.factories.publisher import held_selections
 from tests.helpers.adcp_factories import create_test_db_product
 
 
@@ -65,12 +63,17 @@ def test_profile(integration_db, test_tenant):
                 {"agent_url": "http://test.example.com", "id": "display_300x250_image"},
                 {"agent_url": "http://test.example.com", "id": "display_728x90_image"},
             ],
-            publisher_properties=[
-                {
-                    "publisher_domain": "example.com",
-                    "property_ids": ["example_homepage"],
-                }
-            ],
+            publisher_selections=held_selections(
+                session,
+                InventoryProfilePublisherSelection,
+                test_tenant.tenant_id,
+                [
+                    {
+                        "publisher_domain": "psatest.com",
+                        "property_ids": ["example_homepage"],
+                    }
+                ],
+            ),
             targeting_template={"geo_country": {"values": ["US"], "required": False}},
         )
         session.add(profile)
@@ -92,7 +95,6 @@ def test_product_custom(integration_db, test_tenant):
                 {"agent_url": "http://custom.example.com", "id": "video_15s"},
                 {"agent_url": "http://custom.example.com", "id": "video_30s"},
             ],
-            property_tags=["premium", "video"],
             implementation_config={
                 "targeted_ad_unit_ids": ["custom_unit_1", "custom_unit_2"],
                 "targeted_placement_ids": ["custom_placement_1"],
@@ -132,8 +134,6 @@ def test_product_with_profile(integration_db, test_tenant, test_profile):
             inventory_profile_id=test_profile.id,
             # Custom config exists but should be ignored when profile is set
             format_ids=[{"agent_url": "http://ignored.example.com", "id": "ignored_format"}],
-            # Profile provides properties, so set property_tags to satisfy XOR constraint
-            property_tags=["ignored_tag"],
             implementation_config={
                 "targeted_ad_unit_ids": ["ignored_unit"],
             },
@@ -218,127 +218,6 @@ class TestEffectiveFormats:
             assert effective[1]["id"] == "video_30s"
 
 
-class TestEffectiveProperties:
-    """Tests for Product.effective_properties property."""
-
-    @pytest.mark.requires_db
-    def test_effective_properties_returns_profile_properties_when_profile_set(
-        self, integration_db, test_product_with_profile, test_profile
-    ):
-        """Test effective_properties returns profile.publisher_properties when profile is set.
-
-        Validates that:
-        - Product has inventory_profile_id set
-        - effective_properties returns profile.publisher_properties
-        - Product's direct properties field is None (uses property_tags to satisfy XOR)
-        """
-        with get_db_session() as session:
-            from sqlalchemy import select
-
-            stmt = select(Product).where(Product.product_id == test_product_with_profile.product_id)
-            product = session.scalars(stmt).first()
-
-            # Product should have profile reference
-            assert product.inventory_profile_id == test_profile.id
-            assert product.inventory_profile is not None
-
-            # effective_properties should return profile data + selection_type (non-destructive)
-            effective = product.effective_properties
-            assert_effective_properties_normalized(
-                effective, test_profile.publisher_properties, expected_selection_type="by_id"
-            )
-
-            # Product's direct properties should be None (uses property_tags for XOR constraint)
-            assert product.properties is None
-            assert product.property_tags == ["ignored_tag"]
-
-    @pytest.mark.requires_db
-    def test_effective_properties_returns_custom_properties_when_profile_not_set(
-        self, integration_db, test_product_custom
-    ):
-        """Test effective_properties returns synthesized publisher_properties when profile is not set.
-
-        Validates that:
-        - Product has no inventory_profile_id
-        - effective_properties synthesizes AdCP publisher_properties from property_tags
-        - When product uses property_tags, properties is None
-        """
-        with get_db_session() as session:
-            from sqlalchemy import select
-
-            stmt = select(Product).where(Product.product_id == test_product_custom.product_id)
-            product = session.scalars(stmt).first()
-
-            # Product should NOT have profile reference
-            assert product.inventory_profile_id is None
-
-            # Custom product uses property_tags, so properties should be None
-            assert product.properties is None
-            assert product.property_tags == ["premium", "video"]
-
-            # effective_properties should synthesize by_tag variant from property_tags
-            effective = product.effective_properties
-            assert effective is not None
-            assert len(effective) == 1
-            assert effective[0]["selection_type"] == "by_tag"
-            assert effective[0]["property_tags"] == ["premium", "video"]
-            assert "publisher_domain" in effective[0]
-
-
-class TestEffectivePropertyTags:
-    """Tests for Product.effective_property_tags property."""
-
-    @pytest.mark.requires_db
-    def test_effective_property_tags_returns_none_when_profile_set(self, integration_db, test_product_with_profile):
-        """Test effective_property_tags returns None when profile is set.
-
-        Validates that:
-        - Product has inventory_profile_id set
-        - effective_property_tags returns None (profiles use properties not tags)
-        - This signals to use effective_properties instead
-        """
-        with get_db_session() as session:
-            from sqlalchemy import select
-
-            stmt = select(Product).where(Product.product_id == test_product_with_profile.product_id)
-            product = session.scalars(stmt).first()
-
-            # Product should have profile reference
-            assert product.inventory_profile_id is not None
-            assert product.inventory_profile is not None
-
-            # effective_property_tags should return None for profile-based products
-            effective = product.effective_property_tags
-            assert effective is None
-
-            # Product still has custom property_tags (but they're ignored)
-            assert product.property_tags == ["ignored_tag"]
-
-    @pytest.mark.requires_db
-    def test_effective_property_tags_returns_custom_tags_when_profile_not_set(
-        self, integration_db, test_product_custom
-    ):
-        """Test effective_property_tags returns product.property_tags when profile is not set.
-
-        Validates that:
-        - Product has no inventory_profile_id
-        - effective_property_tags returns product.property_tags (custom config)
-        """
-        with get_db_session() as session:
-            from sqlalchemy import select
-
-            stmt = select(Product).where(Product.product_id == test_product_custom.product_id)
-            product = session.scalars(stmt).first()
-
-            # Product should NOT have profile reference
-            assert product.inventory_profile_id is None
-
-            # effective_property_tags should return product's custom tags
-            effective = product.effective_property_tags
-            assert effective == product.property_tags
-            assert effective == ["premium", "video"]
-
-
 class TestEffectiveImplementationConfig:
     """Tests for Product.effective_implementation_config property."""
 
@@ -410,8 +289,8 @@ class TestEffectiveImplementationConfig:
             assert effective["custom_field"] == "custom_value"
 
     @pytest.mark.requires_db
-    def test_effective_properties_handle_none_profile_relationship(self, integration_db, test_tenant, test_profile):
-        """Test effective properties handle None profile relationship gracefully.
+    def test_effective_values_load_the_profile_relationship_on_access(self, integration_db, test_tenant, test_profile):
+        """The effective_* values read a profile relationship loaded only on access.
 
         Validates that:
         - Product has inventory_profile_id set but relationship is None (simulated)
@@ -430,7 +309,6 @@ class TestEffectiveImplementationConfig:
                 description="Product to test profile fallback behavior",
                 inventory_profile_id=test_profile.id,
                 format_ids=[{"agent_url": "http://fallback.example.com", "id": "fallback_format"}],
-                property_tags=["fallback_tag"],
                 implementation_config={
                     "targeted_ad_unit_ids": ["fallback_unit"],
                 },
@@ -473,16 +351,6 @@ class TestEffectiveImplementationConfig:
             effective_formats = list(product.format_contract.format_ids)
             assert effective_formats == test_profile.format_ids
             assert len(effective_formats) == 2
-
-            # effective_properties uses profile (non-destructive normalization)
-            effective_properties = product.effective_properties
-            assert_effective_properties_normalized(
-                effective_properties, test_profile.publisher_properties, expected_selection_type="by_id"
-            )
-
-            # effective_property_tags returns None for profile-based products
-            effective_property_tags = product.effective_property_tags
-            assert effective_property_tags is None
 
             # effective_config built from profile inventory_config
             effective_config = product.effective_implementation_config

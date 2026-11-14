@@ -166,12 +166,12 @@ class TestCreateMediaBuyV24Format:
 
             # Cleanup - IMPORTANT: Delete in reverse dependency order
             from src.core.database.models import (
-                AuthorizedProperty,
                 MediaBuy,
                 MediaPackage,
                 PricingOption,
                 Product,
                 PropertyTag,
+                Publisher,
             )
 
             # Delete media_packages first (depends on media_buys)
@@ -194,8 +194,8 @@ class TestCreateMediaBuyV24Format:
             session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == "test_tenant_v24"))
             # Delete property tags
             session.execute(delete(PropertyTag).where(PropertyTag.tenant_id == "test_tenant_v24"))
-            # Delete authorized properties
-            session.execute(delete(AuthorizedProperty).where(AuthorizedProperty.tenant_id == "test_tenant_v24"))
+            # Delete publishers (their derived properties go with them)
+            session.execute(delete(Publisher).where(Publisher.tenant_id == "test_tenant_v24"))
             # Finally delete tenant
             session.execute(delete(ModelTenant).where(ModelTenant.tenant_id == "test_tenant_v24"))
             session.commit()

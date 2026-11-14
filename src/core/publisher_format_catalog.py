@@ -1,45 +1,45 @@
-"""The reusable publisher format options a tenant publishes, and the references that name them.
+"""What a seller's publishers authorize, and the format catalogs they publish.
 
-RFC S3 (``docs/rfcs/002-creative-format-model.md``). The pinned obligation is
-``docs/creative/canonical-formats-migration.mdx`` § Seller migration, step 3: "Publish reusable
-publisher options in ``/.well-known/adagents.json`` and reference them with
-``publisher_domain`` plus ``format_option_id``."
+Each publisher states in its own ``https://{domain}/.well-known/adagents.json`` whether it
+authorizes this agent, for which properties, and which format options its inventory
+accepts. ``src/services/publisher_ingest.py`` stores that file and derives the properties
+and the ``formats[]`` catalog from it; this module is how a reader sees them.
 
-**Who publishes.** ``adagents.json#/properties/formats`` is the "Publisher-authoritative format
-catalog", and ``canonical-formats.mdx`` § Publisher catalog resolution says not to "synthesize a
-publisher declaration from one sales agent's products". So the catalog is AUTHORED publisher
-data, never derived from product declarations: a product entry is "Seller-specific narrowing"
-(``canonical-formats.mdx`` § Where to declare a format), and two products may narrow one publisher
-option two ways. This seller is the publisher for the host it is served at (it already serves
-``/.well-known/adagents.json`` there), so the tenant row carries the catalog for that host and
-:func:`src.core.signing.trust_root.build_adagents_json` publishes it as ``formats[]``.
+A product references a publisher's format option by its key alone, ``{publisher_domain,
+format_option_id}`` (``core/product-format-declaration.json``: "Publisher-scoped canonical
+declarations are addressable only by the complete {publisher_domain, format_option_id}
+identity pair"; ``core/product.json`` ``format_options``: "Match publisher-declared options by
+{publisher_domain, format_option_id}"). It is served as the publisher's CURRENT entry
+(:func:`resolve_declarations`), and ``core/product.json`` makes "an unresolved publisher
+placement or format-option reference MUST fail closed": :func:`format_option_refusal` is why
+such a product is not offered.
 
-**What a reference must resolve to.** ``adagents.json#/properties/formats``: "Products selling
-this publisher's inventory SHOULD reference these declarations by ``format_option_id`` ... via
-inline ``format_options`` whose ``format_option_id`` matches an entry here". This seller can
-answer that only for the namespace it owns -- a declaration whose ``publisher_domain`` is its own
-publisher domain. Another publisher's catalog is resolved by the buyer, which the pin makes the
-fail-closed party (``core/product.json`` ``format_options``; ``core/placement.json``
-``format_options``: "buyers MUST also resolve ..."). An own-namespace reference that the catalog
-does not declare is refused where it is AUTHORED (the product and inventory-profile forms), where
-a product's SERVED contract changes (the product forms check ``Product.format_contract`` after the
-profile link is set, so linking a profile whose options the catalog has since withdrawn, or
-unlinking one so the product's own stored arm is served again, is refused), and where the catalog
-is EDITED (withdrawing an option a product is served). So a stored product cannot announce a
-publisher option its own publisher file does not carry.
+The host this agent serves its own adagents.json at is not a catalog: that file carries no
+``formats[]`` (``src/core/signing/trust_root.py``), so an option naming it resolves nowhere
+and is refused like any other unresolved key.
 """
 
 from __future__ import annotations
 
 import functools
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+import logging
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from pydantic import TypeAdapter
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from src.core.database.models import Tenant
+from src.core.http_utils import canonical_publisher_domain
+
+if TYPE_CHECKING:
+    from src.core.database.models import Publisher, PublisherProperty
+    from src.core.helpers.publisher_property_helpers import AuthorizedPropertyRef, SelectableProperty
+
+logger = logging.getLogger(__name__)
+
+#: A publisher-backed format option's identity: canonical publisher domain, format_option_id.
+OptionKey = tuple[str, str]
 
 
 @functools.cache
@@ -48,78 +48,193 @@ def format_declarations_type() -> TypeAdapter:
 
     Read off the DTO that serves a product's ``format_options`` rather than restated, so an
     authoring surface refuses exactly what ``convert_product_model_to_schema`` would refuse
-    later. ``adagents.json`` ``formats[]`` items are that same declaration (plus optional
-    property scoping), so the publisher catalog is validated by the same type.
+    later.
     """
     from src.core.schemas.product import Product as ProductSchema
 
     return TypeAdapter(ProductSchema.model_fields["format_options"].annotation)
 
 
-def validated_catalog(document: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
-    """*document* as the catalog to store, or ``ValueError`` naming why it is not one.
-
-    An empty catalog is stored as ``None``: ``formats[]`` has ``minItems: 1``, so an empty list
-    would publish a declaration that is not there.
-
-    Every entry carries a ``format_option_id``, unique within the catalog. The pin does not
-    require the id on a ``formats[]`` item, but an entry without one cannot be referenced by
-    ``{publisher_domain, format_option_id}`` -- the only thing a reusable option is for -- and
-    two entries under one id make a reference ambiguous.
-    """
-    if not document:
+def option_key(declaration: Mapping[str, Any]) -> OptionKey | None:
+    """The key a declaration references a publisher's option by, or ``None`` for a product-local one."""
+    domain = declaration.get("publisher_domain")
+    if not domain:
         return None
-    # pydantic's ValidationError is a ValueError, so the caller's one except clause covers it.
-    format_declarations_type().validate_python(document)
-    option_ids = [str(entry.get("format_option_id") or "") for entry in document]
-    if not all(option_ids):
-        raise ValueError("Every publisher format option needs a format_option_id: it is how a product references it")
-    duplicates = sorted({option_id for option_id in option_ids if option_ids.count(option_id) > 1})
-    if duplicates:
-        raise ValueError(f"Publisher format option ids must be unique; repeated: {', '.join(duplicates)}")
-    return document
+    return canonical_publisher_domain(str(domain)), str(declaration.get("format_option_id") or "")
+
+
+def names_a_publisher(declarations: Iterable[Mapping[str, Any]] | None) -> bool:
+    """Whether any of *declarations* references a publisher's option."""
+    return any(option_key(declaration) for declaration in declarations or ())
+
+
+def stored_declaration(declaration: Mapping[str, Any]) -> Mapping[str, Any]:
+    """*declaration* as a product stores it: a publisher-backed one as its key alone, a product-local one whole.
+
+    A product does not narrow a publisher's option (the spec defines no narrowing), so the
+    key is all it keeps; the publisher's catalog supplies the rest on every read.
+    """
+    key = option_key(declaration)
+    if key is None:
+        return declaration
+    return {"publisher_domain": key[0], "format_option_id": key[1]}
+
+
+def publisher_option_keys(declarations: Iterable[Mapping[str, Any]] | None) -> list[OptionKey]:
+    """The keys *declarations* reference, in order, without repeats."""
+    return list(dict.fromkeys(key for key in map(option_key, declarations or ()) if key is not None))
+
+
+@dataclass(frozen=True)
+class PublisherOption:
+    """One entry of a publisher's ``formats[]`` catalog, as a value."""
+
+    publisher_domain: str
+    format_option_id: str
+    declaration: Mapping[str, Any]
+    applies_to_property_ids: frozenset[str] = field(default_factory=frozenset)
+    applies_to_property_tags: frozenset[str] = field(default_factory=frozenset)
+
+    def served(self) -> dict[str, Any]:
+        """The declaration a product referencing this option is served: the publisher's entry under its key."""
+        return {
+            **self.declaration,
+            "publisher_domain": self.publisher_domain,
+            "format_option_id": self.format_option_id,
+        }
+
+    def covers(self, properties: Iterable[SelectableProperty]) -> bool:
+        """Whether this option applies to any of *properties*.
+
+        adagents.json ``formats[]``: an entry "without scope applies to all properties in the
+        file; with scope, only to the named subset", and the scope is the union of
+        ``applies_to_property_ids`` and ``applies_to_property_tags``.
+        """
+        if not self.applies_to_property_ids and not self.applies_to_property_tags:
+            return True
+        return any(
+            prop.property_id in self.applies_to_property_ids or self.applies_to_property_tags & set(prop.tags or ())
+            for prop in properties
+        )
+
+
+def options_by_key(publishers: Iterable[Publisher]) -> dict[OptionKey, PublisherOption]:
+    """Every format option *publishers* publish, by key."""
+    return {
+        (row.publisher_domain, row.format_option_id): PublisherOption(
+            publisher_domain=row.publisher_domain,
+            format_option_id=row.format_option_id,
+            declaration=row.declaration,
+            applies_to_property_ids=frozenset(row.applies_to_property_ids or ()),
+            applies_to_property_tags=frozenset(row.applies_to_property_tags or ()),
+        )
+        for publisher in publishers
+        for row in publisher.format_options
+    }
+
+
+def resolve_declarations(
+    declarations: Iterable[Mapping[str, Any]] | None, options: Mapping[OptionKey, PublisherOption]
+) -> list[Mapping[str, Any]]:
+    """*declarations* as served: a product-local one as authored, a publisher key as the publisher's entry.
+
+    A key no option of *options* answers is left out: it cannot be served, and the product
+    carrying it is not offered (:func:`format_option_refusal`).
+    """
+    resolved: list[Mapping[str, Any]] = []
+    for declaration in declarations or ():
+        key = option_key(declaration)
+        if key is None:
+            resolved.append(declaration)
+        elif key in options:
+            resolved.append(options[key].served())
+    return resolved
+
+
+def authorized_properties(publisher: Publisher, now: datetime) -> list[PublisherProperty]:
+    """The properties *publisher*'s stored adagents.json authorizes this agent for at *now*.
+
+    THE rule, in one place: none while the document is past its freshness window
+    (``Publisher.is_fresh`` -- fail closed), else the derived properties whose authorizing
+    entry's ``effective_from`` / ``effective_until`` window holds *now*.
+    """
+    if not publisher.is_fresh(now):
+        return []
+    return [prop for prop in publisher.properties if prop.in_effect(now)]
 
 
 @dataclass(frozen=True)
 class PublisherCatalog:
-    """The tenant's own publisher namespace: its domain and the options its file declares.
+    """What the seller's publishers authorize now, read once per request.
 
-    A value, read off the tenant by the caller that already holds it: resolving a reference
-    must not re-read the tenant inside a caller's session.
+    *refs* are the properties the publishers authorize this agent for now
+    (:func:`authorized_properties`); *options* the format options their stored files publish.
+    An option of a publisher whose document is past its freshness window is never served: the
+    publisher authorizes nothing, so no product sells it (:func:`format_option_refusal` (b)).
     """
 
-    publisher_domain: str
-    options: tuple[Mapping[str, Any], ...]
+    refs: tuple[AuthorizedPropertyRef, ...] = ()
+    options: Mapping[OptionKey, PublisherOption] = field(default_factory=dict)
 
     @classmethod
-    def of(cls, tenant: Tenant) -> PublisherCatalog:
-        # ``primary_domain`` is the domain ``Product.publisher_domain`` announces, so it is the
-        # namespace a product's own-publisher declaration is written under.
-        return cls(publisher_domain=tenant.primary_domain, options=tuple(tenant.publisher_format_options or ()))
+    def of(cls, publishers: Sequence[Publisher], now: datetime) -> PublisherCatalog:
+        """The catalog of *publishers* at *now*.
 
-    def unresolved(self, declarations: Iterable[Mapping[str, Any]] | None) -> list[str]:
-        """The ``format_option_id`` of each own-namespace declaration the catalog does not declare.
-
-        Matched by ``format_option_id`` (formats.mdx § Matching: "An exact publisher claim must
-        match both ``publisher_domain`` and ``format_option_id``") and by ``format_kind``: a
-        product declaration narrows the publisher option it names, and a narrowing never changes
-        the canonical the option is anchored to.
+        A property is named by the host its publisher row names (``publisher_domain_on_wire``).
+        A publisher no such name exists for (a port) is logged and left out, so it costs that
+        publisher and not every read of the catalog.
         """
-        published = {(option.get("format_option_id"), option.get("format_kind")) for option in self.options}
-        return [
-            str(declaration.get("format_option_id"))
-            for declaration in declarations or ()
-            if declaration.get("publisher_domain") == self.publisher_domain
-            and (declaration.get("format_option_id"), declaration.get("format_kind")) not in published
-        ]
+        from src.core.helpers.publisher_property_helpers import AuthorizedPropertyRef, publisher_domain_on_wire
 
-    def refuse_unresolved(self, declarations: Iterable[Mapping[str, Any]] | None) -> None:
-        """``ValueError`` when a declaration names an option this publisher does not publish."""
-        unresolved = self.unresolved(declarations)
-        if unresolved:
-            raise ValueError(
-                f"format_options name publisher options {', '.join(sorted(set(unresolved)))} under "
-                f"{self.publisher_domain}, which this seller's publisher format catalog does not "
-                f"declare with that format_kind. Publish them in the catalog first, or declare them "
-                f"product-local by omitting publisher_domain."
+        refs: set[AuthorizedPropertyRef] = set()
+        for publisher in publishers:
+            domain = publisher_domain_on_wire(publisher.domain)
+            if domain is None:
+                logger.warning("Publisher %r is not offered: it is not a publisher domain", publisher.domain)
+                continue
+            refs.update(
+                AuthorizedPropertyRef(
+                    property_id=prop.property_id,
+                    publisher_domain=domain,
+                    tags=tuple(prop.tags or ()),
+                    name=prop.name,
+                    property_type=prop.property_type,
+                )
+                for prop in authorized_properties(publisher, now)
             )
+        return cls(
+            refs=tuple(sorted(refs, key=lambda ref: (ref.publisher_domain, ref.property_id or "", ref.name))),
+            options=options_by_key(publishers),
+        )
+
+
+def format_option_refusal(
+    declarations: Iterable[Mapping[str, Any]] | None,
+    publisher_properties: Sequence[Mapping[str, Any]],
+    catalog: PublisherCatalog,
+) -> str | None:
+    """Why *declarations* cannot be served for a product selling *publisher_properties*, or ``None``.
+
+    Each publisher key must (a) name an option a publisher's stored file publishes, (b) belong to a
+    publisher the product sells, and (c) apply to at least one property the product sells of
+    that publisher. *publisher_properties* are the product's selectors narrowed to the
+    authorized properties (``Product.resolve_publisher_properties``).
+    """
+    from src.core.helpers.publisher_property_helpers import selected_properties
+
+    refusals = []
+    for domain, option_id in publisher_option_keys(declarations):
+        option = catalog.options.get((domain, option_id))
+        sold = [selector for selector in publisher_properties if selector.get("publisher_domain") == domain]
+        if option is None:
+            refusals.append(
+                f"format option {option_id!r} of {domain} is not in the format catalog of a publisher whose "
+                f"adagents.json this seller holds"
+            )
+        elif not sold:
+            refusals.append(f"format option {option_id!r} names {domain}, a publisher this product does not sell")
+        elif not option.covers(selected_properties(sold, catalog.refs)):
+            refusals.append(
+                f"format option {option_id!r} of {domain} applies to none of the properties this product sells"
+            )
+    return "; ".join(refusals) or None

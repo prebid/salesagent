@@ -10,9 +10,16 @@ nothing else, so they live here once. An env names its routes and reads its rows
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
-from tests.helpers.admin_session import admin_auth_session, admin_test_app, authenticate_http_session
+from tests.helpers.admin_session import (
+    admin_auth_session,
+    admin_test_app,
+    authenticate_http_session,
+    drop_stated_session_cookie,
+)
 
 
 class _CaseInsensitiveHeaders(dict):
@@ -151,6 +158,21 @@ class AdminClient:
             drop_stated_session_cookie(self._http)
         return AdminResponse.from_requests(response)
 
+    def submit(self, path: str, data: dict[str, Any]) -> AdminResponse:
+        """POST the form *data* to *path* and GET the page its redirect names, flash included.
+
+        A form that answers without a redirect (it re-rendered with an error) is returned as is.
+        """
+        response = self.request("post", path, data=data)
+        location = response.headers.get("location")
+        if not location:
+            return response
+        if self._http is not None:
+            # The flash lives in the session the server just wrote; see the helper.
+            drop_stated_session_cookie(self._http)
+        target = urlsplit(location)
+        return self.request("get", target.path + (f"?{target.query}" if target.query else ""))
+
     def close(self) -> None:
         if self._flask_client is not None:
             self._flask_client.__exit__(None, None, None)
@@ -158,6 +180,21 @@ class AdminClient:
         if self._http is not None:
             self._http.close()
             self._http = None
+
+
+def guarded_admin_client(
+    guard: Callable[[str, Callable[[], None]], None], base_url: str | None, tenant_id: str | None
+) -> AdminClient:
+    """An :class:`AdminClient`, optionally authenticated for *tenant_id*, closed by *guard*.
+
+    An env opens it on its first admin request, after every Given, so the in-process app is
+    composed under the deployment a Given chose.
+    """
+    client = AdminClient(base_url)
+    guard("admin_client", client.close)
+    if tenant_id is not None:
+        client.authenticate(tenant_id)
+    return client
 
 
 class AdminOperatorMixin:
@@ -177,20 +214,20 @@ class AdminOperatorMixin:
     _admin_auth_cleared: bool = False
 
     def admin_client(self, tenant_id: str) -> AdminClient:
-        """Open the guarded operator client after committing factory rows."""
+        """The operator client, opened after factory rows commit, retaining sign-out state."""
         self._commit_factory_data()  # type: ignore[attr-defined]
         if self._admin is None:
             e2e_config = self.e2e_config  # type: ignore[attr-defined]
-            self._admin = AdminClient(e2e_config.base_url if e2e_config is not None else None)
-            self._guard("admin_client", self._admin.close)  # type: ignore[attr-defined]
-            if not self._admin_auth_cleared:
-                self._admin.authenticate(tenant_id)
+            base_url = e2e_config.base_url if e2e_config is not None else None
+            auth_tenant = None if self._admin_auth_cleared else tenant_id
+            self._admin = guarded_admin_client(self._guard, base_url, auth_tenant)  # type: ignore[attr-defined]
         return self._admin
 
     def authenticate(self, tenant_id: str) -> None:
         """Authenticate again after an explicit sign-out or tenant change."""
-        self._admin_auth_cleared = False
+        self._admin_auth_cleared = True
         self.admin_client(tenant_id).authenticate(tenant_id)
+        self._admin_auth_cleared = False
 
     def clear_auth(self) -> None:
         """Clear the existing operator credentials without replacing the client."""
@@ -199,7 +236,13 @@ class AdminOperatorMixin:
             self._admin.clear_auth()
 
     def admin_request(
-        self, tenant_id: str, method: str, path: str, *, data: dict[str, str] | None = None
+        self,
+        tenant_id: str,
+        method: str,
+        path: str,
+        *,
+        data: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
     ) -> AdminResponse:
-        """One request to the tenant's admin route, retaining its authentication state."""
-        return self.admin_client(tenant_id).request(method, f"/tenant/{tenant_id}/{path}", data=data)
+        """One request to the tenant route with retained authentication and a form or JSON body."""
+        return self.admin_client(tenant_id).request(method, f"/tenant/{tenant_id}/{path}", data=data, json=json)

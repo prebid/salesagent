@@ -16,8 +16,14 @@ import pytest
 from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import InventoryProfile, Product, Tenant
-from tests.helpers import assert_effective_properties_normalized
+from src.core.database.models import (
+    InventoryProfile,
+    InventoryProfilePublisherSelection,
+    Product,
+    ProductPublisherSelection,
+    Tenant,
+)
+from tests.factories.publisher import held_selections
 
 
 @pytest.mark.integration
@@ -68,12 +74,17 @@ class TestInventoryProfileTransitions:
                     {"agent_url": "https://example.com", "id": "format_a1"},
                     {"agent_url": "https://example.com", "id": "format_a2"},
                 ],
-                publisher_properties=[
-                    {
-                        "publisher_domain": "site-a.com",
-                        "property_ids": ["site_a_main"],
-                    }
-                ],
+                publisher_selections=held_selections(
+                    session,
+                    InventoryProfilePublisherSelection,
+                    tenant,
+                    [
+                        {
+                            "publisher_domain": "site-a.com",
+                            "property_ids": ["site_a_main"],
+                        }
+                    ],
+                ),
             )
             session.add(profile)
             session.commit()
@@ -105,12 +116,17 @@ class TestInventoryProfileTransitions:
                     {"agent_url": "https://example.com", "id": "format_b1"},
                     {"agent_url": "https://example.com", "id": "format_b2"},
                 ],
-                publisher_properties=[
-                    {
-                        "publisher_domain": "site-b.com",
-                        "property_ids": ["site_b_main"],
-                    }
-                ],
+                publisher_selections=held_selections(
+                    session,
+                    InventoryProfilePublisherSelection,
+                    tenant,
+                    [
+                        {
+                            "publisher_domain": "site-b.com",
+                            "property_ids": ["site_b_main"],
+                        }
+                    ],
+                ),
             )
             session.add(profile)
             session.commit()
@@ -130,9 +146,8 @@ class TestInventoryProfileTransitions:
             "format_ids": [],
             "targeting_template": {},
             "delivery_type": "standard",
-            "properties": None,
-            "property_tags": ["all_inventory"],
         }
+        selectors = kwargs.pop("properties", [])
         defaults.update(kwargs)
 
         with get_db_session() as session:
@@ -140,6 +155,7 @@ class TestInventoryProfileTransitions:
                 tenant_id=tenant_id,
                 product_id=product_id,
                 name=name,
+                publisher_selections=held_selections(session, ProductPublisherSelection, tenant_id, selectors),
                 **defaults,
             )
             session.add(product)
@@ -160,24 +176,15 @@ class TestInventoryProfileTransitions:
             {
                 "publisher_domain": "custom-site.com",
                 "property_ids": ["custom_property"],
-            }
-        ]
-        # effective_properties adds selection_type when converting legacy format
-        expected_effective_properties = [
-            {
-                "publisher_domain": "custom-site.com",
-                "property_ids": ["custom_property"],
                 "selection_type": "by_id",
             }
         ]
-
         self.create_product(
             tenant_id=tenant,
             product_id="test_custom_to_profile",
             name="Custom to Profile Test",
             format_ids=custom_formats,
             properties=custom_properties,
-            property_tags=None,  # Using properties instead of tags
         )
 
         # Verify original custom data and then switch to profile
@@ -189,15 +196,13 @@ class TestInventoryProfileTransitions:
             product = session.scalars(stmt).first()
 
             assert product.format_ids == custom_formats
-            assert product.properties == custom_properties
+            assert product.stored_publisher_properties == custom_properties
             assert list(product.format_contract.format_ids) == custom_formats
-            assert product.effective_properties == expected_effective_properties
 
             # Get profile data for comparison
             stmt = select(InventoryProfile).where(InventoryProfile.id == profile_a)
             profile = session.scalars(stmt).first()
             profile_formats = profile.format_ids
-            profile_properties = profile.publisher_properties
 
             # Set inventory_profile_id to existing profile
             product.inventory_profile_id = profile_a
@@ -209,15 +214,9 @@ class TestInventoryProfileTransitions:
             assert list(product.format_contract.format_ids) == profile_formats
             assert list(product.format_contract.format_ids) != custom_formats
 
-            # Assert effective_properties returns profile data + selection_type (non-destructive)
-            assert_effective_properties_normalized(
-                product.effective_properties, profile_properties, expected_selection_type="by_id"
-            )
-            assert product.effective_properties != expected_effective_properties
-
             # Assert custom data still exists in database (not deleted)
             assert product.format_ids == custom_formats
-            assert product.properties == custom_properties
+            assert [row.as_selector() for row in product.publisher_selections] == custom_properties
 
         # Cleanup
         with get_db_session() as session:
@@ -256,9 +255,6 @@ class TestInventoryProfileTransitions:
             # Initially using profile
             assert product.inventory_profile_id == profile_a
             assert list(product.format_contract.format_ids) == profile.format_ids
-            assert_effective_properties_normalized(
-                product.effective_properties, profile.publisher_properties, expected_selection_type="by_id"
-            )
 
             # Clear inventory_profile_id (set to None)
             product.inventory_profile_id = None
@@ -269,29 +265,20 @@ class TestInventoryProfileTransitions:
                 {
                     "publisher_domain": "new-custom-site.com",
                     "property_ids": ["new_custom_property"],
-                }
-            ]
-            # effective_properties adds selection_type when converting legacy format
-            expected_effective_properties = [
-                {
-                    "publisher_domain": "new-custom-site.com",
-                    "property_ids": ["new_custom_property"],
                     "selection_type": "by_id",
                 }
             ]
 
             product.format_ids = custom_formats
-            product.properties = custom_properties
-            product.property_tags = None
+            product.publisher_selections = held_selections(
+                session, ProductPublisherSelection, tenant, custom_properties
+            )
 
             session.commit()
             session.refresh(product)
 
             # Assert effective_formats returns custom data
             assert list(product.format_contract.format_ids) == custom_formats
-
-            # Assert effective_properties returns custom data (with selection_type added)
-            assert product.effective_properties == expected_effective_properties
 
         # Cleanup
         with get_db_session() as session:
@@ -302,7 +289,7 @@ class TestInventoryProfileTransitions:
             session.execute(stmt)
             session.commit()
 
-    def test_switching_profiles_updates_effective_properties(self, tenant, profile_a, profile_b):
+    def test_switching_profiles_updates_effective_formats(self, tenant, profile_a, profile_b):
         """Test switching between different inventory profiles.
 
         Scenario: Product uses profile_a, then switches to profile_b.
@@ -332,9 +319,6 @@ class TestInventoryProfileTransitions:
 
             # Assert effective_formats returns profile_a formats
             assert list(product.format_contract.format_ids) == profile_a_obj.format_ids
-            assert_effective_properties_normalized(
-                product.effective_properties, profile_a_obj.publisher_properties, expected_selection_type="by_id"
-            )
 
             # Verify we have the expected profile_a data
             profile_a_format_ids = [f["id"] for f in profile_a_obj.format_ids]
@@ -349,9 +333,6 @@ class TestInventoryProfileTransitions:
 
             # Assert effective_formats returns profile_b formats
             assert list(product.format_contract.format_ids) == profile_b_obj.format_ids
-            assert_effective_properties_normalized(
-                product.effective_properties, profile_b_obj.publisher_properties, expected_selection_type="by_id"
-            )
 
             # Verify we now have profile_b data
             profile_b_format_ids = [f["id"] for f in profile_b_obj.format_ids]
@@ -376,7 +357,7 @@ class TestInventoryProfileTransitions:
         """Test clearing profile without setting custom config.
 
         Scenario: Product uses profile, profile_id cleared, no custom config set.
-        Expected: System handles gracefully by synthesizing properties from property_tags.
+        Expected: the format contract falls back to the product's own (empty) formats.
         """
         # Create product with inventory_profile_id (no custom config)
         self.create_product(
@@ -385,8 +366,6 @@ class TestInventoryProfileTransitions:
             name="Clear Profile Test",
             inventory_profile_id=profile_a,
             format_ids=[],  # Empty custom formats
-            properties=None,
-            property_tags=["all_inventory"],
         )
 
         with get_db_session() as session:
@@ -409,7 +388,7 @@ class TestInventoryProfileTransitions:
             session.commit()
             session.refresh(product)
 
-            # Check effective_formats and effective_properties
+            # Check effective_formats
             # System should return custom config gracefully
             assert product.inventory_profile_id is None
 
@@ -417,14 +396,6 @@ class TestInventoryProfileTransitions:
             effective_formats = list(product.format_contract.format_ids)
             assert isinstance(effective_formats, list)
             assert effective_formats == []
-
-            # effective_properties should synthesize by_tag variant from property_tags
-            effective_properties = product.effective_properties
-            assert effective_properties is not None
-            assert isinstance(effective_properties, list)
-            assert len(effective_properties) == 1
-            assert effective_properties[0]["selection_type"] == "by_tag"
-            assert effective_properties[0]["property_tags"] == ["all_inventory"]
 
             # Verify system handles gracefully (no exceptions)
             # Product is valid even without profile or custom config
@@ -515,4 +486,4 @@ class TestInventoryProfileTransitions:
         # - Products are NOT deleted (no CASCADE)
         # - inventory_profile_id is set to NULL
         # - Products remain valid and functional
-        # - Products fall back to custom config (formats, properties, property_tags)
+        # - Products fall back to custom config (formats, properties)

@@ -16,11 +16,12 @@ import subprocess
 
 import pytest
 
+from scripts.ci.shard_split import SHARD_COUNTS
 from tests.unit._run_all_tests_helpers import REPO_ROOT, RUNNER
 
 _HOST_RUNNER = REPO_ROOT / "run_all_tests_host.sh"
 _TOX_INI = REPO_ROOT / "tox.ini"
-_ALL_SUITES = "unit,integration,bdd,admin,e2e,ui,quality,storyboard"
+_ALL_SUITES = "unit,integration,bdd,admin,e2e,ui,quality,storyboard,collection"
 
 
 def _resolve(*args: str) -> str:
@@ -91,5 +92,19 @@ def test_six_suite_list_is_single_sourced():
     """
     canonical = _tox_env_list()
     assert _runner_all_suites() == canonical, "run_all_tests.sh ALL_SUITES drifted from tox env_list"
-    assert _host_runner_collect_suites() == canonical, "run_all_tests_host.sh collect_reports drifted from tox env_list"
+    assert _host_runner_collect_suites() == canonical - {"collection"}, (
+        "run_all_tests_host.sh collect_reports drifted from tox env_list"
+    )
     assert {s.strip() for s in _ALL_SUITES.split(",")} == canonical, "_ALL_SUITES constant drifted from tox env_list"
+
+
+def test_tox_declares_one_in_process_env_per_bdd_shard():
+    """The runner asks for SHARD_COUNTS["bdd"] envs and the compose block forwards their paths."""
+    match = re.search(r"^\[testenv:bdd-inprocess-s\{([\d,]+)\}\]", _TOX_INI.read_text(), re.MULTILINE)
+    assert match, "tox.ini no longer declares the bdd-inprocess-s{...} envs"
+    expected = [str(shard) for shard in range(1, SHARD_COUNTS["bdd"] + 1)]
+    assert match.group(1).split(",") == expected
+
+    for carrier in (_TOX_INI, REPO_ROOT / "docker-compose.e2e.yml"):
+        carried = re.findall(r"BDD_SHARD_PATHS_(\d+)", carrier.read_text())
+        assert sorted(set(carried)) == expected, f"{carrier.name} forwards the wrong shard path variables"

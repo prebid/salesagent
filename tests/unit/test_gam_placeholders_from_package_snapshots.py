@@ -104,6 +104,7 @@ def _placed_line_item(package: MediaPackage, impl_config: dict[str, Any] | None 
         packages=[package],
         start_time=datetime(2026, 1, 1, tzinfo=UTC),
         end_time=datetime(2026, 1, 31, tzinfo=UTC),
+        network_time_zone="America/New_York",
         products_map={package.package_id: {"implementation_config": config}},
         package_pricing_info={
             package.package_id: {
