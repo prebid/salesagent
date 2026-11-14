@@ -186,12 +186,11 @@ The authoritative environment list is the table in [Test architecture](../../tes
 Each domain has an environment class that subclasses `BaseTestEnv` or `IntegrationEnv`:
 
 ```python
-class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
+class DeliveryPollEnv(DeliveryDispatchMixin, DeliveryPollMixin, BaseTestEnv):
     MODULE = "src.core.tools.media_buy_delivery"
     EXTERNAL_PATCHES = {
         "uow": f"{MODULE}.MediaBuyUoW",
         "adapter": f"{MODULE}.get_adapter",
-        "pricing": f"{MODULE}._get_pricing_options",
         "circuit_open": f"{MODULE}._is_circuit_breaker_open",
     }
 

@@ -68,9 +68,11 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 from pydantic_core import PydanticCustomError
 
 from src.core.config import get_pydantic_extra_mode
+from src.core.exceptions import AdCPSalesAgentError
 from src.core.schemas._base import (
     BuyerRequest,
     FormatId,
@@ -619,6 +621,7 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
 
     Internal-only (not in AdCP spec, excluded from responses):
     - internal_status: review-routing state (renamed off the inherited spec `status`)
+    - cause: the typed error a failed result carries in ``errors``
 
     ``review_feedback`` IS GONE. ``sync-creatives-response.json``'s result item does not
     declare it -- measured on the node -- and it was write-only: all five construction
@@ -629,7 +632,7 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     inherited ``errors``/``warnings`` arrays.
     """
 
-    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+    model_config = ConfigDict(extra=get_pydantic_extra_mode(), arbitrary_types_allowed=True)
 
     # action is inherited from the the pinned SDK parent as the StrEnum CreativeAction. Every value
     # production emits (created/updated/unchanged/failed/deleted — as strings or enum members) is
@@ -652,6 +655,10 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     internal_status: str | None = Field(
         None, exclude=True, description="Internal review-routing status (INTERNAL - excluded from AdCP responses)"
     )
+    # The typed error a failed result was built from, for an in-process caller that answers the
+    # buyer with it (update_media_buy's inline creatives). ``errors`` is its wire form.
+    # SkipJsonSchema: an exception type has no JSON Schema, and the field is no part of the wire's.
+    cause: SkipJsonSchema[AdCPSalesAgentError | None] = Field(None, exclude=True)
 
     @model_validator(mode="after")
     def _advisory_status_from_review_state(self) -> "SyncCreativeResult":

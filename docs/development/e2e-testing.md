@@ -25,13 +25,14 @@ transports `a2a`, `mcp`, and `rest` in-process. When `BDD_E2E_ENABLED=true`,
 `pytest_generate_tests` in `tests/bdd/conftest.py` appends a fourth
 parametrization, `e2e_rest`. That parametrization replays the same scenario as
 real HTTP against the live server. Runs as `tox -e bdd_e2e` (which runs
-`pytest tests/bdd/ -k e2e_rest`); the in-process transports run as
-`tox -e bdd_inprocess`.
+`pytest tests/bdd/ -k e2e_rest`); on a full run the in-process transports run as
+the shards `bdd-inprocess-s1` to `bdd-inprocess-s4`, published as one
+`bdd_inprocess` report.
 
 The distinction matters because a passing result only certifies what ran.
 `tox -e e2e` passing says nothing about BDD scenario conformance over the
-wire. `tox -e bdd_inprocess` passing says nothing about the live server,
-because that environment sets `BDD_E2E_ENABLED=false`. If you changed server
+wire. The in-process shards passing says nothing about the live server,
+because those environments set `BDD_E2E_ENABLED=false`. If you changed server
 behavior that a BDD scenario covers, the suite that must pass is `bdd_e2e`.
 
 ## The stack
@@ -179,7 +180,7 @@ flowchart TD
         BDDE["tox -e bdd_e2e\nBDD e2e_rest transport"]
     end
     subgraph inprocSuites["Suites that never touch the live server"]
-        BDDI["tox -e bdd_inprocess\ntransports a2a, mcp, rest"]
+        BDDI["tox -e bdd-inprocess-s1..s4\ntransports a2a, mcp, rest"]
         INT["tox -e integration / admin"]
     end
     Server2["Live adcp-server\nreal HTTP via proxy"]
@@ -305,10 +306,11 @@ Two related settings are required for correctness:
   `-n auto` inside the runner resolves to one worker instead of one
   application-loading process per CPU core, which exhausts the container's
   memory.
-- `BDD_XDIST_N` must **derive from** `E2E_WORKERS`; never set it directly.
+- `BDD_SHARD_XDIST_N` must **derive from** `E2E_WORKERS`; never set it directly.
   When `E2E_WORKERS > 0`, `run_all_tests.sh` swaps the serial `bdd`
-  environment for the `bdd_inprocess,bdd_e2e` split, exports
-  `BDD_XDIST_N=${BDD_XDIST_N:-$E2E_WORKERS}` for the in-process half, and
+  environment for the `bdd-inprocess-s*,bdd_e2e` split, exports
+  `BDD_SHARD_XDIST_N` as the in-process worker budget (`BDD_XDIST_N`, else
+  `E2E_WORKERS`) divided across the shards, and
   provisions `E2E_WORKERS` isolated per-worker stacks — one `adcp-server`
   container plus one TLS sidecar per xdist worker, each on its own database
   (`adcp_gwN`, cloned from a migrated template) — then runs `bdd_e2e` with
@@ -325,7 +327,7 @@ distinctions this page teaches.
 | Everything (the default full gate) | `./run_all_tests.sh` | Full stack in-network, all six suites via `tox -p`, auto-teardown |
 | The protocol pytest suite only | `./run_all_tests.sh e2e` | Full stack in-network, `tox -e e2e` |
 | BDD scenarios over real HTTP (the known-failures list) | `./run_all_tests.sh bdd_e2e` | Full stack in-network, `tox -e bdd_e2e` |
-| BDD scenarios in-process only | `tox -e bdd_inprocess` | Nothing (needs a suite `DATABASE_URL`) |
+| BDD scenarios in-process only | `BDD_E2E_ENABLED=false tox -e bdd` | Nothing (needs a suite `DATABASE_URL`) |
 | One e2e test, iterating | `make test-stack-up`, then `source .test-stack.env && tox -e e2e -- -k <name>` | Host-side stack with published ports; stays up between runs |
 | One e2e test, no manual lifecycle | `scripts/run-test.sh tests/e2e/test_foo.py -x` | Auto-detects and starts the full stack |
 | A targeted non-suite run | `./run_all_tests.sh ci <pytest-target> [args]` | Host-side stack (delegates to `run_all_tests_host.sh`) |

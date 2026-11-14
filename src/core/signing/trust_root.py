@@ -2,7 +2,7 @@
 
 Pure builders — no session, no request, no clock. They take a tenant, ONE
 ``SigningKeyRepository.publishable_at()`` result, and (for adagents.json) the
-authorized-property records that back the claim, and return plain dicts. The
+properties the stored file at this host authorizes (the claim's backing), and return plain dicts. The
 route layer (``src/routes/well_known.py``) owns the reads; this module owns the
 SHAPE, which is what the schemas grade.
 
@@ -60,7 +60,7 @@ from src.core.agent_identity import agent_endpoint_urls, agent_entry_id, canonic
 from src.core.signing._rfc3339 import rfc3339
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from src.core.database.models import AuthorizedProperty, SigningKey, Tenant
+    from src.core.database.models import PublisherProperty, SigningKey, Tenant
 
 
 #: The schema origin every trust-root document points ``$schema`` at, DERIVED from the
@@ -207,15 +207,16 @@ def build_brand_json(tenant: Tenant, keys: Sequence[SigningKey]) -> dict[str, An
     return _validated(PublishedBrandDocument, document)
 
 
-def _property_entry(prop: AuthorizedProperty) -> dict[str, Any]:
-    """One ``core/property.json`` object built from an authorized-property record."""
+def _property_entry(prop: PublisherProperty) -> dict[str, Any]:
+    """One ``core/property.json`` object built from a stored authorized property."""
     entry: dict[str, Any] = {
-        "property_id": prop.property_id,
         "property_type": prop.property_type,
         "name": prop.name,
         "identifiers": prop.identifiers,
         "publisher_domain": prop.publisher_domain,
     }
+    if prop.property_id:
+        entry["property_id"] = prop.property_id
     if prop.tags:
         entry["tags"] = list(prop.tags)
     return entry
@@ -224,17 +225,18 @@ def _property_entry(prop: AuthorizedProperty) -> dict[str, Any]:
 def build_adagents_json(
     tenant: Tenant,
     keys: Sequence[SigningKey],
-    authorizations: Sequence[AuthorizedProperty],
+    authorizations: Sequence[PublisherProperty],
 ) -> dict[str, Any]:
     """The inline variant of adagents.json for *tenant*.
 
-    *authorizations* are the tenant's existing authorized-property records — the
-    document NEVER fabricates one. Fabricating an entry would mean
+    *authorizations* are the properties the stored file at this host authorizes this agent
+    for (``PublisherRepository.list_for_publisher_domain``) — the document NEVER fabricates one. Fabricating an entry would mean
     self-attesting an authorization no publisher granted, and this file's entire
-    purpose is to be a publisher's attestation. With no backing record the
-    document claims nothing: an empty ``authorized_agents`` asserts *no sales
-    authorization*, which the schema explicitly distinguishes from deny-all,
-    authorize-all, and revocation.
+    purpose is to be a publisher's attestation. An empty *authorizations* is
+    refused with ``ValueError``: with no backing record there is no document to
+    build, because a file with neither sales authorization nor catalog content is
+    one the pinned schema rejects (``adagents.json`` ``oneOf[1].allOf[0]``), and
+    the route answers 404 instead of calling this.
 
     ``authorization_type: "inline_properties"`` carries the property objects on
     the entry itself, so the document is self-contained and needs no top-level
@@ -245,38 +247,32 @@ def build_adagents_json(
     byte-equality" — and a canonical-by-construction producer satisfies both
     rules at once.
     """
-    document: dict[str, Any] = {"$schema": f"{_SCHEMA_BASE}/adagents.json", "authorized_agents": []}
+    if not authorizations:
+        raise ValueError(f"tenant {tenant.tenant_id!r}: an adagents.json needs at least one authorized property")
+    entry: dict[str, Any] = {
+        "authorization_type": "inline_properties",
+        "properties": [_property_entry(prop) for prop in authorizations],
+        "url": canonical_agent_url(tenant),
+        "authorized_for": f"Advertising inventory on properties operated by {tenant.name}"[:500],
+    }
+    if keys:
+        # Same projection as the JWKS — the sell-side-webhook pin and the
+        # request-signing trust root describe one key set or our own
+        # webhooks get rejected against our own published document.
+        entry["signing_keys"] = [_published_jwk(key) for key in keys]
+    document: dict[str, Any] = {"$schema": f"{_SCHEMA_BASE}/adagents.json", "authorized_agents": [entry]}
 
-    if authorizations:
-        entry: dict[str, Any] = {
-            "authorization_type": "inline_properties",
-            "properties": [_property_entry(prop) for prop in authorizations],
-            "url": canonical_agent_url(tenant),
-            "authorized_for": f"Advertising inventory on properties operated by {tenant.name}"[:500],
-        }
-        if keys:
-            # Same projection as the JWKS — the sell-side-webhook pin and the
-            # request-signing trust root describe one key set or our own
-            # webhooks get rejected against our own published document.
-            entry["signing_keys"] = [_published_jwk(key) for key in keys]
-        document["authorized_agents"].append(entry)
-
-    # The publisher format catalog (RFC S3): canonical-formats-migration.mdx § Seller
-    # migration step 3, "Publish reusable publisher options in /.well-known/adagents.json".
-    # Authored on the tenant and published as stored -- adagents.json#/properties/formats is
-    # "Publisher-authoritative", so it is never synthesized from product declarations.
-    if tenant.publisher_format_options:
-        document["formats"] = list(tenant.publisher_format_options)
-
+    # No ``formats[]``. adagents.json#/properties/formats is the "Publisher-authoritative
+    # format catalog", and a publisher declares it in its own file (canonical-formats.mdx
+    # § Where to declare a format: authority "Publisher"). A seller authors no publisher's
+    # options (core/placement.json ``publisher_domain``: it "does not grant the seller
+    # authority to mint IDs in that publisher's catalog namespace").
     if last_updated := _last_updated(keys):
         document["last_updated"] = last_updated
-    # NOT routed through ``AdcpAgentsAuthorization`` (#1757): that generated model is
-    # STRICTER THAN THE PINNED SCHEMA our documents are graded against. It applies
-    # ``minItems: 1`` to ``authorized_agents``, and this builder DELIBERATELY emits an
-    # empty list when no authorized-property record backs a claim — "an empty
-    # authorized_agents asserts NO sales authorization", which the schema distinguishes
-    # from deny-all, authorize-all and revocation. The pinned schema accepts it (this
-    # document passes ``validate_against_pinned_schema`` today); the model refuses it.
-    # Converting would mean either fabricating an authorization we were never granted or
-    # dropping the document — so this one stays a dict and is validated after the fact.
+    # A dict, not ``AdcpAgentsAuthorization`` (#1757). This builder once emitted an empty
+    # ``authorized_agents`` for a host with no property, which that generated model refuses
+    # (``minItems: 1``). So does the pinned schema: its inline variant requires sales
+    # authorization or non-empty catalog content, and that empty document had neither. The
+    # route now serves no document in that case, and every document built here carries
+    # one entry; local-trust-root-adagents.feature validates it against the pinned schema.
     return document

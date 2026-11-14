@@ -32,12 +32,22 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import format_failure, load_yaml, repo_root, runner_started_services
+from tests.unit._architecture_helpers import (
+    format_failure,
+    load_yaml,
+    repo_root,
+    runner_started_services,
+    san_covers,
+    san_dns_names,
+    sni_map_hostnames,
+    tls_front_aliases,
+)
 
 _REPO_ROOT = repo_root()
 _BASE_COMPOSE = _REPO_ROOT / "docker-compose.e2e.yml"
 _NGINX_TLS_TEMPLATE = _REPO_ROOT / "config" / "nginx" / "nginx-tls-test.conf.template"
 _RUNNER = _REPO_ROOT / "run_all_tests.sh"
+_GEN_TLS_SCRIPT = _REPO_ROOT / "scripts" / "dev" / "gen_test_tls.py"
 
 #: An SNI map row's upstream, e.g. ``webhook-capture:8080`` -> ``webhook-capture``.
 _SNI_UPSTREAM_RE = re.compile(r"^\s*(?P<host>[\w.-]+)\s+(?P<service>[\w-]+):(?P<port>\d+)\s*;", re.MULTILINE)
@@ -187,3 +197,56 @@ def test_every_origin_module_defines_every_name_its_entry_point_uses(module: str
         ),
         docs_link="docs/development/structural-guards.md",
     )
+
+
+def front_disagreements(aliases: list[str], routed: list[str], sans: tuple[str, ...]) -> list[str]:
+    """Every name the TLS front carries without its alias, its SNI route or its SAN."""
+    problems = [f"tls-proxy alias {name} has no $ssl_server_name row" for name in sorted(set(aliases) - set(routed))]
+    problems += [f"$ssl_server_name row {name} is not a tls-proxy alias" for name in sorted(set(routed) - set(aliases))]
+    problems += [
+        f"{name} is not covered by SAN_DNS_NAMES"
+        for name in sorted(set(aliases) | set(routed))
+        if not san_covers(sans, name)
+    ]
+    return problems
+
+
+@pytest.mark.arch_guard
+def test_every_name_the_front_carries_has_its_alias_route_and_san() -> None:
+    """A dialed name resolves (alias), routes to its origin (map row) and verifies (SAN).
+
+    A name missing one of the three fails as a DNS error, a request routed to
+    ``${TLS_UPSTREAM}`` instead of its origin, or a certificate error, each surfacing as the
+    dialing side's failure rather than as wiring.
+    """
+    problems = front_disagreements(
+        tls_front_aliases(load_yaml(_BASE_COMPOSE)),
+        sni_map_hostnames(_NGINX_TLS_TEMPLATE.read_text(encoding="utf-8")),
+        san_dns_names(_GEN_TLS_SCRIPT.read_text(encoding="utf-8")),
+    )
+    assert not problems, format_failure(
+        summary="a name the TLS front carries lacks its alias, its SNI route or its SAN",
+        violations=problems,
+        fix_hint=(
+            "Add the name to tls-proxy's aliases in docker-compose.e2e.yml, to the $ssl_server_name map in "
+            "config/nginx/nginx-tls-test.conf.template, and to SAN_DNS_NAMES in scripts/dev/gen_test_tls.py."
+        ),
+        docs_link="docs/development/structural-guards.md",
+    )
+
+
+def test_front_disagreements_name_each_missing_piece() -> None:
+    sans = ("*.adcp.test", "news-psatest.com")
+    assert (
+        front_disagreements(["proxy.adcp.test", "news-psatest.com"], ["proxy.adcp.test", "news-psatest.com"], sans)
+        == []
+    )
+    assert front_disagreements(["proxy.adcp.test", "news-psatest.com"], ["proxy.adcp.test"], sans) == [
+        "tls-proxy alias news-psatest.com has no $ssl_server_name row"
+    ]
+    assert front_disagreements(["proxy.adcp.test"], ["proxy.adcp.test", "news-psatest.com"], sans) == [
+        "$ssl_server_name row news-psatest.com is not a tls-proxy alias"
+    ]
+    assert front_disagreements(["radio-psatest.com"], ["radio-psatest.com"], sans) == [
+        "radio-psatest.com is not covered by SAN_DNS_NAMES"
+    ]

@@ -120,10 +120,7 @@ def test_gam_callback_redirect_and_persistence(
     "suffix",
     [
         "authorized-properties",
-        "authorized-properties/upload",
         "property-tags",
-        "authorized-properties/create",
-        "authorized-properties/missing/edit",
     ],
 )
 @pytest.mark.parametrize("script_root", ["", "/admin"])

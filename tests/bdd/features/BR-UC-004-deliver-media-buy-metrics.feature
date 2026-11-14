@@ -641,7 +641,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buy_delivery spec
     And the response should contain "media_buy_deliveries" field
-    And the response should not contain "errors" field
+    And the response should NOT contain "errors" field
     # BR-RULE-018 INV-1: success has data, no errors
 
   @T-UC-004-response-error @invariant @BR-RULE-018 @response @error

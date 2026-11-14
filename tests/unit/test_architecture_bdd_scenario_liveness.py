@@ -10,7 +10,7 @@ per-run artifact from a real BDD invocation. This file pins the pure logic
 ``ScenarioLiveness`` record's aggregation rules) offline, without running
 pytest-bdd. The real-run proof — that a genuinely unbound scenario is recorded
 as such, and a genuinely bound one is not — lives in
-``tests/integration/test_bdd_scenario_liveness_real_run.py``, which shells out
+``tests/collection/test_bdd_scenario_liveness_real_run.py``, which shells out
 to a real narrow ``pytest tests/bdd`` slice against Postgres.
 """
 
@@ -364,3 +364,23 @@ def test_the_verdict_tracks_the_fact_that_did_change() -> None:
     reason = "harness wiring not extended to this tag"
     assert _verdict(reason, steps_executed=True).harness_wired is True
     assert _verdict(reason, steps_executed=False).harness_wired is False
+
+
+def test_in_process_projection_keeps_what_the_observations_measured() -> None:
+    """The replay re-derives harness_wired, so it must carry the fact that field reads."""
+    observation = {
+        "nodeid": "tests/bdd/test_uc001.py::test_x[mcp-a]",
+        "transport": "mcp",
+        "outcome": "passed",
+        "reason": None,
+        "reason_category": "live",
+        "steps_executed": True,
+    }
+    e2e_observation = {**observation, "nodeid": "tests/bdd/test_uc001.py::test_x[e2e_rest-a]", "transport": "e2e_rest"}
+
+    projected = sl._project_in_process(
+        {"scenario_id": "T-UC-001-x", "observations": [observation, e2e_observation], "harness_wired": None}
+    )
+
+    assert projected["observations"] == [observation]
+    assert projected["harness_wired"] is True
