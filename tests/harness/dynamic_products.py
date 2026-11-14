@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from copy import deepcopy
 from decimal import Decimal
 
 from tests.factories import PricingOptionFactory, ProductFactory, SignalsAgentFactory, TenantFactory
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.product import ProductEnv
-from tests.harness.publisher_authorization import PUBLISHER_ORIGIN_HOST
 from tests.helpers.tls_material import start_tls_origin, trust_test_ca
 
 
@@ -31,7 +31,7 @@ class DynamicProductEnv(EgressHatchMixin, ProductEnv):
             "signals_origin",
             tools={"get_signals": self._get_signals},
             listen_host="0.0.0.0" if self.is_e2e else "127.0.0.1",
-            public_host=PUBLISHER_ORIGIN_HOST if self.is_e2e else "127.0.0.1",
+            public_host=os.getenv("E2E_ORIGIN_HOST", "signals.adcp-e2e.dev") if self.is_e2e else "127.0.0.1",
         )
         trust_test_ca(self._guard)
 

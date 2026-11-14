@@ -1,6 +1,6 @@
 """Tenant config repository -- tenant-scoped access to configuration models.
 
-Provides access to PublisherPartner and AdapterConfig for _impl functions
+Provides access to the Tenant row and AdapterConfig for _impl functions
 that need tenant-level configuration data without calling get_db_session(),
 plus the one write path admin settings handlers need (``update_tenant``) and
 the atomic authorized-list mutators shared by the admin surfaces.
@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 from src.core.database.jsonb_append import jsonb_list
-from src.core.database.models import AdapterConfig, PublisherPartner, Tenant
+from src.core.database.models import AdapterConfig, Tenant
 
 AuthorizedListColumn = Literal["authorized_domains", "authorized_emails"]
 AddOutcome = Literal["added", "duplicate", "missing_tenant"]
@@ -96,16 +96,6 @@ class TenantConfigRepository:
             setattr(tenant, column, value)
         tenant.updated_at = datetime.now(UTC)
         return True
-
-    def list_publisher_partners(self) -> list[PublisherPartner]:
-        """Get all publisher partners for the tenant."""
-        stmt = select(PublisherPartner).filter_by(tenant_id=self._tenant_id)
-        return list(self._session.scalars(stmt).all())
-
-    def list_publisher_domains(self) -> list[str]:
-        """Get sorted list of publisher domain strings for the tenant."""
-        partners = self.list_publisher_partners()
-        return sorted([p.publisher_domain for p in partners])
 
     # ------------------------------------------------------------------
     # Authorized-list mutation (atomic)

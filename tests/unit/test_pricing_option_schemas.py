@@ -152,7 +152,7 @@ class TestProductIntegration:
             description="d",
             delivery_type="guaranteed",
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
-            publisher_properties=[{"selection_type": "all", "publisher_domain": "example.com"}],
+            publisher_properties=[{"selection_type": "all", "publisher_domain": "psatest.com"}],
             delivery_measurement={"provider": "test"},
             pricing_options=pricing_options,
             reporting_capabilities=default_reporting_capabilities(),

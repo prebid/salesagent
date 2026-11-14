@@ -9,13 +9,9 @@
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <div>
                     <h2>Authorized Properties</h2>
-                    <p class="text-muted">Properties this publisher is authorized to sell</p>
+                    <p class="text-muted">Properties your publishers' <code>adagents.json</code> files authorize this sales agent for</p>
                 </div>
                 <div>
-                    <a href="{{ url_for('authorized_properties.upload_authorized_properties', tenant_id=tenant.tenant_id) }}"
-                       class="btn btn-primary">
-                        <i class="fas fa-upload"></i> Upload Properties
-                    </a>
                     <a href="{{ url_for('authorized_properties.list_property_tags', tenant_id=tenant.tenant_id) }}"
                        class="btn btn-outline-secondary">
                         <i class="fas fa-tags"></i> Property Tags
@@ -25,12 +21,11 @@
 
             <div class="row mb-4">
                 {% for label, key, style in [
-                    ('Total', 'total', 'secondary'),
-                    ('Verified', 'verified', 'success'),
-                    ('Pending', 'pending', 'warning'),
-                    ('Failed', 'failed', 'danger')
+                    ('Properties', 'total', 'secondary'),
+                    ('Authorized now', 'authorized', 'success'),
+                    ('Publishers', 'publishers', 'primary')
                 ] %}
-                <div class="col-md-3">
+                <div class="col-md-4">
                     <div class="card">
                         <div class="card-body text-center">
                             <h3 class="text-{{ style }} mb-0">{{ property_counts[key] }}</h3>
@@ -43,7 +38,7 @@
 
             <div class="card">
                 <div class="card-body">
-                    {% if properties %}
+                    {% if rows %}
                     <div class="table-responsive">
                         <table class="table table-striped">
                             <thead>
@@ -53,32 +48,30 @@
                                     <th>Publisher Domain</th>
                                     <th>Identifiers</th>
                                     <th>Tags</th>
-                                    <th>Verification</th>
+                                    <th>Status</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {% for property in properties %}
+                                {% for row in rows %}
                                 <tr>
-                                    <td>{{ property.name }}</td>
-                                    <td>{{ property.property_type }}</td>
-                                    <td>{{ property.publisher_domain }}</td>
+                                    <td>{{ row.property.name }}</td>
+                                    <td>{{ row.property.property_type }}</td>
+                                    <td>{{ row.property.publisher_domain }}</td>
                                     <td>
-                                        {% for identifier in property.identifiers or [] %}
+                                        {% for identifier in row.property.identifiers or [] %}
                                         <div><small class="text-muted">{{ identifier.type }}:</small> {{ identifier.value }}</div>
                                         {% endfor %}
                                     </td>
                                     <td>
-                                        {% for tag in property.tags or [] %}
+                                        {% for tag in row.property.tags or [] %}
                                         <span class="badge badge-secondary">{{ tag }}</span>
                                         {% endfor %}
                                     </td>
                                     <td>
-                                        {% if property.verification_status == 'verified' %}
-                                        <span class="badge badge-success">Verified</span>
-                                        {% elif property.verification_status == 'failed' %}
-                                        <span class="badge badge-danger">Failed</span>
+                                        {% if row.authorized %}
+                                        <span class="badge badge-success">Authorized</span>
                                         {% else %}
-                                        <span class="badge badge-warning">Pending</span>
+                                        <span class="badge badge-warning" title="Last fetch: {{ row.publisher.fetch_status }}">Not authorized now</span>
                                         {% endif %}
                                     </td>
                                 </tr>
@@ -88,27 +81,10 @@
                     </div>
                     {% else %}
                     <p class="text-muted mb-0">
-                        No authorized properties yet. Upload a properties file, or sync them from a
-                        publisher's <code>adagents.json</code>.
+                        No authorized properties yet. Add a publisher under Inventory &rarr; Publishers; its
+                        <code>adagents.json</code> supplies the properties it authorizes this agent for.
                     </p>
                     {% endif %}
-                </div>
-            </div>
-
-            <div class="card mt-4">
-                <div class="card-body">
-                    <h4>Publisher Format Catalog</h4>
-                    <p class="text-muted">
-                        Reusable format options published as <code>formats[]</code> in the
-                        <code>/.well-known/adagents.json</code> served at <code>{{ tenant.primary_domain }}</code>.
-                        A product references one with <code>publisher_domain: "{{ tenant.primary_domain }}"</code>
-                        and its <code>format_option_id</code>. Each entry is a canonical format declaration
-                        with a unique <code>format_option_id</code>. Leave empty to publish no catalog.
-                    </p>
-                    <form method="POST" action="{{ url_for('authorized_properties.update_publisher_format_catalog', tenant_id=tenant.tenant_id) }}">
-                        <textarea name="publisher_format_options" class="form-control mb-2" rows="10" style="font-family: monospace;">{% if tenant.publisher_format_options %}{{ tenant.publisher_format_options | tojson(indent=2) }}{% endif %}</textarea>
-                        <button type="submit" class="btn btn-primary">Save Catalog</button>
-                    </form>
                 </div>
             </div>
         </div>

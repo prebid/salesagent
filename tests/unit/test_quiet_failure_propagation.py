@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.core.database.repositories.product import OfferedProduct
 from src.core.schemas import GetProductsRequest
 from tests.harness.product_unit import ProductEnv
 from tests.helpers.unit_identity import fabricated_identity
@@ -45,8 +46,9 @@ def _mock_uow_with_products(products):
     mock_uow.__enter__ = MagicMock(return_value=mock_uow)
     mock_uow.__exit__ = MagicMock(return_value=False)
     mock_uow.schemas = {product.product_id: product for product in products}
-    mock_uow.products.list_all.return_value = [
-        ProductEnv.catalog_row_for(product, "test-tenant") for product in products
+    mock_uow.list_offered.return_value = [
+        OfferedProduct(ProductEnv.catalog_row_for(product, "test-tenant"), product.publisher_properties)
+        for product in products
     ]
     return mock_uow
 

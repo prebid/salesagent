@@ -42,6 +42,7 @@ SPEC_AMBIGUOUS (2 tests):
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
@@ -1525,9 +1526,13 @@ class TestProductRepository:
         """
         with ProductUoW("uc001_tenant") as uow:
             assert uow.products is not None
+            assert uow.publishers is not None
             products = uow.products.list_all()
+            catalog = uow.publishers.catalog(datetime.now(UTC))
             for product in products:
-                schema = convert_product_model_to_schema(product)
+                schema = convert_product_model_to_schema(
+                    product, publisher_properties=product.resolve_publisher_properties(catalog.refs)
+                )
                 assert schema.product_id == product.product_id
                 assert schema.name == product.name
                 assert len(schema.pricing_options) > 0

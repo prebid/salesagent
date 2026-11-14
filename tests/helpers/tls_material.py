@@ -93,7 +93,6 @@ def start_tls_origin(
 
     *guard* is a harness env's ``_guard``: the origin is registered on the line it starts,
     so whichever path releases the env -- a clean exit or a failed enter -- closes it.
-    Bind ``0.0.0.0`` when the client dialing the origin is another container.
     """
     advertised_host = public_host or listen_host
     if tools is None:

@@ -36,11 +36,10 @@ def test_inventory_sync_checks_gam_inventory_not_products():
         mock_db.scalars.return_value.first.return_value = mock_tenant
 
         # Mock scalar() calls for counts
-        # Order of calls: CurrencyLimit, AuthorizedProperty, Verified PublisherPartner, GAMInventory, Product, Principal, CurrencyLimit (budget)
+        # Order of calls: CurrencyLimit, GAMInventory, Product, Principal, CurrencyLimit (budget).
+        # The authorized properties and publishers are a repository read (PublisherRepository), not a scalar.
         mock_db.scalar.side_effect = [
             1,  # CurrencyLimit count
-            1,  # AuthorizedProperty count
-            1,  # Verified PublisherPartner count (NEW - added in line 392 of setup_checklist_service.py)
             100,  # GAMInventory count (inventory synced!)
             0,  # Product count (no products yet)
             0,  # Principal count
@@ -97,11 +96,10 @@ def test_inventory_sync_incomplete_when_no_gam_inventory():
         mock_db.scalars.return_value.first.return_value = mock_tenant
 
         # Mock scalar() calls for counts - all zero (no inventory synced)
-        # Order of calls: CurrencyLimit, AuthorizedProperty, Verified PublisherPartner, GAMInventory, Product, Principal, CurrencyLimit (budget)
+        # Order of calls: CurrencyLimit, GAMInventory, Product, Principal, CurrencyLimit (budget).
+        # The authorized properties and publishers are a repository read (PublisherRepository), not a scalar.
         mock_db.scalar.side_effect = [
             1,  # CurrencyLimit count
-            1,  # AuthorizedProperty count
-            1,  # Verified PublisherPartner count (NEW - added in line 392 of setup_checklist_service.py)
             0,  # GAMInventory count (no inventory!)
             0,  # Product count
             0,  # Principal count

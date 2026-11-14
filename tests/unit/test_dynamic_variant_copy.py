@@ -15,6 +15,11 @@ def test_variant_carries_catalog_and_forecast_fields():
     )
     assert variant.catalog_match == template.catalog_match
     assert variant.forecast == template.forecast
+    assert variant.stored_publisher_properties == template.stored_publisher_properties
+    assert all(
+        inherited is not original
+        for inherited, original in zip(variant.publisher_selections, template.publisher_selections, strict=True)
+    )
     variant.forecast["nested"]["seller_value"] = "changed"
     variant.targeting_template["geo_targets"].append("CA")
     assert template.forecast["nested"]["seller_value"] == "forecast"

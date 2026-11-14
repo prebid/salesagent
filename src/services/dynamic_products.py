@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import attributes
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Product
+from src.core.database.models import Product, ProductPublisherSelection
 from src.core.database.product_pricing import mapped_column_values
 from src.core.database.repositories.product import ProductRepository
 from src.core.signals_agent_registry import get_signals_agent_registry
@@ -266,6 +266,9 @@ def create_variant_from_template(
         name=name,
         description=customize_description(
             template.description, signal, activation_key, brief, template.variant_description_template
+        ),
+        publisher_selections=ProductPublisherSelection.from_selectors(
+            template.tenant_id, template.stored_publisher_properties
         ),
         allowed_principal_ids=None,
         is_custom=False,

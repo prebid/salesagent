@@ -918,7 +918,11 @@ def format_contract(*, format_options: Iterable[Any] | None, format_ids: Iterabl
 
 
 def linked_format_contract(
-    *, profile: Any | None, format_options: Iterable[Any] | None, format_ids: Iterable[Any] | None
+    *,
+    profile: Any | None,
+    format_options: Iterable[Any] | None,
+    format_ids: Iterable[Any] | None,
+    publisher_options: Mapping[Any, Any] | None = None,
 ) -> FormatContract:
     """The contract a product carries given its own arms and the inventory profile it links.
 
@@ -928,12 +932,19 @@ def linked_format_contract(
     the canonical source, because the pin makes ``format_options`` the source of truth and
     a legacy-only profile has none to offer.
 
+    A declaration referencing a publisher's option by ``{publisher_domain,
+    format_option_id}`` is served as that publisher's current entry in *publisher_options*
+    (``publisher_format_catalog.resolve_declarations``); one it does not answer is left out.
+
     ``Product.format_contract`` asks this of a stored row; the admin authoring surface asks
     it of a product it has not written yet, so the two cannot disagree about which arm a
     profile-linked product is served.
     """
+    from src.core.publisher_format_catalog import resolve_declarations
+
+    authored = (profile.format_options if profile else None) or format_options
     return format_contract(
-        format_options=(profile.format_options if profile else None) or format_options,
+        format_options=resolve_declarations(authored, publisher_options or {}) if authored else authored,
         format_ids=profile.format_ids if profile else format_ids,
     )
 

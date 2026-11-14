@@ -257,7 +257,7 @@ def create_test_format(
 
 
 def create_test_publisher_properties_by_tag(
-    publisher_domain: str = "test.example.com",
+    publisher_domain: str = "test.psatest.com",
     property_tags: list[str] | None = None,
     **kwargs,
 ) -> dict[str, Any]:
@@ -275,7 +275,7 @@ def create_test_publisher_properties_by_tag(
 
     Example:
         props = create_test_publisher_properties_by_tag(
-            publisher_domain="news.example.com",
+            publisher_domain="news.psatest.com",
             property_tags=["premium", "sports"]
         )
     """
@@ -291,7 +291,7 @@ def create_test_publisher_properties_by_tag(
 
 
 def create_test_publisher_properties_by_id(
-    publisher_domain: str = "test.example.com",
+    publisher_domain: str = "test.psatest.com",
     property_ids: list[str] | None = None,
     **kwargs,
 ) -> dict[str, Any]:
@@ -309,7 +309,7 @@ def create_test_publisher_properties_by_id(
 
     Example:
         props = create_test_publisher_properties_by_id(
-            publisher_domain="news.example.com",
+            publisher_domain="news.psatest.com",
             property_ids=["prop_001", "prop_002"]
         )
     """
@@ -325,7 +325,7 @@ def create_test_publisher_properties_by_id(
 
 
 def create_test_property_dict(
-    publisher_domain: str = "test.example.com",
+    publisher_domain: str = "test.psatest.com",
     property_id: str = "test_property_1",
     property_name: str = "Test Property",
     property_type: str = "website",
@@ -351,7 +351,7 @@ def create_test_property_dict(
         Property dict suitable for Product.publisher_properties
 
     Example:
-        prop = create_test_property_dict(publisher_domain="news.example.com")
+        prop = create_test_property_dict(publisher_domain="news.psatest.com")
     """
     return {
         "publisher_domain": publisher_domain,
@@ -363,7 +363,7 @@ def create_test_property_dict(
 
 
 def create_test_property(
-    identifier: str = "test.example.com",
+    identifier: str = "test.psatest.com",
     type: str = "website",
     **kwargs,
 ) -> Property:
@@ -841,8 +841,6 @@ def create_test_db_product(
     name: str = "Test Product",
     description: str = "Test product description",
     format_ids: list[dict[str, str]] | None = None,
-    property_tags: list[str] | None = None,
-    property_ids: list[str] | None = None,
     properties: list[dict] | None = None,
     delivery_type: str = "guaranteed",
     targeting_template: dict[str, Any] | None = None,
@@ -852,9 +850,9 @@ def create_test_db_product(
     """Create a test Product database record with tenant_id.
 
     This factory creates database Product records (from src.core.database.models.Product)
-    for tests that need to insert Products into the database. The database Product model
-    uses legacy field names (property_tags, property_ids, properties) that get converted
-    to publisher_properties when serializing to AdCP format.
+    for tests that need to insert Products into the database. The model stores its
+    publishers as selection rows (``publisher_selections``), announced as
+    ``publisher_properties``.
 
     Use this factory for integration tests that create Product database records.
     Use create_test_product() for AdCP-compliant Product objects without tenant_id.
@@ -865,9 +863,9 @@ def create_test_db_product(
         name: Product name
         description: Product description
         format_ids: List of format ID dicts with {agent_url: str, id: str}. Defaults to display_300x250
-        property_tags: List of property tags (e.g., ["all_inventory", "premium"]). Default: ["all_inventory"]
-        property_ids: List of property IDs (alternative to property_tags)
-        properties: List of full Property objects (legacy, alternative to property_tags/property_ids)
+        properties: Publisher property selectors stored as selection rows. Default: none. A
+            selection references its publisher by foreign key, so a test that persists a
+            product naming publishers stores those publishers first (``tests.factories.publisher``).
         delivery_type: "guaranteed" or "non_guaranteed"
         targeting_template: Targeting template dict. Defaults to empty dict
         inventory_profile_id: Optional inventory profile ID to link
@@ -886,7 +884,6 @@ def create_test_db_product(
             tenant_id="test_tenant",
             product_id="video_premium",
             format_ids=[{"agent_url": "https://creative.example.com", "id": "video_1920x1080"}],
-            property_tags=["premium", "sports"],
             inventory_profile_id=123
         )
 
@@ -897,6 +894,7 @@ def create_test_db_product(
     """
     # Import database Product model
     from src.core.database.models import Product as DBProduct
+    from src.core.database.models import ProductPublisherSelection
 
     # Default format_ids if not provided
     if format_ids is None:
@@ -906,10 +904,6 @@ def create_test_db_product(
                 "id": "display_300x250",
             }
         ]
-
-    # Default property_tags if no property authorization provided
-    if property_tags is None and property_ids is None and properties is None:
-        property_tags = ["all_inventory"]
 
     # Default targeting_template
     if targeting_template is None:
@@ -921,9 +915,7 @@ def create_test_db_product(
         name=name,
         description=description,
         format_ids=format_ids,
-        property_tags=property_tags,
-        property_ids=property_ids,
-        properties=properties,
+        publisher_selections=ProductPublisherSelection.from_selectors(tenant_id, properties or []),
         delivery_type=delivery_type,
         targeting_template=targeting_template,
         inventory_profile_id=inventory_profile_id,
@@ -969,7 +961,7 @@ def create_test_db_product_with_pricing(
 
             # Product can now be converted to AdCP schema
             from src.core.product_conversion import convert_product_model_to_schema
-            adcp_product = convert_product_model_to_schema(product)
+            adcp_product = convert_product_model_to_schema(product, publisher_properties=product.resolve_publisher_properties(ONE_AUTHORIZED_PROPERTY))
     """
     from decimal import Decimal
 

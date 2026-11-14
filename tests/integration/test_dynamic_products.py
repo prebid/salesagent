@@ -13,13 +13,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product, Tenant
 from src.services.dynamic_products import (
     archive_expired_variants,
     generate_variants_for_brief,
 )
-from tests.factories import ProductFactory
+from tests.factories import ProductFactory, TenantFactory
 from tests.harness._base import BareIntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -35,26 +36,24 @@ def _get_variants(tenant_id: str) -> list[Product]:
         return list(session.scalars(select(Product).filter_by(tenant_id=tenant_id, is_dynamic_variant=True)).all())
 
 
-def _ensure_tenant(tenant_id: str) -> None:
+def _ensure_tenant(tenant_id: str) -> Tenant:
     """Create a tenant in the DB if it doesn't exist."""
     from sqlalchemy import select
 
     from tests.utils.database_helpers import vhost_for
 
-    with get_db_session() as session:
-        existing = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        if not existing:
-            # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
-            session.add(
-                Tenant(
-                    tenant_id=tenant_id,
-                    name=f"Test {tenant_id}",
-                    subdomain=tenant_id,
-                    virtual_host=vhost_for(tenant_id),
-                    ad_server="mock",
-                )
-            )
-            session.commit()
+    session = TenantFactory._meta.sqlalchemy_session
+    assert session is not None
+    existing = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+    if existing is None:
+        existing = TenantFactory(
+            tenant_id=tenant_id,
+            name=f"Test {tenant_id}",
+            subdomain=tenant_id,
+            virtual_host=vhost_for(tenant_id),
+            ad_server="mock",
+        )
+    return existing
 
 
 def _make_signal(
@@ -111,8 +110,7 @@ def _create_dynamic_template(
         countries = ["US"]
 
     return ProductFactory(
-        tenant=None,
-        tenant_id=tenant_id,
+        tenant=_ensure_tenant(tenant_id),
         product_id=product_id,
         name=name,
         description=f"Dynamic template for {name}",
@@ -467,7 +465,7 @@ class TestArchiveExpiredVariants:
                 format_ids=[],
                 targeting_template={},
                 delivery_type="standard",
-                property_tags=["all_inventory"],
+                publisher_selections=whole_publisher_selections(session, "test_tenant"),
                 is_dynamic_variant=True,
                 parent_product_id="tmpl_001",
                 expires_at=datetime.now(UTC) - timedelta(days=1),
@@ -496,7 +494,7 @@ class TestArchiveExpiredVariants:
                 format_ids=[],
                 targeting_template={},
                 delivery_type="standard",
-                property_tags=["all_inventory"],
+                publisher_selections=whole_publisher_selections(session, "test_tenant"),
                 is_dynamic_variant=True,
                 parent_product_id="tmpl_001",
                 expires_at=datetime.now(UTC) + timedelta(days=10),
@@ -519,7 +517,7 @@ class TestArchiveExpiredVariants:
                 format_ids=[],
                 targeting_template={},
                 delivery_type="standard",
-                property_tags=["all_inventory"],
+                publisher_selections=whole_publisher_selections(session, "test_tenant"),
                 is_dynamic_variant=True,
                 parent_product_id="tmpl_001",
                 expires_at=datetime.now(UTC) - timedelta(days=5),
@@ -545,7 +543,7 @@ class TestArchiveExpiredVariants:
                     format_ids=[],
                     targeting_template={},
                     delivery_type="standard",
-                    property_tags=["all_inventory"],
+                    publisher_selections=whole_publisher_selections(session, tid),
                     is_dynamic_variant=True,
                     parent_product_id="tmpl_001",
                     expires_at=datetime.now(UTC) - timedelta(days=1),
@@ -577,7 +575,7 @@ class TestArchiveExpiredVariants:
                     format_ids=[],
                     targeting_template={},
                     delivery_type="standard",
-                    property_tags=["all_inventory"],
+                    publisher_selections=whole_publisher_selections(session, tid),
                     is_dynamic_variant=True,
                     parent_product_id="tmpl_001",
                     expires_at=datetime.now(UTC) - timedelta(days=1),

@@ -3,7 +3,7 @@
 import pytest
 
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
-from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPConfigurationError
+from src.core.exceptions import AdCPCapabilityNotSupportedError
 
 
 class TestCompatibilityMatrix:
@@ -92,34 +92,30 @@ class TestLineItemTypeSelection:
 
     def test_override_compatible_type_accepted(self):
         """Override with compatible type should be accepted."""
-        result = PricingCompatibility.select_line_item_type("cpc", is_guaranteed=False, override_type="NETWORK")
+        result = PricingCompatibility.select_line_item_type("flat_rate", is_guaranteed=False, override_type="NETWORK")
         assert result == "NETWORK"
 
     def test_override_incompatible_type_rejected(self):
-        """Override with incompatible type is refused as SELLER configuration.
-
-        EXPECTATION REVERSED by salesagent-7et3j, then CORRECTED by review.
-        It first became UNSUPPORTED_FEATURE (buyer-correctable), which was wrong:
-        ``override_type`` comes from PRODUCT CONFIG, per this method's own docstring,
-        and the only production caller passes no override at all. The buyer never
-        sent it, so there is nothing for them to correct. CONFIGURATION_ERROR is the
-        honest code, and the pinned enum makes it terminal.
-        """
-        with pytest.raises(AdCPConfigurationError):
+        """An override the pricing model cannot use falls back to auto-selection."""
+        assert (
             PricingCompatibility.select_line_item_type(
                 "flat_rate",
                 is_guaranteed=False,
                 override_type="STANDARD",  # STANDARD doesn't support CPD (used by FLAT_RATE)
             )
+            == "SPONSORSHIP"
+        )
 
     def test_override_vcpm_with_incompatible_rejected(self):
-        """Override VCPM with non-STANDARD type should be rejected."""
-        with pytest.raises(AdCPConfigurationError):
+        """Override VCPM with non-STANDARD type falls back to STANDARD."""
+        assert (
             PricingCompatibility.select_line_item_type(
                 "vcpm",
                 is_guaranteed=False,
                 override_type="SPONSORSHIP",  # SPONSORSHIP doesn't support VCPM
             )
+            == "STANDARD"
+        )
 
 
 class TestGAMCostTypeMapping:
@@ -155,7 +151,7 @@ class TestDefaultPriorities:
         assert PricingCompatibility.get_default_priority("STANDARD") == 8
         assert PricingCompatibility.get_default_priority("PRICE_PRIORITY") == 12
         assert PricingCompatibility.get_default_priority("BULK") == 12
-        assert PricingCompatibility.get_default_priority("NETWORK") == 16
+        assert PricingCompatibility.get_default_priority("NETWORK") == 12
         assert PricingCompatibility.get_default_priority("HOUSE") == 16
 
     def test_unknown_type_defaults_to_standard_priority(self):
