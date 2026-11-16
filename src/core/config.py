@@ -64,6 +64,9 @@ class RuntimeSettings(BaseSettings):
     sales_agent_domain: str | None = None
     admin_domain: str | None = None
     super_admin_domain: str | None = None
+    # Mounts GET /tls/ask, the on-demand TLS gate a proxy such as Caddy asks before issuing a
+    # certificate. Off by default: it tells any caller whether a host is served here.
+    tls_ask_enabled: bool = False
     support_email: str = "support@example.com"
     adcp_agent_url: str | None = None
     adcp_multi_tenant: bool = False
@@ -80,16 +83,6 @@ class RuntimeSettings(BaseSettings):
             "leave it at. It exists because 'serve a newer buyer forward-compatibly' and 'this "
             "is a production deployment' are two facts that were spelled with one variable, and "
             "a grading deployment needs the first without claiming the second"
-        ),
-    )
-    publisher_auto_verify: bool | None = Field(
-        default=None,
-        description=(
-            "Whether a publisher partner is verified without reading its adagents.json, "
-            "stated explicitly. Unset (the normal case) it is DERIVED from is_production: a "
-            "local server is in nobody's file, so anywhere but production skips the check. "
-            "It exists so a non-production deployment can run the check without claiming "
-            "production"
         ),
     )
 
@@ -154,18 +147,6 @@ class RuntimeSettings(BaseSettings):
         favour of whichever was checked last.
         """
         return self.adcp_pydantic_extra_mode or ("ignore" if self.is_production else "forbid")
-
-    @property
-    def publisher_auto_verify_allowed(self) -> bool:
-        """A publisher partner is verified without an adagents.json check: a local server
-        is in nobody's file. Anywhere that is not production.
-
-        ``PUBLISHER_AUTO_VERIFY`` states it outright and wins, so a test deployment can
-        grade the check without claiming production.
-        """
-        if self.publisher_auto_verify is not None:
-            return self.publisher_auto_verify
-        return not self.is_production
 
 
 class TestingSettings(BaseSettings):
@@ -841,10 +822,6 @@ class Settings:
         return self.testing.adcp_testing and not self.database.database_url
 
     # --- production-derived selections ------------------------------------------------
-
-    @property
-    def publisher_auto_verify_allowed(self) -> bool:
-        return self.runtime.publisher_auto_verify_allowed
 
     @property
     def structured_logging(self) -> bool:

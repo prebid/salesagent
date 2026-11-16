@@ -105,6 +105,29 @@ def json_safe(value: Any) -> Any:
     return value
 
 
+def rest_body_from_kwargs(kwargs: dict[str, Any], flat_fields: tuple[str, ...]) -> dict[str, Any]:
+    """The REST body for a verb a step dispatches in either call shape.
+
+    Steps send some verbs as flat kwargs (scenarios grading how the route treats one wire
+    field) and others as a built ``req=<Request>(...)`` (the composite envs route on the
+    request type). A builder serving only the flat form returns ``{}`` for a ``req=``
+    dispatch, which the route reads as an unfiltered request: the REST leg then grades a
+    different request than the other transports.
+
+    Not ``BaseTestEnv.build_rest_body``: that dumps with ``exclude_none`` and returns ``{}``
+    for the flat form, so it can shape neither call.
+    """
+    req = kwargs.get("req")
+    if req is not None:
+        # exclude_unset, not exclude_none: a request model re-based on its library type
+        # inherits defaults of False rather than None (GetMediaBuysRequest.include_snapshot,
+        # GetMediaBuyDeliveryRequest.include_package_daily_breakdown), so exclude_none adds
+        # keys the caller never set. exclude_unset is "send only what was set", which is
+        # what the flat branch does too.
+        return req.model_dump(mode="json", exclude_unset=True)
+    return {key: kwargs[key] for key in flat_fields if kwargs.get(key) is not None}
+
+
 def _presents_a_credential(credential: Any) -> bool:
     """Whether a caller-supplied headers mapping actually carries a CREDENTIAL.
 
@@ -2812,7 +2835,8 @@ class BaseTestEnv:
         tenant: str | None = None,
         host_resolves_nothing: bool = False,
     ) -> Any:
-        """GET the agent card at *path*, naming the seller by *host* or by *tenant*.
+        """GET the agent card, or another root document such as adagents.json, at *path*,
+        naming the seller by *host* or by *tenant*.
 
         The card is not a registry tool, so it is not reachable through ``call_via``: it is a
         root endpoint that answers before any AdCP exchange and carries no envelope. A
@@ -2826,13 +2850,20 @@ class BaseTestEnv:
         Returns the ``requests``/``httpx`` style response, so a step can read
         ``status_code``, ``json()`` and ``text`` the same way on either side.
         """
-        headers = credential_headers(host=host, tenant=tenant, host_resolves_nothing=host_resolves_nothing)
+        return self.get_root(
+            path, headers=credential_headers(host=host, tenant=tenant, host_resolves_nothing=host_resolves_nothing)
+        )
+
+    def get_root(
+        self, path: str, *, headers: dict[str, str] | None = None, params: dict[str, str] | None = None
+    ) -> Any:
+        """GET a root endpoint: the in-process ASGI app, or real HTTP against the live stack."""
         if self.is_e2e:
             import httpx
 
-            assert self.e2e_config is not None, "fetch_agent_card()'s e2e branch needs env.e2e_config"
-            return httpx.get(f"{self.e2e_config.base_url}{path}", headers=headers, timeout=30)
-        return self.get_rest_client().get(path, headers=headers)
+            assert self.e2e_config is not None, "get_root()'s e2e branch needs env.e2e_config"
+            return httpx.get(f"{self.e2e_config.base_url}{path}", headers=headers, params=params, timeout=30)
+        return self.get_rest_client().get(path, headers=headers, params=params)
 
     def post_mcp_initialize(self, path: str) -> Any:
         """POST an MCP ``initialize`` to *path*, following no redirect, and return the response.
@@ -2861,13 +2892,14 @@ class BaseTestEnv:
         with preserved_global_app_state(), TestClient(app, follow_redirects=False) as client:
             return client.post(path, json=body, headers=headers)
 
-    def list_mcp_tools(self) -> dict[str, str | None]:
-        """Each MCP tool's advertised description, by name, as a client's ``tools/list`` answers.
+    def list_mcp_tools(self) -> dict[str, Any]:
+        """Each MCP tool as a client's ``tools/list`` answers it (an ``mcp.types.Tool``), by name.
 
         Like the card, ``tools/list`` is not a registry tool and so not reachable through
         ``call_via``. It runs over FastMCP's in-memory client against the server the MCP
-        transport dispatches to, so the answer is the MCP wire's, not a read of the registry.
-        In-process only: e2e serves no MCP transport to grade.
+        transport dispatches to, middleware chain included, so the answer is the MCP wire's,
+        not a read of the registry. The listing needs no credential. In-process only: e2e
+        serves no MCP transport to grade.
         """
         assert not self.is_e2e, "list_mcp_tools() reads the in-process MCP server; e2e dispatches no MCP"
         import asyncio
@@ -2876,9 +2908,11 @@ class BaseTestEnv:
 
         from src.core.main import mcp
 
-        async def _list() -> dict[str, str | None]:
+        self._commit_factory_data()
+
+        async def _list() -> dict[str, Any]:
             async with Client(mcp) as client:
-                return {tool.name: tool.description for tool in await client.list_tools()}
+                return {tool.name: tool for tool in await client.list_tools()}
 
         return asyncio.run(_list())
 

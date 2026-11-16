@@ -25,6 +25,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from scripts.setup.seed_products import whole_publisher_selections
 from tests.e2e.conftest import (
     GAM_TEST_AD_UNIT_IDS,
     GAM_TEST_ADVERTISER_ID,
@@ -253,7 +254,7 @@ def _seed_lifecycle_test_data():
             format_ids=[],
             targeting_template={},
             delivery_type="non_guaranteed",
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, GAM_LIFECYCLE_TENANT_ID),
             implementation_config={
                 "order_name_template": "E2E-NONGUAR-{po_number}-{timestamp}",
                 "line_item_type": "PRICE_PRIORITY",
@@ -277,7 +278,7 @@ def _seed_lifecycle_test_data():
             format_ids=[],
             targeting_template={},
             delivery_type="guaranteed",
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, GAM_LIFECYCLE_TENANT_ID),
             implementation_config={
                 "order_name_template": "E2E-GUAR-{po_number}-{timestamp}",
                 "line_item_type": "STANDARD",
@@ -293,7 +294,9 @@ def _seed_lifecycle_test_data():
         )
         session.add(product_guaranteed)
 
-        # HOUSE product for archive lifecycle test
+        # Product for the archive lifecycle test. It configures HOUSE, but a CPM package on it
+        # books PRICE_PRIORITY at that type's default priority: the adapter books a
+        # share-of-voice type (SPONSORSHIP, NETWORK, HOUSE) only for flat rate.
         product_house = Product(
             tenant_id=GAM_LIFECYCLE_TENANT_ID,
             product_id="gam_e2e_house",
@@ -301,7 +304,7 @@ def _seed_lifecycle_test_data():
             format_ids=[],
             targeting_template={},
             delivery_type="non_guaranteed",
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, GAM_LIFECYCLE_TENANT_ID),
             implementation_config={
                 "order_name_template": "E2E-HOUSE-{po_number}-{timestamp}",
                 "line_item_type": "HOUSE",

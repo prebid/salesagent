@@ -14,7 +14,10 @@ The four sites, per OWNER DECISION 4 (2026-08-06):
    ``webhooks.adcp-e2e.dev``; ``*.adcp.test`` does not.
 2. the compose network alias on the EXISTING ``tls-proxy`` service.
 3. the nginx SNI map key in ``config/nginx/nginx-tls-test.conf.template``,
-   extending the EXISTING front — never a second ``listen ... ssl`` server.
+   extending the EXISTING front — one terminator, one certificate. (The
+   front listens on 443 as well as 8443, for the test publishers' domains,
+   which carry no port; a second listener on the same server is not a second
+   front, so the guard holds the certificate to one.)
 4. a NON-PRIVATE, PER-STACK-ALLOCATED subnet for the compose network, so the
    resolved address genuinely satisfies production's SSRF gate rather than
    being exempted from it.
@@ -83,8 +86,8 @@ _GEN_TLS_SCRIPT = _REPO_ROOT / "scripts" / "dev" / "gen_test_tls.py"
 #: ``${NAME}`` or ``${NAME:-default}`` — compose's own interpolation syntax.
 _COMPOSE_VAR_RE = re.compile(r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::-(?P<default>[^}]*))?\}")
 
-#: A TLS ``listen`` directive — one per terminating front.
-_TLS_LISTEN_RE = re.compile(r"^\s*listen\s+[^;]*\bssl\b[^;]*;", re.MULTILINE)
+#: An ``ssl_certificate`` directive (not ``ssl_certificate_key``) and the path it names.
+_TLS_CERTIFICATE_RE = re.compile(r"^\s*ssl_certificate\s+(?P<path>[^;\s]+)\s*;", re.MULTILINE)
 
 
 # ---------------------------------------------------------------------------
@@ -96,9 +99,9 @@ _TLS_LISTEN_RE = re.compile(r"^\s*listen\s+[^;]*\bssl\b[^;]*;", re.MULTILINE)
 # ---------------------------------------------------------------------------
 
 
-def count_tls_fronts(template: str) -> int:
-    """How many TLS-terminating ``listen`` directives the template declares."""
-    return len(_TLS_LISTEN_RE.findall(template))
+def tls_certificates(template: str) -> set[str]:
+    """Every certificate the template's TLS servers present."""
+    return {match.group("path") for match in _TLS_CERTIFICATE_RE.finditer(template)}
 
 
 def declared_network_subnets(compose: dict) -> list[tuple[str, str]]:
@@ -237,14 +240,14 @@ def test_nginx_sni_map_routes_the_webhook_capture_hostname() -> None:
 
 
 @pytest.mark.arch_guard
-def test_tls_template_declares_exactly_one_terminating_front() -> None:
-    """One terminator, one certificate. A second ``listen ... ssl`` is the regression."""
-    fronts = count_tls_fronts(_NGINX_TLS_TEMPLATE.read_text(encoding="utf-8"))
+def test_tls_template_presents_exactly_one_certificate() -> None:
+    """One terminator, one certificate. A second certificate is the regression: two places to keep SANs in step."""
+    certificates = tls_certificates(_NGINX_TLS_TEMPLATE.read_text(encoding="utf-8"))
 
-    assert fronts == 1, format_failure(
-        summary="config/nginx/nginx-tls-test.conf.template declares more than one TLS front",
-        violations=[f"{fronts} `listen ... ssl` directives found"],
-        fix_hint="Route new origins through the existing front's SNI map, never a second server block.",
+    assert len(certificates) == 1, format_failure(
+        summary="config/nginx/nginx-tls-test.conf.template presents more than one certificate",
+        violations=[f"ssl_certificate paths: {sorted(certificates)}"],
+        fix_hint="Serve every TLS name from the shared leaf (scripts/dev/gen_test_tls.py), adding a SAN if needed.",
     )
 
 
@@ -355,10 +358,13 @@ def test_sni_map_detector_reads_keys_and_ignores_the_default_row() -> None:
     assert sni_map_hostnames(synthetic) == ["proxy.adcp.test", "webhooks.adcp-e2e.dev"]
 
 
-def test_front_counter_reports_a_second_terminator() -> None:
-    synthetic = "server {\n    listen 8443 ssl;\n}\nserver {\n    listen 9443 ssl http2;\n}\n"
+def test_certificate_reader_reports_a_second_certificate() -> None:
+    synthetic = (
+        "server {\n    ssl_certificate /a/server.pem;\n    ssl_certificate_key /a/server.key;\n}\n"
+        "server {\n    ssl_certificate   /b/other.pem;\n}\n"
+    )
 
-    assert count_tls_fronts(synthetic) == 2
+    assert tls_certificates(synthetic) == {"/a/server.pem", "/b/other.pem"}
 
 
 def test_hardcoded_subnet_detector_reports_a_literal_and_accepts_a_template() -> None:

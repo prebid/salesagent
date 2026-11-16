@@ -80,14 +80,13 @@ def start_tls_capture_service() -> ThreadingHTTPServer:
     return start_capture_service(host="127.0.0.1", port=0, ssl_context=_ready_server_context())
 
 
-def start_tls_origin(guard: Guard, label: str, *, listen_host: str = "127.0.0.1") -> LocalOrigin:
+def start_tls_origin(guard: Guard, label: str) -> LocalOrigin:
     """Start a local origin serving the shared test leaf over TLS, released through *guard*.
 
     *guard* is a harness env's ``_guard``: the origin is registered on the line it starts,
     so whichever path releases the env -- a clean exit or a failed enter -- closes it.
-    Bind ``0.0.0.0`` when the client dialing the origin is another container.
     """
-    context = run_local_origin(listen_host=listen_host, ssl_context=_ready_server_context())
+    context = run_local_origin(ssl_context=_ready_server_context())
     origin = context.__enter__()
 
     def close() -> None:

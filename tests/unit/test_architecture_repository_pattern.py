@@ -159,14 +159,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_delivery_simulator_restart.py", "test_restart_finds_media_buys_with_principal_webhook"),
     ("tests/integration/test_delivery_simulator_restart.py", "test_restart_ignores_media_buys_without_webhook"),
     ("tests/integration/test_delivery_simulator_restart.py", "test_restart_join_cardinality"),
-    # tests/integration/test_delivery_poll_behavioral.py
-    ("tests/integration/test_delivery_poll_behavioral.py", "test_get_pricing_options_uses_string_id_not_integer_pk"),
-    (
-        "tests/integration/test_delivery_poll_behavioral.py",
-        "test_non_numeric_pricing_option_id_is_not_silently_discarded",
-    ),
-    ("tests/integration/test_delivery_poll_behavioral.py", "test_pricing_options_keyed_by_string_id_not_integer_pk"),
-    ("tests/integration/test_delivery_poll_behavioral.py", "test_integer_pk_lookup_returns_none"),
     # tests/integration/test_delivery_repository.py
     ("tests/integration/test_delivery_repository.py", "tenant_a"),
     ("tests/integration/test_delivery_repository.py", "tenant_b"),
@@ -190,7 +182,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_delivery_webhooks_integration.py", "_create_test_tenant_and_principal"),
     ("tests/integration/test_delivery_webhooks_integration.py", "_create_basic_media_buy_with_webhook"),
     # tests/integration/test_format_conversion_approval.py
-    ("tests/integration/test_format_conversion_approval.py", "create_media_package"),
     ("tests/integration/test_format_conversion_approval.py", "test_tenant"),
     ("tests/integration/test_format_conversion_approval.py", "test_currency_limit"),
     ("tests/integration/test_format_conversion_approval.py", "test_property_tag"),
@@ -217,7 +208,7 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_inventory_profile_effective_properties.py", "test_product_with_profile"),
     (
         "tests/integration/test_inventory_profile_effective_properties.py",
-        "test_effective_properties_handle_none_profile_relationship",
+        "test_effective_values_load_the_profile_relationship_on_access",
     ),
     # tests/integration/test_inventory_profile_media_buy.py
     ("tests/integration/test_inventory_profile_media_buy.py", "test_create_media_buy_with_profile_based_product"),
@@ -284,9 +275,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_media_buy_v3.py", "mb_creatives"),
     ("tests/integration/test_media_buy_v3.py", "test_unsupported_currency_rejected"),
     ("tests/integration/test_media_buy_v3.py", "test_ownership_mismatch_rejected"),
-    # tests/integration/test_mock_adapter_publisher_sync.py
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "mock_tenant"),
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "publisher_partner"),
     # tests/integration/test_mock_ai_per_creative.py
     ("tests/integration/test_mock_ai_per_creative.py", "mock_adapter"),
     # tests/integration/test_pricing_models_integration.py
@@ -451,10 +439,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/admin/test_accounts_blueprint.py", "test_tenant"),
     ("tests/admin/test_accounts_blueprint.py", "test_list_page_shows_created_account"),
     ("tests/admin/test_accounts_blueprint.py", "test_suspend_account"),
-    # tests/admin/test_authorized_properties.py
-    ("tests/admin/test_authorized_properties.py", "test_tenant"),
-    ("tests/admin/test_authorized_properties.py", "test_list_page_shows_existing_property"),
-    ("tests/admin/test_authorized_properties.py", "test_delete_property_removes_from_db"),
     # tests/admin/test_creatives_blueprint.py
     ("tests/admin/test_creatives_blueprint.py", "test_tenant"),
     ("tests/admin/test_creatives_blueprint.py", "_create_creative"),
@@ -650,13 +634,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/admin/test_accounts_blueprint.py", "test_list_page_shows_created_account"),
     ("tests/admin/test_accounts_blueprint.py", "test_suspend_account"),
     ("tests/admin/test_accounts_blueprint.py", "test_tenant"),
-    ("tests/admin/test_authorized_properties.py", "test_create_property_missing_required_fields_redirects"),
-    ("tests/admin/test_authorized_properties.py", "test_create_property_saves_to_db"),
-    ("tests/admin/test_authorized_properties.py", "test_create_tag_missing_fields_redirects_without_creation"),
-    ("tests/admin/test_authorized_properties.py", "test_create_tag_saves_to_db"),
-    ("tests/admin/test_authorized_properties.py", "test_delete_property_removes_from_db"),
-    ("tests/admin/test_authorized_properties.py", "test_list_page_shows_existing_property"),
-    ("tests/admin/test_authorized_properties.py", "test_tenant"),
     ("tests/admin/test_creatives_blueprint.py", "_create_creative"),
     ("tests/admin/test_creatives_blueprint.py", "test_approve_creates_review_record"),
     ("tests/admin/test_creatives_blueprint.py", "test_approve_creative_sets_status_approved"),
@@ -797,13 +774,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_database_health_integration.py", "test_health_check_table_existence_validation"),
     ("tests/integration/test_database_health_integration.py", "test_health_check_with_real_schema_validation"),
     ("tests/integration/test_database_integration.py", "test_settings_queries"),
-    ("tests/integration/test_delivery_poll_behavioral.py", "test_get_pricing_options_uses_string_id_not_integer_pk"),
-    ("tests/integration/test_delivery_poll_behavioral.py", "test_integer_pk_lookup_returns_none"),
-    (
-        "tests/integration/test_delivery_poll_behavioral.py",
-        "test_non_numeric_pricing_option_id_is_not_silently_discarded",
-    ),
-    ("tests/integration/test_delivery_poll_behavioral.py", "test_pricing_options_keyed_by_string_id_not_integer_pk"),
     ("tests/integration/test_delivery_repository.py", "_cleanup_tenant"),
     ("tests/integration/test_delivery_repository.py", "media_buy_a"),
     ("tests/integration/test_delivery_repository.py", "media_buy_b"),
@@ -849,7 +819,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_delivery_v3.py", "test_nested_serialization_roundtrip"),
     ("tests/integration/test_delivery_v3.py", "test_ownership_isolation"),
     ("tests/integration/test_delivery_v3.py", "test_ownership_no_info_leakage"),
-    ("tests/integration/test_delivery_v3.py", "test_pricing_option_roundtrip"),
     ("tests/integration/test_delivery_v3.py", "test_single_buy_delivery_via_media_buy_id"),
     ("tests/integration/test_delivery_v3.py", "test_status_filter_all_via_explicit_ids"),
     ("tests/integration/test_delivery_v3.py", "test_status_filter_no_match_returns_empty"),
@@ -939,23 +908,7 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ),
     (
         "tests/integration/test_inventory_profile_effective_properties.py",
-        "test_effective_properties_handle_none_profile_relationship",
-    ),
-    (
-        "tests/integration/test_inventory_profile_effective_properties.py",
-        "test_effective_properties_returns_custom_properties_when_profile_not_set",
-    ),
-    (
-        "tests/integration/test_inventory_profile_effective_properties.py",
-        "test_effective_properties_returns_profile_properties_when_profile_set",
-    ),
-    (
-        "tests/integration/test_inventory_profile_effective_properties.py",
-        "test_effective_property_tags_returns_custom_tags_when_profile_not_set",
-    ),
-    (
-        "tests/integration/test_inventory_profile_effective_properties.py",
-        "test_effective_property_tags_returns_none_when_profile_set",
+        "test_effective_values_load_the_profile_relationship_on_access",
     ),
     ("tests/integration/test_inventory_profile_effective_properties.py", "test_product_custom"),
     ("tests/integration/test_inventory_profile_effective_properties.py", "test_product_with_profile"),
@@ -992,7 +945,7 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "tests/integration/test_inventory_profile_transitions.py",
         "test_switching_from_profile_to_custom_uses_custom_config",
     ),
-    ("tests/integration/test_inventory_profile_transitions.py", "test_switching_profiles_updates_effective_properties"),
+    ("tests/integration/test_inventory_profile_transitions.py", "test_switching_profiles_updates_effective_formats"),
     ("tests/integration/test_inventory_profile_updates.py", "test_updating_profile_formats_affects_all_products"),
     (
         "tests/integration/test_inventory_profile_updates.py",
@@ -1068,12 +1021,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_media_buy_v3.py", "test_unsupported_currency_rejected"),
     ("tests/integration/test_minimum_spend_validation.py", "setup_test_data"),
     ("tests/integration/test_minimum_spend_validation.py", "test_no_minimum_when_not_set"),
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "mock_tenant"),
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "publisher_partner"),
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "test_sync_creates_authorized_property"),
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "test_sync_creates_property_tag"),
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "test_sync_is_idempotent"),
-    ("tests/integration/test_mock_adapter_publisher_sync.py", "test_sync_property_has_verified_status"),
     ("tests/integration/test_mock_ai_per_creative.py", "mock_adapter"),
     ("tests/integration/test_pricing_helpers.py", "test_auto_generated_product_id"),
     ("tests/integration/test_pricing_helpers.py", "test_create_auction_product"),

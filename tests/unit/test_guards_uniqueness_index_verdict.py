@@ -293,9 +293,9 @@ def test_every_precheck_handles_the_index_verdict():
 #: — a real UNIQUE constraint (``e7a2c40b91d5_add_signing_keys_table``), not a PK
 #: subset: ``signing_keys`` keys on a surrogate ``id``, so the natural key is
 #: separately declared and separately enforced.
-EXPECTED_DECLARED_TUPLES = 21
-EXPECTED_DECLARED_MODELS = 18
-EXPECTED_FORM_COUNTS = {"unique-constraint": 13, "unique-index": 5, "column-unique": 3}
+EXPECTED_DECLARED_TUPLES = 20
+EXPECTED_DECLARED_MODELS = 17
+EXPECTED_FORM_COUNTS = {"unique-constraint": 12, "unique-index": 5, "column-unique": 3}
 
 #: Excluded, never truncated — the column subset these name is NOT unique in the DB.
 EXPECTED_UNUSABLE = {
@@ -305,7 +305,7 @@ EXPECTED_UNUSABLE = {
 
 #: Composite primary keys are unique indexes too, and for these models the ONLY one.
 EXPECTED_PK_ADDITIONS = {
-    ("AuthorizedProperty", frozenset({"property_id", "tenant_id"})),
+    ("Publisher", frozenset({"tenant_id", "domain"})),
     ("PropertyTag", frozenset({"tag_id", "tenant_id"})),
     # ReplayNonce keys on (keyid, nonce) and declares nothing else — the replay
     # cache's whole defence is that this pair cannot be claimed twice, so the
@@ -349,7 +349,6 @@ def test_unique_key_inventory_is_complete_and_untruncated():
 EXEMPTION_LOAD_BEARING: set[tuple[str, str, str]] = {
     ("src/admin/blueprints/inventory_profiles.py", "add_inventory_profile", "InventoryProfile"),
     ("src/admin/blueprints/public.py", "provision_tenant", "User"),
-    ("src/admin/blueprints/publisher_partners.py", "add_publisher_partner", "PublisherPartner"),
     ("src/admin/blueprints/users.py", "add_user", "User"),
 }
 EXEMPTION_FLOOR = len(EXEMPTION_LOAD_BEARING)
@@ -385,14 +384,14 @@ class TestGuardMetaCases:
         source = (
             "def add_partner(session, tenant_id, domain):\n"
             "    existing = session.scalars(\n"
-            "        select(PublisherPartner).filter_by(tenant_id=tenant_id, publisher_domain=domain)\n"
+            "        select(InventoryProfile).filter_by(tenant_id=tenant_id, profile_id=domain)\n"
             "    ).first()\n"
             "    if existing:\n"
             "        return 'already there'\n"
-            "    partner = PublisherPartner(tenant_id=tenant_id, publisher_domain=domain)\n"
+            "    partner = InventoryProfile(tenant_id=tenant_id, profile_id=domain)\n"
             "    session.add(partner)\n"
         )
-        assert [v.model for v in _find(source)] == ["PublisherPartner"]
+        assert [v.model for v in _find(source)] == ["InventoryProfile"]
 
     def test_flags_where_equality_precheck(self):
         source = (
@@ -434,36 +433,36 @@ class TestGuardMetaCases:
     def test_bare_marker_without_a_reason_is_not_a_justification(self):
         source = (
             "def add_partner(session, tenant_id, domain):\n"
-            "    if session.scalars(select(PublisherPartner).filter_by(\n"
-            "        tenant_id=tenant_id, publisher_domain=domain)).first():\n"
+            "    if session.scalars(select(InventoryProfile).filter_by(\n"
+            "        tenant_id=tenant_id, profile_id=domain)).first():\n"
             "        return 'exists'\n"
-            "    session.add(PublisherPartner(tenant_id=tenant_id))  # structural-guard: uniqueness-index-verdict\n"
+            "    session.add(InventoryProfile(tenant_id=tenant_id))  # structural-guard: uniqueness-index-verdict\n"
         )
-        assert [v.model for v in _find(source)] == ["PublisherPartner"]
+        assert [v.model for v in _find(source)] == ["InventoryProfile"]
 
     def test_accepts_resolve_or_write(self):
         source = (
             "def add_partner(session, tenant_id, domain):\n"
             "    def already_exists():\n"
-            "        stmt = select(PublisherPartner).filter_by(tenant_id=tenant_id, publisher_domain=domain)\n"
+            "        stmt = select(InventoryProfile).filter_by(tenant_id=tenant_id, profile_id=domain)\n"
             "        return 'exists' if session.scalars(stmt).first() else None\n"
-            "    partner = PublisherPartner(tenant_id=tenant_id, publisher_domain=domain)\n"
+            "    partner = InventoryProfile(tenant_id=tenant_id, profile_id=domain)\n"
             "    return resolve_or_write(session, conflict=already_exists,\n"
-            "        write=lambda: session.add(partner), constraint='uq_tenant_publisher')\n"
+            "        write=lambda: session.add(partner), constraint='uq_inventory_profile')\n"
         )
         assert _find(source) == []
 
     def test_accepts_write_inside_an_integrity_error_try(self):
         source = (
             "def add_partner(session, tenant_id, domain):\n"
-            "    if session.scalars(select(PublisherPartner).filter_by(\n"
-            "        tenant_id=tenant_id, publisher_domain=domain)).first():\n"
+            "    if session.scalars(select(InventoryProfile).filter_by(\n"
+            "        tenant_id=tenant_id, profile_id=domain)).first():\n"
             "        return 'exists'\n"
             "    try:\n"
-            "        session.add(PublisherPartner(tenant_id=tenant_id))\n"
+            "        session.add(InventoryProfile(tenant_id=tenant_id))\n"
             "        session.flush()\n"
             "    except IntegrityError as exc:\n"
-            "        if not is_constraint_violation(exc, 'uq_tenant_publisher'):\n"
+            "        if not is_constraint_violation(exc, 'uq_inventory_profile'):\n"
             "            raise\n"
             "        return 'exists'\n"
         )
@@ -472,10 +471,10 @@ class TestGuardMetaCases:
     def test_accepts_marked_site_with_a_reason(self):
         source = (
             "def add_partner(session, tenant_id, domain):\n"
-            "    if session.scalars(select(PublisherPartner).filter_by(\n"
-            "        tenant_id=tenant_id, publisher_domain=domain)).first():\n"
+            "    if session.scalars(select(InventoryProfile).filter_by(\n"
+            "        tenant_id=tenant_id, profile_id=domain)).first():\n"
             "        return 'exists'\n"
-            "    session.add(PublisherPartner(tenant_id=tenant_id))"
+            "    session.add(InventoryProfile(tenant_id=tenant_id))"
             "  # structural-guard: uniqueness-index-verdict - caller owns the recovery branch\n"
         )
         assert _find(source) == []

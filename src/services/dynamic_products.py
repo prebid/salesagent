@@ -19,8 +19,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import attributes
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Product
+from src.core.database.models import Product, ProductPublisherSelection
 from src.core.database.repositories.product import ProductRepository
+from src.core.publisher_format_catalog import stored_declaration
 from src.core.signals_agent_registry import get_signals_agent_registry
 
 logger = logging.getLogger(__name__)
@@ -305,11 +306,11 @@ def create_variant_from_template(
     #
     # It is not a hypothetical and it is not fixed by this one addition. The derivation that
     # settles it -- walk this literal's keys against ``Product.__table__.columns`` -- reports
-    # eleven further omissions, and TWO OF THEM WIDEN AUTHORIZATION rather than merely losing
-    # data: dropping ``property_ids`` sends ``effective_properties`` from the ``by_id`` arm to
-    # ``selection_type: "all"``, i.e. the publisher's whole inventory, and dropping
-    # ``allowed_principal_ids`` turns a principal restriction into visibility for every
-    # principal of the tenant. Both measured on this function, both in salesagent-tq42j.
+    # eleven further omissions, and ONE OF THEM WIDENS AUTHORIZATION rather than merely losing
+    # data: dropping ``allowed_principal_ids`` turns a principal restriction into visibility
+    # for every principal of the tenant (measured on this function, salesagent-tq42j; a second
+    # one, ``property_ids``, went with that column in revision e2af0c242a7f, since every
+    # product's publishers now live in the copied ``publisher_selections``).
     #
     # The right shape is to DERIVE the copied set from the table and pin an exception set
     # naming each column a variant must not inherit, so a new column is inherited by default
@@ -343,7 +344,9 @@ def create_variant_from_template(
         # contract is copied as its declarations alone; its legacy projection is derived
         # from them, so storing it beside them would be a second authored catalog.
         "format_ids": None if contract.format_options else (list(contract.format_ids) or None),
-        "format_options": list(contract.format_options) if contract.format_options else None,
+        # A publisher-backed declaration is stored as its key alone, as on every product, and
+        # served as the publisher's current entry (``publisher_format_catalog``).
+        "format_options": [stored_declaration(d) for d in contract.format_options] if contract.format_options else None,
         "targeting_template": template.targeting_template,
         "delivery_type": template.delivery_type,
         "measurement": template.measurement,
@@ -352,8 +355,9 @@ def create_variant_from_template(
         "is_custom": False,  # Variants are generated, not custom
         "countries": template.countries,
         "implementation_config": template.implementation_config,
-        "properties": template.properties,
-        "property_tags": template.property_tags,
+        "publisher_selections": ProductPublisherSelection.from_selectors(
+            template.tenant_id, template.stored_publisher_properties
+        ),
         "delivery_measurement": template.delivery_measurement,
         "product_card": template.product_card,
         "product_card_detailed": template.product_card_detailed,

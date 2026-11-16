@@ -15,16 +15,28 @@ serves what it decides, and the ``/debug/*`` reports in :mod:`src.routes.health`
 it decided rather than repeating the lookup — a debug endpoint naming a detection the
 deployment does not have is worse than no endpoint. A tool never comes here; its tenant is
 resolved once by the boundary and carried on the identity.
+
+``is_served_host`` answers the reverse proxy's on-demand TLS question from the same decision.
 """
 
+import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
 # Import existing tenant lookup functions from config_loader
 # This ensures all servers (MCP, Admin, A2A) use the same lookup logic
-from src.core.config_loader import get_tenant_by_virtual_host
-from src.core.domain_config import is_admin_domain
-from src.core.http_utils import requested_host
+from src.core.config_loader import get_tenant_by_virtual_host, tenant_id_for
+from src.core.domain_config import get_sales_agent_domain, is_admin_domain
+from src.core.http_utils import requested_host, same_hostname
+
+# A DNS hostname: 1-253 characters of dot-separated labels, each 1-63 of [a-z0-9-] with no
+# leading or trailing hyphen. No port, no wildcard, no path. ``re.ASCII`` keeps IGNORECASE
+# from folding non-ASCII letters (the Kelvin sign, a dotless i) into ``[a-z]``.
+_HOSTNAME = re.compile(
+    r"(?=.{1,253}\Z)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\Z",
+    re.ASCII | re.IGNORECASE,
+)
 
 
 @dataclass
@@ -40,6 +52,27 @@ class RoutingResult:
     type: Literal["custom_domain", "admin", "unknown"]
     tenant: dict | None
     effective_host: str
+
+
+def _route_host[T](
+    host: str, find_tenant: Callable[[str], T | None]
+) -> tuple[Literal["admin", "custom_domain"], T | None]:
+    """Which kind of host *host* is, and what *find_tenant* holds for it.
+
+    The caller says how much of the tenant it needs: the landing page hydrates the row, and the
+    on-demand TLS gate asks only whether one exists.
+    """
+    # Admin domain check - uses is_admin_domain() which validates against the
+    # configured admin domain. This prevents spoofing via malicious domains that
+    # start with 'admin.' but aren't our legitimate admin domain
+    # (e.g., admin.sales-agent.example.com is valid, admin.malicious.com is not)
+    if is_admin_domain(host):
+        return "admin", None
+
+    # ONE lookup: the host a tenant declares it is served at. Every host reaches it, under
+    # SALES_AGENT_DOMAIN or not — a branch on the domain would be a second derivation of
+    # the same fact.
+    return "custom_domain", find_tenant(host)
 
 
 def route_landing_page(request_headers: dict) -> RoutingResult:
@@ -87,18 +120,42 @@ def route_landing_page(request_headers: dict) -> RoutingResult:
     if not effective_host:
         return RoutingResult("unknown", None, "")
 
-    # Admin domain check - uses is_admin_domain() which validates against the
-    # configured admin domain. This prevents spoofing via malicious domains that
-    # start with 'admin.' but aren't our legitimate admin domain
-    # (e.g., admin.sales-agent.example.com is valid, admin.malicious.com is not)
-    if is_admin_domain(effective_host):
-        return RoutingResult("admin", None, effective_host)
-
-    # ONE lookup: the host a tenant declares it is served at. Every host reaches it, under
-    # SALES_AGENT_DOMAIN or not — a branch on the domain would be a second derivation of
-    # the same fact.
-    tenant = get_tenant_by_virtual_host(effective_host)
+    kind, tenant = _route_host(effective_host, get_tenant_by_virtual_host)
     # ``custom_domain`` even when no tenant matched: the caller distinguishes "a host asking
     # for a tenant we do not serve" (it can offer signup) from "no host at all" (the generic
     # fallback above). Which of those to show is the caller's decision, not this function's.
-    return RoutingResult("custom_domain", tenant, effective_host)
+    return RoutingResult(kind, tenant, effective_host)
+
+
+def normalize_hostname(host: str) -> str | None:
+    """``host`` lower-cased with any trailing dot dropped, or None when it is not a DNS hostname.
+
+    Matched BEFORE folding: ``str.lower`` maps the Kelvin sign to ``k``, so folding first would
+    let a non-ASCII name through as an ASCII one.
+    """
+    candidate = host.strip().removesuffix(".")
+    return candidate.lower() if _HOSTNAME.match(candidate) else None
+
+
+def is_served_host(host: str) -> bool:
+    """Whether this deployment serves ``host``: the on-demand TLS gate's decision.
+
+    Served: the hosts :func:`route_landing_page` routes -- the admin domain and an active
+    tenant's ``virtual_host`` (whose port, if it stores one, a certificate does not carry) --
+    plus ``SALES_AGENT_DOMAIN``, which the deployment answers on for the OAuth callbacks it
+    builds from it (``get_oauth_redirect_uri``). Nothing is derived from a subdomain: a tenant
+    served at ``acme.<SALES_AGENT_DOMAIN>`` declares that as its ``virtual_host``.
+
+    The endpoint asking this is unauthenticated, so a malformed host is refused before any
+    query; the rest cost one lookup of one column on the unique ``virtual_host_name`` index.
+    A tenant is identified here, never loaded, so a stored secret that no longer decrypts
+    does not cost it its certificate.
+    """
+    normalized = normalize_hostname(host)
+    if normalized is None:
+        return False
+    apex = get_sales_agent_domain()
+    if apex and same_hostname(normalized, apex):
+        return True
+    kind, tenant_id = _route_host(normalized, lambda name: tenant_id_for(virtual_host=name))
+    return kind == "admin" or tenant_id is not None
