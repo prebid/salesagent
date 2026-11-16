@@ -19,6 +19,8 @@ from sqlalchemy.exc import (
     ProgrammingError,
 )
 
+from src.services.media_buy_status_scheduler import STATUS_BATCH_SUMMARY_PREFIX
+
 
 def summary_lines(records: Sequence[logging.LogRecord]) -> list[tuple[str, str]]:
     """``(level name, rendered message)`` for each record, in order."""
@@ -28,6 +30,50 @@ def summary_lines(records: Sequence[logging.LogRecord]) -> list[tuple[str, str]]
 def logged(records: Sequence[logging.LogRecord], level: str, needle: str) -> list[str]:
     """Rendered messages at ``level`` whose text contains ``needle``."""
     return [message for record_level, message in summary_lines(records) if record_level == level and needle in message]
+
+
+def tick_summaries(records: Sequence[logging.LogRecord]) -> list[tuple[str, str]]:
+    """The tick's summary lines, as ``(level name, rendered message)``."""
+    return [line for line in summary_lines(records) if STATUS_BATCH_SUMMARY_PREFIX in line[1]]
+
+
+def assert_tick_summary(records: Sequence[logging.LogRecord], severity: str, text: str) -> None:
+    """The tick logged exactly one summary, at *severity*, reading *text* after the prefix."""
+    assert tick_summaries(records) == [(severity, f"{STATUS_BATCH_SUMMARY_PREFIX}: {text}")]
+
+
+def assert_no_tick_summary(records: Sequence[logging.LogRecord]) -> None:
+    """A quiet tick: no summary line at any level."""
+    assert tick_summaries(records) == []
+
+
+def assert_isolated_buy_logged(
+    records: Sequence[logging.LogRecord],
+    *,
+    tenant_id: str,
+    principal_id: str,
+    media_buy_id: str,
+) -> None:
+    """Exactly one ERROR record, naming the buy's three ids, with the traceback attached."""
+    errors = [record for record in records if record.levelname == "ERROR"]
+    assert len(errors) == 1, [record.getMessage() for record in errors]
+    message = errors[0].getMessage()
+    assert f"tenant_id={tenant_id}" in message
+    assert f"principal_id={principal_id}" in message
+    assert f"media_buy_id={media_buy_id}" in message
+    assert errors[0].exc_info, "the isolated buy's ERROR record must carry exc_info"
+
+
+def flip_lines(records: Sequence[logging.LogRecord]) -> list[str]:
+    """The per-buy flip lines the tick logged after its commit."""
+    return logged(records, "INFO", "Updated media buy ")
+
+
+def assert_tick_stopped(records: Sequence[logging.LogRecord]) -> None:
+    """The tick stopped on the outer handler, and no buy took the isolate path."""
+    error_msgs = logged(records, "ERROR", "")
+    assert any("Failed to update media buy statuses" in msg for msg in error_msgs), error_msgs
+    assert not any("Error updating media buy status" in msg for msg in error_msgs), error_msgs
 
 
 async def run_status_tick(scheduler=None) -> list[logging.LogRecord]:
@@ -164,9 +210,8 @@ async def assert_propagated_failure_stops_batch(
     is true only for a connect the server never answered.
     """
     assert buy_count >= 2, "seed at least two buys so a continued batch is visible"
-    from tests.helpers.metrics import counter_value
+    from tests.helpers.metrics import assert_counter_delta
 
-    metric_before = counter_value("media_buy_status", tenant_id, "db_error")
     processed: list[str] = []
 
     def _raise(media_buy, _now, _session):
@@ -177,9 +222,11 @@ async def assert_propagated_failure_stops_batch(
         with patch.object(scheduler, "_compute_new_status", side_effect=_raise):
             await scheduler._update_statuses()
 
-    await assert_propagated_session_error(_run, trips_fail_fast=trips_fail_fast)
+    with assert_counter_delta(
+        "scheduler_isolation_errors_total", 0, scheduler="media_buy_status", tenant_id=tenant_id, error_type="db_error"
+    ):
+        await assert_propagated_session_error(_run, trips_fail_fast=trips_fail_fast)
     assert len(processed) == 1
-    assert counter_value("media_buy_status", tenant_id, "db_error") == metric_before
 
 
 def mock_savepoint_session(*, release_exc: Exception | None = None) -> MagicMock:

@@ -16,10 +16,14 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from src.core.metrics import scheduler_isolation_errors
-from src.services.media_buy_status_scheduler import STATUS_BATCH_SUMMARY_PREFIX
-from tests.helpers.metrics import counter_value
+from tests.helpers.metrics import assert_counter_delta
 from tests.helpers.scheduler_isolation import (
+    assert_isolated_buy_logged,
+    assert_no_tick_summary,
+    assert_tick_stopped,
+    assert_tick_summary,
     bare_disconnection_error,
+    flip_lines,
     invalidated_dbapi_error,
     logged,
     mock_media_buy,
@@ -41,11 +45,8 @@ async def test_savepoint_release_failure_counts_as_isolated_not_flipped():
 
     records = await run_mocked_tick(buys, "completed", session=session)
 
-    assert logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX) == [
-        f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"
-    ]
-    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == []
-    assert logged(records, "INFO", "Updated media buy ") == []
+    assert_tick_summary(records, "WARNING", "0 updated, 3 errors")
+    assert flip_lines(records) == []
     session.commit.assert_not_called()
 
 
@@ -72,14 +73,16 @@ async def test_status_scheduler_connection_failure_reraises(escaped):
         raise escaped
 
     scheduler_isolation_errors.clear()
-    metric_before = counter_value("media_buy_status", "t-fail-fast", "db_error")
+    with assert_counter_delta(
+        "scheduler_isolation_errors_total",
+        0,
+        scheduler="media_buy_status",
+        tenant_id="t-fail-fast",
+        error_type="db_error",
+    ):
+        records = await run_mocked_tick([buy], _raise_invalidated)
 
-    records = await run_mocked_tick([buy], _raise_invalidated)
-
-    error_msgs = logged(records, "ERROR", "")
-    assert any("Failed to update media buy statuses" in msg for msg in error_msgs)
-    assert not any("Error updating media buy status" in msg for msg in error_msgs)
-    assert counter_value("media_buy_status", "t-fail-fast", "db_error") == metric_before
+    assert_tick_stopped(records)
 
 
 @pytest.mark.asyncio
@@ -99,18 +102,25 @@ async def test_status_isolates_one_failure_and_meters_once():
         return "completed"
 
     scheduler_isolation_errors.clear()
-    fail_before = counter_value("media_buy_status", "tenant-fail", "db_error")
+    with (
+        assert_counter_delta(
+            "scheduler_isolation_errors_total",
+            1,
+            scheduler="media_buy_status",
+            tenant_id="tenant-fail",
+            error_type="db_error",
+        ),
+        # Siblings must not be metered.
+        assert_counter_delta(
+            "scheduler_isolation_errors_total", 0, scheduler="media_buy_status", tenant_id="tenant-ok-a"
+        ),
+        assert_counter_delta(
+            "scheduler_isolation_errors_total", 0, scheduler="media_buy_status", tenant_id="tenant-ok-b"
+        ),
+    ):
+        records = await run_mocked_tick(buys, _compute)
 
-    records = await run_mocked_tick(buys, _compute)
-
-    errors = [record for record in records if record.levelname == "ERROR"]
-    assert len(errors) == 1
-    assert errors[0].exc_info
-    assert "tenant_id=tenant-fail" in errors[0].getMessage()
-
-    assert counter_value("media_buy_status", "tenant-fail", "db_error") == fail_before + 1
-    # Siblings must not be metered.
-    assert counter_value("media_buy_status", "tenant-ok-a", "db_error") == 0
+    assert_isolated_buy_logged(records, tenant_id="tenant-fail", principal_id="p-mb_fail", media_buy_id="mb_fail")
 
 
 @pytest.mark.asyncio
@@ -123,10 +133,7 @@ async def test_batch_summary_warns_when_every_visited_buy_fails():
 
     records = await run_mocked_tick(buys, _always_fail)
 
-    assert logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX) == [
-        f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"
-    ]
-    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert_tick_summary(records, "WARNING", "0 updated, 3 errors")
 
 
 @pytest.mark.asyncio
@@ -144,10 +151,7 @@ async def test_batch_summary_info_when_noop_plus_one_raiser():
 
     records = await run_mocked_tick(buys, _noop_or_raise)
 
-    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == [
-        f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 1 errors"
-    ]
-    assert logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert_tick_summary(records, "INFO", "0 updated, 1 errors")
 
 
 @pytest.mark.asyncio
@@ -177,11 +181,9 @@ async def test_id_read_failure_stops_the_tick():
 
     records = await run_mocked_tick(buys, _compute, session=session)
 
-    err_msgs = logged(records, "ERROR", "")
-    assert any("Failed to update media buy statuses" in msg for msg in err_msgs)
-    assert not any("Error updating media buy status" in msg for msg in err_msgs)
+    assert_tick_stopped(records)
     session.commit.assert_not_called()
-    assert logged(records, "INFO", "Updated media buy ") == []
+    assert flip_lines(records) == []
 
 
 @pytest.mark.asyncio
@@ -208,7 +210,7 @@ async def test_nested_handler_failure_stays_isolated():
     assert any("Status isolation error handler failed" in msg for msg in err_msgs)
     assert not any("Failed to update media buy statuses" in msg for msg in err_msgs)
     session.commit.assert_called_once_with()
-    assert len(logged(records, "INFO", "Updated media buy ")) == 1
+    assert len(flip_lines(records)) == 1
 
 
 @pytest.mark.asyncio
@@ -228,10 +230,7 @@ async def test_batch_summary_warns_on_escape_with_only_prior_errors():
 
     records = await run_mocked_tick(buys, _compute)
 
-    assert logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX) == [
-        f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"
-    ]
-    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert_tick_summary(records, "WARNING", "0 updated, 3 errors")
 
 
 @pytest.mark.asyncio
@@ -241,8 +240,7 @@ async def test_batch_summary_suppresses_all_quiet_tick():
 
     records = await run_mocked_tick(buys, None)
 
-    assert logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX) == []
-    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert_no_tick_summary(records)
 
 
 @pytest.mark.asyncio
@@ -254,12 +252,8 @@ async def test_batch_summary_reports_pending_flips_when_commit_fails():
 
     records = await run_mocked_tick(buys, "completed", session=session)
 
-    warn_lines = logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX)
-    assert len(warn_lines) == 1
-    assert "0 persisted" in warn_lines[0]
-    assert "1 pending flips lost" in warn_lines[0]
-    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == []
-    assert logged(records, "INFO", "Updated media buy ") == []
+    assert_tick_summary(records, "WARNING", "0 persisted (1 pending flips lost), 0 errors")
+    assert flip_lines(records) == []
 
 
 @pytest.mark.asyncio
@@ -277,9 +271,5 @@ async def test_batch_summary_survives_dead_connection_escape():
 
     records = await run_mocked_tick(buys, _compute)
 
-    warn_lines = logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX)
-    assert len(warn_lines) == 1
-    assert "0 persisted" in warn_lines[0]
-    assert "1 pending flips lost" in warn_lines[0]
-    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == []
-    assert logged(records, "INFO", "Updated media buy ") == []
+    assert_tick_summary(records, "WARNING", "0 persisted (1 pending flips lost), 0 errors")
+    assert flip_lines(records) == []

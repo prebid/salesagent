@@ -25,21 +25,20 @@ from src.core.database.models import (
     Tenant,
 )
 from src.core.database.repositories import MediaBuyRepository
-from src.services.media_buy_status_scheduler import (
-    STATUS_BATCH_SUMMARY_PREFIX,
-    MediaBuyStatusScheduler,
-)
+from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
 from tests.factories import stamp_format_identity
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
     read_media_buy_state,
 )
-from tests.helpers.metrics import counter_value
+from tests.helpers.metrics import assert_counter_delta
 from tests.helpers.scheduler_isolation import (
     INVALIDATED_ESCAPE_ERROR_TYPES,
+    assert_isolated_buy_logged,
     assert_propagated_session_error,
-    logged,
+    assert_tick_summary,
+    flip_lines,
     run_status_tick,
     seed_active_expired_buys,
     statement_failure,
@@ -585,34 +584,24 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
                 raise statement_failure()
         return real_compute(media_buy, now_arg, session)
 
-    metric_before = counter_value("media_buy_status", tenant_id, "db_error")
     records: list = []
 
     async def _run() -> None:
         with patch.object(scheduler, "_compute_new_status", side_effect=_compute_with_raiser):
             records.extend(await run_status_tick(scheduler))
 
-    await assert_propagated_session_error(_run, trips_fail_fast=False)
+    with assert_counter_delta(
+        "scheduler_isolation_errors_total", 1, scheduler="media_buy_status", tenant_id=tenant_id, error_type="db_error"
+    ):
+        await assert_propagated_session_error(_run, trips_fail_fast=False)
 
     assert set(processed) == set(buy_ids)
     for mid in good_ids:
         assert read_media_buy_state(tenant_id, mid).status == "completed"
     assert read_media_buy_state(tenant_id, bad_buy_id).status == "active"
 
-    errors = [record for record in records if record.levelname == "ERROR"]
-    assert len(errors) == 1
-    err_msg = errors[0].getMessage()
-    assert f"tenant_id={tenant_id}" in err_msg
-    assert f"principal_id={principal_id}" in err_msg
-    assert f"media_buy_id={bad_buy_id}" in err_msg
-    assert errors[0].exc_info
-
-    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == [
-        f"{STATUS_BATCH_SUMMARY_PREFIX}: 2 updated, 1 errors"
-    ]
-    assert logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX) == []
-
-    assert counter_value("media_buy_status", tenant_id, "db_error") == metric_before + 1
+    assert_isolated_buy_logged(records, tenant_id=tenant_id, principal_id=principal_id, media_buy_id=bad_buy_id)
+    assert_tick_summary(records, "INFO", "2 updated, 1 errors")
 
 
 @pytest.mark.requires_db
@@ -635,17 +624,16 @@ async def test_all_failing_flips_emit_warning_summary(integration_db):
     def _always_fail(_media_buy, _now_arg, _session):
         raise ValueError("flip failed")
 
-    metric_before = counter_value("media_buy_status", tenant_id, "other")
-
-    with patch.object(scheduler, "_compute_new_status", side_effect=_always_fail):
+    # Non-SQLAlchemyError → _classify_scheduler_error → "other"
+    with (
+        assert_counter_delta(
+            "scheduler_isolation_errors_total", 3, scheduler="media_buy_status", tenant_id=tenant_id, error_type="other"
+        ),
+        patch.object(scheduler, "_compute_new_status", side_effect=_always_fail),
+    ):
         records = await run_status_tick(scheduler)
 
-    warning_msgs = logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX)
-    info_msgs = logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX)
-    assert warning_msgs == [f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"]
-    assert info_msgs == []
-    # Non-SQLAlchemyError → _classify_scheduler_error → "other"
-    assert counter_value("media_buy_status", tenant_id, "other") == metric_before + 3
+    assert_tick_summary(records, "WARNING", "0 updated, 3 errors")
 
 
 @pytest.mark.requires_db
@@ -693,10 +681,8 @@ async def test_savepoint_release_failure_not_counted_processed_and_warns(integra
     for mid in buy_ids:
         assert read_media_buy_state(tenant_id, mid).status == "active"
 
-    warning_msgs = logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX)
-    assert warning_msgs == [f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"]
-    assert logged(records, "INFO", STATUS_BATCH_SUMMARY_PREFIX) == []
-    assert logged(records, "INFO", "Updated media buy ") == []
+    assert_tick_summary(records, "WARNING", "0 updated, 3 errors")
+    assert flip_lines(records) == []
 
 
 def _propagated_session_cases():
@@ -888,9 +874,12 @@ async def test_sweep_does_not_count_a_write_the_repository_declined(integration_
     assert before.status == "scheduled"
 
     scheduler = MediaBuyStatusScheduler()
-    metric_before = counter_value("media_buy_status", tenant_id, "other")
-
-    with patch.object(MediaBuyRepository, "update_status", return_value=None) as mock_update:
+    with (
+        assert_counter_delta(
+            "scheduler_isolation_errors_total", 1, scheduler="media_buy_status", tenant_id=tenant_id, error_type="other"
+        ),
+        patch.object(MediaBuyRepository, "update_status", return_value=None) as mock_update,
+    ):
         records = await run_status_tick(scheduler)
 
     # The sweep did reach the write — otherwise the rest of this test is vacuous.
@@ -899,18 +888,9 @@ async def test_sweep_does_not_count_a_write_the_repository_declined(integration_
     # claiming the commitment could put a schema-invalid document on the wire.
     mock_update.assert_called_once_with(media_buy_id, PersistedMediaBuyStatus.ACTIVE, seller_committed=True)
 
-    assert logged(records, "INFO", "Updated media buy ") == []
-    assert logged(records, "WARNING", STATUS_BATCH_SUMMARY_PREFIX) == [
-        f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 1 errors"
-    ]
-    assert counter_value("media_buy_status", tenant_id, "other") == metric_before + 1
-
-    errors = [record for record in records if record.levelname == "ERROR"]
-    assert len(errors) == 1
-    err_msg = errors[0].getMessage()
-    assert f"tenant_id={tenant_id}" in err_msg
-    assert f"principal_id={principal_id}" in err_msg
-    assert f"media_buy_id={media_buy_id}" in err_msg
+    assert flip_lines(records) == []
+    assert_tick_summary(records, "WARNING", "0 updated, 1 errors")
+    assert_isolated_buy_logged(records, tenant_id=tenant_id, principal_id=principal_id, media_buy_id=media_buy_id)
 
     # (c) The row itself is untouched — status, and the bookkeeping a real move carries.
     after = read_media_buy_state(tenant_id, media_buy_id)

@@ -49,16 +49,21 @@ def samples_with(sample_name: str, **labels: str) -> dict[tuple[tuple[str, str],
 
 
 @contextmanager
-def assert_counter_delta(metric: str, expected: int, *, why: str = "") -> Iterator[None]:
+def assert_counter_delta(metric: str, expected: int, *, why: str = "", **labels: str) -> Iterator[None]:
     """Assert *metric* moved by exactly *expected* across the block.
+
+    With *labels*, only the samples whose labels include them are summed, so a
+    test can scope the delta to one tenant or one error type. Without them the
+    whole counter is read.
 
     ``expected=0`` is a first-class case. "Production did not count this" is as
     much of an observable as "it counted once".
     """
-    before = counter_total(metric)
+    before = sum(samples_with(metric, **labels).values())
     yield
-    after = counter_total(metric)
+    after = sum(samples_with(metric, **labels).values())
+    scope = f"{{{', '.join(f'{k}={v}' for k, v in labels.items())}}}" if labels else ""
     detail = f" {why}" if why else ""
     assert after == before + expected, (
-        f"{metric} must move by {expected} across this block; it went {before} -> {after}.{detail}"
+        f"{metric}{scope} must move by {expected} across this block; it went {before} -> {after}.{detail}"
     )

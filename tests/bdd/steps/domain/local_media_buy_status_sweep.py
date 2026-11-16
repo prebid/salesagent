@@ -15,13 +15,12 @@ from uuid import uuid4
 from pytest_bdd import given, parsers, then, when
 
 from src.core.metrics import SCHEDULER_ERROR_TYPE_VALUES
-from src.services.media_buy_status_scheduler import STATUS_BATCH_SUMMARY_PREFIX
 from tests.bdd.steps._outcome_helpers import wire_entry
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.credentials import credential_headers
 from tests.helpers.metrics import counter_value
-from tests.helpers.scheduler_isolation import summary_lines
+from tests.helpers.scheduler_isolation import assert_no_tick_summary, assert_tick_summary
 
 
 @dataclass
@@ -207,11 +206,9 @@ def then_isolation_unchanged(ctx: dict, tenant: str) -> None:
 
 @then("the sweep summary is absent")
 def then_summary_absent(ctx: dict) -> None:
-    assert [line for line in summary_lines(ctx["sweep_records"]) if STATUS_BATCH_SUMMARY_PREFIX in line[1]] == []
+    assert_no_tick_summary(ctx["sweep_records"])
 
 
 @then(parsers.re(r'the sweep summary is the (?P<severity>WARNING|INFO) "(?P<text>[^"]+)"'))
 def then_summary_is(ctx: dict, severity: str, text: str) -> None:
-    expected = f"{STATUS_BATCH_SUMMARY_PREFIX}: {text}"
-    summaries = [line for line in summary_lines(ctx["sweep_records"]) if STATUS_BATCH_SUMMARY_PREFIX in line[1]]
-    assert summaries == [(severity, expected)]
+    assert_tick_summary(ctx["sweep_records"], severity, text)
