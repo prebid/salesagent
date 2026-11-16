@@ -248,7 +248,7 @@ def then_list_creative_formats_advertised_as_deprecated(ctx: dict) -> None:
     skills = {skill["id"]: skill.get("description") for skill in _fetched_document(ctx).get("skills") or []}
     advertised = {"the agent card's skill": skills.get("list_creative_formats")}
     if _as_transport(ctx, "then_list_creative_formats_advertised_as_deprecated") is Transport.MCP:
-        advertised["MCP tools/list"] = ctx["env"].list_mcp_tools().get("list_creative_formats")
+        advertised["MCP tools/list"] = ctx["env"].list_mcp_tools()["list_creative_formats"].description
 
     for surface, description in advertised.items():
         assert description == expected, f"{surface} advertises {description!r}, not the pinned description {expected!r}"
