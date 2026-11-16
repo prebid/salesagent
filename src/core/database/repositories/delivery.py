@@ -23,14 +23,14 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from src.core.database.models import MediaBuy, WebhookDeliveryLog, WebhookDeliveryRecord
-from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext
+from src.core.database.models import WebhookDeliveryLog, WebhookDeliveryRecord
+from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.webhooks.delivery import SCHEDULER_SEQUENCE_TASK_TYPE, WebhookDeliveryOutcome, WebhookTaskContext
 
 # The ``task_type`` that marks a row as the delivery-poll sequence counter rather
 # than a delivery. Named here because the repository owns what the row means; a
 # caller spelling it is how it started looking like an outcome.
 POLL_SEQUENCE_TASK_TYPE = "delivery_poll"
-SCHEDULER_SEQUENCE_TASK_TYPE = "media_buy_delivery"
 
 # ``webhook_delivery_log.webhook_url`` is NOT NULL and a sequence-counter row has
 # no destination. The scheme is deliberately not http(s): nothing may ever mistake
@@ -270,7 +270,6 @@ class DeliveryRepository:
     def reserve_next_sequence(
         self,
         *,
-        principal_id: str,
         media_buy_id: str,
         webhook_url: str,
         notification_type: str | None = None,
@@ -281,15 +280,10 @@ class DeliveryRepository:
         empty stream. Every status consumes a sequence. This does not reclaim
         outstanding reservations or coordinate HTTP delivery (#1638).
         """
-        owned_buy = self._session.scalar(
-            select(MediaBuy.media_buy_id).where(
-                MediaBuy.tenant_id == self._tenant_id,
-                MediaBuy.principal_id == principal_id,
-                MediaBuy.media_buy_id == media_buy_id,
-            )
-        )
+        owned_buy = MediaBuyRepository(self._session, self._tenant_id).get_by_id(media_buy_id)
         if owned_buy is None:
-            raise ValueError(f"Media buy {media_buy_id!r} is outside the reservation's tenant/principal scope")
+            raise ValueError(f"Media buy {media_buy_id!r} is outside the reservation's tenant scope")
+        principal_id = owned_buy.principal_id
         stream = json.dumps([self._tenant_id, media_buy_id, SCHEDULER_SEQUENCE_TASK_TYPE])
         lock_key = int.from_bytes(hashlib.sha256(stream.encode()).digest()[:8], byteorder="big", signed=True)
         self._session.execute(select(func.pg_advisory_xact_lock(lock_key)))

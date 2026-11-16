@@ -5,10 +5,14 @@
 #
 # Usage (host path — invoked directly, or reached via `./run_all_tests.sh quick`
 # and `./run_all_tests.sh ci <target>`, which delegate here):
-#   ./run_all_tests_host.sh           # Docker + all 6 suites via tox (default)
+#   ./run_all_tests_host.sh           # Docker + 8 suites via tox, all but `collection` (default)
 #   ./run_all_tests_host.sh quick     # No Docker: unit + integration
 #   ./run_all_tests_host.sh ci tests/integration/test_file.py -k test_name
 #   ./run_all_tests_host.sh ci tests/integration/ -m creative     # scoped by entity
+#
+# `collection` runs in-network and in CI, not here. Two of its tests read a record
+# of the whole BDD tree collected with BDD_E2E_ENABLED=true, and this runner's bdd
+# env runs under xdist, which refuses that setting, so no such record can exist.
 
 set -euo pipefail
 
@@ -167,10 +171,10 @@ elif [ "$MODE" = "ci" ]; then
         set -eo pipefail
         [ "$TOX_RC" -ne 0 ] && FAILURES="targeted"
     else
-        echo -e "${BLUE}Running all 6 suites in parallel via tox...${NC}"
+        echo -e "${BLUE}Running 8 suites in parallel via tox, all but collection...${NC}"
         set +eo pipefail
         purge_stale_reports
-        tox -p -o > >(tee "$RESULTS_DIR/tox.log") 2>&1
+        tox -p -o --skip-env '^collection$' > >(tee "$RESULTS_DIR/tox.log") 2>&1
         TOX_RC=${PIPESTATUS[0]}
         set -eo pipefail
         collect_reports
@@ -195,7 +199,7 @@ elif [ "$MODE" = "ci" ]; then
     fi
 else
     echo "Usage: ./run_all_tests.sh [quick|ci]"
-    echo "  ci (default) — Docker + all 6 suites via tox"
+    echo "  ci (default) — Docker + 8 suites via tox, all but collection"
     echo "  quick        — no Docker: unit + integration"
     exit 1
 fi

@@ -43,6 +43,10 @@ class TestCreativeSyncEnvContract:
             "slack_notifier",
             "audit_log",
             "ai_review_executor",
+            # Google's GAM SOAP client and report download (GAM_CLIENT_PATCH): inert unless the
+            # tenant sells through GAM.
+            "gam_client",
+            "gam_report_download",
         }
         assert set(CreativeSyncEnv.EXTERNAL_PATCHES.keys()) == expected_keys
 
@@ -66,7 +70,9 @@ class TestCreativeSyncEnvContract:
             assert "send_notifications" in env.mock
             assert "slack_notifier" in env.mock
             assert "audit_log" in env.mock
-            assert len(env.mock) == 5
+            assert "gam_client" in env.mock
+            assert "gam_report_download" in env.mock
+            assert len(env.mock) == 7
             # The generative build reads the TENANT's AI configuration, and the env's
             # tenant carries none until a test sets one (set_gemini_api_key).
             assert env.identity.tenant.ai_config is None

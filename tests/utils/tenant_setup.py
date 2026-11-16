@@ -36,32 +36,22 @@ def seed_gam_tenant(
     name: str,
     subdomain: str,
     trafficker_id: str,
-    network_code: str = "123456",
 ) -> Any:
-    """Create a set-up GAM tenant and return it, flushed.
+    """Create a set-up GAM tenant and return it, committed.
 
-    Seeds the three rows a GAM create_media_buy test cannot do without and never varies:
-    the ``Tenant`` itself with ``human_review_required=False`` (so validation runs
-    immediately instead of parking the buy in an approval workflow), the setup-checklist
-    rows the gate grades, and an ``AdapterConfig``.
-
-    ``gam_refresh_token`` is what makes the adapter CONSTRUCTIBLE: it builds its
-    credentials in ``__init__`` and refuses a config carrying no
-    key_file/service_account_json/refresh_token (``google_ad_manager.py:176``). It used to
-    skip that whenever the caller set the testing context's ``dry_run``, and that channel
-    is gone (a1b79d22d). Nothing authenticates -- the callers stub the client manager --
-    so the value only has to be present.
+    Seeds the rows a GAM create_media_buy test cannot do without and never varies: the
+    ``Tenant`` itself with ``human_review_required=False`` (so validation runs immediately
+    instead of parking the buy in an approval workflow), the setup-checklist rows the gate
+    grades, and the GAM onboarding rows (``onboard_gam``, which says why the adapter needs
+    its refresh token).
 
     The caller still owns what it varies: the currency limit's ceiling, the property tags,
     the principal, and the products.
     """
-    from src.core.database.models import AdapterConfig
-
     tenant = create_tenant_with_timestamps(
         tenant_id=tenant_id,
         name=name,
         subdomain=subdomain,
-        ad_server="google_ad_manager",
         human_review_required=False,
         # Half of the setup checklist's "SSO configured" task; the other half is the
         # TenantAuthConfig row seed_setup_checklist_rows writes.
@@ -70,16 +60,36 @@ def seed_gam_tenant(
     session.add(tenant)
     session.flush()
     seed_setup_checklist_rows(session, tenant)
-    session.add(
-        AdapterConfig(
-            tenant_id=tenant_id,
-            adapter_type="google_ad_manager",
-            gam_network_code=network_code,
-            gam_trafficker_id=trafficker_id,
-            gam_refresh_token="test_refresh_token",
-        )
-    )
+    with bind_factories_to_session(session):
+        onboard_gam(tenant, trafficker_id=trafficker_id)
     return tenant
+
+
+def onboard_gam(tenant: Any, *, trafficker_id: str) -> Any:
+    """Leave *tenant* with the rows GAM onboarding in the Admin UI writes, and return the config.
+
+    The one writer of that fact: ``tenant.ad_server``, which the setup checklist reads, and
+    the tenant's ``AdapterConfig`` row, which adapter selection reads. *tenant* must have no
+    ``AdapterConfig`` yet; a second one fails on the primary key.
+
+    ``gam_refresh_token`` is what makes the adapter CONSTRUCTIBLE: it builds its
+    credentials in ``__init__`` and refuses a config carrying no
+    key_file/service_account_json/refresh_token (``google_ad_manager.py:176``). Every caller
+    stands in Google's client, so the value only has to be present.
+
+    The caller binds the factories to its session (an env does so on entry; otherwise wrap
+    the call in ``bind_factories_to_session``).
+    """
+    from tests.factories import AdapterConfigFactory
+
+    tenant.ad_server = "google_ad_manager"
+    return AdapterConfigFactory(
+        tenant=tenant,
+        adapter_type="google_ad_manager",
+        gam_network_code="123456",
+        gam_trafficker_id=trafficker_id,
+        gam_refresh_token="test_refresh_token",
+    )
 
 
 def seed_setup_checklist_rows(session: Any, tenant: Any) -> None:

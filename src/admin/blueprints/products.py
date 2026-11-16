@@ -16,6 +16,7 @@ from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import joinedload
 from werkzeug.exceptions import HTTPException
 
+from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.admin.form_validation import sanitize_form_data
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
@@ -63,6 +64,30 @@ logger = logging.getLogger(__name__)
 
 # Create Blueprint
 products_bp = Blueprint("products", __name__)
+
+
+def _stored_custom_targeting(custom_targeting_keys: object) -> CustomTargeting | None:
+    """``custom_targeting_keys`` read into the model, or ``None`` when GAM cannot take it."""
+    try:
+        return CustomTargeting.from_stored(custom_targeting_keys)
+    except ValidationError as exc:
+        logger.warning("Custom targeting GAM cannot take: %s", exc)
+        return None
+
+
+def _read_gam_custom_targeting(custom_targeting_keys: object) -> CustomTargeting | None:
+    """``custom_targeting_keys`` read into the model, or ``None`` after saying on the form why GAM cannot take it.
+
+    Refused here, the seller fixes it on the product rather than a buyer's media buy failing.
+    """
+    custom_targeting = _stored_custom_targeting(custom_targeting_keys)
+    if custom_targeting is None:
+        flash(
+            "Custom targeting is not in a form GAM can take. Every key must be a GAM key ID, every value a "
+            "value ID or name, and no field may be stored that the format does not have.",
+            "error",
+        )
+    return custom_targeting
 
 
 def _format_to_dict(fmt: Format) -> dict:
@@ -553,83 +578,38 @@ _FORM_OWNED_COLUMNS = tuple(
 )
 
 
-def create_custom_key_inventory_mappings(db_session, tenant_id: str, product_id: str, custom_keys: dict) -> int:
-    """Create ProductInventoryMapping entries for custom targeting keys.
+def custom_key_inventory_ids(custom_targeting: CustomTargeting) -> list[str]:
+    """The ``custom_key`` inventory IDs a product's custom targeting maps to.
 
-    Handles three formats:
-    - Groups format: {'groups': [{'criteria': [{'keyId': '123', 'values': ['v1'], 'exclude': False}]}]}
-    - Enhanced format: {'include': {'keyId': ['v1']}, 'exclude': {'keyId': ['v2']}, 'operator': 'AND'}
-    - Legacy format: {'keyId': 'value'}
-
-    Args:
-        db_session: Database session
-        tenant_id: Tenant ID
-        product_id: Product ID
-        custom_keys: Custom targeting configuration in any of the three formats
-
-    Returns:
-        Number of mappings created
+    Each is ``<key_id>=<value>``, ``NOT_``-prefixed for an excluded key. A criterion that
+    appears in more than one group is listed once, since a mapping is unique per product.
     """
-    mapping_count = 0
+    return list(
+        dict.fromkeys(
+            f"{'NOT_' if criterion.exclude else ''}{criterion.key_id}={value}"
+            for branch in custom_targeting.branches
+            for criterion in branch
+            for value in criterion.values
+        )
+    )
 
-    # Groups format (GAM-style nested groups)
-    if isinstance(custom_keys, dict) and "groups" in custom_keys:
-        for group in custom_keys.get("groups", []):
-            for criterion in group.get("criteria", []):
-                key_id = criterion.get("keyId")
-                is_exclude = criterion.get("exclude", False)
-                for value_id in criterion.get("values", []):
-                    prefix = "NOT_" if is_exclude else ""
-                    mapping = ProductInventoryMapping(
-                        tenant_id=tenant_id,
-                        product_id=product_id,
-                        inventory_type="custom_key",
-                        inventory_id=f"{prefix}{key_id}={value_id}",
-                        is_primary=False,
-                    )
-                    db_session.add(mapping)
-                    mapping_count += 1
 
-    # Enhanced format (include/exclude)
-    elif isinstance(custom_keys, dict) and ("include" in custom_keys or "exclude" in custom_keys):
-        for key_id, value_ids in custom_keys.get("include", {}).items():
-            for value_id in value_ids:
-                mapping = ProductInventoryMapping(
-                    tenant_id=tenant_id,
-                    product_id=product_id,
-                    inventory_type="custom_key",
-                    inventory_id=f"{key_id}={value_id}",
-                    is_primary=False,
-                )
-                db_session.add(mapping)
-                mapping_count += 1
-        for key_id, value_ids in custom_keys.get("exclude", {}).items():
-            for value_id in value_ids:
-                mapping = ProductInventoryMapping(
-                    tenant_id=tenant_id,
-                    product_id=product_id,
-                    inventory_type="custom_key",
-                    inventory_id=f"NOT_{key_id}={value_id}",
-                    is_primary=False,
-                )
-                db_session.add(mapping)
-                mapping_count += 1
-
-    # Legacy format ({keyId: value})
-    else:
-        for key, value in custom_keys.items():
-            custom_key_id = f"{key}={value}"
-            mapping = ProductInventoryMapping(
+def create_custom_key_inventory_mappings(
+    db_session, tenant_id: str, product_id: str, custom_targeting: CustomTargeting
+) -> int:
+    """Add a ``custom_key`` ProductInventoryMapping for each of ``custom_key_inventory_ids``; return how many."""
+    inventory_ids = custom_key_inventory_ids(custom_targeting)
+    for inventory_id in inventory_ids:
+        db_session.add(
+            ProductInventoryMapping(
                 tenant_id=tenant_id,
                 product_id=product_id,
                 inventory_type="custom_key",
-                inventory_id=custom_key_id,
+                inventory_id=inventory_id,
                 is_primary=False,
             )
-            db_session.add(mapping)
-            mapping_count += 1
-
-    return mapping_count
+        )
+    return len(inventory_ids)
 
 
 @products_bp.route("/")
@@ -1125,21 +1105,17 @@ def add_product(tenant_id):
                 except json.JSONDecodeError:
                     targeting_template = {}
 
-                # If targeting template has key_value_pairs, copy to implementation_config for GAM
+                # The widget sends the product's whole custom targeting; GAM reads it from
+                # implementation_config, stored as the model writes it
+                custom_targeting = CustomTargeting()
                 if targeting_template.get("key_value_pairs"):
-                    if "custom_targeting_keys" not in implementation_config:
-                        implementation_config["custom_targeting_keys"] = {}
-                    # Handle different targeting formats
-                    kv_pairs = targeting_template["key_value_pairs"]
-                    if isinstance(kv_pairs, dict) and "groups" in kv_pairs:
-                        # Groups format (GAM-style nested) - pass through directly
-                        implementation_config["custom_targeting_keys"] = kv_pairs
-                    elif isinstance(kv_pairs, dict) and ("include" in kv_pairs or "exclude" in kv_pairs):
-                        # Enhanced format - pass through directly
-                        implementation_config["custom_targeting_keys"] = kv_pairs
-                    else:
-                        # Legacy format - merge as before
-                        implementation_config["custom_targeting_keys"].update(kv_pairs)
+                    implementation_config["custom_targeting_keys"] = targeting_template["key_value_pairs"]
+                    if adapter_type == "google_ad_manager":
+                        read = _read_gam_custom_targeting(implementation_config["custom_targeting_keys"])
+                        if read is None:
+                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                        custom_targeting = read
+                        implementation_config["custom_targeting_keys"] = custom_targeting.to_stored()
 
                 # Build product kwargs, excluding None values for JSON fields that have database constraints
                 product_kwargs = {
@@ -1347,10 +1323,9 @@ def add_product(tenant_id):
                             db_session.add(mapping)
 
                     # Save custom targeting key mappings
-                    if implementation_config.get("custom_targeting_keys"):
-                        custom_keys = implementation_config["custom_targeting_keys"]
+                    if custom_targeting.branches:
                         mapping_count = create_custom_key_inventory_mappings(
-                            db_session, tenant_id, product.product_id, custom_keys
+                            db_session, tenant_id, product.product_id, custom_targeting
                         )
                         logger.info(
                             f"Created {mapping_count} custom targeting key mappings for product {product.product_id}"
@@ -1632,21 +1607,21 @@ def edit_product(tenant_id, product_id):
                     except json.JSONDecodeError:
                         targeting_template = {}
 
-                    # If targeting template has key_value_pairs, copy to implementation_config for GAM
-                    if targeting_template.get("key_value_pairs"):
-                        if "custom_targeting_keys" not in base_config:
-                            base_config["custom_targeting_keys"] = {}
-                        # Handle different targeting formats
-                        kv_pairs = targeting_template["key_value_pairs"]
-                        if isinstance(kv_pairs, dict) and "groups" in kv_pairs:
-                            # Groups format (GAM-style nested) - pass through directly
-                            base_config["custom_targeting_keys"] = kv_pairs
-                        elif isinstance(kv_pairs, dict) and ("include" in kv_pairs or "exclude" in kv_pairs):
-                            # Enhanced format - pass through directly
-                            base_config["custom_targeting_keys"] = kv_pairs
-                        else:
-                            # Legacy format - merge as before
-                            base_config["custom_targeting_keys"].update(kv_pairs)
+                    # The widget sends the product's whole custom targeting, stored as the model
+                    # writes it. An empty one keeps a stored config GAM cannot take: the edit page
+                    # could not show that config, so the seller has not cleared it.
+                    stored = _stored_custom_targeting(base_config.get("custom_targeting_keys") or {})
+                    submitted = targeting_template.get("key_value_pairs")
+                    custom_targeting = stored or CustomTargeting()
+                    if submitted is not None:
+                        read = _read_gam_custom_targeting(submitted)
+                        if read is None:
+                            return redirect(
+                                url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
+                            )
+                        if read.branches or stored is not None:
+                            custom_targeting = read
+                            base_config["custom_targeting_keys"] = read.to_stored()
 
                     # Store targeting_template in product
                     product.targeting_template = targeting_template
@@ -1705,9 +1680,7 @@ def edit_product(tenant_id, product_id):
                                 already_mapped.is_primary = idx == 0
 
                     # Custom targeting keys
-                    if base_config.get("custom_targeting_keys"):
-                        custom_keys = base_config["custom_targeting_keys"]
-                        create_custom_key_inventory_mappings(db_session, tenant_id, product_id, custom_keys)
+                    create_custom_key_inventory_mappings(db_session, tenant_id, product_id, custom_targeting)
 
                 # Update pricing options (AdCP PR #88)
                 # Note: min_spend is now stored in pricing_options[].min_spend_per_package
@@ -1897,6 +1870,18 @@ def edit_product(tenant_id, product_id):
             # populate targeting_template from implementation_config for backwards compatibility
             if not targeting_template.get("key_value_pairs") and implementation_config.get("custom_targeting_keys"):
                 targeting_template["key_value_pairs"] = implementation_config["custom_targeting_keys"]
+
+            # The widget edits only the groups format, written by the model, so it never decides
+            # for itself whether a stored value is an ID or a name
+            if adapter_type == "google_ad_manager" and targeting_template.get("key_value_pairs"):
+                shown = _read_gam_custom_targeting(targeting_template["key_value_pairs"])
+                if shown is None:
+                    flash(
+                        "The product's stored custom targeting is not shown below. Saving keeps it as it is "
+                        "until you set new custom targeting.",
+                        "error",
+                    )
+                targeting_template["key_value_pairs"] = (shown or CustomTargeting()).to_stored()
 
             product_dict = {
                 "product_id": product.product_id,

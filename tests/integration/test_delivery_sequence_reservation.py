@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from src.core.database.models import MediaBuy, WebhookDeliveryLog
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.webhooks.delivery import WebhookDeliveryOutcome
-from tests.factories import MediaBuyFactory, PrincipalFactory
+from tests.factories import MediaBuyFactory, WebhookDeliveryLogFactory
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -22,7 +22,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 def stream(integration_db, bound_factory_session):
     buy = MediaBuyFactory(raw_request={})
     identity = {
-        "principal_id": buy.principal_id,
         "media_buy_id": buy.media_buy_id,
         "webhook_url": "https://buyer.example/report",
     }
@@ -37,16 +36,28 @@ def _read(session, log_id):
 
 
 def _history(session, tenant, identity, *, sequence=1, status="success", task_type="media_buy_delivery"):
-    return (
-        DeliveryRepository(session, tenant)
-        ._create_log(
-            log_id=str(uuid4()),
-            **identity,
-            task_type=task_type,
-            sequence_number=sequence,
-            status=status,
-        )
-        .id
+    buy = session.get(MediaBuy, identity["media_buy_id"])
+    return WebhookDeliveryLogFactory(
+        media_buy=buy,
+        webhook_url=identity["webhook_url"],
+        task_type=task_type,
+        sequence_number=sequence,
+        status=status,
+    ).id
+
+
+def test_reservation_uses_the_buys_stored_owner(stream):
+    session, tenant, identity = stream
+    buy = session.get(MediaBuy, identity["media_buy_id"])
+    expected_principal = buy.principal_id
+    row = DeliveryRepository(session, tenant).reserve_next_sequence(
+        media_buy_id=identity["media_buy_id"],
+        webhook_url=identity["webhook_url"],
+    )
+    assert (row.tenant_id, row.principal_id, row.media_buy_id) == (
+        tenant,
+        expected_principal,
+        identity["media_buy_id"],
     )
 
 
@@ -88,7 +99,6 @@ def test_reservations_are_independent_for_other_buys_and_tenants(stream, same_te
         raw_request={}, **({"tenant": original.tenant, "principal": original.principal} if same_tenant else {})
     )
     second = DeliveryRepository(session, other.tenant_id).reserve_next_sequence(
-        principal_id=other.principal_id,
         media_buy_id=other.media_buy_id,
         webhook_url=identity["webhook_url"],
     )
@@ -117,16 +127,14 @@ def test_another_buy_does_not_wait_for_the_reserved_stream(stream):
     session.rollback()
 
 
-@pytest.mark.parametrize("scope", ["tenant", "principal"])
-def test_reservation_refuses_a_buy_outside_the_declared_owner_scope(stream, scope):
+@pytest.mark.parametrize("scope", ["tenant", "missing"])
+def test_reservation_refuses_a_buy_outside_the_tenant_scope(stream, scope):
     session, tenant, identity = stream
-    original = session.get(MediaBuy, identity["media_buy_id"])
     if scope == "tenant":
         other = MediaBuyFactory(raw_request={})
         wrong_identity = {**identity, "media_buy_id": other.media_buy_id}
     else:
-        other = PrincipalFactory(tenant=original.tenant)
-        wrong_identity = {**identity, "principal_id": other.principal_id}
+        wrong_identity = {**identity, "media_buy_id": "unknown-buy"}
     session.commit()
     with pytest.raises(ValueError):
         DeliveryRepository(session, tenant).reserve_next_sequence(**wrong_identity)

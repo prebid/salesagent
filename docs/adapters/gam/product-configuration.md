@@ -58,7 +58,7 @@ Guaranteed products:
   "cost_type": "CPM",
   "line_item_type": "STANDARD",
   "priority": 6,
-  "primary_goal_type": "DAILY",
+  "primary_goal_type": "LIFETIME",
   "primary_goal_unit_type": "IMPRESSIONS",
   "delivery_rate_type": "EVENLY",
   "creative_rotation_type": "EVEN",
@@ -112,15 +112,15 @@ At media buy creation, a missing or invalid configuration fails with an explicit
 
 ## Line item type selection
 
-You can set `line_item_type` explicitly, but you don't have to: when it is absent, `PricingCompatibility.select_line_item_type()` (in `src/adapters/gam/pricing_compatibility.py`) picks the type from the pricing model and the delivery guarantee. An explicit type that is incompatible with the pricing model is rejected with a `ValueError`.
+You can set `line_item_type` explicitly, but you don't have to. `PricingCompatibility.select_line_item_type()` (in `src/adapters/gam/pricing_compatibility.py`) uses a configured type when it can book the package: GAM supports the package's pricing model on it, and SPONSORSHIP, NETWORK and HOUSE are used only for flat-rate packages. Those three types take only a daily goal of a percentage of impressions, which cannot hold a CPM, vCPM or CPC package to its budget. Otherwise the type is picked from the pricing model and the delivery guarantee, as when no type is configured. A configured HOUSE is therefore never used: GAM allows only CPM on it.
 
 The following decision tree shows how the adapter selects the line item type:
 
 ```mermaid
 flowchart TD
     Start["Pricing model + guarantee"] --> OV{"line_item_type set in\nimplementation_config?"}
-    OV -->|"yes"| CHK{"Compatible with the\npricing model?"}
-    CHK -->|"no"| ERR["Error: incompatible\nline item type"]
+    OV -->|"yes"| CHK{"GAM supports the pricing model\non it, and a share-of-voice\ntype only for flat_rate?"}
+    CHK -->|"no"| FR
     CHK -->|"yes"| USE["Use the configured type"]
     OV -->|"no"| FR{"flat_rate?"}
     FR -->|"yes"| SP["SPONSORSHIP\nbilled as CPD:\ntotal budget / flight days"]
@@ -181,7 +181,9 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 #### Primary goal
 
 - **Fields**: `primary_goal_type` (`DAILY`, `LIFETIME`, `NONE`) and `primary_goal_unit_type` (`IMPRESSIONS`, `CLICKS`, `VIEWABLE_IMPRESSIONS`)
-- **Defaults**: `DAILY` for guaranteed, `NONE` for non-guaranteed; unit defaults to `IMPRESSIONS`
+- **Defaults**: `LIFETIME` for guaranteed, `NONE` for non-guaranteed; unit defaults to `IMPRESSIONS`
+- **Behavior**: The goal type follows the line item type: `STANDARD` and `BULK` book `LIFETIME`; `SPONSORSHIP` and `NETWORK` (flat rate only) book a `DAILY` share of 100% of impressions. The configured `primary_goal_type` applies to `PRICE_PRIORITY`, which accepts `LIFETIME`, `DAILY` and `NONE` and books `LIFETIME` for any other value. CPC packages book `CLICKS` and vCPM packages `VIEWABLE_IMPRESSIONS`.
+- **Units**: the package's volume, which is its budget at the price of the pricing option it selected (per thousand for CPM and vCPM). A `DAILY` goal spreads it over the flight's days.
 
 #### Inventory targeting
 
@@ -222,15 +224,29 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 #### Custom targeting
 
 - **Field**: `custom_targeting_keys`
-- **Type**: JSON object
-- **Example**:
+- **Type**: JSON object in the groups format the product form's targeting widget saves
+- **Behavior**: Criteria within a group are ANDed and groups are ORed. Every line item for the product must match this targeting AND any custom targeting in the buyer's request.
+- **Example**: `(11001 is 448512 or 448513, and 11002 is not 448601) or (11003 is 448701)`
 
   ```json
   {
-    "sport": ["football", "basketball"],
-    "geo": ["us-ny", "us-ca"]
+    "groups": [
+      {
+        "criteria": [
+          {"keyId": "11001", "values": ["448512", "448513"]},
+          {"keyId": "11002", "values": ["448601"], "exclude": true}
+        ]
+      },
+      {
+        "criteria": [{"keyId": "11003", "values": ["448701"]}]
+      }
+    ]
   }
   ```
+
+  `keyId` is a numeric GAM custom targeting key ID. Each value is a numeric GAM value ID, or a value name, which is looked up in GAM and created if it does not exist. A value written `{"name": "..."}` is always a name, even when it is all digits.
+  Two older formats are still read. In `{"<key_id>": "<value_name>"}` a `NOT_<key_id>` key excludes the value, and the value is always a name, even when it is all digits. `{"include": {"<key_id>": [values]}, "exclude": {...}, "operator": "AND"}` reads values the way the groups format does. The edit page shows a product stored in either one in the groups format, with a name of digits written `{"name": "..."}`, and saving stores the groups format.
+  A criterion with no values and a group with no criteria are ignored. Anything else GAM cannot take, such as a key that is not a numeric key ID or a field none of the formats has, is refused when the product is saved. A product already stored that way refuses every media buy with `CONFIGURATION_ERROR`; its edit page says so and keeps the stored targeting until new targeting is set.
 
 #### Non-guaranteed automation
 

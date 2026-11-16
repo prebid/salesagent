@@ -114,6 +114,27 @@ _cores="$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) )"
 
 if [ "$_docker_mem_gb" -ge "$_CI_BOX_FLOOR_GB" ]; then
     # CI box. Per-worker e2e stacks are affordable; cores are the ceiling again.
+    # 16, and the cap is DERIVED FROM MEASURED BARRIER COST, not from core count.
+    # Post-sharding sweep on noetis-b-vm (40 cores), barrier = import+collect per
+    # process, the phase every added worker pays before running anything:
+    #
+    #   N per suite      8       16       24
+    #   bdd-inproc-s1  101.5    176.6    238.1   s/process
+    #   integration     54.2     90.4    129.7
+    #   unit            67.2     81.5     99.8
+    #   total barrier  3376     7183    13109   s of CPU  (~N^2)
+    #
+    # Barrier per process rises in EVERY suite with N, and the total rises about
+    # quadratically -- per-process cost grows AND more processes pay it. Wall
+    # clock does not repay it: two runs at N=24 on an unchanged tree put the pole
+    # at 743.2 s and 905.6 s, a 21.9% spread, so the walls at 8, 16 and 24
+    # (872.7 / 884.2 / 743.2-905.6) are indistinguishable. Barrier, by contrast,
+    # reproduces within 6.5% across every suite -- which is why it, and not the
+    # wall clock, sets this number.
+    #
+    # 16 is therefore the largest N whose barrier is still mid-curve; 24 costs
+    # ~35% more barrier per process and buys nothing measurable. Raising it needs
+    # a barrier measurement, not a bigger box.
     _unit=$(( _cores > 16 ? 16 : _cores )); _integration=8; _e2e_workers=8
 elif [ "$_docker_mem_gb" -ge 32 ]; then
     _unit=$(( _cores > 8 ? 8 : _cores )); _integration=4; _e2e_workers=2
@@ -137,7 +158,7 @@ export INTEGRATION_XDIST_N="${INTEGRATION_XDIST_N:-$_integration}"
 # raises a UsageError for that together with -n>0 unless E2E_PER_WORKER=1 --
 # because under xdist the e2e_rest transport is silently dropped at collection and
 # the suite would go green without ever having run it. Setting E2E_WORKERS>0 takes
-# the fast path below, which splits `bdd` into `bdd_inprocess` (e2e disabled,
+# the fast path below, which splits `bdd` into `bdd-inprocess-s*` (e2e off,
 # freely parallel) plus `bdd_e2e`, and provisions N per-worker server+DB stacks so
 # e2e_rest can run in parallel legally.
 export E2E_WORKERS="${E2E_WORKERS:-$_e2e_workers}"
@@ -154,7 +175,7 @@ echo "Parallelism: docker_mem=${_docker_mem_gb}GB cores=${_cores} -> unit=$UNIT_
 # The in-network path always builds the full compose stack, so it can't honor
 # the "quick == no Docker" or the targeted contracts — those delegate to the
 # verbatim host runner that already implements them (DRY, single source).
-ALL_SUITES="unit,integration,bdd,admin,e2e,ui,quality,storyboard"
+ALL_SUITES="unit,integration,bdd,admin,e2e,ui,quality,storyboard,collection"
 DELEGATE=0
 case "${1:-ci}" in
     quick) DELEGATE=1 ;;
@@ -174,28 +195,56 @@ if [ "$DELEGATE" = 1 ]; then
 fi
 
 # Fast bdd path: when per-worker e2e stacks are provisioned (E2E_WORKERS>0), swap
-# the plain serial `bdd` env for the two-pass split — bdd_inprocess (the
+# the plain serial `bdd` env for the sharded split — bdd-inprocess-s1..sN (the
 # a2a/mcp/rest bulk, parallelized by BDD_XDIST_N) then bdd_e2e (the e2e_rest
 # transport, fanned across the per-worker servers by BDD_E2E_XDIST_N). Without
 # E2E_WORKERS the plain serial `bdd` runs unchanged, so CI and small runners are
 # unaffected. Phase B below provisions the servers and exports BDD_E2E_XDIST_N.
 if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
-    # Token-exact swap: a plain-substring ${SUITES/bdd/...} would mangle an
-    # explicit bdd_inprocess/bdd_e2e suite argument (bdd_e2e -> bdd_e2e_e2e).
-    SUITES=",$SUITES,"
-    SUITES="${SUITES/,bdd,/,bdd_inprocess,bdd_e2e,}"
-    SUITES="${SUITES#,}"; SUITES="${SUITES%,}"
-    # bdd_inprocess reads BDD_XDIST_N (compose pins it to 0 = serial by default),
-    # so the in-process bulk only parallelizes if we export a worker count here.
+    # Each shard collects only its own files. Under xdist every worker collected
+    # all 7223 items to run a slice of them -- 162.5 s per worker against 57.9 s
+    # to import -- so collection cost was O(items x workers). The split is the
+    # committed one at SHARD_COUNTS["bdd"], the same assignment CI's matrix
+    # runs, so tests/collection/test_architecture_ci_bdd_shard_partition.py already
+    # grades the exact partition used here.
+    #
+    # sys.path.insert is not optional: `python3 -c` does not reliably put the cwd on
+    # sys.path (PYTHONSAFEPATH / -P turn it off), and scripts/ci/shard_paths.py solves
+    # the same problem the same way at its own top.
+    _BDD_SHARDS="$(python3 -c "import sys; sys.path.insert(0, '.'); from scripts.ci.shard_split import SHARD_COUNTS; print(SHARD_COUNTS['bdd'])")"
     #
     # A REAL NUMBER, not `auto`. `auto` resolves through
     # PYTEST_XDIST_AUTO_NUM_WORKERS, which docker-compose.e2e.yml pins to 1 for
-    # BDD's own benefit -- so `auto` here meant ONE worker for every caller that
-    # does not separately export that variable, and the ~23m->~3.5m in-process win
-    # silently never landed. Matching E2E_WORKERS keeps the two halves of the split
-    # in proportion; both are overridable.
-    export BDD_XDIST_N="${BDD_XDIST_N:-$E2E_WORKERS}"
-    echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS BDD_XDIST_N=$BDD_XDIST_N -> suites=$SUITES"
+    # BDD's own benefit -- so `auto` meant ONE worker for every caller that does
+    # not separately export that variable, and the ~23m->~3.5m in-process win
+    # silently never landed. BDD_XDIST_N is the whole in-process budget a caller
+    # asks for (cassini's box profile asks for 16), and without one E2E_WORKERS is
+    # what the memory tiering above already sized. Dividing it across the shards
+    # keeps the TOTAL worker count there; the override form is what lets a
+    # measurement harness pin the per-shard number.
+    case "${BDD_XDIST_N:-}" in
+        ''|*[!0-9]*) _shard_workers=$(( E2E_WORKERS / _BDD_SHARDS )) ;;
+        *) _shard_workers=$(( BDD_XDIST_N / _BDD_SHARDS )) ;;
+    esac
+    export BDD_SHARD_XDIST_N="${BDD_SHARD_XDIST_N:-$(( _shard_workers > 0 ? _shard_workers : 1 ))}"
+    _shard_envs=""
+    for _shard in $(seq 1 "$_BDD_SHARDS"); do
+        _shard_paths="$(python3 scripts/ci/shard_paths.py bdd "$_shard" | tr '\n' ' ')"
+        # tox drops an empty {env:...} from argv without a word -- pytest then falls
+        # back to pytest.ini's `testpaths = tests` and the shard collects the whole
+        # tree, green. This assert is the only thing standing between that and a
+        # silent full-tree run.
+        : "${_shard_paths:?shard_paths.py produced no paths for bdd shard $_shard}"
+        export "BDD_SHARD_PATHS_$_shard=$_shard_paths"
+        _shard_envs="${_shard_envs}bdd-inprocess-s$_shard,"
+    done
+    # Token-exact swap: a plain-substring ${SUITES/bdd/...} would mangle an
+    # explicit bdd-inprocess-s*/bdd_e2e suite argument (bdd_e2e -> bdd_e2e_e2e).
+    SUITES=",$SUITES,"
+    SUITES="${SUITES/,bdd,/,${_shard_envs}bdd_e2e,}"
+    SUITES="${SUITES#,}"; SUITES="${SUITES%,}"
+    : "${BDD_SHARD_XDIST_N:?shard worker count resolved empty}"
+    echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS BDD_SHARD_XDIST_N=$BDD_SHARD_XDIST_N -> suites=$SUITES"
 fi
 
 # UTC, not local. The name is built by whichever client launches the run while the
@@ -216,6 +265,22 @@ mkdir -p "$RESULTS_DIR"
 # now, so that what is found after the suites ran is this run's or nothing: a storyboard
 # env that died before publishing must read as "no summary", not as last week's score.
 rm -f test-results/storyboard_summary_*.json
+# Same for the liveness artifact: the sharded path does not write it, so a copy on disk is
+# some earlier run's, and the unit env would read that as this run's measurement.
+rm -f test-results/bdd_scenario_liveness.json
+
+# What this run's sessions COLLECTED, published so the observers of a collection
+# do not each have to re-collect it in a subprocess. Unconditional because
+# the cost is one JSON write per process at session end, and the artifact is only useful if it is there without anyone
+# having predicted they would need it. See tests/_collection_manifest.py.
+export PYTEST_COLLECTION_MANIFEST="${PYTEST_COLLECTION_MANIFEST:-/app/$RESULTS_DIR/collection-manifest}"
+
+# Where each BDD session publishes what it MEASURED. Per run, for the same
+# reason the manifest above is: the liveness artifact itself lives at a stable
+# top-level path, so a directory derived from it would accumulate yesterday's
+# sessions, which satisfy the coverage check and get merged into today's
+# measurement. See tests/bdd/scenario_liveness.sessions_dir().
+export BDD_LIVENESS_SESSIONS="${BDD_LIVENESS_SESSIONS:-/app/$RESULTS_DIR/liveness-sessions}"
 
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
 
@@ -645,7 +710,8 @@ fi
 # comment used to cite was, for some callers, never actually applied. With
 # that bug fixed and the cap now confirmed to genuinely reach the container,
 # a real, monitored, disposable-worktree run of the full 7-suite `-p` (unit,
-# integration, bdd_inprocess, bdd_e2e, admin, e2e, ui) measured peak memory at
+# integration, bdd-inprocess-s1, bdd-inprocess-s2, bdd_e2e, admin, e2e, ui)
+# measured peak memory at
 # ~35GB of the box's 86.4GB (40.5%), no OOM, pass/fail counts matching a
 # serial baseline, measured on a full in-network run of all 7 suites.
 echo "Running suites in-network (parallel): $SUITES"
@@ -674,7 +740,7 @@ chmod -R go-w .git 2>/dev/null || true
 # Blanket (`.tox/*.json`), not a $SUITES-scoped loop: a scoped loop leaves exactly
 # the not-run envs' reports sitting in `.tox/`, which is the class of staleness
 # documented at the copy below (`storyboard.json` republished for three runs). It
-# also bit `bdd`, which is swapped out for `bdd_inprocess,bdd_e2e` whenever
+# also bit `bdd`, which is swapped out for `bdd-inprocess-s*,bdd_e2e` whenever
 # E2E_WORKERS>0 (see above): a stale bdd.json from whenever `tox -e bdd` last ran
 # kept being republished -- one was a full DAY older than its directory-mates and
 # reported 6 failures against code that no longer existed, read as a live
@@ -829,6 +895,41 @@ case ",$SUITES," in
                 [ -f "test-results/$_record" ] && cp "test-results/$_record" "$RESULTS_DIR/$STORYBOARD_SUBDIR/$_record" || true
             done
         done
+        ;;
+esac
+
+# Merge the BDD shard artifacts back into one bdd_inprocess. Every reader globs FILES,
+# not env names -- scripts/check_truncated_reports.py, report_suite_failures, cassini,
+# compare_runs and compare_payloads -- and each expects one per suite. Left as parts, one
+# failure would be counted twice and cassini would render three BDD rows for one suite.
+#
+# It runs on the HOST, over what the extraction above published: the extraction container
+# is alpine, with no python, and the reports leave the tox_data volume only there.
+#
+# The hard-fail is the point. check_truncated_reports.py compares collected-deselected
+# against total PER FILE and is BLIND to a file that is absent: if a shard is OOM-killed
+# and the survivor were published alone, the merged report would be internally consistent
+# and the run would go GREEN with half the BDD suite never executed.
+#
+# $_REPORT_SUITES answers "what reports exist", which after a merge differs from $SUITES,
+# "what did this invocation run". The consumer joins `.suites` against the report
+# FILENAMES beside it (cassini results.summarize() renders any report whose suite is
+# unnamed there as STALE), so `.suites` has to name what was published.
+_REPORT_SUITES="$SUITES"
+case ",$SUITES," in
+    *,bdd-inprocess-s*)
+        if python3 scripts/ci/merge_shard_reports.py "$RESULTS_DIR" "$PAYLOAD_SUBDIR"; then
+            _kept=""
+            for _s in ${SUITES//,/ }; do
+                case "$_s" in bdd-inprocess-s*) continue ;; esac
+                _kept="${_kept:+$_kept,}$_s"
+            done
+            _REPORT_SUITES="bdd_inprocess${_kept:+,$_kept}"
+            printf '%s\n' "$_REPORT_SUITES" > "$RESULTS_DIR/.suites"
+        else
+            echo "ERROR: BDD shard artifacts could not be merged -- refusing to publish a partial suite." >&2
+            RC=1
+        fi
         ;;
 esac
 if [ -n "$_missing_reports" ]; then

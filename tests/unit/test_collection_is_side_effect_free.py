@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._collection_manifest import unpublished_env
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -44,6 +46,7 @@ def test_collecting_the_integration_suite_writes_nothing_into_the_cwd(tmp_path):
             "no:randomly",
         ],
         cwd=tmp_path,
+        env=unpublished_env(),
         capture_output=True,
         text=True,
         timeout=600,
