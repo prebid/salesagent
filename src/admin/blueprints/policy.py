@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 policy_bp = Blueprint("policy", __name__)
 
 
+# FIXME(#2233): inline session["role"] check stands in for require_tenant_access.
 @policy_bp.route("/", methods=["GET"])
 @require_auth()
 def index(tenant_id):
@@ -136,6 +137,7 @@ def index(tenant_id):
     )
 
 
+# FIXME(#2233): inline session["role"] check stands in for require_tenant_access.
 @policy_bp.route("/update", methods=["POST"])
 @require_auth()
 @log_admin_action("update_policy")
@@ -213,6 +215,7 @@ def rules(tenant_id):
     return redirect(url_for("policy.index", tenant_id=tenant_id))
 
 
+# FIXME(#2233): inline session["role"] check stands in for require_tenant_access.
 @policy_bp.route("/review/<task_id>", methods=["GET", "POST"])
 @require_auth()
 @log_admin_action("review_policy_task")

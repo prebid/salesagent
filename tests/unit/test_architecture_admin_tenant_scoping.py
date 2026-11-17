@@ -75,12 +75,12 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("publisher_partners.add_publisher_partner", "/tenant/<tenant_id>/publisher-partners"): _PR_2075,
     (
         "publisher_partners.delete_publisher_partner",
-        "/tenant/<tenant_id>/publisher-partners/<int:partner_id>",
+        "/tenant/<tenant_id>/publisher-partners/<path:domain>",
     ): _PR_2075,
     ("publisher_partners.sync_publisher_partners", "/tenant/<tenant_id>/publisher-partners/sync"): _PR_2075,
     (
         "publisher_partners.get_publisher_properties",
-        "/tenant/<tenant_id>/publisher-partners/<int:partner_id>/properties",
+        "/tenant/<tenant_id>/publisher-partners/<path:domain>/properties",
     ): _PR_2075,
     ("gam_reporting_api.get_gam_reporting", "/api/tenant/<tenant_id>/gam/reporting"): _ISSUE_2204,
     (
@@ -121,6 +121,20 @@ def _tenant_rules(app: Flask) -> list[Rule]:
     return [rule for rule in app.url_map.iter_rules() if "tenant_id" in rule.arguments]
 
 
+def _unguarded(app: Flask) -> set[tuple[str, str]]:
+    """``(endpoint, rule)`` of every ``<tenant_id>`` rule whose own view skips the decorator.
+
+    Each rule is graded by its own view. ``Rule.__eq__`` compares the path alone, so testing
+    membership in a list of guarded rules would pass an unguarded view that shares its path
+    with a guarded one.
+    """
+    return {
+        (rule.endpoint, rule.rule)
+        for rule in _tenant_rules(app)
+        if not _enforces_membership(app.view_functions[rule.endpoint])
+    }
+
+
 @pytest.fixture(scope="module")
 def app() -> Flask:
     return create_app()
@@ -138,10 +152,19 @@ def test_detector_recognises_the_decorator_and_nothing_else() -> None:
     assert not _enforces_membership(view)
 
 
-def test_every_tenant_rule_enforces_membership_or_is_exempt(app: Flask) -> None:
-    rules = _tenant_rules(app)
-    guarded = [rule for rule in rules if _enforces_membership(app.view_functions[rule.endpoint])]
-    assert guarded, "non-vacuity: the url_map walk found no rule wrapped by require_tenant_access"
+def test_an_unguarded_view_on_a_guarded_path_is_reported() -> None:
+    """Each rule is graded by its own view: a path with one guarded view can still carry an unguarded one."""
+    app = Flask(__name__)
+    path = "/tenant/<tenant_id>/thing"
+    app.add_url_rule(path, "read", require_tenant_access()(lambda tenant_id: ""), methods=["GET"])
+    app.add_url_rule(path, "write", lambda tenant_id: "", methods=["PUT"])
 
-    unguarded = {(rule.endpoint, rule.rule) for rule in rules if rule not in guarded}
-    assert_violations_match_allowlist(unguarded, set(EXEMPT), fix_hint=_FIX_HINT)
+    assert _unguarded(app) == {("write", path)}
+
+
+def test_every_tenant_rule_enforces_membership_or_is_exempt(app: Flask) -> None:
+    assert any(_enforces_membership(app.view_functions[rule.endpoint]) for rule in _tenant_rules(app)), (
+        "non-vacuity: the url_map walk found no rule wrapped by require_tenant_access"
+    )
+
+    assert_violations_match_allowlist(_unguarded(app), set(EXEMPT), fix_hint=_FIX_HINT)
