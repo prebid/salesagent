@@ -83,7 +83,6 @@ def _auto_configure(product_id: str, **product_columns: Any) -> dict[str, Any]:
             product_id=product_id,
             delivery_type="guaranteed",
             implementation_config=None,  # force the auto-config branch
-            property_tags=["all_inventory"],
             **product_columns,
         )
         PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)

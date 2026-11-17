@@ -478,7 +478,7 @@ def _seed_vector_product(session: Session, tenant_id: str) -> None:
     """
     from sqlalchemy import select
 
-    from scripts.setup.seed_products import canonical_declaration
+    from scripts.setup.seed_products import canonical_declaration, whole_publisher_selections
     from src.core.database.models import PricingOption, Product
     from tests.factories.product import DEFAULT_PRICING_OPTION_ID
     from tests.factories.request import PackageRequestFactory
@@ -510,7 +510,7 @@ def _seed_vector_product(session: Session, tenant_id: str) -> None:
             format_options=format_options,
             targeting_template={},
             delivery_type="non_guaranteed",
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, tenant_id),
             # `media_buy_seller/inventory_list_targeting` buys this product with a
             # property_list overlay, and a product that forbids it is refused before the
             # storyboard's own subject is reached. Nothing about this product is a

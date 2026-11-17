@@ -147,6 +147,28 @@ SAN_DNS_NAMES = (
     "localhost",
     "agent.localhost",
     "*.localhost",
+    # The test publishers whose adagents.json the SERVER fetches on e2e, at the domain the
+    # scenario names (salesagent-ts3gk.9). Exact names, one per publisher: no wildcard here
+    # covers them. Each is also a tls-proxy alias and an SNI map row routed to
+    # publisher-origin.
+    "psatest.com",
+    "news.psatest.com",
+    "dotted.psatest.com",
+    "mixed.psatest.com",
+    "news-psatest.com",
+    "radio-psatest.com",
+    "podcast-psatest.com",
+    "sports-psatest.com",
+    "weather-psatest.com",
+    "pub-psatest.com",
+    "partner-psatest.com",
+    "other-psatest.com",
+    "stranger-psatest.com",
+    "other-publisher-psatest.com",
+    "unverified-psatest.com",
+    "pending-psatest.com",
+    "failed-psatest.com",
+    "unbacked-publisher-psatest.com",
 )
 # 127.0.0.2 (GH #1757): a SECOND loopback address, distinct from
 # 127.0.0.1, that tests/integration/test_protocol_webhook_egress.py needs to

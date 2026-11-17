@@ -46,15 +46,16 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import delete, select
 
+from scripts.setup.seed_products import seed_verified_website
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
-    AuthorizedProperty,
     CurrencyLimit,
     GAMInventory,
     MediaBuy,
     Principal,
     Product,
     PropertyTag,
+    Publisher,
     Tenant,
     TenantAuthConfig,
 )
@@ -144,17 +145,9 @@ class TestMinimumSpendValidation:
             )
             session.add(property_tag)
 
-            # Create required AuthorizedProperty (needed for setup validation)
-            authorized_property = AuthorizedProperty(
-                tenant_id="test_minspend_tenant",
-                property_id="test_minspend_property",
-                property_type="website",
-                name="Test Property",
-                identifiers=[{"type": "domain", "value": "example.com"}],
-                publisher_domain="example.com",
-                verification_status="verified",
-            )
-            session.add(authorized_property)
+            # The publisher whose stored adagents.json authorizes the tenant (needed for setup validation)
+            session.flush()
+            seed_verified_website(session, "test_minspend_tenant", "psatest.com", name="Test Property")
 
             # Create principal with both kevel and mock mappings
             principal = Principal.with_token(
@@ -340,7 +333,7 @@ class TestMinimumSpendValidation:
             session.execute(delete(Principal).where(Principal.tenant_id == "test_minspend_tenant"))
             session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == "test_minspend_tenant"))
             session.execute(delete(PropertyTag).where(PropertyTag.tenant_id == "test_minspend_tenant"))
-            session.execute(delete(AuthorizedProperty).where(AuthorizedProperty.tenant_id == "test_minspend_tenant"))
+            session.execute(delete(Publisher).where(Publisher.tenant_id == "test_minspend_tenant"))
             session.execute(delete(TenantAuthConfig).where(TenantAuthConfig.tenant_id == "test_minspend_tenant"))
             session.execute(delete(Tenant).where(Tenant.tenant_id == "test_minspend_tenant"))
             session.commit()

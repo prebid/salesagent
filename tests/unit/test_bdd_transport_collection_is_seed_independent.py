@@ -11,7 +11,7 @@ seeds 1/2/3 over the UC-010 module gave mcp/rest 183/166, 171/178, 174/175.
 
 The cause was ``pytest_collection_modifyitems``'s strict-xfail representative
 keeping the FIRST mcp/rest sibling it walked, over an ``items`` order that
-pytest-randomly reshuffles every run (the ``bdd_inprocess`` tox env does not
+pytest-randomly reshuffles every run (the ``bdd-inprocess-s*`` tox envs do not
 pass ``-p no:randomly``). The transport it skipped was ungraded -- and
 invisibly so: it presents as ~19 removed / ~19 added nodeids, exactly the
 benign transport-parameter noise ``scripts/audit/compare_runs.py`` documents,

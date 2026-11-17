@@ -210,10 +210,9 @@ fixture by way of `_build_admin_env`.
    them.
    Every admin scenario gets both legs. When the live stack cannot realize a Given
    as it stands, the harness or the stack is extended until it can:
-   `local-publisher-authorization.feature` serves a publisher's adagents.json from a
-   TLS origin in the runner (`publisher.adcp-e2e.dev`, the runner's alias on the
-   stack's non-private subnet), and the stack's servers start with
-   `PUBLISHER_AUTO_VERIFY=false`, the setting its in-process leg patches.
+   `local-publisher-authorization.feature` serves a publisher's adagents.json from the
+   stack's `publisher-origin` service, which the live server reaches on 443 through
+   tls-proxy (`tests/harness/publisher_authorization.py`).
 2. **One registry row builds the env.** `ENV_ROUTES["ADMIN"]`
    (`tests/bdd/conftest.py:5061`) names `_build_admin_env` (`:4782-4806`), and
    `_run_env_route` is the single consumer. That builder is the only one that

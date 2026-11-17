@@ -1,9 +1,8 @@
-"""The pinned shared liveness contract, shared by its two graders.
+"""The pinned shared liveness contract, shared by the modules that grade it.
 
-One place, so the structural guard
-(``tests/unit/test_architecture_liveness_contract_owner.py``) and the behavioral
-grader (``tests/unit/test_architecture_env_route_agreement.py``) cannot drift
-apart — the same disease this lane exists to cure.
+One place, so the behavioral grader
+(``tests/collection/test_architecture_env_route_agreement.py``) and the other readers
+cannot drift apart — the same disease this lane exists to cure.
 
 Authored RED, before implementation: these names ARE the contract the implement
 atom builds to. Changing one is changing the contract, and must be recorded in
