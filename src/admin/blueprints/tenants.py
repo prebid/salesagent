@@ -275,7 +275,8 @@ def tenant_settings(tenant_id, section=None):
             if adapter_config_obj:
                 adapter_config_dict = {
                     "network_code": adapter_config_obj.gam_network_code or "",
-                    "refresh_token": adapter_config_obj.gam_refresh_token or "",
+                    # Whether one is stored, never the token: the page must not be able to render it
+                    "refresh_token": bool(adapter_config_obj.gam_refresh_token),
                     "trafficker_id": adapter_config_obj.gam_trafficker_id or "",
                     "application_name": getattr(adapter_config_obj, "gam_application_name", "") or "",
                     "service_account_email": adapter_config_obj.gam_service_account_email or "",

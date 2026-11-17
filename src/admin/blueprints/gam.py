@@ -17,7 +17,7 @@ from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, GAMLineItem, GAMOrder, Tenant
-from src.core.database.repositories.adapter_config import AdapterConfigRepository
+from src.core.database.repositories.adapter_config import AdapterConfigRepository, read_adapter_config
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,19 @@ def _validate_gam_config(session, tenant_id: str) -> tuple[AdapterConfig | None,
     if not config or not config.gam_network_code or not repo.has_gam_credentials(config):
         return None, "Please connect your GAM account first. Go to Ad Server settings to configure GAM."
     return config, None
+
+
+def _presented_or_stored_refresh_token(tenant_id: str, presented: object) -> str:
+    """The refresh token the request sent, else the tenant's stored one ("" if neither).
+
+    The settings page never renders the stored token: it is a credential to the
+    publisher's ad server, and anyone who can open the page could otherwise copy it.
+    So the page sends a blank token to mean "the one on file".
+    """
+    if isinstance(presented, str) and presented.strip():
+        return presented.strip()
+    config = read_adapter_config(tenant_id)
+    return (config.gam_refresh_token or "") if config else ""
 
 
 def validate_gam_network_response(network) -> tuple[bool, str | None]:
@@ -175,7 +188,7 @@ def detect_gam_network(tenant_id):
         if data is None:
             return jsonify({"success": False, "error": "Invalid or empty request body"}), 400
 
-        refresh_token = data.get("refresh_token")
+        refresh_token = _presented_or_stored_refresh_token(tenant_id, data.get("refresh_token"))
         network_code_provided = data.get("network_code")  # For multi-network selection
 
         if not refresh_token:
@@ -403,6 +416,10 @@ def configure_gam(tenant_id):
                 ),
                 400,
             )
+
+        # A blank OAuth token means "keep the stored one" (the page never renders it)
+        if isinstance(data, dict) and data.get("auth_method", "oauth") == "oauth":
+            data["refresh_token"] = _presented_or_stored_refresh_token(tenant_id, data.get("refresh_token"))
 
         # Validate GAM configuration data
         validation_errors = validate_gam_config(data)
@@ -895,8 +912,12 @@ def test_gam_connection(tenant_id):
     try:
         # Use force=True and silent=True to handle empty/malformed requests gracefully
         data = request.get_json(force=True, silent=True) or {}
-        refresh_token = data.get("refresh_token")
         auth_method = data.get("auth_method")
+        refresh_token = (
+            None
+            if auth_method == "service_account"
+            else _presented_or_stored_refresh_token(tenant_id, data.get("refresh_token")) or None
+        )
 
         # If no explicit auth_method, infer from what's provided
         if not auth_method:
