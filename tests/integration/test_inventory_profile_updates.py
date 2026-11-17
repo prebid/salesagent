@@ -8,7 +8,9 @@ import pytest
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import InventoryProfile, Product
+from src.core.database.models import InventoryProfile, InventoryProfilePublisherSelection, Product
+from tests.factories.product import authorized_refs
+from tests.factories.publisher import held_selections
 from tests.helpers.adcp_factories import create_test_db_product
 
 
@@ -31,14 +33,19 @@ def test_updating_profile_formats_affects_all_products(integration_db, sample_te
                 {"agent_url": "https://test.example.com", "id": "format_a"},
                 {"agent_url": "https://test.example.com", "id": "format_b"},
             ],
-            publisher_properties=[
-                {
-                    "property_type": "website",
-                    "name": "Example Website",
-                    "identifiers": [{"type": "domain", "value": "example.com"}],
-                    "publisher_domain": "example.com",
-                }
-            ],
+            publisher_selections=held_selections(
+                session,
+                InventoryProfilePublisherSelection,
+                sample_tenant["tenant_id"],
+                [
+                    {
+                        "property_type": "website",
+                        "name": "Example Website",
+                        "identifiers": [{"type": "domain", "value": "psatest.com"}],
+                        "publisher_domain": "psatest.com",
+                    }
+                ],
+            ),
         )
         session.add(profile)
         session.flush()
@@ -115,14 +122,19 @@ def test_updating_profile_inventory_affects_product_implementation_config(integr
             format_ids=[
                 {"agent_url": "https://test.example.com", "id": "display_300x250"},
             ],
-            publisher_properties=[
-                {
-                    "property_type": "website",
-                    "name": "Example Website",
-                    "identifiers": [{"type": "domain", "value": "example.com"}],
-                    "publisher_domain": "example.com",
-                }
-            ],
+            publisher_selections=held_selections(
+                session,
+                InventoryProfilePublisherSelection,
+                sample_tenant["tenant_id"],
+                [
+                    {
+                        "property_type": "website",
+                        "name": "Example Website",
+                        "identifiers": [{"type": "domain", "value": "psatest.com"}],
+                        "publisher_domain": "psatest.com",
+                    }
+                ],
+            ),
         )
         session.add(profile)
         session.flush()
@@ -189,11 +201,12 @@ def test_updating_profile_inventory_affects_product_implementation_config(integr
 
 @pytest.mark.requires_db
 def test_updating_profile_properties_affects_all_products(integration_db, sample_tenant):
-    """Test that updating profile publisher_properties cascades to all products."""
+    """Test that updating a profile's publisher selections cascades to all products."""
+    tenant_id = sample_tenant["tenant_id"]
     with get_db_session() as session:
-        # Create profile with initial properties
+        # Create profile with an initial selection
         profile = InventoryProfile(
-            tenant_id=sample_tenant["tenant_id"],
+            tenant_id=tenant_id,
             profile_id="test_profile_properties",
             name="Test Profile - Properties",
             description="Profile for testing property updates",
@@ -205,14 +218,12 @@ def test_updating_profile_properties_affects_all_products(integration_db, sample
             format_ids=[
                 {"agent_url": "https://test.example.com", "id": "display_300x250"},
             ],
-            publisher_properties=[
-                {
-                    "property_type": "website",
-                    "name": "Original Website",
-                    "identifiers": [{"type": "domain", "value": "original.com"}],
-                    "publisher_domain": "original.com",
-                }
-            ],
+            publisher_selections=held_selections(
+                session,
+                InventoryProfilePublisherSelection,
+                tenant_id,
+                [{"publisher_domain": "original.com", "selection_type": "all"}],
+            ),
         )
         session.add(profile)
         session.flush()
@@ -220,10 +231,9 @@ def test_updating_profile_properties_affects_all_products(integration_db, sample
         profile_id = profile.id
 
         # Create products referencing this profile
-        products = []
         for i in range(3):
             product = create_test_db_product(
-                tenant_id=sample_tenant["tenant_id"],
+                tenant_id=tenant_id,
                 product_id=f"test_product_props_{i}",
                 name=f"Test Product Props {i}",
                 description=f"Product {i} with inventory profile",
@@ -233,61 +243,39 @@ def test_updating_profile_properties_affects_all_products(integration_db, sample
                 countries=["US"],
             )
             session.add(product)
-            products.append(product)
 
         session.commit()
 
-        # Verify initial state - all products return profile's properties
-        stmt = select(Product).where(Product.tenant_id == sample_tenant["tenant_id"])
-        db_products = session.scalars(stmt).all()
-        for product in db_products:
-            effective_props = product.effective_properties
-            assert len(effective_props) == 1
-            assert effective_props[0]["publisher_domain"] == "original.com"
-            assert effective_props[0]["property_type"] == "website"
-            assert effective_props[0]["name"] == "Original Website"
+        authorized = authorized_refs("original.com", "updated.com", "second.com")
 
-        # Update profile properties
+        # Verify initial state - all products sell the profile's publisher
+        stmt = select(Product).where(Product.tenant_id == tenant_id)
+        for product in session.scalars(stmt).all():
+            assert product.resolve_publisher_properties(authorized) == [
+                {"publisher_domain": "original.com", "selection_type": "all"}
+            ]
+
+        # Update the profile's selection
         stmt = select(InventoryProfile).where(InventoryProfile.id == profile_id)
         profile = session.scalars(stmt).first()
-        profile.publisher_properties = [
-            {
-                "property_type": "website",
-                "name": "Updated Website",
-                "identifiers": [{"type": "domain", "value": "updated.com"}],
-                "publisher_domain": "updated.com",
-            },
-            {
-                "property_type": "mobile_app",
-                "name": "Second App",
-                "identifiers": [{"type": "bundle_id", "value": "com.second.app"}],
-                "publisher_domain": "second.com",
-                "tags": ["premium"],
-            },
-        ]
+        profile.publisher_selections = held_selections(
+            session,
+            InventoryProfilePublisherSelection,
+            tenant_id,
+            [
+                {"publisher_domain": "updated.com", "selection_type": "all"},
+                {"publisher_domain": "second.com", "property_ids": ["second_com"], "selection_type": "by_id"},
+            ],
+        )
         session.commit()
 
-        # Verify cascade - all products now return new properties
-        stmt = select(Product).where(Product.tenant_id == sample_tenant["tenant_id"])
+        # Verify cascade - all products now sell the new publishers, and not the old one
+        stmt = select(Product).where(Product.tenant_id == tenant_id)
         db_products = session.scalars(stmt).all()
         assert len(db_products) == 3
-
         for product in db_products:
-            effective_props = product.effective_properties
-            assert len(effective_props) == 2
-
-            # Check first property
-            prop1 = next(p for p in effective_props if p["publisher_domain"] == "updated.com")
-            assert prop1 is not None
-            assert prop1["property_type"] == "website"
-            assert prop1["name"] == "Updated Website"
-
-            # Check second property
-            prop2 = next(p for p in effective_props if p["publisher_domain"] == "second.com")
-            assert prop2 is not None
-            assert prop2["property_type"] == "mobile_app"
-            assert prop2["name"] == "Second App"
-            assert prop2.get("tags") == ["premium"]
-
-            # Old properties should not be present
-            assert not any(p["publisher_domain"] == "original.com" for p in effective_props)
+            session.refresh(product)
+            assert product.resolve_publisher_properties(authorized) == [
+                {"publisher_domain": "updated.com", "selection_type": "all"},
+                {"publisher_domain": "second.com", "property_ids": ["second_com"], "selection_type": "by_id"},
+            ]

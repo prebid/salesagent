@@ -32,7 +32,7 @@ import pytest
 
 from src.adapters.broadstreet import BroadstreetAdapter
 from src.core.schemas import Format
-from tests.factories import AuthorizedPropertyFactory, CreativeFactory
+from tests.factories import CreativeFactory
 from tests.factories.creative import declared_format_spec
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.transport import Transport
@@ -85,7 +85,6 @@ class TestAdapterFormatCreativeSurvivesTheReDial:
     def test_broadstreet_format_creative_is_accepted(self, integration_db, transport):
         with MediaBuyCreateEnv() as env:
             tenant, principal = env.setup_default_data(human_review_required=False)
-            AuthorizedPropertyFactory(tenant=tenant)
             agent_url = f"broadstreet://{tenant.tenant_id}"
             product, _pricing_option = env.setup_product_chain(
                 tenant,
@@ -154,7 +153,6 @@ class TestReDialOfBuyerProvenanceUrlIsNotOperatorMisclassified:
 
         with MediaBuyCreateEnv() as env:
             tenant, principal = env.setup_default_data(human_review_required=False)
-            AuthorizedPropertyFactory(tenant=tenant)
             product, _pricing_option = env.setup_product_chain(
                 tenant,
                 format_ids=[{"agent_url": third_party_agent_url, "id": format_id}],

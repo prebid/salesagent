@@ -37,6 +37,11 @@ from tests.helpers.ledger import load_ledger_nodeids
 from tests.helpers.marker_names import derive_marker_names
 from tests.utils.database_helpers import production_db_pointed_at
 
+# ``src.app`` reads this when it is imported and mounts GET /tls/ask from it, as a deployment
+# does. local-tls-ask.feature grades that composed app, so it is set before anything imports
+# ``src.app``. docker-compose.e2e.yml sets the same on the live stack.
+os.environ["TLS_ASK_ENABLED"] = "true"
+
 # Known mock-incompatible e2e_rest BDD scenarios — these dispatch over real HTTP
 # to the separate server, so in-process mock injection (set_registry_formats /
 # set_adapter_response / account billing-state fixtures) is invisible to it and
@@ -75,6 +80,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_v31_request",
     "tests.bdd.steps.domain.uc002_v31_proposal_targeting",
     "tests.bdd.steps.domain.uc002_invariants",
+    "tests.bdd.steps.domain.gam_seller",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc003_storyboard_generic_client",
@@ -99,6 +105,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_inventory_profiles",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
+    "tests.bdd.steps.domain.uc_get_products_publisher_domain",
     "tests.bdd.steps.domain.uc001_discovery",
     "tests.bdd.steps.domain.uc_get_products_format_options",
     "tests.bdd.steps.domain.uc_get_products_format_id_filter",
@@ -109,14 +116,15 @@ pytest_plugins = [
     "tests.bdd.steps.domain.local_context_echo",
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
+    "tests.bdd.steps.domain.mcp_tool_discovery",
     "tests.bdd.steps.domain.mcp_endpoint_paths",
-    "tests.bdd.steps.domain.publisher_format_catalog",
     "tests.bdd.steps.domain.publisher_authorization",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
     "tests.bdd.steps.domain.security_tenant_isolation",
     "tests.bdd.steps.domain.database_fail_fast",
+    "tests.bdd.steps.domain.tls_ask",
     "tests.bdd.steps.domain.protocol_version_negotiation",
 ]
 
@@ -1856,7 +1864,7 @@ def parse_xfail_reason(reason: str) -> XfailReason | None:
 # Both lists may only SHRINK. A scenario that newly fails is not added here; it is fixed, or
 # its cause is measured and given its own entry with that cause. The entry counts, the
 # nodeids each list matches, the no-overlap rule and the outline-rows rule are pinned by
-# tests/unit/test_architecture_route_xfail_census.py.
+# tests/collection/test_architecture_route_xfail_census.py.
 #
 # Reasons avoid the words the dormancy tripwire (_classify_strict_xfail_dormancy) reads as a
 # claim about production, because several entries ARE test-wiring and say so.
@@ -2178,7 +2186,7 @@ _NO_UPDATE_WITHOUT_ID_ON_REST = (
 #: failure (the ledger) nor a pass that grades nothing (the parks); nothing is wrong on either
 #: side. Each entry names its rows and its transports, the row is xfail(run=False) on exactly
 #: those transports with the reason below, and it runs and grades on every other transport.
-#: Pinned by tests/unit/test_architecture_route_xfail_census.py with the two lists above.
+#: Pinned by tests/collection/test_architecture_route_xfail_census.py with the two lists above.
 _TRANSPORT_INEXPRESSIBLE_ROWS: tuple[_CatchallXfail, ...] = (
     _X(
         "T-UC-003-partition-media-buy-identification",
@@ -5236,6 +5244,9 @@ _SINGLE_TRANSPORT_TAGS = {
     "predispatch-rest": "REST",
     "predispatch-a2a": "A2A",
     "predispatch-mcp": "MCP",
+    # local-mcp-tool-discovery.feature: tools/list is MCP's own discovery frame and exists on
+    # no other transport.
+    "mcptools": "MCP",
 }
 
 # UC + tag combinations that should run IMPL-only (no 4-way parametrization).
@@ -5396,6 +5407,12 @@ def _uc010_wired_tags() -> frozenset[str]:
             # than for its real, cited reason (#1291).
             "T-UC-010-main-reporting-delivery",
             "T-UC-010-degradation-no-cascade",
+            # portfolio.publisher_domains: the verified publishers, or no portfolio at all
+            "T-UC-010-portfolio-verified-publishers",
+            "T-UC-010-portfolio-no-verified-publisher",
+            "T-UC-010-portfolio-canonical-domain",
+            "T-UC-010-portfolio-rejected-domain",
+            "T-UC-010-portfolio-only-rejected-domain",
             "T-UC-010-main-timestamp",
             "T-UC-010-main-readonly",
             "T-UC-010-pricing",
@@ -5403,6 +5420,8 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-conversion-caps",
             "T-UC-010-creative-caps",
             "T-UC-010-ext-b-schema-valid",
+            # portfolio under each failed dependency: named, or omitted, never a placeholder
+            "T-UC-010-ext-b-degradation",
             "T-UC-010-ext-a",
             "T-UC-010-account-require-operator-auth",
             "T-UC-010-account-authorization-endpoint",
@@ -5482,6 +5501,13 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-local-orphaned-specialism",
             "T-UC-010-local-unbacked-protocol",
             "T-UC-010-local-inline-creative-management",
+            # Batch 17 — the locally-added advertising-policy graders. Their feature was
+            # edited before it was wired, so it had never run; portfolio, and the policy
+            # inside it, now exists only for a seller some publisher has verified.
+            "T-UC-010-local-advertising-policy-declared",
+            "T-UC-010-local-advertising-policy-absent",
+            "T-UC-010-local-advertising-policy-empty-description",
+            "T-UC-010-local-advertising-policy-no-verified-publisher",
             # Batch 14 — account.sandbox boundary outline (#1721 M4). Was dormant
             # (no bound Given for "the tenant account is configured for
             # {boundary_point}"), citing #1855 (generic wiring) instead of the
@@ -5513,6 +5539,10 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-v31-request-signing-migrated-digest",
             "T-UC-010-v31-request-signing-subset",
             "T-UC-010-v31-webhook-signing",
+            # Batch 17 — a GAM seller declares only the geo targeting it books
+            # (local-uc010-declaration-backing.feature): the real GoogleAdManager class
+            # answers get_targeting_capabilities.
+            "T-UC-010-local-gam-postal",
         }
     )
     return _UC010_WIRED_TAGS
@@ -5582,7 +5612,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if "ctx" not in metafunc.fixturenames:
         return
 
-    from tests.harness.transport import Transport
+    from tests.harness.transport import BDD_IN_PROCESS_TRANSPORTS, Transport
 
     marker_names = {m.name for m in metafunc.definition.iter_markers()}
     if marker_names & _TRANSPORT_SPECIFIC_TAGS:
@@ -5620,7 +5650,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # wire envelope (so it can't participate in error-envelope assertions). The six
     # truthful transports are a2a/mcp/rest in process, plus e2e_rest/e2e_mcp/e2e_a2a
     # over real HTTP (added below when enabled).
-    transports = [Transport.A2A, Transport.MCP, Transport.REST]
+    transports = list(BDD_IN_PROCESS_TRANSPORTS)
 
     # EVERY tool is reachable on EVERY transport, so no scenario is withheld from one.
     # A per-UC exclusion for tools with no REST route, driven by a hand-maintained
@@ -5635,7 +5665,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # it is exactly as ungraded as an xfail, but INVISIBLE to both escape-hatch detectors
     # in test_architecture_e2e_rest_escape_hatches.py, which walk xfail conditions and
     # E2EUnsupportedSetup sites and never see a scenario that was never parametrized.
-    # That is what tests/unit/test_e2e_rest_ssrf_blocked_scenario_collected.py pins.
+    # That is what tests/collection/test_e2e_rest_ssrf_blocked_scenario_collected.py pins.
     #
     # A tool that genuinely lost a wrapper is a PRODUCTION gap. Add the route.
     # e2e_mcp and e2e_a2a are OPT-IN, and that is a capacity decision rather than a
@@ -5713,6 +5743,7 @@ def e2e_stack():
     # shared-server/shared-DB contention. Falls back to the shared stack when off.
     ca_bundle = os.environ.get("E2E_CA_BUNDLE")
     tls_base_url = os.environ.get("E2E_TLS_BASE_URL")
+    server_host = os.environ.get("E2E_SERVER_HOST")
     worker = os.environ.get("PYTEST_XDIST_WORKER")  # e.g. "gw3"
     if os.environ.get("E2E_PER_WORKER") == "1" and worker and worker.startswith("gw"):
         import re
@@ -5722,7 +5753,8 @@ def e2e_stack():
         # compose network. Hit the server directly on :8080 (SKIP_NGINX).
         proj = os.environ.get("COMPOSE_PROJECT_NAME", "")
         prefix = f"{proj}-" if proj else ""
-        base_url = f"http://{prefix}server-{worker}:8080"
+        server_host = f"{prefix}server-{worker}"
+        base_url = f"http://{server_host}:8080"
         # Each worker's TLS sidecar carries its own DOTTED CONTAINER NAME for the
         # same reason — `docker compose run` cannot give it a network alias.
         if tls_base_url:
@@ -5768,6 +5800,7 @@ def e2e_stack():
         postgres_url=postgres_url,
         tls_base_url=tls_base_url,
         ca_bundle=ca_bundle,
+        server_host=server_host,
     )
 
 
@@ -6093,6 +6126,19 @@ def _build_product_env(e2e_config: object | None) -> AbstractContextManager:
     return ProductEnv(e2e_config=e2e_config)
 
 
+def _build_admin_inventory_profile_env(e2e_config: object | None) -> AbstractContextManager:
+    """ProductEnv plus the operator's inventory-profile form and products page (#1845).
+
+    Serves both the admin feature (admin_integration / e2e_admin) and the publisher-domain
+    scenarios that save a profile through the form and read the product off get_products
+    on every buyer transport. The admin requests follow the env's own transport: in
+    process without ``e2e_config``, over the live stack with it.
+    """
+    from tests.harness.admin_inventory_profile import AdminInventoryProfileEnv
+
+    return AdminInventoryProfileEnv(e2e_config=e2e_config)
+
+
 def _build_capabilities_env(e2e_config: object | None) -> AbstractContextManager:
     """UC-010 get_adcp_capabilities. Named rather than ``_env(...)``-generated so
     the parked/wired/not-wired rows below — and ``_uc010_dormancy_rows()`` above —
@@ -6249,6 +6295,18 @@ def _seed_media_buy_chain_create_dispatch(ctx: dict, env: object) -> None:
     """The chain, plus the flag telling the shared When step to dispatch a create."""
     _seed_media_buy_chain(ctx, env)
     ctx["dispatch_mode"] = "create"
+
+
+def _seed_buy_readback(ctx: dict, env: object) -> None:
+    """The create chain on a seller whose adapter is production's, on every transport.
+
+    The read-back scenarios grade what a real adapter's create leaves behind, so the
+    in-process transports run the tenant's own adapter as the live server does: the Mock
+    adapter (whose creative upload is #2420), or ``GoogleAdManager`` once a Given makes the
+    tenant a GAM seller.
+    """
+    _seed_media_buy_chain_create_dispatch(ctx, env)
+    env.sell_through_tenant_adapter()
 
 
 def _seed_media_buy_chain_full_create(ctx: dict, env: object) -> None:
@@ -6588,6 +6646,9 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-local-assignment-only-existing-creative",
         "T-UC-006-local-failed-creative-assignment",
         "T-UC-006-local-dryrun-parity",
+        # delete_missing and active delivery: plain syncs CreativeSyncEnv serves on every transport.
+        "T-UC-006-local-delete-missing-active-delivery",
+        "T-UC-006-local-delete-missing-not-delivering",
         # The format/validation error paths, corrected to the pinned enum (INVALID_REQUEST
         # for schema violations at the request, REFERENCE_NOT_FOUND / VALIDATION_ERROR on
         # the creative's entry, SERVICE_UNAVAILABLE for an agent that does not answer) and
@@ -6750,6 +6811,17 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_media_buy_create_list_env,
         seed=_seed_media_buy_chain,
     ),
+    # A real create through the scenario's transport, then a read of that buy on the same
+    # env and identity: the initial status (get_media_buys) and a GAM buy's packages
+    # (get_media_buy_delivery). A factory-seeded buy cannot stand in, because it carries its
+    # package ids in raw_request and so cannot show what create persisted. Unscoped and
+    # ahead of the UC rows, so neither uc002-not-wired nor uc004-poll claims these tags.
+    EnvRoute(
+        tag="local-buy-readback",
+        when=lambda m: any(t.startswith(("T-UC-002-local-initial-status-", "T-UC-004-local-gam-readback-")) for t in m),
+        env_builder=_build_media_buy_create_list_env,
+        seed=_seed_buy_readback,
+    ),
     # ── @tenantid (local tenant-identification-routes feature) ──────────────
     # An UNSCOPED `when` row for the same reason as the rows above and below: the
     # scenarios carry a @tenantid tag rather than a T-UC-<n> identity, so
@@ -6778,6 +6850,16 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
     ),
+    # ── @tlsask (local on-demand TLS gate feature) ──────────────────────────
+    # An UNSCOPED `when` row for the same reason as the rows around it: T-TLSASK-* identity
+    # tags, so detect_uc returns None. The gate is a root endpoint, not a tool, so the env
+    # dispatches nothing; it owns the GET and the database faults.
+    EnvRoute(
+        tag="tlsask",
+        when=lambda m: "tlsask" in m,
+        env_builder=_env("tests.harness.tls_gate.TlsGateEnv"),
+        seed=_seed_tenant_and_principal,
+    ),
     # ── @mcppath (local MCP endpoint paths feature) ─────────────────────────
     # Unscoped for the reason the row above gives. No tool is dispatched: the env only supplies
     # how a path is reached on this transport (``post_mcp_initialize``).
@@ -6786,19 +6868,6 @@ ENV_ROUTES: list[EnvRoute] = [
         when=lambda m: "mcppath" in m,
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
-    ),
-    # ── @pubformats (local publisher-format-catalog feature, RFC S3) ────────
-    # An UNSCOPED `when` row for the same reason as the rows around it: T-PUBFORMATS-* tags
-    # carry no T-UC-<n>, so detect_uc returns None and no coarse bucket claims them.
-    #
-    # The product env, because one scenario dispatches get_products and reads the product
-    # off the wire; the adagents.json fetches use `fetch_agent_card`, which every env has.
-    # No seed: the Background's "a tenant is configured for product discovery" seeds the
-    # tenant and principal, as for the canonical-format-filter rows.
-    EnvRoute(
-        tag="pubformats",
-        when=lambda m: "pubformats" in m,
-        env_builder=_build_product_env,
     ),
     # ── @pubauth (local publisher-authorization feature) ────────────────────
     # A `when` row because its scenarios carry T-ADMIN-PUBAUTH-* tags, which detect_uc
@@ -6813,6 +6882,28 @@ ENV_ROUTES: list[EnvRoute] = [
     EnvRoute(
         tag="tenantid",
         when=lambda m: "tenantid" in m,
+        env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @mcptools (local mcp-tool-discovery feature) ────────────────────────
+    # An UNSCOPED `when` row: the scenario carries a T-MCPTOOLS-* identity tag, so
+    # detect_uc returns None and no coarse bucket claims it. The capabilities env, for the
+    # one thing a listing needs from an env: `list_mcp_tools`, which sends `tools/list`
+    # through the in-memory FastMCP Client. The listing is NOT dispatched as a tool, so
+    # which tool this env would dispatch is irrelevant.
+    EnvRoute(
+        tag="mcptools",
+        when=lambda m: "mcptools" in m,
+        env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @adagents (local trust-root adagents.json feature) ──────────────────
+    # The same shape as @agentcard: an unscoped row for T-ADAGENTS-* identity tags, the
+    # capabilities env for its in-process ASGI client, and a tenant declaring its own
+    # virtual_host, whose properties are what the document is built from.
+    EnvRoute(
+        tag="adagents",
+        when=lambda m: "adagents" in m,
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
     ),
@@ -6926,6 +7017,24 @@ ENV_ROUTES: list[EnvRoute] = [
         # returns None for it and no coarse bucket claims it.
         when=lambda m: "pricing_option_announcement" in m,
         env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="get-products-publisher-domain",
+        # BR-UC-GET-PRODUCTS publisher_domain resolution (#1845): stores real authorized
+        # properties and products and reads publisher_properties back off get_products, so
+        # it takes the UC-GET-PRODUCTS branch. Like the pricing row above it carries its own
+        # identity tag, so detect_uc returns None for it and no coarse bucket claims it.
+        when=lambda m: "publisher_domain_resolution" in m,
+        env_builder=_build_admin_inventory_profile_env,
+    ),
+    EnvRoute(
+        tag="admin-inventory-profile-publishers",
+        # BR-ADMIN-INVENTORY-PROFILE-publishers (#1845): the inventory-profile form and the
+        # products page. Its T-ADMIN- tags parametrize it over the admin transports, and
+        # this row claims it before the ADMIN bucket, whose AdminAccountEnv has no
+        # factories or products.
+        when=lambda m: "admin_inventory_profile" in m,
+        env_builder=_build_admin_inventory_profile_env,
     ),
     EnvRoute(
         tag="get-products-format-options",
@@ -7150,6 +7259,11 @@ ENV_ROUTES: list[EnvRoute] = [
                 # the record is with the _UC002_VALIDATION_XFAIL block.
                 or "T-UC-002-partition-creative-asset" in m
                 or "T-UC-002-boundary-creative-asset" in m
+                # Every scenario of local-gam-seller.feature needs exactly this row: the
+                # create chain, and dispatch_mode="create" so the shared When dispatches the
+                # request the Givens built. The row claims that feature's tag prefix once, so
+                # a new GAM scenario joins it without editing this predicate.
+                or any(t.startswith("T-UC-002-local-gam-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
@@ -7338,6 +7452,11 @@ ENV_ROUTES: list[EnvRoute] = [
                 # Plus the scenarios named one by one, because the family tags do not
                 # partition along the wired boundary -- see _UC006_WIRED_SCENARIOS.
                 or bool(m & _UC006_WIRED_SCENARIOS)
+                # Every scenario of local-uc006-gam-assignment-trafficking.feature needs
+                # exactly this row: the sync chain on the tenant's own adapter. The row claims
+                # that feature's tag prefix once, so a new scenario joins it without editing
+                # this predicate.
+                or any(t.startswith("T-UC-006-local-gam-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),

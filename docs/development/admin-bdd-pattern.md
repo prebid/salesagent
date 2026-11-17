@@ -226,14 +226,13 @@ fixture by way of the admin builders (`_build_admin_env`,
    them.
    Every admin scenario gets both legs. When the live stack cannot realize a Given
    as it stands, the harness or the stack is extended until it can:
-   `local-publisher-authorization.feature` serves a publisher's adagents.json from a
-   TLS origin in the runner (`publisher.adcp-e2e.dev`, the runner's alias on the
-   stack's non-private subnet), and the stack's servers start with
-   `PUBLISHER_AUTO_VERIFY=false`, the setting its in-process leg patches.
+   `local-publisher-authorization.feature` serves a publisher's adagents.json from the
+   stack's `publisher-origin` service, which the live server reaches on 443 through
+   tls-proxy (`tests/harness/publisher_authorization.py`).
 2. **A registry row builds the env.** `ENV_ROUTES["ADMIN"]`
-   (`tests/bdd/conftest.py:5688`) names `_build_admin_env` (`:5313-5344`); the
-   `admin-tenant-scoping` predicate row ahead of it (`:5934`) names
-   `_build_admin_tenant_scoping_env` (`:5347-5369`) for `T-ADMIN-SCOPE-*`.
+   (`tests/bdd/conftest.py:6463`) names `_build_admin_env` (`:6063-6094`); the
+   `admin-tenant-scoping` predicate row ahead of it (`:6768`) names
+   `_build_admin_tenant_scoping_env` (`:6097-6119`) for `T-ADMIN-SCOPE-*`.
    `_run_env_route` is the single consumer. These two builders are the only ones
    that pass `base_url=` rather than `e2e_config=`, because the admin env needs
    the address and nothing else from `E2EConfig`;

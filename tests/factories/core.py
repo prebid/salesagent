@@ -1,6 +1,6 @@
 """Factory_boy factories for core tenant-related models.
 
-Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory, PublisherPartnerFactory
+Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory
 Helpers: set_adapter_test_behavior (persist adapter test-behavior to AdapterConfig),
 get_or_create (idempotent factory seeding for shared-DB e2e_rest scenarios),
 seed_property_tag_selection (the property-tag rows the admin product form requires)
@@ -16,12 +16,10 @@ from factory import LazyAttribute, RelatedFactory, Sequence, SubFactory
 
 from src.core.database.models import (
     AdapterConfig,
-    AuthorizedProperty,
     CreativeAgent,
     CurrencyLimit,
     GAMInventory,
     PropertyTag,
-    PublisherPartner,
     SignalsAgent,
     Tenant,
 )
@@ -154,43 +152,6 @@ class CurrencyLimitFactory(factory.alchemy.SQLAlchemyModelFactory):
     min_package_budget = Decimal("100.00")
 
 
-class PublisherPartnerFactory(factory.alchemy.SQLAlchemyModelFactory):
-    class Meta:
-        model = PublisherPartner
-        sqlalchemy_session = None
-        sqlalchemy_session_persistence = "commit"
-
-    tenant = SubFactory(TenantFactory)
-    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
-    publisher_domain = Sequence(lambda n: f"publisher-{n:04d}.com")
-    display_name = LazyAttribute(lambda o: f"Publisher {o.publisher_domain}")
-    is_verified = True
-    sync_status = "success"
-
-
-class AuthorizedPropertyFactory(factory.alchemy.SQLAlchemyModelFactory):
-    """A verified authorized property — satisfies the create_media_buy setup
-    checklist's "Authorized Properties" gate (SetupChecklistService counts
-    AuthorizedProperty rows for the tenant). The in-process transports skip the
-    gate via the testing context; the live e2e_rest server enforces it, so a
-    fully-set-up tenant needs at least one of these.
-    """
-
-    class Meta:
-        model = AuthorizedProperty
-        sqlalchemy_session = None
-        sqlalchemy_session_persistence = "commit"
-
-    tenant = SubFactory(TenantFactory)
-    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
-    property_id = Sequence(lambda n: f"prop_{n:04d}")
-    property_type = "website"
-    name = LazyAttribute(lambda o: f"Authorized Property {o.property_id}")
-    publisher_domain = Sequence(lambda n: f"authorized-{n:04d}.example.com")
-    identifiers = LazyAttribute(lambda o: [{"type": "domain", "value": o.publisher_domain}])
-    verification_status = "verified"
-
-
 class AdapterConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
     class Meta:
         model = AdapterConfig
@@ -242,8 +203,9 @@ def seed_property_tag_selection(tenant: Tenant, env: Any = None) -> str:
     """Seed what the admin product form's property picker requires, and return its value.
 
     The product-create handler refuses a ``selected_property_tags`` entry that no
-    authorized property of that publisher carries, so posting the form needs two rows:
-    the tenant's ``all_inventory`` tag and an authorized property tagged with it. The
+    authorized property of that publisher carries, so posting the form needs the tenant's
+    ``all_inventory`` tag and a publisher whose stored adagents.json authorizes a property
+    tagged with it. The
     return value is the ``"<publisher_domain>:all_inventory"`` string the picker submits.
 
     ``env`` is a BDD harness env, so the tag is reused when a prior scenario left it in the
@@ -256,8 +218,13 @@ def seed_property_tag_selection(tenant: Tenant, env: Any = None) -> str:
         {"tenant_id": tenant.tenant_id, "tag_id": "all_inventory"},
         lambda: PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory"),
     )
-    authorized = AuthorizedPropertyFactory(tenant=tenant, tags=["all_inventory"])
-    return f"{authorized.publisher_domain}:all_inventory"
+    from tests.factories.publisher import PublisherFactory, authorize_properties
+
+    # A publisher of its own per call, so two calls give a product two publishers.
+    publisher = authorize_properties(
+        tenant, PublisherFactory(tenant=tenant).domain, [("tagged_home", ("all_inventory",))]
+    )
+    return f"{publisher.domain}:all_inventory"
 
 
 class CreativeAgentFactory(factory.alchemy.SQLAlchemyModelFactory):

@@ -24,6 +24,8 @@ from tests.factories import PricingOptionFactory, ProductFactory
 from tests.factories.core import seed_property_tag_selection
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.inventory_profile import InventoryProfileFactory
+from tests.factories.product import default_publisher_properties
+from tests.factories.publisher import declare_format_options
 from tests.helpers.admin_product_form import minimal_product_create_form
 
 #: The params a stored "image" declaration carries. Concrete values, so an announcement that
@@ -240,6 +242,18 @@ def given_canonical_product_with_named_declaration(ctx: dict, declaration: str, 
     )
 
 
+def _profile_selling_the_default_publisher(ctx: dict, **overrides: Any) -> Any:
+    """An inventory profile naming the publisher a test product sells by default.
+
+    A linked profile supplies its products' publishers, and a product is offered only for a
+    publisher the seller holds a verified property of (#1845). The linked ProductFactory row
+    seeds that property for the default publisher, so the profile names the same one.
+    """
+    return InventoryProfileFactory(
+        tenant=ctx["tenant"], publisher_properties=default_publisher_properties(), **overrides
+    )
+
+
 @given(
     parsers.parse(
         "the seller stores a canonically-authored product linked to an inventory profile whose "
@@ -255,7 +269,7 @@ def given_profile_linked_canonical_product(ctx: dict, profile_id: str, asserted_
     ``inventory_profile_id`` is the profile's INTEGER primary key, not its string business key
     ``profile_id`` -- ``products.inventory_profile_id`` FKs ``inventory_profiles.id``.
     """
-    profile = InventoryProfileFactory(tenant=ctx["tenant"], format_ids=[_ref(profile_id)])
+    profile = _profile_selling_the_default_publisher(ctx, format_ids=[_ref(profile_id)])
     product = ProductFactory(
         tenant=ctx["tenant"],
         inventory_profile_id=profile.id,
@@ -280,8 +294,8 @@ def given_product_linked_to_canonical_profile(ctx: dict, asserted_id: str) -> No
     the buyer could be announced from the product therefore differs from the profile's
     asserted ref, which comes from the scenario.
     """
-    profile = InventoryProfileFactory(
-        tenant=ctx["tenant"], format_ids=None, format_options=[_image_declaration(asserted_id)]
+    profile = _profile_selling_the_default_publisher(
+        ctx, format_ids=None, format_options=[_image_declaration(asserted_id)]
     )
     product = ProductFactory(
         tenant=ctx["tenant"],
@@ -419,14 +433,18 @@ def given_operator_product_across_two_publishers(ctx: dict, scope: str) -> None:
     authors no placements. Both declarations are complete image options. The 300x250 is
     product-local in both rows; the 728x90 is product-local or scoped to the FIRST publisher,
     which is the one difference between the two scenarios. Neither publisher is the tenant's
-    own, so the seller's publisher format catalog (RFC S3) is not consulted.
+    own; a publisher-scoped option is declared in the first publisher's formats[] and referenced by its key.
 
     The response is kept, not asserted: whether the form accepts is the scenario's Then.
     """
     selections = [seed_property_tag_selection(ctx["tenant"], ctx["env"]) for _ in range(2)]
     leaderboard = _sized_image_option("operator_leaderboard", 728, 90)
     if scope == "publisher-scoped":
-        leaderboard["publisher_domain"] = selections[0].split(":", 1)[0]
+        # The first publisher's catalog declares the option; the product references it by its
+        # key alone (core/product-format-declaration.json: the pair is the identity).
+        first_publisher = selections[0].split(":", 1)[0]
+        declare_format_options(ctx["tenant"], first_publisher, [leaderboard])
+        leaderboard = {"publisher_domain": first_publisher, "format_option_id": leaderboard["format_option_id"]}
     else:
         assert scope == "product-local", f"the scenario names an unknown scope: {scope!r}"
     ctx["admin_response"] = _post_operator_product(
