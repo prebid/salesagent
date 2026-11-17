@@ -4,7 +4,7 @@ This document is the reference for the security architecture of the sales agent:
 
 ## Contents
 
-- [Admin authentication architecture](#admin-authentication-architecture) — environment-first super-admin check with database fallback
+- [Admin authentication architecture](#admin-authentication-architecture) — environment-first super-admin check with database fallback, and cross-site request forgery protection
 - [Tenant registration security](#tenant-registration-security) — subdomain assignment, branded URLs, ad server checks
 - [Access control patterns](#access-control-patterns) — super admins, tenant users, principal isolation, audit trail
 - [Message signing (RFC 9421)](#message-signing-rfc-9421) — agent-to-agent authentication, and where it is documented in full
@@ -53,6 +53,15 @@ The session layer avoids redundant checks in the following ways:
 - **Session caching**: The session caches super admin status to avoid redundant database calls.
 - **Trusted session state**: `require_tenant_access()` checks the session first, then validates if needed.
 - **Automatic caching**: The system updates the session when it confirms admin status.
+
+### Cross-site request forgery
+
+The admin UI authenticates browsers with the session cookie, so a page on another site could otherwise submit a form to an admin route with a signed-in user's cookie attached. Two controls stop this:
+
+- **Origin check** (`src/admin/csrf.py`): every state-changing request (`POST`, `PUT`, `PATCH`, `DELETE`) must come from the admin UI's own origin. The check reads `Sec-Fetch-Site` (only `same-origin` or `none` pass), or, if a browser doesn't send that, `Origin`, which must equal the address the request was sent to. A request with neither header isn't from a browser and passes. Sibling subdomains are refused. Forms and `fetch` calls need no token. Views authenticated only by an API-key header (the tenant management and sync APIs) are exempt with `csrf_exempt`.
+- **`SameSite=Lax` session cookie**: browsers don't send it on cross-site posts, frames or `fetch` calls, but do send it on top-level navigations, which is what the OAuth and OIDC callbacks are.
+
+Behind a reverse proxy, the origin check relies on `ProxyFix` applying `X-Forwarded-Proto` and `X-Forwarded-Host` (configured in production), so the request's address is the public one.
 
 ## Tenant registration security
 
@@ -201,8 +210,9 @@ Cross-domain OAuth is limited:
 ```python
 # Production session config (src/admin/app.py)
 SESSION_COOKIE_DOMAIN = ".sales-agent.example.com"  # Multi-tenant mode: scoped to the internal domain
-SESSION_COOKIE_SECURE = True                        # Required for SameSite=None over HTTPS
-SESSION_COOKIE_SAMESITE = "None"                    # Required for EventSource cross-origin requests
+SESSION_COOKIE_SECURE = True                        # HTTPS only
+SESSION_COOKIE_HTTPONLY = True                      # No script reads the session cookie
+SESSION_COOKIE_SAMESITE = "Lax"                     # Sent on top-level navigations (OAuth callbacks), not on cross-site posts
 SESSION_COOKIE_PATH = "/"                           # Covers /admin/* and /auth/* (OAuth callbacks)
 ```
 

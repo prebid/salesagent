@@ -446,10 +446,9 @@ class TestSelfServiceSignupFlow:
         """The minted principal token is shown once in the page body and rides no header.
 
         A flash is stored in the signed session cookie, so a flashed credential leaves
-        the server in ``Set-Cookie``. In production that cookie is ``HTTPONLY=False``,
-        ``SAMESITE="None"`` and shared across subdomains (``src/admin/app.py``:126-136),
-        which makes it readable by any script on the domain and sent on cross-site
-        requests. Both halves are asserted here, because either one alone passes for the
+        the server in ``Set-Cookie``. That cookie is signed, not encrypted, and in
+        production shared across subdomains (``src/admin/app.py``), which makes it
+        readable by anyone who holds the cookie. Both halves are asserted here, because either one alone passes for the
         wrong reason: a page that reveals nothing has no token to leak, and a header
         check over a token the page never minted grades nothing.
 

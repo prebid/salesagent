@@ -98,9 +98,8 @@ def create_signing_key(tenant_id: str) -> ResponseReturnValue:
 
     # No key-material branch, and none is reachable: provisioning returns the ROW
     # (salesagent-9misv). This used to flash an env: mint's PEM, and flash() writes
-    # to Flask's default client-side session cookie — signed, not encrypted, and
-    # readable by JavaScript under the production SESSION_COOKIE_HTTPONLY=False at
-    # src/admin/app.py:128.
+    # to Flask's default client-side session cookie — signed, not encrypted, so
+    # readable by anyone who holds the cookie.
     flash(f"Signing key {kid} provisioned and published.", "success")
     return redirect(url_for("signing_keys.list_signing_keys", tenant_id=tenant_id))
 

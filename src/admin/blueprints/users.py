@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 # Create Blueprint
 users_bp = Blueprint("users", __name__, url_prefix="/tenant/<tenant_id>/users")
 
+# The roles the users.role check constraint allows (models.py).
+USER_ROLES = frozenset({"admin", "manager", "viewer"})
+
 
 def _is_valid_email(email: str) -> bool:
     """Whether *email* has a local part, one ``@``, and a dotted domain.
@@ -116,6 +119,10 @@ def add_user(tenant_id):
             flash("Email is required", "error")
             return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
+        if role not in USER_ROLES:
+            flash("Invalid role", "error")
+            return redirect(url_for("users.list_users", tenant_id=tenant_id))
+
         # Validate email format
         if not _is_valid_email(email):
             flash("Invalid email format", "error")
@@ -200,7 +207,7 @@ def update_role(tenant_id, user_id):
     """Update user role."""
     try:
         new_role = request.form.get("role")
-        if not new_role or new_role not in ["admin", "manager", "viewer"]:
+        if new_role not in USER_ROLES:
             flash("Invalid role", "error")
             return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
