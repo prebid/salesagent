@@ -3,7 +3,8 @@
 Provides access to the Tenant row and AdapterConfig for _impl functions
 that need tenant-level configuration data without calling get_db_session(),
 plus the one write path admin settings handlers need (``update_tenant``) and
-the atomic authorized-list mutators shared by the admin surfaces.
+the atomic authorized-list mutators shared by the admin surfaces, and the tenant's
+users for the admin Users page (``get_user``, ``is_last_active_admin``).
 
 Core invariant: every query includes tenant_id in the WHERE clause. The tenant_id
 is set at construction time and injected into all queries automatically.
@@ -23,7 +24,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 from src.core.database.jsonb_append import jsonb_list
-from src.core.database.models import AdapterConfig, Tenant
+from src.core.database.models import AdapterConfig, Tenant, User, UserRole
 
 AuthorizedListColumn = Literal["authorized_domains", "authorized_emails"]
 AddOutcome = Literal["added", "duplicate", "missing_tenant"]
@@ -156,3 +157,31 @@ class TenantConfigRepository:
         from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
         return AdapterConfigRepository(self._session, self._tenant_id).find_by_tenant()
+
+    # ------------------------------------------------------------------
+    # Tenant users
+    # ------------------------------------------------------------------
+
+    def get_user(self, user_id: str) -> User | None:
+        """Get one of the tenant's users by id."""
+        stmt = select(User).filter_by(tenant_id=self._tenant_id, user_id=user_id)
+        return self._session.scalars(stmt).first()
+
+    def is_last_active_admin(self, user: User) -> bool:
+        """Whether *user* is the tenant's only active admin.
+
+        Locks the tenant's active admin rows (``FOR UPDATE``, in id order) until the
+        caller's transaction ends, so two admins demoting or deactivating each other
+        at the same time cannot both pass: the second waits for the first to commit,
+        and PostgreSQL re-checks the locked rows against the ``WHERE`` before
+        returning them.
+        """
+        if user.role != UserRole.ADMIN or not user.is_active:
+            return False
+        stmt = (
+            select(User.user_id)
+            .filter_by(tenant_id=self._tenant_id, role=UserRole.ADMIN, is_active=True)
+            .order_by(User.user_id)
+            .with_for_update()
+        )
+        return list(self._session.scalars(stmt).all()) == [user.user_id]

@@ -837,7 +837,7 @@ def get_ai_models(tenant_id):
 # Domain and Email Management Routes
 @settings_bp.route("/domains/add", methods=["POST"])
 @log_admin_action("add_authorized_domain")
-@require_tenant_access()
+@require_tenant_access(admin_only=True)
 def add_authorized_domain(tenant_id):
     """Add domain to tenant's authorized domains list."""
     from src.admin.domain_access import add_authorized_domain as add_domain
@@ -868,7 +868,7 @@ def add_authorized_domain(tenant_id):
 
 @settings_bp.route("/domains/remove", methods=["POST"])
 @log_admin_action("remove_authorized_domain")
-@require_tenant_access()
+@require_tenant_access(admin_only=True)
 def remove_authorized_domain(tenant_id):
     """Remove domain from tenant's authorized domains list."""
     from src.admin.domain_access import remove_authorized_domain as remove_domain
@@ -894,7 +894,7 @@ def remove_authorized_domain(tenant_id):
 
 @settings_bp.route("/emails/add", methods=["POST"])
 @log_admin_action("add_authorized_email")
-@require_tenant_access()
+@require_tenant_access(admin_only=True)
 def add_authorized_email(tenant_id):
     """Add email to tenant's authorized emails list."""
     from src.admin.domain_access import add_authorized_email as add_email
@@ -925,7 +925,7 @@ def add_authorized_email(tenant_id):
 
 @settings_bp.route("/emails/remove", methods=["POST"])
 @log_admin_action("remove_authorized_email")
-@require_tenant_access()
+@require_tenant_access(admin_only=True)
 def remove_authorized_email(tenant_id):
     """Remove email from tenant's authorized emails list."""
     from src.admin.domain_access import remove_authorized_email as remove_email

@@ -547,10 +547,11 @@
             </div>
             <div class="form-group">
                 <label for="role">Role</label>
+                {# Least access first, so the first option, viewer, is the default. #}
                 <select id="role" name="role">
-                    <option value="viewer" selected>Viewer: read-only</option>
-                    <option value="manager">Manager: can change settings, products and campaigns</option>
-                    <option value="admin">Admin: can also manage users and sign-in</option>
+                    {% for role, description in role_descriptions.items() %}
+                    <option value="{{ role.value }}">{{ role.value|capitalize }}: {{ description }}</option>
+                    {% endfor %}
                 </select>
             </div>
             <button type="submit" class="btn btn-primary">Add User</button>
@@ -618,8 +619,8 @@
                     <td>
                         <form method="post" action="{{ url_for('users.update_role', tenant_id=tenant_id, user_id=user.user_id) }}" class="role-form">
                             <select name="role" aria-label="Role for {{ user.email }}">
-                                {% for value, label in [('viewer', 'Viewer'), ('manager', 'Manager'), ('admin', 'Admin')] %}
-                                <option value="{{ value }}" {% if user.role == value %}selected{% endif %}>{{ label }}</option>
+                                {% for role in role_descriptions %}
+                                <option value="{{ role.value }}" {% if user.role == role %}selected{% endif %}>{{ role.value|capitalize }}</option>
                                 {% endfor %}
                             </select>
                             <button type="submit" class="btn btn-secondary btn-sm">Change</button>

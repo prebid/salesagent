@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from src.admin.utils.helpers import role_permits
+from src.core.database.models import UserRole
 
 READS = ["GET", "HEAD", "OPTIONS"]
 WRITES = ["POST", "PUT", "PATCH", "DELETE"]
@@ -35,3 +36,21 @@ def test_viewer_and_unknown_roles_are_read_only(role):
         assert not role_permits(role, method, admin_only=False)
     for method in READS + WRITES:
         assert not role_permits(role, method, admin_only=True)
+
+
+def test_the_users_page_describes_every_role_least_access_first():
+    """The role pickers in templates/users.html list ROLE_DESCRIPTIONS; the first is the default."""
+    from src.admin.blueprints.users import ROLE_DESCRIPTIONS
+
+    assert list(ROLE_DESCRIPTIONS) == list(UserRole)
+    assert list(UserRole)[0] == UserRole.VIEWER
+
+
+def test_the_role_check_constraint_is_derived_from_user_role():
+    """The SQL keeps the text the migrations created, so the schema does not drift."""
+    from sqlalchemy import CheckConstraint
+
+    from src.core.database.models import User
+
+    (constraint,) = [c for c in User.__table__.constraints if isinstance(c, CheckConstraint)]
+    assert str(constraint.sqltext) == "role IN ('admin', 'manager', 'viewer')"

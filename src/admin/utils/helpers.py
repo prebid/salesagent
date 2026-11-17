@@ -16,7 +16,7 @@ from werkzeug.exceptions import Forbidden
 from src.admin.csrf import SAFE_METHODS
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant, TenantManagementConfig, User
+from src.core.database.models import Tenant, TenantManagementConfig, User, UserRole
 from src.core.logging_config import log_safe
 
 T = TypeVar("T")
@@ -325,11 +325,11 @@ def role_permits(role: str, method: str, *, admin_only: bool) -> bool:
     tenant itself) admit no one else. ``manager`` may change everything else.
     ``viewer``, and any role this code does not know, is read-only.
     """
-    if role == "admin":
+    if role == UserRole.ADMIN:
         return True
     if admin_only:
         return False
-    if role == "manager":
+    if role == UserRole.MANAGER:
         return True
     return method in SAFE_METHODS
 

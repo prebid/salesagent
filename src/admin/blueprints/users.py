@@ -11,7 +11,8 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import Tenant, TenantAuthConfig, User
+from src.core.database.models import Tenant, TenantAuthConfig, User, UserRole
+from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.uow import TenantConfigUoW
 
 logger = logging.getLogger(__name__)
@@ -19,8 +20,13 @@ logger = logging.getLogger(__name__)
 # Create Blueprint
 users_bp = Blueprint("users", __name__, url_prefix="/tenant/<tenant_id>/users")
 
-# The roles the users.role check constraint allows (models.py).
-USER_ROLES = frozenset({"admin", "manager", "viewer"})
+# What each role may do, for the Users page's role pickers. One entry per UserRole,
+# least access first; tests/unit/test_admin_role_permits.py checks it covers them all.
+ROLE_DESCRIPTIONS: dict[UserRole, str] = {
+    UserRole.VIEWER: "read-only",
+    UserRole.MANAGER: "can change settings, products and campaigns",
+    UserRole.ADMIN: "can also manage users and sign-in",
+}
 
 
 def _is_valid_email(email: str) -> bool:
@@ -53,6 +59,18 @@ def _is_valid_email(email: str) -> bool:
         return False
     label, dot, rest = domain.partition(".")
     return bool(label and dot and rest)
+
+
+def _refuse_last_admin(repo: TenantConfigRepository, user: User) -> bool:
+    """Flash an error and return True when *user* is the tenant's last active admin.
+
+    Demoting or deactivating that user would leave no one but a super admin able to
+    reach the admin-only routes, so the caller makes no change.
+    """
+    if not repo.is_last_active_admin(user):
+        return False
+    flash(f"{user.email} is the last active admin of this tenant. Make someone else an admin first.", "error")
+    return True
 
 
 @users_bp.route("")
@@ -101,6 +119,7 @@ def list_users(tenant_id):
             authorized_domains=authorized_domains,
             auth_setup_mode=tenant.auth_setup_mode,
             oidc_enabled=oidc_enabled,
+            role_descriptions=ROLE_DESCRIPTIONS,
         )
 
 
@@ -113,13 +132,13 @@ def add_user(tenant_id):
     """Add a new user to the tenant."""
     try:
         email = request.form.get("email", "").strip().lower()
-        role = request.form.get("role", "viewer")
+        role = request.form.get("role", UserRole.VIEWER)
 
         if not email:
             flash("Email is required", "error")
             return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
-        if role not in USER_ROLES:
+        if role not in UserRole:
             flash("Invalid role", "error")
             return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
@@ -179,19 +198,17 @@ def add_user(tenant_id):
 @log_admin_action("toggle_user")
 @require_tenant_access(admin_only=True)
 def toggle_user(tenant_id, user_id):
-    """Toggle user active status."""
+    """Toggle user active status. Refuses to deactivate the tenant's last active admin."""
     try:
-        with get_db_session() as db_session:
-            user = db_session.scalars(select(User).filter_by(tenant_id=tenant_id, user_id=user_id)).first()
+        with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            user = uow.tenant_config.get_user(user_id)
             if not user:
                 flash("User not found", "error")
-                return redirect(url_for("users.list_users", tenant_id=tenant_id))
-
-            user.is_active = not user.is_active
-            db_session.commit()
-
-            status = "activated" if user.is_active else "deactivated"
-            flash(f"User {user.email} {status}", "success")
+            elif not _refuse_last_admin(uow.tenant_config, user):
+                user.is_active = not user.is_active
+                status = "activated" if user.is_active else "deactivated"
+                flash(f"User {user.email} {status}", "success")
 
     except Exception as e:
         logger.error(f"Error toggling user: {e}", exc_info=True)
@@ -204,23 +221,21 @@ def toggle_user(tenant_id, user_id):
 @log_admin_action("update_role")
 @require_tenant_access(admin_only=True)
 def update_role(tenant_id, user_id):
-    """Update user role."""
+    """Update user role. Refuses to demote the tenant's last active admin."""
     try:
         new_role = request.form.get("role")
-        if new_role not in USER_ROLES:
+        if new_role not in UserRole:
             flash("Invalid role", "error")
             return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
-        with get_db_session() as db_session:
-            user = db_session.scalars(select(User).filter_by(tenant_id=tenant_id, user_id=user_id)).first()
+        with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            user = uow.tenant_config.get_user(user_id)
             if not user:
                 flash("User not found", "error")
-                return redirect(url_for("users.list_users", tenant_id=tenant_id))
-
-            user.role = new_role
-            db_session.commit()
-
-            flash(f"User {user.email} role updated to {new_role}", "success")
+            elif new_role == UserRole.ADMIN or not _refuse_last_admin(uow.tenant_config, user):
+                user.role = new_role
+                flash(f"User {user.email} role updated to {new_role}", "success")
 
     except Exception as e:
         logger.error(f"Error updating user role: {e}", exc_info=True)
