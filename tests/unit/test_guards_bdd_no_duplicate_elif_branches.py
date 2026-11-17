@@ -96,9 +96,9 @@ def find_duplicate_dispatch_tests(tree: ast.AST) -> list[str]:
 def test_no_duplicate_dispatch_tests_in_bdd_conftest():
     violations: list[str] = []
     for path in SCAN_FILES:
-        tree = ast.parse(path.read_text(), filename=str(path))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for offender in find_duplicate_dispatch_tests(tree):
-            violations.append(f"{path.relative_to(REPO_ROOT)}: {offender}")
+            violations.append(f"{path.relative_to(REPO_ROOT).as_posix()}: {offender}")
     assert not violations, (
         "Duplicate dispatch test expression — the later branch is unreachable "
         "(shadowed by an earlier identical test in the same chain, or by an "

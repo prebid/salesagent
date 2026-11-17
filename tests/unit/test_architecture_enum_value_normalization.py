@@ -45,7 +45,7 @@ def test_no_handrolled_enum_to_str_normalization():
     for py in _SRC_CORE.rglob("*.py"):
         if py.name in _EXEMPT:
             continue
-        for lineno, line in enumerate(py.read_text().splitlines(), start=1):
+        for lineno, line in enumerate(py.read_text(encoding="utf-8").splitlines(), start=1):
             if _TERNARY.search(line) or _STR_VALUE_WRAP.search(line):
                 rel = py.relative_to(_SRC_CORE.parents[1])
                 violations.append(f"{rel}:{lineno}: {line.strip()}")

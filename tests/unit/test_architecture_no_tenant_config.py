@@ -29,7 +29,7 @@ def test_no_tenant_config_access() -> None:
     repo = repo_root()
     violations: list[str] = []
     for path in src_python_files(repo):
-        rel = str(path.relative_to(repo))
+        rel = path.relative_to(repo).as_posix()
         if "test_migration" in rel or "postmortem" in rel or "pre-commit" in rel:
             continue
         tree = parse_module(path)

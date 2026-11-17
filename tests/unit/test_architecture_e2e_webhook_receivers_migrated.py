@@ -208,7 +208,7 @@ def _loopback_call_sites() -> tuple[list[tuple[str, int, str]], list[tuple[str, 
     unattributed: list[tuple[str, int, str]] = []
 
     for path in sorted((repo / "tests").rglob("*.py")):
-        rel = str(path.relative_to(repo))
+        rel = path.relative_to(repo).as_posix()
         tree = parse_module(path)
         if tree is None:
             continue

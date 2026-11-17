@@ -96,12 +96,12 @@ def _scan_file(filepath: Path) -> list[tuple[str, int, str]]:
     """
     violations = []
     try:
-        source = filepath.read_text()
+        source = filepath.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(filepath))
     except SyntaxError:
         return violations
 
-    rel_path = str(filepath.relative_to(_SRC_DIR))
+    rel_path = filepath.relative_to(_SRC_DIR).as_posix()
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.ExceptHandler):

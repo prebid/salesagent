@@ -355,7 +355,7 @@ class TestTheOperationLabelIsBoundedByADerivedSet:
                     and node.func.id == "sanitize_operation"
                 ):
                     enclosing = _enclosing_function(tree, node) or "<module scope>"
-                    callers.add(f"{path.relative_to(REPO_ROOT)}::{enclosing}")
+                    callers.add(f"{path.relative_to(REPO_ROOT).as_posix()}::{enclosing}")
 
         stray = sorted(key for key in callers if key.rsplit("::", 1)[1] not in _OPERATION_RECORDERS)
         missing = sorted(set(_OPERATION_RECORDERS) - {key.rsplit("::", 1)[1] for key in callers})

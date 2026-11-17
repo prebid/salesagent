@@ -60,7 +60,7 @@ def _admin_scenario_tag_sets() -> list[tuple[str, frozenset[str]]]:
     Read from the feature file rather than hardcoded, so a 14th scenario is
     graded by this guard the day it is authored.
     """
-    tag_lines = re.findall(r"^\s*(@T-ADMIN-[\w@\- ]+)$", _FEATURE_FILE.read_text(), re.MULTILINE)
+    tag_lines = re.findall(r"^\s*(@T-ADMIN-[\w@\- ]+)$", _FEATURE_FILE.read_text(encoding="utf-8"), re.MULTILINE)
     scenarios = []
     for line in tag_lines:
         names = frozenset(tag.lstrip("@") for tag in line.split())
@@ -191,7 +191,7 @@ def test_admin_transport_values_satisfy_the_ctx_fixture_contract(monkeypatch: py
 
 def _pinned_db_scope_calls() -> list[int]:
     """Line numbers of ``getfixturevalue("integration_db")`` inside ``_harness_env``."""
-    tree = ast.parse(_BDD_CONFTEST.read_text(), filename=str(_BDD_CONFTEST))
+    tree = ast.parse(_BDD_CONFTEST.read_text(encoding="utf-8"), filename=str(_BDD_CONFTEST))
     harness_env = next(
         node
         for node in ast.walk(tree)

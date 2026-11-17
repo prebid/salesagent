@@ -43,7 +43,7 @@ def check_file(filepath: Path) -> list[tuple[int, str, str]]:
     violations = []
 
     try:
-        content = filepath.read_text()
+        content = filepath.read_text(encoding="utf-8")
         lines = content.split("\n")
 
         for line_num, line in enumerate(lines, start=1):

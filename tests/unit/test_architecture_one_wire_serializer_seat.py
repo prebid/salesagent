@@ -165,7 +165,7 @@ def find_reinsert_violations(tree: ast.Module, relpath: str) -> list[str]:
 def _scan(repo, finder) -> list[str]:
     violations: list[str] = []
     for path in sorted((repo / "src").rglob("*.py")):
-        relpath = str(path.relative_to(repo))
+        relpath = path.relative_to(repo).as_posix()
         if relpath in ALLOWED_FILES:
             continue
         tree = parse_module(path)

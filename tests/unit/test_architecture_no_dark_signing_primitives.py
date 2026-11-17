@@ -233,7 +233,7 @@ def _production_modules() -> dict[str, set[str]]:
         for path in sorted((repo / root).rglob("*.py")):
             if path.name == "__init__.py" or "__pycache__" in path.parts:
                 continue
-            modules[str(path.relative_to(repo))] = module_references(parse_module(path))
+            modules[path.relative_to(repo).as_posix()] = module_references(parse_module(path))
     return modules
 
 

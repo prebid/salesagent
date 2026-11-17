@@ -51,7 +51,7 @@ def _required_path_arguments(module: Path) -> list[str]:
 def test_no_audit_script_requires_an_input_the_repository_does_not_carry() -> None:
     """Every audit CLI's subject is the repo plus the pinned bundle, and both default."""
     offenders = sorted(
-        f"{module.relative_to(REPO_ROOT)}: {', '.join(args)}"
+        f"{module.relative_to(REPO_ROOT).as_posix()}: {', '.join(args)}"
         for module in sorted(AUDIT_DIR.glob("*.py"))
         if (args := _required_path_arguments(module))
     )

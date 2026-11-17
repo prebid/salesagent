@@ -18,14 +18,14 @@ class TestNoStaleContextVarComments:
 
     def test_app_no_contextvar_in_a2a_comment(self):
         """A2A integration comment must not mention ContextVar propagation."""
-        source = (PROJECT_ROOT / "src" / "app.py").read_text()
+        source = (PROJECT_ROOT / "src" / "app.py").read_text(encoding="utf-8")
         for lineno, line in enumerate(source.splitlines(), 1):
             if "ContextVar" in line and line.lstrip().startswith("#"):
                 pytest.fail(f"src/app.py:{lineno} has stale ContextVar comment: {line.strip()}")
 
     def test_middleware_comment_no_contextvar(self):
         """Middleware stack comment must not reference ContextVar."""
-        source = (PROJECT_ROOT / "src" / "app.py").read_text()
+        source = (PROJECT_ROOT / "src" / "app.py").read_text(encoding="utf-8")
         for lineno, line in enumerate(source.splitlines(), 1):
             if "ContextVar" in line and "scope" in line.lower():
                 pytest.fail(f"src/app.py:{lineno} references ContextVar in middleware comment: {line.strip()}")
@@ -45,7 +45,7 @@ class TestNoSQLiteReferences:
         """Docstrings must not reference SQLite as a supported backend."""
         import ast
 
-        source = (PROJECT_ROOT / rel_path).read_text()
+        source = (PROJECT_ROOT / rel_path).read_text(encoding="utf-8")
         tree = ast.parse(source)
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)):
@@ -62,7 +62,7 @@ class TestSecurityDocPattern:
         doc_path = PROJECT_ROOT / "docs" / "security.md"
         if not doc_path.exists():
             pytest.skip("docs/security.md not found")
-        source = doc_path.read_text()
+        source = doc_path.read_text(encoding="utf-8")
         for lineno, line in enumerate(source.splitlines(), 1):
             if ".query(" in line and "session" not in line.lower():
                 # Check for db.query() pattern specifically

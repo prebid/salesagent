@@ -188,8 +188,8 @@ def _iter_step_functions() -> Iterator[tuple[ast.FunctionDef | ast.AsyncFunction
     for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
         if py_file.name.startswith("_"):
             continue
-        tree = ast.parse(py_file.read_text(), filename=str(py_file))
-        relative = str(py_file.relative_to(_BDD_STEPS_DIR.parent.parent))
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        relative = py_file.relative_to(_BDD_STEPS_DIR.parent.parent).as_posix()
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_step_decorated(node):
                 yield node, relative, node.lineno

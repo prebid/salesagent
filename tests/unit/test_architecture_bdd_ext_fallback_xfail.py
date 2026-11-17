@@ -132,7 +132,7 @@ def _ucs_missing_not_wired_row(source: str, ledgered: dict[str, str] | None = No
 def test_ext_split_ucs_keep_a_not_wired_row():
     """Production conftest: every ext-splitting UC still xfails its unwired scenarios, or runs
     them through a fallback row whose failures an explicit ledger names (``_LEDGERED_UCS``)."""
-    source = _CONFTEST.read_text()
+    source = _CONFTEST.read_text(encoding="utf-8")
 
     # Sanity: the pattern actually exists (the guard is not vacuously passing).
     rows = _route_rows(source)

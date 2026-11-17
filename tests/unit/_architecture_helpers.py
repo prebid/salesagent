@@ -58,7 +58,7 @@ def rel(path: Path) -> str:
     independently of whatever the repo happens to contain.
     """
     try:
-        return str(path.relative_to(REPO_ROOT))
+        return path.relative_to(REPO_ROOT).as_posix()
     except ValueError:
         return str(path)
 
@@ -411,7 +411,7 @@ def read_source_roots(roots: Iterable[str]) -> dict[str, str]:
         for path in sorted((REPO_ROOT / root).rglob("*.py")):
             if is_untracked_repo_file(path):
                 continue
-            sources[str(path.relative_to(REPO_ROOT))] = path.read_text(encoding="utf-8")
+            sources[path.relative_to(REPO_ROOT).as_posix()] = path.read_text(encoding="utf-8")
     return sources
 
 
@@ -728,7 +728,7 @@ def extract_select_calls(
         lines from the select() call through the next ten lines (the full
         statement can span multiple lines).
     """
-    source_text = source_path.read_text()
+    source_text = source_path.read_text(encoding="utf-8")
     tree = ast.parse(source_text)
     lines = source_text.splitlines()
 
@@ -775,7 +775,7 @@ def find_raw_select_violations(
     repo = repo_root()
     violations: list[tuple[str, str, str, int]] = []
     for py_file in (repo / "src").rglob("*.py"):
-        rel_path = str(py_file.relative_to(repo))
+        rel_path = py_file.relative_to(repo).as_posix()
         if skip(rel_path):
             continue
         tree = safe_parse(py_file)
@@ -1087,7 +1087,7 @@ def python_version_pattern_map() -> dict[str, str]:
 
 
 def _repo_relative(path: Path, repo: Path) -> str:
-    return str(path.relative_to(repo))
+    return path.relative_to(repo).as_posix()
 
 
 def _github_yaml_candidate(path: Path, repo: Path) -> bool:
@@ -1214,7 +1214,7 @@ def assert_setup_uv_single_pinned_source(pins: Iterable[tuple[Path, str]], repo:
 
     by_file: dict[str, set[str]] = {}
     for path, pin in pin_list:
-        rel = str(path.relative_to(repo))
+        rel = path.relative_to(repo).as_posix()
         by_file.setdefault(rel, set()).add(pin)
 
     if set(by_file) != {_INSTALL_UV_ACTION}:
@@ -1289,7 +1289,7 @@ def assert_adr008_target_version_pinned(anchors: Iterable[tuple[Path, str, str]]
     if not target_versions:
         raise AssertionError("non-vacuity: pyproject.toml target-version anchor must be scanned")
     drift = [
-        f"{path.relative_to(repo)}: {version}"
+        f"{path.relative_to(repo).as_posix()}: {version}"
         for path, version, anchor_kind in anchors
         if anchor_kind == "target-version" and version != _ADR_008_TARGET_VERSION
     ]
@@ -1825,7 +1825,7 @@ def scan_src(
 
     The one walk every src-scanning guard needs, so a guard supplies only what
     it detects. Files with no findings are omitted; keys are :func:`rel` spelling
-    (``str(path.relative_to(REPO_ROOT))``), and every suppression constant must
+    (``path.relative_to(REPO_ROOT).as_posix()``), and every suppression constant must
     be written in that same spelling.
 
     Suppression has two axes, and they are NOT the same rule:
@@ -1962,6 +1962,15 @@ AST_GREP_CONFIG = "sgconfig.yml"
 AST_GREP_RULE_DIR = ".ast-grep"
 
 
+def venv_ast_grep() -> Path:
+    """Where the venv-local ast-grep lives: next to ``sys.executable``, ``.exe`` on Windows.
+
+    The path only; each caller asserts it exists with its own message. A PATH lookup is
+    deliberately not used -- see ``test_ast_grep_credential_header_ban._ast_grep_bin``.
+    """
+    return Path(sys.executable).parent / ("ast-grep.exe" if os.name == "nt" else "ast-grep")
+
+
 def stage_ast_grep_root(tmp_dir: Path) -> Path:
     """A disposable project root holding the REAL ``sgconfig.yml`` and ``.ast-grep/`` rules.
 
@@ -1986,7 +1995,7 @@ def write_ast_grep_probe(root: Path, rel_dir: str, source: str, *, stem: str = "
     rel_path = f"{rel_dir}/{stem}_{uuid.uuid4().hex}.py"
     path = root / rel_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(source)
+    path.write_text(source, encoding="utf-8")
     return rel_path
 
 

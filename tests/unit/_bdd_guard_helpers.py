@@ -108,8 +108,8 @@ def iter_bdd_steps(
     """
     wanted = tuple(dict.fromkeys(step_names))
     for py_file in _candidate_files(files):
-        tree = ast.parse(py_file.read_text(), filename=str(py_file))
-        relative = str(py_file.relative_to(BDD_STEPS_DIR.parent.parent))
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        relative = py_file.relative_to(BDD_STEPS_DIR.parent.parent).as_posix()
 
         for node in ast.walk(tree):
             if not isinstance(node, _FUNCTION_NODES):

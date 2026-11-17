@@ -110,7 +110,7 @@ def _function_local_src_imports() -> list[tuple[str, int, str, str]]:
                         continue
                     if not node.module or not node.module.startswith("src."):
                         continue
-                    rel = str(path.relative_to(REPO_ROOT))
+                    rel = path.relative_to(REPO_ROOT).as_posix()
                     for alias in node.names:
                         if alias.name != "*":
                             found.append((rel, node.lineno, node.module, alias.name))

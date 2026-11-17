@@ -61,7 +61,7 @@ def test_seeded_format_ids_exist_in_reference_catalog() -> None:
         path.relative_to(REPO_ROOT).as_posix(): ids
         for root in SCANNED_ROOTS
         for path in sorted((REPO_ROOT / root).rglob("*.py"))
-        if (ids := _seeded_format_ids(path.read_text()))
+        if (ids := _seeded_format_ids(path.read_text(encoding="utf-8")))
     }
 
     # A scanner that stopped recognizing the seed shapes would pass the membership check vacuously.

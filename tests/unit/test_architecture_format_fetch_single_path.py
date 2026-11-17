@@ -59,7 +59,7 @@ def find_direct_get_format_calls(tree: ast.Module) -> list[int]:
 def test_no_direct_registry_get_format_outside_resolver():
     found: set[tuple[str, int]] = set()
     for path in sorted(_SRC.rglob("*.py")):
-        rel = str(path.relative_to(_REPO_ROOT))
+        rel = path.relative_to(_REPO_ROOT).as_posix()
         if rel in _ALLOWED_FILES:
             continue
         for lineno in find_direct_get_format_calls(parse_module(path)):

@@ -69,7 +69,7 @@ def _scan(repo: Path) -> dict[str, list[str]]:
         if not directory.exists():
             continue
         for path in sorted(directory.rglob("*.py")):
-            rel = str(path.relative_to(repo))
+            rel = path.relative_to(repo).as_posix()
             if rel == CANONICAL_FILE:
                 continue
             tree = safe_parse(path)

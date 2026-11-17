@@ -505,7 +505,7 @@ class TestNoKeyMaterialTouchesAFilesystem:
             f"Nothing was written to {structured}"
         )
 
-        entries = [json.loads(line) for line in structured.read_text().splitlines() if line.strip()]
+        entries = [json.loads(line) for line in structured.read_text(encoding="utf-8").splitlines() if line.strip()]
         provisioning = [
             entry for entry in entries if entry.get("operation") == "provision_signing_key" and entry.get("success")
         ]
@@ -944,7 +944,7 @@ def _env_template_values() -> dict[str, str]:
     needs the two literals the file DEFINES, not what they would expand to in a shell that
     already had them set.
     """
-    lines = (Path(__file__).resolve().parents[2] / _ENV_TEMPLATE).read_text().splitlines()
+    lines = (Path(__file__).resolve().parents[2] / _ENV_TEMPLATE).read_text(encoding="utf-8").splitlines()
     pairs = (line.split("=", 1) for line in lines if "=" in line and not line.lstrip().startswith("#"))
     return {name.strip(): value.strip() for name, value in pairs}
 

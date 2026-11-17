@@ -66,7 +66,7 @@ class TestNoBareShadowedImportsInSrc:
         violations: list[str] = []
         for path in sorted(_SRC_DIR.rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            rel = str(path.relative_to(repo_root()))
+            rel = path.relative_to(repo_root()).as_posix()
             for lineno, module in find_bare_shadowed_imports(tree, basenames):
                 if (rel, lineno) in ALLOWLIST:
                     continue

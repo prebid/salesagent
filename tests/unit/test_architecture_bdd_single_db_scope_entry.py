@@ -82,7 +82,9 @@ class TestBddSingleDbScopeEntry:
         assert len(sites) == 1, (
             f'Expected exactly one request.getfixturevalue("integration_db") call site in '
             f"tests/bdd/, found {len(sites)}:\n"
-            + "\n".join(f"  {path.relative_to(_BDD_DIR.parent.parent)}:{lineno}" for path, lineno, _ in sites)
+            + "\n".join(
+                f"  {path.relative_to(_BDD_DIR.parent.parent).as_posix()}:{lineno}" for path, lineno, _ in sites
+            )
             + f"\nRoute new DB access through {_SANCTIONED_FUNCTION}(request, e2e_config) instead."
         )
 
@@ -94,11 +96,11 @@ class TestBddSingleDbScopeEntry:
         path, lineno, enclosing_function = sites[0]
         assert path == _CONFTEST, (
             f"Sanctioned getfixturevalue(integration_db) call site must live in "
-            f"{_CONFTEST.relative_to(_BDD_DIR.parent.parent)}, found it in "
-            f"{path.relative_to(_BDD_DIR.parent.parent)}:{lineno}"
+            f"{_CONFTEST.relative_to(_BDD_DIR.parent.parent).as_posix()}, found it in "
+            f"{path.relative_to(_BDD_DIR.parent.parent).as_posix()}:{lineno}"
         )
         assert enclosing_function == _SANCTIONED_FUNCTION, (
             f"Sanctioned getfixturevalue(integration_db) call site must be inside "
             f"{_SANCTIONED_FUNCTION}(), found it inside {enclosing_function!r} at "
-            f"{path.relative_to(_BDD_DIR.parent.parent)}:{lineno}"
+            f"{path.relative_to(_BDD_DIR.parent.parent).as_posix()}:{lineno}"
         )

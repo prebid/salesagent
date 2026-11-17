@@ -64,13 +64,13 @@ def _is_json_dumps(node: ast.expr) -> bool:
 def _scan_file(path: Path, by_class: dict[str, set[str]]) -> list[tuple[str, str, int]]:
     """(rel_path, target-description, lineno) per violation in one file."""
     all_json_cols = set().union(*by_class.values()) if by_class else set()
-    tree = ast.parse(path.read_text())
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     bindings: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == MODELS_MODULE:
             for alias in node.names:
                 bindings[alias.asname or alias.name] = alias.name
-    rel = str(path.relative_to(REPO_ROOT))
+    rel = path.relative_to(REPO_ROOT).as_posix()
     hits: list[tuple[str, str, int]] = []
     for node in ast.walk(tree):
         # Form A: Model(col=json.dumps(...)) with Model imported from models.py
@@ -117,7 +117,7 @@ class TestGuardMetaTests:
         import tempfile
 
         by_class = _jsontype_cols_by_class()
-        with tempfile.NamedTemporaryFile("w", suffix=".py", dir=REPO_ROOT, delete=False) as fh:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".py", dir=REPO_ROOT, delete=False) as fh:
             fh.write(source)
             tmp = Path(fh.name)
         try:

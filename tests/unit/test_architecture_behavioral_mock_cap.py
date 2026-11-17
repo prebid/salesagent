@@ -87,7 +87,7 @@ def _count_mock_constructions(filepath: Path) -> list[int]:
     if not _is_behavioral_test_file(filepath):
         return []
     try:
-        tree = ast.parse(filepath.read_text(), filename=str(filepath))
+        tree = ast.parse(filepath.read_text(encoding="utf-8"), filename=str(filepath))
     except (OSError, SyntaxError):
         return []
     lines: list[int] = []
@@ -105,7 +105,7 @@ _SCAN_DIRS = [_REPO_ROOT / "tests"]
 
 
 def _rel(path: Path) -> str:
-    return str(path.relative_to(_REPO_ROOT)).replace("\\", "/")
+    return path.relative_to(_REPO_ROOT).as_posix().replace("\\", "/")
 
 
 from tests.unit._per_file_cap_guard import (

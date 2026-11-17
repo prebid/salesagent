@@ -202,14 +202,14 @@ def test_the_fixture_set_is_not_empty():
     )
 
 
-@pytest.mark.parametrize("path", _vendored_files(), ids=lambda p: str(p.relative_to(_FIXTURE_DIR)))
+@pytest.mark.parametrize("path", _vendored_files(), ids=lambda p: p.relative_to(_FIXTURE_DIR).as_posix())
 def test_vendored_id_is_upstreams_own_and_matches_its_path(path: Path):
     """Each vendored file's $id is upstream's own form for its own path."""
-    schema_id = json.loads(path.read_text())["$id"]
+    schema_id = json.loads(path.read_text(encoding="utf-8"))["$id"]
     expected = _expected_id(path)
 
     assert schema_id == expected, (
-        f"{path.relative_to(REPO_ROOT)} has $id {schema_id!r}, expected {expected!r} — vendored "
+        f"{path.relative_to(REPO_ROOT).as_posix()} has $id {schema_id!r}, expected {expected!r} — vendored "
         "fixtures keep upstream's own site-rooted $id verbatim, version segment included or "
         "omitted exactly as the revision they were fetched from writes it "
         "(see _refresh.py's '$id convention' section)."
@@ -230,7 +230,7 @@ def test_vendored_id_is_upstreams_own_and_matches_its_path(path: Path):
     )
 
 
-@pytest.mark.parametrize("path", _vendored_files(), ids=lambda p: str(p.relative_to(_FIXTURE_DIR)))
+@pytest.mark.parametrize("path", _vendored_files(), ids=lambda p: p.relative_to(_FIXTURE_DIR).as_posix())
 def test_refresh_accepts_every_vendored_file_at_its_own_id(path: Path):
     """Negative control: the guard is not a blanket reject.
 
@@ -238,7 +238,7 @@ def test_refresh_accepts_every_vendored_file_at_its_own_id(path: Path):
     ref its own convention derives — so the guard below rejects divergence, not
     the vendoring itself, for BOTH root sets.
     """
-    _refresh.check_id_convention(_expected_id(path), json.loads(path.read_text()))
+    _refresh.check_id_convention(_expected_id(path), json.loads(path.read_text(encoding="utf-8")))
 
 
 @pytest.mark.parametrize(

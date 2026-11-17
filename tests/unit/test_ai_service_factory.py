@@ -23,6 +23,7 @@ from src.services.ai.config import (
     uses_legacy_gemini_api_key,
 )
 from src.services.ai.factory import PROVIDER_MODELS, AIProviderError, ResolvedAIConfig, run_agent
+from tests.helpers.environ import isolated_environ
 from tests.helpers.settings_injection import PlatformAICredential
 
 
@@ -535,15 +536,13 @@ class TestAIServiceFactory:
         anonymous buyer's brief was enough to trigger it. With no Anthropic key of the
         tenant's own, nothing is built at all.
         """
-        with patch.dict(
-            os.environ,
+        with isolated_environ(
             {
                 "PYDANTIC_AI_PROVIDER": "gemini",
                 "PYDANTIC_AI_MODEL": "gemini-2.0-flash",
                 "GEMINI_API_KEY": "PLATFORM-GEMINI-SECRET",
                 "ANTHROPIC_API_KEY": "PLATFORM-ANTHROPIC-KEY",
-            },
-            clear=True,
+            }
         ):
             factory = AIServiceFactory()
             tenant = TenantAIConfig(provider="anthropic", model="claude-sonnet-4-20250514")
@@ -617,7 +616,7 @@ class TestAIServiceFactory:
 
         config = TenantAIConfig(provider=provider, model="model-x", api_key=f"key-{provider}")
 
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             factory = AIServiceFactory()
             resolved = factory.resolve(config)
             model = factory.build(config)

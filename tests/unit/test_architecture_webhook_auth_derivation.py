@@ -235,11 +235,11 @@ def _derivations() -> set[tuple[str, str]]:
     root = repo_root()
     found: set[tuple[str, str]] = set()
     for path in sorted((root / "src").rglob("*.py")):
-        relative = str(path.relative_to(root))
+        relative = path.relative_to(root).as_posix()
         if relative in _CANONICAL_HOMES:
             continue
         try:
-            tree = ast.parse(path.read_text())
+            tree = ast.parse(path.read_text(encoding="utf-8"))
         except (OSError, SyntaxError):  # pragma: no cover - matches the sibling guards
             continue
         for lineno in find_scheme_plucks(tree) + find_mode_literals(tree):

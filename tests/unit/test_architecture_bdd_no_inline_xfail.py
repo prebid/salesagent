@@ -117,8 +117,8 @@ def step_module_paths() -> list[Path]:
 def _scan_bdd_steps() -> set[XfailSite]:
     found: set[XfailSite] = set()
     for py_file in step_module_paths():
-        tree = ast.parse(py_file.read_text(), filename=str(py_file))
-        relative = str(py_file.relative_to(_BDD_STEPS_DIR))
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        relative = py_file.relative_to(_BDD_STEPS_DIR).as_posix()
         found |= collect_xfail_sites(tree, relative)
     return found
 
@@ -236,8 +236,8 @@ class TestBddNoConditionalXfail:
     def test_no_conditional_xfail_anywhere_in_steps(self):
         offenders: list[str] = []
         for py_file in step_module_paths():
-            tree = ast.parse(py_file.read_text(), filename=str(py_file))
-            relative = str(py_file.relative_to(_BDD_STEPS_DIR))
+            tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+            relative = py_file.relative_to(_BDD_STEPS_DIR).as_posix()
             for lineno, guard in find_conditional_xfail_calls(tree):
                 offenders.append(f"  {relative}:{lineno}  guarded by: {guard}")
         assert not offenders, (

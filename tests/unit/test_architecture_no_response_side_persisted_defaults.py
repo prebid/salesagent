@@ -90,7 +90,7 @@ def _scan(repo) -> list[str]:
     for path in sorted(schemas.rglob("*.py")):
         tree = parse_module(path)
         if tree is not None:
-            violations.extend(find_persisted_defaults(tree, str(path.relative_to(repo))))
+            violations.extend(find_persisted_defaults(tree, path.relative_to(repo).as_posix()))
     return violations
 
 

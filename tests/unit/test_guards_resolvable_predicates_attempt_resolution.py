@@ -44,7 +44,7 @@ def _scan() -> set[str]:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except SyntaxError:
             continue
-        rel = str(path.relative_to(REPO_ROOT))
+        rel = path.relative_to(REPO_ROOT).as_posix()
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.FunctionDef)

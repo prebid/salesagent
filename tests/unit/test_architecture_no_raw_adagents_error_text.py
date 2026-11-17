@@ -158,7 +158,7 @@ class TestNoRawAdagentsErrorText:
         repo = repo_root()
         all_violations: dict[str, list[str]] = {}
         for path in src_python_files(repo):
-            rel = str(path.relative_to(repo))
+            rel = path.relative_to(repo).as_posix()
             if rel == _EXEMPT_FILE:
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

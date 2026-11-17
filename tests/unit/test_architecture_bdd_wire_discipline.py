@@ -193,7 +193,7 @@ def _iter_step_modules() -> list[tuple[str, ast.Module]]:
     for py_file in sorted(_STEPS_DIR.rglob("*.py")):
         if py_file.name.startswith("__"):
             continue
-        rel = str(py_file.relative_to(_TESTS_ROOT))
+        rel = py_file.relative_to(_TESTS_ROOT).as_posix()
         out.append((rel, ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))))
     return out
 
@@ -1103,7 +1103,7 @@ def _find_ctx_response_access() -> set[str]:
         rel = path.relative_to(steps_root).as_posix()
         if rel == "_outcome_helpers.py":
             continue  # the accessors themselves; they are the sanctioned readers
-        if _ctx_response_hits(ast.parse(path.read_text())):
+        if _ctx_response_hits(ast.parse(path.read_text(encoding="utf-8"))):
             found.add(rel)
     return found
 

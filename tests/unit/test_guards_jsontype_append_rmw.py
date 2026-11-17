@@ -30,8 +30,8 @@ ALLOWLIST: set[tuple[str, str]] = set()
 
 def _scan_file(path: Path) -> list[tuple[str, str, int]]:
     """(rel_path, form, lineno) per violation in one file."""
-    tree = ast.parse(path.read_text())
-    rel = str(path.relative_to(REPO_ROOT))
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    rel = path.relative_to(REPO_ROOT).as_posix()
     hits: list[tuple[str, str, int]] = []
     for node in ast.walk(tree):
         # obj.<col>.append(...) — skip `self.<col>` (in-memory model methods;
@@ -86,7 +86,7 @@ class TestGuardMetaTests:
     def _scan_source(self, source: str) -> list[tuple[str, str, int]]:
         import tempfile
 
-        with tempfile.NamedTemporaryFile("w", suffix=".py", dir=REPO_ROOT, delete=False) as fh:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".py", dir=REPO_ROOT, delete=False) as fh:
             fh.write(source)
             tmp = Path(fh.name)
         try:

@@ -147,7 +147,7 @@ def _scan(repo) -> list[str]:
         if not root.exists():
             continue
         for path in sorted(root.rglob("*.py")):
-            rel = str(path.relative_to(repo))
+            rel = path.relative_to(repo).as_posix()
             if rel == OWNER or rel in ALLOWED_FILES:
                 continue
             tree = safe_parse(path)

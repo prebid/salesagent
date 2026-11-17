@@ -96,10 +96,10 @@ def _trees() -> dict[str, ast.Module]:
         if "__pycache__" in str(p):
             continue
         try:
-            source = p.read_text()
+            source = p.read_text(encoding="utf-8")
         except OSError:
             continue
-        rel = str(p.relative_to(_TESTS_DIR.parent))
+        rel = p.relative_to(_TESTS_DIR.parent).as_posix()
         if not (_BDD_DIR in p.parents or _is_step_driver(source)):
             continue
         out[rel] = ast.parse(source, filename=str(p))

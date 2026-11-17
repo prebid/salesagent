@@ -38,7 +38,7 @@ def _find_rootmodel_violations(repo, *, extra_allowed: set[str] | None = None) -
         if not root.exists():
             continue
         for path in root.rglob("*.py"):
-            rel = str(path.relative_to(repo))
+            rel = path.relative_to(repo).as_posix()
             if rel in allowed:
                 continue
             try:

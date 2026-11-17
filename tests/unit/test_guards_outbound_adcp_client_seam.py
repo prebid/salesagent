@@ -220,7 +220,8 @@ def test_detector_flags_a_dial_that_omits_the_signing_decision(tmp_path):
     bad_file.write_text(
         "from src.core.utils.operator_mcp import call_operator_mcp_tool\n\n"
         "async def f():\n"
-        "    return await call_operator_mcp_tool(url, 'get_signals', {}, label='x')\n"
+        "    return await call_operator_mcp_tool(url, 'get_signals', {}, label='x')\n",
+        encoding="utf-8",
     )
 
     assert ("some_new_registry.py", 4) in _undecided_dials(tmp_path)
@@ -236,7 +237,8 @@ def test_detector_accepts_a_dial_that_delegates_the_decision(tmp_path):
         "    return await call_operator_mcp_tool(\n"
         "        url, 'get_signals', {}, label='x',\n"
         "        sign=request_signer_for_tenant(tenant_id=None),\n"
-        "    )\n"
+        "    )\n",
+        encoding="utf-8",
     )
 
     assert _undecided_dials(tmp_path) == set()
@@ -247,7 +249,8 @@ def test_detector_flags_a_second_signer_builder(tmp_path):
     bad_file = tmp_path / "some_new_registry.py"
     bad_file.write_text(
         "from src.core.signing.request_signer import RequestSignerStrategy as _Strategy\n\n"
-        "signer = _Strategy(config).build_signed_headers\n"
+        "signer = _Strategy(config).build_signed_headers\n",
+        encoding="utf-8",
     )
 
     assert ("some_new_registry.py", 3) in _signer_violations(tmp_path)
@@ -262,7 +265,8 @@ def test_detector_ignores_unrelated_calls(tmp_path):
         "factory = RequestSignerStrategyFactory()\n\n"
         "def call_mcp_tool_name() -> str:\n"
         "    return 'list_creative_formats'\n\n"
-        "name = call_mcp_tool_name()\n"
+        "name = call_mcp_tool_name()\n",
+        encoding="utf-8",
     )
 
     assert _signer_violations(tmp_path) == set()

@@ -72,8 +72,8 @@ def _scan_source_text(rel: str, text: str) -> list[tuple[str, int]]:
 def _scan() -> list[tuple[str, int]]:
     hits: list[tuple[str, int]] = []
     for path in sorted(TESTS_DIR.rglob("*.py")):
-        rel = str(path.relative_to(REPO_ROOT))
-        hits.extend(_scan_source_text(rel, path.read_text()))
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        hits.extend(_scan_source_text(rel, path.read_text(encoding="utf-8")))
     return hits
 
 

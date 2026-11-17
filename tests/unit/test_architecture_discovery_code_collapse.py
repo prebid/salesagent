@@ -102,7 +102,7 @@ class TestNoDiscoveryCodeCollapse:
     def test_no_unmapped_agent_resolver_error_handler(self):
         repo = repo_root()
         violations = [
-            f"{path.relative_to(repo)}:{lineno}: except AgentResolverError never calls {_MAPPER_NAME}(exc)"
+            f"{path.relative_to(repo).as_posix()}:{lineno}: except AgentResolverError never calls {_MAPPER_NAME}(exc)"
             for path in src_python_files(repo)
             for lineno in find_unmapped_resolver_error_handlers(parse_module(path))
         ]
@@ -119,7 +119,7 @@ class TestNoDiscoveryCodeCollapse:
     def test_no_key_origin_map_reaches_the_verifier(self):
         repo = repo_root()
         violations = [
-            f"{path.relative_to(repo)}:{lineno}: expected_key_origins= is passed to the SDK verifier"
+            f"{path.relative_to(repo).as_posix()}:{lineno}: expected_key_origins= is passed to the SDK verifier"
             for path in src_python_files(repo)
             for lineno in find_key_origin_map_passthrough_violations(parse_module(path))
         ]

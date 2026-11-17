@@ -133,7 +133,7 @@ def _scan_src(*, inside_repositories: bool) -> list[str]:
     repo = repo_root()
     hits: list[str] = []
     for path in src_python_files(repo):
-        rel = str(path.relative_to(repo))
+        rel = path.relative_to(repo).as_posix()
         if rel.startswith(REPOSITORY_DIR) is not inside_repositories:
             continue
         hits.extend(f"{rel}:{lineno}" for lineno in find_media_buy_write_seam_violations(parse_module(path)))
@@ -182,7 +182,7 @@ def test_detector_finds_the_real_repository_writes() -> None:
     written_fields = {
         attr.attr
         for path in src_python_files(repo)
-        if str(path.relative_to(repo)).startswith(REPOSITORY_DIR)
+        if path.relative_to(repo).as_posix().startswith(REPOSITORY_DIR)
         for node in ast.walk(parse_module(path))
         for attr in _attribute_targets(node)
         if attr.attr in GUARDED_FIELDS

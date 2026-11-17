@@ -112,7 +112,7 @@ def _is_seam_owned(relative: str) -> bool:
 def _find_private_destination_violations(repo) -> list[str]:
     violations: list[str] = []
     for path in src_python_files(repo):
-        if _is_seam_owned(str(path.relative_to(repo))):
+        if _is_seam_owned(path.relative_to(repo).as_posix()):
             continue
         tree = safe_parse(path)
         if tree is None:
@@ -269,11 +269,11 @@ def _find_env_hatch_violations(repo) -> list[str]:
             continue
         if FORBIDDEN_ENV_HATCH not in text:
             continue
-        if _is_seam_owned(str(path.relative_to(repo))):
+        if _is_seam_owned(path.relative_to(repo).as_posix()):
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
             if FORBIDDEN_ENV_HATCH in line:
-                violations.append(f"{path.relative_to(repo)}:{lineno}: names {FORBIDDEN_ENV_HATCH}")
+                violations.append(f"{path.relative_to(repo).as_posix()}:{lineno}: names {FORBIDDEN_ENV_HATCH}")
     return violations
 
 

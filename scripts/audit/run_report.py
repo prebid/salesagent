@@ -91,7 +91,7 @@ def read_storyboard(run: Path) -> dict[str, dict]:
     for protocol in PROTOCOLS:
         path = run / STORYBOARD_SUBDIR / f"summary_{protocol}.json"
         if path.exists():
-            found[protocol] = json.loads(path.read_text())
+            found[protocol] = json.loads(path.read_text(encoding="utf-8"))
     return found
 
 
@@ -261,14 +261,14 @@ def rate_limit_section(run_dir: Path, limit: int, out) -> None:
     """
     print("\nCREATIVE AGENT RATE LIMITS (an environment limit, not a scenario result)", file=out)
     proxy = sum(
-        len(_AGENT_429_IN_PROXY_LOG.findall(log.read_text(errors="replace")))
+        len(_AGENT_429_IN_PROXY_LOG.findall(log.read_text(errors="replace", encoding="utf-8")))
         for log in sorted((run_dir / "containers").glob("*tls-proxy*.log"))
     )
     hit: list[tuple[str, str, str]] = []
     for report_path in sorted(run_dir.glob("*.json")):
         if report_path.name == IDENTITY_FILE:
             continue
-        for test in json.loads(report_path.read_text()).get("tests", []):
+        for test in json.loads(report_path.read_text(encoding="utf-8")).get("tests", []):
             if test.get("outcome") == "passed":
                 continue
             captured = " ".join(
@@ -423,7 +423,7 @@ def report(
     groups = failure_groups(run, run_sb)
     groups_section(groups, limit, out)
     if groups_json is not None:
-        groups_json.write_text(json.dumps(groups, indent=1))
+        groups_json.write_text(json.dumps(groups, indent=1), encoding="utf-8")
         print(f"\n  groups written to {groups_json}", file=out)
     failure_details(run, limit, out)
     refused = 0

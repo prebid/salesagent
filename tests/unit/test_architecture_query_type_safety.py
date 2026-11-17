@@ -76,7 +76,7 @@ def _find_in_queries_on_integer_columns(filepath: str) -> list[tuple[int, str, s
     if not path.exists():
         return []
 
-    source = path.read_text()
+    source = path.read_text(encoding="utf-8")
     try:
         tree = ast.parse(source, filename=filepath)
     except SyntaxError:
@@ -120,7 +120,7 @@ def _find_filter_by_on_integer_columns(filepath: str) -> list[tuple[int, str, st
     if not path.exists():
         return []
 
-    source = path.read_text()
+    source = path.read_text(encoding="utf-8")
     try:
         tree = ast.parse(source, filename=filepath)
     except SyntaxError:
@@ -220,10 +220,10 @@ def test_no_legacy_session_query() -> None:
     repo = repo_root()
     violations: list[str] = []
     for path in src_python_files(repo):
-        rel = str(path.relative_to(repo))
+        rel = path.relative_to(repo).as_posix()
         if "test_" in rel:
             continue
-        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if "# legacy-ok" in line or "# noqa" in line:
                 continue
             if _LEGACY_QUERY_RE.search(line):
@@ -239,8 +239,8 @@ def test_models_use_mapped_not_column() -> None:
     models_path = repo / "src" / "core" / "database" / "models.py"
     if not models_path.exists():
         return
-    rel = str(models_path.relative_to(repo))
-    for lineno, line in enumerate(models_path.read_text().splitlines(), 1):
+    rel = models_path.relative_to(repo).as_posix()
+    for lineno, line in enumerate(models_path.read_text(encoding="utf-8").splitlines(), 1):
         if "# legacy-ok" in line or "# noqa" in line:
             continue
         if _LEGACY_COLUMN_RE.search(line):

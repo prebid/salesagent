@@ -53,7 +53,7 @@ def test_postgres_image_unified() -> None:
 @pytest.mark.arch_guard
 def test_postgres_scan_finds_script_and_doc_anchors() -> None:
     """Git-tracked scan must include non-YAML surfaces (scripts, docs)."""
-    refs = {str(path.relative_to(repo_root())) for path, _ in iter_postgres_image_refs(repo_root())}
+    refs = {path.relative_to(repo_root()).as_posix() for path, _ in iter_postgres_image_refs(repo_root())}
     assert refs, "non-vacuity: postgres scan found no git-tracked anchors"
     assert any("scripts/" in path for path in refs), "expected postgres refs under scripts/"
     assert any(path.endswith(".md") for path in refs), "expected postgres refs in markdown docs"

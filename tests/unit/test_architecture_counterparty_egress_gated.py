@@ -141,7 +141,7 @@ def test_raw_http_module_count_does_not_grow() -> None:
     """
     repo = repo_root()
     offenders = sorted(
-        str(path.relative_to(repo))
+        path.relative_to(repo).as_posix()
         for path in (repo / "src").rglob("*.py")
         if any(marker in path.read_text(encoding="utf-8") for marker in _RAW_HTTP_MARKERS)
     )

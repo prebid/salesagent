@@ -277,7 +277,7 @@ class TestCreativeLookupPrincipalScoped:
         """Found violations must EXACTLY match the allowlist (new ones rejected, fixed ones removed)."""
         found: set[tuple[str, str]] = set()
         for path in _scanned_files():
-            rel = str(path.relative_to(_REPO_ROOT))
+            rel = path.relative_to(_REPO_ROOT).as_posix()
             for _lineno, func in find_unscoped_creative_queries(parse_module(path)):
                 found.add((rel, func))
         assert_violations_match_allowlist(
@@ -295,7 +295,7 @@ class TestCreativeLookupPrincipalScoped:
     def test_no_admin_repo_calls_in_buyer_tools(self):
         found: set[tuple[str, str]] = set()
         for path in sorted(_TOOLS_DIR.rglob("*.py")):
-            rel = str(path.relative_to(_REPO_ROOT))
+            rel = path.relative_to(_REPO_ROOT).as_posix()
             for _lineno, func in find_admin_calls(parse_module(path)):
                 found.add((rel, func))
         assert_violations_match_allowlist(

@@ -40,7 +40,7 @@ _IMPL_LEGACY_EXTRA_FILES = frozenset({"src/core/context_manager.py", "src/admin/
 def _glob_python_files(root: Path, dirs: tuple[str, ...]) -> set[str]:
     """``.py`` files under any of ``dirs`` (relative to ``root``), pycache excluded."""
     return {
-        str(p.relative_to(root))
+        p.relative_to(root).as_posix()
         for scan_dir in dirs
         for p in (root / scan_dir).rglob("*.py")
         if "__pycache__" not in str(p)
@@ -89,7 +89,8 @@ def _discover_integration_test_files() -> list[str]:
     # database_helpers.py and tenant_setup.py, and two allowlist rows were removed as
     # "fixed" when the calls had only moved somewhere this glob did not reach.
     util_files = glob.glob("tests/utils/**/*.py", recursive=True)
-    return sorted(set(test_files + conftest_files + helper_files + util_files))
+    # glob.glob joins with os.sep; the allowlists spell paths with "/".
+    return sorted({Path(f).as_posix() for f in test_files + conftest_files + helper_files + util_files})
 
 
 INTEGRATION_TEST_FILES = _discover_integration_test_files()
@@ -470,7 +471,7 @@ def _find_matching_calls(file_path: str, predicate: Callable[[ast.expr], bool]) 
     if not source_path.exists():
         return []
 
-    tree = ast.parse(source_path.read_text())
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
     violations = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -575,7 +576,7 @@ class TestImplNoDirectDbSession:
         frozen snapshot masquerading as one (#1721 M2)."""
         scan_dir = tmp_path / "src" / "core" / "tools"
         scan_dir.mkdir(parents=True)
-        (scan_dir / "_never_seen_before.py").write_text("def f():\n    pass\n")
+        (scan_dir / "_never_seen_before.py").write_text("def f():\n    pass\n", encoding="utf-8")
         found = _glob_python_files(tmp_path, ("src/core/tools",))
         assert "src/core/tools/_never_seen_before.py" in found
 
@@ -1235,8 +1236,8 @@ def _find_repository_protocol_imports() -> list[tuple[str, str, int]]:
     for py_file in sorted((ROOT / REPOSITORIES_DIR).rglob("*.py")):
         if "__pycache__" in str(py_file):
             continue
-        rel_path = str(py_file.relative_to(ROOT))
-        tree = ast.parse(py_file.read_text())
+        rel_path = py_file.relative_to(ROOT).as_posix()
+        tree = ast.parse(py_file.read_text(encoding="utf-8"))
         violations.extend((rel_path, module, lineno) for module, lineno in _scan_for_protocol_imports(tree))
     return violations
 

@@ -221,7 +221,9 @@ class _EffectBoundaryTracker(ast.NodeVisitor):
 
 def _scan(path: Path) -> list[tuple[str, str, str]]:
     tree = parse_module(path)
-    tracker = _EffectBoundaryTracker(str(path.relative_to(REPO_ROOT)), path.read_text().splitlines())
+    tracker = _EffectBoundaryTracker(
+        path.relative_to(REPO_ROOT).as_posix(), path.read_text(encoding="utf-8").splitlines()
+    )
     tracker._deferred_names = _names_handed_to_the_boundary(tree)
     tracker.visit(tree)
     return tracker.violations

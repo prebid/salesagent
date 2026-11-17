@@ -51,7 +51,7 @@ def _seam_import_line(file_path: Path) -> int | None:
     a module path assembled at runtime from non-literal fragments (e.g.
     ``"adcp.server." + "idempotency"``) — not statically detectable.
     """
-    tree = ast.parse(file_path.read_text(), filename=str(file_path))
+    tree = ast.parse(file_path.read_text(encoding="utf-8"), filename=str(file_path))
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
             if _reaches_seam(node.module):
@@ -132,9 +132,9 @@ def test_matcher_models_every_reaching_form(tmp_path):
     ]
     for i, src in enumerate(positives):
         f = tmp_path / f"pos_{i}.py"
-        f.write_text(src + "\n")
+        f.write_text(src + "\n", encoding="utf-8")
         assert _seam_import_line(f) is not None, f"matcher missed: {src!r}"
     for i, src in enumerate(negatives):
         f = tmp_path / f"neg_{i}.py"
-        f.write_text(src + "\n")
+        f.write_text(src + "\n", encoding="utf-8")
         assert _seam_import_line(f) is None, f"matcher false-positive: {src!r}"

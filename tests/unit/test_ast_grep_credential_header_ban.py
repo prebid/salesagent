@@ -69,12 +69,11 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import repo_root, stage_ast_grep_root, write_ast_grep_probe
+from tests.unit._architecture_helpers import repo_root, stage_ast_grep_root, venv_ast_grep, write_ast_grep_probe
 
 # The rule's id, and the path it is committed at. Both are pinned so that a
 # rule filed under another name fails with a path in the message rather than a
@@ -174,7 +173,7 @@ def _ast_grep_bin() -> Path:
     to declare ``ast-grep-cli`` in the dev group, which is part of the work this
     module grades.
     """
-    candidate = Path(sys.executable).parent / "ast-grep"
+    candidate = venv_ast_grep()
     assert candidate.exists(), (
         f"{candidate} does not exist: ast-grep is not installed in this environment's venv.\n"
         "Declare `ast-grep-cli` in the pyproject dev group so `uv run ast-grep` resolves — "
@@ -342,13 +341,13 @@ class TestLiveTreeAndExemptions:
         directive = re.compile(rf"#\s*ast-grep-ignore:\s*{re.escape(RULE_ID)}\b")
         # This module is excluded: it spells the directive inside string
         # literals as TEST DATA (TestExemptionForm), which is not an exemption.
-        this_module = str(Path(__file__).resolve().relative_to(repo_root()))
+        this_module = Path(__file__).resolve().relative_to(repo_root()).as_posix()
         # Probes are excluded here for the same reason the live-tree scan excludes
         # them: a sibling test on another xdist worker writes and removes them, so one
         # can vanish between rglob and read_text -- a FileNotFoundError that read as
         # this test failing on two box runs with nothing else changed.
         found = {
-            str(path.relative_to(repo_root()))
+            path.relative_to(repo_root()).as_posix()
             for path in (repo_root() / "tests").rglob("*.py")
             if not path.name.startswith(_PROBE_STEM)
             and directive.search(path.read_text(encoding="utf-8", errors="ignore"))

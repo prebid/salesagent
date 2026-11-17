@@ -157,7 +157,7 @@ class TestCollectionListReferenceSpecDrift:
     def spec(self) -> dict:
         if not _SPEC_PATH.exists():
             pytest.skip(f"AdCP spec cache not present at {_SPEC_PATH}")
-        return json.loads(_SPEC_PATH.read_text())
+        return json.loads(_SPEC_PATH.read_text(encoding="utf-8"))
 
     def test_field_set_matches_spec(self, spec: dict):
         spec_fields = set(spec["properties"].keys())

@@ -42,7 +42,7 @@ def _iter_then_steps() -> list[tuple[Path, ast.FunctionDef | ast.AsyncFunctionDe
     for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
         if py_file.name.startswith("_"):
             continue
-        source = py_file.read_text()
+        source = py_file.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(py_file))
         resolved = str(py_file.resolve())
         for node in ast.walk(tree):
@@ -78,7 +78,7 @@ class TestBddStepTextAlignment:
             referenced = _field_names_referenced(func)
             if "account_id" not in referenced:
                 violations.append(
-                    f"{py_file.relative_to(Path.cwd())}:{func.lineno} {func.name} — step mentions account_id"
+                    f"{py_file.relative_to(Path.cwd()).as_posix()}:{func.lineno} {func.name} — step mentions account_id"
                 )
 
         assert not violations, (
@@ -99,7 +99,7 @@ class TestBddStepTextAlignment:
             referenced = _field_names_referenced(func)
             if field_name not in referenced:
                 violations.append(
-                    f"{py_file.relative_to(Path.cwd())}:{func.lineno} {func.name} — step claims response field '{field_name}'"
+                    f"{py_file.relative_to(Path.cwd()).as_posix()}:{func.lineno} {func.name} — step claims response field '{field_name}'"
                 )
 
         assert not violations, (

@@ -60,7 +60,7 @@ def repo(tmp_path: pathlib.Path) -> pathlib.Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(root, "init", "-q", "-b", "work/lane")
-    (root / "a.txt").write_text("one\n")
+    (root / "a.txt").write_text("one\n", encoding="utf-8")
     _git(root, "add", "a.txt")
     _git(root, "commit", "-qm", "one")
     return root
@@ -81,7 +81,7 @@ def test_a_real_checkout_is_identified_by_git(repo: pathlib.Path) -> None:
 
 def test_an_uncommitted_edit_makes_the_tree_dirty(repo: pathlib.Path) -> None:
     """A dirty tree is not identified by its commit, and the record says so."""
-    (repo / "a.txt").write_text("two\n")
+    (repo / "a.txt").write_text("two\n", encoding="utf-8")
 
     assert collect(repo, {}).tree == "dirty"
 
@@ -116,7 +116,7 @@ def test_the_ci_box_shape_is_unidentified_rather_than_dirty(tmp_path: pathlib.Pa
     """
     mirror = tmp_path / "mirror"
     mirror.mkdir()
-    (mirror / "run_all_tests.sh").write_text("#!/bin/sh\n")
+    (mirror / "run_all_tests.sh").write_text("#!/bin/sh\n", encoding="utf-8")
     _git(mirror, "init", "-q")
     _git(mirror, "add", "-A")
     # The two signals a naive implementation would have read:
@@ -186,14 +186,14 @@ def test_a_run_directory_with_no_identity_file_reads_as_none(tmp_path: pathlib.P
 
 
 def test_an_unreadable_identity_file_is_not_an_identity(tmp_path: pathlib.Path) -> None:
-    (tmp_path / IDENTITY_FILE).write_text("{ truncated")
+    (tmp_path / IDENTITY_FILE).write_text("{ truncated", encoding="utf-8")
 
     assert read(tmp_path) is None
 
 
 def test_describe_never_claims_a_tree_it_cannot_support(tmp_path: pathlib.Path) -> None:
     assert describe(None) == "IDENTITY UNKNOWN"
-    (tmp_path / IDENTITY_FILE).write_text(json.dumps({"source": "absent", "commit": None}))
+    (tmp_path / IDENTITY_FILE).write_text(json.dumps({"source": "absent", "commit": None}), encoding="utf-8")
     assert describe(read(tmp_path)) == "IDENTITY UNKNOWN"
 
 
@@ -206,7 +206,7 @@ def _identity(commit: str, branch: str) -> Identity:
 
 def test_a_descendant_is_a_comparable_subject(repo: pathlib.Path) -> None:
     base = _git(repo, "rev-parse", "HEAD")
-    (repo / "b.txt").write_text("b\n")
+    (repo / "b.txt").write_text("b\n", encoding="utf-8")
     _git(repo, "add", "b.txt")
     _git(repo, "commit", "-qm", "two")
     head = _git(repo, "rev-parse", "HEAD")
@@ -230,13 +230,13 @@ def test_two_divergent_branches_refuse_and_name_their_merge_base(repo: pathlib.P
     """
     base = _git(repo, "rev-parse", "HEAD")
     _git(repo, "checkout", "-q", "-b", "lane/a")
-    (repo / "a2.txt").write_text("a2\n")
+    (repo / "a2.txt").write_text("a2\n", encoding="utf-8")
     _git(repo, "add", "a2.txt")
     _git(repo, "commit", "-qm", "a2")
     left = _git(repo, "rev-parse", "HEAD")
     _git(repo, "checkout", "-q", base)
     _git(repo, "checkout", "-q", "-b", "lane/b")
-    (repo / "b2.txt").write_text("b2\n")
+    (repo / "b2.txt").write_text("b2\n", encoding="utf-8")
     _git(repo, "add", "b2.txt")
     _git(repo, "commit", "-qm", "b2")
     right = _git(repo, "rev-parse", "HEAD")

@@ -46,15 +46,15 @@ def _creative_modules() -> list[Path]:
 def _scan() -> list[tuple[str, str, int]]:
     hits: list[tuple[str, str, int]] = []
     for path in _creative_modules():
-        rel = str(path.relative_to(REPO_ROOT))
-        hits.extend(_scan_source_text(rel, path.read_text()))
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        hits.extend(_scan_source_text(rel, path.read_text(encoding="utf-8")))
     return hits
 
 
 class TestCreativeInputRaiseGuard:
     def test_scope_is_nonempty(self):
         """The glob must keep matching the GAM creatives manager (guard not vacuous)."""
-        assert any("gam/managers/creatives.py" in str(p) for p in _creative_modules())
+        assert any("gam/managers/creatives.py" in p.as_posix() for p in _creative_modules())
 
     def test_no_bare_raises_in_adapter_creative_modules(self):
         violations = [v for v in _scan() if (v[0], v[1]) not in ALLOWLIST]

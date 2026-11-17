@@ -67,12 +67,12 @@ def _find_raw_thread_registries() -> list[str]:
     src_dir = ROOT / "src"
 
     for py_file in src_dir.rglob("*.py"):
-        rel_path = str(py_file.relative_to(ROOT))
+        rel_path = py_file.relative_to(ROOT).as_posix()
         if rel_path == REGISTRY_FILE:
             continue
 
         try:
-            tree = ast.parse(py_file.read_text())
+            tree = ast.parse(py_file.read_text(encoding="utf-8"))
         except SyntaxError:
             continue
 

@@ -173,7 +173,9 @@ def test_logging_still_writes_its_backup_file_without_a_preexisting_log_dir(tmp_
         "logs/structured.jsonl was not written; the log directory must be created "
         "on first use now that it is no longer created at import"
     )
-    assert "create_media_buy" in structured.read_text(), "the audit record never reached the backup file"
+    assert "create_media_buy" in structured.read_text(encoding="utf-8"), (
+        "the audit record never reached the backup file"
+    )
 
 
 def test_adcp_log_dir_redirects_the_backup_away_from_the_working_directory(tmp_path):

@@ -108,7 +108,7 @@ def test_uv_version_consistent() -> None:
 def test_workflows_do_not_hardcode_uv_version_env() -> None:
     """Workflow/action env blocks must not copy uv version literals — use _install-uv instead."""
     violations = [
-        f"{path.relative_to(repo_root())}:{lineno}: {line}"
+        f"{path.relative_to(repo_root()).as_posix()}:{lineno}: {line}"
         for path, lineno, line in iter_hardcoded_uv_version_env(repo_root())
     ]
     assert not violations, (
@@ -125,7 +125,7 @@ def test_setup_uv_action_pinned_in_single_source() -> None:
 
     for wf in iter_workflow_files(repo):
         assert "astral-sh/setup-uv@" not in wf.read_text(encoding="utf-8"), (
-            f"{wf.relative_to(repo)} must use ./_install-uv, not astral-sh/setup-uv directly"
+            f"{wf.relative_to(repo).as_posix()} must use ./_install-uv, not astral-sh/setup-uv directly"
         )
 
 
@@ -198,7 +198,7 @@ def test_python_version_anchors_consistent() -> None:
         if anchor_kind == "target-version":
             continue
         if version != major_minor:
-            drift.append(f"{path.relative_to(repo)} ({anchor_kind}): {version}")
+            drift.append(f"{path.relative_to(repo).as_posix()} ({anchor_kind}): {version}")
 
     assert not drift, f"python version drift — canonical {major_minor} from .python-version:\n" + "\n".join(drift)
 
@@ -212,7 +212,7 @@ def test_python_anchor_scan_includes_github_yaml_surfaces() -> None:
 
     repo = repo_root()
     candidates = {
-        str(path.relative_to(repo))
+        path.relative_to(repo).as_posix()
         for path in iter_git_tracked_files(repo)
         if _python_anchor_candidate(path, repo) and path.suffix in {".yml", ".yaml"}
     }
@@ -263,7 +263,7 @@ def test_hardcoded_uv_version_env_detector_catches_known_bad(tmp_path: Path) -> 
 def test_workflows_use_python_version_file() -> None:
     """Workflows/actions must not hardcode python-version when setup-env reads .python-version."""
     violations = [
-        f"{path.relative_to(repo_root())}:{lineno}: {line}"
+        f"{path.relative_to(repo_root()).as_posix()}:{lineno}: {line}"
         for path, lineno, line in iter_hardcoded_python_version_yaml(repo_root())
     ]
     assert not violations, (

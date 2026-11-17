@@ -95,7 +95,7 @@ def find_hand_rolled_normalization(source: str, relpath: str) -> list[str]:
 def _scan(repo, *, ast_finder=None, text_finder=None) -> list[str]:
     violations: list[str] = []
     for path in sorted((repo / "src").rglob("*.py")):
-        relpath = str(path.relative_to(repo))
+        relpath = path.relative_to(repo).as_posix()
         if relpath in ALLOWED_FILES:
             continue
         if ast_finder is not None:

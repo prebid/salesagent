@@ -102,7 +102,7 @@ def _policy_definitions() -> dict[str, list[str]]:
         tree = parse_module(path)
         if tree is None:
             continue
-        rel = str(path.relative_to(repo))
+        rel = path.relative_to(repo).as_posix()
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name in POLICY_NAMES:
                 found[node.name].append(f"{rel}:{node.lineno}")

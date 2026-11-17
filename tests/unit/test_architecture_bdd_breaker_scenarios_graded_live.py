@@ -179,7 +179,7 @@ def _step_functions_by_template() -> list[tuple[re.Pattern[str], str, ast.Functi
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             for template in _decorator_templates(node):
-                key = f"{py_file.relative_to(_TESTS_ROOT.parent)}::{node.name}"
+                key = f"{py_file.relative_to(_TESTS_ROOT.parent).as_posix()}::{node.name}"
                 registered.append((_template_to_regex(template), key, node))
     return registered
 

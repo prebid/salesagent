@@ -25,12 +25,11 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import repo_root, stage_ast_grep_root
+from tests.unit._architecture_helpers import repo_root, stage_ast_grep_root, venv_ast_grep
 
 RULE_ID = "test-flag-never-reaches-production"
 RULE_FILE = f".ast-grep/rules/{RULE_ID}.yml"
@@ -69,7 +68,7 @@ def _ast_grep_bin() -> Path:
     a developer machine and not in CI, so this module would pass locally while the gate
     line it grades failed there. Absence FAILS rather than skips, for the same reason.
     """
-    candidate = Path(sys.executable).parent / "ast-grep"
+    candidate = venv_ast_grep()
     assert candidate.exists(), (
         f"{candidate} does not exist: ast-grep is not installed in this environment's venv. "
         "Declare `ast-grep-cli` in the pyproject dev group so `uv run ast-grep` resolves."
@@ -127,7 +126,7 @@ def test_a_production_read_of_the_flag_matches(planted: Path) -> None:
     probe = planted / "src" / "_ast_grep_probe" / "reads_the_flag.py"
     probe.write_text(_VIOLATING_SOURCE, encoding="utf-8")
 
-    found = _matches(_scan(str(probe.relative_to(planted)), cwd=planted))
+    found = _matches(_scan(probe.relative_to(planted).as_posix(), cwd=planted))
 
     assert len(found) == 1, f"expected exactly one match for one read, got {len(found)}: {found}"
     assert found[0]["ruleId"] == RULE_ID
@@ -143,7 +142,7 @@ def test_the_match_is_build_failing(planted: Path) -> None:
     probe = planted / "src" / "_ast_grep_probe" / "reads_the_flag.py"
     probe.write_text(_VIOLATING_SOURCE, encoding="utf-8")
 
-    assert _scan(str(probe.relative_to(planted)), cwd=planted).returncode == 1
+    assert _scan(probe.relative_to(planted).as_posix(), cwd=planted).returncode == 1
 
 
 def test_the_same_decision_on_a_real_input_is_clean(planted: Path) -> None:
@@ -151,7 +150,7 @@ def test_the_same_decision_on_a_real_input_is_clean(planted: Path) -> None:
     probe = planted / "src" / "_ast_grep_probe" / "reads_a_real_input.py"
     probe.write_text(_CONFORMING_SOURCE, encoding="utf-8")
 
-    proc = _scan(str(probe.relative_to(planted)), cwd=planted)
+    proc = _scan(probe.relative_to(planted).as_posix(), cwd=planted)
 
     assert _matches(proc) == []
     assert proc.returncode == 0

@@ -27,7 +27,7 @@ def test_json_columns_use_jsontype() -> None:
     violations: list[str] = []
     db_dir = repo / "src" / "core" / "database"
     for path in db_dir.rglob("*.py"):
-        rel = str(path.relative_to(repo))
+        rel = path.relative_to(repo).as_posix()
         tree = parse_module(path)
         for lineno in find_plain_json_column_violations(tree):
             violations.append(f"{rel}:{lineno} — use JSONType, not JSON")

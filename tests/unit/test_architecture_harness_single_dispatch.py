@@ -150,7 +150,7 @@ def _iter_test_modules() -> list[tuple[str, ast.Module]]:
             tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
         except SyntaxError:  # pragma: no cover - a syntax error fails elsewhere
             continue
-        modules.append((str(py_file.relative_to(repo_root())), tree))
+        modules.append((py_file.relative_to(repo_root()).as_posix(), tree))
     return modules
 
 
