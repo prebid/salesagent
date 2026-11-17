@@ -55,7 +55,7 @@ dependencies = [
     "mcp>=2.2.0",  # CVE-2026-59951 / GHSA-84m7-p3x7-pcfv, fixed in 2.2.0 on the 2.x line (via fastmcp); 2.0 floor required by adcp 9; earlier CVE-2026-59950
     "pyjwt>=2.15.0",  # GHSA-42vr-xj54-vc7v (fixed in 2.15.0) + 11 more fixed in 2.14.0, GHSA-w6j9-cwv2-h6wq et al.; earlier GHSA-752w-5fwx-jx9f
     "filelock>=4.2.1",  # GHSA-v4x8-3wr5-3wq8, GHSA-9vhv-jxww-xfm5, GHSA-567q-5qvw-pf92; earlier GHSA-qmgc-5h2g-mvrw
-    "opentelemetry-api>=1.45.1",  # GHSA-xcq7-p3pf-p88h (moves logfire to 5.x and the opentelemetry family with it)
+    "opentelemetry-api>=1.45.2",  # GHSA-mf5v-w3w3-f6cg; earlier GHSA-xcq7-p3pf-p88h (moves logfire to 5.x and the opentelemetry family with it)
     "urllib3>=2.8.0",  # GHSA-8988-9cw3-xx77 + GHSA-gh4c-6fx4-qh6g + GHSA-vxq7-64xx-v4gw; earlier GHSA-38jv-5279-wg99 + GHSA-qccp-gfcp-xxvc + GHSA-mf9v-mfxr-j63j
     "werkzeug>=3.1.9",  # GHSA-g6x2-hccm-hh4m; earlier GHSA-87hc-h4r5-73f7 + GHSA-29vq-49wr-vm6x
     "jaraco-context>=6.1.0",  # GHSA-58pv-8j8x-9vj2
@@ -68,7 +68,8 @@ dependencies = [
     "click>=8.3.3",  # PYSEC-2026-2132 (transitive via flask/uvicorn)
     "fsspec>=2026.6.0",  # GHSA-27vj-qcqg-25rc (transitive via huggingface-hub, from the cohere extra)
     "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2 / PYSEC-2026-4320 (transitive via httpx/httpcore/requests)
-    "dnspython>=2.9.0",  # GHSA-45c3-73f7-pv4m (transitive via email-validator, from adcp and pydantic[email])
+    "dnspython>=2.9.2",  # GHSA-vvf4-9x63-8xvv; earlier GHSA-45c3-73f7-pv4m (transitive via email-validator, from adcp and pydantic[email])
+    "soupsieve>=4.0.0",  # GHSA-mmhr-3c5m-f64f (fixed in 4.0.0) + GHSA-6655-6qjp-jx7x + GHSA-7g44-g9rc-x53w (3.0.2) + GHSA-4j63-6c4x-wfg4 (2.10.0) (transitive via beautifulsoup4)
     # Transitive via pydantic-ai-slim -> genai-prices. 2.3.0 carries four advisories:
     # httpcore2 GHSA-7mj9-2mp8-4m2p, httpx2 GHSA-h4x7-gw46-3wm6 / GHSA-pf96-p4fj-6566 /
     # GHSA-8xx6-hgc6-gc2m. Floors are the highest fix version each names, so uv-secure
