@@ -15,7 +15,7 @@ from pydantic import TypeAdapter, ValidationError
 from src.core.audit_logger import get_audit_logger
 from src.core.database.models import CreativeAssignment as DBCreativeAssignment
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.errors.codes import ErrorCode
+from src.core.errors.codes import AppErrorCode
 from src.core.errors.details import CapabilityRefusalDetails, EntityRefDetails, ValidationDetails
 from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPInvalidRequestError
 from src.core.format_resolver import equivalent_formats
@@ -564,26 +564,9 @@ def _list_creatives_impl(
             try:
                 status_enum = CreativeStatus(db_creative.status)
             except ValueError:
-                # A stored status that is not a CreativeStatus member. AdCP.1
-                # list-creatives-response.json makes `status` REQUIRED on every item and
-                # $refs a CLOSED 6-member enum with no `unknown`, so some value must be
-                # emitted — every choice makes some claim, which is why the errors[]
-                # advisory below, not the placeholder, is the honest part of this handler.
-                # `processing` is the placeholder because it is the only member asserting
-                # no completed evaluation, no deliverability and no seller MUST;
-                # `pending_review` is the worst choice (it asserts processing already
-                # succeeded AND that the seller owes a decision, i.e. "wait for us").
-                #
-                # The advisory code is PINNED to CONFIGURATION_ERROR: normalize_advisory_errors
-                # used to collapse any unclassified code to SERVICE_UNAVAILABLE /
-                # recovery=transient — which would tell the buyer to retry a permanently
-                # bad row forever. Honest caveat: CONFIGURATION_ERROR's pinned prose says
-                # "prevents handling the request" and here the request IS handled; it is
-                # nonetheless the only wire-standard code whose recovery (`terminal`) and
-                # remediation ("surface to a human at the seller — the buyer cannot resolve
-                # a seller-side deployment misconfiguration and MUST NOT auto-retry") both
-                # match. INVALID_STATE is `correctable` (implies the buyer can fix the
-                # request — false); SERVICE_UNAVAILABLE is `transient` (implies retry).
+                # Keep the existing processing fallback for unreadable stored status.
+                # CODE_TABLE owns the persisted-value advisory's terminal seller-repair
+                # policy; neither the fallback nor this corruption case is spec-graded.
                 logger.warning(
                     "Creative %s (tenant %s) has unreadable stored status %r; reporting it as "
                     "'processing' and surfacing an advisory",
@@ -599,7 +582,7 @@ def _list_creatives_impl(
                     # recovery come from CODE_TABLE) plus the one specific they can act
                     # on: which creative is affected.
                     Error.of(  # structural-guard: advisory per-creative result in ListCreativesResponse.errors[]
-                        ErrorCode.CONFIGURATION_ERROR,
+                        AppErrorCode.PERSISTED_VALUE_UNRENDERABLE,
                         details=EntityRefDetails(creative_id=db_creative.creative_id),
                     )
                 )

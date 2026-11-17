@@ -617,27 +617,15 @@ Feature: BR-UC-018 List Creatives
     Then the response is compliant with the list_creatives spec
     And the creative is returned with status "processing"
     And no error is raised
-    And exactly one entry in errors[] names that creative with code "CONFIGURATION_ERROR"
-    # Was "mapped to pending_review". The pin does not choose a placeholder — status is
-    # REQUIRED and $refs a closed enum with no "unknown" member — so the choice is the
-    # seller's, and this seller's is `processing`: the only member that asserts no
-    # completed evaluation and no seller obligation. pending_review is the one member that
-    # would be a second untruth, claiming processing succeeded and a decision is owed.
-    #
-    # The substitution alone is not the whole obligation. list-creatives-response.json
-    # carries errors[] on the SUCCESS path for exactly this case — the read succeeded and
-    # one record is not fully representable — so the buyer is told WHICH creative could not
-    # be described. CONFIGURATION_ERROR because the pin gives that code recovery "terminal"
-    # and "surface to a human at the seller": a seller-side data defect is not something a
-    # buyer can retry, and a code outside the wire-standard set collapses to
-    # SERVICE_UNAVAILABLE, which tells the buyer to poll forever for a row only the seller
-    # can repair.
-    #
-    # Exactly one entry, not merely one present: a per-row advisory emitted twice would
-    # read as two defective records.
-    #
-    # The recovery value is deliberately not asserted. It is a read-only property over the
-    # code table, so it is right whenever the code is right.
+    And exactly one entry in errors[] names that creative with code "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
+    # AdCP 3.2.7 creative-status.json requires a closed status enum with no "unknown".
+    # This seller preserves its existing processing fallback for unreadable stored data.
+    # The fallback is local policy, ungraded upstream; the pin does not mandate it.
+    # list-creatives-response.json permits errors[] on a successful response, and
+    # operating/transport-errors.mdx permits seller-specific X_{VENDOR}_{CODE} codes.
+    # The shared code table makes this advisory terminal because seller repair is needed.
+    # The integration wire case independently asserts terminal recovery; this scenario
+    # grades the returned processing status and exactly one advisory with the creative ID.
     # (src/core/tools/creatives/listing.py)
 
   @T-UC-018-inv-034-1-holds @invariant @BR-RULE-034
