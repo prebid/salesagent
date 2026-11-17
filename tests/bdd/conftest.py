@@ -6308,7 +6308,7 @@ def _seed_delivery_poll(ctx: dict, env: object) -> None:
     ctx[f"db_principal_{env._principal_id}"] = principal
 
 
-def _harness_class(factory_path: str) -> Any:
+def _harness_class(factory_path: str) -> Callable[..., AbstractContextManager]:
     """The harness class at dotted *factory_path*, imported when a builder runs rather than with this conftest."""
     import importlib
 

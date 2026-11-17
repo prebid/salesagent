@@ -4,19 +4,35 @@ Provides consistent patterns for creating test database objects with proper
 timestamp handling and field validation to prevent common test issues.
 """
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session
 
 from src.core.database.models import (
+    AdapterConfig,
+    AuditLog,
+    Context,
+    Creative,
+    CreativeAssignment,
     CurrencyLimit,
+    MediaBuy,
+    MediaPackage,
+    ObjectWorkflowMapping,
     Principal,
     Product,
     PropertyTag,
+    Publisher,
+    PushNotificationConfig,
+    SigningKey,
     Tenant,
+    User,
+    WebhookDeliveryLog,
+    WorkflowStep,
 )
 from tests.factories.principal import plaintext_token_for
 
@@ -160,7 +176,7 @@ def bind_factories_to_session(session):
 
 
 @contextmanager
-def bound_factory_session():
+def bound_factory_session() -> Iterator[Session]:
     """A session on the current engine, bound to every factory for the block, then closed.
 
     Owns the session as well as the binding: it creates it, binds it through
@@ -170,11 +186,9 @@ def bound_factory_session():
     diverge. The ``bound_factory_session`` fixture in tests/integration/conftest.py and
     the admin harnesses both come through here.
     """
-    from sqlalchemy.orm import Session as SASession
-
     from src.core.database.database_session import get_engine
 
-    session = SASession(bind=get_engine())
+    session = Session(bind=get_engine())
     try:
         with bind_factories_to_session(session):
             yield session
@@ -182,7 +196,46 @@ def bound_factory_session():
         session.close()
 
 
-def delete_tenant_rows(session: Any, tenant_id: str) -> None:
+#: Every model whose rows carry a ``tenant_id``, children before the rows they reference
+#: and ``Tenant`` last: the order :func:`delete_tenant_rows` deletes in. ONE statement of
+#: what a tenant's rows are, so a teardown and a before/after snapshot cannot disagree.
+TENANT_SCOPED_MODELS = (
+    Context,
+    CreativeAssignment,
+    WebhookDeliveryLog,
+    Creative,
+    PushNotificationConfig,
+    MediaBuy,
+    Product,
+    Principal,
+    PropertyTag,
+    AdapterConfig,
+    SigningKey,
+    Publisher,
+    AuditLog,
+    User,
+    Tenant,
+)
+
+
+def tenant_row_counts(session: Session, tenant_id: str) -> dict[str, int]:
+    """How many rows of each tenant-scoped table *tenant_id* holds, by table name."""
+    return {
+        model.__tablename__: session.scalar(select(func.count()).select_from(model).filter_by(tenant_id=tenant_id))
+        for model in TENANT_SCOPED_MODELS
+    }
+
+
+def delete_tenant(tenant_id: str) -> None:
+    """Delete tenant *tenant_id* and its rows from the database the current engine points at."""
+    from src.core.database.database_session import get_engine
+
+    with Session(bind=get_engine()) as session:
+        delete_tenant_rows(session, tenant_id)
+        session.commit()
+
+
+def delete_tenant_rows(session: Session, tenant_id: str) -> None:
     """Delete a test tenant and EVERY row that hangs off it. The caller commits.
 
     Children go first, explicitly: the ORM ``backref`` relationships carry no
@@ -204,25 +257,6 @@ def delete_tenant_rows(session: Any, tenant_id: str) -> None:
     ``ObjectWorkflowMapping`` and ``WorkflowStep`` have no ``tenant_id`` at all, so
     they are reached through ``contexts``.
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import (
-        AdapterConfig,
-        AuditLog,
-        Context,
-        Creative,
-        CreativeAssignment,
-        MediaBuy,
-        MediaPackage,
-        ObjectWorkflowMapping,
-        Publisher,
-        PushNotificationConfig,
-        SigningKey,
-        User,
-        WebhookDeliveryLog,
-        WorkflowStep,
-    )
-
     context_ids = select(Context.context_id).where(Context.tenant_id == tenant_id)
     step_ids = select(WorkflowStep.step_id).where(WorkflowStep.context_id.in_(context_ids))
     session.execute(delete(ObjectWorkflowMapping).where(ObjectWorkflowMapping.step_id.in_(step_ids)))
@@ -236,28 +270,12 @@ def delete_tenant_rows(session: Any, tenant_id: str) -> None:
     # pricing option while that product still exists, and explicitly allows the same
     # row to go via the product's cascade. The composite FK's ``ON DELETE CASCADE``
     # (migration c3b75d304773) is real, so deleting ``Product`` takes it.
-    for model in (
-        Context,
-        CreativeAssignment,
-        WebhookDeliveryLog,
-        Creative,
-        PushNotificationConfig,
-        MediaBuy,
-        Product,
-        Principal,
-        PropertyTag,
-        AdapterConfig,
-        SigningKey,
-        Publisher,
-        AuditLog,
-        User,
-        Tenant,
-    ):
+    for model in TENANT_SCOPED_MODELS:
         session.execute(delete(model).where(model.tenant_id == tenant_id))
 
 
 @contextmanager
-def production_db_pointed_at(url: str):
+def production_db_pointed_at(url: str) -> Iterator[None]:
     """Point production's cached DB engine at ``url`` for the block.
 
     The e2e counterpart of ``integration_db``'s engine repoint: over a live stack the

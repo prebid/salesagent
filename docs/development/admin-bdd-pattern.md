@@ -41,7 +41,7 @@ tests/harness/
 └── admin_tenant_scoping.py          # AdminTenantScopingEnv (AdminAccountEnv subclass)
 
 tests/helpers/
-└── admin_session.py                 # admin_auth_session() for the Flask client
+└── admin_session.py                 # the session payloads and the one writer per transport
 ```
 
 `BR-ADMIN-TENANT-SCOPING` is claimed by a predicate `ENV_ROUTES` row ahead of the
@@ -49,10 +49,10 @@ tests/helpers/
 `BR-ADMIN-ACCOUNTS`, it runs on both admin transports: both rows build their env through
 `_admin_env_builder`, which returns the in-process env for `admin_integration` and the
 live-stack env at `e2e_config.base_url` for `e2e_admin`.
-`tests/unit/test_bdd_admin_transport_parametrization.py` checks that builder on both
-transports. The env empties the super-admin lists on the live settings object for the
-scenario, so the member it logs in as is never an ambient super admin, and deletes the
-tenants it created when it exits. The feature file is the one statement of
+`tests/unit/test_bdd_admin_transport_parametrization.py` takes each row's builder from
+`ENV_ROUTES` and checks it on both transports. The env enters `no_configured_super_admins()`
+(`tests/helpers/admin_session.py`) for the scenario, so the member it logs in as is never an
+ambient super admin, and deletes the tenants it created when it exits. The feature file is the one statement of
 the contract: the pytest twins that once ran the same assertions in-process and against the
 Docker stack were deleted once `AdminTransport.E2E` carried the Gherkin, as
 BR-ADMIN-ACCOUNTS' own `test_admin_bdd_e2e.py` had been.
@@ -183,21 +183,22 @@ follow:
   returning `AdminResponse`.
 - **The transport lives in `AdminClient`, never in the env.** The env opens one
   `AdminClient` (`None` for the Flask client, the live server's URL otherwise)
-  and sends every request through it. `AdminClient.state_session()` is the one
-  session writer: it replaces the session on the Flask client, and for the live
-  stack it replaces every `session` cookie with one signed the way the server
-  signs its own (`state_http_session`). `authenticate()` states the super-admin
-  session through it. `PublisherAuthorizationEnv` drives its admin routes through
-  the same client.
+  and sends every request through it. `AdminClient.state_session()` states a
+  session through the transport's one writer in `tests/helpers/admin_session.py`,
+  and both writers replace the session the client held: `state_flask_session`
+  clears and rewrites the Flask client's session, and `state_http_session` swaps
+  every `session` cookie for one signed the way the server signs its own.
+  `authenticate()` states the super-admin session through it.
+  `PublisherAuthorizationEnv` drives its admin routes through the same client.
 - **Seeding goes through the production write path.** `create_account`
-  (`:180-226`) uses `AccountUoW` → `AccountRepository.create()`, so a
+  uses `AccountUoW` → `AccountRepository.create()`, so a
   harness-seeded row obeys the invariants a production-created one does — above
   all the natural-key collision refusal. It propagates `NaturalKeyConflict`
   deliberately. Seeding straight into the table is the one seam through which a
   test can establish a state production forbids, and a test asserting on an
   impossible state proves nothing.
 - **Read-backs are env methods too** (`get_account_from_db`,
-  `accounts_on_natural_key`, `accounts_with_brand_domain`, `:228-278`), so a
+  `accounts_on_natural_key`, `accounts_with_brand_domain`), so a
   lookup follows whichever database the transport selected instead of a step
   opening its own session.
 

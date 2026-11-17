@@ -25,7 +25,7 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
   #   - e2e: requests.Session against Docker stack (full deployment)
 
   Background:
-    Given a target tenant with one catalogue product and one active media buy
+    Given a target tenant with one catalogue product, one active media buy and an active member
 
   @T-ADMIN-SCOPE-001 @auth @edge-case
   Scenario Outline: Anonymous callers of the tenant APIs receive JSON 401

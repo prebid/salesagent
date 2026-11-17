@@ -2,8 +2,8 @@
 
 Steps for the four routes that take ``<tenant_id>`` from the URL. The harness
 (``AdminTenantScopingEnv``) is provided by the ``_harness_env`` fixture in
-tests/bdd/conftest.py. The generic admin Then steps (``the page returns status``,
-``the JSON response has "key" as "value"``) come from
+tests/bdd/conftest.py. The generic admin steps (``the caller is not authenticated``,
+``the page returns status``, ``the JSON response has "key" as "value"``) come from
 tests/bdd/steps/domain/admin_accounts.py and read the same ``ctx["admin_page"]`` key.
 
 """
@@ -36,16 +36,10 @@ def _env(ctx: dict) -> AdminTenantScopingEnv:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-@given("a target tenant with one catalogue product and one active media buy")
+@given("a target tenant with one catalogue product, one active media buy and an active member")
 def given_target_tenant(ctx: dict) -> None:
-    """Seed the tenant every scenario reads; the harness snapshots its state."""
+    """Seed the tenant every scenario reads. Its member is somebody other than the caller."""
     _env(ctx).seed_target_tenant()
-
-
-@given("the caller is not authenticated")
-def given_caller_anonymous(ctx: dict) -> None:
-    """Drop any session."""
-    _env(ctx).clear_auth()
 
 
 @given("the caller is an active member of a different tenant")
@@ -94,9 +88,10 @@ def then_redirect_to_tenant_page(ctx: dict, page: str) -> None:
 
 @then("the target tenant's stored data is unchanged")
 def then_target_unchanged(ctx: dict) -> None:
-    """A rejected request leaves the tenant's products, media buys and policy settings as seeded."""
+    """A rejected request leaves the tenant holding the rows and the policy settings the request found."""
     env = _env(ctx)
-    assert env.target_state() == env.seeded_state, f"Target tenant state changed from {env.seeded_state!r}"
+    before, after = env.state_before_request, env.target_state()
+    assert after == before, f"The request changed the target tenant: {before!r} became {after!r}"
 
 
 @then("the revenue chart lists the target tenant's active media buy")

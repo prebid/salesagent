@@ -21,9 +21,9 @@ check, on the same branch of the decorator in-process as on the stack.
 
 The contract itself is stated once, in ``tests/bdd/features/BR-ADMIN-TENANT-SCOPING.feature``,
 and runs on both transports through the ``admin-tenant-scoping`` row of ``ENV_ROUTES`` in
-tests/bdd/conftest.py. The module-level helpers (route and redirect tables, seeding, state
-snapshot, expected bodies) are what the step definitions in
-tests/bdd/steps/domain/admin_tenant_scoping.py read.
+tests/bdd/conftest.py. The step definitions in tests/bdd/steps/domain/admin_tenant_scoping.py
+read the redirect table, the buy's budget and the expected-body builders from this module;
+seeding and read-backs are methods of the env.
 """
 
 from __future__ import annotations
@@ -32,12 +32,8 @@ import uuid
 from contextlib import ExitStack
 from decimal import Decimal
 from typing import Any, NamedTuple
-from unittest import mock
 from urllib.parse import urlsplit
 
-from sqlalchemy.orm import Session
-
-from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from src.services.default_products import get_default_products
@@ -45,27 +41,30 @@ from tests.factories import MediaBuyFactory, ProductFactory, TenantFactory, User
 from tests.factories.mint import mint
 from tests.harness.admin_accounts import AdminAccountEnv
 from tests.harness.admin_client import AdminResponse
-from tests.helpers.admin_session import member_session_payload
-from tests.utils.database_helpers import bound_factory_session, delete_tenant_rows
+from tests.helpers.admin_session import member_session_payload, no_configured_super_admins
+from tests.utils.database_helpers import bound_factory_session, delete_tenant, tenant_row_counts
 
 #: The non-admin identity the scenarios log in as. Both transports use the same address
 #: so they grade identical ``User`` rows.
 MEMBER_EMAIL = "test_tenant_user@example.com"
+#: Somebody else, who IS an active member of the target tenant in every scenario. Without
+#: this row a lookup that forgot the caller's email would still find nobody, and a refusal
+#: would prove nothing about whose membership was checked.
+OTHER_MEMBER_EMAIL = "target_tenant_member@example.com"
 ACTIVE_BUY_BUDGET = Decimal("1500.00")
 
 
 class TenantScopedRoute(NamedTuple):
     path: str
     methods: tuple[str, ...]
-    api_mode: bool  # JSON 401/403 from require_tenant_access(api_mode=True); else redirect / abort(403)
 
 
 #: The four routes of #2203, keyed by the name the Gherkin scenarios use.
 ROUTES: dict[str, TenantScopedRoute] = {
-    "revenue chart API": TenantScopedRoute("/api/tenant/{tenant_id}/revenue-chart", ("GET",), True),
-    "products API": TenantScopedRoute("/api/tenant/{tenant_id}/products", ("GET",), True),
-    "product suggestions API": TenantScopedRoute("/api/tenant/{tenant_id}/products/suggestions", ("GET",), True),
-    "policy rules page": TenantScopedRoute("/tenant/{tenant_id}/policy/rules", ("GET", "POST"), False),
+    "revenue chart API": TenantScopedRoute("/api/tenant/{tenant_id}/revenue-chart", ("GET",)),
+    "products API": TenantScopedRoute("/api/tenant/{tenant_id}/products", ("GET",)),
+    "product suggestions API": TenantScopedRoute("/api/tenant/{tenant_id}/products/suggestions", ("GET",)),
+    "policy rules page": TenantScopedRoute("/tenant/{tenant_id}/policy/rules", ("GET", "POST")),
 }
 
 #: Where a scenario may say a route redirected to, keyed by the name the Gherkin uses. The
@@ -83,55 +82,19 @@ class TargetTenant(NamedTuple):
     products_payload: list[dict[str, str]]
 
 
-def unique_id(prefix: str) -> str:
+class TenantState(NamedTuple):
+    """What a request can change for a tenant: how many rows it holds per table, and its policy settings."""
+
+    row_counts: dict[str, int]
+    policy_settings: Any
+
+
+def _unique_id(prefix: str) -> str:
     """A collision-free id: the e2e stack DB persists across runs, so factory sequences would repeat."""
     return mint(f"{prefix}_{uuid.uuid4().hex[:10]}")
 
 
-def seed_target_tenant(session: Session, tenant_id: str) -> TargetTenant:
-    """Tenant *tenant_id* with one catalogue product and one active media buy. Factories must be bound to ``session``."""
-    tenant = TenantFactory(tenant_id=tenant_id)
-    product = ProductFactory(tenant=tenant, product_id=unique_id("prod"))
-    buy = MediaBuyFactory(
-        tenant=tenant,
-        media_buy_id=unique_id("mb"),
-        status="active",
-        budget=ACTIVE_BUY_BUDGET,
-        # Only the principal id is set: PrincipalFactory derives token_hash/token_prefix
-        # from it (tests/factories/principal.py), so a unique id is a unique credential.
-        principal__principal_id=unique_id("principal"),
-    )
-    products_payload = [
-        {
-            "product_id": product.product_id,
-            "name": product.name,
-            "description": product.description,
-            "delivery_type": product.delivery_type,
-        }
-    ]
-    return TargetTenant(tenant.tenant_id, buy.principal.name, products_payload)
-
-
-def delete_tenant(tenant_id: str) -> None:
-    """Delete tenant *tenant_id* and its rows from the database the current engine points at."""
-    with get_db_session() as session:
-        delete_tenant_rows(session, tenant_id)
-        session.commit()
-
-
-def tenant_state(session: Session, tenant_id: str) -> tuple:
-    """Everything the four handlers can reach for a tenant, read fresh from the DB."""
-    session.expire_all()
-    tenant = session.get(Tenant, tenant_id)
-    assert tenant is not None
-    return (
-        sorted(product.product_id for product in tenant.products),
-        sorted(buy.media_buy_id for buy in tenant.media_buys),
-        tenant.policy_settings,
-    )
-
-
-def redirect_path(response: Any) -> str:
+def redirect_path(response: AdminResponse) -> str:
     """Path of a redirect's Location, without the ``next`` query the login page carries."""
     return urlsplit(response.headers["Location"]).path
 
@@ -178,25 +141,13 @@ class AdminTenantScopingEnv(AdminAccountEnv):
     def __init__(self, *, mode: str = "integration", base_url: str | None = None) -> None:
         super().__init__(mode=mode, base_url=base_url)
         self._target: TargetTenant | None = None
-        self._state: tuple | None = None
+        self._state_before_request: TenantState | None = None
         self._cleanups = ExitStack()
 
     def _setup(self) -> None:
-        """No ambient super-admin grant for the member identity.
-
-        ``MEMBER_EMAIL`` lives at ``example.com``; a configured ``SUPER_ADMIN_DOMAINS=example.com``
-        (or the address itself in ``SUPER_ADMIN_EMAILS``) would turn every rejection case into
-        a super-admin pass. Both lists are emptied on the live settings object, which
-        ``is_super_admin`` reads on each request. The environment is loaded once, so removing
-        the variables instead would only reach a process that had not built its settings yet.
-
-        This governs the in-process app. Over e2e the server reads its own settings
-        (docker-compose.e2e.yml forwards ``SUPER_ADMIN_EMAILS`` only).
-        """
+        """No ambient super-admin grant for the member identity, on the app in this process."""
         super()._setup()
-        auth = get_settings().auth
-        for field in ("super_admin_emails", "super_admin_domains"):
-            self._cleanups.enter_context(mock.patch.object(auth, field, ""))
+        self._cleanups.enter_context(no_configured_super_admins())
 
     def _cleanup(self) -> None:
         """Delete the tenants this env created, with their rows, and restore the settings.
@@ -209,7 +160,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
 
     def _new_tenant_id(self, prefix: str) -> str:
         """A unique tenant id whose deletion is registered before the tenant exists."""
-        tenant_id = unique_id(prefix)
+        tenant_id = _unique_id(prefix)
         self._cleanups.callback(delete_tenant, tenant_id)
         return tenant_id
 
@@ -221,20 +172,43 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         return self._target
 
     def seed_target_tenant(self) -> TargetTenant:
-        with bound_factory_session() as session:
-            self._target = seed_target_tenant(session, self._new_tenant_id("scope"))
-        self._state = self.target_state()
+        """A tenant with one catalogue product, one active media buy and an active member who is not the caller."""
+        with bound_factory_session():
+            tenant = TenantFactory(tenant_id=self._new_tenant_id("scope"))
+            product = ProductFactory(tenant=tenant, product_id=_unique_id("prod"))
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                media_buy_id=_unique_id("mb"),
+                status="active",
+                budget=ACTIVE_BUY_BUDGET,
+                # Only the principal id is set: PrincipalFactory derives token_hash/token_prefix
+                # from it (tests/factories/principal.py), so a unique id is a unique credential.
+                principal__principal_id=_unique_id("principal"),
+            )
+            UserFactory(tenant=tenant, user_id=_unique_id("user"), email=OTHER_MEMBER_EMAIL)
+            products_payload = [
+                {
+                    "product_id": product.product_id,
+                    "name": product.name,
+                    "description": product.description,
+                    "delivery_type": product.delivery_type,
+                }
+            ]
+            self._target = TargetTenant(tenant.tenant_id, buy.principal.name, products_payload)
         return self._target
 
-    def target_state(self) -> tuple:
+    def target_state(self) -> TenantState:
+        """The target tenant's state now, read from the database."""
         with get_db_session() as session:
-            return tenant_state(session, self.target.tenant_id)
+            tenant = session.get(Tenant, self.target.tenant_id)
+            assert tenant is not None
+            return TenantState(tenant_row_counts(session, tenant.tenant_id), tenant.policy_settings)
 
     @property
-    def seeded_state(self) -> tuple:
-        """The target tenant's state as seeded; compare ``target_state()`` against it after a rejection."""
-        assert self._state is not None, "seed_target_tenant() has not run"
-        return self._state
+    def state_before_request(self) -> TenantState:
+        """The target tenant's state as ``send()`` found it; compare ``target_state()`` against it after a rejection."""
+        assert self._state_before_request is not None, "send() has not run"
+        return self._state_before_request
 
     # ── Caller memberships ────────────────────────────────────────────────
 
@@ -247,7 +221,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         home_tenant_id = self._new_home_tenant(with_member=False)
         with bound_factory_session() as session:
             target = session.get(Tenant, self.target.tenant_id)
-            UserFactory(tenant=target, user_id=unique_id("user"), email=MEMBER_EMAIL, is_active=is_active)
+            UserFactory(tenant=target, user_id=_unique_id("user"), email=MEMBER_EMAIL, is_active=is_active)
         self._authenticate_member(home_tenant_id)
 
     def _new_home_tenant(self, *, with_member: bool) -> str:
@@ -255,7 +229,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         with bound_factory_session():
             home = TenantFactory(tenant_id=self._new_tenant_id("home"))
             if with_member:
-                UserFactory(tenant=home, user_id=unique_id("user"), email=MEMBER_EMAIL)
+                UserFactory(tenant=home, user_id=_unique_id("user"), email=MEMBER_EMAIL)
             return home.tenant_id
 
     def _authenticate_member(self, login_tenant_id: str) -> None:
@@ -268,4 +242,6 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         route = ROUTES[route_name]
         assert method in route.methods, f"{route_name} does not serve {method}"
         path = route.path.format(tenant_id=self.target.tenant_id)
+        # Read here, not at seeding: a Given after the Background adds the caller's own row.
+        self._state_before_request = self.target_state()
         return self.client.request(method, path, data={} if method == "POST" else None)
