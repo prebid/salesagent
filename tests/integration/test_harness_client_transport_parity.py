@@ -64,7 +64,17 @@ def _assert_error_equivalent(via, client_result, code: str, *, recovery: str) ->
     # `status` came to exist on the dispatcher path and not on the client path
     # while every wire_error_envelope assertion stayed green. Comparing the
     # envelope makes that divergence observable here (wire-grading remediation).
-    assert via.envelope == client_result.envelope, (
+    import copy
+
+    envelopes = [copy.deepcopy(result.envelope) for result in (via, client_result)]
+    for envelope in envelopes:
+        if envelope["transport"] in (Transport.A2A.value, Transport.E2E_A2A.value) and "jsonrpc_error" not in envelope:
+            task = envelope.get("task")
+            assert isinstance(task, dict), f"A2A failure lost its native Task: {envelope!r}"
+            for field in ("id", "contextId"):
+                assert isinstance(task.get(field), str) and task[field], f"native Task lost {field}: {task!r}"
+                task[field] = f"per-invocation-{field}"
+    assert envelopes[0] == envelopes[1], (
         f"env.call_via and AdCPTestClient.call disagree on the error envelope: "
         f"{via.envelope!r} vs {client_result.envelope!r}"
     )
@@ -101,9 +111,9 @@ def _dispatch_via_env_pinning_one_dispatch_core(env, transport: Transport, tool:
     real_dispatch_core = client_module._dispatch_core
     seen: list[tuple[Transport, str]] = []
 
-    def _spy(env_, transport_, tool_, payload_, identity_=NO_IDENTITY_OVERRIDE):
+    def _spy(env_, transport_, tool_, payload_, identity_=NO_IDENTITY_OVERRIDE, **options):
         seen.append((transport_, tool_))
-        return real_dispatch_core(env_, transport_, tool_, payload_, identity_)
+        return real_dispatch_core(env_, transport_, tool_, payload_, identity_, **options)
 
     with patch.object(client_module, "_dispatch_core", _spy):
         via = env.call_via(transport, **kwargs)
