@@ -18,6 +18,7 @@ from tests.helpers.admin_session import (
     admin_session_payload,
     admin_test_app,
     drop_stated_session_cookie,
+    state_flask_session,
     state_http_session,
 )
 
@@ -120,11 +121,9 @@ class AdminClient:
         self.state_session(admin_session_payload(tenant_id))
 
     def state_session(self, payload: dict[str, Any]) -> None:
-        """State *payload* as the session, replacing whatever the client held. The one session writer."""
+        """State *payload* as the session, replacing whatever the client held, through this transport's writer."""
         if self._flask_client is not None:
-            with self._flask_client.session_transaction() as session:
-                session.clear()
-                session.update(payload)
+            state_flask_session(self._flask_client, payload)
         else:
             state_http_session(self._http, payload)
 

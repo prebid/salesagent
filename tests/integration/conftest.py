@@ -173,15 +173,16 @@ def gam_oauth_configured(admin_client, monkeypatch):
     live settings object the views read (the environment is loaded once).
     """
     from src.core.config import get_settings
+    from tests.helpers.admin_session import no_configured_super_admins
 
     auth = get_settings().auth
-    monkeypatch.setattr(auth, "super_admin_emails", "")
-    monkeypatch.setattr(auth, "super_admin_domains", "")
     monkeypatch.setattr(auth, "gam_oauth_client_id", "gam-oauth-client.apps.googleusercontent.com")
     monkeypatch.setattr(auth, "gam_oauth_client_secret", "GOCSPX-gam-oauth-client-secret")
     # ``gam_authorize`` only tests ``current_app.oauth`` for presence; whether the
     # module-level app registered a provider depends on the shell's GOOGLE_CLIENT_ID.
     monkeypatch.setattr(admin_client.application, "oauth", object(), raising=False)
+    with no_configured_super_admins():
+        yield
 
 
 @pytest.fixture

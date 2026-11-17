@@ -29,3 +29,18 @@ def test_stating_a_session_over_http_replaces_the_cookie_the_server_wrote(state:
         assert [(cookie.name, cookie.domain) for cookie in client._http.cookies] == [("session", "")]
     finally:
         client.close()
+
+
+def test_stating_a_session_in_process_replaces_the_session_the_client_held() -> None:
+    """A member stated over a super-admin session keeps none of its keys, ``is_super_admin`` least of all."""
+    client = AdminClient(None)
+    try:
+        client.authenticate("tenant_a")
+        payload = member_session_payload("member@example.com", "home")
+
+        client.state_session(payload)
+
+        with client._flask_client.session_transaction() as session:
+            assert dict(session) == payload
+    finally:
+        client.close()
