@@ -19,6 +19,7 @@ from adcp.types import ErrorCode
 from pytest_bdd import given, parsers
 
 from src.core.database.models import PricingOption
+from src.core.format_cache import DEFAULT_AGENT_URL
 from src.core.helpers import MEDIA_ASSET_TYPES
 from tests.bdd.steps.generic._create_request import (
     build_create_request_kwargs,
@@ -66,6 +67,13 @@ def _resolve_date_token(value: str, clock: Any) -> str:
 def _future(days: int = 1) -> datetime:
     """Return a timezone-aware datetime N days in the future."""
     return mint(datetime.now(UTC) + timedelta(days=days))
+
+
+def _set_flight_days(kwargs: dict[str, Any], days: int) -> None:
+    """Set the request's flight to start tomorrow and run exactly ``days`` days."""
+    start = _future(1)
+    kwargs["start_time"] = start.isoformat()
+    kwargs["end_time"] = mint(start + timedelta(days=days)).isoformat()
 
 
 def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
@@ -117,6 +125,24 @@ def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
     if "env" in ctx:
         ctx["request_kwargs"].setdefault("account", {"account_id": ctx["env"].setup_default_account().account_id})
     return ctx["request_kwargs"]
+
+
+def scenario_products(ctx: dict) -> dict[str, Any]:
+    """The products the scenario's Givens built, by ``product_id``.
+
+    The one reader of the two keys a Given records its products under:
+    ``ctx["default_product"]``, and ``ctx["extra_products"]`` for every further product,
+    a list of ``(product, pricing option)`` pairs. The default product comes first.
+    """
+    products = [ctx["default_product"], *(product for product, _ in ctx.get("extra_products") or [])]
+    return {product.product_id: product for product in products}
+
+
+def seeded_product(ctx: dict, product_id: str) -> Any:
+    """The product a Given of this scenario built under *product_id*; fails naming the built ids."""
+    products = scenario_products(ctx)
+    assert product_id in products, f"No Given seeded product {product_id!r}. Seeded: {sorted(products)}."
+    return products[product_id]
 
 
 def harness_create_request_kwargs(ctx: dict) -> dict[str, Any]:
@@ -667,15 +693,9 @@ def given_packages_same_currency(ctx: dict, currency: str) -> None:
     # not a design: the moment a product's option is minted with a publisher-chosen id,
     # the step names an id that product does not have. It is now correct by construction
     # instead of by that coincidence.
-    by_product = {ctx["default_product"].product_id: ctx["default_product"]}
-    by_product.update({product.product_id: product for product, _ in ctx.get("extra_products") or []})
-
     wanted = PricingOption.default_option_id("cpm", currency, True)
     for pkg in kwargs.get("packages", []):
-        product = by_product.get(pkg["product_id"])
-        assert product is not None, (
-            f"Package names product {pkg['product_id']!r}, which no Given seeded. Seeded: {sorted(by_product)}."
-        )
+        product = seeded_product(ctx, pkg["product_id"])
         existing = next(
             (po for po in getattr(product, "pricing_options", None) or [] if po.pricing_option_id == wanted),
             None,
@@ -946,8 +966,7 @@ def given_high_daily_spend(ctx: dict, budget: int, days: int, daily: int) -> Non
     math to catch Gherkin typos.
     """
     kwargs = _ensure_request_defaults(ctx)
-    kwargs["start_time"] = _future(1).isoformat()
-    kwargs["end_time"] = _future(1 + days).isoformat()
+    _set_flight_days(kwargs, days)
     assert kwargs.get("packages"), (
         f"No packages in request — step claims 'a package has budget {budget} over a "
         f"{days}-day flight' but no package exists to set it on"
@@ -1234,7 +1253,9 @@ def given_pricing_option_configuration(ctx: dict, config: str) -> None:
 
     elif config.startswith("floor_price="):
         floor = float(config.split("=")[1])
-        _setup_auction_pricing(ctx, floor=floor, bid=floor + 1.0)
+        # Any bid above the floor is valid. This one keeps the request's budget under the mock
+        # ad server's 1,000,000-impression ceiling, since a package's volume is budget at its bid.
+        _setup_auction_pricing(ctx, floor=floor, bid=floor + 9.0)
 
     else:
         raise ValueError(f"Unknown pricing option configuration: {config}")
@@ -1592,20 +1613,28 @@ def given_minimum_spend_configuration(ctx: dict, config: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _set_daily_spend_cap(ctx: dict, *, cap: float | None, budget: float, flight_days: int = 10) -> None:
+def _set_daily_spend_cap(
+    ctx: dict, *, cap: float | None, budget: float, flight_days: int = 10, cpm: float | None = None
+) -> None:
     """Configure daily spend cap and package budget/flight duration.
 
     Sets CurrencyLimit.max_daily_package_spend (tenant-level cap) and adjusts
     the request package budget and flight dates to achieve the target daily spend.
 
     Daily spend = budget / max(flight_days, 1).
+
+    ``cpm`` reprices the scenario's default pricing option, for a row whose budget buys
+    more than a seller books at the default price (``given_daily_spend_boundary`` says
+    why). The row is edited in place, for the reason ``_set_minimums`` gives:
+    ``uq_pricing_options_option_id`` refuses a second cpm/USD/fixed option on the product.
     """
     env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
 
-    # Set flight duration via start_time / end_time
-    kwargs["start_time"] = _future(1).isoformat()
-    kwargs["end_time"] = _future(1 + flight_days).isoformat()
+    _set_flight_days(kwargs, flight_days)
+
+    if cpm is not None:
+        ctx["default_pricing_option"].rate = Decimal(str(cpm))
 
     # Set package budget
     if kwargs.get("packages"):
@@ -1650,41 +1679,45 @@ def given_daily_spend_boundary(ctx: dict, config: str) -> None:
     """Set up daily spend cap for boundary scenarios (BR-RULE-012).
 
     Boundary configs:
-    - daily=1000 cap=1000: at limit (budget=10000, 10-day flight)
-    - daily=1001 cap=1000: exceeds by 1 (budget=10010, 10-day flight)
-    - daily=9999 no-cap: no cap configured (check skipped)
-    - 0-day-flight: start==end, production floors to 1 day
+    - daily=1000 cap=1000: at limit (budget=2000, 2-day flight)
+    - daily=1001 cap=1000: exceeds by 1 (budget=2002, 2-day flight)
+    - daily=9999 no-cap: no cap configured (check skipped); budget=9999, 1-day flight, 10.00 CPM
+    - 0-day-flight: a 12-hour flight, 0 whole days, production floors to 1 day
 
     THE DAILY RATE IS WHAT THESE ROWS VARY; THE TOTAL IS NOT FREE. A cap applies to
-    ``budget / flight_days``, so a row can reach any daily figure by raising the budget or by
-    shortening the flight -- but the TOTAL is what every downstream limit sees, and impressions
-    are derived from it (``budget / cpm * 1000``). The no-cap row reached daily=9999 the first
-    way, with a 99990 budget over ten days, and at the seeded $10 CPM that asks the seller for
-    9,999,000 impressions against the mock ad server's 1,000,000 goal ceiling (a real
-    GAM-style limit, ``mock_ad_server.py``). The live server refused it --
-    ``packages[0].impressions``, rejected_value 9999000 -- and the row failed on e2e_rest while
-    passing on the three transports that mock the adapter and so never reach that check. Its
-    sibling at 10000 survives by exactly one impression: 1,000,000 is not ``> 1000000``.
-    Reaching the same daily figure by shortening the flight keeps the row's meaning and stops
-    it asking for inventory no seller would sell.
+    ``budget / flight_days``, so a row can reach a daily figure by raising the budget or by
+    shortening the flight, but the total is what every downstream limit sees. A package's
+    volume is its own budget at its pricing option's unit price (``package_volume``:
+    ``budget * 1000 / price``), and the mock ad server refuses a package above 1,000,000
+    impressions (``mock_ad_server.py``, the kind of goal ceiling GAM has). The three
+    transports that stand in the adapter never reach that check; e2e_rest books through the
+    live mock and does. At the scenario product's 5.00 CPM the ceiling is a 5000 budget, so
+    a row that must be accepted reaches its daily figure over a short flight: 2000 over two
+    days is 400,000 impressions. That keeps the row's meaning and stops it asking for
+    inventory no seller would sell.
     """
     config = config.strip()
 
     if config == "daily=1000 cap=1000":
-        _set_daily_spend_cap(ctx, cap=1000.0, budget=10000.0)
+        _set_daily_spend_cap(ctx, cap=1000.0, budget=2000.0, flight_days=2)
 
     elif config == "daily=1001 cap=1000":
-        _set_daily_spend_cap(ctx, cap=1000.0, budget=10010.0)
+        _set_daily_spend_cap(ctx, cap=1000.0, budget=2002.0, flight_days=2)
 
     elif config == "daily=9999 no-cap":
         # daily = 9999/1 = 9999, which breaches every cap this outline uses, so the row still
-        # proves the check is SKIPPED rather than merely satisfied. 999,900 impressions.
-        _set_daily_spend_cap(ctx, cap=None, budget=9999.0, flight_days=1)
+        # proves the check is SKIPPED rather than merely satisfied. The flight cannot get
+        # shorter than one day, and 9999 at 5.00 is 1,999,800 impressions, so this row's
+        # product sells at a 10.00 CPM, where 9999 buys 999,900.
+        _set_daily_spend_cap(ctx, cap=None, budget=9999.0, flight_days=1, cpm=10.0)
 
     elif config == "0-day-flight":
-        # 0-day flight: start==end, production floors flight_days to 1
-        # daily = budget / 1 = 500, cap = 1000 → passes
+        # A flight of 0 whole days: it ends 12 hours after it starts, and production floors
+        # flight_days to 1, so daily = budget / 1 = 500, cap = 1000 -> passes. Not start==end:
+        # the seller refuses an end_time that is not after start_time.
         _set_daily_spend_cap(ctx, cap=1000.0, budget=500.0, flight_days=0)
+        kwargs = ctx["request_kwargs"]
+        kwargs["end_time"] = (datetime.fromisoformat(kwargs["start_time"]) + timedelta(hours=12)).isoformat()
 
     else:
         raise ValueError(f"Unknown daily spend boundary config: {config}")
@@ -1707,6 +1740,18 @@ def _set_targeting_overlay(ctx: dict, overlay: dict[str, Any] | None) -> None:
             kwargs["packages"][0].pop("targeting_overlay", None)
         else:
             kwargs["packages"][0]["targeting_overlay"] = overlay
+
+
+@given(parsers.re(r"^the package targeting_overlay is (?P<overlay>\{.*\})$"))
+def given_package_targeting_overlay(ctx: dict, overlay: str) -> None:
+    """Set the first package's targeting_overlay of the CREATE request to the JSON object *overlay*.
+
+    The update request's overlay is UC-003's ``the package targeting_overlay is set to: ...``;
+    the two texts differ by two words and write to different requests.
+    """
+    import json
+
+    _set_targeting_overlay(ctx, json.loads(overlay))
 
 
 @given(parsers.parse("the targeting overlay scenario is {partition}"))
@@ -2071,11 +2116,16 @@ def _add_creative_ids_to_package(ctx: dict, creative_ids: list[str]) -> None:
 
 
 def _create_approved_creative(
-    ctx: dict, creative_id: str, fmt: str = "display_300x250_image", asset_key: str = "banner_image"
+    ctx: dict,
+    creative_id: str,
+    fmt: str = "display_300x250_image",
+    asset_key: str = "banner_image",
+    principal: Any = None,
 ) -> Any:
     """Create an approved Creative in the DB and return it.
 
-    Uses CreativeFactory with the tenant/principal from harness context.
+    Uses CreativeFactory with the tenant from harness context, owned by *principal*
+    (the harness's principal when not given).
 
     THE FORMAT AND THE ASSET KEY MOVE TOGETHER and are not independent defaults. The
     previous pair -- ``display_300x250`` keyed ``primary`` -- named the harness's own
@@ -2095,7 +2145,7 @@ def _create_approved_creative(
     creative = CreativeFactory(
         creative_id=creative_id,
         tenant=ctx["tenant"],
-        principal=ctx["principal"],
+        principal=principal if principal is not None else ctx["principal"],
         format=fmt,
         approved=True,
         data={"assets": {asset_key: {"url": "https://example.com/banner.png", "width": 300, "height": 250}}},
@@ -2104,7 +2154,12 @@ def _create_approved_creative(
     return creative
 
 
-def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x250_image") -> None:
+def _add_inline_creatives(
+    ctx: dict,
+    count: int = 1,
+    fmt_id: str = "display_300x250_image",
+    agent_url: str = DEFAULT_AGENT_URL,
+) -> None:
     """Add inline creative dicts to the first package's 'creatives' field.
 
     Builds creative payloads matching the product's accepted format, through
@@ -2124,19 +2179,18 @@ def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x
     if kwargs.get("packages"):
         pkg = kwargs["packages"][0]
         creatives = pkg.get("creatives") or []
-        creatives.extend(inline_creative_payload(i + 1, fmt_id) for i in range(count))
+        creatives.extend(inline_creative_payload(i + 1, fmt_id, agent_url) for i in range(count))
         pkg["creatives"] = creatives
 
 
-def inline_creative_payload(number: int, fmt_id: str = "display_300x250_image") -> dict[str, Any]:
+def inline_creative_payload(
+    number: int, fmt_id: str = "display_300x250_image", agent_url: str = DEFAULT_AGENT_URL
+) -> dict[str, Any]:
     """The *number*-th inline creative ``_add_inline_creatives`` builds: one image for *fmt_id*."""
     return CreativeAssetRequestFactory.payload(
         creative_id=f"inline-cr-{number:03d}",
         name=f"Inline Creative {number}",
-        format_id={
-            "agent_url": "https://creative.adcontextprotocol.org",
-            "id": fmt_id,
-        },
+        format_id={"agent_url": agent_url, "id": fmt_id},
         # Every asset the CAPTURE requires for this format, keyed by its asset_id, not by
         # the deleted stub's ``primary``. See _create_approved_creative.
         assets=named_format_assets(fmt_id, media_url=f"https://example.com/banner-{number}.png"),
@@ -2156,6 +2210,44 @@ def inline_creative_media_asset(creative: dict[str, Any]) -> dict[str, Any]:
     media = [a for a in assets.values() if isinstance(a, dict) and a.get("asset_type") in MEDIA_ASSET_TYPES]
     assert len(media) == 1, f"expected exactly one media asset to break, got assets={assets}"
     return media[0]
+
+
+@given("the request's package carries an inline image creative in its product's format")
+@given("the request's first package carries an inline image creative in its product's format")
+def given_package_carries_inline_creative_in_product_format(ctx: dict) -> None:
+    """The first package uploads one image creative, in the format its product row declares.
+
+    The format is read off the seeded product (``agent_url`` and ``id``), not named here, so
+    the creative is one the product accepts on every transport, the live server's
+    in-network creative agent included. The creative carries every asset the reference
+    catalog's definition of that format requires, and the media one must be an image.
+    """
+    from tests.factories.format import reference_format
+
+    product_format = ctx["default_product"].format_ids[0]
+    assert reference_format(product_format["id"]) is not None, (
+        f"the product's format {product_format['id']!r} is not in the reference catalog; "
+        "the scenario's product must be built in a format the creative agent serves"
+    )
+    _add_inline_creatives(ctx, fmt_id=product_format["id"], agent_url=product_format["agent_url"])
+    creative = ctx["request_kwargs"]["packages"][0]["creatives"][-1]
+    assert inline_creative_media_asset(creative)["asset_type"] == "image", (
+        f"the product's format {product_format['id']!r} does not require an image: {creative['assets']}"
+    )
+
+
+@given("another principal of the tenant holds an approved creative under the id of the request's inline creative")
+def given_other_principal_holds_inline_creative_id(ctx: dict) -> None:
+    """Another principal of the tenant holds an approved creative under the request's inline creative id.
+
+    A creative is keyed by ``(creative_id, tenant_id, principal_id)``, so two principals of
+    one tenant may each hold a creative under the same id. The id is read off the request
+    the scenario built.
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    creative_id = _ensure_request_defaults(ctx)["packages"][0]["creatives"][0]["creative_id"]
+    _create_approved_creative(ctx, creative_id, principal=PrincipalFactory(tenant=ctx["tenant"]))
 
 
 @given(parsers.parse("the creative scenario is {partition}"))

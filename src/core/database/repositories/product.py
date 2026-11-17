@@ -15,7 +15,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from src.core.database.models import InventoryProfile, PricingOption, Product, Publisher, Tenant
+from src.core.database.models import InventoryProfile, Product, Publisher, Tenant
 from src.core.format_satisfaction import refuse_outside_common_intersection
 from src.core.publisher_format_catalog import PublisherCatalog, format_option_refusal
 
@@ -246,17 +246,3 @@ class ProductRepository:
         refuse_outside_common_intersection(product)
         self._session.flush()
         return product
-
-    # ------------------------------------------------------------------
-    # PricingOption queries
-    # ------------------------------------------------------------------
-
-    def get_all_pricing_options(self) -> list[PricingOption]:
-        """Get all pricing options for the tenant."""
-        return list(
-            self._session.scalars(
-                select(PricingOption).where(
-                    PricingOption.tenant_id == self._tenant_id,
-                )
-            ).all()
-        )
