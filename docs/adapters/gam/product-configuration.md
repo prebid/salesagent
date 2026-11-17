@@ -58,7 +58,7 @@ Guaranteed products:
   "cost_type": "CPM",
   "line_item_type": "STANDARD",
   "priority": 6,
-  "primary_goal_type": "DAILY",
+  "primary_goal_type": "LIFETIME",
   "primary_goal_unit_type": "IMPRESSIONS",
   "delivery_rate_type": "EVENLY",
   "creative_rotation_type": "EVEN",
@@ -112,15 +112,15 @@ At media buy creation, a missing or invalid configuration fails with an explicit
 
 ## Line item type selection
 
-You can set `line_item_type` explicitly, but you don't have to: when it is absent, `PricingCompatibility.select_line_item_type()` (in `src/adapters/gam/pricing_compatibility.py`) picks the type from the pricing model and the delivery guarantee. An explicit type that is incompatible with the pricing model is rejected with a `ValueError`.
+You can set `line_item_type` explicitly, but you don't have to. `PricingCompatibility.select_line_item_type()` (in `src/adapters/gam/pricing_compatibility.py`) uses a configured type when it can book the package: GAM supports the package's pricing model on it, and SPONSORSHIP, NETWORK and HOUSE are used only for flat-rate packages. Those three types take only a daily goal of a percentage of impressions, which cannot hold a CPM, vCPM or CPC package to its budget. Otherwise the type is picked from the pricing model and the delivery guarantee, as when no type is configured. A configured HOUSE is therefore never used: GAM allows only CPM on it.
 
 The following decision tree shows how the adapter selects the line item type:
 
 ```mermaid
 flowchart TD
     Start["Pricing model + guarantee"] --> OV{"line_item_type set in\nimplementation_config?"}
-    OV -->|"yes"| CHK{"Compatible with the\npricing model?"}
-    CHK -->|"no"| ERR["Error: incompatible\nline item type"]
+    OV -->|"yes"| CHK{"GAM supports the pricing model\non it, and a share-of-voice\ntype only for flat_rate?"}
+    CHK -->|"no"| FR
     CHK -->|"yes"| USE["Use the configured type"]
     OV -->|"no"| FR{"flat_rate?"}
     FR -->|"yes"| SP["SPONSORSHIP\nbilled as CPD:\ntotal budget / flight days"]
@@ -181,7 +181,9 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 #### Primary goal
 
 - **Fields**: `primary_goal_type` (`DAILY`, `LIFETIME`, `NONE`) and `primary_goal_unit_type` (`IMPRESSIONS`, `CLICKS`, `VIEWABLE_IMPRESSIONS`)
-- **Defaults**: `DAILY` for guaranteed, `NONE` for non-guaranteed; unit defaults to `IMPRESSIONS`
+- **Defaults**: `LIFETIME` for guaranteed, `NONE` for non-guaranteed; unit defaults to `IMPRESSIONS`
+- **Behavior**: The goal type follows the line item type: `STANDARD` and `BULK` book `LIFETIME`; `SPONSORSHIP` and `NETWORK` (flat rate only) book a `DAILY` share of 100% of impressions. The configured `primary_goal_type` applies to `PRICE_PRIORITY`, which accepts `LIFETIME`, `DAILY` and `NONE` and books `LIFETIME` for any other value. CPC packages book `CLICKS` and vCPM packages `VIEWABLE_IMPRESSIONS`.
+- **Units**: the package's volume, which is its budget at the price of the pricing option it selected (per thousand for CPM and vCPM). A `DAILY` goal spreads it over the flight's days.
 
 #### Inventory targeting
 

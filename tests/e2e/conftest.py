@@ -32,37 +32,12 @@ from tests.e2e.stack_readiness import (
     compose_argv,
     compose_down_argv,
     compose_exec_argv,
-    e2e_db_url_build,
-    e2e_host_default,
+    e2e_host,
+    e2e_in_network,
     e2e_ports,
-    in_network,
     resolve_e2e_db,
-    use_container_exec,
     wait_for_e2e_stack,
 )
-
-
-def e2e_host() -> str:
-    """Host for e2e server URLs.
-
-    'localhost' on the host path (Docker publishes host ports); a compose service
-    name (e.g. 'proxy') when the runner is in-network and reaches the server over
-    the compose network with no published ports (ADCP_TEST_HOST).
-    """
-    return e2e_host_default()
-
-
-def e2e_in_network() -> bool:
-    """Whether this process runs INSIDE the compose network rather than on the host.
-
-    The in-network runner addresses the stack by service name (:func:`e2e_host` is a
-    compose alias); the host path reaches published ports on localhost and cannot
-    resolve a compose alias at all. Any claim that depends on compose DNS — reaching a
-    service that publishes NO host port, or resolving a network alias — is only
-    meaningful here. ``./run_all_tests.sh`` runs every suite in-network, so this is the
-    normal path and the host path is the developer convenience.
-    """
-    return in_network(e2e_host())
 
 
 def e2e_tls_host() -> str:
@@ -382,21 +357,7 @@ def docker_services_e2e(request):
     # Initialize CI test data now that services are healthy
     print("📦 Initializing CI test data (products, principals, etc.)...")
 
-    # CRITICAL: when neither E2E_DATABASE_URL nor a genuinely-e2e DATABASE_URL
-    # is set, resolve_e2e_db() falls back to localhost:<postgres_port>/adcp — the
-    # exact host-published address of THIS stack's own postgres (postgres_port
-    # resolved above by either branch). But a test runner that already has an
-    # unrelated DATABASE_URL set (e.g. a suite DB provisioned by the CI
-    # offload harness for unit/integration/bdd) leaks it into this process's
-    # os.environ, and resolve_e2e_db() prefers that stale value over the e2e
-    # stack's own DB — so init_database_ci.py silently seeds a database
-    # nothing else reads while the running adcp-server (DATABASE_URL fixed to
-    # its own postgres inside the container) stays empty. setdefault() only
-    # fills the gap when E2E_DATABASE_URL is genuinely absent (this leak
-    # case) — a real in-network run that already sets it (compose service
-    # name, not a published port) is left untouched (#1838 review).
-    os.environ.setdefault("E2E_DATABASE_URL", e2e_db_url_build(port=postgres_port))
-    database = resolve_e2e_db(fallback_port=postgres_port)
+    database = resolve_e2e_db(host=e2e_host(), published_port=postgres_port)
 
     # Setup environment for init script - reuse existing env if available, else create minimal
     init_env = os.environ.copy()
@@ -406,7 +367,7 @@ def docker_services_e2e(request):
 
     # The host reaches the container DB through Compose; in-network the
     # runner connects directly. CLI availability does not decide topology.
-    if use_container_exec(e2e_host()):
+    if not e2e_in_network():
         init_cmd = compose_exec_argv("adcp-server", "python", "scripts/setup/init_database_ci.py")
     else:
         init_cmd = [sys.executable, "scripts/setup/init_database_ci.py"]
@@ -563,7 +524,7 @@ def live_server(docker_services_e2e):
 
     host = e2e_host()
     # The URL and direct-connection parameters share the readiness resolver.
-    database = resolve_e2e_db(fallback_port=ports["postgres_port"])
+    database = resolve_e2e_db(host=host, published_port=ports["postgres_port"])
     urls = {
         "mcp": f"http://{host}:{ports['mcp_port']}",
         "a2a": f"http://{host}:{ports['a2a_port']}",

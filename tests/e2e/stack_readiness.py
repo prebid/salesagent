@@ -63,8 +63,8 @@ class _Probe(Protocol):
     ) -> bool: ...
 
 
-def e2e_host_default() -> str:
-    """Host for e2e server URLs — SSOT for ``conftest.e2e_host`` and wait defaults."""
+def e2e_host() -> str:
+    """Published-port host or Compose service name used by this E2E runner."""
     return os.getenv("ADCP_TEST_HOST", "localhost")
 
 
@@ -84,13 +84,10 @@ def e2e_db_url_build(*, host: str = "localhost", port: int = 5432) -> str:
     return f"postgresql://{_DEFAULT_DB_USER}:{_DEFAULT_DB_PASSWORD}@{_http_authority(host, port)}/{_DEFAULT_DB_NAME}"
 
 
-def resolve_e2e_db(*, fallback_host: str = "localhost", fallback_port: int = 5432) -> E2EDatabase:
-    """Resolve the environment chain once, preserving the configured DSN verbatim."""
-    url = (
-        os.getenv("E2E_DATABASE_URL")
-        or os.getenv("DATABASE_URL")
-        or e2e_db_url_build(host=fallback_host, port=fallback_port)
-    )
+def resolve_e2e_db(*, host: str, published_port: int) -> E2EDatabase:
+    """Resolve the E2E endpoint, independently of a suite's DATABASE_URL."""
+    fallback_host, fallback_port = ("postgres", 5432) if e2e_in_network(host) else (host, published_port)
+    url = os.getenv("E2E_DATABASE_URL") or e2e_db_url_build(host=fallback_host, port=fallback_port)
     parsed = urlparse(url)
     return E2EDatabase(
         url=url,
@@ -102,14 +99,10 @@ def resolve_e2e_db(*, fallback_host: str = "localhost", fallback_port: int = 543
     )
 
 
-def in_network(host: str) -> bool:
+def e2e_in_network(host: str | None = None) -> bool:
     """True when the runner reaches the stack by compose service name (topology)."""
+    host = e2e_host() if host is None else host
     return host not in {"localhost", "127.0.0.1", "::1"}
-
-
-def use_container_exec(host: str) -> bool:
-    """True when seed/update should prefer ``compose exec`` (host-path topology)."""
-    return not in_network(host)
 
 
 def compose_argv(compose_files: Sequence[str]) -> list[str]:
@@ -242,12 +235,11 @@ def _probe_postgres(
     ports: E2EPorts,
     host: str,
 ) -> bool:
-    if in_network(host):
-        # Runner is on the compose network — shared env/default endpoint SSOT.
-        connection = resolve_e2e_db(fallback_host="postgres", fallback_port=5432)
+    def probe(port: int) -> bool:
+        connection = resolve_e2e_db(host=host, published_port=port)
         return _tcp_open(connection.host, connection.port)
 
-    return _published_port_ready(ports, "postgres", lambda port: _tcp_open(host, port))
+    return _published_port_ready(ports, "postgres", probe)
 
 
 def _probe_creative_agent(
@@ -255,7 +247,7 @@ def _probe_creative_agent(
     ports: E2EPorts,
     host: str,
 ) -> bool:
-    if in_network(host):
+    if e2e_in_network(host):
         return _http_ok(_CREATIVE_AGENT_IN_NETWORK_HEALTH)
 
     return _published_port_ready(
@@ -295,7 +287,7 @@ def wait_for_e2e_stack(
     Both fixture paths use this gate. A failed check
     prevents later probes in that attempt; timeout emits one diagnostic dump.
     """
-    host = e2e_host_default() if host is None else host
+    host = e2e_host() if host is None else host
     deadline = time.monotonic() + timeout_s
     failed = "postgres"
     print(f"Waiting for E2E stack readiness (timeout={timeout_s}s, host={host})...")

@@ -1,7 +1,6 @@
 import subprocess
 import time
 from contextlib import contextmanager
-from urllib.parse import urlparse
 
 import psycopg2
 from fastmcp.client import Client
@@ -9,7 +8,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 from sqlalchemy import select
 
 from scripts.setup.init_database_ci import CI_TEST_TENANT_ID
-from tests.e2e.stack_readiness import compose_exec_argv, use_container_exec
+from tests.e2e.stack_readiness import compose_exec_argv, e2e_in_network
 from tests.helpers.credentials import credential_headers
 
 
@@ -311,7 +310,7 @@ except Exception as e:
     # directly, so exec the update inside the adcp-server container. In-network
     # there is no docker-compose binary and the runner CAN reach the server DB by
     # service name — go straight to the direct update (mirrors the conftest seed).
-    if use_container_exec(urlparse(live_server["mcp"]).hostname or "localhost"):
+    if not e2e_in_network():
         try:
             cmd = compose_exec_argv("adcp-server", "python", "-c", update_script)
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)

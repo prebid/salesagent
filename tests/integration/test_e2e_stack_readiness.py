@@ -19,7 +19,8 @@ from tests.helpers.local_http_origin import responds, run_local_origin
 
 
 @pytest.fixture
-def readiness():
+def readiness(monkeypatch):
+    monkeypatch.delenv("E2E_DATABASE_URL", raising=False)
     return importlib.import_module("tests.e2e.stack_readiness")
 
 
@@ -89,6 +90,27 @@ def test_postgres_failure_prevents_later_probes(readiness, local_origin, closed_
     assert capsys.readouterr().out.count("Dumping compose logs") == 1
 
 
+def test_explicit_database_override_is_the_endpoint_that_must_be_ready(
+    readiness, local_origin, tcp_port, closed_port, creative_agent, compose, capsys, monkeypatch
+):
+    monkeypatch.setenv("E2E_DATABASE_URL", f"postgresql://u:p@127.0.0.1:{closed_port}/adcp")
+    with pytest.raises(pytest.fail.Exception, match="failed probe: postgres"):
+        wait(readiness, local_origin, tcp_port, creative_agent, timeout_s=3)
+    assert creative_agent.hits == 0
+    assert local_origin.hits == 0
+    assert capsys.readouterr().out.count("Dumping compose logs") == 1
+
+
+@pytest.mark.parametrize(
+    "host, expected_host, expected_port",
+    [("127.0.0.1", "127.0.0.1", 5456), ("::1", "::1", 5456), ("proxy", "postgres", 5432)],
+)
+def test_suite_database_cannot_override_the_e2e_endpoint(readiness, monkeypatch, host, expected_host, expected_port):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@suite-db:5434/test")
+    database = readiness.resolve_e2e_db(host=host, published_port=5456)
+    assert (database.host, database.port, database.dbname) == (expected_host, expected_port, "adcp")
+
+
 @pytest.mark.parametrize("status", [503, 404, 302])
 def test_creative_failure_blocks_healthy_server(
     readiness, local_origin, tcp_port, creative_agent, compose, status, capsys
@@ -147,34 +169,32 @@ def test_db_url_fallback_reads_each_setting_once(readiness, monkeypatch):
     monkeypatch.delenv("E2E_DATABASE_URL", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     reads = _count_env_reads(monkeypatch)
-    assert readiness.resolve_e2e_db(fallback_host="::1", fallback_port=5456).url == (
+    assert readiness.resolve_e2e_db(host="::1", published_port=5456).url == (
         "postgresql://adcp_user:secure_password_change_me@[::1]:5456/adcp"
     )
-    assert reads == {"E2E_DATABASE_URL": 1, "DATABASE_URL": 1}
+    assert reads == {"E2E_DATABASE_URL": 1}
 
 
 def test_db_url_precedence_and_fallback_match(readiness, monkeypatch):
-    monkeypatch.setenv("E2E_DATABASE_URL", "postgresql://u:p@e2e-db:5433/adcp")
+    url = "postgresql://u:p@e2e-db:5433/adcp?sslmode=require"
+    monkeypatch.setenv("E2E_DATABASE_URL", url)
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@suite-db:5434/test")
-    assert readiness.resolve_e2e_db()[1:] == ("e2e-db", 5433, "u", "p", "adcp")
-    assert readiness.resolve_e2e_db().url == "postgresql://u:p@e2e-db:5433/adcp"
+    assert readiness.resolve_e2e_db(host="localhost", published_port=5456) == (url, "e2e-db", 5433, "u", "p", "adcp")
     monkeypatch.delenv("E2E_DATABASE_URL")
-    assert readiness.resolve_e2e_db()[1:] == ("suite-db", 5434, "u", "p", "test")
-    monkeypatch.delenv("DATABASE_URL")
-    assert readiness.resolve_e2e_db(fallback_port=5456)[1:] == (
+    assert readiness.resolve_e2e_db(host="localhost", published_port=5456)[1:] == (
         "localhost",
         5456,
         "adcp_user",
         "secure_password_change_me",
         "adcp",
     )
-    assert readiness.resolve_e2e_db(fallback_port=5456).url.endswith("@localhost:5456/adcp")
+    assert readiness.resolve_e2e_db(host="localhost", published_port=5456).url.endswith("@localhost:5456/adcp")
 
 
 def test_db_record_fills_missing_url_fields_without_rewriting_dsn(readiness, monkeypatch):
     url = "postgresql:///?sslmode=require"
     monkeypatch.setenv("E2E_DATABASE_URL", url)
-    assert readiness.resolve_e2e_db(fallback_host="::1", fallback_port=5456) == (
+    assert readiness.resolve_e2e_db(host="::1", published_port=5456) == (
         url,
         "::1",
         5456,
@@ -215,25 +235,35 @@ def test_env_port_rejects_invalid_configuration(monkeypatch):
 
 
 @pytest.mark.parametrize("agent_status", [200, 503])
-def test_in_network_gate_uses_service_addresses(readiness, local_origin, test_database_url, monkeypatch, agent_status):
+@pytest.mark.parametrize("override", [False, True])
+def test_in_network_gate_uses_service_addresses(
+    readiness, local_origin, test_database_url, monkeypatch, agent_status, override, closed_port
+):
     """Compose DNS is substituted; both HTTP services and PostgreSQL are real."""
     with psycopg2.connect(test_database_url) as connection, connection.cursor() as cursor:
         cursor.execute("SELECT 1")
         assert cursor.fetchone() == (1,)
+        postgres_address = (connection.info.host, connection.info.port)
     with run_local_origin() as creative_agent:
         creative_agent.respond_with(agent_status)
         real_lookup = socket.getaddrinfo
-        addresses = {("proxy", 8000): local_origin.port, ("creative-agent", 8080): creative_agent.port}
+        addresses = {
+            ("proxy", 8000): ("127.0.0.1", local_origin.port),
+            ("creative-agent", 8080): ("127.0.0.1", creative_agent.port),
+            ("postgres", 5432): postgres_address,
+        }
 
         def lookup(host, port, *args, **kwargs):
             target = addresses.get((host, port))
             if target is not None:
-                return real_lookup("127.0.0.1", target, *args, **kwargs)
+                return real_lookup(*target, *args, **kwargs)
             return real_lookup(host, port, *args, **kwargs)
 
         monkeypatch.setattr(socket, "getaddrinfo", lookup)
         monkeypatch.setenv("NO_PROXY", "proxy,creative-agent")
-        monkeypatch.setenv("E2E_DATABASE_URL", test_database_url)
+        if override:
+            monkeypatch.setenv("E2E_DATABASE_URL", test_database_url)
+        monkeypatch.setenv("DATABASE_URL", f"postgresql://u:p@127.0.0.1:{closed_port}/suite")
         monkeypatch.setenv("ADCP_TEST_HOST", "proxy")
         # The in-network route must work without a host-published DB port and
         # without reaching for a Docker CLI on the runner.
@@ -248,6 +278,13 @@ def test_in_network_gate_uses_service_addresses(readiness, local_origin, test_da
             assert local_origin.hits == 0
         assert creative_agent.paths
         assert set(creative_agent.paths) == {"/api/creative-agent/health"}
+
+
+def test_explicit_topology_takes_precedence_over_runner_environment(readiness, monkeypatch):
+    monkeypatch.setenv("ADCP_TEST_HOST", "proxy")
+    assert readiness.e2e_host() == "proxy"
+    assert readiness.e2e_in_network()
+    assert not readiness.e2e_in_network("::1")
 
 
 @pytest.mark.parametrize(
