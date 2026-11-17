@@ -545,7 +545,14 @@
                 <label for="email">Email Address</label>
                 <input type="email" id="email" name="email" placeholder="user@example.com" required>
             </div>
-            <input type="hidden" name="role" value="viewer">
+            <div class="form-group">
+                <label for="role">Role</label>
+                <select id="role" name="role">
+                    <option value="viewer" selected>Viewer: read-only</option>
+                    <option value="manager">Manager: can change settings, products and campaigns</option>
+                    <option value="admin">Admin: can also manage users and sign-in</option>
+                </select>
+            </div>
             <button type="submit" class="btn btn-primary">Add User</button>
         </form>
         <p class="help-text" style="margin-top: 0.5rem;">Name will be populated when the user logs in via SSO.</p>
@@ -594,6 +601,7 @@
                 <tr>
                     <th>User</th>
                     <th>Name</th>
+                    <th>Role</th>
                     <th>Status</th>
                     <th>Last Login</th>
                     <th></th>
@@ -607,6 +615,16 @@
                         <div class="meta-text">Added {{ user.created_at.strftime('%b %d, %Y') if user.created_at else 'Unknown' }}</div>
                     </td>
                     <td>{{ user.name or '-' }}</td>
+                    <td>
+                        <form method="post" action="{{ url_for('users.update_role', tenant_id=tenant_id, user_id=user.user_id) }}" class="role-form">
+                            <select name="role" aria-label="Role for {{ user.email }}">
+                                {% for value, label in [('viewer', 'Viewer'), ('manager', 'Manager'), ('admin', 'Admin')] %}
+                                <option value="{{ value }}" {% if user.role == value %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="btn btn-secondary btn-sm">Change</button>
+                        </form>
+                    </td>
                     <td>
                         {% if user.is_active %}
                         <span class="status-badge status-active">Active</span>

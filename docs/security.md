@@ -90,7 +90,15 @@ Super admins have full access to all tenants and can create, modify, and delete 
 
 ### Tenant users
 
-Tenant users have access to specific tenants through the `User` model. They can manage their own tenant's configuration but cannot access other tenants' data.
+Tenant users have access to specific tenants through the `User` model, and cannot access other tenants' data. What they can do in their tenant depends on the role on their `User` row, which `require_tenant_access` checks on every request:
+
+| Role | Can |
+| --- | --- |
+| `viewer` | Read only: no `POST`, `PUT`, `PATCH` or `DELETE` |
+| `manager` | Change everything except the admin-only routes |
+| `admin` | Everything, including the admin-only routes: managing users, roles and authorized domains, setup mode, SSO configuration, and deactivating the tenant |
+
+A route is admin-only when it is decorated `require_tenant_access(admin_only=True)`. The Users page adds people as viewers by default; admins choose a role when adding someone and can change it later. People who sign in from an authorized domain without an invitation are created as admins. Super admins pass every check.
 
 ### Principal isolation
 

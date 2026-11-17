@@ -532,7 +532,7 @@ def test_slack(tenant_id):
 
 @tenants_bp.route("/<tenant_id>/deactivate", methods=["POST"])
 @log_admin_action("deactivate_tenant")
-@require_tenant_access()
+@require_tenant_access(admin_only=True)
 def deactivate_tenant(tenant_id):
     """Deactivate (soft delete) a tenant."""
     try:

@@ -105,7 +105,7 @@ def list_users(tenant_id):
 
 
 @users_bp.route("/add", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(admin_only=True)
 @log_admin_action(
     "add_user", extract_details=lambda r, **kw: {"email": request.form.get("email"), "role": request.form.get("role")}
 )
@@ -177,7 +177,7 @@ def add_user(tenant_id):
 
 @users_bp.route("/<user_id>/toggle", methods=["POST"])
 @log_admin_action("toggle_user")
-@require_tenant_access()
+@require_tenant_access(admin_only=True)
 def toggle_user(tenant_id, user_id):
     """Toggle user active status."""
     try:
@@ -202,7 +202,7 @@ def toggle_user(tenant_id, user_id):
 
 @users_bp.route("/<user_id>/update_role", methods=["POST"])
 @log_admin_action("update_role")
-@require_tenant_access()
+@require_tenant_access(admin_only=True)
 def update_role(tenant_id, user_id):
     """Update user role."""
     try:
@@ -230,7 +230,7 @@ def update_role(tenant_id, user_id):
 
 
 @users_bp.route("/domains", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(admin_only=True)
 @log_admin_action("add_domain", extract_details=lambda r, **kw: {"domain": request.json.get("domain")})
 def add_domain(tenant_id):
     """Add an authorized domain for the tenant."""
@@ -264,7 +264,7 @@ def add_domain(tenant_id):
 
 
 @users_bp.route("/domains", methods=["DELETE"])
-@require_tenant_access()
+@require_tenant_access(admin_only=True)
 @log_admin_action("remove_domain", extract_details=lambda r, **kw: {"domain": request.json.get("domain")})
 def remove_domain(tenant_id):
     """Remove an authorized domain from the tenant."""
@@ -291,7 +291,7 @@ def remove_domain(tenant_id):
 
 
 @users_bp.route("/disable-setup-mode", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(admin_only=True)
 @log_admin_action("disable_auth_setup_mode")
 def disable_setup_mode(tenant_id):
     """Disable auth setup mode for the tenant.
@@ -344,7 +344,7 @@ def disable_setup_mode(tenant_id):
 
 
 @users_bp.route("/enable-setup-mode", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(admin_only=True)
 @log_admin_action("enable_auth_setup_mode")
 def enable_setup_mode(tenant_id):
     """Re-enable auth setup mode for the tenant.

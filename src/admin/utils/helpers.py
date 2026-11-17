@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
+from src.admin.csrf import SAFE_METHODS
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, TenantManagementConfig, User
@@ -316,8 +317,28 @@ def _setup_session_reaches(tenant_id: str) -> bool:
     return session.get("test_tenant_id") == tenant_id or session.get("test_user_role") == "super_admin"
 
 
-def require_tenant_access(api_mode=False):
-    """Decorator to require tenant access for routes."""
+def role_permits(role: str, method: str, *, admin_only: bool) -> bool:
+    """Whether a tenant user with *role* may make a *method* request to a route.
+
+    ``admin`` may do anything; ``admin_only`` routes (managing users, sign-in and the
+    tenant itself) admit no one else. ``manager`` may change everything else.
+    ``viewer``, and any role this code does not know, is read-only.
+    """
+    if role == "admin":
+        return True
+    if admin_only:
+        return False
+    if role == "manager":
+        return True
+    return method in SAFE_METHODS
+
+
+def require_tenant_access(api_mode=False, admin_only=False):
+    """Decorator to require tenant access for routes.
+
+    A tenant user must also hold a role that permits the request (:func:`role_permits`);
+    ``admin_only=True`` limits the route to tenant admins. Super admins pass regardless.
+    """
 
     def decorator(f):
         @wraps(f)
@@ -377,6 +398,14 @@ def require_tenant_access(api_mode=False):
                     if not user:
                         if api_mode:
                             return jsonify({"error": "Access denied"}), 403
+                        abort(403)
+
+                    if not role_permits(user.role, request.method, admin_only=admin_only):
+                        logger.warning(
+                            "Refused %s %s for tenant %s: role %r", request.method, request.path, tenant_id, user.role
+                        )
+                        if api_mode:
+                            return jsonify({"error": "Your role does not allow this"}), 403
                         abort(403)
 
                     return f(tenant_id, *args, **kwargs)
