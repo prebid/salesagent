@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 
 from src.core.database.models import MediaBuy, WebhookDeliveryLog
 from src.core.database.repositories.delivery import DeliveryRepository
-from src.core.webhooks.delivery import WebhookDeliveryOutcome
+from src.core.exceptions import AdCPMediaBuyNotFoundError
+from src.core.webhooks.delivery import SCHEDULER_SEQUENCE_TASK_TYPE, WebhookDeliveryOutcome
 from tests.factories import MediaBuyFactory, WebhookDeliveryLogFactory
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -35,7 +36,7 @@ def _read(session, log_id):
     return session.get(WebhookDeliveryLog, log_id)
 
 
-def _history(session, tenant, identity, *, sequence=1, status="success", task_type="media_buy_delivery"):
+def _history(session, tenant, identity, *, sequence=1, status="success", task_type=SCHEDULER_SEQUENCE_TASK_TYPE):
     buy = session.get(MediaBuy, identity["media_buy_id"])
     return WebhookDeliveryLogFactory(
         media_buy=buy,
@@ -69,7 +70,7 @@ def test_reservation_starts_at_one_and_is_owned_by_the_callers_transaction(strea
     assert str(UUID(log_id)) == log_id
     assert inspect(row).persistent
     assert (row.sequence_number, row.status, row.attempt_count) == (1, "reserved", 0)
-    assert (row.task_type, row.notification_type, row.completed_at) == ("media_buy_delivery", "scheduled", None)
+    assert (row.task_type, row.notification_type, row.completed_at) == (SCHEDULER_SEQUENCE_TASK_TYPE, "scheduled", None)
     with Session(session.bind) as observer:
         assert observer.get(WebhookDeliveryLog, log_id) is None
     session.rollback()
@@ -136,10 +137,11 @@ def test_reservation_refuses_a_buy_outside_the_tenant_scope(stream, scope):
     else:
         wrong_identity = {**identity, "media_buy_id": "unknown-buy"}
     session.commit()
-    with pytest.raises(ValueError):
+    with pytest.raises(AdCPMediaBuyNotFoundError):
         DeliveryRepository(session, tenant).reserve_next_sequence(**wrong_identity)
-    session.rollback()
+    session.expire_all()
     assert session.scalars(select(WebhookDeliveryLog)).all() == []
+    session.rollback()
 
 
 def _contend_then_commit(session, operation):
@@ -280,17 +282,18 @@ def test_concurrent_failure_acknowledgement_cannot_overwrite_success(stream):
 def test_acknowledgement_cannot_create_or_modify_a_different_reservation(stream, scope):
     session, tenant, identity = stream
     log_id = _history(
-        session, tenant, identity, task_type="delivery_report" if scope == "stream" else "media_buy_delivery"
+        session, tenant, identity, task_type="delivery_report" if scope == "stream" else SCHEDULER_SEQUENCE_TASK_TYPE
     )
     session.commit()
     repo = DeliveryRepository(session, "another-tenant" if scope == "tenant" else tenant)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="not found"):
         repo.mark_delivery_result(
             str(uuid4()) if scope == "missing" else log_id, outcome=WebhookDeliveryOutcome("delivered", 2, 200)
         )
-    session.rollback()
+    session.expire_all()
     assert len(session.scalars(select(WebhookDeliveryLog)).all()) == 1
     assert _read(session, log_id).attempt_count == 1
+    session.rollback()
 
 
 def test_acknowledgement_is_rolled_back_by_the_caller(stream):

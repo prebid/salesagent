@@ -280,10 +280,7 @@ class DeliveryRepository:
         empty stream. Every status consumes a sequence. This does not reclaim
         outstanding reservations or coordinate HTTP delivery (#1638).
         """
-        owned_buy = MediaBuyRepository(self._session, self._tenant_id).get_by_id(media_buy_id)
-        if owned_buy is None:
-            raise ValueError(f"Media buy {media_buy_id!r} is outside the reservation's tenant scope")
-        principal_id = owned_buy.principal_id
+        principal_id = MediaBuyRepository(self._session, self._tenant_id).get_by_id_or_raise(media_buy_id).principal_id
         stream = json.dumps([self._tenant_id, media_buy_id, SCHEDULER_SEQUENCE_TASK_TYPE])
         lock_key = int.from_bytes(hashlib.sha256(stream.encode()).digest()[:8], byteorder="big", signed=True)
         self._session.execute(select(func.pg_advisory_xact_lock(lock_key)))
