@@ -203,6 +203,31 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
+  # The same unit run on Windows, so a guard that reads files in the platform's
+  # default encoding, builds paths with "\", or reaches for a POSIX-only module
+  # fails here instead of on a contributor's machine. Tests that grade
+  # POSIX-only behaviour carry @pytest.mark.posix_only and skip with a reason.
+  # Coverage stays with the Linux job; this job is not in summary.needs.
+  unit-tests-windows:
+    name: Unit Tests (Windows)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+      - uses: ./.github/actions/_adcp-bundle
+      - uses: ./.github/actions/_pytest
+        with:
+          paths: tests/unit/ tests/harness/
+          extra_args: -n auto --dist loadgroup --json-report --json-report-file=unit-windows-ci.json
+
   integration-tests:
     name: Integration (${{ matrix.group }})
     runs-on: ubuntu-latest
