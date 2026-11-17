@@ -11,6 +11,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Tenant
+from src.core.database.repositories.gam_inventory import GAMInventoryRepository
 from src.core.database.repositories.principal import PrincipalRepository
 
 logger = logging.getLogger(__name__)
@@ -765,22 +766,7 @@ def get_inventory_stats(tenant_id):
     """
     try:
         with get_db_session() as db_session:
-            # Get counts by inventory_type and status
-            # FIXME(#1119): raw select on GAMInventory outside a repository
-            stmt = (
-                select(GAMInventory.inventory_type, GAMInventory.status, func.count())
-                .filter(GAMInventory.tenant_id == tenant_id)
-                .group_by(GAMInventory.inventory_type, GAMInventory.status)
-            )
-            results = db_session.execute(stmt).all()
-
-            # Format results
-            stats = {}
-            for inv_type, status, count in results:
-                if inv_type not in stats:
-                    stats[inv_type] = {}
-                stats[inv_type][status] = count
-
+            stats = GAMInventoryRepository(db_session, tenant_id).counts_by_type_and_status()
             return jsonify({"tenant_id": tenant_id, "stats": stats})
 
     except Exception as e:
@@ -877,34 +863,19 @@ def _unit_to_dict(unit, *, matched_search=False):
 
 
 def _get_inventory_stats(db_session, tenant_id):
-    """Get counts for non-ad-unit inventory types and last sync time."""
-    stats = {}
-    for inv_type, key in [
-        ("placement", "placements"),
-        ("label", "labels"),
-        ("custom_targeting_key", "custom_targeting_keys"),
-        ("audience_segment", "audience_segments"),
-    ]:
-        stats[key] = (
-            db_session.scalar(
-                select(func.count())
-                .select_from(GAMInventory)
-                .where(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.inventory_type == inv_type,
-                    GAMInventory.status == "ACTIVE",
-                )
-            )
-            or 0
-        )
-
-    # FIXME(#1119): raw select on GAMInventory outside a repository
-    last_sync = db_session.scalar(
-        select(GAMInventory.last_synced)
-        .where(GAMInventory.tenant_id == tenant_id)
-        .order_by(GAMInventory.last_synced.desc())
-        .limit(1)
-    )
+    """Get counts of ACTIVE items for the non-ad-unit inventory types, and the last sync time."""
+    inventory = GAMInventoryRepository(db_session, tenant_id)
+    counts = inventory.counts_by_type_and_status()
+    stats: dict[str, int | str | None] = {
+        key: counts.get(inv_type, {}).get("ACTIVE", 0)
+        for inv_type, key in [
+            ("placement", "placements"),
+            ("label", "labels"),
+            ("custom_targeting_key", "custom_targeting_keys"),
+            ("audience_segment", "audience_segments"),
+        ]
+    }
+    last_sync = inventory.last_synced_at()
     stats["last_sync"] = last_sync.isoformat() if last_sync else None
     return stats
 

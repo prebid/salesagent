@@ -11,6 +11,7 @@ Routes are organized by blueprint for maintainability.
 
 import pytest
 
+from tests.factories import ProductFactory, TenantFactory
 from tests.integration.link_validator import LinkValidator, format_broken_links_report
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -23,6 +24,20 @@ class TestCoreRoutes:
         """Test / redirects or renders."""
         response = admin_client.get("/", follow_redirects=False)
         assert response.status_code in [200, 302]
+
+    def test_super_admin_index_filters_the_tenant_list(self, authenticated_admin_session, factory_session, monkeypatch):
+        """The configured filter reaches the tenant listing (TenantLookupRepository.list_active)."""
+        from src.core.config import get_settings
+
+        monkeypatch.setattr(get_settings().runtime, "adcp_multi_tenant", True)
+        TenantFactory(name="Alpha Wired", ad_server="google_ad_manager")
+        TenantFactory(name="Bravo Bare", ad_server=None)
+
+        response = authenticated_admin_session.get("/?configured=not-configured")
+
+        assert response.status_code == 200
+        assert b"Bravo Bare" in response.data
+        assert b"Alpha Wired" not in response.data
 
     def test_health_endpoint(self, admin_client):
         """Test /health returns 200."""
@@ -336,6 +351,20 @@ class TestAPIRoutes:
         tenant_id = test_tenant_with_data["tenant_id"]
         response = authenticated_admin_session.get(f"/api/tenant/{tenant_id}/products/suggestions")
         assert response.status_code == 200
+
+    def test_product_suggestions_mark_the_products_the_tenant_already_has(
+        self, authenticated_admin_session, factory_session
+    ):
+        """already_exists compares whole product ids; the read used to keep the first character of each."""
+        tenant = TenantFactory()
+        ProductFactory(tenant=tenant, product_id="run_of_site_display")
+
+        response = authenticated_admin_session.get(f"/api/tenant/{tenant.tenant_id}/products/suggestions")
+
+        assert response.status_code == 200
+        marked = {s["product_id"]: s["already_exists"] for s in response.get_json()["suggestions"]}
+        assert marked["run_of_site_display"] is True
+        assert marked["video_preroll"] is False
 
 
 class TestActivityStreamRoutes:

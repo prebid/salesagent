@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, datetime
 
 from flask import Blueprint, Response, jsonify, request
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 
 from src.admin.auth_helpers import require_api_key_auth
 from src.admin.utils.operator_errors import safe_error_message
@@ -73,43 +73,21 @@ def health_check():
 @require_tenant_management_api_key
 def list_tenants():
     """List all tenants."""
-    from src.core.database.models import AdapterConfig
-
     with get_db_session() as db_session:
         try:
-            # Query with left join and group by
-            # FIXME(#1119): raw select on Tenant outside a repository
-            stmt = (
-                select(
-                    Tenant.tenant_id,
-                    Tenant.name,
-                    Tenant.subdomain,
-                    Tenant.is_active,
-                    Tenant.billing_plan,
-                    Tenant.ad_server,
-                    Tenant.created_at,
-                    func.count(AdapterConfig.tenant_id).label("has_adapter"),
-                )
-                .outerjoin(AdapterConfig, Tenant.tenant_id == AdapterConfig.tenant_id)
-                .group_by(Tenant.tenant_id)
-                .order_by(Tenant.created_at.desc())
-            )
-            tenants_query = db_session.execute(stmt)
-
-            results = []
-            for row in tenants_query:
-                results.append(
-                    {
-                        "tenant_id": row.tenant_id,
-                        "name": row.name,
-                        "subdomain": row.subdomain,
-                        "is_active": bool(row.is_active),
-                        "billing_plan": row.billing_plan,
-                        "ad_server": row.ad_server,
-                        "created_at": row.created_at.isoformat() if row.created_at else None,
-                        "adapter_configured": bool(row.has_adapter),
-                    }
-                )
+            results = [
+                {
+                    "tenant_id": tenant.tenant_id,
+                    "name": tenant.name,
+                    "subdomain": tenant.subdomain,
+                    "is_active": bool(tenant.is_active),
+                    "billing_plan": tenant.billing_plan,
+                    "ad_server": tenant.ad_server,
+                    "created_at": tenant.created_at.isoformat() if tenant.created_at else None,
+                    "adapter_configured": tenant.adapter_config is not None,
+                }
+                for tenant in TenantLookupRepository(db_session).list_all()
+            ]
 
             return jsonify({"tenants": results, "count": len(results)})
 

@@ -4,13 +4,13 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from flask import Blueprint, jsonify, request
-from sqlalchemy import select, text
+from sqlalchemy import text
 
 from src.admin.utils import require_auth
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Product
+from src.core.database.repositories.product import ProductRepository
 
 logger = logging.getLogger(__name__)
 
@@ -222,10 +222,7 @@ def get_product_suggestions(tenant_id):
 
         # Check existing products to mark which are already created
         with get_db_session() as db_session:
-            # FIXME(#1119): raw select on Product outside a repository
-            stmt = select(Product.product_id).filter_by(tenant_id=tenant_id)
-            existing_products = db_session.scalars(stmt).all()
-            existing_ids = {product[0] for product in existing_products}
+            existing_ids = ProductRepository(db_session, tenant_id).product_ids()
 
         # Add metadata to suggestions
         for suggestion in filtered_suggestions:

@@ -63,9 +63,6 @@ def render_super_admin_index():
     """
     from datetime import timedelta
 
-    from sqlalchemy import func
-    from sqlalchemy.orm import joinedload
-
     from src.core.database.models import MediaBuy
     from src.core.database.repositories.tenant_counts import count_by_tenant
     from src.core.tenant_status import is_tenant_ad_server_configured
@@ -80,47 +77,19 @@ def render_super_admin_index():
         # Filters
         config_filter = request.args.get("configured", "all")  # all, configured, not-configured
         activity_filter = request.args.get("activity", "all")  # all, has-activity, no-activity
+        configured = {"configured": True, "not-configured": False}.get(config_filter)
+        has_activity = {"has-activity": True, "no-activity": False}.get(activity_filter)
 
-        # Helper function to apply filters consistently
-        def apply_tenant_filters(query, config_filter, activity_filter):
-            """Apply configuration and activity filters to tenant query."""
-            # Configuration filter
-            if config_filter == "configured":
-                query = query.where(Tenant.ad_server.isnot(None), Tenant.ad_server != "")
-            elif config_filter == "not-configured":
-                query = query.where((Tenant.ad_server.is_(None)) | (Tenant.ad_server == ""))
-
-            # Activity filter (use EXISTS for better performance than subquery)
-            # FIXME(#1119): raw select on MediaBuy outside a repository
-            if activity_filter == "has-activity":
-                query = query.where(
-                    select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == Tenant.tenant_id).exists()
-                )
-            elif activity_filter == "no-activity":
-                query = query.where(
-                    ~select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == Tenant.tenant_id).exists()
-                )
-
-            return query
-
-        # Build base query with filters
-        count_stmt = select(func.count()).select_from(Tenant).where(Tenant.is_active == True)  # noqa: E712
-        count_stmt = apply_tenant_filters(count_stmt, config_filter, activity_filter)
-
-        total_tenants = db_session.scalar(count_stmt) or 0
+        tenant_lookup = TenantLookupRepository(db_session)
+        total_tenants = tenant_lookup.count_active(configured=configured, has_activity=has_activity)
 
         # Calculate pagination
         total_pages = (total_tenants + per_page - 1) // per_page if total_tenants > 0 else 1
         offset = (page - 1) * per_page
 
-        # Eager load adapter_config to avoid N+1 queries
-        stmt = select(Tenant).options(joinedload(Tenant.adapter_config)).filter_by(is_active=True).order_by(Tenant.name)
-
-        # Apply same filters to main query
-        stmt = apply_tenant_filters(stmt, config_filter, activity_filter)
-
-        stmt = stmt.limit(per_page).offset(offset)
-        tenants = db_session.scalars(stmt).all()
+        tenants = tenant_lookup.list_active(
+            limit=per_page, offset=offset, configured=configured, has_activity=has_activity
+        )
 
         # Bulk fetch setup status for all tenants on this page (single query per metric)
         tenant_ids = [t.tenant_id for t in tenants]

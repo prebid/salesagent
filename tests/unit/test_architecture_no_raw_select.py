@@ -73,7 +73,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/adapters.py", "list_broadstreet_zones"),
     ("src/admin/blueprints/adapters.py", "mock_config"),
     ("src/admin/blueprints/adapters.py", "save_adapter_config"),
-    ("src/admin/blueprints/api.py", "get_product_suggestions"),  # FIXME(#1119): select(Product.product_id)
     ("src/admin/blueprints/api.py", "get_tenant_products"),
     ("src/admin/blueprints/auth.py", "gam_authorize"),
     ("src/admin/blueprints/auth.py", "gam_callback"),
@@ -89,10 +88,10 @@ ALLOWLIST: set[tuple[str, str]] = {
     # get_tenant_from_hostname fixed — the admin plane's one host -> tenant lookup now goes
     # through TenantLookupRepository.find_active_by_virtual_host, and public.landing and
     # auth.login call it instead of each hand-rolling the same select (#2263)
-    ("src/admin/blueprints/core.py", "apply_tenant_filters"),  # FIXME(#1119): EXISTS on select(MediaBuy.media_buy_id)
     ("src/admin/blueprints/core.py", "index"),
     ("src/admin/blueprints/core.py", "reactivate_tenant"),
-    ("src/admin/blueprints/core.py", "render_super_admin_index"),
+    # render_super_admin_index removed — its tenant page and count come from
+    # TenantLookupRepository.list_active / count_active
     ("src/admin/blueprints/creative_agents.py", "add_creative_agent"),
     ("src/admin/blueprints/creative_agents.py", "delete_creative_agent"),
     ("src/admin/blueprints/creative_agents.py", "edit_creative_agent"),
@@ -110,9 +109,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/inventory.py", "check_inventory_sync"),
     ("src/admin/blueprints/inventory.py", "get_inventory_list"),
     ("src/admin/blueprints/inventory.py", "get_inventory_sizes"),
-    ("src/admin/blueprints/inventory.py", "get_inventory_stats"),  # FIXME(#1119): select(GAMInventory.*) aggregate
     ("src/admin/blueprints/inventory.py", "_batch_fetch_ancestors"),  # FIXME(#1119): extract to repository
-    ("src/admin/blueprints/inventory.py", "_get_inventory_stats"),  # FIXME(#1119): select(GAMInventory.last_synced)
     ("src/admin/blueprints/inventory.py", "get_inventory_tree"),
     ("src/admin/blueprints/inventory.py", "get_order_details"),
     ("src/admin/blueprints/inventory.py", "get_orders"),
@@ -217,7 +214,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/sync_api.py", "trigger_sync"),
     ("src/admin/tenant_management_api.py", "delete_tenant"),
     ("src/admin/tenant_management_api.py", "get_tenant"),
-    ("src/admin/tenant_management_api.py", "list_tenants"),  # FIXME(#1119): select(Tenant.*) with a join
     ("src/admin/tenant_management_api.py", "update_tenant"),
     ("src/admin/utils/helpers.py", "decorated_function"),
     ("src/admin/utils/helpers.py", "decorator"),
@@ -279,15 +275,9 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/dynamic_products.py", "archive_expired_variants"),
     ("src/services/format_metrics_service.py", "_process_and_store_metrics"),
     ("src/services/format_metrics_service.py", "aggregate_all_tenants"),
-    # _update_adapter_config_targeting_keys removed — uses AdapterConfigRepository
-    (
-        "src/services/gam_inventory_service.py",
-        "_save_inventory_to_db",
-    ),  # FIXME(#1119): bulk sync, select(GAMInventory.*)
-    ("src/services/gam_inventory_service.py", "_update_adapter_config_targeting_keys"),  # FIXME(#1119): same
+    # _save_inventory_to_db, _update_adapter_config_targeting_keys, _write_custom_targeting_keys and
+    # _write_inventory_batch removed — the sync reads gam_inventory through GAMInventoryRepository
     ("src/services/gam_inventory_service.py", "_upsert_inventory_item"),
-    ("src/services/gam_inventory_service.py", "_write_custom_targeting_keys"),  # FIXME(#1119): same
-    ("src/services/gam_inventory_service.py", "_write_inventory_batch"),  # FIXME(#1119): same
     ("src/services/gam_inventory_service.py", "create_inventory_endpoints"),
     ("src/services/gam_inventory_service.py", "fetch_custom_targeting_values"),
     ("src/services/gam_inventory_service.py", "get_ad_unit_tree"),
