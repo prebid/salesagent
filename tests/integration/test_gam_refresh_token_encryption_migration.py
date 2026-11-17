@@ -126,3 +126,40 @@ def test_upgrade_without_an_encryption_key_passes_when_no_token_is_stored(migrat
     run_alembic_upgrade(db_url, _REVISION)
 
     assert _stored_token(engine, _NULL_TENANT) is None
+
+
+_FOREIGN_TENANT = "mig_gam_token_foreign"
+
+
+def _encrypted_with_another_key(token: str) -> str:
+    return Fernet(Fernet.generate_key()).encrypt(token.encode()).decode()
+
+
+def test_upgrade_refuses_a_token_encrypted_with_another_key(migration_db, encryption_key):
+    foreign = _encrypted_with_another_key("1//token-from-another-deployment")
+    engine, db_url = _seed(migration_db, {_PLAINTEXT_TENANT: _PLAINTEXT_TOKEN, _FOREIGN_TENANT: foreign})
+
+    with pytest.raises(RuntimeError, match=_FOREIGN_TENANT) as raised:
+        run_alembic_upgrade(db_url, _REVISION)
+
+    assert _PLAINTEXT_TENANT not in str(raised.value)
+    # nothing is written: no double encryption, and the plaintext token waits for the re-run
+    assert _stored_token(engine, _FOREIGN_TENANT) == foreign
+    assert _stored_token(engine, _PLAINTEXT_TENANT) == _PLAINTEXT_TOKEN
+
+
+def test_downgrade_refuses_a_token_encrypted_with_another_key(migration_db, encryption_key):
+    engine, db_url = _seed(migration_db, {_PLAINTEXT_TENANT: _PLAINTEXT_TOKEN, _FOREIGN_TENANT: _ENCRYPTED_TOKEN})
+    run_alembic_upgrade(db_url, _REVISION)
+    foreign = _encrypted_with_another_key(_ENCRYPTED_TOKEN)
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE adapter_config SET gam_refresh_token = :token WHERE tenant_id = :tid"),
+            {"token": foreign, "tid": _FOREIGN_TENANT},
+        )
+
+    with pytest.raises(RuntimeError, match=_FOREIGN_TENANT):
+        run_alembic_downgrade(db_url, _PREVIOUS)
+
+    assert _stored_token(engine, _FOREIGN_TENANT) == foreign
+    assert decrypt_api_key(_stored_token(engine, _PLAINTEXT_TENANT)) == _PLAINTEXT_TOKEN

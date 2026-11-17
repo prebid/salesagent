@@ -15,6 +15,12 @@ there are tokens to encrypt and no usable ``ENCRYPTION_KEY`` is configured, the 
 stops and names the tenants: leaving them in plaintext would make the application fail on
 every read of the token.
 
+A value that does not decrypt but has the form of a Fernet token (``gAAAAA``…; a Google
+refresh token starts ``1//``) was encrypted with a different key, for example after a
+restore or a key rotation. Encrypting it again would make the application decrypt one layer
+and send ciphertext to Google, so the upgrade stops and names those tenants too. The
+downgrade does the same instead of leaving such a value as if it were plaintext.
+
 DOWNGRADE: every token that decrypts with ``ENCRYPTION_KEY`` is written back as plaintext,
 which is what the previous revision's model reads. A value that does not decrypt is already
 plaintext and is left as it is. With tokens stored and no ``ENCRYPTION_KEY`` configured,
@@ -68,6 +74,21 @@ def _decrypted(value: str) -> str | None:
         return None
 
 
+def _is_fernet_token(value: str) -> bool:
+    """Whether *value* has the form of a Fernet token: version byte 0x80 and a 64-bit timestamp
+    whose high bytes are zero, which base64-encode to ``gAAAAA``."""
+    return value.startswith("gAAAAA")
+
+
+def _refuse_foreign_ciphertext(tenant_ids: list[str]) -> None:
+    if tenant_ids:
+        raise RuntimeError(
+            f"The GAM refresh token of {len(tenant_ids)} tenant(s) is encrypted, but not with this deployment's "
+            f"ENCRYPTION_KEY: {', '.join(tenant_ids)}. Set the ENCRYPTION_KEY those tokens were written with, or "
+            "clear and re-enter those tenants' GAM credentials, then re-run the migration."
+        )
+
+
 def _write(tenant_id: str, value: str) -> None:
     op.get_bind().execute(
         sa.update(_adapter_config).where(_adapter_config.c.tenant_id == tenant_id).values(gam_refresh_token=value)
@@ -80,14 +101,19 @@ def upgrade() -> None:
 
     writes: dict[str, str] = {}
     unencryptable: list[str] = []
+    foreign: list[str] = []
     for tenant_id, token in _stored_tokens():
         if _decrypted(token) is not None:
+            continue
+        if _is_fernet_token(token):
+            foreign.append(tenant_id)
             continue
         try:
             writes[tenant_id] = encrypt_api_key(token)
         except ValueError:
             unencryptable.append(tenant_id)
 
+    _refuse_foreign_ciphertext(foreign)
     if unencryptable:
         raise RuntimeError(
             f"Cannot encrypt the GAM refresh token of {len(unencryptable)} tenant(s): no usable "
@@ -113,7 +139,10 @@ def downgrade() -> None:
             "written with, then re-run the downgrade."
         )
 
-    for tenant_id, token in rows:
-        plaintext = _decrypted(token)
+    decrypted = {tenant_id: _decrypted(token) for tenant_id, token in rows}
+    _refuse_foreign_ciphertext(
+        [tenant_id for tenant_id, token in rows if decrypted[tenant_id] is None and _is_fernet_token(token)]
+    )
+    for tenant_id, plaintext in decrypted.items():
         if plaintext is not None:
             _write(tenant_id, plaintext)

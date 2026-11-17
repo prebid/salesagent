@@ -61,7 +61,7 @@ The admin UI authenticates browsers with the session cookie, so a page on anothe
 - **Origin check** (`src/admin/csrf.py`): every state-changing request (`POST`, `PUT`, `PATCH`, `DELETE`) must come from the admin UI's own origin. The check reads `Sec-Fetch-Site` (only `same-origin` or `none` pass), or, if a browser doesn't send that, `Origin`, which must equal the address the request was sent to. A request with neither header isn't from a browser and passes. Sibling subdomains are refused. Forms and `fetch` calls need no token. Views authenticated only by an API-key header (the tenant management and sync APIs) are exempt with `csrf_exempt`.
 - **`SameSite=Lax` session cookie**: browsers don't send it on cross-site posts, frames or `fetch` calls, but do send it on top-level navigations, which is what the OAuth and OIDC callbacks are.
 
-Behind a reverse proxy, the origin check relies on `ProxyFix` applying `X-Forwarded-Proto` and `X-Forwarded-Host` (configured in production), so the request's address is the public one.
+Behind a reverse proxy, the `Origin` fallback compares against the request's own scheme and host, which `ProxyFix` takes from `X-Forwarded-Proto` and `X-Forwarded-Host` (configured in production). **The proxy must send both.** Without them, a browser that sends `Origin` but not `Sec-Fetch-Site` (`https://admin.example.com`) is compared with the internal address (`http://...`) and refused: the check fails closed, it is not bypassed. Current browsers send `Sec-Fetch-Site`, which does not depend on the proxy.
 
 ## Tenant registration security
 
