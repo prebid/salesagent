@@ -182,6 +182,80 @@ def bound_factory_session():
         session.close()
 
 
+def delete_tenant_rows(session: Any, tenant_id: str) -> None:
+    """Delete a test tenant and EVERY row that hangs off it. The caller commits.
+
+    Children go first, explicitly: the ORM ``backref`` relationships carry no
+    delete cascade, so an ORM ``session.delete(tenant)`` tries to NULL a child's
+    ``tenant_id`` — which is half of its composite primary key. The FK's
+    ``ON DELETE CASCADE`` only applies to a database-level delete.
+
+    And the deployed schema does not have the cascade the models claim. In a database the
+    migrations built, the ``tenant_id`` FK of ``products``, ``media_buys``, ``creatives``,
+    ``users`` and ``audit_logs`` is ``NO ACTION``, while ``models.py`` declares
+    ``ON DELETE CASCADE`` on each. That model/migration drift is a real, pre-existing bug
+    (out of scope to fix here), and reading the model metadata instead of the migrations
+    is what would make this teardown silently incomplete. ``adapter_config``,
+    ``property_tags``, ``pricing_options`` and ``contexts`` DO carry a real cascade in
+    their creating migrations; they are deleted anyway, because an explicit delete of an
+    already-cascaded row is a harmless no-op and depending on which half of a known
+    drift is true is not.
+
+    ``ObjectWorkflowMapping`` and ``WorkflowStep`` have no ``tenant_id`` at all, so
+    they are reached through ``contexts``.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import (
+        AdapterConfig,
+        AuditLog,
+        Context,
+        Creative,
+        CreativeAssignment,
+        MediaBuy,
+        MediaPackage,
+        ObjectWorkflowMapping,
+        Publisher,
+        PushNotificationConfig,
+        SigningKey,
+        User,
+        WebhookDeliveryLog,
+        WorkflowStep,
+    )
+
+    context_ids = select(Context.context_id).where(Context.tenant_id == tenant_id)
+    step_ids = select(WorkflowStep.step_id).where(WorkflowStep.context_id.in_(context_ids))
+    session.execute(delete(ObjectWorkflowMapping).where(ObjectWorkflowMapping.step_id.in_(step_ids)))
+    session.execute(delete(WorkflowStep).where(WorkflowStep.context_id.in_(context_ids)))
+    # ``media_packages`` has no tenant_id and its FK to media_buys carries no cascade,
+    # so a created media buy is unreachable from the tenant-scoped deletes below.
+    media_buy_ids = select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == tenant_id)
+    session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id.in_(media_buy_ids)))
+    # ``PricingOption`` is deliberately NOT deleted directly: the
+    # ``prevent_empty_pricing_options`` trigger REFUSES to remove a product's last
+    # pricing option while that product still exists, and explicitly allows the same
+    # row to go via the product's cascade. The composite FK's ``ON DELETE CASCADE``
+    # (migration c3b75d304773) is real, so deleting ``Product`` takes it.
+    for model in (
+        Context,
+        CreativeAssignment,
+        WebhookDeliveryLog,
+        Creative,
+        PushNotificationConfig,
+        MediaBuy,
+        Product,
+        Principal,
+        PropertyTag,
+        AdapterConfig,
+        SigningKey,
+        Publisher,
+        AuditLog,
+        User,
+        Tenant,
+    ):
+        session.execute(delete(model).where(model.tenant_id == tenant_id))
+
+
 @contextmanager
 def production_db_pointed_at(url: str):
     """Point production's cached DB engine at ``url`` for the block.

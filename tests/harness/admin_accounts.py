@@ -101,21 +101,35 @@ class AdminAccountEnv:
     def __enter__(self) -> AdminAccountEnv:
         # Not a BaseTestEnv, so it keeps its own __enter__ — but it owes the same
         # guarantee. Python does not call __exit__ when __enter__ raises, so a
-        # failure in _ensure_tenant would strand the admin client for the rest of
+        # failure in _setup would strand the admin client for the rest of
         # the process. __exit__ is None-safe, so calling it here is what releases it.
         try:
             self._client = AdminClient(self._base_url if self._mode == "e2e" else None)
-            self._ensure_tenant()
+            self._setup()
         except BaseException:
             self.__exit__(None, None, None)
             raise
         return self
 
     def __exit__(self, *exc: object) -> None:
+        try:
+            self._cleanup()
+        finally:
+            if self._client is not None:
+                self._client.close()
+                self._client = None
+
+    def _setup(self) -> None:
+        """Put in place what the env needs before its first step, once the client is open.
+
+        A subclass extends this, and releases whatever it acquires here in ``_cleanup``,
+        which also runs when this raises part-way.
+        """
+        self._ensure_tenant()
+
+    def _cleanup(self) -> None:
+        """Release what ``_setup`` and the scenario's steps left behind."""
         self._cleanup_accounts()
-        if self._client is not None:
-            self._client.close()
-            self._client = None
 
     @property
     def tenant_id(self) -> str:

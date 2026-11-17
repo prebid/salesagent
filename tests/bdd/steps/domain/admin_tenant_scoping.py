@@ -15,7 +15,12 @@ from typing import TYPE_CHECKING
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.domain.admin_accounts import _require_admin_page
-from tests.harness.admin_tenant_scoping import ACTIVE_BUY_BUDGET, expected_suggestions_body, redirect_path
+from tests.harness.admin_tenant_scoping import (
+    ACTIVE_BUY_BUDGET,
+    REDIRECTS,
+    expected_suggestions_body,
+    redirect_path,
+)
 
 if TYPE_CHECKING:
     from tests.harness.admin_tenant_scoping import AdminTenantScopingEnv
@@ -77,23 +82,13 @@ def when_caller_sends(ctx: dict, method: str, route: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-@then("the page redirects to the login page of the target tenant")
-def then_redirect_to_tenant_login(ctx: dict) -> None:
-    """The tenant login page, not the generic /login require_auth sends to and not the handler's own redirect."""
+@then(parsers.parse("the page redirects to the {page} of the target tenant"))
+def then_redirect_to_tenant_page(ctx: dict, page: str) -> None:
+    """A 302 to the named page of the target tenant, by the ``REDIRECTS`` table beside the routes."""
     response = _require_admin_page(ctx)
     assert response.status_code == 302, f"Expected 302, got {response.status_code}"
     path = redirect_path(response)
-    expected = f"/tenant/{_env(ctx).target.tenant_id}/login"
-    assert path == expected, f"Expected redirect to {expected}, got {path}"
-
-
-@then("the page redirects to the policy page of the target tenant")
-def then_redirect_to_policy_index(ctx: dict) -> None:
-    """policy.rules keeps its redirect to policy.index for an authorized member."""
-    response = _require_admin_page(ctx)
-    assert response.status_code == 302, f"Expected 302, got {response.status_code}"
-    path = redirect_path(response)
-    expected = f"/tenant/{_env(ctx).target.tenant_id}/policy/"
+    expected = REDIRECTS[page].format(tenant_id=_env(ctx).target.tenant_id)
     assert path == expected, f"Expected redirect to {expected}, got {path}"
 
 

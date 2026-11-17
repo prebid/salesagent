@@ -12,25 +12,24 @@ inherited unchanged, and the harness lifecycle guard
 one hand-rolled ``__enter__``/``__exit__`` home to ``AdminAccountEnv``, so a second admin
 env inherits that lifecycle instead of restating it.
 
-The caller's session is STATED on both transports (``AdminClient.state_session``), in
-the shape an OIDC login writes for a non-admin: a ``user`` email and a HOME tenant that is
-never the target, with no ``test_user`` key. ``require_tenant_access`` therefore takes its
-real branch, and the target tenant's ``User`` row is the only thing that decides the
-outcome, so a rejection here is the real membership check, on the same branch of the
-decorator in-process as on the stack.
+The caller's session is STATED on both transports (``AdminClient.state_session``), with the
+keys an OIDC login writes for a non-admin (``member_session_payload``): ``user`` as a bare
+email and a HOME tenant that is never the target, with no ``test_user`` key.
+``require_tenant_access`` therefore takes its real branch, and the target tenant's ``User``
+row is the only thing that decides the outcome, so a rejection here is the real membership
+check, on the same branch of the decorator in-process as on the stack.
 
 The contract itself is stated once, in ``tests/bdd/features/BR-ADMIN-TENANT-SCOPING.feature``,
-and runs on both transports through ``_build_admin_tenant_scoping_env`` in tests/bdd/conftest.py.
-The module-level helpers (route table, seeding, state snapshot, expected bodies) are what the
-step definitions in tests/bdd/steps/domain/admin_tenant_scoping.py read.
+and runs on both transports through the ``admin-tenant-scoping`` row of ``ENV_ROUTES`` in
+tests/bdd/conftest.py. The module-level helpers (route and redirect tables, seeding, state
+snapshot, expected bodies) are what the step definitions in
+tests/bdd/steps/domain/admin_tenant_scoping.py read.
 """
 
 from __future__ import annotations
 
-import os
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack
 from decimal import Decimal
 from typing import Any, NamedTuple
 from unittest import mock
@@ -38,14 +37,16 @@ from urllib.parse import urlsplit
 
 from sqlalchemy.orm import Session
 
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from src.services.default_products import get_default_products
 from tests.factories import MediaBuyFactory, ProductFactory, TenantFactory, UserFactory
+from tests.factories.mint import mint
 from tests.harness.admin_accounts import AdminAccountEnv
 from tests.harness.admin_client import AdminResponse
 from tests.helpers.admin_session import member_session_payload
-from tests.utils.database_helpers import bound_factory_session
+from tests.utils.database_helpers import bound_factory_session, delete_tenant_rows
 
 #: The non-admin identity the scenarios log in as. Both transports use the same address
 #: so they grade identical ``User`` rows.
@@ -67,6 +68,14 @@ ROUTES: dict[str, TenantScopedRoute] = {
     "policy rules page": TenantScopedRoute("/tenant/{tenant_id}/policy/rules", ("GET", "POST"), False),
 }
 
+#: Where a scenario may say a route redirected to, keyed by the name the Gherkin uses. The
+#: login page is the TENANT's, not the generic ``/login`` ``require_auth`` sends to; the
+#: policy page is where ``policy.rules`` sends an authorized member.
+REDIRECTS: dict[str, str] = {
+    "login page": "/tenant/{tenant_id}/login",
+    "policy page": "/tenant/{tenant_id}/policy/",
+}
+
 
 class TargetTenant(NamedTuple):
     tenant_id: str
@@ -76,12 +85,12 @@ class TargetTenant(NamedTuple):
 
 def unique_id(prefix: str) -> str:
     """A collision-free id: the e2e stack DB persists across runs, so factory sequences would repeat."""
-    return f"{prefix}_{uuid.uuid4().hex[:10]}"
+    return mint(f"{prefix}_{uuid.uuid4().hex[:10]}")
 
 
-def seed_target_tenant(session: Session) -> TargetTenant:
-    """A tenant with one catalogue product and one active media buy. Factories must be bound to ``session``."""
-    tenant = TenantFactory(tenant_id=unique_id("scope"))
+def seed_target_tenant(session: Session, tenant_id: str) -> TargetTenant:
+    """Tenant *tenant_id* with one catalogue product and one active media buy. Factories must be bound to ``session``."""
+    tenant = TenantFactory(tenant_id=tenant_id)
     product = ProductFactory(tenant=tenant, product_id=unique_id("prod"))
     buy = MediaBuyFactory(
         tenant=tenant,
@@ -101,6 +110,13 @@ def seed_target_tenant(session: Session) -> TargetTenant:
         }
     ]
     return TargetTenant(tenant.tenant_id, buy.principal.name, products_payload)
+
+
+def delete_tenant(tenant_id: str) -> None:
+    """Delete tenant *tenant_id* and its rows from the database the current engine points at."""
+    with get_db_session() as session:
+        delete_tenant_rows(session, tenant_id)
+        session.commit()
 
 
 def tenant_state(session: Session, tenant_id: str) -> tuple:
@@ -163,22 +179,39 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         super().__init__(mode=mode, base_url=base_url)
         self._target: TargetTenant | None = None
         self._state: tuple | None = None
+        self._cleanups = ExitStack()
 
-    @classmethod
-    @contextmanager
-    def integration(cls) -> Iterator[AdminTenantScopingEnv]:
-        """The in-process env, with no ambient super-admin grant for the member identity.
+    def _setup(self) -> None:
+        """No ambient super-admin grant for the member identity.
 
-        ``MEMBER_EMAIL`` lives at ``example.com``; an inherited ``SUPER_ADMIN_DOMAINS=example.com``
-        would turn every rejection case into a super-admin pass. The stack's environment is the
-        server's own (docker-compose.e2e.yml forwards ``SUPER_ADMIN_EMAILS`` only), so this is the
-        one transport the test process controls, and ``_build_admin_tenant_scoping_env``
-        (tests/bdd/conftest.py) builds the in-process env through here.
+        ``MEMBER_EMAIL`` lives at ``example.com``; a configured ``SUPER_ADMIN_DOMAINS=example.com``
+        (or the address itself in ``SUPER_ADMIN_EMAILS``) would turn every rejection case into
+        a super-admin pass. Both lists are emptied on the live settings object, which
+        ``is_super_admin`` reads on each request. The environment is loaded once, so removing
+        the variables instead would only reach a process that had not built its settings yet.
+
+        This governs the in-process app. Over e2e the server reads its own settings
+        (docker-compose.e2e.yml forwards ``SUPER_ADMIN_EMAILS`` only).
         """
-        with mock.patch.dict(os.environ):
-            os.environ.pop("SUPER_ADMIN_DOMAINS", None)
-            with cls(mode="integration") as env:
-                yield env
+        super()._setup()
+        auth = get_settings().auth
+        for field in ("super_admin_emails", "super_admin_domains"):
+            self._cleanups.enter_context(mock.patch.object(auth, field, ""))
+
+    def _cleanup(self) -> None:
+        """Delete the tenants this env created, with their rows, and restore the settings.
+
+        The e2e stack's database outlives the scenario, so a tenant left there stays for
+        every later run.
+        """
+        with self._cleanups:
+            super()._cleanup()
+
+    def _new_tenant_id(self, prefix: str) -> str:
+        """A unique tenant id whose deletion is registered before the tenant exists."""
+        tenant_id = unique_id(prefix)
+        self._cleanups.callback(delete_tenant, tenant_id)
+        return tenant_id
 
     # ── Target tenant ─────────────────────────────────────────────────────
 
@@ -189,7 +222,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
 
     def seed_target_tenant(self) -> TargetTenant:
         with bound_factory_session() as session:
-            self._target = seed_target_tenant(session)
+            self._target = seed_target_tenant(session, self._new_tenant_id("scope"))
         self._state = self.target_state()
         return self._target
 
@@ -220,7 +253,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
     def _new_home_tenant(self, *, with_member: bool) -> str:
         """A tenant the session is logged in against. Never the target, so the bypass cannot fire."""
         with bound_factory_session():
-            home = TenantFactory(tenant_id=unique_id("home"))
+            home = TenantFactory(tenant_id=self._new_tenant_id("home"))
             if with_member:
                 UserFactory(tenant=home, user_id=unique_id("user"), email=MEMBER_EMAIL)
             return home.tenant_id
