@@ -7,10 +7,11 @@ import logging
 from functools import wraps
 from typing import TYPE_CHECKING, NamedTuple, TypeVar
 
-from flask import abort, g, jsonify, redirect, session, url_for
+from flask import abort, g, jsonify, make_response, redirect, request, session, url_for
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
+from werkzeug.exceptions import Forbidden
 
 from src.admin.csrf import SAFE_METHODS
 from src.core.config import get_settings
@@ -333,6 +334,15 @@ def role_permits(role: str, method: str, *, admin_only: bool) -> bool:
     return method in SAFE_METHODS
 
 
+def _enforce_role(role: str, tenant_id: str, *, api_mode: bool, admin_only: bool) -> None:
+    """Raise ``Forbidden`` unless *role* permits the current request (JSON body in API mode)."""
+    if role_permits(role, request.method, admin_only=admin_only):
+        return
+    logger.warning("Refused %s %s for tenant %s: role %r", request.method, request.path, tenant_id, role)
+    body = make_response(jsonify({"error": "Your role does not allow this"}), 403) if api_mode else None
+    raise Forbidden(response=body)
+
+
 def require_tenant_access(api_mode=False, admin_only=False):
     """Decorator to require tenant access for routes.
 
@@ -400,14 +410,7 @@ def require_tenant_access(api_mode=False, admin_only=False):
                             return jsonify({"error": "Access denied"}), 403
                         abort(403)
 
-                    if not role_permits(user.role, request.method, admin_only=admin_only):
-                        logger.warning(
-                            "Refused %s %s for tenant %s: role %r", request.method, request.path, tenant_id, user.role
-                        )
-                        if api_mode:
-                            return jsonify({"error": "Your role does not allow this"}), 403
-                        abort(403)
-
+                    _enforce_role(user.role, tenant_id, api_mode=api_mode, admin_only=admin_only)
                     return f(tenant_id, *args, **kwargs)
 
             except Exception as e:
