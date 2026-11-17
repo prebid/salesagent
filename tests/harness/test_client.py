@@ -635,6 +635,34 @@ class TestA2AHttpResultContract:
         if error_kind == "domain":
             assert result.error_envelope() == body
 
+    @pytest.mark.parametrize("over_http", [False, True])
+    @pytest.mark.parametrize("state", ["TASK_STATE_FAILED", "TASK_STATE_COMPLETED"])
+    def test_envelope_only_adcp_error_retains_domain_evidence(self, over_http, state):
+        import httpx
+
+        from tests.harness._base import WireError
+        from tests.harness.client import jsonrpc_http_result, native_task_result
+
+        # AdCP3.2.7 L0 a2a-response-format Error Handling illustrates this
+        # shape; L3 error-handling's two-layer model permits a single layer.
+        body = {"adcp_error": {"code": "MEDIA_BUY_NOT_FOUND", "message": "missing", "recovery": "correctable"}}
+        frame = self._frame(state)
+        task = frame["result"]["task"]
+        task["artifacts"][0]["parts"][0]["data"] = body
+        response = httpx.Response(200, json=frame)
+        result = jsonrpc_http_result(Transport.A2A, response) if over_http else native_task_result(Transport.A2A, task)
+
+        assert result.envelope["status"] == "adcp_error"
+        assert isinstance(result.error, WireError)
+        assert result.payload is None
+        assert result.error_envelope() == body
+        assert result.error_envelope_or_none() is result.wire_response
+        assert result.error.envelope is result.wire_response
+        assert "errors" not in result.error_envelope()
+        assert result.envelope["task"] == task
+        assert result.raw_response is (response if over_http else None)
+        assert result.has_wire is over_http
+
     @pytest.mark.parametrize("kind", ["native", "typed_parse", "local_parse", "malformed"])
     def test_http_dispatcher_keeps_error_and_native_evidence(self, kind):
         frame, body = self._delivery_failure(kind)

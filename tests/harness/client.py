@@ -358,8 +358,9 @@ def native_task_result(transport: Transport, task: dict[str, Any], *, response: 
     try:
         data = _a2a_first_data_part(task)
         failed = task["status"]["state"] == "TASK_STATE_FAILED"
-        if failed or isinstance(data.get("adcp_error"), dict):
-            wire_error = _wire_envelope(data)
+        has_adcp_error = isinstance(data.get("adcp_error"), dict)
+        if failed or has_adcp_error:
+            wire_error = data if has_adcp_error else _wire_envelope(data)
             if wire_error is not None:
                 raise WireError(wire_error, response)
             raise WireRefusal("Failed A2A Task carried no AdCP error envelope", response)
