@@ -62,15 +62,15 @@ def legacy(migration_db):
     return engine, url
 
 
-def _buy(engine, buy_id="buy", *, account=None, request=None, key=None):
+def _buy(engine, buy_id="buy", *, account=None, request=None, key=None, payload_hash=None, created_at="2026-02-01"):
     with engine.begin() as conn:
         conn.execute(
             text(
                 "INSERT INTO media_buys (media_buy_id, tenant_id, principal_id, account_id, "
                 "order_name, advertiser_name, start_date, end_date, status, raw_request, "
-                "created_at, idempotency_key) VALUES (:buy, :tenant, :principal, :account, "
+                "created_at, idempotency_key, payload_hash) VALUES (:buy, :tenant, :principal, :account, "
                 "'Order', 'Brand', '2026-02-01', '2026-12-01', 'pending_approval', "
-                "CAST(:request AS jsonb), '2026-02-01', :key)"
+                "CAST(:request AS jsonb), :created_at, :key, :payload_hash)"
             ),
             {
                 "buy": buy_id,
@@ -78,6 +78,8 @@ def _buy(engine, buy_id="buy", *, account=None, request=None, key=None):
                 "principal": _PRINCIPAL,
                 "account": account,
                 "request": json.dumps(request or {}),
+                "created_at": created_at,
+                "payload_hash": payload_hash,
                 "key": key,
             },
         )
@@ -135,6 +137,7 @@ def _cache(
     account="acc_sandbox",
     response=None,
     key="key",
+    payload_hash=None,
     principal=_PRINCIPAL,
     tenant=_TENANT,
     tool="create_media_buy",
@@ -143,8 +146,8 @@ def _cache(
         conn.execute(
             text(
                 "INSERT INTO idempotency_attempts (attempt_id, tenant_id, principal_id, account_id, "
-                "tool_name, idempotency_key, response_envelope, expires_at) "
-                "VALUES (:key, :tenant, :principal, :account, :tool, :key, "
+                "tool_name, idempotency_key, payload_hash, response_envelope, expires_at) "
+                "VALUES (:key, :tenant, :principal, :account, :tool, :key, :payload_hash, "
                 "CAST(:envelope AS jsonb), '2026-02-02')"
             ),
             {
@@ -153,6 +156,7 @@ def _cache(
                 "account": account,
                 "tool": tool,
                 "key": key,
+                "payload_hash": payload_hash,
                 "envelope": json.dumps(
                     {
                         "status": "submitted" if response and "task_id" in response else "completed",
@@ -205,6 +209,31 @@ def test_natural_key_mode_requires_independent_resolved_id(legacy, mode, account
     _cache(engine, account=account, response={"media_buy_id": "buy"})
     run_alembic_upgrade(url, _REVISION)
     assert _accounts(engine) == {"buy": account}
+
+
+@pytest.mark.parametrize("source", ["raw", "workflow"])
+def test_omitted_natural_mode_recovers_production_with_independent_id(legacy, source):
+    engine, url = legacy
+    request = {"account": {"brand": {"domain": "brand.example"}, "operator": "agent.example"}}
+    _buy(engine, request=request if source == "raw" else {})
+    if source == "workflow":
+        _workflow(engine, request=request)
+    _cache(engine, account="acc_live", response={"media_buy_id": "buy"})
+
+    run_alembic_upgrade(url, _REVISION)
+
+    assert _accounts(engine) == {"buy": "acc_live"}
+
+
+def test_absent_workflow_request_does_not_erase_valid_cache_evidence(legacy):
+    engine, url = legacy
+    _buy(engine)
+    _workflow(engine, request=None)
+    _cache(engine)
+
+    run_alembic_upgrade(url, _REVISION)
+
+    assert _accounts(engine) == {"buy": "acc_sandbox"}
 
 
 @pytest.mark.parametrize(
@@ -267,7 +296,16 @@ def test_unrelated_cache_cannot_supply_ownership(legacy, change):
         ("account", "account_evidence_conflict"),
         ("mode", "mode_evidence_conflict"),
         ("missing_account", "account_missing"),
-        ("natural_key", "natural_key_mismatch"),
+        ("natural_key", "natural_key_mismatch:acc_sandbox"),
+        ("brand", "natural_key_mismatch:acc_sandbox"),
+        ("account_mode", "account_mode_changed:acc_live"),
+        ("account_age", "account_newer_than_buy:acc_sandbox"),
+        ("payload_hash", "conflicting_payload_hash"),
+        ("idempotency_key", "conflicting_idempotency_key"),
+        ("unsupported_identity", "unsupported_natural_key_identity"),
+        ("malformed_reference", "malformed_account_reference"),
+        ("malformed_natural_key", "malformed_natural_key"),
+        ("malformed_brand", "malformed_natural_key"),
     ],
 )
 def test_conflicting_evidence_aborts_entire_upgrade(legacy, kind, reason):
@@ -279,15 +317,46 @@ def test_conflicting_evidence_aborts_entire_upgrade(legacy, kind, reason):
             "account_id": "acc_live" if kind == "account" else "missing" if kind == "missing_account" else "acc_sandbox"
         }
     }
-    if kind in {"mode", "natural_key"}:
+    if kind in {
+        "mode",
+        "natural_key",
+        "brand",
+        "account_mode",
+        "unsupported_identity",
+        "malformed_natural_key",
+        "malformed_brand",
+    }:
         request = {"account": _ref(False if kind == "mode" else True)}
         if kind == "natural_key":
             request["account"]["operator"] = "wrong.example"
-    _buy(engine, "unsafe", request=request)
-    _cache(engine, "unsafe", account="missing" if kind == "missing_account" else "acc_sandbox")
+        elif kind == "brand":
+            request["account"]["brand"]["domain"] = "wrong.example"
+        elif kind == "unsupported_identity":
+            request["account"]["operator_unit"] = {"id": "seat"}
+        elif kind == "malformed_natural_key":
+            request["account"].pop("operator")
+        elif kind == "malformed_brand":
+            request["account"]["brand"] = "brand.example"
+    elif kind == "malformed_reference":
+        request = {"account": "acc_sandbox"}
+    _buy(
+        engine,
+        "unsafe",
+        request=request,
+        key="original_key" if kind == "idempotency_key" else None,
+        payload_hash="a" * 64 if kind == "payload_hash" else None,
+        created_at="2025-12-01" if kind == "account_age" else "2026-02-01",
+    )
+    _cache(
+        engine,
+        "unsafe",
+        account="missing" if kind == "missing_account" else "acc_live" if kind == "account_mode" else "acc_sandbox",
+        response={"media_buy_id": "unsafe"} if kind == "account_mode" else None,
+        payload_hash="b" * 64 if kind == "payload_hash" else None,
+    )
     with pytest.raises(RuntimeError, match=reason) as failure:
         run_alembic_upgrade(url, _REVISION)
-    assert "unsafe" in str(failure.value)
+    assert all(value in str(failure.value) for value in (_TENANT, _PRINCIPAL, "unsafe"))
     assert _accounts(engine) == {"safe": None, "unsafe": None}
     with engine.connect() as conn:
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == _PREVIOUS

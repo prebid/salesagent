@@ -7,11 +7,12 @@ Only the original create request, its scoped creation workflow, or a cached
 create response naming this exact buy can identify its account. Current grants
 and natural-key lookups cannot prove historical ownership. Account mode was
 mutable before #1721, so an ID also needs independent persisted mode evidence:
-an explicit boolean in a natural-key create reference, or sandbox:true in a
-same-buy create response. An absent response marker never proves live mode.
+a natural-key create reference (omitted sandbox means production), or
+sandbox:true in a same-buy create response. An absent response marker never proves live mode.
 
 AdCP 3.1.1 and 3.2.7 core/account-ref.json both permit boolean sandbox on the
-natural-key arm only. Legacy null/omitted mode is deliberately unresolved.
+natural-key arm only, defaulting omitted sandbox to false. Explicit malformed
+mode remains unresolved.
 This local upgrade policy is ungraded by conformance storyboards.
 No rows are deleted or accounts/grants invented. Refusal rolls back everything.
 """
@@ -107,12 +108,13 @@ def _recover(bind: sa.Connection, buy: Mapping[str, Any]) -> tuple[str | None, s
             brand = _document(ref.get("brand"))
             if not isinstance(brand.get("domain"), str) or not isinstance(ref.get("operator"), str):
                 return None, "malformed_natural_key"
-            if type(ref.get("sandbox")) is not bool:
+            sandbox = ref.get("sandbox", False)
+            if type(sandbox) is not bool:
                 return None, "historical_mode_unproven"
             # The account table has no identity columns for these newer selectors.
             if any(ref.get(key) is not None for key in ("operator_unit", "currency", "timezone")):
                 return None, "unsupported_natural_key_identity"
-            modes.add(ref["sandbox"])
+            modes.add(sandbox)
             natural_refs.append(ref)
 
     attempts = bind.execute(
