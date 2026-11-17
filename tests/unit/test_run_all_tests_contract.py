@@ -17,7 +17,7 @@ import subprocess
 import pytest
 
 from scripts.ci.shard_split import SHARD_COUNTS
-from tests.unit._run_all_tests_helpers import REPO_ROOT, RUNNER
+from tests.unit._run_all_tests_helpers import BASH, REPO_ROOT, RUNNER
 
 _HOST_RUNNER = REPO_ROOT / "run_all_tests_host.sh"
 _TOX_INI = REPO_ROOT / "tox.ini"
@@ -26,7 +26,7 @@ _ALL_SUITES = "unit,integration,bdd,admin,e2e,ui,quality,storyboard,collection"
 
 def _resolve(*args: str) -> str:
     proc = subprocess.run(
-        ["bash", str(RUNNER), *args],
+        [BASH, str(RUNNER), *args],
         cwd=REPO_ROOT,
         env={**os.environ, "RUN_ALL_TESTS_RESOLVE_ONLY": "1"},
         capture_output=True,

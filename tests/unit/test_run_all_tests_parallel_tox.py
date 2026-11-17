@@ -40,7 +40,7 @@ import pytest
 from scripts import check_truncated_reports
 from scripts.check_truncated_reports import truncation_report
 from scripts.ci.shard_split import SHARD_COUNTS
-from tests.unit._run_all_tests_helpers import REPO_ROOT, RUNNER
+from tests.unit._run_all_tests_helpers import BASH, REPO_ROOT, RUNNER
 
 _DOCKER_STUB = """#!/usr/bin/env bash
 # Records every invocation of this fake `docker` (argv, space-joined) to
@@ -280,7 +280,7 @@ def _run_with_stubbed_docker(tmp_path: Path, **extra_env: str) -> tuple[subproce
     }
 
     proc = subprocess.run(
-        ["bash", "run_all_tests.sh"],
+        [BASH, "run_all_tests.sh"],
         cwd=workdir,
         env=env,
         capture_output=True,

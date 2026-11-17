@@ -23,7 +23,7 @@ import subprocess
 
 import pytest
 
-from tests.unit._run_all_tests_helpers import REPO_ROOT, RUNNER
+from tests.unit._run_all_tests_helpers import BASH, REPO_ROOT, RUNNER
 
 #: `_CI_BOX_FLOOR_GB=86`
 _FLOOR_RE = re.compile(r"^_CI_BOX_FLOOR_GB=(\d+)\s*$", re.MULTILINE)
@@ -107,7 +107,7 @@ def _resolve_at(tmp_path, *, mem_gb: int, cores: int) -> dict[str, int]:
         env.pop(inherited, None)
 
     proc = subprocess.run(
-        ["bash", str(RUNNER)],
+        [BASH, str(RUNNER)],
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,
