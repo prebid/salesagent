@@ -74,12 +74,16 @@ def _presented_or_stored_refresh_token(tenant_id: str, presented: object) -> str
 
     The settings page never renders the stored token: it is a credential to the
     publisher's ad server, and anyone who can open the page could otherwise copy it.
-    So the page sends a blank token to mean "the one on file".
+    So the page sends a blank token to mean "the one on file". The stored token is
+    used only while the tenant authenticates with OAuth, so a service-account tenant
+    is never tested or configured with a leftover token.
     """
     if isinstance(presented, str) and presented.strip():
         return presented.strip()
     config = read_adapter_config(tenant_id)
-    return (config.gam_refresh_token or "") if config else ""
+    if config is None or config.gam_auth_method != "oauth":
+        return ""
+    return config.gam_refresh_token or ""
 
 
 def validate_gam_network_response(network) -> tuple[bool, str | None]:

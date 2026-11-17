@@ -39,7 +39,10 @@ def gam_tenant(integration_db):
     from tests.harness._base import IntegrationEnv
 
     with IntegrationEnv() as env:
-        tenant = TenantFactory(tenant_id=TENANT_ID, name="GAM Write Only", subdomain="gamwriteonly")
+        # ad_server selects the settings page's adapter template (the factory default is "mock")
+        tenant = TenantFactory(
+            tenant_id=TENANT_ID, name="GAM Write Only", subdomain="gamwriteonly", ad_server="google_ad_manager"
+        )
         AdapterConfigFactory(
             tenant=tenant,
             adapter_type="google_ad_manager",
@@ -79,7 +82,20 @@ def _token_google_was_given(oauth_client: MagicMock) -> str:
 def test_the_settings_page_never_contains_the_stored_token(gam_tenant, authenticated_admin_client):
     response = authenticated_admin_client.get(f"/tenant/{TENANT_ID}/settings")
     assert response.status_code == 200
+    # the GAM template rendered, in the state that used to carry the token in a hidden input
+    assert b"OAuth Token: Configured" in response.data
     assert STORED_TOKEN.encode() not in response.data
+
+
+def test_a_service_account_tenant_never_falls_back_to_a_stored_token(gam_tenant, google, authenticated_admin_client):
+    session = gam_tenant.get_session()
+    config = session.scalars(select(AdapterConfig).filter_by(tenant_id=TENANT_ID)).one()
+    config.gam_auth_method = "service_account"
+    session.commit()
+
+    response = authenticated_admin_client.post(f"/tenant/{TENANT_ID}/gam/detect-network", json={"refresh_token": ""})
+    assert response.status_code == 400
+    google.assert_not_called()
 
 
 def test_detect_network_with_a_blank_token_uses_the_stored_one(google, authenticated_admin_client):
