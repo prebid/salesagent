@@ -36,6 +36,11 @@ from tests.helpers.bdd_transport import NODEID_TRANSPORTS, transport_of
 from tests.helpers.ledger import load_ledger_nodeids
 from tests.helpers.marker_names import derive_marker_names
 
+# ``src.app`` reads this when it is imported and mounts GET /tls/ask from it, as a deployment
+# does. local-tls-ask.feature grades that composed app, so it is set before anything imports
+# ``src.app``. docker-compose.e2e.yml sets the same on the live stack.
+os.environ["TLS_ASK_ENABLED"] = "true"
+
 # Known mock-incompatible e2e_rest BDD scenarios — these dispatch over real HTTP
 # to the separate server, so in-process mock injection (set_registry_formats /
 # set_adapter_response / account billing-state fixtures) is invisible to it and
@@ -75,6 +80,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_v31_request",
     "tests.bdd.steps.domain.uc002_v31_proposal_targeting",
     "tests.bdd.steps.domain.uc002_invariants",
+    "tests.bdd.steps.domain.gam_seller",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc003_storyboard_generic_client",
@@ -109,6 +115,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.local_context_echo",
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
+    "tests.bdd.steps.domain.mcp_tool_discovery",
     "tests.bdd.steps.domain.mcp_endpoint_paths",
     "tests.bdd.steps.domain.publisher_authorization",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
@@ -116,6 +123,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.security_wire_safety",
     "tests.bdd.steps.domain.security_tenant_isolation",
     "tests.bdd.steps.domain.database_fail_fast",
+    "tests.bdd.steps.domain.tls_ask",
     "tests.bdd.steps.domain.protocol_version_negotiation",
 ]
 
@@ -5235,6 +5243,9 @@ _SINGLE_TRANSPORT_TAGS = {
     "predispatch-rest": "REST",
     "predispatch-a2a": "A2A",
     "predispatch-mcp": "MCP",
+    # local-mcp-tool-discovery.feature: tools/list is MCP's own discovery frame and exists on
+    # no other transport.
+    "mcptools": "MCP",
 }
 
 # UC + tag combinations that should run IMPL-only (no 4-way parametrization).
@@ -5527,6 +5538,10 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-v31-request-signing-migrated-digest",
             "T-UC-010-v31-request-signing-subset",
             "T-UC-010-v31-webhook-signing",
+            # Batch 17 — a GAM seller declares only the geo targeting it books
+            # (local-uc010-declaration-backing.feature): the real GoogleAdManager class
+            # answers get_targeting_capabilities.
+            "T-UC-010-local-gam-postal",
         }
     )
     return _UC010_WIRED_TAGS
@@ -6260,6 +6275,18 @@ def _seed_media_buy_chain_create_dispatch(ctx: dict, env: object) -> None:
     ctx["dispatch_mode"] = "create"
 
 
+def _seed_buy_readback(ctx: dict, env: object) -> None:
+    """The create chain on a seller whose adapter is production's, on every transport.
+
+    The read-back scenarios grade what a real adapter's create leaves behind, so the
+    in-process transports run the tenant's own adapter as the live server does: the Mock
+    adapter (whose creative upload is #2420), or ``GoogleAdManager`` once a Given makes the
+    tenant a GAM seller.
+    """
+    _seed_media_buy_chain_create_dispatch(ctx, env)
+    env.sell_through_tenant_adapter()
+
+
 def _seed_media_buy_chain_full_create(ctx: dict, env: object) -> None:
     """The chain, plus the manual-approval full-create flag (PR #1567)."""
     _seed_media_buy_chain(ctx, env)
@@ -6627,6 +6654,9 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-local-assignment-only-existing-creative",
         "T-UC-006-local-failed-creative-assignment",
         "T-UC-006-local-dryrun-parity",
+        # delete_missing and active delivery: plain syncs CreativeSyncEnv serves on every transport.
+        "T-UC-006-local-delete-missing-active-delivery",
+        "T-UC-006-local-delete-missing-not-delivering",
         # The format/validation error paths, corrected to the pinned enum (INVALID_REQUEST
         # for schema violations at the request, REFERENCE_NOT_FOUND / VALIDATION_ERROR on
         # the creative's entry, SERVICE_UNAVAILABLE for an agent that does not answer) and
@@ -6784,6 +6814,17 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_media_buy_create_list_env,
         seed=_seed_media_buy_chain,
     ),
+    # A real create through the scenario's transport, then a read of that buy on the same
+    # env and identity: the initial status (get_media_buys) and a GAM buy's packages
+    # (get_media_buy_delivery). A factory-seeded buy cannot stand in, because it carries its
+    # package ids in raw_request and so cannot show what create persisted. Unscoped and
+    # ahead of the UC rows, so neither uc002-not-wired nor uc004-poll claims these tags.
+    EnvRoute(
+        tag="local-buy-readback",
+        when=lambda m: any(t.startswith(("T-UC-002-local-initial-status-", "T-UC-004-local-gam-readback-")) for t in m),
+        env_builder=_build_media_buy_create_list_env,
+        seed=_seed_buy_readback,
+    ),
     # ── @tenantid (local tenant-identification-routes feature) ──────────────
     # An UNSCOPED `when` row for the same reason as the rows above and below: the
     # scenarios carry a @tenantid tag rather than a T-UC-<n> identity, so
@@ -6812,6 +6853,16 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
     ),
+    # ── @tlsask (local on-demand TLS gate feature) ──────────────────────────
+    # An UNSCOPED `when` row for the same reason as the rows around it: T-TLSASK-* identity
+    # tags, so detect_uc returns None. The gate is a root endpoint, not a tool, so the env
+    # dispatches nothing; it owns the GET and the database faults.
+    EnvRoute(
+        tag="tlsask",
+        when=lambda m: "tlsask" in m,
+        env_builder=_env("tests.harness.tls_gate.TlsGateEnv"),
+        seed=_seed_tenant_and_principal,
+    ),
     # ── @mcppath (local MCP endpoint paths feature) ─────────────────────────
     # Unscoped for the reason the row above gives. No tool is dispatched: the env only supplies
     # how a path is reached on this transport (``post_mcp_initialize``).
@@ -6834,6 +6885,18 @@ ENV_ROUTES: list[EnvRoute] = [
     EnvRoute(
         tag="tenantid",
         when=lambda m: "tenantid" in m,
+        env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @mcptools (local mcp-tool-discovery feature) ────────────────────────
+    # An UNSCOPED `when` row: the scenario carries a T-MCPTOOLS-* identity tag, so
+    # detect_uc returns None and no coarse bucket claims it. The capabilities env, for the
+    # one thing a listing needs from an env: `list_mcp_tools`, which sends `tools/list`
+    # through the in-memory FastMCP Client. The listing is NOT dispatched as a tool, so
+    # which tool this env would dispatch is irrelevant.
+    EnvRoute(
+        tag="mcptools",
+        when=lambda m: "mcptools" in m,
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
     ),
@@ -7199,6 +7262,11 @@ ENV_ROUTES: list[EnvRoute] = [
                 # the record is with the _UC002_VALIDATION_XFAIL block.
                 or "T-UC-002-partition-creative-asset" in m
                 or "T-UC-002-boundary-creative-asset" in m
+                # Every scenario of local-gam-seller.feature needs exactly this row: the
+                # create chain, and dispatch_mode="create" so the shared When dispatches the
+                # request the Givens built. The row claims that feature's tag prefix once, so
+                # a new GAM scenario joins it without editing this predicate.
+                or any(t.startswith("T-UC-002-local-gam-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
@@ -7387,6 +7455,11 @@ ENV_ROUTES: list[EnvRoute] = [
                 # Plus the scenarios named one by one, because the family tags do not
                 # partition along the wired boundary -- see _UC006_WIRED_SCENARIOS.
                 or bool(m & _UC006_WIRED_SCENARIOS)
+                # Every scenario of local-uc006-gam-assignment-trafficking.feature needs
+                # exactly this row: the sync chain on the tenant's own adapter. The row claims
+                # that feature's tag prefix once, so a new scenario joins it without editing
+                # this predicate.
+                or any(t.startswith("T-UC-006-local-gam-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),

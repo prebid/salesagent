@@ -12,20 +12,57 @@ session and do not enforce tenant isolation — these are system-level operation
 from __future__ import annotations
 
 import datetime
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.database.models import (
+    CreativeAssignment,
     MediaBuy,
     MediaPackage,
     PersistedMediaBuyStatus,
 )
 from src.core.errors.details import EntityRefDetails
 from src.core.idempotency_canonical import canonical_request_hash
+
+if TYPE_CHECKING:
+    from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
+    from adcp.types.domains.core.package_format_snapshot import PackageFormatSnapshot as LibraryPackageFormatSnapshot
+
+    from src.core.schemas import PackageRequest
+
+
+@dataclass(frozen=True)
+class RequestedPackage:
+    """One package of a create request, and what the seller decided for it before the row is written.
+
+    ``request`` is the buyer's package as sent; the row records it (product, budget, targeting,
+    creatives, formats). ``package_id`` is the id the seller minted for it, ``pricing_info`` the
+    pricing option the seller resolved, and ``paused`` the state the adapter reported, or the
+    buyer's ask on a buy parked for approval.
+
+    ``formats_to_provide`` and ``format_ids_to_provide`` come from the declaration the package's
+    selector selected, which the caller resolved and this repository cannot. ``core/package.json``
+    requires a package to "retain and return this checklist" and says "the live Product is never
+    substituted for the package snapshot", so a later read answers from the row. ``minItems: 1``
+    on ``formats_to_provide`` means an empty selection records None.
+    """
+
+    package_id: str
+    request: PackageRequest
+    pricing_info: dict[str, Any] | None
+    paused: bool = False
+    formats_to_provide: list[LibraryPackageFormatSnapshot] | None = None
+    format_ids_to_provide: list[LibraryFormatId] | None = None
+
+
+def stored_line_item_id(package: MediaPackage) -> str | None:
+    """The ad server line item a package row stores, None for a package not booked as one."""
+    return (package.package_config or {}).get("platform_line_item_id")
 
 
 class MediaBuyRepository:
@@ -204,6 +241,28 @@ class MediaBuyRepository:
             ).all()
         )
 
+    def buy_packages_of_creative(self, creative_id: str, principal_id: str) -> list[tuple[MediaBuy, MediaPackage]]:
+        """Each package of the principal's own buys that the principal's creative is assigned to, with its buy."""
+        rows = self._session.execute(
+            select(MediaBuy, MediaPackage)
+            .join(MediaPackage, MediaPackage.media_buy_id == MediaBuy.media_buy_id)
+            .join(
+                CreativeAssignment,
+                and_(
+                    CreativeAssignment.tenant_id == MediaBuy.tenant_id,
+                    CreativeAssignment.principal_id == MediaBuy.principal_id,
+                    CreativeAssignment.media_buy_id == MediaBuy.media_buy_id,
+                    CreativeAssignment.package_id == MediaPackage.package_id,
+                ),
+            )
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.principal_id == principal_id,
+                CreativeAssignment.creative_id == creative_id,
+            )
+        ).all()
+        return [(buy, package) for buy, package in rows]
+
     def get_package(self, media_buy_id: str, package_id: str) -> MediaPackage | None:
         """Get a specific package, verified to belong to this tenant."""
         return self._session.scalars(
@@ -359,7 +418,7 @@ class MediaBuyRepository:
         order_name: str | None = None,
         campaign_objective: str | None = None,
         kpi_goal: str | None = None,
-        package_id_map: dict[int, str] | None = None,
+        packages: Sequence[RequestedPackage] = (),
         by_alias: bool = False,
         created_at: datetime.datetime | None = None,
         account_id: str | None = None,
@@ -384,7 +443,10 @@ class MediaBuyRepository:
             order_name: Order name (defaults to req.po_number or "Order-{id}").
             campaign_objective: Optional campaign objective.
             kpi_goal: Optional KPI goal.
-            package_id_map: Map of package index → package_id to inject into serialized packages.
+            packages: The request's packages, in request order, each with its minted id. One
+                package row is written per entry, in the same flush as the buy, and each id is
+                injected into the stored request's package at the same position. The rows are
+                part of the create, so they do not bump the buy's revision.
             by_alias: Whether to serialize with field aliases (e.g., content_uri).
             created_at: Optional explicit created_at timestamp.
             account_id: Resolved account scope (AdCP idempotency scope is agent+account+key).
@@ -394,11 +456,9 @@ class MediaBuyRepository:
             The created MediaBuy ORM object (added to session, not committed).
         """
         raw = req.model_dump(mode="json", by_alias=by_alias)
-        if package_id_map:
-            packages = raw.get("packages", [])
-            for idx, pkg_id in package_id_map.items():
-                if idx < len(packages):
-                    packages[idx]["package_id"] = pkg_id
+        raw_packages = raw.get("packages") or []
+        for raw_package, requested in zip(raw_packages, packages, strict=False):
+            raw_package["package_id"] = requested.package_id
 
         kwargs: dict[str, Any] = {
             "media_buy_id": media_buy_id,
@@ -441,8 +501,52 @@ class MediaBuyRepository:
         media_buy = MediaBuy(**kwargs)
         self._stamp_confirmation_if_needed(media_buy, seller_committed=seller_committed)
         self._session.add(media_buy)
+        for requested in packages:
+            self._session.add(self._requested_package_row(media_buy_id, requested, currency))
         self._session.flush()
         return media_buy
+
+    @staticmethod
+    def _requested_package_row(media_buy_id: str, requested: RequestedPackage, currency: str) -> MediaPackage:
+        """The package row for one requested package: what the buyer booked, as the request carried it.
+
+        The budget is stored as ``{"total", "currency"}``, its currency the pricing option's when
+        the seller resolved one and the buy's otherwise; the ``budget`` and ``bid_price`` columns
+        carry the same values.
+
+        ``pricing_option_id`` and ``catalogs`` are here because update_media_buy's
+        ``affected_packages`` report them off the row (``core/package.json``;
+        ``media-buy/package-update.json``: "Omit to leave catalogs unchanged"). Models go in, not
+        dicts: the JSONType column serializes them through the engine's serializer.
+        """
+        request = requested.request
+        pricing_info = requested.pricing_info
+        budget: dict[str, Any] | None = None
+        if request.budget is not None:
+            budget = {"total": float(request.budget), "currency": (pricing_info or {}).get("currency", currency)}
+        bid_price = (pricing_info or {}).get("bid_price")
+        package_config = {
+            "package_id": requested.package_id,
+            "paused": requested.paused,
+            "product_id": request.product_id,
+            "pricing_option_id": request.pricing_option_id,
+            "budget": budget,
+            "targeting_overlay": request.targeting_overlay,
+            "creative_ids": request.creative_ids,
+            "format_ids": request.format_ids,
+            "catalogs": request.catalogs,
+            "formats_to_provide": requested.formats_to_provide,
+            "format_ids_to_provide": requested.format_ids_to_provide,
+            "pricing_info": pricing_info,
+            "impressions": request.impressions,
+        }
+        return MediaPackage(
+            media_buy_id=media_buy_id,
+            package_id=requested.package_id,
+            package_config=package_config,
+            budget=Decimal(str(budget["total"])) if budget is not None else None,
+            bid_price=Decimal(str(bid_price)) if bid_price is not None else None,
+        )
 
     def create(self, media_buy: MediaBuy, *, seller_committed: bool = False) -> MediaBuy:
         """Persist a new media buy within this tenant.
@@ -534,13 +638,13 @@ class MediaBuyRepository:
         buyer-visible and write-once, while a missing one is corrected by the next
         genuine commit.
 
-        Pinned contract: ``create-media-buy-response.json`` @ 3.1.1 branch0 types
+        Pinned contract: ``create-media-buy-response.json`` @ 3.2.7 branch0 types
         ``confirmed_at`` ["string","null"], lists it in ``required``, and describes it
-        as "the moment the seller committed... May be null in deferred or
-        manual-approval flows until seller commitment occurs" -- an event, in the
-        spec's own words. Its one hard constraint is that a null value forbids
-        ``status == "active"``, which holds: ACTIVE is only ever reached through a
-        writer that commits.
+        as "ISO 8601 timestamp when this media buy was committed by the seller... May
+        be null in deferred or manual-approval flows until seller commitment occurs" --
+        an event, in the spec's own words. Its constraint on the status is that a null
+        value forbids ``media_buy_status == "active"``, which holds: ACTIVE is only ever
+        reached through a writer that commits.
 
         Graded by @T-UC-002-v31-success-revision-and-actions (the auto-approval branch,
         which requires a timestamp) and by the approval-route integration tests (the

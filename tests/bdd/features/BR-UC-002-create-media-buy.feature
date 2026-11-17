@@ -327,6 +327,32 @@ Feature: BR-UC-002 Create Media Buy
     # the raise discarded it, so the buyer learned only that targeting was rejected.
     # details now carries {include, exclude, values} per conflicting pair, so all four
     # targeting violation kinds stay distinguishable under one INVALID_REQUEST code.
+
+  @T-UC-002-ext-f-geo-disjoint @extension @ext-f @error
+  Scenario Outline: Targeting overlay inclusion fields share no place - <case>
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package targeting_overlay is <overlay>
+    When the Buyer Agent sends the create_media_buy request
+    Then the response is compliant with the create_media_buy error spec
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error recovery should be "correctable"
+    And the wire error INVALID_REQUEST details problems should be <records>
+    And the error should include "suggestion" field
+
+    Examples:
+      | case                   | overlay                                                                                 | records                                                |
+      | region outside country | {"geo_countries": ["CA"], "geo_regions": ["US-NY"]}                                     | [{"field": "geo_regions", "rejected_value": "US-NY"}] |
+      | DMA outside country    | {"geo_countries": ["CA"], "geo_metros": [{"system": "nielsen_dma", "values": ["501"]}]} | [{"field": "geo_metros", "rejected_value": "501"}]    |
+    # LOCALLY-ADDED beside the generated ext-f-geo. Inclusion fields combine with AND
+    # (docs/reference/migration/geo-targeting.mdx at v3.2.7); an overlay whose inclusion
+    # fields have no place in common can never deliver. The pin does not state this case:
+    # the same-value overlap above (targeting.mdx, Exclusion Semantics) covers one value in
+    # an inclusion and an exclusion, and targeting.mdx's "A supported create-time selection
+    # with no executable inventory produces `PRODUCT_UNAVAILABLE`" names another code. It is
+    # refused like the overlap, with each field and code in details.problems (field,
+    # rejected_value).
     # --- ext-g: Creative Validation Failure ---
 
   @T-UC-002-ext-g @extension @ext-g @error @post-f1 @post-f2 @post-f3

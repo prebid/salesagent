@@ -279,7 +279,7 @@ class GAMProductConfigService:
                 {
                     "line_item_type": "STANDARD",
                     "priority": 6,
-                    "primary_goal_type": "DAILY",
+                    "primary_goal_type": "LIFETIME",  # the only goal type GAM accepts on STANDARD
                     "delivery_rate_type": "EVENLY",
                     "non_guaranteed_automation": "manual",  # Guaranteed always manual
                 }

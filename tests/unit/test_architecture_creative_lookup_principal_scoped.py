@@ -62,11 +62,7 @@ _QUERY_ALLOWLIST: set[tuple[str, str]] = {
 
 # Explicit allowlist for the ADMIN-CALL detector: tools-layer functions that
 # are genuinely seller-side (reached from creative approval, not buyer input).
-_ADMIN_CALL_ALLOWLIST: set[tuple[str, str]] = {
-    # GATE-PUSH: pushes an admin-APPROVED creative to an existing buy; the
-    # owning principal is re-derived from the creative row itself.
-    ("src/core/tools/media_buy_create.py", "push_creative_to_existing_buy"),
-}
+_ADMIN_CALL_ALLOWLIST: set[tuple[str, str]] = set()
 
 
 def _model_aliases(tree: ast.Module) -> dict[str, str]:

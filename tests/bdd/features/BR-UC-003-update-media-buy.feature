@@ -2220,6 +2220,36 @@ Feature: BR-UC-003 Update Media Buy
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/keyword_targets
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/geo_proximity/items/oneOf
 
+  @T-UC-003-ext-geo-disjoint @extension @error
+  Scenario Outline: Targeting overlay inclusion fields share no place - <case>
+    Given a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field             | value   |
+    | package_id        | pkg_001 |
+    And the package targeting_overlay is set to: <overlay>
+    And the package "pkg_001" exists in the media buy
+    And the tenant is configured for auto-approval
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the wire error INVALID_REQUEST details problems should be <records>
+    And the error should include "suggestion" field
+
+    Examples:
+      | case                   | overlay                                                                                 | records                                                |
+      | region outside country | {"geo_countries": ["CA"], "geo_regions": ["US-NY"]}                                     | [{"field": "geo_regions", "rejected_value": "US-NY"}] |
+      | DMA outside country    | {"geo_countries": ["CA"], "geo_metros": [{"system": "nielsen_dma", "values": ["501"]}]} | [{"field": "geo_metros", "rejected_value": "501"}]    |
+    # LOCALLY-ADDED beside the generated targeting-overlay outlines, whose
+    # `the result should be <outcome>` grades only the code and the suggestion.
+    # Inclusion fields combine with AND (docs/reference/migration/geo-targeting.mdx at
+    # v3.2.7); an overlay whose inclusion fields have no place in common can never
+    # deliver. The pin does not state this case. It is refused on update as on create
+    # (BR-UC-002 @T-UC-002-ext-f-geo-disjoint), with each field and code in
+    # details.problems (field, rejected_value).
+
   @T-UC-003-partition-start-time @partition @start_time
   Scenario Outline: Start time partition validation - <partition>
     Given the existing media buy has start_time "2026-01-01T00:00:00Z"
