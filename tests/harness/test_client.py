@@ -592,6 +592,49 @@ class TestA2AHttpResultContract:
         assert result.envelope["jsonrpc_error"] == refusal
         assert result.envelope["jsonrpc_error_code"] == -32001
 
+    @pytest.mark.parametrize("entrypoint", ["reader", "client", "dispatcher"])
+    def test_malformed_event_stream_retains_http_evidence(self, entrypoint):
+        import httpx
+
+        from tests.harness.client import jsonrpc_http_result
+        from tests.harness.transport import E2EConfig
+        from tests.helpers.local_http_origin import run_local_origin
+
+        body = 'event: message\ndata: {"unexpected": true}\n\n'
+        headers = {"content-type": "text/event-stream", "x-evidence": "malformed-stream"}
+        if entrypoint == "reader":
+            response = httpx.Response(200, text=body, headers=headers)
+            result = jsonrpc_http_result(Transport.E2E_A2A, response)
+            assert result.raw_response is response
+        else:
+            with run_local_origin() as origin:
+                origin.respond_with(
+                    200,
+                    body=body.encode(),
+                    content_type="text/event-stream",
+                    headers={"x-evidence": "malformed-stream"},
+                )
+                env = BaseTestEnv(e2e_config=E2EConfig(base_url=origin.base_url, postgres_url="postgresql://unused/db"))
+                if entrypoint == "client":
+                    result = AdCPTestClient(env).call("get_products", {}, Transport.E2E_A2A, credential={})
+                else:
+                    result = env.call_via(Transport.E2E_A2A, tool_name="get_products", credential={})
+
+        assert result.is_error
+        framing_error = result.error.__cause__ or result.error
+        assert type(framing_error) is AssertionError
+        assert repr(body) in str(framing_error)
+        assert result.has_wire
+        assert result.envelope["status"] == "transport_fault"
+        assert result.envelope["status_code"] == 200
+        assert result.raw_response.status_code == 200
+        assert result.raw_response.headers["content-type"] == "text/event-stream"
+        assert result.raw_response.headers["x-evidence"] == "malformed-stream"
+        assert result.raw_response.text == body
+        assert result.payload is None
+        assert result.wire_response is None
+        assert result.error_envelope_or_none() is None
+
     @pytest.mark.parametrize("over_http", [False, True])
     @pytest.mark.parametrize(
         "state,body,error_kind",

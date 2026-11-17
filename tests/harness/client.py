@@ -418,7 +418,7 @@ def jsonrpc_http_result(transport: Transport, response: Any) -> TransportResult:
                 envelope={**captured.envelope, "status": derive_error_status(None)},
             )
         return captured
-    except (WireError, WireRefusal, ValueError, TypeError, KeyError) as exc:
+    except (WireError, WireRefusal, ValueError, TypeError, KeyError, AssertionError) as exc:
         error = exc
         metadata["status"] = derive_error_status(wire_error)
     return TransportResult(
