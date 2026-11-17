@@ -294,7 +294,7 @@ class TestFetchTargetMediaBuys:
         assert [b.media_buy_id for b in result] == ["buy_good"]
         assert len(self.advisories) == 1
         advisory = self.advisories[0]
-        assert advisory.code == "PERSISTED_VALUE_UNRENDERABLE"
+        assert advisory.code == "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
         assert advisory.recovery == "terminal", (
             "a persisted-state defect cannot be retried into success; the advisory must say so"
         )
@@ -688,7 +688,7 @@ class TestTargetingOverlayRoundTrip:
         assert response.errors is not None
         assert len(response.errors) == 1
         err = response.errors[0]
-        assert err.code == "PERSISTED_VALUE_UNRENDERABLE"
+        assert err.code == "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
         assert err.recovery == "terminal", "a row the buyer cannot repair must not invite a retry"
         # The discriminator is ``details.reasons``, not the message: ``message`` is
         # derived from CODE_TABLE, so no raise site can stamp a

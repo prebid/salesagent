@@ -99,16 +99,9 @@ def make_pending_media_buy(integration_db):
         )
         # Persisted package row — the approve path's adapter execution reads the
         # buy's MediaPackage records ("No packages found" aborts before the webhook).
-        MediaPackageFactory(
-            media_buy=media_buy,
-            package_id="pkg_reject_wh_1",
-            package_config={
-                "package_id": "pkg_reject_wh_1",
-                "product_id": product.product_id,
-                "budget": 5000.0,
-                "pricing_option_id": "cpm_usd_fixed",
-            },
-        )
+        # Its budget and package_config come from the raw_request package, as the
+        # pending writer writes them.
+        MediaPackageFactory(media_buy=media_buy, package_id="pkg_reject_wh_1")
         PushNotificationConfigFactory(
             tenant=tenant,
             principal=principal,

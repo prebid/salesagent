@@ -268,6 +268,9 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       SALES_AGENT_DOMAIN: "sales-agent.example.com"
+      # Mounts GET /tls/ask, which local-tls-ask.feature grades on e2e. That feature names
+      # the SALES_AGENT_DOMAIN above, so the two change together.
+      TLS_ASK_ENABLED: "true"
       ADCP_MULTI_TENANT: "true"
     depends_on:
       postgres:

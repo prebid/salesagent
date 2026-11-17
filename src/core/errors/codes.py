@@ -168,7 +168,7 @@ class AppErrorCode(StrEnum):
         ),
     )
     PERSISTED_VALUE_UNRENDERABLE = (
-        "PERSISTED_VALUE_UNRENDERABLE",
+        "X_PREBID_PERSISTED_VALUE_UNRENDERABLE",
         CodeEntry(
             recovery=Recovery.TERMINAL,
             suggestion="Contact the seller to repair the stored data; retrying this request cannot repair it",

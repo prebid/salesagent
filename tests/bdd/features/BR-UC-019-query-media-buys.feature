@@ -1009,7 +1009,7 @@ Feature: BR-UC-019 Query Media Buys
     And the response should include media buy "mb-good"
     And the response should not include media buy "mb-broken"
     And the response errors should name the omitted media buy "mb-broken"
-    And response.errors[] should carry exactly 1 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And response.errors[] should carry exactly 1 advisories with code "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
     # HAND-EDITED, pending the bulk upstream copy to adcp-req. Authored here rather than
     # upstream by owner ruling; the @hand-edited marker keeps compile_bdd.py --merge from
     # classifying it LEGACY-DELETE in the meantime. Expected, not stray.
@@ -1167,7 +1167,7 @@ Feature: BR-UC-019 Query Media Buys
     # citing the ruling under T-UC-019-boundary-revision. That ruling covers a REQUIRED
     # field (revision), which has no legal absent rendering. packages[].creative_deadline
     # is OPTIONAL, so the policy for it is the blob rule: the package renders without the
-    # field and errors[] carries one CONFIGURATION_ERROR / terminal advisory naming it.
+    # field and errors[] carries one X_PREBID_PERSISTED_VALUE_UNRENDERABLE advisory naming it.
     # The "next Friday" row is now the creative_deadline row of
     # @T-UC-019-blob-degraded-package-field, which grades exactly that.
     #
@@ -1336,7 +1336,7 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
     And the package "pkg-001" wire field targeting_overlay should equal the JSON value <overlay>
-    And response.errors[] should carry exactly <count> advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And response.errors[] should carry exactly <count> advisories with code "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
 
     Examples:
       | partition                            | persisted_state                                                                                                 | overlay                    | count |
@@ -1352,7 +1352,7 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
     And the package "pkg-001" wire field targeting_overlay should be null or absent
-    And response.errors[] should carry exactly 1 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And response.errors[] should carry exactly 1 advisories with code "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
     And the persisted-value advisory for field targeting_overlay should identify media buy "mb-001" package "pkg-001"
 
   # ISOLATION IS THE OBLIGATION, and it was ungraded. The degradation of ONE corrupt
@@ -1364,7 +1364,7 @@ Feature: BR-UC-019 Query Media Buys
   #
   # AdCP 3.2.7 L3/error-handling.mdx: payload advisories preserve a usable result;
   # CONFIGURATION_ERROR instead requires transport failure. This seller's terminal
-  # PERSISTED_VALUE_UNRENDERABLE code identifies unreadable stored values. The open
+  # X_PREBID_PERSISTED_VALUE_UNRENDERABLE code identifies unreadable stored values. The open
   # error.code vocabulary permits it. BR-RULE-294 is upstream-storyboard ungraded.
   # Source: https://github.com/adcontextprotocol/adcp/blob/v3.2.7/docs/building/by-layer/L3/error-handling.mdx
   #
@@ -1384,7 +1384,7 @@ Feature: BR-UC-019 Query Media Buys
     And the response should include media buy "mb-001" with package "pkg-002"
     And the package "pkg-002" wire field targeting_overlay should be null or absent
     And the package "pkg-001" targeting_overlay should carry geo_countries ["US"]
-    And response.errors[] should carry exactly 1 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And response.errors[] should carry exactly 1 advisories with code "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
     And the persisted-value advisory for field targeting_overlay should identify media buy "mb-001" package "pkg-002"
     # BR-RULE-294 INV-5: per-package failure isolation
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
@@ -1406,7 +1406,7 @@ Feature: BR-UC-019 Query Media Buys
     And the package "pkg-002" wire field targeting_overlay should be null or absent
     And the response should include media buy "mb-003" with package "pkg-003"
     And the package "pkg-003" wire field targeting_overlay should be null or absent
-    And response.errors[] should carry exactly 2 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And response.errors[] should carry exactly 2 advisories with code "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
     And the persisted-value advisory for field targeting_overlay should identify media buy "mb-002" package "pkg-002"
     And the persisted-value advisory for field targeting_overlay should identify media buy "mb-003" package "pkg-003"
     # BR-RULE-294 INV-6: per-buy failure isolation across the response
@@ -1444,7 +1444,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the response should include media buy "mb-001" with package "pkg-001"
     And the package "pkg-001" wire field <field> should be null or absent
-    And response.errors[] should carry exactly 1 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And response.errors[] should carry exactly 1 advisories with code "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
     And the persisted-value advisory for field <field> should identify media buy "mb-001" package "pkg-001"
     # All optional persisted values share one advisory class. CONFIGURATION_ERROR
     # requires transport failure under AdCP 3.2.7 L3/error-handling.mdx; this result
@@ -1479,7 +1479,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the response should include media buy "mb-001" with package "pkg-001"
     And the media buy "mb-001" wire field buyer_campaign_ref should be null or absent
-    And response.errors[] should carry exactly 1 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And response.errors[] should carry exactly 1 advisories with code "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
     And the persisted-value advisory should identify media buy "mb-001" field buyer_campaign_ref
 
   @T-UC-019-mixed-persisted-value-advisories @invariant @BR-RULE-294 @error @schema-v3.1
@@ -1494,7 +1494,7 @@ Feature: BR-UC-019 Query Media Buys
     And media buy "mb-002" raw_request key buyer_campaign_ref holds the legacy JSON value 456
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001", "mb-002"]
     Then the response is compliant with the get_media_buys spec
-    And response.errors[] should carry exactly 6 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And response.errors[] should carry exactly 6 advisories with code "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
     And the persisted-value advisory for field paused should identify media buy "mb-001" package "pkg-001"
     And the persisted-value advisory for field creative_deadline should identify media buy "mb-001" package "pkg-0010"
     And the persisted-value advisory for field paused should identify media buy "mb-002" package "pkg-002"
@@ -1776,7 +1776,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the package "pkg-001" wire field targeting_overlay should be null or absent
     And the package "pkg-0010" wire field targeting_overlay should be null or absent
-    And response.errors[] should carry exactly 2 advisories with code "PERSISTED_VALUE_UNRENDERABLE" and recovery "terminal"
+    And response.errors[] should carry exactly 2 advisories with code "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
     And the persisted-value advisory for field targeting_overlay should identify media buy "mb-001" package "pkg-001"
     And the persisted-value advisory for field targeting_overlay should identify media buy "mb-001" package "pkg-0010"
 

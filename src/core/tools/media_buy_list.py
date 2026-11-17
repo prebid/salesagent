@@ -247,7 +247,7 @@ def _get_media_buys_impl(
             # OPTIONAL-field branch of the module's per-row failure policy (see the
             # module docstring): targeting_overlay has a legal empty value, so a
             # single corrupted package_config row renders as None with a non-fatal
-            # PERSISTED_VALUE_UNRENDERABLE advisory rather than crashing the whole
+            # X_PREBID_PERSISTED_VALUE_UNRENDERABLE advisory rather than crashing the whole
             # tenant's get_media_buys response. The REQUIRED-field branch of the same
             # policy is _persisted_revision / _compute_status, which refuse.
             #
@@ -445,7 +445,9 @@ def _persisted_value_advisory(
 
     AdCP 3.2.7 L3/error-handling.mdx requires failed transport for CONFIGURATION_ERROR.
     Its open code vocabulary permits this terminal advisory for seller-owned data
-    that the buyer cannot repair (BR-RULE-294; upstream storyboard ungraded).
+    that the buyer cannot repair. AdCP 3.2.7 transport-errors.mdx, Seller-Specific
+    Error Codes, requires X_{VENDOR}_{CODE}; terminal seller repair is local policy
+    (BR-RULE-294 / UC019; upstream storyboard ungraded).
     Returned values use positional JSONPath-lite fields; omitted rows name the
     collection because they have no position in the response.
     """
