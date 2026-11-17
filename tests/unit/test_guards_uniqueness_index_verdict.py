@@ -50,10 +50,9 @@ from tests.unit._architecture_helpers import (
     handles_integrity_error,
     iter_call_expressions,
     iter_statement_scoped_nodes,
-    orm_model_class_defs,
+    orm_references,
     parse_module,
     rel,
-    select_call_model_name,
     src_python_files,
     structural_guard_marker_re,
     unique_key_constraints,
@@ -72,8 +71,6 @@ FIX_HINT = (
     "add a bare `except IntegrityError` in the blueprint. Where the recovery genuinely belongs "
     f"one frame up, mark the site `# {MARKER} - <why>`."
 )
-
-_ORM_MODEL_NAMES = frozenset(cls.name for cls in orm_model_class_defs())
 
 
 class IndexVerdictViolation(NamedTuple):
@@ -107,26 +104,28 @@ def _outermost_functions(tree: ast.AST) -> Iterator[ast.FunctionDef | ast.AsyncF
 # ── Pre-checks ──────────────────────────────────────────────────────
 
 
-def _equality_column(node: ast.Compare, model: str) -> str | None:
+def _equality_column(node: ast.Compare, model: str, references: dict[int, str]) -> str | None:
     """Column name from ``Model.col == value`` (either orientation), else None."""
     if len(node.ops) != 1 or not isinstance(node.ops[0], ast.Eq):
         return None
     for side in (node.left, *node.comparators):
-        if isinstance(side, ast.Attribute) and isinstance(side.value, ast.Name) and side.value.id == model:
+        if isinstance(side, ast.Attribute) and references.get(id(side.value)) == model:
             return side.attr
     return None
 
 
-def _statement_precheck(stmt: ast.stmt) -> tuple[str, frozenset[str]] | None:
+def _statement_precheck(stmt: ast.stmt, references: dict[int, str]) -> tuple[str, frozenset[str]] | None:
     """The ``(model, filter_keys)`` this ONE statement checks, else None.
 
     Keys bind per statement rather than per function so that two unrelated queries
     on the same model cannot jointly compose a unique tuple neither of them checks.
     A statement naming more than one model is skipped: its keys cannot be attributed.
+    The model is the one ``orm_references`` resolves for a ``select(...)`` in the
+    statement, so ``select(User.user_id)`` pre-checks ``User`` exactly as ``select(User)``.
     """
     nodes = list(iter_statement_scoped_nodes(stmt))
     calls = [node for node in nodes if isinstance(node, ast.Call)]
-    models = {name for call in calls if (name := select_call_model_name(call))}
+    models = {references[id(call)] for call in calls if id(call) in references}
     if len(models) != 1:
         return None
     model = models.pop()
@@ -136,17 +135,17 @@ def _statement_precheck(stmt: ast.stmt) -> tuple[str, frozenset[str]] | None:
         if isinstance(call.func, ast.Attribute) and call.func.attr == "filter_by":
             keys.update(kw.arg for kw in call.keywords if kw.arg)
     for node in nodes:
-        if isinstance(node, ast.Compare) and (column := _equality_column(node, model)):
+        if isinstance(node, ast.Compare) and (column := _equality_column(node, model, references)):
             keys.add(column)
     return (model, frozenset(keys)) if keys else None
 
 
-def _prechecked_keys(func: ast.AST) -> dict[str, list[frozenset[str]]]:
+def _prechecked_keys(func: ast.AST, references: dict[int, str]) -> dict[str, list[frozenset[str]]]:
     by_model: dict[str, list[frozenset[str]]] = {}
     for node in ast.walk(func):
         if not isinstance(node, ast.stmt):
             continue
-        precheck = _statement_precheck(node)
+        precheck = _statement_precheck(node, references)
         if precheck is not None:
             by_model.setdefault(precheck[0], []).append(precheck[1])
     return by_model
@@ -155,14 +154,14 @@ def _prechecked_keys(func: ast.AST) -> dict[str, list[frozenset[str]]]:
 # ── Writes ──────────────────────────────────────────────────────────
 
 
-def _constructed_models(func: ast.AST) -> dict[str, str]:
-    """Local name → ORM model class it was constructed from."""
+def _constructed_models(func: ast.AST, references: dict[int, str]) -> dict[str, str]:
+    """Local name → ORM model class it was constructed from (the class resolved by import)."""
     built: dict[str, str] = {}
     for node in ast.walk(func):
         if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
             continue
-        constructor = getattr(node.value.func, "id", None)
-        if constructor not in _ORM_MODEL_NAMES:
+        constructor = references.get(id(node.value.func))
+        if constructor is None:
             continue
         for target in node.targets:
             if isinstance(target, ast.Name):
@@ -170,7 +169,7 @@ def _constructed_models(func: ast.AST) -> dict[str, str]:
     return built
 
 
-def _write_model(call: ast.Call, constructed: dict[str, str]) -> str | None:
+def _write_model(call: ast.Call, constructed: dict[str, str], references: dict[int, str]) -> str | None:
     """Model written by a ``session.add(...)`` call, else None."""
     if not isinstance(call.func, ast.Attribute) or call.func.attr != "add" or len(call.args) != 1:
         return None
@@ -178,8 +177,7 @@ def _write_model(call: ast.Call, constructed: dict[str, str]) -> str | None:
     if isinstance(arg, ast.Name):
         return constructed.get(arg.id)
     if isinstance(arg, ast.Call):
-        constructor = getattr(arg.func, "id", None)
-        return constructor if constructor in _ORM_MODEL_NAMES else None
+        return references.get(id(arg.func))
     return None
 
 
@@ -210,7 +208,7 @@ def _marked_line_numbers(source: str, marker_re) -> set[int]:
 def find_unhandled_index_verdicts(
     tree: ast.Module,
     source: str,
-    path: str = "<snippet>",
+    path: str,
     *,
     apply_exemptions: bool = True,
 ) -> list[IndexVerdictViolation]:
@@ -222,17 +220,18 @@ def find_unhandled_index_verdicts(
     """
     marked_lines = _marked_line_numbers(source, structural_guard_marker_re(GUARD_NAME))
     unique_keys = usable_unique_keys_by_model()
+    references = orm_references(path, tree)
     violations: dict[tuple[str, str, str], IndexVerdictViolation] = {}
 
     for func in _outermost_functions(tree):
-        prechecked = _prechecked_keys(func)
+        prechecked = _prechecked_keys(func, references)
         if not prechecked:
             continue
-        constructed = _constructed_models(func)
+        constructed = _constructed_models(func, references)
         exempt = _exempt_node_ids(func) if apply_exemptions else set()
 
         for call in iter_call_expressions(func, name="add"):
-            model = _write_model(call, constructed)
+            model = _write_model(call, constructed, references)
             if model is None or model not in unique_keys:
                 continue
             covered = any(
@@ -373,8 +372,16 @@ def test_exemptions_are_load_bearing():
 # ── Meta-cases ──────────────────────────────────────────────────────
 
 
+#: The imports a real module carries: the guard resolves ``select`` and every model by import.
+_PREAMBLE = (
+    "from sqlalchemy import select\n"
+    "from src.core.database.models import Account, InventoryProfile, Principal, PropertyTag, Tenant, User\n"
+)
+
+
 def _find(source: str) -> list[IndexVerdictViolation]:
-    return find_unhandled_index_verdicts(ast.parse(source), source)
+    source = _PREAMBLE + source
+    return find_unhandled_index_verdicts(ast.parse(source), source, "src/x.py")
 
 
 class TestGuardMetaCases:
@@ -411,6 +418,27 @@ class TestGuardMetaCases:
             "    if session.scalars(stmt).first():\n"
             "        return 'exists'\n"
             "    session.add(User(tenant_id=tenant_id, email=email))\n"
+        )
+        assert [v.model for v in _find(source)] == ["User"]
+
+    def test_flags_a_column_projection_precheck(self):
+        """select(User.user_id) pre-checks User; the spelling match read a model named user_id."""
+        source = (
+            "def add_user(session, tenant_id, email):\n"
+            "    if session.scalars(select(User.user_id).filter_by(tenant_id=tenant_id, email=email)).first():\n"
+            "        return 'exists'\n"
+            "    session.add(User(tenant_id=tenant_id, email=email))\n"
+        )
+        assert [v.model for v in _find(source)] == ["User"]
+
+    def test_flags_a_precheck_and_write_through_an_import_alias(self):
+        source = (
+            "from src.core.database.models import User as DBUser\n"
+            "def add_user(session, tenant_id, email):\n"
+            "    if session.scalars(select(DBUser).filter_by(tenant_id=tenant_id, email=email)).first():\n"
+            "        return 'exists'\n"
+            "    user = DBUser(tenant_id=tenant_id, email=email)\n"
+            "    session.add(user)\n"
         )
         assert [v.model for v in _find(source)] == ["User"]
 

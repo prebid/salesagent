@@ -4,7 +4,7 @@ All ORM model data access in production code must go through repository classes.
 Direct select() calls bypass tenant isolation, skip business logic, and violate
 the repository pattern (CLAUDE.md Pattern #3).
 
-ORM model names are auto-discovered from src/core/database/models.py — any new
+ORM model names come from the live mapper registry (``orm_classes``) — any new
 model gets coverage automatically without manual listing.
 
 Repository files (src/core/database/repositories/*.py) are exempt because they
@@ -18,7 +18,7 @@ import pytest
 from tests.unit._architecture_helpers import (
     assert_violations_match_allowlist,
     find_raw_select_violations,
-    orm_model_class_defs,
+    orm_classes,
 )
 
 # ── Exempt directories and files ────────────────────────────────────
@@ -30,22 +30,8 @@ INFRASTRUCTURE_FILES = {
     "src/core/database/database.py",
 }
 
-# ── Auto-discover ORM models ───────────────────────────────────────
-
-
-def _discover_orm_model_names() -> set[str]:
-    """Every ORM model class name declared in src/core/database/models.py.
-
-    A class is an ORM model if it inherits from Base (directly or with mixins).
-    The Base class itself is excluded. Discovery reads the shared
-    ``models_module_tree()`` parse so this guard, the uniqueness-index-verdict
-    guard and every other models.py reader agree on one inventory.
-    """
-    return {cls.name for cls in orm_model_class_defs()}
-
-
-# Cache the model names at module load (fast — single file parse)
-ORM_MODEL_NAMES = _discover_orm_model_names()
+# ── ORM models: every mapped class, from the one shared inventory ──
+ORM_MODEL_NAMES = set(orm_classes())
 
 # ── Pre-existing violations (allowlist) ─────────────────────────────
 # These existed before the guard was created. The allowlist can only SHRINK.

@@ -19,22 +19,19 @@ from tests.unit._architecture_helpers import extract_select_calls
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# Models that require tenant_id in every query
+# Models that require tenant_id in every query, by ORM class name: the scan resolves an
+# import alias (``DBCreative``, ``MediaBuyModel``) to the class it names.
 TENANT_SCOPED_MODELS = {
     "Principal",
-    "ModelPrincipal",
     "Creative",
-    "CreativeModel",
-    "DBCreative",
     "CreativeReview",
     "MediaBuy",
-    "MediaBuyModel",
     "Product",
     "CreativeAssignment",
     "PricingOption",
 }
 
-# MediaPackage / MediaPackageModel / DBMediaPackage are NOT tenant-scoped.
+# MediaPackage is NOT tenant-scoped.
 # They have no tenant_id column; PK is (media_buy_id, package_id).
 # Tenant isolation is inherited via media_buy_id FK → MediaBuy (globally unique PK).
 
@@ -101,7 +98,7 @@ class TestMediaBuyUpdateTenantIsolation:
             "_update_media_buy_impl",
         )
 
-        mediabuy_selects = [s for s in selects if s["model"] in ("MediaBuy", "MediaBuyModel")]
+        mediabuy_selects = [s for s in selects if s["model"] == "MediaBuy"]
         assert not mediabuy_selects, (
             f"Found {len(mediabuy_selects)} raw select(MediaBuy) call(s) in _update_media_buy_impl. "
             f"After UoW migration, all MediaBuy queries should go through MediaBuyRepository. "
@@ -141,7 +138,7 @@ class TestApproveMediaBuyTenantIsolation:
             "src/admin/blueprints/operations.py",
             "approve_media_buy",
         )
-        mediabuy_selects = [s for s in selects if s["model"] in ("MediaBuy", "MediaBuyModel")]
+        mediabuy_selects = [s for s in selects if s["model"] == "MediaBuy"]
         assert not mediabuy_selects, (
             f"approve_media_buy() should use MediaBuyRepository, not raw select(MediaBuy). "
             f"Found {len(mediabuy_selects)} raw query(ies). "
@@ -196,7 +193,7 @@ class TestAdminDeliveryTenantIsolation:
             "src/admin/blueprints/creatives.py",
             "_call_webhook_for_creative_status",
         )
-        creative_selects = [s for s in selects if s["model"] in ("Creative", "CreativeModel")]
+        creative_selects = [s for s in selects if s["model"] == "Creative"]
         assert not creative_selects, (
             f"_call_webhook_for_creative_status should use CreativeRepository, not raw select(Creative). "
             f"Found {len(creative_selects)} raw query(ies)."
@@ -214,7 +211,7 @@ class TestAdminDeliveryTenantIsolation:
             "approve_creative",
         )
 
-        creative_selects = [s for s in selects if s["model"] in ("Creative", "CreativeModel")]
+        creative_selects = [s for s in selects if s["model"] == "Creative"]
         assert not creative_selects, (
             f"approve_creative() should use CreativeRepository, not raw select(Creative). "
             f"Found {len(creative_selects)} raw query(ies)."
@@ -250,7 +247,7 @@ class TestAdminDeliveryTenantIsolation:
             "src/admin/blueprints/creatives.py",
             "review_creatives",
         )
-        mediabuy_selects = [s for s in selects if s["model"] in ("MediaBuy", "MediaBuyModel")]
+        mediabuy_selects = [s for s in selects if s["model"] == "MediaBuy"]
         assert not mediabuy_selects, (
             f"review_creatives() should use MediaBuyRepository, not raw select(MediaBuy). "
             f"Found {len(mediabuy_selects)} raw query(ies)."

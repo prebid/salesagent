@@ -19,15 +19,16 @@ shares (``tests/unit/_architecture_helpers.py``):
   DBUser`` included), and neither may be rebound in the module or the scope. A Pydantic
   ``Product``, a module-local ``def select``, ``sa.select(M)``, ``select(models.M)`` and
   ``select(func.sum(...))`` are unresolved.
-- The chain is crossed only through the ``Select`` methods in ``_CHAIN``, which keep the
-  entity; ``with_only_columns``, ``add_columns``, ``subquery`` and anything else not named
-  there ends resolution.
+- The chain is crossed only through the ``Select`` methods in ``SELECT_CHAIN_METHODS``
+  (``select_chain``), which keep the entity; ``with_only_columns``, ``add_columns``,
+  ``subquery`` and anything else not named there ends resolution.
 - A local name resolves (``scope_bindings``) only when every binding of it in the scope
   is a plain ``name = value`` statement and every one agrees on the class;
   ``stmt = stmt.where(...)`` keeps the class. A parameter, a loop or ``with`` target,
   ``+=``, an annotated or walrus assignment, or bindings that disagree leave it
-  unresolved. Functions, lambdas, classes and comprehensions are scopes (``SCOPE_NODES``);
-  a nested scope does not read the enclosing one's names.
+  unresolved. Functions, lambdas, classes and comprehensions are scopes (``iter_scopes``);
+  a nested scope does not read the enclosing one's local names, and a name it or an
+  enclosing function binds shadows the import of the same spelling.
 
 Unresolved means skipped, never guessed. Each keyword must be in
 ``sqlalchemy.inspect(M).all_orm_descriptors`` -- columns, relationships, synonyms and
@@ -52,84 +53,63 @@ import pytest
 from sqlalchemy import inspect
 
 from tests.unit._architecture_helpers import (
-    SCOPE_NODES,
+    SELECT_CHAIN_METHODS,
+    SELECT_JOIN_METHODS,
     QueryBindings,
     assert_violations_match_allowlist,
+    call_callee_name,
     iter_module_trees,
+    iter_scopes,
     orm_classes,
     orm_entity,
     parse_module,
     query_bindings,
     repo_root,
     scope_bindings,
-    scope_bound_names,
     scope_nodes,
+    select_chain,
     select_entity,
 )
 
 # (relpath, enclosing scope, "Model.kwarg"). Shrink-only.
 ALLOWLIST: set[tuple[str, str, str]] = set()
 
-_JOINS = frozenset({"join", "outerjoin", "join_from"})
-#: The Select methods a chain may be walked through. None of them changes the selected
-#: columns, and the join family and ``select_from`` are where ``_filter_by_zero`` reads its
-#: answer; a method outside this set (``with_only_columns``, ``add_columns``, ``subquery``,
-#: ``union``...) leaves the target unresolved.
-_CHAIN = _JOINS | frozenset(
-    {
-        "where",
-        "filter",
-        "filter_by",
-        "order_by",
-        "group_by",
-        "having",
-        "limit",
-        "offset",
-        "options",
-        "distinct",
-        "execution_options",
-        "with_for_update",
-        "select_from",
-    }
-)
-
 
 def _anchor(expr: ast.expr) -> tuple[str, ast.expr | None]:
-    """What ``Select._filter_by_zero`` picks on *expr*, walking the call chain outermost-in.
+    """What ``Select._filter_by_zero`` picks on *expr*: a fold over its chain, outermost call first.
 
     ``("join", target)``: the first join met is the LAST in source order, so it decides.
     ``("select_from", entity)``: the last met is the FIRST in source order, so it
-    overwrites. Otherwise ``("select", call)`` for a bare-name call, ``("query", call)``
-    for ``<x>.query(...)``, ``("name", Name)`` for a local accumulator, ``("other", node)``
-    for anything else, a method outside ``_CHAIN`` included.
+    overwrites. Otherwise the chain's base (``select_chain``): ``("select", call)`` for a
+    bare-name call, ``("query", call)`` for ``<x>.query(...)``, ``("name", Name)`` for a local
+    accumulator, ``("other", node)`` for anything else, a method outside the chain set included.
     """
+    base, calls = select_chain(expr, SELECT_CHAIN_METHODS)
     select_from: ast.expr | None = None
-    node = expr
-    while isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _CHAIN:
-        attr, args = node.func.attr, node.args
-        if attr in _JOINS:
-            position = 1 if attr == "join_from" else 0  # join_from(left, right)
+    for call in calls:
+        method, args = call_callee_name(call), call.args
+        if method in SELECT_JOIN_METHODS:
+            position = 1 if method == "join_from" else 0  # join_from(left, right)
             return "join", args[position] if len(args) > position else None
-        if attr == "select_from" and args:
+        if method == "select_from" and args:
             select_from = args[0]
-        node = node.func.value
     if select_from is not None:
         return "select_from", select_from
-    if isinstance(node, ast.Call):
-        if isinstance(node.func, ast.Name):
-            return "select", node
-        if isinstance(node.func, ast.Attribute) and node.func.attr == "query":
-            return "query", node
-    if isinstance(node, ast.Name):
-        return "name", node
-    return "other", node
+    if isinstance(base, ast.Call):
+        if isinstance(base.func, ast.Name):
+            return "select", base
+        if isinstance(base.func, ast.Attribute) and base.func.attr == "query":
+            return "query", base
+    if isinstance(base, ast.Name):
+        return "name", base
+    return "other", base
 
 
 class _Scope:
-    """One scope's view: its plain bindings, and the module's imports it does not shadow."""
+    """One scope's view: its plain bindings, and the imports it sees (``iter_scopes``)."""
 
-    def __init__(self, scope: ast.AST, bindings: QueryBindings) -> None:
-        self._imports = bindings.without(scope_bound_names(scope))
+    def __init__(self, scope: ast.AST, imports: QueryBindings) -> None:
+        self._imports = imports
         self._assigned = scope_bindings(scope)
         self.nodes = list(scope_nodes(scope))
 
@@ -177,9 +157,8 @@ def _scope_name(scope: ast.AST) -> str:
 
 def _graded_sites(tree: ast.Module, relpath: str) -> Iterator[tuple[str, type[Any], ast.Call]]:
     """``(scope name, model, filter_by call)`` for every site whose target resolves."""
-    bindings = query_bindings(relpath, tree)
-    for scope_node in (tree, *(node for node in ast.walk(tree) if isinstance(node, SCOPE_NODES))):
-        scope = _Scope(scope_node, bindings)
+    for scope_node, imports in iter_scopes(tree, query_bindings(relpath, tree)):
+        scope = _Scope(scope_node, imports)
         for node in scope.nodes:
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "filter_by":
                 model = scope.target(node.func.value)
@@ -280,6 +259,10 @@ _TABLE: dict[str, tuple[str, set[tuple[str, str]]]] = {
         "def f(xs):\n    return [select(User).filter_by(is_admin=True) for x in xs]\n",
         {("<comprehension>", "User.is_admin")},
     ),
+    "a-class-body-binding-is-invisible-to-its-methods": (
+        "class K:\n    select = None\n\n    def m(self):\n        return select(User).filter_by(is_admin=True)\n",
+        {("m", "User.is_admin")},
+    ),
     # Valid queries: nothing reported.
     "mapped-column-and-relationship": ("def f(t):\n    return select(User).filter_by(email='a', tenant=t)\n", set()),
     "join-then-a-joined-column": ("def f():\n    return select(Tenant).join(User).filter_by(email='x')\n", set()),
@@ -328,6 +311,14 @@ _TABLE: dict[str, tuple[str, set[tuple[str, str]]]] = {
         set(),
     ),
     "select-shadowed-by-a-parameter": ("def f(select):\n    return select(User).filter_by(nope=1)\n", set()),
+    "select-shadowed-by-an-enclosing-function": (
+        "def outer(select):\n    def inner():\n        return select(User).filter_by(nope=1)\n\n    return inner\n",
+        set(),
+    ),
+    "model-shadowed-by-an-enclosing-function": (
+        "def f(User):\n    return lambda: select(User).filter_by(nope=1)\n",
+        set(),
+    ),
     "model-rebound-in-the-module": ("User = object()\ndef f():\n    return select(User).filter_by(nope=1)\n", set()),
     "relationship-join": ("def f():\n    return select(User).join(User.tenant).filter_by(nope=1)\n", set()),
     "aggregate": ("def f():\n    return select(func.sum(User.user_id)).filter_by(nope=1)\n", set()),

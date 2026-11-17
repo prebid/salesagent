@@ -9,10 +9,15 @@ from pathlib import Path
 import pytest
 
 from tests.unit._architecture_helpers import (
+    SELECT_CHAIN_METHODS,
+    SELECT_FILTER_METHODS,
     assert_anchor_consistency,
     assert_violations_match_allowlist,
+    call_callee_name,
     iter_call_expressions,
     iter_git_tracked_files,
+    iter_scopes,
+    orm_references,
     postgres_image_ref,
     postgres_tag_pattern_map,
     query_bindings,
@@ -21,6 +26,7 @@ from tests.unit._architecture_helpers import (
     scope_bindings,
     scope_bound_names,
     scope_nodes,
+    select_chain,
     select_entity,
     uv_version_pattern_map,
 )
@@ -147,6 +153,64 @@ def test_query_bindings_drops_a_name_the_module_rebinds() -> None:
     bindings = query_bindings("src/x.py", ast.parse(source))
     assert bindings.select == frozenset()
     assert bindings.orm == {"Tenant": "Tenant"}
+
+
+@pytest.mark.arch_guard
+def test_select_chain_crosses_only_the_named_methods() -> None:
+    chain = ast.parse("select(User).where(a).with_only_columns(b).order_by(c).limit(1)", mode="eval").body
+    base, calls = select_chain(chain, SELECT_CHAIN_METHODS)
+    assert [call_callee_name(call) for call in calls] == ["limit", "order_by"]  # outermost first
+    assert call_callee_name(base) == "with_only_columns"  # not a chain method: the walk stops
+
+    chain = ast.parse("stmt.order_by(c).where(a)", mode="eval").body
+    base, calls = select_chain(chain, SELECT_FILTER_METHODS)
+    assert [call_callee_name(call) for call in calls] == ["where"]
+    assert call_callee_name(base) == "order_by"
+
+
+_SCOPES_SOURCE = """
+from sqlalchemy import select
+from src.core.database.models import User
+
+def f(select):
+    g = lambda: select(User)
+
+class K:
+    User = 1
+
+    def m(self):
+        return select(User)
+"""
+
+
+@pytest.mark.arch_guard
+def test_iter_scopes_shadows_through_enclosing_functions_but_not_class_bodies() -> None:
+    tree = ast.parse(_SCOPES_SOURCE)
+    views = {
+        getattr(scope, "name", type(scope).__name__): view
+        for scope, view in iter_scopes(tree, query_bindings("src/x.py", tree))
+    }
+    assert list(views) == ["Module", "f", "Lambda", "K", "m"]  # the module first, then source order
+    assert views["Module"].select == {"select"} and views["Module"].orm == {"User": "User"}
+    assert views["f"].select == frozenset()  # a parameter shadows the import...
+    assert views["Lambda"].select == frozenset()  # ...in every scope nested inside it
+    assert views["K"].orm == {}  # a class body binds User for itself...
+    assert views["m"].orm == {"User": "User"} and views["m"].select == {"select"}  # ...not for its methods
+
+
+@pytest.mark.arch_guard
+def test_orm_references_resolves_names_and_selects_per_scope() -> None:
+    tree = ast.parse(_SCOPES_SOURCE)
+    references = orm_references("src/x.py", tree)
+    calls = {
+        getattr(scope, "name", type(scope).__name__): next(n for n in scope_nodes(scope) if isinstance(n, ast.Call))
+        for scope, _ in iter_scopes(tree, query_bindings("src/x.py", tree))
+        if any(isinstance(n, ast.Call) for n in scope_nodes(scope))
+    }
+    assert references.get(id(calls["m"])) == "User"  # select(User) in the method
+    assert id(calls["Lambda"]) not in references  # select is the enclosing function's parameter
+    assert references.get(id(calls["Lambda"].args[0])) == "User"  # ...while User itself still resolves
+    assert all(isinstance(node, (ast.Name, ast.Call)) for node in ast.walk(tree) if id(node) in references)
 
 
 @pytest.mark.arch_guard

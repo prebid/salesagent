@@ -22,7 +22,7 @@ def _extract_select_calls_in_function(file_path: str, func_name: str) -> list[di
     """Extract Creative-related select() call info from a function using AST.
 
     Returns list of dicts with:
-    - model: the model name being selected (e.g., "Creative", "CreativeModel")
+    - model: the ORM class being selected, resolved by import (``DBCreative`` -> "Creative")
     - has_tenant_filter: whether .filter/.where includes tenant_id
     - lineno: line number of the select() call
     """
@@ -80,7 +80,7 @@ class TestCreativeQueryTenantIsolation:
             "_fetch_creative_approvals",
         )
 
-        creative_selects = [s for s in selects if s["model"] in ("Creative", "CreativeModel")]
+        creative_selects = [s for s in selects if s["model"] == "Creative"]
         assert not creative_selects, (
             f"Inline Creative select() at media_buy_list.py:"
             f"{[s['lineno'] for s in creative_selects]} — Creative loads must go "
@@ -104,7 +104,7 @@ class TestCreativeQueryTenantIsolation:
             "execute_approved_media_buy",
         )
 
-        creative_selects = [s for s in selects if s["model"] in ("Creative", "CreativeModel")]
+        creative_selects = [s for s in selects if s["model"] == "Creative"]
         assert not creative_selects, (
             f"Inline Creative select() at media_buy_create.py:"
             f"{[s['lineno'] for s in creative_selects]} — Creative loads must go "
