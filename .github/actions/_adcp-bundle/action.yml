@@ -49,7 +49,8 @@ runs:
         set -euo pipefail
         gh release download "v${VERSION}" --repo adcontextprotocol/adcp \
           -p "${VERSION}.tgz" -p "${VERSION}.tgz.sha256"
-        shasum -a 256 -c "${VERSION}.tgz.sha256"
+        # sha256sum, not shasum: Git Bash on the Windows runner has no shasum.
+        sha256sum -c "${VERSION}.tgz.sha256"
         tar -xzf "${VERSION}.tgz"
         # The path is spelled twice, in two languages: here, and by
         # storyboard_spec.adcp_home() in Python. Nothing made them agree, and
