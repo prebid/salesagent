@@ -217,7 +217,7 @@ def tenant_settings(tenant_id, section=None):
             # Get OAuth status for GAM
             oauth_configured = False
             if adapter_config_obj and adapter_config_obj.adapter_type == "google_ad_manager":
-                oauth_configured = bool(adapter_config_obj.gam_refresh_token)
+                oauth_configured = bool(adapter_config_obj._gam_refresh_token)
 
             # Check if GAM OAuth credentials are configured
             gam_oauth_configured = get_settings().auth.gam_oauth_configured
@@ -276,7 +276,7 @@ def tenant_settings(tenant_id, section=None):
                 adapter_config_dict = {
                     "network_code": adapter_config_obj.gam_network_code or "",
                     # Whether one is stored, never the token: the page must not be able to render it
-                    "refresh_token": bool(adapter_config_obj.gam_refresh_token),
+                    "refresh_token": bool(adapter_config_obj._gam_refresh_token),
                     "trafficker_id": adapter_config_obj.gam_trafficker_id or "",
                     "application_name": getattr(adapter_config_obj, "gam_application_name", "") or "",
                     "service_account_email": adapter_config_obj.gam_service_account_email or "",
