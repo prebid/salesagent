@@ -22,7 +22,6 @@ Multi-transport support (subclasses may also override):
 
 from __future__ import annotations
 
-import copy
 import json
 import os
 import uuid
@@ -274,26 +273,6 @@ def _wire_envelope(envelope: dict) -> dict | None:
     return None
 
 
-def _a2a_wire_envelope(exc: Exception) -> dict | None:
-    """The two-layer envelope inside an a2a ``A2AError``'s ``data``, or ``None``.
-
-    The A2A dispatcher wraps an ``AdCPSalesAgentError`` into a failed Task whose artifact
-    carries the envelope; a JSON-RPC-level ``A2AError`` carries it in ``data``.
-
-    Returns the ENVELOPE. The three-way fallback ladder that used to sit here --
-    ``InvalidRequestError`` -> AdCPAuthenticationError, ``InvalidParamsError`` ->
-    AdCPValidationError, ``InternalError`` -> RuntimeError -- is gone with it: those
-    were hand-maintained guesses at what the wire meant, and a guess is not evidence
-    of what the buyer received.
-    """
-    from a2a.utils.errors import A2AError
-
-    if not isinstance(exc, A2AError):
-        return None
-    data = getattr(exc, "data", None)
-    return _wire_envelope(data) if isinstance(data, dict) else None
-
-
 # ---------------------------------------------------------------------------
 # The JSON-RPC wire, for the A2A and MCP legs that go over real HTTP
 # (salesagent-n78j0.1.1). Kept module-level and transport-named so the env keeps
@@ -429,38 +408,13 @@ def _a2a_message_send_body(skill_name: str, parameters: dict[str, Any]) -> dict[
     return _a2a_jsonrpc_body("SendMessage", request)
 
 
-def _a2a_first_data_part(task: dict[str, Any]) -> dict[str, Any]:
-    """Read the one artifact DataPart of a finished native invocation.
-
-    AdCP 3.2.7 L0/a2a-profile-extension.mdx completes each invocation,
-    including submitted work and polls. Both HTTP and protobuf readers use
-    this check, so neither can accept the retired status-message payload.
-    """
-    status = task.get("status")
-    if not isinstance(status, dict):
-        raise ValueError("Expected an A2A Task status object")
-    state = status.get("state")
-    if state not in {"TASK_STATE_COMPLETED", "TASK_STATE_FAILED"}:
-        raise ValueError(f"Expected a completed or failed native A2A Task, got {state!r}")
-    artifacts = task.get("artifacts")
-    if not isinstance(artifacts, list) or len(artifacts) != 1 or not isinstance(artifacts[0], dict):
-        raise ValueError("Expected exactly one A2A artifact object")
-    parts = artifacts[0].get("parts")
-    if not isinstance(parts, list) or any(not isinstance(part, dict) for part in parts):
-        raise ValueError("Expected an A2A artifact parts array")
-    data = [part["data"] for part in parts if "data" in part]
-    if len(data) != 1 or not isinstance(data[0], dict):
-        raise ValueError("Expected exactly one object DataPart in the A2A artifact")
-    return data[0]
-
-
-def _a2a_protobuf_data(task: Any) -> dict[str, Any]:
+def _a2a_protobuf_task(task: Any) -> dict[str, Any]:
     """Match the HTTP route's integer restoration at the protobuf conversion edge."""
     from google.protobuf import json_format
 
     from src.a2a_server.adcp_a2a_server import restore_a2a_integer_types
 
-    return restore_a2a_integer_types(_a2a_first_data_part(json_format.MessageToDict(task)))
+    return restore_a2a_integer_types(json_format.MessageToDict(task))
 
 
 def _mcp_jsonrpc_request(request_id: int, method: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -789,7 +743,6 @@ class BaseTestEnv:
     # contract lives at dispatchers.py's getattr(env, "REST_METHOD", "post").
     MCP_TOOL: str = ""
     A2A_SKILL: str = ""
-    A2A_OVER_HTTP: bool = False
     # The parser the base delegation feeds wire dicts to. Declared per env
     # because envs parse into their LOCAL response subclass, which is not always
     # the tool's pinned SDK model — defaulting to the pinned model would quietly
@@ -827,9 +780,6 @@ class BaseTestEnv:
         self._unit_principals: dict[tuple[str, str], Any] = {}
         self._rest_client: Any = None  # Lazy-created TestClient
         self.clock = _TestClock()  # BDD steps may use env.clock for date tokens
-        # Raw A2A Task from the last dispatch, available for framing assertions
-        # independently of the parsed AdCP artifact payload.
-        self._last_a2a_task: Any = None
         # WHICH signature realization the dispatch currently in flight carries —
         # not whether it asked for one. It holds one of False / True /
         # ``"malformed"`` / ``"tampered"``
@@ -1749,7 +1699,7 @@ class BaseTestEnv:
             )
         return model
 
-    def deliver_a2a(self, **kwargs: Any) -> DeliverResult | TransportResult:
+    def deliver_a2a(self, **kwargs: Any) -> TransportResult:
         """Dispatch through the real A2A pipeline, returning payload AND wire.
 
         THE override point for A2A. The dispatchers call this and read both
@@ -1769,15 +1719,10 @@ class BaseTestEnv:
     def call_a2a(self, **kwargs: Any) -> Any:
         """The parsed A2A payload. Defined ONCE; never override — override
         :meth:`deliver_a2a` instead, so the wire survives the call."""
-        return self.deliver_a2a(**kwargs).payload
-
-    @property
-    def last_a2a_task(self) -> Any:
-        """Raw A2A Task from the last ``_run_a2a_handler`` dispatch (or None).
-
-        Provides the transport framing independently of the parsed AdCP payload.
-        """
-        return self._last_a2a_task
+        result = self.deliver_a2a(**kwargs)
+        if result.error is not None:
+            raise result.error
+        return result.payload
 
     def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
         """Dispatch through the real FastMCP Client pipeline, returning payload AND wire.
@@ -1812,15 +1757,19 @@ class BaseTestEnv:
         that type. The core still owns the DISPATCH; the env owns only how its
         own wire is typed.
 
-        A2A HTTP results retain their response and native Task metadata through
-        the local parse. Errors raise with their received response attached, so
-        legacy callers raise and dispatchers can recover the same wire evidence.
+        A2A results retain native Task metadata through one local parse and
+        return captured errors. Only call_a2a raises those errors.
         """
         from tests.harness.client import _dispatch_core
         from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
 
         payload = dict(kwargs)
         credential = payload.pop("credential", NO_IDENTITY_OVERRIDE)
+        if transport is Transport.A2A:
+            parser = self.response_parser(tool)
+            revive = getattr(parser, "revive", None)
+            parse_response = revive if revive is not None else lambda data: parser(**data)
+            return _dispatch_core(self, transport, tool, payload, credential, a2a_parser=parse_response)
         result = _dispatch_core(self, transport, tool, payload, credential)
         if result.error is not None:
             raise result.error
@@ -1841,13 +1790,6 @@ class BaseTestEnv:
         parser = self.response_parser(tool)
         revive = getattr(parser, "revive", None)
         parse_response = revive if revive is not None else lambda data: parser(**data)
-        if transport is Transport.A2A and result.raw_response is not None:
-            from tests.harness.client import _parse_a2a_http_result
-
-            result = _parse_a2a_http_result(result, parse_response)
-            if result.error is not None:
-                raise result.error
-            return result
         return DeliverResult(payload=parse_response(wire), wire_response=wire)
 
     def call_mcp(self, **kwargs: Any) -> Any:
@@ -1860,7 +1802,7 @@ class BaseTestEnv:
         skill_name: str,
         response_cls: type,
         **kwargs: Any,
-    ) -> Any:
+    ) -> TransportResult:
         """A2A dispatch via real AdCPRequestHandler — exercises full A2A pipeline.
 
         Dispatches through the real AdCPRequestHandler.on_message_send(), which
@@ -1886,12 +1828,12 @@ class BaseTestEnv:
                 :func:`_a2a_send_message_configuration`) rather than as a skill
                 parameter; remaining kwargs become skill parameters.
         """
-        if self.can_sign or self.A2A_OVER_HTTP:
+        if self.can_sign:
             return self._run_a2a_over_http(skill_name, response_cls, **kwargs)
 
         import asyncio
 
-        from a2a.types import SendMessageRequest, Task, TaskState
+        from a2a.types import SendMessageRequest, Task
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from tests.harness.transport import NO_IDENTITY_OVERRIDE
@@ -1925,34 +1867,17 @@ class BaseTestEnv:
         async def _call():
             return await handler.on_message_send(params, server_context)
 
+        from tests.harness.client import native_task_result, parse_a2a_result, unwrap_delivery_error
+        from tests.harness.transport import Transport
+
         try:
             task_result = asyncio.run(_call())
+            if not isinstance(task_result, Task):
+                raise TypeError(f"Expected Task, got {type(task_result).__name__}: {task_result}")
+            result = native_task_result(Transport.A2A, _a2a_protobuf_task(task_result))
         except Exception as exc:
-            # The ORIGINAL exception propagates. It used to be translated into a
-            # reconstructed AdCPSalesAgentError so callers could catch domain exceptions; the
-            # dispatcher now reads the envelope off the A2AError instead
-            # , and a genuine in-process production error --
-            # which is what the IMPL path raises -- is unaffected either way.
-            envelope = _a2a_wire_envelope(exc)
-            if envelope is not None:
-                raise WireError(envelope) from exc
-            raise
-
-        # Parse Task.artifacts[0] into response_cls
-        if not isinstance(task_result, Task):
-            raise TypeError(f"Expected Task, got {type(task_result).__name__}: {task_result}")
-
-        # Expose the raw Task so tests can pin Task-level contract facts
-        # (state, artifact absence) that the parsed response cannot prove.
-        self._last_a2a_task = task_result
-
-        data = _a2a_protobuf_data(task_result)
-        if task_result.status.state == TaskState.TASK_STATE_FAILED:
-            envelope = _wire_envelope(data)
-            if envelope is None:
-                raise ValueError("Failed A2A Task carried no AdCP error envelope")
-            raise WireError(envelope)
-        return DeliverResult(payload=response_cls(**copy.deepcopy(data)), wire_response=data)
+            return unwrap_delivery_error(exc, Transport.A2A)
+        return result if response_cls is dict else parse_a2a_result(result, lambda data: response_cls(**data))
 
     @staticmethod
     def _a2a_skill_parameters(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -1974,8 +1899,6 @@ class BaseTestEnv:
         """Send one native A2A frame through the shared HTTP/signing route."""
         from urllib.parse import urlsplit
 
-        import httpx
-
         origin = self.e2e_config.base_url if self.is_e2e else None
         if self.can_sign:
             from tests.helpers.signing import WIRE_ORIGIN
@@ -1995,14 +1918,11 @@ class BaseTestEnv:
                 self.signing  # raises with the missing capability  # noqa: B018
             raw = json.dumps(body).encode()
             headers = {"Content-Type": "application/json", **_A2A_VERSION_HEADER, **credential}
-        if origin is not None:
-            with httpx.Client(base_url=origin, timeout=30) as client:
-                return client.post(_A2A_PATH, content=raw, headers=headers)
-        return self.get_rest_client().post(_A2A_PATH, content=raw, headers=headers)
+        return self._send_http("POST", _A2A_PATH, content=raw, headers=headers)
 
-    def _run_a2a_over_http(self, skill_name: str, response_cls: type, **kwargs: Any) -> Any:
+    def _run_a2a_over_http(self, skill_name: str, response_cls: type, **kwargs: Any) -> TransportResult:
         """Dispatch through the real A2A HTTP route and retain its native receipt."""
-        from tests.harness.client import _parse_a2a_http_result, jsonrpc_http_result
+        from tests.harness.client import jsonrpc_http_result, parse_a2a_result
         from tests.harness.transport import Transport
 
         credential = self._pop_credential(kwargs)
@@ -2011,10 +1931,8 @@ class BaseTestEnv:
         body = _a2a_message_send_body(skill_name, self._a2a_skill_parameters(kwargs))
         response = self.post_a2a(body, credential, signed=self._signed_dispatch)
         transport = Transport.E2E_A2A if self.is_e2e else Transport.A2A
-        result = _parse_a2a_http_result(jsonrpc_http_result(transport, response), lambda data: response_cls(**data))
-        if result.error is not None:
-            raise result.error
-        return result
+        result = jsonrpc_http_result(transport, response)
+        return result if response_cls is dict else parse_a2a_result(result, lambda data: response_cls(**data))
 
     def _run_mcp_client(
         self,
@@ -2720,12 +2638,25 @@ class BaseTestEnv:
         self, path: str, *, headers: dict[str, str] | None = None, params: dict[str, str] | None = None
     ) -> Any:
         """GET a root endpoint: the in-process ASGI app, or real HTTP against the live stack."""
+        return self._send_http("GET", path, headers=headers, params=params)
+
+    def _send_http(self, method: str, path: str, *, lifespan: bool = False, **kwargs: Any) -> Any:
+        """Select the HTTP target once, preserving MCP's entered app lifespan."""
         if self.is_e2e:
             import httpx
 
-            assert self.e2e_config is not None, "get_root()'s e2e branch needs env.e2e_config"
-            return httpx.get(f"{self.e2e_config.base_url}{path}", headers=headers, params=params, timeout=30)
-        return self.get_rest_client().get(path, headers=headers, params=params)
+            assert self.e2e_config is not None, "HTTP dispatch needs env.e2e_config"
+            with httpx.Client(base_url=self.e2e_config.base_url, timeout=30, follow_redirects=False) as client:
+                return client.request(method, path, **kwargs)
+        if lifespan:
+            from starlette.testclient import TestClient
+
+            from src.app import app
+            from tests.helpers.app_state import preserved_global_app_state
+
+            with preserved_global_app_state(), TestClient(app, follow_redirects=False) as client:
+                return client.request(method, path, **kwargs)
+        return self.get_rest_client().request(method, path, **kwargs)
 
     def post_mcp_initialize(self, path: str) -> Any:
         """POST an MCP ``initialize`` to *path*, following no redirect, and return the response.
@@ -2740,19 +2671,7 @@ class BaseTestEnv:
             {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "harness", "version": "0"}},
         )
         headers = {"accept": "application/json, text/event-stream"}
-        if self.is_e2e:
-            import httpx
-
-            assert self.e2e_config is not None, "post_mcp_initialize()'s e2e branch needs env.e2e_config"
-            return httpx.post(f"{self.e2e_config.base_url}{path}", json=body, headers=headers, timeout=30)
-
-        from starlette.testclient import TestClient
-
-        from src.app import app
-        from tests.helpers.app_state import preserved_global_app_state
-
-        with preserved_global_app_state(), TestClient(app, follow_redirects=False) as client:
-            return client.post(path, json=body, headers=headers)
+        return self._send_http("POST", path, json=body, headers=headers, lifespan=True)
 
     def list_mcp_tools(self) -> dict[str, Any]:
         """Each MCP tool as a client's ``tools/list`` answers it (an ``mcp.types.Tool``), by name.

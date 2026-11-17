@@ -27,7 +27,7 @@ from tests.harness.media_buy_create import (
     MediaBuyCreateEnv,
     _adapter_operation_receipts,
 )
-from tests.harness.transport import DeliverResult
+from tests.harness.transport import DeliverResult, TransportResult
 
 if TYPE_CHECKING:
     from tests.helpers.signing import SignatureRealization
@@ -126,7 +126,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
             return self._call_update_impl(**kwargs)
         return super().call_impl(**kwargs)
 
-    def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
+    def deliver_a2a(self, **kwargs: Any) -> TransportResult:
         # JUSTIFIED OVERRIDE: this env selects BOTH the tool and the parser from
         # request CONTENT, so it can declare no single A2A_SKILL.
         if _is_update_request(kwargs):
@@ -276,7 +276,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         req = kwargs.get("req")
         return getattr(req, "media_buy_id", None) or kwargs.get("media_buy_id") or self._seeded_media_buy_id
 
-    def _call_update_a2a(self, **kwargs: Any) -> DeliverResult:
+    def _call_update_a2a(self, **kwargs: Any) -> TransportResult:
         # Drive the REAL on_message_send → _dispatch_skill → to_wire → Task/Artifact
         # pipeline (mirrors MediaBuyCreateEnv.call_a2a), so _run_a2a_handler stashes
         # the true artifact DataPart as the wire_response. A prior version synthesized

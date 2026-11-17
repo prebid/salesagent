@@ -330,23 +330,24 @@ def test_base_env_owns_the_one_dispatch_pair():
         f"34 out-of-harness call sites depend on. Missing: {sorted(_LEGACY_DISPATCH_METHODS - defined)}."
     )
 
-    # ...and each legacy entry point is exactly the one-line delegation, so a
-    # second dispatch implementation cannot grow back inside the base itself.
-    for legacy, deliver in (("call_mcp", "deliver_mcp"), ("call_a2a", "deliver_a2a")):
+    # Each legacy entry point dispatches once. A2A alone adapts a captured
+    # error into an exception; MCP retains its existing payload-only adapter.
+    adapters = {
+        "call_mcp": "return self.deliver_mcp(**kwargs).payload",
+        "call_a2a": """result = self.deliver_a2a(**kwargs)
+if result.error is not None:
+    raise result.error
+return result.payload""",
+    }
+    for legacy, source in adapters.items():
         func = next(s for s in base.body if isinstance(s, ast.FunctionDef | ast.AsyncFunctionDef) and s.name == legacy)
         body = [s for s in func.body if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))]
-        assert len(body) == 1 and isinstance(body[0], ast.Return), (
-            f"BaseTestEnv.{legacy} must be a single `return self.{deliver}(**kwargs).payload` statement, "
-            f"got {len(body)} statement(s) — a second dispatch implementation must not grow back inside the base."
+        actual = ast.dump(ast.Module(body=body, type_ignores=[]))
+        expected = ast.dump(ast.parse(source))
+        assert actual == expected, (
+            f"BaseTestEnv.{legacy} must deliver once and adapt only its captured result; "
+            f"expected {source!r}, got {actual[:300]}"
         )
-        returned = body[0].value
-        assert (
-            isinstance(returned, ast.Attribute)
-            and returned.attr == "payload"
-            and isinstance(returned.value, ast.Call)
-            and isinstance(returned.value.func, ast.Attribute)
-            and returned.value.func.attr == deliver
-        ), f"BaseTestEnv.{legacy} must return `self.{deliver}(...).payload`, got {ast.dump(returned)[:160]}"
 
 
 def test_no_per_env_wire_stash_attribute():

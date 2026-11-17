@@ -143,8 +143,6 @@ from adcp.signing.webhook_signer import WEBHOOK_TAG
 from adcp.types.domains.core.webhook_challenge import WebhookChallenge
 
 from tests.e2e._signing_e2e import (
-    a2a_data_part,
-    assert_a2a_task_did_not_fail,
     buyer_headers,
     ca_verified_ssl_context,
     declaring_tenant_provisioner,
@@ -166,7 +164,7 @@ from tests.factories.request import fresh_idempotency_key
 # hand-rolling a second 1.0 envelope here, this dials the same protobuf-serialized body
 # the harness's own E2E_A2A transport posts (``_deliver_e2e_a2a``), so a wire this module
 # sends cannot drift from the wire every other e2e A2A leg sends.
-from tests.harness.client import _build_a2a_jsonrpc_body
+from tests.harness._base import _a2a_message_send_body
 from tests.helpers.signing import verify_as_conformant_receiver
 from tests.helpers.webhook_wire import CapturedWebhook, signature_input_label
 
@@ -310,15 +308,15 @@ async def _sync_over_a2a(client: httpx.AsyncClient, *, brand_domain: str, url: s
     *client* must carry :data:`_A2A_VERSION_HEADERS`; ``/a2a`` speaks native 1.0 only and
     refuses an unversioned request at the route decorator.
     """
-    message = _build_a2a_jsonrpc_body("sync_accounts", _sync_accounts_parameters(brand_domain, url))
+    message = _a2a_message_send_body("sync_accounts", _sync_accounts_parameters(brand_domain, url))
     result = await post_a2a(client, message, leg=f"sync_accounts[{brand_domain}]", token=_BUYER_TOKEN)
     # BEFORE the payload read, not instead of it: a tool that RAISED comes back as a FAILED
     # Task inside an ordinary 200 result, and ``"error" not in result`` does not see it.
     # Without this, a refused sync arrives at ``_one_account`` as zero accounts and reports
     # itself as a response-shape problem -- which is exactly how a missing required request
     # field stayed hidden here.
-    assert_a2a_task_did_not_fail(result, leg=f"sync_accounts[{brand_domain}]")
-    return _one_account(a2a_data_part(result), leg=brand_domain)
+    assert result.is_success, result.error
+    return _one_account(result.require_wire(), leg=brand_domain)
 
 
 async def _sync_over_rest(client: httpx.AsyncClient, *, brand_domain: str, url: str) -> dict[str, Any]:

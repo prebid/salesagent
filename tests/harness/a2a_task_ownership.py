@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -11,7 +12,7 @@ from pydantic import RootModel
 from src.core.credentials import hash_token
 from tests.factories import AdapterConfigFactory, MediaBuyFactory, PrincipalFactory, TenantFactory
 from tests.factories.principal import plaintext_token_for
-from tests.harness._base import BareIntegrationEnv
+from tests.harness._base import BareIntegrationEnv, _a2a_jsonrpc_body
 from tests.harness.client import jsonrpc_http_result
 from tests.harness.transport import Transport, TransportResult
 from tests.helpers.credentials import credential_headers
@@ -19,8 +20,6 @@ from tests.helpers.credentials import credential_headers
 
 class A2ATaskOwnershipEnv(BareIntegrationEnv):
     """Seed callers through factories and retain task IDs received on the wire."""
-
-    A2A_OVER_HTTP = True
 
     def response_parser(self, tool: str) -> Any:
         return lambda **data: RootModel(data)
@@ -34,7 +33,7 @@ class A2ATaskOwnershipEnv(BareIntegrationEnv):
         if state == "completed":
             skill, parameters = "get_adcp_capabilities", {}
         else:
-            self.setup_default_account()
+            account_id = self.setup_default_account().account_id
             AdapterConfigFactory(tenant=tenant, mock_manual_approval_required=True)
             now = datetime.now(UTC)
             buy = MediaBuyFactory(
@@ -46,7 +45,7 @@ class A2ATaskOwnershipEnv(BareIntegrationEnv):
             )
             skill = "update_media_buy"
             parameters = {
-                "account": {"account_id": "acct_test"},
+                "account": {"account_id": account_id},
                 "idempotency_key": "ownership-setup-key",
                 "media_buy_id": buy.media_buy_id if state == "submitted" else "missing-buy",
                 "end_time": (now + timedelta(days=60)).isoformat(),
@@ -80,7 +79,11 @@ class A2ATaskOwnershipEnv(BareIntegrationEnv):
             )
         else:
             task_id = self.task_id if kwargs.get("target", "existing") == "existing" else "missing-task"
-            body = {"jsonrpc": "2.0", "id": "task-call", "method": kwargs["operation"], "params": {"id": task_id}}
+            from a2a.types import CancelTaskRequest, GetTaskRequest
+
+            self.requested_task_id = task_id
+            request_cls = GetTaskRequest if kwargs["operation"] == "GetTask" else CancelTaskRequest
+            body = _a2a_jsonrpc_body(kwargs["operation"], request_cls(id=task_id))
             result = jsonrpc_http_result(transport, self.post_a2a(body, credential))
         if action == "invoke":
             self.task_id = result.envelope["task"]["id"]
@@ -91,21 +94,18 @@ class A2ATaskOwnershipEnv(BareIntegrationEnv):
 
     @staticmethod
     def adcp_result(result: TransportResult) -> dict[str, Any]:
-        assert result.has_wire
         assert "adcp_task_id" not in result.envelope["task"]["artifacts"][0].get("metadata", {})
         if result.is_error:
             return result.error_envelope()
         assert result.wire_response is not None
         return result.wire_response
 
-    @staticmethod
-    def assert_not_found(result: TransportResult) -> None:
+    def assert_not_found(self, result: TransportResult) -> None:
         assert result.is_error
         assert result.has_wire
         assert result.raw_response.status_code == 200
-        assert result.envelope["jsonrpc_error_code"] == -32001
-        requested_id = json.loads(result.raw_response.request.content)["params"]["id"]
-        refusal = result.raw_response.json()["error"]
+        requested_id = self.requested_task_id
+        refusal = result.envelope["jsonrpc_error"]
         assert requested_id in refusal["message"]
         assert refusal["data"] == {"task_id": requested_id}
 
@@ -114,7 +114,7 @@ class A2ATaskOwnershipEnv(BareIntegrationEnv):
         # must be indistinguishable; this compares wire responses, not table text.
         def without_id(result: TransportResult) -> Any:
             return (
-                json.dumps(result.raw_response.json()["error"], sort_keys=True)
+                json.dumps(copy.deepcopy(result.envelope["jsonrpc_error"]), sort_keys=True)
                 .replace(self.task_id, "TASK")
                 .replace("missing-task", "TASK")
             )

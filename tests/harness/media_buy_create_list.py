@@ -48,7 +48,7 @@ from typing import Any, Literal
 from tests.harness.delivery_poll import DeliveryDispatchMixin
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.media_buy_list import MediaBuyListDispatchMixin
-from tests.harness.transport import DeliverResult
+from tests.harness.transport import DeliverResult, TransportResult
 
 # The verb discriminators are the mixins' own ``is_delivery_request`` and
 # ``is_list_request``, inherited rather than restated here: a local copy is a second
@@ -87,7 +87,7 @@ class MediaBuyCreateListEnv(DeliveryDispatchMixin, MediaBuyListDispatchMixin, Me
             return self._call_list_impl(**kwargs)
         return super().call_impl(**kwargs)
 
-    def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
+    def deliver_a2a(self, **kwargs: Any) -> TransportResult:
         """Route by request CONTENT: delivery and list requests to their mixins, else create.
 
         JUSTIFIED OVERRIDE (``_KNOWN_DELIVER_OVERRIDES``): this env selects the

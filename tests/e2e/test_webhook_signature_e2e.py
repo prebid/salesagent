@@ -71,8 +71,6 @@ import httpx
 import pytest
 
 from tests.e2e._signing_e2e import (
-    a2a_data_part,
-    assert_a2a_task_did_not_fail,
     ca_verified_ssl_context,
     declaring_tenant_provisioner,
     fetch_capabilities,
@@ -168,7 +166,7 @@ def _a2a_version_headers() -> dict[str, str]:
 def _a2a_send_message(skill: str, parameters: dict[str, Any]) -> dict[str, Any]:
     """The native A2A 1.0 ``SendMessage`` envelope, built by the ONE producer that owns it.
 
-    ``tests.harness.client._build_a2a_jsonrpc_body`` serializes the SAME protobuf
+    ``tests.harness._base._a2a_message_send_body`` serializes the SAME protobuf
     ``Message`` in-process dispatch uses through the real proto JSON mapping, so the
     body here is byte-for-byte what a real A2A client sends. Re-deriving it locally is
     how a hand-rolled approximation drifts from the one the rest of the suite grades.
@@ -177,21 +175,9 @@ def _a2a_send_message(skill: str, parameters: dict[str, Any]) -> dict[str, Any]:
     same reason ``_signing_e2e`` reaches for its harness seams inside the function that
     needs them rather than at module scope.
     """
-    from tests.harness.client import _build_a2a_jsonrpc_body
+    from tests.harness._base import _a2a_message_send_body
 
-    return _build_a2a_jsonrpc_body(skill, parameters)
-
-
-def _adcp_payload(a2a_response: dict[str, Any]) -> dict[str, Any]:
-    """The AdCP payload out of an A2A 1.0 result, or ``{}`` when there is none.
-
-    A thin adaptation of ``_signing_e2e.a2a_data_part`` — the one home for that read —
-    to the ``{}``-not-``None`` contract this module's call sites want. The private copy
-    that used to live here existed only because the shared helper still spoke A2A 0.3;
-    it now speaks 1.0, so a second implementation would be the duplication the DRY
-    invariant blocks PRs for.
-    """
-    return a2a_data_part(a2a_response) or {}
+    return _a2a_message_send_body(skill, parameters)
 
 
 async def _fire_one_delivery(client: httpx.AsyncClient, callback_url: str) -> None:
@@ -231,7 +217,7 @@ async def _fire_one_delivery(client: httpx.AsyncClient, callback_url: str) -> No
     result = await post_a2a(
         client, _a2a_send_message("create_media_buy", parameters), leg="create_media_buy", token=_BUYER_TOKEN
     )
-    assert_a2a_task_did_not_fail(result, leg="create_media_buy")
+    assert result.is_success, result.error
 
 
 async def _discover_product_and_pricing(client: httpx.AsyncClient) -> tuple[str, str]:
@@ -243,8 +229,8 @@ async def _discover_product_and_pricing(client: httpx.AsyncClient) -> tuple[str,
     """
     message = _a2a_send_message("get_products", {"brand": {"domain": "testbrand.com"}})
     result = await post_a2a(client, message, leg="get_products", token=_BUYER_TOKEN)
-    assert_a2a_task_did_not_fail(result, leg="get_products")
-    products = _adcp_payload(result).get("products") or []
+    assert result.is_success, result.error
+    products = result.require_wire().get("products") or []
     assert products, (
         "the seeded tenant must expose at least one product with a pricing option, or there is nothing "
         f"to buy and no delivery to sign. A2A response: {str(result)[:600]!r}"

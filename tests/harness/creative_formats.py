@@ -38,7 +38,7 @@ from unittest.mock import MagicMock
 from src.core.schemas import ListCreativeFormatsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness.peer_agent import PeerCreativeAgentMixin
-from tests.harness.transport import DeliverResult
+from tests.harness.transport import DeliverResult, TransportResult
 from tests.helpers.peer_creative_agent import new_peer_key
 
 
@@ -65,7 +65,7 @@ class CreativeFormatsEnv(PeerCreativeAgentMixin, IntegrationEnv):
         """Dispatch list_creative_formats via the real FastMCP Client pipeline."""
         return self._run_mcp_client("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
 
-    def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
+    def deliver_a2a(self, **kwargs: Any) -> TransportResult:
         """Dispatch list_creative_formats via the real A2A handler pipeline."""
         return self._run_a2a_handler("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
 

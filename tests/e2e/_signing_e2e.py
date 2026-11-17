@@ -45,6 +45,7 @@ from sqlalchemy import delete
 from src.core.http_utils import hostname_of
 from tests.e2e.conftest import e2e_ca_bundle, e2e_tls_base_url
 from tests.e2e.utils import _LiveDBEnv, live_db_env, live_repo_session
+from tests.harness.transport import TransportResult
 from tests.helpers.admin_session import authenticate_http_session, drop_stated_session_cookie
 from tests.helpers.credentials import credential_headers
 from tests.helpers.signing import json_seeded_client_factory, wire_origin
@@ -638,7 +639,7 @@ def buyer_headers(token: str) -> dict[str, str]:
     return {**credential_headers(token=token), "Content-Type": "application/json"}
 
 
-async def post_a2a(client: httpx.AsyncClient, message: dict[str, Any], *, leg: str, token: str) -> dict[str, Any]:
+async def post_a2a(client: httpx.AsyncClient, message: dict[str, Any], *, leg: str, token: str) -> TransportResult:
     """POST one A2A JSON-RPC envelope, naming the leg in every failure mode.
 
     A bare ``httpx.ReadTimeout`` out of a multi-request flow says nothing about WHICH
@@ -649,37 +650,10 @@ async def post_a2a(client: httpx.AsyncClient, message: dict[str, Any], *, leg: s
         response = await client.post("/a2a", json=message, headers=buyer_headers(token))
     except httpx.TimeoutException as exc:
         raise AssertionError(f"the A2A {leg} request timed out against the live stack: {exc!r}") from exc
-    assert response.status_code == 200, (
-        f"the A2A {leg} request must succeed; got HTTP {response.status_code}: {response.text[:600]!r}"
-    )
-    return response.json()
+    from tests.harness.client import jsonrpc_http_result
+    from tests.harness.transport import Transport
 
-
-def a2a_data_part(a2a_response: dict[str, Any]) -> dict[str, Any] | None:
-    """Read the finished native Task through the shared artifact validator."""
-    from tests.harness._base import _a2a_first_data_part
-
-    return _a2a_first_data_part(a2a_response["result"]["task"])
-
-
-def assert_a2a_task_did_not_fail(result: dict[str, Any], *, leg: str) -> None:
-    """A 200 is not a success on A2A 1.0 — a refused call comes back as a FAILED Task.
-
-    Two reads, not one: a malformed envelope or an unknown skill is a JSON-RPC ``error``,
-    while a tool that RAISED is a Task whose ``status.state`` is ``TASK_STATE_FAILED``
-    inside an otherwise ordinary ``result``. Collapsing them is how an operation that never
-    happened reads as an empty result set — the exact failure mode that let a missing
-    required request field sit undetected behind a "zero accounts" assertion message.
-
-    Every A2A leg in the signing e2e suite calls this BEFORE reading a payload.
-    """
-    assert "error" not in result, f"the A2A {leg} returned a JSON-RPC error: {result['error']!r}"
-    task = (result.get("result") or {}).get("task") or {}
-    state = (task.get("status") or {}).get("state")
-    assert state != "TASK_STATE_FAILED", (
-        f"the A2A {leg} came back as a FAILED Task, so the operation never happened and any "
-        f"empty result below would be reporting that failure as absence. Artifacts: {task.get('artifacts')!r}"
-    )
+    return jsonrpc_http_result(Transport.E2E_A2A, response)
 
 
 async def published_jwks_for_agent(

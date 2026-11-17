@@ -144,30 +144,13 @@ def _protocol_refusal(transport: Transport, exc: Exception, **verdict: Any) -> T
     )
 
 
-def _a2a_task_result(transport: Transport, failed: bool, bodies: list[dict[str, Any]]) -> TransportResult:
-    from tests.harness._base import WireError, _wire_envelope
-
-    if failed:
-        wire = _wire_envelope(bodies[0]) if bodies else None
-        return TransportResult(
-            has_wire=False,
-            error=WireError(wire) if wire is not None else RuntimeError("A2A task failed with no artifact"),
-            envelope={"transport": transport.value, "status": derive_error_status(wire)},
-            wire_error_envelope=wire,
-        )
-    return TransportResult(
-        has_wire=True,
-        envelope={"transport": transport.value, "status": "completed"},
-        wire_response=bodies[0] if bodies else None,
-    )
-
-
 def _a2a(env: Any, document: RawDocument, credential: dict[str, str]) -> TransportResult:
-    from a2a.types import SendMessageRequest, TaskState
+    from a2a.types import SendMessageRequest
     from a2a.utils.errors import JSON_RPC_ERROR_CODE_MAP, A2AError
 
     from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-    from tests.harness._base import _a2a_call_context, _a2a_protobuf_data
+    from tests.harness._base import _a2a_call_context, _a2a_protobuf_task
+    from tests.harness.client import native_task_result
 
     env._commit_factory_data()
     context = _a2a_call_context(credential)
@@ -180,8 +163,7 @@ def _a2a(env: Any, document: RawDocument, credential: dict[str, str]) -> Transpo
         # The code the JSON-RPC layer would write for this class, read from the SDK's own
         # table rather than restated here.
         return _protocol_refusal(Transport.A2A, exc, jsonrpc_error_code=JSON_RPC_ERROR_CODE_MAP[type(exc)])
-    failed = task.status.state == TaskState.TASK_STATE_FAILED
-    return _a2a_task_result(Transport.A2A, failed, [_a2a_protobuf_data(task)])
+    return native_task_result(Transport.A2A, _a2a_protobuf_task(task))
 
 
 def _e2e_a2a(env: Any, document: RawDocument, credential: dict[str, str]) -> TransportResult:

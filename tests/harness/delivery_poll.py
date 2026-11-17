@@ -38,7 +38,7 @@ from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.harness._base import IntegrationEnv, rest_body_from_kwargs
 from tests.harness._mixins import DeliveryPollMixin
 from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
-from tests.harness.transport import DeliverResult
+from tests.harness.transport import DeliverResult, TransportResult
 from tests.helpers.gam_client import gam_delivery_row
 
 #: The request fields the delivery route's body accepts, for a dispatch in the flat form.
@@ -109,7 +109,7 @@ class DeliveryDispatchMixin:
         """Dispatch get_media_buy_delivery via the real FastMCP Client pipeline."""
         return self._run_mcp_client("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)  # type: ignore[attr-defined]
 
-    def _deliver_delivery_a2a(self, **kwargs: Any) -> DeliverResult:
+    def _deliver_delivery_a2a(self, **kwargs: Any) -> TransportResult:
         """Dispatch get_media_buy_delivery via the real A2A handler pipeline."""
         return self._run_a2a_handler("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)  # type: ignore[attr-defined]
 
@@ -146,7 +146,7 @@ class DeliveryPollEnv(GamSellerMixin, DeliveryDispatchMixin, DeliveryPollMixin, 
         """Dispatch get_media_buy_delivery via the real FastMCP Client pipeline."""
         return self._deliver_delivery_mcp(**kwargs)
 
-    def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
+    def deliver_a2a(self, **kwargs: Any) -> TransportResult:
         """Dispatch get_media_buy_delivery via the real A2A handler pipeline."""
         return self._deliver_delivery_a2a(**kwargs)
 

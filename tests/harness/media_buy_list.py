@@ -20,7 +20,7 @@ from typing import Any, cast
 
 from src.core.schemas._base import GetMediaBuysRequest, GetMediaBuysResponse
 from tests.harness._base import IntegrationEnv, rest_body_from_kwargs
-from tests.harness.transport import DeliverResult
+from tests.harness.transport import DeliverResult, TransportResult
 
 
 class MediaBuyListDispatchMixin:
@@ -67,7 +67,7 @@ class MediaBuyListDispatchMixin:
 
         return _get_media_buys_impl(req=req, identity=identity)
 
-    def _deliver_list_a2a(self, **kwargs: Any) -> DeliverResult:
+    def _deliver_list_a2a(self, **kwargs: Any) -> TransportResult:
         """Dispatch get_media_buys through the REAL A2A pipeline (on_message_send).
 
         The production A2A path is ``_handle_get_media_buys_skill`` —

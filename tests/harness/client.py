@@ -197,9 +197,7 @@ def _deliver_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any]
     return env._run_mcp_client(address.name, dict, **kwargs)
 
 
-def _deliver_a2a(
-    env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], credential: Any
-) -> DeliverResult | TransportResult:
+def _deliver_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], credential: Any) -> TransportResult:
     kwargs = _with_credential(wrapped, credential)
     return env._run_a2a_handler(address.name, dict, **kwargs)
 
@@ -318,48 +316,88 @@ def _deliver_e2e_mcp(
 # ``_wrap_a2a`` produced unchanged, same limitation.
 
 
-def _build_a2a_jsonrpc_body(skill_name: str, parameters: dict[str, Any]) -> dict[str, Any]:
-    """JSON-RPC 2.0 envelope for a ``message/send`` (``SendMessage``) call.
+def _a2a_first_data_part(task: dict[str, Any]) -> dict[str, Any]:
+    """Read the one artifact DataPart of a finished native invocation.
 
-    Builds the SAME protobuf ``Message`` in-process dispatch uses
-    (``create_a2a_message_with_skill``, ``tests/utils/a2a_helpers.py:67`` —
-    the exact helper ``_run_a2a_handler`` calls, ``tests/harness/_base.py:692``)
-    and serializes it through the real proto JSON mapping
-    (``google.protobuf.json_format``) so the wire body is byte-for-byte what
-    a real A2A client would send — not a hand-rolled approximation. Method
-    name ``"SendMessage"`` and the ``params.message`` shape are dictated by
-    ``a2a.server.routes.jsonrpc_dispatcher.JsonRpcDispatcher.METHOD_TO_MODEL``
-    and ``SendMessageRequest``'s proto fields, confirmed by direct
-    inspection, not assumed.
+    AdCP 3.2.7 L0/a2a-profile-extension.mdx completes each invocation,
+    including submitted work and polls. Both HTTP and protobuf readers use
+    this check, so neither can accept the retired status-message payload.
     """
-    import uuid
+    status = task.get("status")
+    if not isinstance(status, dict):
+        raise ValueError("Expected an A2A Task status object")
+    state = status.get("state")
+    if state not in {"TASK_STATE_COMPLETED", "TASK_STATE_FAILED"}:
+        raise ValueError(f"Expected a completed or failed native A2A Task, got {state!r}")
+    artifacts = task.get("artifacts")
+    if not isinstance(artifacts, list) or len(artifacts) != 1 or not isinstance(artifacts[0], dict):
+        raise ValueError("Expected exactly one A2A artifact object")
+    parts = artifacts[0].get("parts")
+    if not isinstance(parts, list) or any(not isinstance(part, dict) for part in parts):
+        raise ValueError("Expected an A2A artifact parts array")
+    data = [part["data"] for part in parts if "data" in part]
+    if len(data) != 1 or not isinstance(data[0], dict):
+        raise ValueError("Expected exactly one object DataPart in the A2A artifact")
+    return data[0]
 
-    from a2a.types.a2a_pb2 import SendMessageRequest
-    from google.protobuf import json_format
 
-    from tests.utils.a2a_helpers import create_a2a_message_with_skill
+def native_task_result(transport: Transport, task: dict[str, Any], *, response: Any = None) -> TransportResult:
+    """Read one native receipt, retaining its authentic Task and AdCP body.
 
-    message = create_a2a_message_with_skill(skill_name=skill_name, parameters=parameters)
-    params = json_format.MessageToDict(SendMessageRequest(message=message))
-    return {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": "SendMessage", "params": params}
+    AdCP 3.2.7 L0 response mapping distinguishes business results from fatal
+    adcp_error failures. Advisory errors[] alone do not fail a completed result.
+    """
+    from pydantic import RootModel
+
+    from tests.harness._base import WireError, WireRefusal, _wire_envelope
+
+    metadata = {"transport": transport.value, "task": task}
+    data = None
+    wire_error = None
+    error = None
+    try:
+        data = _a2a_first_data_part(task)
+        failed = task["status"]["state"] == "TASK_STATE_FAILED"
+        if failed or isinstance(data.get("adcp_error"), dict):
+            wire_error = _wire_envelope(data)
+            if wire_error is not None:
+                raise WireError(wire_error, response)
+            raise WireRefusal("Failed A2A Task carried no AdCP error envelope", response)
+    except (ValueError, TypeError, KeyError) as exc:
+        error = WireRefusal(str(exc), response)
+        error.__cause__ = exc
+    except (WireError, WireRefusal) as exc:
+        error = exc
+    if error is not None:
+        metadata["status"] = derive_error_status(wire_error)
+    result = TransportResult(
+        has_wire=False,
+        payload=RootModel(copy.deepcopy(data)) if error is None else None,
+        error=error,
+        envelope=metadata,
+        wire_response=data,
+        wire_error_envelope=wire_error,
+    )
+    if response is not None:
+        return replace(
+            result, has_wire=True, raw_response=response, envelope={**metadata, "status_code": response.status_code}
+        )
+    return result
 
 
 def jsonrpc_http_result(transport: Transport, response: Any) -> TransportResult:
-    """Read one actual A2A HTTP response, preserving the Task and HTTP evidence."""
-    from pydantic import RootModel
-
-    from tests.harness._base import WireError, WireRefusal, _a2a_first_data_part, _jsonrpc_body, _wire_envelope
+    """Read HTTP framing once; native_task_result owns the Task outcome."""
+    from tests.harness._base import WireError, WireRefusal, _jsonrpc_body, _wire_envelope
 
     metadata = {"transport": transport.value, "status_code": response.status_code}
     wire_error = None
-    data = None
-    error = None
     try:
         frame = _jsonrpc_body(response, surface="/a2a")
         if not isinstance(frame, dict):
             raise WireRefusal("A2A returned a non-object JSON-RPC frame", response)
         if "error" in frame:
             refusal = frame["error"]
+            metadata["jsonrpc_error"] = refusal
             if isinstance(refusal, dict):
                 metadata["jsonrpc_error_code"] = refusal.get("code")
                 details = refusal.get("data")
@@ -370,45 +408,35 @@ def jsonrpc_http_result(transport: Transport, response: Any) -> TransportResult:
         result = frame.get("result")
         if not isinstance(result, dict) or not isinstance(result.get("task"), dict):
             raise WireRefusal("A2A JSON-RPC result carried no native Task", response)
-        task = result["task"]
-        metadata["task"] = task
-        data = _a2a_first_data_part(task)
-        if task["status"]["state"] == "TASK_STATE_FAILED":
-            wire_error = _wire_envelope(data)
-            if wire_error is not None:
-                raise WireError(wire_error, response)
-            raise WireRefusal("Failed A2A Task carried no AdCP error envelope", response)
-        if response.status_code >= 400:
-            raise WireRefusal(f"A2A returned HTTP {response.status_code} without an AdCP error", response)
+        captured = native_task_result(transport, result["task"], response=response)
+        if response.status_code >= 400 and captured.error is None:
+            return replace(
+                captured,
+                payload=None,
+                error=WireRefusal(f"A2A returned HTTP {response.status_code} without an AdCP error", response),
+                envelope={**captured.envelope, "status": derive_error_status(None)},
+            )
+        return captured
     except (WireError, WireRefusal, ValueError, TypeError, KeyError) as exc:
         error = exc
         metadata["status"] = derive_error_status(wire_error)
     return TransportResult(
         has_wire=True,
-        payload=RootModel(copy.deepcopy(data)) if error is None else None,
         error=error,
         envelope=metadata,
         raw_response=response,
-        wire_response=data if error is None else None,
         wire_error_envelope=wire_error,
     )
 
 
-def _parse_a2a_http_result(result: TransportResult, parser: Callable[[dict[str, Any]], Any]) -> TransportResult:
-    """Parse the AdCP body without dropping the already-observed HTTP/Task frame."""
-    from tests.harness._base import WireError, WireRefusal
-
-    error = result.error
-    if error is None:
-        try:
-            return replace(result, payload=parser(copy.deepcopy(result.wire_response)))
-        except Exception as exc:
-            error = exc
-    if not isinstance(error, (WireError, WireRefusal)):
-        refusal = WireRefusal(str(error), result.raw_response)
-        refusal.__cause__ = error
-        error = refusal
-    return replace(result, payload=None, error=error)
+def parse_a2a_result(result: TransportResult, parser: Callable[[dict[str, Any]], Any]) -> TransportResult:
+    """Parse a copy once, retaining the original parser exception and evidence."""
+    if result.error is not None:
+        return result
+    try:
+        return replace(result, payload=parser(copy.deepcopy(result.wire_response)))
+    except Exception as exc:
+        return replace(result, payload=None, error=exc)
 
 
 def _deliver_e2e_a2a(
@@ -417,7 +445,9 @@ def _deliver_e2e_a2a(
     """Send the live A2A frame through the env's HTTP route and shared reader."""
     if not env.e2e_config:
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
-    response = env.post_a2a(_build_a2a_jsonrpc_body(address.name, wrapped), _presented(env, credential))
+    from tests.harness._base import _a2a_message_send_body
+
+    response = env.post_a2a(_a2a_message_send_body(address.name, wrapped), _presented(env, credential))
     return jsonrpc_http_result(Transport.E2E_A2A, response)
 
 
@@ -468,24 +498,9 @@ def _parse_pinned_response(tool_name: str, raw: dict[str, Any]) -> Any | None:
 
 
 def _unwrap_tool_success(
-    env: BaseTestEnv, delivered: DeliverResult | TransportResult, transport: Transport, tool_name: str
+    env: BaseTestEnv, delivered: DeliverResult, transport: Transport, tool_name: str
 ) -> TransportResult:
-    """Success-path unwrap for tool-style transports, returning PINNED types.
-
-    One function only: the MCP and A2A versions were byte-identical.
-
-    Not the sole unwrap. The in-process dispatchers re-parse with the env's own
-    ``response_parser`` on purpose, so they return the env-LOCAL response type
-    that ~34 call sites outside tests/harness depend on — see
-    ``_base.py:656-660``. Do not collapse them into this.
-
-    The wire comes off the DELIVERED VALUE, not ``env._last_wire_response``:
-    one delivery, one channel. ``tag`` is ``transport.value``, never a literal,
-    so an E2E dispatch is never mislabeled in-process.
-    """
-    if isinstance(delivered, TransportResult):
-        assert transport in (Transport.A2A, Transport.E2E_A2A)
-        return _parse_a2a_http_result(delivered, lambda body: _parse_pinned_response(tool_name, body))
+    """Parse the MCP structured body into the tool's pinned response type."""
     return TransportResult(
         # Downstream of DELIVER: the MCP structured_content / A2A artifact
         # DataPart already came back, which is the same declaration the
@@ -663,6 +678,8 @@ def _dispatch_core(
     tool_name: str,
     payload: dict[str, Any],
     credential: Any = NO_IDENTITY_OVERRIDE,
+    *,
+    a2a_parser: Callable[[dict[str, Any]], Any] | None = None,
 ) -> TransportResult:
     """Address -> wrap -> deliver -> unwrap -> ``TransportResult``.
 
@@ -717,6 +734,9 @@ def _dispatch_core(
         # transport.value tag and derived status the dispatcher path produces —
         # one error-unwrap implementation per transport family, not two.
         return UNWRAP_ERROR[transport](exc, transport)
+    if transport in (Transport.A2A, Transport.E2E_A2A):
+        parser = a2a_parser or (lambda body: _parse_pinned_response(tool_name, body))
+        return parse_a2a_result(raw, parser)
     return UNWRAP_SUCCESS[transport](env, raw, transport, tool_name)
 
 
@@ -802,43 +822,23 @@ def unwrap_mcp_error(exc: Exception, transport: Transport = Transport.MCP) -> Tr
     )
 
 
-def unwrap_a2a_error(exc: Exception, transport: Transport = Transport.A2A) -> TransportResult:
-    """THE A2A error-path unwrap — one definition, both dispatch paths.
+def unwrap_delivery_error(exc: Exception, transport: Transport = Transport.A2A) -> TransportResult:
+    """Capture a pre-response delivery exception without re-reading any frame."""
+    from a2a.utils.errors import JSON_RPC_ERROR_CODE_MAP, A2AError
 
-    ``_run_a2a_handler`` already raises ``WireError`` carrying the failed Task
-    artifact's envelope verbatim, so the ``.envelope`` read below covers it.
-    See :func:`unwrap_mcp_error` for why this is one function rather than a copy
-    per dispatch path.
+    from tests.harness._base import _wire_envelope
 
-    REAL STASH ONLY — never ``_envelope_from_adcp_error``. That rule has ONE
-    owner, ``transport._wire_envelope_from_exception``, called below rather than
-    re-implemented here: an inlined second copy is how the fallback survived a
-    merge once already (it was restored in ``transport.py`` while this call site
-    kept its own read). Handing back an envelope the harness rebuilt from the
-    exception it just caught, under the field named for what actually crossed
-    the wire, is the laundered-copy channel this branch closed — a
-    scenario asserting on ``wire_error_envelope`` would then grade the rebuild,
-    and pass whether or not production emitted anything at all. ``None`` is the
-    honest answer when nothing was captured; pinned by
-    ``tests/unit/test_harness_mcp_never_synthesizes.py``.
-    """
-    from tests.harness._base import WireError, WireRefusal
-
-    if isinstance(exc, (WireError, WireRefusal)) and exc.response is not None:
-        # A typed parser can reject a valid native frame. Preserve that error
-        # while reading its actual response, so the re-read cannot turn it green.
-        return replace(jsonrpc_http_result(transport, exc.response), payload=None, error=exc)
     wire = _wire_envelope_from_exception(exc)
+    metadata = {"transport": transport.value}
+    if isinstance(exc, A2AError):
+        code = JSON_RPC_ERROR_CODE_MAP[type(exc)]
+        metadata.update(jsonrpc_error_code=code, jsonrpc_error={"code": code, "message": exc.message, "data": exc.data})
+        if isinstance(exc.data, dict):
+            wire = _wire_envelope(exc.data)
     return TransportResult(
-        # Catch-all branch wrapping the whole A2A delivery — it may fire before
-        # anything was sent, so it declares False while still exposing the real
-        # envelope the WireError carries verbatim. This is the exact
-        # case TransportResult.has_wire's SCOPE note names.
         has_wire=False,
         error=exc,
-        # Derived per-transport status: the A2A evidence is whether
-        # a failed Task carried an AdCP envelope in its artifact DataPart.
-        envelope={"transport": transport.value, "status": derive_error_status(wire)},
+        envelope={**metadata, "status": derive_error_status(wire)},
         wire_error_envelope=wire,
     )
 
@@ -866,8 +866,6 @@ def unwrap_rest_error(exc: Exception, transport: Transport = Transport.REST) -> 
 UNWRAP_SUCCESS: dict[Transport, Callable[[BaseTestEnv, Any, Transport, str], TransportResult]] = {
     Transport.MCP: _unwrap_tool_success,
     Transport.E2E_MCP: _unwrap_tool_success,
-    Transport.A2A: _unwrap_tool_success,
-    Transport.E2E_A2A: _unwrap_tool_success,
     Transport.REST: _unwrap_rest,
     Transport.E2E_REST: _unwrap_rest,
 }
@@ -875,8 +873,8 @@ UNWRAP_SUCCESS: dict[Transport, Callable[[BaseTestEnv, Any, Transport, str], Tra
 UNWRAP_ERROR: dict[Transport, Callable[[Exception, Transport], TransportResult]] = {
     Transport.MCP: unwrap_mcp_error,
     Transport.E2E_MCP: unwrap_mcp_error,
-    Transport.A2A: unwrap_a2a_error,
-    Transport.E2E_A2A: unwrap_a2a_error,
+    Transport.A2A: unwrap_delivery_error,
+    Transport.E2E_A2A: unwrap_delivery_error,
     Transport.REST: unwrap_rest_error,
     Transport.E2E_REST: unwrap_rest_error,
 }

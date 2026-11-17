@@ -45,7 +45,6 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from tests.harness.transport import (
-    DeliverResult,
     Transport,
     TransportResult,
 )
@@ -65,7 +64,7 @@ if TYPE_CHECKING:
 # client.py — the two together being the "mutual" part).
 #
 # The MCP/A2A/REST error-path unwraps themselves are NOT re-implemented here:
-# this module delegates to client.py's unwrap_mcp_error / unwrap_a2a_error /
+# this module delegates to client.py's unwrap_mcp_error / unwrap_delivery_error /
 # unwrap_rest_error, so there is one error unwrap per transport family for both
 # dispatch paths (CLAUDE.md DRY invariant; remediation finding 1). The same rule
 # now covers the REST *response* unwrap (``unwrap_rest_response``), which is why
@@ -162,65 +161,28 @@ def _refuse_signed_generic_client(signed: SignatureRealization, transport: Trans
     )
 
 
-def a2a_transport_result(call: Callable[[], DeliverResult | Any]) -> TransportResult:
-    """One ``TransportResult`` out of any dispatch onto the ``/a2a`` wire.
+def a2a_transport_result(call: Callable[[], Any]) -> TransportResult:
+    """Return captured A2A evidence; capture only exceptions preceding a result.
 
-    Stated once because A2A has MORE THAN ONE thing a buyer can send it — a
-    skill invocation and a bare credential registration
-    (``tasks/pushNotificationConfig/set``) — and both have to produce results a
-    scenario can grade side by side. A second copy of this wrapping would be
-    free to drop the refusal's raw response, which
-    ``assert_signature_challenge`` reports as "no wire to read" rather than as
-    the acceptance it actually is.
-
-    *call* returns a :class:`~tests.harness.transport.DeliverResult` on a leg that
-    observes a success-path wire (the skill dispatch, ``env.deliver_a2a``), and a
-    bare payload on one that does not (the credential registration, which
-    deliberately captures no wire — the operation dispatch's capture belongs to
-    the operation dispatch). Either way the wire rides the RETURN VALUE and is
-    never read back off another object's private attribute.
-
-    The error path delegates to ``client.py``'s ``unwrap_a2a_error`` — the one
-    A2A error unwrap, shared with ``AdCPTestClient``, which owns wire-envelope
-    recovery and the derived status — then re-attaches the refusal response.
+    Credential-registration calls return a bare payload and observe no native
+    Task. Skill delivery already returns its complete TransportResult.
     """
-    from tests.harness.client import unwrap_a2a_error
+    from tests.harness.client import unwrap_delivery_error
 
     try:
         delivered = call()
     except Exception as exc:
-        # The shared unwrap reads a carried HTTP response through the A2A reader.
-        # Exceptions with no observed response retain the no-wire declaration;
-        # neither path synthesizes a wire envelope from a domain exception.
-        return _carrying_refusal_response(unwrap_a2a_error(exc, Transport.A2A), exc)
+        return _carrying_refusal_response(unwrap_delivery_error(exc, Transport.A2A), exc)
     if isinstance(delivered, TransportResult):
         return delivered
-    if isinstance(delivered, DeliverResult):
-        # Real A2A wire: the artifact DataPart dict, carried back on the SAME
-        # return value as the payload. It used to be read off
-        # env._last_wire_response — one object reaching into another's private
-        # attribute, which is what allowed a second writer and a stale wire.
-        return TransportResult(
-            has_wire=True,  # the artifact DataPart came back from the handler
-            payload=delivered.payload,
-            envelope={"transport": "a2a"},
-            wire_response=delivered.wire_response,
-        )
-    # A leg that returned a bare payload rather than a ``DeliverResult``: no
-    # success-path wire was captured, so it declares has_wire=False rather than
-    # claiming a wire whose body it never stashed.
     return TransportResult(payload=delivered, envelope={"transport": "a2a"}, has_wire=False)
 
 
 class A2ADispatcher:
     """Dispatch via ``handler.on_message_send`` — exercises the full A2A pipeline.
 
-    ``env.deliver_a2a`` drives ``AdCPRequestHandler.on_message_send`` end-to-end
-    (message parsing → skill routing → ``serve`` → ``to_wire``
-    → Task/Artifact framing). On a failed Task, the harness reconstructs the
-    ``AdCPSalesAgentError`` from the artifact DataPart and stashes the real wire
-    envelope on the exception via ``_wire_error_envelope`` — read off it by
-    ``client.py``'s ``unwrap_a2a_error``, the one A2A error unwrap.
+    ``env.deliver_a2a`` returns the shared reader's native Task and AdCP
+    outcome, including captured failures, without a second error parse.
 
     ``signed`` is consumed here but not forwarded. Whether a signature is
     realizable is a fact about the ENV (does it have a counterparty key?), not

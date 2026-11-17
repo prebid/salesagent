@@ -2344,7 +2344,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         #   That pass rode the adapter flag its Given also raised; with the Given setting the
         #   tenant flag alone it is xfailed in _XFAIL_TAGS against #2483 on every transport.
         # - T-UC-003-approval-adapter → GRADUATE — BR-RULE-017 INV-3: same real-wire path;
-        #   the last_a2a_task guard is Transport.A2A-gated and inert on e2e_rest.
         # No UC-003 entries remain in e2e_rest_known_failures.txt — no sibling conflict.
 
         # Graduated: eleven of the twelve scenarios of the _UC005_E2E_FIXTURE_INJECTION_TAGS

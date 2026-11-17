@@ -1,4 +1,4 @@
-"""Native receipt lifetime and durable AdCP polling, graded on real HTTP."""
+"""Native receipt lifetime and durable AdCP polling, graded on native and HTTP evidence."""
 
 from pytest_bdd import given, parsers, then, when
 
@@ -31,8 +31,11 @@ def then_task_state(ctx: dict, state: str) -> None:
 
 
 @then(parsers.parse('the receipt contains the AdCP "{status}" result'))
-def then_adcp_result(ctx: dict, status: str) -> None:
+@then(parsers.parse('the receipt contains the AdCP "{status}" result with error "{code}"'))
+def then_adcp_result(ctx: dict, status: str, code: str = "-") -> None:
     assert ctx["env"].adcp_result(ctx["result"])["status"] == status
+    if code != "-":
+        ctx["result"].assert_wire_error(code)
 
 
 @then("the AdCP task handle is distinct from the native receipt")
@@ -48,10 +51,11 @@ def then_durable_handle(ctx: dict) -> None:
     assert ctx["env"].adcp_result(ctx["result"])["task_id"] == ctx["env"].adcp_task_id
 
 
-@then("the task is not found")
+@then("the native refusal identifies the supplied task")
 def then_task_not_found(ctx: dict) -> None:
     ctx["env"].assert_not_found(ctx["result"])
-    ctx["denied_result"] = ctx["result"]
+    if "denied_result" not in ctx:
+        ctx["denied_result"] = ctx["result"]
 
 
 @then("the refusal matches the inaccessible task")
