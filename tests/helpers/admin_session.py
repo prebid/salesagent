@@ -31,7 +31,7 @@ from typing import Any
 TEST_FLASK_SECRET_KEY = "adcp-test-stack-session-signing-key"
 
 
-def _session_payload(tenant_id: str, *, auth_method: str | None = None) -> dict[str, Any]:
+def admin_session_payload(tenant_id: str, *, auth_method: str | None = None) -> dict[str, Any]:
     """The session an authenticated super admin carries. ONE definition, both transports."""
     payload: dict[str, Any] = {
         "authenticated": True,
@@ -56,10 +56,18 @@ def _session_payload(tenant_id: str, *, auth_method: str | None = None) -> dict[
 def member_session_payload(email: str, tenant_id: str) -> dict[str, Any]:
     """The session an OIDC login writes for a caller who is NOT a super admin.
 
-    No ``test_user`` key, so ``require_tenant_access`` takes its real branch: the caller's
-    ``User`` row in the requested tenant is the only thing that decides the outcome.
+    The keys ``callback`` writes under "Create session" in ``src/admin/blueprints/oidc.py``,
+    with ``user`` a bare email as it is there. No ``test_user`` key, so
+    ``require_tenant_access`` takes its real branch: the caller's ``User`` row in the
+    requested tenant is the only thing that decides the outcome.
     """
-    return {"authenticated": True, "user": {"email": email}, "email": email, "tenant_id": tenant_id}
+    return {
+        "user": email,
+        "user_name": email,
+        "tenant_id": tenant_id,
+        "authenticated": True,
+        "auth_method": "oidc",
+    }
 
 
 def admin_session_cookie(tenant_id: str, *, auth_method: str | None = None, secret_key: str | None = None) -> str:
@@ -72,7 +80,7 @@ def admin_session_cookie(tenant_id: str, *, auth_method: str | None = None, secr
     *secret_key* defaults to ``FLASK_SECRET_KEY`` from the environment, then to
     :data:`TEST_FLASK_SECRET_KEY` — the value the test compose stacks set.
     """
-    return sign_session(_session_payload(tenant_id, auth_method=auth_method), secret_key=secret_key)
+    return sign_session(admin_session_payload(tenant_id, auth_method=auth_method), secret_key=secret_key)
 
 
 def sign_session(payload: dict[str, Any], *, secret_key: str | None = None) -> str:
@@ -104,8 +112,26 @@ def authenticate_http_session(session: Any, base_url: str, tenant_id: str, *, au
     *base_url* is still taken, because a caller naming the session's target reads better
     than one that does not, and because a future scheme- or host-specific rule belongs here.
     """
-    session.cookies.set("session", admin_session_cookie(tenant_id, auth_method=auth_method), path="/")
+    state_http_session(session, admin_session_payload(tenant_id, auth_method=auth_method))
     return session
+
+
+def state_http_session(session: Any, payload: dict[str, Any]) -> None:
+    """State *payload* as a ``requests.Session``'s admin session, replacing the one it held.
+
+    Every ``session`` cookie goes first, the one the server wrote under its own domain
+    included: left in the jar, it would sit beside the stated one and the request would
+    carry two sessions.
+    """
+    _drop_session_cookies(session)
+    session.cookies.set("session", sign_session(payload), path="/")
+
+
+def _drop_session_cookies(session: Any, *, stated_only: bool = False) -> None:
+    """Remove the jar's ``session`` cookies: every one, or only the domainless stated one."""
+    for cookie in list(session.cookies):
+        if cookie.name == "session" and not (stated_only and cookie.domain):
+            session.cookies.clear(cookie.domain, cookie.path, cookie.name)
 
 
 def drop_stated_session_cookie(session: Any) -> None:
@@ -128,9 +154,7 @@ def drop_stated_session_cookie(session: Any) -> None:
     The server's cookie carries everything the stated one did, so the session survives the
     drop.
     """
-    for cookie in list(session.cookies):
-        if cookie.name == "session" and not cookie.domain:
-            session.cookies.clear(cookie.domain, cookie.path, cookie.name)
+    _drop_session_cookies(session, stated_only=True)
 
 
 def admin_test_app() -> Any:
@@ -162,4 +186,4 @@ def admin_auth_session(client: Any, tenant_id: str, *, auth_method: str | None =
     (e.g. ``disable-setup-mode``).
     """
     with client.session_transaction() as sess:
-        sess.update(_session_payload(tenant_id, auth_method=auth_method))
+        sess.update(admin_session_payload(tenant_id, auth_method=auth_method))
