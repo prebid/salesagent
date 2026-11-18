@@ -38,6 +38,10 @@ jobs:
           image-ref: ${{ steps.publish.outputs.ref }}
           severity: CRITICAL,HIGH
           vuln-type: os,library
+          # Vulnerabilities only. This is the third-party AdCP reference image we
+          # run in tests; its vendored docs carry example service-account keys and
+          # JWTs that trivy's default secret scanner reports as real secrets.
+          scanners: vuln
           ignore-unfixed: true
           exit-code: 0
           format: sarif
