@@ -17,7 +17,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import safe_error_message
+from src.admin.utils.operator_errors import json_error, safe_error_message
 from src.admin.utils.url_policy import redirect_if_url_blocked
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -497,7 +497,7 @@ def update_adapter(tenant_id):
         logger.error(f"Error updating adapter: {e}", exc_info=True)
 
         if request.is_json:
-            return jsonify({"success": False, "error": safe_error_message(e)}), 400
+            return json_error(e, status_code=400, success=False)
 
         flash(f"Error updating adapter: {safe_error_message(e)}", "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="adapter"))
@@ -691,19 +691,23 @@ def test_ai_connection(tenant_id):
         )
 
     except Exception as e:
-        error_msg = str(e)
-        # Clean up error messages for common issues
-        if "expired" in error_msg.lower():
-            error_msg = "API key expired. Please renew your API key."
-        elif "401" in error_msg or "authentication" in error_msg.lower() or "api_key_invalid" in error_msg.lower():
-            error_msg = "Invalid API key. Please check your credentials."
-        elif "404" in error_msg or "not found" in error_msg.lower():
-            error_msg = f"Model '{model}' not found. Please check the model name."
-        elif "rate" in error_msg.lower() or "quota" in error_msg.lower():
-            error_msg = "Rate limit exceeded. Please try again later."
-
+        error_msg = _ai_connection_error_message(e, model)
         logger.error(f"AI test connection failed: {e}", exc_info=True)
         return jsonify({"success": False, "error": error_msg}), 400
+
+
+def _ai_connection_error_message(e: Exception, model: str) -> str:
+    """Operator text for a failed AI connection test: a known cause, or a logged reference."""
+    error_text = str(e).lower()
+    if "expired" in error_text:
+        return "API key expired. Please renew your API key."
+    if "401" in error_text or "authentication" in error_text or "api_key_invalid" in error_text:
+        return "Invalid API key. Please check your credentials."
+    if "404" in error_text or "not found" in error_text:
+        return f"Model '{model}' not found. Please check the model name."
+    if "rate" in error_text or "quota" in error_text:
+        return "Rate limit exceeded. Please try again later."
+    return safe_error_message(e, "AI connection test failed")
 
 
 @settings_bp.route("/ai/test-logfire", methods=["POST"])
@@ -741,11 +745,13 @@ def test_logfire_connection(tenant_id):
             )
 
         except Exception as config_error:
-            error_msg = str(config_error)
-            if "401" in error_msg or "unauthorized" in error_msg.lower() or "invalid" in error_msg.lower():
+            error_text = str(config_error)
+            if "401" in error_text or "unauthorized" in error_text.lower() or "invalid" in error_text.lower():
                 error_msg = "Invalid Logfire token. Please check your credentials."
-            elif "403" in error_msg or "forbidden" in error_msg.lower():
+            elif "403" in error_text or "forbidden" in error_text.lower():
                 error_msg = "Token does not have permission to send data."
+            else:
+                error_msg = safe_error_message(config_error, "Logfire connection test failed")
 
             return jsonify({"success": False, "error": error_msg}), 400
 
@@ -753,7 +759,7 @@ def test_logfire_connection(tenant_id):
         return jsonify({"success": False, "error": "Logfire package not installed"}), 400
     except Exception as e:
         logger.error(f"Logfire test connection failed: {e}", exc_info=True)
-        return jsonify({"success": False, "error": safe_error_message(e)}), 400
+        return json_error(e, status_code=400, success=False)
 
 
 @settings_bp.route("/ai/models", methods=["GET"])
@@ -1261,7 +1267,7 @@ def update_business_rules(tenant_id):
         logger.error(f"Error updating business rules: {e}", exc_info=True)
 
         if request.is_json:
-            return jsonify({"success": False, "error": safe_error_message(e)}), 500
+            return json_error(e, success=False)
 
         flash(f"Error updating business rules: {safe_error_message(e)}", "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="business-rules"))
@@ -1331,15 +1337,15 @@ def check_approximated_domain_status(tenant_id):
             }
         )
 
-    except DomainNotOwned as e:
+    except DomainNotOwned:
         # Ahead of the broad handler on purpose: caught below it, an ownership
         # refusal would answer 500 with exception text instead of the 400 the
         # three routes agree on.
-        return jsonify({"success": False, "error": str(e)}), 400
+        return jsonify({"success": False, "error": DomainNotOwned.MESSAGE}), 400
 
     except Exception as e:
         logger.error(f"Error checking domain status: {e}", exc_info=True)
-        return jsonify({"success": False, "error": safe_error_message(e)}), 500
+        return json_error(e, success=False)
 
 
 @settings_bp.route("/approximated-register-domain", methods=["POST"])
@@ -1387,12 +1393,12 @@ def register_approximated_domain(tenant_id):
         logger.info("✅ Registered domain with Approximated: %s", domain)
         return jsonify({"success": True, "message": f"Domain {domain} registered successfully"})
 
-    except DomainNotOwned as e:
-        return jsonify({"success": False, "error": str(e)}), 400
+    except DomainNotOwned:
+        return jsonify({"success": False, "error": DomainNotOwned.MESSAGE}), 400
 
     except Exception as e:
         logger.error(f"Error registering domain: {e}", exc_info=True)
-        return jsonify({"success": False, "error": safe_error_message(e)}), 500
+        return json_error(e, success=False)
 
 
 @settings_bp.route("/approximated-unregister-domain", methods=["POST"])
@@ -1430,12 +1436,12 @@ def unregister_approximated_domain(tenant_id):
         logger.info("✅ Unregistered domain from Approximated: %s", domain)
         return jsonify({"success": True, "message": f"Domain {domain} unregistered successfully"})
 
-    except DomainNotOwned as e:
-        return jsonify({"success": False, "error": str(e)}), 400
+    except DomainNotOwned:
+        return jsonify({"success": False, "error": DomainNotOwned.MESSAGE}), 400
 
     except Exception as e:
         logger.error(f"Error unregistering domain: {e}", exc_info=True)
-        return jsonify({"success": False, "error": safe_error_message(e)}), 500
+        return json_error(e, success=False)
 
 
 @settings_bp.route("/approximated-token", methods=["POST"])
@@ -1472,4 +1478,4 @@ def get_approximated_token(tenant_id):
 
     except Exception as e:
         logger.error(f"Error generating Approximated token: {e}", exc_info=True)
-        return jsonify({"success": False, "error": safe_error_message(e)}), 500
+        return json_error(e, success=False)

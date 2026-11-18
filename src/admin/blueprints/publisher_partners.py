@@ -13,7 +13,7 @@ from typing import Any
 
 from flask import Blueprint, Response, jsonify, request
 
-from src.admin.utils.operator_errors import safe_error_message
+from src.admin.utils.operator_errors import json_error
 from src.core.database.models import Publisher
 from src.core.database.repositories.uow import PublisherUoW
 from src.core.http_utils import canonical_publisher_domain
@@ -85,7 +85,7 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
         # Anything but the duplicate the repository resolves: the operator is told the write
         # failed, never the driver's statement or parameters.
         logger.error(f"Error adding publisher: {e}", exc_info=True)
-        return jsonify({"error": safe_error_message(e)}), 500
+        return json_error(e)
     (outcome,) = ingest_sync(tenant_id, [domain])
     return jsonify({**_outcome_json(outcome), "message": "Publisher added"}), 201
 
@@ -110,7 +110,7 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
         outcomes = ingest_sync(tenant_id, domains)
     except Exception as e:
         logger.error(f"Error syncing publishers: {e}", exc_info=True)
-        return jsonify({"error": safe_error_message(e)}), 500
+        return json_error(e)
     return jsonify(
         {
             "message": "Sync completed",

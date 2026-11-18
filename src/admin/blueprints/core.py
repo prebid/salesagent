@@ -351,7 +351,7 @@ def health():
             return "OK", 200
     except Exception as e:
         logger.error(f"Health check failed: {e}")
-        return f"Database connection failed: {str(e)}", 500
+        return safe_error_message(e, "Database connection failed"), 500
 
 
 @core_bp.route("/health/config")

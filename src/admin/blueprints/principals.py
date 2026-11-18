@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from src.admin.services import DashboardService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
+from src.admin.utils.operator_errors import json_error, safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, PushNotificationConfig, Tenant
 from src.core.database.repositories.principal import PrincipalRepository
@@ -332,7 +333,7 @@ def get_principal(tenant_id, principal_id):
 
     except Exception as e:
         logger.error(f"Error getting principal {principal_id}: {e}", exc_info=True)
-        return jsonify({"error": f"Failed to get principal: {str(e)}"}), 500
+        return json_error(e, "Failed to get principal")
 
 
 @principals_bp.route("/principal/<principal_id>/rotate-token", methods=["POST"])
@@ -524,7 +525,7 @@ def get_gam_advertisers(tenant_id):
 
             except Exception as gam_error:
                 logger.error(f"GAM API error: {gam_error}")
-                return jsonify({"error": f"Failed to fetch advertisers: {str(gam_error)}"}), 500
+                return json_error(gam_error, "Failed to fetch advertisers")
 
     except Exception as e:
         logger.error(f"Error getting GAM advertisers: {e}", exc_info=True)
@@ -641,7 +642,7 @@ def manage_webhooks(tenant_id, principal_id):
 
     except Exception as e:
         logger.error(f"Error loading webhook management: {e}", exc_info=True)
-        flash(f"Error loading webhooks: {str(e)}", "error")
+        flash(safe_error_message(e, "Error loading webhooks"), "error")
         return redirect(url_for("principals.list_principals", tenant_id=tenant_id))
 
 
@@ -867,4 +868,4 @@ def delete_principal(tenant_id, principal_id):
 
     except Exception as e:
         logger.error(f"Error deleting principal: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)

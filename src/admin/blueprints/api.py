@@ -8,6 +8,7 @@ from sqlalchemy import select, text
 
 from src.admin.utils import require_auth
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.operator_errors import json_error, safe_error_message
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product
@@ -105,22 +106,14 @@ def oauth_status():
             return jsonify(
                 {
                     "configured": False,
-                    "error": f"GAM OAuth configuration error: {str(config_error)}",
+                    "error": safe_error_message(config_error, "GAM OAuth configuration error"),
                     "help": "Check GAM_OAUTH_CLIENT_ID and GAM_OAUTH_CLIENT_SECRET environment variables.",
                 }
             )
 
     except Exception as e:
         logger.error(f"Error checking OAuth status: {e}")
-        return (
-            jsonify(
-                {
-                    "configured": False,
-                    "error": f"Error checking OAuth configuration: {str(e)}",
-                }
-            ),
-            500,
-        )
+        return json_error(e, "Error checking OAuth configuration", configured=False)
 
 
 @api_bp.route("/tenant/<tenant_id>/products", methods=["GET"])
@@ -151,7 +144,7 @@ def get_tenant_products(tenant_id):
 
     except Exception as e:
         logger.error(f"Error getting products for tenant {tenant_id}: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @api_bp.route("/tenant/<tenant_id>/products/suggestions", methods=["GET"])
@@ -260,7 +253,7 @@ def get_product_suggestions(tenant_id):
 
     except Exception as e:
         logger.error(f"Error getting product suggestions: {e}")
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @api_bp.route("/gam/get-advertisers", methods=["POST"])
@@ -313,7 +306,7 @@ def test_gam_connection():
             # This will attempt to refresh the token
             oauth2_client.Refresh()
         except Exception as e:
-            return jsonify({"error": f"Invalid refresh token: {str(e)}"}), 400
+            return json_error(e, "Invalid refresh token", status_code=400)
 
         # Initialize GAM client to get network info
         # Note: We don't need to specify network_code for getAllNetworks call
@@ -429,9 +422,9 @@ def test_gam_connection():
 
             except Exception as e:
                 # It's okay if we can't fetch companies/users
-                result["warning"] = f"Connected but couldn't fetch all resources: {str(e)}"
+                result["warning"] = safe_error_message(e, "Connected but couldn't fetch all resources")
 
         return jsonify(result)
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)

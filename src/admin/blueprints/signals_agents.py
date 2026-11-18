@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.operator_errors import json_error
 from src.admin.utils.url_policy import json_error_if_url_blocked, redirect_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SignalsAgent, Tenant
@@ -321,12 +322,4 @@ def test_signals_agent(tenant_id, agent_id):
 
     except Exception as e:
         logger.error(f"Error testing signals agent: {e}", exc_info=True)
-        return (
-            jsonify(
-                {
-                    "success": False,
-                    "error": f"Connection failed: {str(e)}",
-                }
-            ),
-            500,
-        )
+        return json_error(e, "Connection failed", success=False)

@@ -9,6 +9,7 @@ import logging
 
 from flask import Blueprint, jsonify
 
+from src.admin.utils.operator_errors import safe_error_message
 from src.core.domain_config import get_sales_agent_url
 from src.core.schema_validation import create_schema_registry
 
@@ -69,7 +70,7 @@ def get_schema(schema_name: str):
 
     except Exception as e:
         logger.error(f"Error serving schema {schema_name}: {e}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+        return jsonify({"error": "Internal server error", "message": safe_error_message(e)}), 500
 
 
 @schemas_bp.route("/adcp/v2.4/", methods=["GET"])
@@ -102,7 +103,7 @@ def list_schemas():
 
     except Exception as e:
         logger.error(f"Error listing schemas: {e}")
-        return jsonify({"error": "Internal server error", "message": str(e)}), 500
+        return jsonify({"error": "Internal server error", "message": safe_error_message(e)}), 500
 
 
 @schemas_bp.route("/adcp/", methods=["GET"])
@@ -169,7 +170,16 @@ def schema_health():
 
     except Exception as e:
         logger.error(f"Schema service health check failed: {e}")
-        return jsonify({"status": "unhealthy", "error": str(e), "service": "AdCP Schema Validation Service"}), 500
+        return (
+            jsonify(
+                {
+                    "status": "unhealthy",
+                    "error": safe_error_message(e, "Schema service health check failed"),
+                    "service": "AdCP Schema Validation Service",
+                }
+            ),
+            500,
+        )
 
 
 # Error handlers for the blueprint

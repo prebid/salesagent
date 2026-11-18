@@ -13,6 +13,7 @@ from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
 from src.adapters.gam_reporting_service import GAMReportingService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.operator_errors import json_error, safe_error_message
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -163,8 +164,8 @@ def validate_gam_config(data: dict) -> list | None:
                     errors.append(f"Service account JSON missing required fields: {', '.join(missing_fields)}")
                 elif key_data.get("type") != "service_account":
                     errors.append("Service account JSON must be of type 'service_account'")
-            except json.JSONDecodeError as e:
-                errors.append(f"Invalid JSON format: {str(e)}")
+            except json.JSONDecodeError:
+                errors.append("Invalid JSON format in service account JSON")
 
     # Trafficker ID validation
     trafficker_id = data.get("trafficker_id")
@@ -210,15 +211,7 @@ def detect_gam_network(tenant_id):
             client_secret = gam_auth.gam_oauth_client_secret
 
         except Exception as e:
-            return (
-                jsonify(
-                    {
-                        "success": False,
-                        "error": f"GAM OAuth configuration error: {str(e)}",
-                    }
-                ),
-                500,
-            )
+            return json_error(e, "GAM OAuth configuration error", success=False)
 
         # Create OAuth2 client with refresh token
         oauth2_client = oauth2.GoogleRefreshTokenClient(
@@ -231,10 +224,7 @@ def detect_gam_network(tenant_id):
         try:
             oauth2_client.Refresh()
         except Exception as e:
-            return (
-                jsonify({"success": False, "error": f"Invalid refresh token: {str(e)}"}),
-                400,
-            )
+            return json_error(e, "Invalid refresh token", status_code=400, success=False)
 
         # Create GAM client
         client = ad_manager.AdManagerClient(oauth2_client, "AdCP-Sales-Agent")
@@ -275,7 +265,7 @@ def detect_gam_network(tenant_id):
                     }
                 )
             except Exception as e:
-                return jsonify({"success": False, "error": f"Error getting trafficker ID: {str(e)}"}), 500
+                return json_error(e, "Error getting trafficker ID", success=False)
 
         # Get network service and retrieve network info
         network_service = client.GetService("NetworkService")
@@ -373,22 +363,11 @@ def detect_gam_network(tenant_id):
 
         except Exception as e:
             logger.error(f"Failed to get network info: {e}")
-            return (
-                jsonify(
-                    {
-                        "success": False,
-                        "error": f"Failed to retrieve network information: {str(e)}",
-                    }
-                ),
-                500,
-            )
+            return json_error(e, "Failed to retrieve network information", success=False)
 
     except Exception as e:
         logger.error(f"Error detecting GAM network for tenant {tenant_id}: {e}", exc_info=True)
-        return (
-            jsonify({"success": False, "error": f"Error detecting network: {str(e)}"}),
-            500,
-        )
+        return json_error(e, "Error detecting network", success=False)
 
 
 @gam_bp.route("/configure", methods=["POST"])
@@ -538,10 +517,7 @@ def configure_gam(tenant_id):
 
     except Exception as e:
         logger.error(f"Error saving GAM configuration for tenant {tenant_id}: {e}")
-        return (
-            jsonify({"success": False, "error": f"Error saving configuration: {str(e)}"}),
-            500,
-        )
+        return json_error(e, "Error saving configuration", success=False)
 
 
 @gam_bp.route("/line-item/<line_item_id>")
@@ -682,7 +658,7 @@ def get_gam_custom_targeting_keys(tenant_id):
 
     except Exception as e:
         logger.error(f"Error getting GAM custom targeting keys: {e}")
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 # Removed: /sync-inventory endpoint - use /api/tenant/<tenant_id>/inventory/sync instead
@@ -726,7 +702,7 @@ def get_sync_status(tenant_id, sync_id):
 
     except Exception as e:
         logger.error(f"Error getting sync status: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @gam_bp.route("/sync-status/latest", methods=["GET"])
@@ -761,7 +737,7 @@ def get_latest_sync_status(tenant_id):
 
     except Exception as e:
         logger.error(f"Error getting latest sync status: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @gam_bp.route("/reset-stuck-sync", methods=["POST"])
@@ -812,7 +788,7 @@ def reset_stuck_sync(tenant_id):
 
     except Exception as e:
         logger.error(f"Error resetting stuck sync: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return json_error(e, success=False)
 
 
 @gam_bp.route("/create-service-account", methods=["POST"])
@@ -860,15 +836,17 @@ def create_service_account(tenant_id):
 
         except ValueError as e:
             # Tenant not found or already has service account
-            return jsonify({"success": False, "error": str(e)}), 400
+            return json_error(
+                e, "Tenant not found, or it already has a service account", status_code=400, success=False
+            )
 
         except Exception as e:
             logger.error(f"Error creating service account for tenant {tenant_id}: {e}", exc_info=True)
-            return jsonify({"success": False, "error": f"Failed to create service account: {str(e)}"}), 500
+            return json_error(e, "Failed to create service account", success=False)
 
     except Exception as e:
         logger.error(f"Error in create_service_account endpoint: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return json_error(e, success=False)
 
 
 @gam_bp.route("/get-service-account-email", methods=["GET"])
@@ -895,7 +873,7 @@ def get_service_account_email(tenant_id):
 
     except Exception as e:
         logger.error(f"Error getting service account email: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @gam_bp.route("/test-connection", methods=["POST"])
@@ -964,7 +942,7 @@ def test_gam_connection(tenant_id):
             try:
                 oauth2_client.Refresh()
             except Exception as e:
-                return jsonify({"error": f"Invalid refresh token: {str(e)}"}), 400
+                return json_error(e, "Invalid refresh token", status_code=400)
 
         elif auth_method == "service_account":
             # Service account flow
@@ -1001,7 +979,7 @@ def test_gam_connection(tenant_id):
 
                     service_account_info = json_lib.loads(adapter_config.gam_service_account_json)
                 except json_lib.JSONDecodeError as e:
-                    return jsonify({"error": f"Invalid service account JSON: {str(e)}"}), 400
+                    return json_error(e, "Invalid service account JSON", status_code=400)
 
                 # Create credentials from service account (in-memory, no temp file needed)
                 from google.oauth2 import service_account
@@ -1085,12 +1063,12 @@ def test_gam_connection(tenant_id):
                 ]
             except Exception as e:
                 logger.error(f"Failed to get network info: {e}")
-                network_error = str(e)
+                network_error = safe_error_message(e, "Network lookup failed")
                 networks = []
         except Exception as e:
             logger.error(f"Failed to get networks: {e}")
             logger.exception("Full exception details:")
-            network_error = str(e)
+            network_error = safe_error_message(e, "Network lookup failed")
             networks = []
 
         # If no network is accessible, the connection test must fail.
@@ -1187,13 +1165,13 @@ def test_gam_connection(tenant_id):
 
             except Exception as e:
                 # It's okay if we can't fetch companies/users
-                result["warning"] = f"Connected but couldn't fetch all resources: {str(e)}"
+                result["warning"] = safe_error_message(e, "Connected but couldn't fetch all resources")
 
         return jsonify(result)
 
     except Exception as e:
         logger.error(f"Error testing GAM connection: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @gam_bp.route("/api/line-item/<line_item_id>", methods=["GET"])
@@ -1267,4 +1245,4 @@ def get_gam_line_item_api(tenant_id, line_item_id):
 
     except Exception as e:
         logger.error(f"Error getting GAM line item {line_item_id}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)

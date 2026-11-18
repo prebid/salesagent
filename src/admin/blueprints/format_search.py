@@ -10,6 +10,7 @@ from flask import Blueprint, Response, jsonify, request
 from pydantic import BaseModel
 
 from src.admin.utils import require_auth
+from src.admin.utils.operator_errors import json_error
 from src.core.creative_agent_registry import get_creative_agent_registry
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.agent import CreativeAgentRepository
@@ -95,7 +96,7 @@ def search_formats():
         return jsonify({"formats": results, "count": len(results)})
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @bp.route("/list", methods=["GET"])
@@ -168,7 +169,7 @@ def list_all_formats():
         return jsonify({"agents": by_agent, "total_formats": len(formats)})
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @bp.route("/templates", methods=["GET"])
@@ -321,4 +322,4 @@ def list_creative_agents():
             return jsonify({"agents": agents})
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)

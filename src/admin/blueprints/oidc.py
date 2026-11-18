@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from src.admin.auth_utils import extract_user_info
 from src.admin.utils import require_tenant_access
+from src.admin.utils.operator_errors import json_error, safe_error_message
 from src.admin.utils.url_policy import json_error_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -131,7 +132,7 @@ def save_config(tenant_id: str):
         )
 
     except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        return json_error(e, "Invalid OIDC configuration; a custom provider needs a discovery URL", status_code=400)
     except Exception as e:
         logger.error(f"Error saving OIDC config: {e}", exc_info=True)
         return jsonify({"error": "Failed to save configuration"}), 500
@@ -269,7 +270,7 @@ def callback():
                 logger.info("OAuth callback: token exchange successful")
             except Exception as e:
                 logger.error(f"OAuth token exchange failed: {e}", exc_info=True)
-                flash(f"OAuth authentication failed: {e}", "error")
+                flash(safe_error_message(e, "OAuth authentication failed"), "error")
                 if is_test:
                     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
                 return redirect(url_for("auth.login"))
@@ -400,7 +401,7 @@ def callback():
 
     except Exception as e:
         logger.error(f"OAuth callback error: {e}", exc_info=True)
-        flash(f"Authentication error: {e}", "error")
+        flash(safe_error_message(e, "Authentication error"), "error")
         return redirect(url_for("auth.login"))
 
 

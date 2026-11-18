@@ -26,6 +26,23 @@ _FILES = [
     "src/admin/blueprints/inventory_profiles.py",
     "src/admin/blueprints/settings.py",
     "src/admin/tenant_management_api.py",
+    "src/admin/blueprints/adapters.py",
+    "src/admin/blueprints/api.py",
+    "src/admin/blueprints/creative_agents.py",
+    "src/admin/blueprints/creatives.py",
+    "src/admin/blueprints/format_search.py",
+    "src/admin/blueprints/gam.py",
+    "src/admin/blueprints/inventory.py",
+    "src/admin/blueprints/oidc.py",
+    "src/admin/blueprints/policy.py",
+    "src/admin/blueprints/principals.py",
+    "src/admin/blueprints/products.py",
+    "src/admin/blueprints/schemas.py",
+    "src/admin/blueprints/signals_agents.py",
+    "src/admin/sync_api.py",
+    "src/adapters/gam_reporting_api.py",
+    "src/services/gam_inventory_service.py",
+    "src/routes/health.py",
 ]
 
 _RESPONSE_HINT = re.compile(r"flash\(|jsonify\(|[\"']error[\"']|[\"']message[\"']")

@@ -347,8 +347,8 @@ class TestAIReviewCreative:
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
         assert result["status"] == "pending_review"
-        assert "error" in result
-        assert "API rate limit exceeded" in str(result["error"])
+        assert result["error"].startswith("AI review failed. The details have been logged (reference ")
+        assert "API rate limit exceeded" not in result["error"]
 
     # Edge Case: Confidence threshold at exact boundary (0.90)
     @patch("src.services.ai.agents.review_agent.review_creative_async")

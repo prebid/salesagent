@@ -50,6 +50,8 @@ class DomainNotOwned(Exception):
     :class:`OwnedDomain` every domain-bearing operation below requires.
     """
 
+    MESSAGE = "Domain must match tenant's virtual_host"
+
 
 @dataclass(frozen=True, slots=True)
 class OwnedDomain:
@@ -88,7 +90,7 @@ def tenant_owns_domain(tenant: Tenant, domain: str | None) -> OwnedDomain:
     not own a domain it is served at.
     """
     if not isinstance(domain, str) or not domain or (tenant.virtual_host or "").lower() != domain.lower():
-        raise DomainNotOwned("Domain must match tenant's virtual_host")
+        raise DomainNotOwned(DomainNotOwned.MESSAGE)
     return OwnedDomain(domain=domain)
 
 

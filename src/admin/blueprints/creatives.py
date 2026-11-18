@@ -43,6 +43,7 @@ from flask import Blueprint, jsonify, redirect, render_template, request, url_fo
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.operator_errors import json_error, safe_error_message
 from src.core.database.repositories.uow import AdminCreativeUoW
 from src.core.tools.media_buy_create import execute_approved_media_buy, push_creative_to_existing_buy
 
@@ -429,7 +430,7 @@ def analyze(tenant_id, **kwargs):
 
     except Exception as e:
         logger.error(f"Error analyzing creative format: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 def _create_human_review_record(
@@ -701,7 +702,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
     except Exception as e:
         logger.error(f"Error approving creative: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @creatives_bp.route("/review/<creative_id>/reject", methods=["POST"])
@@ -802,7 +803,7 @@ def reject_creative(tenant_id, creative_id, **kwargs):
 
     except Exception as e:
         logger.error(f"Error rejecting creative: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 def _ai_review_creative(
@@ -939,7 +940,7 @@ def _ai_review_creative(
                     if not isinstance(creative.data, dict):
                         creative.data = {}
                     creative.data["ai_review_error"] = {
-                        "error": str(e),
+                        "error": safe_error_message(e, "AI review failed"),
                         "timestamp": datetime.now(UTC).isoformat(),
                     }
                     uow.creatives.update_data(creative, creative.data)
@@ -975,7 +976,11 @@ def get_ai_review_status(task_id: str) -> dict:
             result = future.result()
             return {"status": "completed", "result": result, "creative_id": task_info["creative_id"]}
         except Exception as e:
-            return {"status": "failed", "error": str(e), "creative_id": task_info["creative_id"]}
+            return {
+                "status": "failed",
+                "error": safe_error_message(e, "AI review task failed"),
+                "creative_id": task_info["creative_id"],
+            }
 
 
 def _create_review_record(
@@ -1065,7 +1070,11 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
         logger.error(f"Error running AI review: {e}", exc_info=True)
         # Record error metrics (error_type bounded to a fixed enum)
         record_ai_review_error(tenant_id=tenant_id, error=e)
-        return {"status": "pending_review", "error": str(e), "reason": "AI review failed - requires manual approval"}
+        return {
+            "status": "pending_review",
+            "error": safe_error_message(e, "AI review failed"),
+            "reason": "AI review failed - requires manual approval",
+        }
     finally:
         # Record duration and decrement active reviews
         duration = time.time() - start_time

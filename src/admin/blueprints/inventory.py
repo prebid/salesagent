@@ -8,6 +8,7 @@ from sqlalchemy import String, func, or_, select
 
 from src.admin.utils import execute_limited, get_tenant_config_from_db, require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.operator_errors import json_error
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Tenant
@@ -159,7 +160,7 @@ def get_targeting_data(tenant_id):
 
     except Exception as e:
         logger.error(f"Error fetching targeting data for tenant {tenant_id}: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/targeting/values/<key_id>", methods=["GET"])
@@ -305,7 +306,7 @@ def get_targeting_values(tenant_id, key_id):
 
     except Exception as e:
         logger.error(f"Error fetching targeting values for key {key_id}: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @inventory_bp.route("/tenant/<tenant_id>/inventory")
@@ -413,7 +414,7 @@ def sync_orders(tenant_id):
 
     except Exception as e:
         logger.error(f"Error syncing orders: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/orders", methods=["GET"])
@@ -465,7 +466,7 @@ def get_orders(tenant_id):
 
     except Exception as e:
         logger.error(f"Error getting orders: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/orders/<order_id>", methods=["GET"])
@@ -511,7 +512,7 @@ def get_order_details(tenant_id, order_id):
 
     except Exception as e:
         logger.error(f"Error getting order details: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @inventory_bp.route("/tenant/<tenant_id>/check-inventory-sync")
@@ -553,7 +554,7 @@ def check_inventory_sync(tenant_id):
 
     except Exception as e:
         logger.error(f"Error checking inventory sync: {e}")
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @inventory_bp.route("/tenant/<tenant_id>/analyze-ad-server")
@@ -656,7 +657,7 @@ def analyze_ad_server_inventory(tenant_id):
 
     except Exception as e:
         logger.error(f"Error analyzing ad server: {e}")
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/inventory/sync", methods=["POST"])
@@ -749,10 +750,10 @@ def sync_inventory(tenant_id):
 
     except ValueError as e:
         # Sync already running or validation error
-        return jsonify({"error": str(e)}), 400
+        return json_error(e, "A sync is already running for this tenant, or the request was invalid", status_code=400)
     except Exception as e:
         logger.error(f"Error starting inventory sync: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/inventory-stats", methods=["GET"])
@@ -784,7 +785,7 @@ def get_inventory_stats(tenant_id):
 
     except Exception as e:
         logger.error(f"Error fetching inventory stats: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/sync-status", methods=["GET"])
@@ -853,7 +854,7 @@ def get_sync_status(tenant_id):
 
     except Exception as e:
         logger.error(f"Error fetching sync status: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 def _unit_to_dict(unit, *, matched_search=False):
@@ -1021,7 +1022,7 @@ def get_inventory_tree(tenant_id):
                 return jsonify({"units": units, "truncated": truncated})
         except Exception as e:
             logger.error(f"Error fetching children for {parent_id_param}: {e}", exc_info=True)
-            return jsonify({"error": str(e)}), 500
+            return json_error(e)
 
     # --- Cache (root mode only, no search, no parent_id) ---
     cache_key = f"inventory_tree:v3:{tenant_id}"
@@ -1157,7 +1158,7 @@ def get_inventory_tree(tenant_id):
 
     except Exception as e:
         logger.error(f"Error building inventory tree for tenant {tenant_id}: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/inventory-list", methods=["GET"])
@@ -1302,7 +1303,7 @@ def get_inventory_list(tenant_id):
 
     except Exception as e:
         logger.error(f"Error fetching inventory list: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/inventory/sizes", methods=["GET"])
@@ -1420,4 +1421,4 @@ def get_inventory_sizes(tenant_id):
 
     except Exception as e:
         logger.error(f"Error fetching inventory sizes: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)

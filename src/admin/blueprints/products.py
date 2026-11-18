@@ -20,6 +20,7 @@ from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.admin.form_validation import sanitize_form_data
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.operator_errors import json_error, safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import (
@@ -2144,7 +2145,7 @@ def delete_product(tenant_id, product_id):
 
         # Generic error
         logger.error(f"Product deletion failed for {product_id}: {error_message}")
-        return jsonify({"error": f"Failed to delete product: {error_message}"}), 500
+        return json_error(e, "Failed to delete product")
 
 
 @products_bp.route("/<product_id>/inventory", methods=["POST"])
@@ -2274,7 +2275,7 @@ def assign_inventory_to_product(tenant_id, product_id):
 
     except Exception as e:
         logger.error(f"Error assigning inventory to product: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @products_bp.route("/<product_id>/inventory", methods=["GET"])
@@ -2322,7 +2323,7 @@ def get_product_inventory(tenant_id, product_id):
 
     except Exception as e:
         logger.error(f"Error fetching product inventory: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return json_error(e)
 
 
 @products_bp.route("/<product_id>/inventory/<int:mapping_id>", methods=["DELETE"])
@@ -2405,4 +2406,4 @@ def unassign_inventory_from_product(tenant_id, product_id, mapping_id):
 
     except Exception as e:
         logger.error(f"Error removing inventory assignment: {e}", exc_info=True)
-        return jsonify({"success": False, "message": str(e)}), 500
+        return jsonify({"success": False, "message": safe_error_message(e)}), 500

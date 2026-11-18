@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import safe_error_message
+from src.admin.utils.operator_errors import json_error, safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig, User
@@ -260,7 +260,7 @@ def add_domain(tenant_id):
 
     except Exception as e:
         logger.error(f"Error adding domain: {e}", exc_info=True)
-        return jsonify({"success": False, "error": safe_error_message(e)}), 500
+        return json_error(e, success=False)
 
 
 @users_bp.route("/domains", methods=["DELETE"])
@@ -287,7 +287,7 @@ def remove_domain(tenant_id):
 
     except Exception as e:
         logger.error(f"Error removing domain: {e}", exc_info=True)
-        return jsonify({"success": False, "error": safe_error_message(e)}), 500
+        return json_error(e, success=False)
 
 
 @users_bp.route("/disable-setup-mode", methods=["POST"])
@@ -340,7 +340,7 @@ def disable_setup_mode(tenant_id):
 
     except Exception as e:
         logger.error(f"Error disabling setup mode: {e}", exc_info=True)
-        return jsonify({"success": False, "error": safe_error_message(e)}), 500
+        return json_error(e, success=False)
 
 
 @users_bp.route("/enable-setup-mode", methods=["POST"])
@@ -365,4 +365,4 @@ def enable_setup_mode(tenant_id):
 
     except Exception as e:
         logger.error(f"Error enabling setup mode: {e}", exc_info=True)
-        return jsonify({"success": False, "error": safe_error_message(e)}), 500
+        return json_error(e, success=False)

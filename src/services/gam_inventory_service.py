@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, scoped_session, sessionmaker
 from src.adapters.gam_inventory_discovery import (
     GAMInventoryDiscovery,
 )
+from src.admin.utils.operator_errors import json_error
 from src.core.database.db_config import DatabaseConfig
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
@@ -1570,7 +1571,7 @@ def create_inventory_endpoints(app):
         except Exception as e:
             logger.error(f"Inventory sync failed: {e}", exc_info=True)
             db_session.rollback()
-            return jsonify({"error": str(e)}), 500
+            return json_error(e)
         finally:
             # Always remove the session to clean up
             db_session.remove()
@@ -1591,7 +1592,7 @@ def create_inventory_endpoints(app):
         except Exception as e:
             logger.error(f"Failed to get inventory tree: {e}", exc_info=True)
             db_session.rollback()
-            return jsonify({"error": str(e)}), 500
+            return json_error(e)
         finally:
             db_session.remove()
 
@@ -1616,7 +1617,7 @@ def create_inventory_endpoints(app):
         except Exception as e:
             logger.error(f"Inventory search failed: {e}", exc_info=True)
             db_session.rollback()
-            return jsonify({"error": str(e)}), 500
+            return json_error(e)
         finally:
             db_session.remove()
 
@@ -1634,7 +1635,7 @@ def create_inventory_endpoints(app):
 
         except Exception as e:
             logger.error(f"Failed to get product inventory: {e}", exc_info=True)
-            return jsonify({"error": str(e)}), 500
+            return json_error(e)
 
     @app.route("/api/tenant/<tenant_id>/product/<product_id>/inventory", methods=["POST"])
     def update_product_inventory(tenant_id, product_id):
@@ -1660,7 +1661,7 @@ def create_inventory_endpoints(app):
 
         except Exception as e:
             logger.error(f"Failed to update product inventory: {e}", exc_info=True)
-            return jsonify({"error": str(e)}), 500
+            return json_error(e)
 
     @app.route("/api/tenant/<tenant_id>/product/<product_id>/inventory/suggest")
     def suggest_product_inventory(tenant_id, product_id):
@@ -1674,7 +1675,7 @@ def create_inventory_endpoints(app):
 
         except Exception as e:
             logger.error(f"Failed to get inventory suggestions: {e}", exc_info=True)
-            return jsonify({"error": str(e)}), 500
+            return json_error(e)
 
     @app.route("/api/tenant/<tenant_id>/targeting/all")
     def get_all_targeting(tenant_id):
@@ -1688,7 +1689,7 @@ def create_inventory_endpoints(app):
 
         except Exception as e:
             logger.error(f"Failed to get targeting data: {e}", exc_info=True)
-            return jsonify({"error": str(e)}), 500
+            return json_error(e)
 
     @app.route("/api/tenant/<tenant_id>/targeting/values/<key_id>", methods=["GET", "POST"])
     def fetch_custom_targeting_values(tenant_id, key_id):
@@ -1813,7 +1814,7 @@ def create_inventory_endpoints(app):
         except Exception as e:
             logger.error(f"Failed to fetch custom targeting values: {e}", exc_info=True)
             db_session.rollback()
-            return jsonify({"error": str(e)}), 500
+            return json_error(e)
         finally:
             db_session.remove()
 

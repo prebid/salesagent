@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from src.admin.utils import get_tenant_config_from_db, require_auth
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.operator_errors import safe_error_message
 from src.core.audit_logger import AuditLogger
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog, Context, Tenant, WorkflowStep
@@ -203,7 +204,7 @@ def update(tenant_id):
         return redirect(url_for("policy.index", tenant_id=tenant_id))
 
     except Exception as e:
-        return f"Error: {e}", 400
+        return safe_error_message(e, "Error updating policy settings"), 400
 
 
 @policy_bp.route("/rules", methods=["GET", "POST"])
@@ -267,7 +268,7 @@ def review_task(tenant_id, task_id):
 
             except Exception as e:
                 logger.error(f"Error updating policy task: {e}")
-                return f"Error: {e}", 500
+                return safe_error_message(e, "Error updating policy task"), 500
 
         # GET request - show review form
         try:
@@ -293,4 +294,4 @@ def review_task(tenant_id, task_id):
 
         except Exception as e:
             logger.error(f"Error loading policy task: {e}")
-            return f"Error: {e}", 500
+            return safe_error_message(e, "Error loading policy task"), 500

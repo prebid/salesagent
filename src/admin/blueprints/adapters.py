@@ -10,6 +10,7 @@ from sqlalchemy.orm import attributes
 from src.adapters import get_adapter_schemas
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.operator_errors import json_error, safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Product
 
@@ -103,7 +104,7 @@ def mock_config(tenant_id, product_id, **kwargs):
                 flash(f"Invalid configuration: {str(e)}", "error")
             except Exception as e:
                 logger.error(f"Error saving mock config: {e}", exc_info=True)
-                flash(f"Error saving configuration: {str(e)}", "error")
+                flash(safe_error_message(e, "Error saving configuration"), "error")
 
         # GET request - render template with product config
         config = product.implementation_config or {}
@@ -203,7 +204,7 @@ def save_adapter_config(tenant_id, **kwargs):
 
     except Exception as e:
         logger.error(f"Error saving adapter config: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return json_error(e, success=False)
 
 
 @adapters_bp.route("/api/adapters/<adapter_type>/capabilities", methods=["GET"])
@@ -262,7 +263,7 @@ def test_broadstreet_connection(tenant_id, **kwargs):
 
     except Exception as e:
         logger.error(f"Broadstreet connection test failed: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return json_error(e, success=False)
 
 
 @adapters_bp.route("/api/tenant/<tenant_id>/adapters/broadstreet/zones", methods=["GET"])
@@ -303,4 +304,4 @@ def list_broadstreet_zones(tenant_id, **kwargs):
 
     except Exception as e:
         logger.error(f"Error fetching Broadstreet zones: {e}", exc_info=True)
-        return jsonify({"zones": [], "error": str(e)}), 500
+        return json_error(e, zones=[])

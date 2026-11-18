@@ -18,6 +18,7 @@ from sqlalchemy import select
 
 from scripts.ops.gam_helper import get_ad_manager_client_for_tenant
 from src.adapters.gam_reporting_service import GAMReportingService
+from src.admin.utils.operator_errors import json_error
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Tenant
 from src.core.database.repositories.principal import PrincipalRepository
@@ -210,7 +211,7 @@ def get_gam_reporting(tenant_id: str):
 
     except Exception as e:
         logger.error(f"Error getting GAM reporting data for tenant {tenant_id}: {str(e)}", exc_info=True)
-        return jsonify({"error": f"Failed to get reporting data: {str(e)}"}), 500
+        return json_error(e, "Failed to get reporting data")
 
 
 @gam_reporting_api.route("/api/tenant/<tenant_id>/gam/reporting/advertiser/<advertiser_id>/summary", methods=["GET"])
@@ -273,7 +274,7 @@ def get_advertiser_summary(tenant_id: str, advertiser_id: str):
 
     except Exception as e:
         logger.error(f"Error getting advertiser summary: {str(e)}")
-        return jsonify({"error": f"Failed to get advertiser summary: {str(e)}"}), 500
+        return json_error(e, "Failed to get advertiser summary")
 
 
 @gam_reporting_api.route("/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting", methods=["GET"])
@@ -388,7 +389,7 @@ def get_principal_reporting(tenant_id: str, principal_id: str):
 
     except Exception as e:
         logger.error(f"Error getting principal reporting data: {str(e)}")
-        return jsonify({"error": f"Failed to get reporting data: {str(e)}"}), 500
+        return json_error(e, "Failed to get reporting data")
 
 
 @gam_reporting_api.route("/api/tenant/<tenant_id>/gam/reporting/countries", methods=["GET"])
@@ -473,7 +474,7 @@ def get_country_breakdown(tenant_id: str):
 
     except Exception as e:
         logger.error(f"Error getting country breakdown: {str(e)}", exc_info=True)
-        return jsonify({"error": f"Failed to get country breakdown: {str(e)}"}), 500
+        return json_error(e, "Failed to get country breakdown")
 
 
 @gam_reporting_api.route("/api/tenant/<tenant_id>/gam/reporting/ad-units", methods=["GET"])
@@ -563,7 +564,7 @@ def get_ad_unit_breakdown(tenant_id: str):
 
     except Exception as e:
         logger.error(f"Error getting ad unit breakdown: {str(e)}", exc_info=True)
-        return jsonify({"error": f"Failed to get ad unit breakdown: {str(e)}"}), 500
+        return json_error(e, "Failed to get ad unit breakdown")
 
 
 @gam_reporting_api.route("/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting/summary", methods=["GET"])
@@ -646,4 +647,4 @@ def get_principal_summary(tenant_id: str, principal_id: str):
 
     except Exception as e:
         logger.error(f"Error getting principal summary: {str(e)}")
-        return jsonify({"error": f"Failed to get principal summary: {str(e)}"}), 500
+        return json_error(e, "Failed to get principal summary")
