@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.admin.auth_helpers import api_key_prefix, mint_stored_api_key, require_api_key_auth
 from src.core.database.models import AdapterConfig, SyncJob, Tenant
+from src.core.logging_config import log_safe
 from src.services.gam_inventory_service import db_session as gam_db_session
 
 logger = logging.getLogger(__name__)
@@ -175,7 +176,7 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
             return jsonify(result), 200
 
         except Exception as e:
-            logger.error(f"Sync failed for tenant {tenant_id}: {e}", exc_info=True)
+            logger.error(f"Sync failed for tenant {log_safe(tenant_id)}: {e}", exc_info=True)
 
             # Update sync job with error (if it was created)
             try:
@@ -534,7 +535,7 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
             return jsonify({"sync_id": sync_id, "status": "completed", "summary": summary}), 200
 
         except Exception as e:
-            logger.error(f"Orders sync failed for tenant {tenant_id}: {e}", exc_info=True)
+            logger.error(f"Orders sync failed for tenant {log_safe(tenant_id)}: {e}", exc_info=True)
 
             # Update sync job with error
             sync_job.status = "failed"

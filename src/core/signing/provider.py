@@ -25,6 +25,7 @@ from src.core.database.models import SigningKey
 from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError
+from src.core.logging_config import log_safe
 from src.core.signing.algorithms import REQUEST_SIGNING, narrow_alg, narrow_purpose
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ def _refuse(
     to be made the same way each time, and a second spelling of it is how one
     site ends up interpolating a path into the buyer's envelope.
     """
-    logger.error("signing key resolution refused: %s", diagnostic)
+    logger.error("signing key resolution refused: %s", log_safe(diagnostic))
     raise AdCPConfigurationError(details=details, internal_detail=cause) from cause
 
 

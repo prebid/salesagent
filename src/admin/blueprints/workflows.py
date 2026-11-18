@@ -13,6 +13,7 @@ from src.core.database.models import Context
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.logging_config import log_safe
 from src.core.tools.media_buy_create import ApprovalOutcome
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,7 @@ def list_workflows(tenant_id, **kwargs):
         stmt = select(AuditLog).filter(AuditLog.tenant_id == tenant_id).order_by(AuditLog.timestamp.desc()).limit(100)
         audit_logs = db.scalars(stmt).all()
 
-        logger.info(f"[workflows] Querying audit logs for tenant_id={tenant_id}")
+        logger.info(f"[workflows] Querying audit logs for tenant_id={log_safe(tenant_id)}")
         logger.info(f"[workflows] Found {len(audit_logs)} audit logs")
         if audit_logs:
             logger.info(
@@ -89,7 +90,7 @@ def list_workflows(tenant_id, **kwargs):
             all_logs_stmt = select(AuditLog).order_by(AuditLog.timestamp.desc()).limit(5)
             all_logs = db.scalars(all_logs_stmt).all()
             logger.warning(
-                f"[workflows] No audit logs for tenant {tenant_id}, but found {len(all_logs)} logs total in database"
+                f"[workflows] No audit logs for tenant {log_safe(tenant_id)}, but found {len(all_logs)} logs total in database"
             )
             if all_logs:
                 logger.warning(f"[workflows] Sample log tenant_ids: {[log.tenant_id for log in all_logs]}")
@@ -172,7 +173,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
             mapping = next((m for m in mappings if m.object_type == "media_buy"), None)
 
             logger.info(
-                f"[APPROVAL] Checking for ObjectWorkflowMapping: step_id={step_id}, found={mapping is not None}"
+                f"[APPROVAL] Checking for ObjectWorkflowMapping: step_id={log_safe(step_id)}, found={mapping is not None}"
             )
             if mapping:
                 logger.info(
@@ -181,7 +182,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
 
             if mapping:
                 media_buy_id = mapping.object_id
-                logger.info(f"[APPROVAL] Workflow step {step_id} approved for media buy {media_buy_id}")
+                logger.info(f"[APPROVAL] Workflow step {log_safe(step_id)} approved for media buy {media_buy_id}")
 
                 # Get the media buy
                 media_buy_repo = MediaBuyRepository(db, tenant_id)
@@ -213,7 +214,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
             return jsonify({"success": True}), 200
 
     except Exception as e:
-        logger.error(f"Error approving workflow step {step_id}: {e}", exc_info=True)
+        logger.error(f"Error approving workflow step {log_safe(step_id)}: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
 
 
@@ -248,5 +249,5 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
             return jsonify({"success": True}), 200
 
     except Exception as e:
-        logger.error(f"Error rejecting workflow step {step_id}: {e}", exc_info=True)
+        logger.error(f"Error rejecting workflow step {log_safe(step_id)}: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500

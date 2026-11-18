@@ -231,7 +231,7 @@ def setup_oauth_logging() -> None:
 # only \t \r \n, and the log readers that matter split on all ten, so neutralizing
 # only CR/LF leaves seven ways to forge a second log line.
 _LINE_BREAKING = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
-_LOG_SAFE = str.maketrans({c: c.encode("unicode_escape").decode("ascii") for c in _LINE_BREAKING})
+_LOG_SAFE_ESCAPES = tuple((c, c.encode("unicode_escape").decode("ascii")) for c in _LINE_BREAKING if c != "\n")
 
 
 def log_safe(value: object) -> str:
@@ -245,5 +245,13 @@ def log_safe(value: object) -> str:
     Escaped rather than deleted: a dropped character silently changes the value an
     operator reads, and buyers correlate on exact ids. ``\\n`` in an id says
     something was there.
+
+    Written as ``.replace`` calls rather than ``str.translate``: CodeQL's
+    log-injection query recognizes a ``.replace("\\n", ...)`` call as a sanitizer,
+    and ``translate`` it does not model at all. No escape contains a character
+    from ``_LINE_BREAKING``, so the order of the replacements does not matter.
     """
-    return str(value).translate(_LOG_SAFE)
+    text = str(value).replace("\n", "\\n")
+    for char, escaped in _LOG_SAFE_ESCAPES:
+        text = text.replace(char, escaped)
+    return text

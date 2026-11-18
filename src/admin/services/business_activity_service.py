@@ -18,6 +18,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -238,7 +239,7 @@ def get_business_activities(tenant_id: str, limit: int = 50) -> list[dict]:
                 )
 
     except Exception as e:
-        logger.error(f"Error getting business activities for tenant {tenant_id}: {e}", exc_info=True)
+        logger.error(f"Error getting business activities for tenant {log_safe(tenant_id)}: {e}", exc_info=True)
         return []
 
     # Sort all activities by timestamp (newest first)

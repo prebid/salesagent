@@ -45,6 +45,7 @@ from src.core.format_cache import load_reference_formats
 # DRY invariant).
 from src.core.helpers.adapter_helpers import request_signer_for_tenant
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
+from src.core.logging_config import log_safe
 from src.core.schemas import Error as AdCPResponseError
 from src.core.schemas import Format, FormatId, PeerFormat, canonical_agent_url
 from src.core.security.outbound_http import (
@@ -894,7 +895,7 @@ class CreativeAgentRegistry:
         errors: list[AdCPResponseError] = []
         failed_agent_urls: list[str] = []
 
-        logger.info(f"list_all_formats: Found {len(agents)} agents for tenant {tenant_id}")
+        logger.info(f"list_all_formats: Found {len(agents)} agents for tenant {log_safe(tenant_id)}")
 
         for agent in agents:
             logger.info(f"list_all_formats: Fetching from {agent.agent_url}")

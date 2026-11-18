@@ -24,6 +24,7 @@ from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.logging_config import log_safe
 from src.services.ai.factory import tenant_ai_enabled
 from src.services.setup_checklist_service import SetupChecklistService
 from src.services.slack_notifier import SlackNotifier
@@ -562,7 +563,9 @@ def deactivate_tenant(tenant_id):
             db_session.commit()
 
             # Log to application logs
-            logger.info(f"Tenant {tenant_id} ({tenant.name}) deactivated by user {session.get('user', 'unknown')}")
+            logger.info(
+                f"Tenant {log_safe(tenant_id)} ({tenant.name}) deactivated by user {session.get('user', 'unknown')}"
+            )
 
             # Create audit log entry for compliance
             from src.core.audit_logger import AuditLogger
@@ -593,7 +596,7 @@ def deactivate_tenant(tenant_id):
             return redirect(url_for("auth.login"))
 
     except Exception as e:
-        logger.error(f"Error deactivating tenant {tenant_id}: {e}", exc_info=True)
+        logger.error(f"Error deactivating tenant {log_safe(tenant_id)}: {e}", exc_info=True)
         flash(f"Error deactivating sales agent: {str(e)}", "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="danger-zone"))
 
@@ -670,7 +673,7 @@ def media_buys_list(tenant_id):
             )
 
     except Exception as e:
-        logger.error(f"Error listing media buys for tenant {tenant_id}: {e}", exc_info=True)
+        logger.error(f"Error listing media buys for tenant {log_safe(tenant_id)}: {e}", exc_info=True)
         flash(f"Error loading media buys: {str(e)}", "error")
         return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
@@ -754,7 +757,7 @@ def upload_favicon(tenant_id):
         # Create tenant-specific favicon directory
         upload_dir = _get_favicon_upload_dir()
         if not _is_safe_favicon_path(upload_dir, tenant_id):
-            logger.error(f"Path traversal attempt detected for tenant: {tenant_id}")
+            logger.error(f"Path traversal attempt detected for tenant: {log_safe(tenant_id)}")
             flash("Invalid tenant ID", "error")
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
         tenant_favicon_dir = os.path.join(upload_dir, tenant_id)
@@ -787,7 +790,7 @@ def upload_favicon(tenant_id):
         flash("Favicon uploaded successfully", "success")
 
     except Exception as e:
-        logger.error(f"Error uploading favicon for tenant {tenant_id}: {e}", exc_info=True)
+        logger.error(f"Error uploading favicon for tenant {log_safe(tenant_id)}: {e}", exc_info=True)
         flash("Error uploading favicon. Please try again.", "error")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
@@ -824,7 +827,7 @@ def update_favicon_url(tenant_id):
                 flash("Favicon URL cleared - using default favicon", "success")
 
     except Exception as e:
-        logger.error(f"Error updating favicon URL for tenant {tenant_id}: {e}", exc_info=True)
+        logger.error(f"Error updating favicon URL for tenant {log_safe(tenant_id)}: {e}", exc_info=True)
         flash("Error updating favicon URL. Please try again.", "error")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
@@ -852,7 +855,7 @@ def remove_favicon(tenant_id):
                         if os.path.exists(filepath):
                             os.remove(filepath)
                 else:
-                    logger.error(f"Path traversal attempt detected for tenant: {tenant_id}")
+                    logger.error(f"Path traversal attempt detected for tenant: {log_safe(tenant_id)}")
 
             # Clear the favicon URL
             tenant.favicon_url = None
@@ -862,7 +865,7 @@ def remove_favicon(tenant_id):
         flash("Favicon removed - using default favicon", "success")
 
     except Exception as e:
-        logger.error(f"Error removing favicon for tenant {tenant_id}: {e}", exc_info=True)
+        logger.error(f"Error removing favicon for tenant {log_safe(tenant_id)}: {e}", exc_info=True)
         flash("Error removing favicon. Please try again.", "error")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))

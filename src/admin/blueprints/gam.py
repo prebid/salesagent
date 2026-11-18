@@ -18,6 +18,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, GAMLineItem, GAMOrder, Tenant
 from src.core.database.repositories.adapter_config import AdapterConfigRepository, read_adapter_config
+from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -407,9 +408,9 @@ def configure_gam(tenant_id):
         if data is None:
             logger.error(
                 f"Failed to parse JSON from request for tenant {tenant_id}. "
-                f"Content-Type: {request.content_type}, "
+                f"Content-Type: {log_safe(request.content_type)}, "
                 f"Data length: {len(request.data) if request.data else 0}, "
-                f"Data preview: {request.data[:200] if request.data else 'empty'}"
+                f"Data preview: {log_safe(request.data[:200]) if request.data else 'empty'}"
             )
             return (
                 jsonify(
@@ -453,7 +454,7 @@ def configure_gam(tenant_id):
 
         # Log what we received (without exposing sensitive credentials)
         logger.info(
-            f"GAM config save - auth_method: {auth_method}, network_code: {network_code}, "
+            f"GAM config save - auth_method: {log_safe(auth_method)}, network_code: {network_code}, "
             f"trafficker_id: {trafficker_id}, network_currency: {network_currency}, "
             f"secondary_currencies: {secondary_currencies}, network_timezone: {network_timezone}"
         )
@@ -523,7 +524,7 @@ def configure_gam(tenant_id):
                     constraint=("currency_limits_pkey", "uq_currency_limit"),
                 )
                 if already_there is None:
-                    logger.info(f"Auto-created CurrencyLimit for GAM currency {network_currency}")
+                    logger.info(f"Auto-created CurrencyLimit for GAM currency {log_safe(network_currency)}")
 
             db_session.commit()
 
@@ -638,7 +639,7 @@ def view_gam_line_item(tenant_id, line_item_id):
             )
 
     except Exception as e:
-        logger.error(f"Error viewing GAM line item {line_item_id}: {e}")
+        logger.error(f"Error viewing GAM line item {log_safe(line_item_id)}: {e}")
         return render_template("error.html", error=f"Error loading line item: {str(e)}"), 500
 
 
@@ -1266,5 +1267,5 @@ def get_gam_line_item_api(tenant_id, line_item_id):
             )
 
     except Exception as e:
-        logger.error(f"Error getting GAM line item {line_item_id}: {e}")
+        logger.error(f"Error getting GAM line item {log_safe(line_item_id)}: {e}")
         return jsonify({"error": str(e)}), 500

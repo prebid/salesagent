@@ -18,6 +18,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import PropertyTag, Tenant
 from src.core.database.repositories.uow import PublisherUoW
+from src.core.logging_config import log_safe
 from src.core.publisher_format_catalog import authorized_properties
 from src.core.schemas import PROPERTY_ERROR_MESSAGES
 
@@ -94,7 +95,7 @@ def list_property_tags(tenant_id: str) -> str | Response:
                 is None
             ):
                 db_session.commit()
-                logger.info(f"Auto-created 'all_inventory' tag for tenant {tenant_id}")
+                logger.info(f"Auto-created 'all_inventory' tag for tenant {log_safe(tenant_id)}")
 
             # Get all tags for this tenant
             all_tags_stmt = select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.name)

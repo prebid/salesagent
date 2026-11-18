@@ -6,6 +6,7 @@ from googleads import ad_manager
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Tenant
+from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -85,18 +86,18 @@ def get_ad_manager_client_for_tenant(tenant_id: str) -> ad_manager.AdManagerClie
 
         # Log successful client creation
         oauth_structured_logger.log_gam_client_creation(success=True)
-        logger.info(f"Created OAuth2 client for tenant {tenant_id}")
+        logger.info(f"Created OAuth2 client for tenant {log_safe(tenant_id)}")
 
         # Create and return the Ad Manager client
         client = ad_manager.AdManagerClient(
             oauth2_client, f"AdCP-Sales-Agent-{tenant_name}", network_code=gam_network_code
         )
 
-        logger.info(f"Successfully created GAM client for tenant {tenant_id} (network: {gam_network_code})")
+        logger.info(f"Successfully created GAM client for tenant {log_safe(tenant_id)} (network: {gam_network_code})")
         return client
 
     except Exception as e:
-        logger.error(f"Failed to create GAM client for tenant {tenant_id}: {str(e)}")
+        logger.error(f"Failed to create GAM client for tenant {log_safe(tenant_id)}: {str(e)}")
         raise
 
 
@@ -154,11 +155,11 @@ def get_gam_network_info(tenant_id: str) -> dict:
             ),
         }
 
-        logger.info(f"Retrieved GAM network info for tenant {tenant_id}: {network_info}")
+        logger.info(f"Retrieved GAM network info for tenant {log_safe(tenant_id)}: {network_info}")
         return network_info
 
     except Exception as e:
-        logger.error(f"Error getting GAM network info for tenant {tenant_id}: {e}")
+        logger.error(f"Error getting GAM network info for tenant {log_safe(tenant_id)}: {e}")
         # Return defaults
         return {
             "network_code": None,
@@ -182,14 +183,14 @@ def ensure_network_timezone(tenant_id: str) -> str:
     with get_db_session():
         # TODO: Add proper caching once we have a config column in adapter_config table
         # For now, always fetch from GAM
-        logger.info(f"Fetching network timezone from GAM for tenant {tenant_id}...")
+        logger.info(f"Fetching network timezone from GAM for tenant {log_safe(tenant_id)}...")
         try:
             network_info = get_gam_network_info(tenant_id)
             timezone = network_info.get("timezone", "America/New_York")
-            logger.info(f"Got network timezone for tenant {tenant_id}: {timezone}")
+            logger.info(f"Got network timezone for tenant {log_safe(tenant_id)}: {timezone}")
             return timezone
         except Exception as e:
-            logger.error(f"Error fetching network timezone for tenant {tenant_id}: {str(e)}")
+            logger.error(f"Error fetching network timezone for tenant {log_safe(tenant_id)}: {str(e)}")
             # Default to America/New_York if we can't get the timezone
             return "America/New_York"
 

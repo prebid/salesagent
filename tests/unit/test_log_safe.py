@@ -43,6 +43,13 @@ class TestLogSafe:
         assert log_safe(None) == "None"
         assert log_safe(42) == "42"
 
+    def test_output_matches_a_unicode_escape_of_each_line_break(self):
+        """The ``.replace`` chain produces what the earlier ``str.translate`` table did."""
+        breaks = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+        table = str.maketrans({c: c.encode("unicode_escape").decode("ascii") for c in breaks})
+        sample = "a" + "b".join(breaks) + "\\n\r\n" + "z" + breaks[::-1]
+        assert log_safe(sample) == sample.translate(table)
+
     def test_ordinary_text_is_unchanged(self):
         assert log_safe("tenant_blick") == "tenant_blick"
         assert log_safe("a tab\tsurvives") == "a tab\tsurvives", "a tab cannot start a line"

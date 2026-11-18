@@ -25,6 +25,7 @@ from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.core.logging_config import log_safe
 from src.core.security.outbound_http import OutboundError
 from src.services.ai.config import DEFAULT_GOOGLE_MODEL, TenantAIConfig, uses_legacy_gemini_api_key
 from src.services.approximated_client import (
@@ -268,9 +269,9 @@ def update_general(tenant_id):
 
                 # Validate currency code using Babel
                 is_valid = is_valid_currency_code(currency_code)
-                logger.info(f"Currency validation: {currency_code} -> valid={is_valid}")
+                logger.info(f"Currency validation: {log_safe(currency_code)} -> valid={is_valid}")
                 if not is_valid:
-                    logger.warning(f"Rejecting invalid currency code: {currency_code}")
+                    logger.warning(f"Rejecting invalid currency code: {log_safe(currency_code)}")
                     flash(
                         f"Invalid currency code: {currency_code}. Please use a valid ISO 4217 currency code.", "error"
                     )
@@ -333,7 +334,7 @@ def update_adapter(tenant_id):
         # Support both JSON (from our frontend) and form data (from tests)
         if request.is_json:
             new_adapter = request.json.get("adapter")
-            logger.info(f"update_adapter received JSON payload: {request.json}")
+            logger.info(f"update_adapter received JSON payload: {log_safe(request.json)}")
         else:
             new_adapter = request.form.get("adapter")
 
@@ -1094,11 +1095,11 @@ def parse_form_data_to_policy_updates(form_data) -> dict[str, Any]:
 
     if "brand_manifest_policy" in form_data:
         policy_value = form_data.get("brand_manifest_policy", "").strip()
-        logger.info(f"Parsing brand_manifest_policy: received '{policy_value}'")
+        logger.info(f"Parsing brand_manifest_policy: received '{log_safe(policy_value)}'")
         if policy_value in ["public", "require_auth", "require_brand"]:
             updates["brand_manifest_policy"] = policy_value
         else:
-            logger.warning(f"Invalid brand_manifest_policy value: '{policy_value}', ignoring")
+            logger.warning(f"Invalid brand_manifest_policy value: '{log_safe(policy_value)}', ignoring")
             # Still include it so PolicyService can validate and reject if needed
             if policy_value:
                 updates["brand_manifest_policy"] = policy_value
@@ -1377,14 +1378,14 @@ def register_approximated_domain(tenant_id):
         try:
             result = register_domain(owned, backend_url, approximated_api_key)
         except OutboundError as exc:
-            logger.error("Approximated API error registering %s: %s", domain, exc)
+            logger.error("Approximated API error registering %s: %s", log_safe(domain), exc)
             return jsonify({"success": False, "error": "Approximated API error"}), 502
 
         if result.already_registered:
-            logger.info("✅ Domain already registered: %s", domain)
+            logger.info("✅ Domain already registered: %s", log_safe(domain))
             return jsonify({"success": True, "message": f"Domain {domain} already registered"})
 
-        logger.info("✅ Registered domain with Approximated: %s", domain)
+        logger.info("✅ Registered domain with Approximated: %s", log_safe(domain))
         return jsonify({"success": True, "message": f"Domain {domain} registered successfully"})
 
     except DomainNotOwned as e:
@@ -1420,14 +1421,14 @@ def unregister_approximated_domain(tenant_id):
         try:
             result = unregister_domain(owned, approximated_api_key)
         except OutboundError as exc:
-            logger.error("Approximated API error unregistering %s: %s", domain, exc)
+            logger.error("Approximated API error unregistering %s: %s", log_safe(domain), exc)
             return jsonify({"success": False, "error": "Approximated API error"}), 502
 
         if result.already_unregistered:
-            logger.info("✅ Domain already unregistered: %s", domain)
+            logger.info("✅ Domain already unregistered: %s", log_safe(domain))
             return jsonify({"success": True, "message": f"Domain {domain} was not registered"})
 
-        logger.info("✅ Unregistered domain from Approximated: %s", domain)
+        logger.info("✅ Unregistered domain from Approximated: %s", log_safe(domain))
         return jsonify({"success": True, "message": f"Domain {domain} unregistered successfully"})
 
     except DomainNotOwned as e:

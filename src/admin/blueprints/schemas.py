@@ -10,6 +10,7 @@ import logging
 from flask import Blueprint, jsonify
 
 from src.core.domain_config import get_sales_agent_url
+from src.core.logging_config import log_safe
 from src.core.schema_validation import create_schema_registry
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ def get_schema(schema_name: str):
                 }
 
                 # Log the schema request
-                logger.info(f"Serving schema for: {schema_name} (matched: {registry_name})")
+                logger.info(f"Serving schema for: {log_safe(schema_name)} (matched: {registry_name})")
 
                 return jsonify(schema_with_meta)
 
@@ -68,7 +69,7 @@ def get_schema(schema_name: str):
         )
 
     except Exception as e:
-        logger.error(f"Error serving schema {schema_name}: {e}")
+        logger.error(f"Error serving schema {log_safe(schema_name)}: {e}")
         return jsonify({"error": "Internal server error", "message": str(e)}), 500
 
 

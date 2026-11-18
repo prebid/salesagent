@@ -12,6 +12,7 @@ from sqlalchemy import select
 from src.admin.utils import require_tenant_access
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog
+from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +169,7 @@ def get_recent_activities(tenant_id: str, since: datetime = None, limit: int = 5
     """Get recent activities for a tenant from the database."""
     # Validate input parameters
     if not tenant_id or not isinstance(tenant_id, str) or len(tenant_id) > 50:
-        logger.warning(f"Invalid tenant_id provided: {tenant_id}")
+        logger.warning(f"Invalid tenant_id provided: {log_safe(tenant_id)}")
         return []
 
     # Enforce reasonable limits
@@ -196,7 +197,7 @@ def get_recent_activities(tenant_id: str, since: datetime = None, limit: int = 5
             return activities
 
     except Exception as e:
-        logger.error(f"Failed to query activities for tenant {tenant_id}: {e}")
+        logger.error(f"Failed to query activities for tenant {log_safe(tenant_id)}: {e}")
         return []
 
 
@@ -207,19 +208,19 @@ def activity_feed(tenant_id, **kwargs):
 
     # Validate tenant_id
     if not tenant_id or not isinstance(tenant_id, str) or len(tenant_id) > 50:
-        logger.error(f"Invalid tenant_id for activity endpoint: {tenant_id}")
+        logger.error(f"Invalid tenant_id for activity endpoint: {log_safe(tenant_id)}")
         return jsonify({"error": "Invalid tenant ID"}), 400
 
     try:
         # Get recent activities (last 50)
         activities = get_recent_activities(tenant_id, limit=50)
 
-        logger.info(f"Activity polling request - tenant: {tenant_id}, activities: {len(activities)}")
+        logger.info(f"Activity polling request - tenant: {log_safe(tenant_id)}, activities: {len(activities)}")
 
         return jsonify({"activities": activities, "timestamp": datetime.now(UTC).isoformat(), "count": len(activities)})
 
     except Exception as e:
-        logger.error(f"Error getting activities for tenant {tenant_id}: {e}")
+        logger.error(f"Error getting activities for tenant {log_safe(tenant_id)}: {e}")
         return jsonify({"error": "Failed to get activities"}), 500
 
 
@@ -230,12 +231,12 @@ def activity_events(tenant_id, **kwargs):
 
     # Handle HEAD requests for authentication checks
     if request.method == "HEAD":
-        logger.info(f"HEAD request for SSE endpoint - tenant: {tenant_id}, authenticated: True")
+        logger.info(f"HEAD request for SSE endpoint - tenant: {log_safe(tenant_id)}, authenticated: True")
         return Response(status=200)
 
     # Validate tenant_id
     if not tenant_id or not isinstance(tenant_id, str) or len(tenant_id) > 50:
-        logger.error(f"Invalid tenant_id for SSE endpoint: {tenant_id}")
+        logger.error(f"Invalid tenant_id for SSE endpoint: {log_safe(tenant_id)}")
         return Response("Invalid tenant ID", status=400)
 
     # Rate limiting: Clean up old timestamps (older than 1 minute)
@@ -248,7 +249,7 @@ def activity_events(tenant_id, **kwargs):
     active_connections = len(connection_timestamps[tenant_id])
     if active_connections >= MAX_CONNECTIONS_PER_TENANT:
         logger.warning(
-            f"RATE LIMIT HIT - tenant: {tenant_id}, active_connections: {active_connections}, max: {MAX_CONNECTIONS_PER_TENANT}"
+            f"RATE LIMIT HIT - tenant: {log_safe(tenant_id)}, active_connections: {active_connections}, max: {MAX_CONNECTIONS_PER_TENANT}"
         )
         return Response("Too many connections. Please wait before reconnecting.", status=429)
 
@@ -257,7 +258,7 @@ def activity_events(tenant_id, **kwargs):
     connection_counts[tenant_id] += 1
 
     logger.info(
-        f"SSE GET request starting - tenant: {tenant_id}, active_connections: {active_connections + 1}, total_connections: {connection_counts[tenant_id]}"
+        f"SSE GET request starting - tenant: {log_safe(tenant_id)}, active_connections: {active_connections + 1}, total_connections: {connection_counts[tenant_id]}"
     )
 
     def generate():
@@ -267,7 +268,7 @@ def activity_events(tenant_id, **kwargs):
 
         try:
             # Send initial historical data
-            logger.info(f"Starting SSE stream for tenant {tenant_id}")
+            logger.info(f"Starting SSE stream for tenant {log_safe(tenant_id)}")
             recent_activities = get_recent_activities(tenant_id, limit=50)
 
             for activity in reversed(recent_activities):  # Reverse to show oldest first
@@ -309,11 +310,11 @@ def activity_events(tenant_id, **kwargs):
                     time.sleep(2)
 
                 except GeneratorExit:
-                    logger.info(f"SSE client disconnected for tenant {tenant_id}")
+                    logger.info(f"SSE client disconnected for tenant {log_safe(tenant_id)}")
                     cleanup_needed = True
                     break
                 except Exception as e:
-                    logger.error(f"Error in SSE stream for tenant {tenant_id}: {e}")
+                    logger.error(f"Error in SSE stream for tenant {log_safe(tenant_id)}: {e}")
                     cleanup_needed = True
                     # Send error event
                     error_data = json.dumps(
@@ -327,7 +328,7 @@ def activity_events(tenant_id, **kwargs):
                     time.sleep(5)  # Wait longer after error
 
         except Exception as e:
-            logger.error(f"Failed to start SSE stream for tenant {tenant_id}: {e}")
+            logger.error(f"Failed to start SSE stream for tenant {log_safe(tenant_id)}: {e}")
             cleanup_needed = True
             error_data = json.dumps(
                 {
@@ -343,7 +344,7 @@ def activity_events(tenant_id, **kwargs):
                 old_count = connection_counts[tenant_id]
                 connection_counts[tenant_id] = max(0, connection_counts[tenant_id] - 1)
                 logger.info(
-                    f"Cleaning up SSE stream resources for tenant {tenant_id} - connection count: {old_count} -> {connection_counts[tenant_id]}"
+                    f"Cleaning up SSE stream resources for tenant {log_safe(tenant_id)} - connection count: {old_count} -> {connection_counts[tenant_id]}"
                 )
                 # Force garbage collection for any lingering resources
                 import gc
@@ -376,7 +377,7 @@ def get_activities_api(tenant_id, **kwargs):
             try:
                 since = datetime.fromisoformat(since_param.replace("Z", "+00:00"))
             except ValueError:
-                logger.warning(f"Invalid since parameter: {since_param}")
+                logger.warning(f"Invalid since parameter: {log_safe(since_param)}")
 
         # Get optional limit parameter
         limit = min(int(request.args.get("limit", 50)), 100)  # Max 100 activities
@@ -386,5 +387,5 @@ def get_activities_api(tenant_id, **kwargs):
         return {"activities": activities, "count": len(activities), "timestamp": datetime.now(UTC).isoformat()}
 
     except Exception as e:
-        logger.error(f"Failed to get activities for tenant {tenant_id}: {e}")
+        logger.error(f"Failed to get activities for tenant {log_safe(tenant_id)}: {e}")
         return {"error": "Failed to retrieve activities"}, 500

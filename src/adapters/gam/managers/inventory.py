@@ -27,6 +27,7 @@ from src.adapters.gam_inventory_discovery import (
     Label,
     Placement,
 )
+from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class GAMInventoryManager:
         self._discovery: GAMInventoryDiscovery | None = None
         self._cache_timeout = timedelta(hours=24)
 
-        logger.info(f"Initialized GAMInventoryManager for tenant {tenant_id}")
+        logger.info(f"Initialized GAMInventoryManager for tenant {log_safe(tenant_id)}")
 
     def _get_discovery(self) -> GAMInventoryDiscovery:
         """Get or create GAM inventory discovery instance."""
@@ -124,11 +125,11 @@ class GAMInventoryManager:
         Returns:
             Summary of synced data
         """
-        logger.info(f"Starting full inventory sync for tenant {self.tenant_id}")
+        logger.info(f"Starting full inventory sync for tenant {log_safe(self.tenant_id)}")
         if not fetch_values:
             logger.info("Custom targeting: Keys only (values will be lazy loaded on demand)")
         else:
-            logger.info(f"Custom targeting: Keys + values (limit: {custom_targeting_limit} values per key)")
+            logger.info(f"Custom targeting: Keys + values (limit: {log_safe(custom_targeting_limit)} values per key)")
 
         discovery = self._get_discovery()
         return discovery.sync_all(

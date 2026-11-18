@@ -17,6 +17,7 @@ from src.core.database.models import MediaBuy, PushNotificationConfig, Tenant
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.uow import PushNotificationConfigUoW
 from src.core.exceptions import AdCPValidationError
+from src.core.logging_config import log_safe
 from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_primitives
 
@@ -331,7 +332,7 @@ def get_principal(tenant_id, principal_id):
             )
 
     except Exception as e:
-        logger.error(f"Error getting principal {principal_id}: {e}", exc_info=True)
+        logger.error(f"Error getting principal {log_safe(principal_id)}: {e}", exc_info=True)
         return jsonify({"error": f"Failed to get principal: {str(e)}"}), 500
 
 
@@ -363,7 +364,7 @@ def rotate_token(tenant_id, principal_id):
             return jsonify({"success": True, "token": token, "token_prefix": principal.token_prefix})
 
     except Exception as e:
-        logger.error(f"Error rotating token for principal {principal_id}: {e}", exc_info=True)
+        logger.error(f"Error rotating token for principal {log_safe(principal_id)}: {e}", exc_info=True)
         return jsonify({"error": "Failed to rotate token"}), 500
 
 
@@ -463,7 +464,7 @@ def get_gam_advertisers(tenant_id):
                 f"has_adapter_config={tenant.adapter_config is not None}, "
                 f"adapter_type={tenant.adapter_config.adapter_type if tenant.adapter_config else None}, "
                 f"gam_enabled={gam_enabled}, "
-                f"search={search_query}, limit={limit}, fetch_all={fetch_all}"
+                f"search={log_safe(search_query)}, limit={log_safe(limit)}, fetch_all={log_safe(fetch_all)}"
             )
 
             if not gam_enabled:
@@ -599,7 +600,7 @@ def save_testing_config(tenant_id, principal_id):
             principal.updated_at = datetime.now(UTC)
             db_session.commit()
 
-            logger.info(f"Updated testing config for principal {principal_id} in tenant {tenant_id}")
+            logger.info(f"Updated testing config for principal {log_safe(principal_id)} in tenant {tenant_id}")
 
             return jsonify({"success": True, "message": "Testing configuration saved successfully"})
 
@@ -755,7 +756,7 @@ def register_webhook(tenant_id, principal_id):
         logger.info(
             "Registered webhook %s for principal %r in tenant %r",
             webhook_url_for_log(registration.url),
-            principal_id,
+            log_safe(principal_id),
             tenant_id,
         )
         flash("Webhook registered successfully", "success")
@@ -766,7 +767,7 @@ def register_webhook(tenant_id, principal_id):
     # a broad `except Exception` here is what let a route that never persisted a
     # single row look like a validation problem for months.
     except AdCPValidationError as e:
-        logger.warning("Rejected webhook registration for principal %r: %s", principal_id, e)
+        logger.warning("Rejected webhook registration for principal %r: %s", log_safe(principal_id), e)
         # The operator gets a flash, not a 500 — so this returns normally, which
         # means the audit decorator would otherwise record the refusal as a
         # SUCCESSFUL admin action. Say the action failed explicitly.
@@ -803,7 +804,9 @@ def delete_webhook(tenant_id, principal_id, config_id):
         flash("Webhook not found", "error")
         return _redirect_to_webhooks(tenant_id, principal_id)
 
-    logger.info("Deleted webhook %r for principal %r in tenant %r", config_id, principal_id, tenant_id)
+    logger.info(
+        "Deleted webhook %r for principal %r in tenant %r", log_safe(config_id), log_safe(principal_id), tenant_id
+    )
     flash("Webhook deleted successfully", "success")
     return _redirect_to_webhooks(tenant_id, principal_id)
 
@@ -835,9 +838,9 @@ def toggle_webhook(tenant_id, principal_id, config_id):
 
     logger.info(
         "Toggled webhook %r to %s for principal %r",
-        config_id,
+        log_safe(config_id),
         "active" if new_state else "inactive",
-        principal_id,
+        log_safe(principal_id),
     )
     return jsonify({"success": True, "is_active": new_state})
 
@@ -861,7 +864,7 @@ def delete_principal(tenant_id, principal_id):
             db_session.delete(principal)
             db_session.commit()
 
-            logger.info(f"Deleted principal {principal_id} ({principal_name}) from tenant {tenant_id}")
+            logger.info(f"Deleted principal {log_safe(principal_id)} ({principal_name}) from tenant {tenant_id}")
 
             return jsonify({"success": True, "message": f"Principal '{principal_name}' deleted successfully"})
 

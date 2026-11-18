@@ -26,6 +26,7 @@ from zeep.helpers import serialize_object
 from src.adapters.gam.utils.error_handler import with_retry
 from src.adapters.gam.utils.logging import logger
 from src.adapters.gam.utils.timeout_handler import timeout
+from src.core.logging_config import log_safe
 
 
 class AdUnitStatus(Enum):
@@ -432,7 +433,7 @@ class GAMInventoryDiscovery:
         logger.info(
             "Discovering custom targeting keys"
             + (" and values" if fetch_values else " (values will be lazy loaded)")
-            + (f" (max {max_values_per_key} values per key)" if fetch_values and max_values_per_key else "")
+            + (f" (max {log_safe(max_values_per_key)} values per key)" if fetch_values and max_values_per_key else "")
             + (" (note: always fetches all keys)" if since else "")
         )
 
@@ -495,7 +496,8 @@ class GAMInventoryDiscovery:
             List of discovered custom targeting values
         """
         logger.info(
-            f"Lazy loading custom targeting values for key {key_id}" + (f" (max {max_values})" if max_values else "")
+            f"Lazy loading custom targeting values for key {log_safe(key_id)}"
+            + (f" (max {log_safe(max_values)})" if max_values else "")
         )
 
         values = self._discover_custom_targeting_values(key_id, max_values)
@@ -503,7 +505,7 @@ class GAMInventoryDiscovery:
         # Update the internal cache
         self.custom_targeting_values[key_id] = values
 
-        logger.info(f"Loaded {len(values)} values for key {key_id}")
+        logger.info(f"Loaded {len(values)} values for key {log_safe(key_id)}")
         return values
 
     def _discover_custom_targeting_values(
@@ -538,7 +540,7 @@ class GAMInventoryDiscovery:
 
                     # Check if we've hit the limit
                     if max_values and len(discovered_values) >= max_values:
-                        logger.info(f"Reached limit of {max_values} values for key {key_id}")
+                        logger.info(f"Reached limit of {log_safe(max_values)} values for key {log_safe(key_id)}")
                         return discovered_values
 
                 statement_builder.offset += len(response["results"])
@@ -562,7 +564,7 @@ class GAMInventoryDiscovery:
         """
         logger.info(
             f"Discovering audience segments (first-party only, incremental={since is not None})"
-            + (f" (max {max_segments})" if max_segments else "")
+            + (f" (max {log_safe(max_segments)})" if max_segments else "")
         )
 
         # Note: The exact service and method names may vary based on GAM API version
@@ -607,7 +609,7 @@ class GAMInventoryDiscovery:
 
                         # Check if we've hit the limit
                         if max_segments and len(discovered_segments) >= max_segments:
-                            logger.info(f"Reached limit of {max_segments} audience segments")
+                            logger.info(f"Reached limit of {log_safe(max_segments)} audience segments")
                             return discovered_segments
 
                     statement_builder.offset += len(response["results"])
@@ -783,12 +785,12 @@ class GAMInventoryDiscovery:
         Returns:
             Summary of synced data
         """
-        logger.info(f"Starting full inventory sync for tenant {self.tenant_id}")
+        logger.info(f"Starting full inventory sync for tenant {log_safe(self.tenant_id)}")
         if not fetch_custom_targeting_values:
             logger.info("Custom targeting: Keys only (values will be lazy loaded on demand)")
         else:
             logger.info(
-                f"Custom targeting: Keys + values (limit: {max_custom_targeting_values_per_key} values per key)"
+                f"Custom targeting: Keys + values (limit: {log_safe(max_custom_targeting_values_per_key)} values per key)"
             )
 
         start_time = datetime.now(UTC)
@@ -863,7 +865,7 @@ class GAMInventoryDiscovery:
         Returns:
             Summary of synced data
         """
-        logger.info(f"Starting selective inventory sync for tenant {self.tenant_id}: {sync_types}")
+        logger.info(f"Starting selective inventory sync for tenant {log_safe(self.tenant_id)}: {log_safe(sync_types)}")
 
         start_time = datetime.now(UTC)
         summary: dict[str, Any] = {

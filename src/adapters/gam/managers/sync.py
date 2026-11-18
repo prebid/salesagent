@@ -24,6 +24,7 @@ from src.adapters.gam.client import GAMClientManager
 from src.adapters.gam.managers.inventory import GAMInventoryManager
 from src.adapters.gam.managers.orders import GAMOrdersManager
 from src.core.database.models import SyncJob
+from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ class GAMSyncManager:
         self.retry_attempts = 3
         self.retry_delay = timedelta(minutes=5)
 
-        logger.info(f"Initialized GAMSyncManager for tenant {tenant_id}")
+        logger.info(f"Initialized GAMSyncManager for tenant {log_safe(tenant_id)}")
 
     def sync_inventory(
         self,
@@ -77,7 +78,7 @@ class GAMSyncManager:
             Sync summary with timing and results
         """
         sync_type = "inventory"
-        logger.info(f"Starting inventory sync for tenant {self.tenant_id} (force: {force})")
+        logger.info(f"Starting inventory sync for tenant {log_safe(self.tenant_id)} (force: {log_safe(force)})")
 
         # Check for recent sync if not forcing
         if not force:
@@ -115,7 +116,7 @@ class GAMSyncManager:
             sync_job.summary = json.dumps(summary)
             db_session.commit()
 
-            logger.info(f"Inventory sync completed for tenant {self.tenant_id}: {summary}")
+            logger.info(f"Inventory sync completed for tenant {log_safe(self.tenant_id)}: {summary}")
             return {
                 "sync_id": sync_job.sync_id,
                 "status": "completed",
@@ -123,7 +124,7 @@ class GAMSyncManager:
             }
 
         except Exception as e:
-            logger.error(f"Inventory sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
+            logger.error(f"Inventory sync failed for tenant {log_safe(self.tenant_id)}: {e}", exc_info=True)
 
             # Update sync job with error
             sync_job.status = "failed"
@@ -145,7 +146,7 @@ class GAMSyncManager:
             Sync summary with timing and results
         """
         sync_type = "orders"
-        logger.info(f"Starting orders sync for tenant {self.tenant_id} (force: {force})")
+        logger.info(f"Starting orders sync for tenant {log_safe(self.tenant_id)} (force: {force})")
 
         # Check for recent sync if not forcing
         if not force:
@@ -180,7 +181,7 @@ class GAMSyncManager:
             sync_job.summary = json.dumps(summary)
             db_session.commit()
 
-            logger.info(f"Orders sync completed for tenant {self.tenant_id}: {summary}")
+            logger.info(f"Orders sync completed for tenant {log_safe(self.tenant_id)}: {summary}")
             return {
                 "sync_id": sync_job.sync_id,
                 "status": "completed",
@@ -188,7 +189,7 @@ class GAMSyncManager:
             }
 
         except Exception as e:
-            logger.error(f"Orders sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
+            logger.error(f"Orders sync failed for tenant {log_safe(self.tenant_id)}: {e}", exc_info=True)
 
             # Update sync job with error
             sync_job.status = "failed"
@@ -210,7 +211,7 @@ class GAMSyncManager:
         Returns:
             Combined sync summary
         """
-        logger.info(f"Starting full sync for tenant {self.tenant_id} (force: {force})")
+        logger.info(f"Starting full sync for tenant {log_safe(self.tenant_id)} (force: {log_safe(force)})")
 
         # Create sync job for full sync
         sync_job = self._create_sync_job(db_session, "full", "api")
@@ -247,7 +248,7 @@ class GAMSyncManager:
             sync_job.summary = json.dumps(combined_summary)
             db_session.commit()
 
-            logger.info(f"Full sync completed for tenant {self.tenant_id}: {combined_summary}")
+            logger.info(f"Full sync completed for tenant {log_safe(self.tenant_id)}: {combined_summary}")
             return {
                 "sync_id": sync_job.sync_id,
                 "status": "completed",
@@ -255,7 +256,7 @@ class GAMSyncManager:
             }
 
         except Exception as e:
-            logger.error(f"Full sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
+            logger.error(f"Full sync failed for tenant {log_safe(self.tenant_id)}: {e}", exc_info=True)
 
             # Update sync job with error
             sync_job.status = "failed"
@@ -284,7 +285,7 @@ class GAMSyncManager:
         Returns:
             Sync summary with timing and results
         """
-        logger.info(f"Starting selective sync for tenant {self.tenant_id}: {sync_types}")
+        logger.info(f"Starting selective sync for tenant {log_safe(self.tenant_id)}: {log_safe(sync_types)}")
 
         # Create sync job
         sync_job = self._create_sync_job(db_session, "selective", "api")
@@ -319,7 +320,7 @@ class GAMSyncManager:
             sync_job.summary = json.dumps(summary)
             db_session.commit()
 
-            logger.info(f"Selective sync completed for tenant {self.tenant_id}: {summary}")
+            logger.info(f"Selective sync completed for tenant {log_safe(self.tenant_id)}: {summary}")
             return {
                 "sync_id": sync_job.sync_id,
                 "status": "completed",
@@ -327,7 +328,7 @@ class GAMSyncManager:
             }
 
         except Exception as e:
-            logger.error(f"Selective sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
+            logger.error(f"Selective sync failed for tenant {log_safe(self.tenant_id)}: {e}", exc_info=True)
 
             # Update sync job with error
             sync_job.status = "failed"
@@ -530,7 +531,7 @@ class GAMSyncManager:
         db_session.add(sync_job)
         db_session.commit()
 
-        logger.info(f"Created sync job {sync_id} for tenant {self.tenant_id}")
+        logger.info(f"Created sync job {log_safe(sync_id)} for tenant {log_safe(self.tenant_id)}")
         return sync_job
 
     def get_sync_stats(self, db_session: Session, hours: int = 24) -> dict[str, Any]:

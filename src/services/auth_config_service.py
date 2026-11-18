@@ -11,6 +11,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig
+from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,7 @@ def save_oidc_config(
         session.commit()
         session.refresh(config)
 
-        logger.info(f"Saved OIDC config for tenant {tenant_id}: provider={provider}")
+        logger.info(f"Saved OIDC config for tenant {log_safe(tenant_id)}: provider={log_safe(provider)}")
         return config
 
 
@@ -174,19 +175,19 @@ def enable_oidc(tenant_id: str) -> bool:
         config = session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
 
         if not config:
-            logger.error(f"Cannot enable OIDC: no config for tenant {tenant_id}")
+            logger.error(f"Cannot enable OIDC: no config for tenant {log_safe(tenant_id)}")
             return False
 
         tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not _config_is_verified_for(config, tenant, tenant_id):
-            logger.error(f"Cannot enable OIDC: config not verified for tenant {tenant_id}")
+            logger.error(f"Cannot enable OIDC: config not verified for tenant {log_safe(tenant_id)}")
             return False
 
         config.oidc_enabled = True
         config.updated_at = datetime.now(UTC)
         session.commit()
 
-        logger.info(f"Enabled OIDC for tenant {tenant_id}")
+        logger.info(f"Enabled OIDC for tenant {log_safe(tenant_id)}")
         return True
 
 
@@ -206,7 +207,7 @@ def disable_oidc(tenant_id: str) -> bool:
             config.oidc_enabled = False
             config.updated_at = datetime.now(UTC)
             session.commit()
-            logger.info(f"Disabled OIDC for tenant {tenant_id}")
+            logger.info(f"Disabled OIDC for tenant {log_safe(tenant_id)}")
 
         return True
 
@@ -265,7 +266,7 @@ def _config_is_verified_for(config: TenantAuthConfig | None, tenant: Tenant | No
     if config.oidc_verified_redirect_uri != current_uri:
         logger.warning(
             "OIDC config invalid for tenant %s: redirect URI changed from %s to %s",
-            tenant_id,
+            log_safe(tenant_id),
             config.oidc_verified_redirect_uri,
             current_uri,
         )
@@ -310,7 +311,7 @@ def get_oidc_config_for_auth(tenant_id: str) -> dict | None:
             return None
 
         if not is_oidc_config_valid(tenant_id):
-            logger.warning(f"OIDC config invalid for tenant {tenant_id}")
+            logger.warning(f"OIDC config invalid for tenant {log_safe(tenant_id)}")
             return None
 
         return {

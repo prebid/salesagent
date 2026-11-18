@@ -21,6 +21,7 @@ from src.adapters.gam_inventory_discovery import (
 from src.core.database.db_config import DatabaseConfig
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
+from src.core.logging_config import log_safe
 from src.services.gam_product_config_service import product_gam_slots
 
 # Create database session factory
@@ -161,7 +162,7 @@ class GAMInventoryService:
 
         if placements_count == 0:
             logger.warning(
-                f"No placements found in discovery object for tenant {tenant_id}. "
+                f"No placements found in discovery object for tenant {log_safe(tenant_id)}. "
                 f"This could indicate: (1) no placements exist in GAM, (2) placement discovery failed, "
                 f"or (3) all placements are ARCHIVED"
             )

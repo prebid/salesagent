@@ -11,6 +11,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product
+from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +151,7 @@ def get_tenant_products(tenant_id):
             return jsonify({"products": products_data})
 
     except Exception as e:
-        logger.error(f"Error getting products for tenant {tenant_id}: {e}", exc_info=True)
+        logger.error(f"Error getting products for tenant {log_safe(tenant_id)}: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 

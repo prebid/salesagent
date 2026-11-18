@@ -12,6 +12,7 @@ from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Product
+from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +198,7 @@ def save_adapter_config(tenant_id, **kwargs):
             # Note: GAM, Kevel, Triton will be added as their schemas are created
 
             session.commit()
-            logger.info(f"Saved adapter config for tenant {tenant_id}: {adapter_type}")
+            logger.info(f"Saved adapter config for tenant {log_safe(tenant_id)}: {log_safe(adapter_type)}")
 
         return jsonify({"success": True, "adapter_type": adapter_type})
 
