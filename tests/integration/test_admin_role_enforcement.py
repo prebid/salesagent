@@ -144,7 +144,7 @@ LAST_ADMIN_ERROR = b"is the last active admin of this tenant"
 
 
 def _last_audit(env, operation):
-    """The newest audit row for *operation* on the tenant (log_admin_action writes it)."""
+    """The newest audit row for *operation* (``AdminUI.<view>``, as log_admin_action names it) on the tenant."""
     session = env.get_session()
     session.expire_all()
     return session.scalars(
@@ -158,14 +158,14 @@ def test_the_last_active_admin_may_not_be_demoted(rbac_tenant, test_admin_app, n
     assert LAST_ADMIN_ERROR in response.data
     assert _user(rbac_tenant, "admin").role == "admin"
     # the refusal is audited as a failure, not as a successful change
-    assert _last_audit(rbac_tenant, "update_role").success is False
+    assert _last_audit(rbac_tenant, "AdminUI.update_role").success is False
 
 
 def test_the_last_active_admin_may_not_be_deactivated(rbac_tenant, test_admin_app):
     response = _toggle(_client_as(test_admin_app, "admin"), "admin")
     assert LAST_ADMIN_ERROR in response.data
     assert _user(rbac_tenant, "admin").is_active is True
-    assert _last_audit(rbac_tenant, "toggle_user").success is False
+    assert _last_audit(rbac_tenant, "AdminUI.toggle_user").success is False
 
 
 def test_an_admin_may_be_demoted_once_there_is_another(rbac_tenant, test_admin_app):
