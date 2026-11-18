@@ -34,14 +34,15 @@ ADCP_PIN="8d1d3244b2ef"
 # docker-compose.e2e.yml and the standalone `up` path run; _ensure_image
 # repoints it at this pin before every run.
 #
-# The tag also carries a checksum of this file's two source patches below (the Fly size check
-# and the MCP rate limit), read from the script's own text. Changing either patch changes the
-# tag, locally and on ghcr.io, so no host reuses an image built with an older patch or with
-# none (an image from before the rate-limit patch carries the bare pin as its tag).
-_PATCHES="$(awk '/^(_dockerfile_without_fly_size_check|_raise_mcp_rate_limit)[(][)] [{]$/ { n++; on = 1 }
+# The tag also carries a checksum of this file's three source patches below (the Fly size
+# check, the MCP rate limit and the dependency updates), read from the script's own text.
+# Changing any patch changes the tag, locally and on ghcr.io, so no host reuses an image built
+# with an older patch or with none (an image from before the rate-limit patch carries the bare
+# pin as its tag).
+_PATCHES="$(awk '/^(_dockerfile_without_fly_size_check|_raise_mcp_rate_limit|_dockerfile_with_dependency_updates)[(][)] [{]$/ { n++; on = 1 }
                  on { print }
                  on && /^}$/ { on = 0 }
-                 END { exit n == 2 ? 0 : 1 }' "${BASH_SOURCE[0]}")" || {
+                 END { exit n == 3 ? 0 : 1 }' "${BASH_SOURCE[0]}")" || {
     echo "[creative-agent] ERROR: the source patch functions were not found in ${BASH_SOURCE[0]}" >&2
     exit 1
 }
@@ -168,15 +169,114 @@ _raise_mcp_rate_limit() {
     fi
 }
 
+# The image carries the reference agent's npm dependencies as locked at the pin, the npm that
+# ships with the node base image, and the base image's Debian packages, and the Trivy scan in
+# publish-creative-agent.yml reports known CVEs in all three. This copy of the Dockerfile (made
+# from the one above) updates them without moving the pin, which follows the spec version:
+#   - a first stage, salesagent-deps, merges the versions below into package.json and
+#     regenerates package-lock.json; the builder and runtime stages copy both from it instead
+#     of from the source, so their `npm ci` installs the updated tree. A key that names a direct
+#     dependency of the same major sets that dependency to the version (with a "$name" override,
+#     as npm requires); any other key is an override. A key with "@<major>" touches only that
+#     line (undici has three: the agent's 8.x, @slack/bolt's 7.x, @adcp/sdk's 6.x);
+#   - the runtime stage upgrades its Debian packages from bookworm-security and replaces the
+#     bundled npm with npm_version.
+# Each version is the lowest release that fixes every alert open on that package, pinned so a
+# rebuild resolves the same tree; @modelcontextprotocol/core follows client and server so one
+# copy is installed. The Debian upgrade is not pinned: the security archive keeps only the
+# latest build of a package, so a pinned one would stop building at the next update. The build
+# fails when the Dockerfile no longer has its two `COPY package*.json ./` lines. Drop an entry
+# once the pinned release locks that version or newer, and the patch once none is left.
+_dockerfile_with_dependency_updates() {
+    local src_dockerfile="$(_dockerfile_without_fly_size_check)"
+    local out="${SRC}/Dockerfile.salesagent-deps"
+    local npm_version="11.21.3"
+    local last_from
+    last_from="$(grep -n '^FROM ' "$src_dockerfile" | tail -n 1 | cut -d: -f1)"
+    {
+        awk '/^FROM / { print $2 " AS salesagent-deps"; exit }' "$src_dockerfile" | sed 's/^/FROM /'
+        cat <<'STAGE'
+WORKDIR /app
+COPY package*.json ./
+COPY <<'VERSIONS' /tmp/salesagent-dependency-updates.json
+  {
+    "undici@6": "6.29.1",
+    "undici@7": "7.30.1",
+    "undici@8": "8.12.2",
+    "@grpc/grpc-js": "1.14.5",
+    "@hono/node-server": "2.1.6",
+    "@modelcontextprotocol/client": "2.3.0",
+    "@modelcontextprotocol/core": "2.3.0",
+    "@modelcontextprotocol/node": "2.1.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
+    "@modelcontextprotocol/server": "2.3.0",
+    "body-parser@2": "2.4.0",
+    "brace-expansion@1": "1.1.21",
+    "dompurify": "3.4.17",
+    "fast-copy": "4.1.0",
+    "fast-uri@3": "3.1.9",
+    "fast-xml-parser": "5.12.0",
+    "follow-redirects": "1.16.2",
+    "hono": "4.13.16",
+    "ip-address": "10.7.4",
+    "multer": "2.5.0",
+    "proxy-addr": "2.0.8",
+    "qs@6": "6.16.1",
+    "sharp@0.35": "0.35.5",
+    "source-map-js": "1.2.2"
+  }
+VERSIONS
+COPY <<'MERGE' /tmp/salesagent-dependency-updates.cjs
+  const fs = require("fs");
+  const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+  const updates = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+  const major = (spec) => spec.replace(/^[^0-9]*/, "").split(".")[0];
+  pkg.overrides = pkg.overrides || {};
+  for (const [key, version] of Object.entries(updates)) {
+    const name = key.replace(/(.)@.*$/, "$1");
+    const field = ["dependencies", "devDependencies", "optionalDependencies"].find(
+      (f) => pkg[f] && name in pkg[f] && major(pkg[f][name]) === major(version));
+    if (field) pkg[field][name] = version;
+    pkg.overrides[key] = field ? "$" + name : version;
+  }
+  fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+MERGE
+STAGE
+        echo "RUN npm install -g npm@${npm_version} \\"
+        echo " && node /tmp/salesagent-dependency-updates.cjs /tmp/salesagent-dependency-updates.json \\"
+        echo " && npm install --package-lock-only --ignore-scripts --no-audit --no-fund"
+        echo
+    } > "$out"
+    if ! awk -v last="$last_from" -v npm_version="$npm_version" '
+             $0 == "COPY package*.json ./" { print "COPY --from=salesagent-deps /app/package*.json ./"; copied++; next }
+             { print }
+             NR == last {
+                 print "RUN apt-get update \\"
+                 print " && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \\"
+                 print " && rm -rf /var/lib/apt/lists/* \\"
+                 print " && npm install -g npm@" npm_version " \\"
+                 print " && npm cache clean --force"
+             }
+             END { exit copied == 2 ? 0 : 1 }' "$src_dockerfile" >> "$out"; then
+        echo "[creative-agent] ERROR: two 'COPY package*.json ./' lines not found in ${src_dockerfile}" \
+            "(adcp@${ADCP_PIN}); update _dockerfile_with_dependency_updates for this pin" >&2
+        return 1
+    fi
+    echo "$out"
+}
+
 _build_image_local() {
+    local dockerfile
+    dockerfile="$(_dockerfile_with_dependency_updates)" || return 1
     echo "[creative-agent] docker build $IMAGE (adcp@${ADCP_PIN})"
-    docker build -f "$(_dockerfile_without_fly_size_check)" -t "$IMAGE" "$SRC"
+    docker build -f "$dockerfile" -t "$IMAGE" "$SRC"
 }
 
 _build_for_ghcr() {
-    local ref="$(_ghcr_ref)"
+    local ref="$(_ghcr_ref)" dockerfile
+    dockerfile="$(_dockerfile_with_dependency_updates)" || return 1
     echo "[creative-agent] docker build ${ref} (adcp@${ADCP_PIN})"
-    docker build -f "$(_dockerfile_without_fly_size_check)" -t "$ref" -t "$IMAGE" "$SRC"
+    docker build -f "$dockerfile" -t "$ref" -t "$IMAGE" "$SRC"
 }
 
 _push_to_ghcr() {
