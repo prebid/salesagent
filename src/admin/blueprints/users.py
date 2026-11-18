@@ -7,7 +7,7 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
-from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
 from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -69,7 +69,10 @@ def _refuse_last_admin(repo: TenantConfigRepository, user: User) -> bool:
     """
     if not repo.is_last_active_admin(user):
         return False
-    flash(f"{user.email} is the last active admin of this tenant. Make someone else an admin first.", "error")
+    message = f"{user.email} is the last active admin of this tenant. Make someone else an admin first."
+    flash(message, "error")
+    # the handler returns normally, so without this the audit log records the refused change as a success
+    record_admin_action_failure(message)
     return True
 
 
@@ -223,7 +226,7 @@ def toggle_user(tenant_id, user_id):
 def update_role(tenant_id, user_id):
     """Update user role. Refuses to demote the tenant's last active admin."""
     try:
-        new_role = request.form.get("role")
+        new_role = request.form.get("role", "")
         if new_role not in UserRole:
             flash("Invalid role", "error")
             return redirect(url_for("users.list_users", tenant_id=tenant_id))

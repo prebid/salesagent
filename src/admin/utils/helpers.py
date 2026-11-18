@@ -338,7 +338,9 @@ def _enforce_role(role: str, tenant_id: str, *, api_mode: bool, admin_only: bool
     """Raise ``Forbidden`` unless *role* permits the current request (JSON body in API mode)."""
     if role_permits(role, request.method, admin_only=admin_only):
         return
-    logger.warning("Refused %s %s for tenant %s: role %r", request.method, request.path, tenant_id, role)
+    logger.warning(
+        "Refused %s %s for tenant %s: role %r", request.method, log_safe(request.path), log_safe(tenant_id), role
+    )
     body = make_response(jsonify({"error": "Your role does not allow this"}), 403) if api_mode else None
     raise Forbidden(response=body)
 
