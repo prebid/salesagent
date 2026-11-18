@@ -2,7 +2,7 @@
 # Multi-stage build for smaller image
 # Cache bust: 2026-02-27
 ARG PYTHON_VERSION=3.12
-ARG PYTHON_BASE_DIGEST=sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf
+ARG PYTHON_BASE_DIGEST=sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 # Consumed by BuildKit for reproducible layer timestamps (PR 6 release pipeline).
 ARG SOURCE_DATE_EPOCH=0
 # Canonical uv version: .uv-version (CI reads the file; guard keeps this ARG in sync).
@@ -16,7 +16,7 @@ FROM --platform=$TARGETPLATFORM ghcr.io/astral-sh/uv:${UV_VERSION}@${UV_IMAGE_DI
 # binaries lag the latest Go patch, so their embedded stdlib fails the release
 # Trivy gate on freshly-published Go CVEs; building here keeps it current.
 # Digest is the multi-arch manifest list for golang:1.26-trixie (resolves per TARGETPLATFORM).
-FROM golang:1.26-trixie@sha256:68b7145ec43d1820b9a56704554b53d1520aa2a15cb5233e374188a31b2a1bce AS supercronic
+FROM golang:1.26-trixie@sha256:cff05dd6b81c901f2e8249eb6f91c69a60451d0f12c26bfef08e476a85b32d4d AS supercronic
 ENV CGO_ENABLED=0
 RUN go install github.com/aptible/supercronic@v0.2.46
 
@@ -84,7 +84,8 @@ RUN echo 'path-exclude /usr/share/doc/*' > /etc/dpkg/dpkg.cfg.d/01_nodoc && \
 # Install runtime dependencies including nginx (no gcc/libpq-dev/git — build deps stay in builder)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     nginx
