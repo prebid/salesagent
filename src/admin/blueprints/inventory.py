@@ -1194,7 +1194,7 @@ def get_inventory_list(tenant_id):
 
         logger.info(
             f"Building inventory list: tenant={log_safe(tenant_id)}, type={log_safe(inventory_type or 'all')}, "
-            f"search='{search}', status={status}"
+            f"search='{log_safe(search)}', status={log_safe(status)}"
         )
 
         with get_db_session() as db_session:
@@ -1275,7 +1275,7 @@ def get_inventory_list(tenant_id):
 
             logger.info(
                 f"Query returned {len(items)} items after filtering "
-                f"(filters: type={log_safe(inventory_type or 'all')}, status={status}, search='{search}')"
+                f"(filters: type={log_safe(inventory_type or 'all')}, status={log_safe(status)}, search='{log_safe(search)}')"
             )
 
             # Format response

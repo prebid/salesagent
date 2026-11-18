@@ -454,9 +454,9 @@ def configure_gam(tenant_id):
 
         # Log what we received (without exposing sensitive credentials)
         logger.info(
-            f"GAM config save - auth_method: {log_safe(auth_method)}, network_code: {network_code}, "
-            f"trafficker_id: {trafficker_id}, network_currency: {network_currency}, "
-            f"secondary_currencies: {secondary_currencies}, network_timezone: {network_timezone}"
+            f"GAM config save - auth_method: {log_safe(auth_method)}, network_code: {log_safe(network_code)}, "
+            f"trafficker_id: {log_safe(trafficker_id)}, network_currency: {log_safe(network_currency)}, "
+            f"secondary_currencies: {log_safe(secondary_currencies)}, network_timezone: {log_safe(network_timezone)}"
         )
 
         # If network code or trafficker_id not provided, try to auto-detect them
