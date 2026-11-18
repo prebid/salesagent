@@ -160,6 +160,11 @@ def _wait_out_fail_fast(self: DatabaseFaultMixin) -> None:
         time.sleep(remaining)
 
 
+#: The trigger, and the function it runs, behind every media buy status fault. Named once so
+#: the install and the cleanup cannot drift apart.
+_STATUS_FAULT = "poison_media_buy_status_write"
+
+
 class DatabaseFaultMixin:
     """Mixes database fault injection into a real-database env.
 
@@ -212,8 +217,27 @@ class DatabaseFaultMixin:
         Installed before the rows are inserted. The trigger covers only these ids.
         Cleanup drops the trigger and the function.
         """
+        action = "PERFORM pg_terminate_backend(pg_backend_pid());" if terminate else "RAISE EXCEPTION 'poison';"
+        self._install_media_buy_status_trigger(media_buy_ids, action=action, deferred=False)
+
+    def refuse_media_buy_status_commit(self, media_buy_ids: Sequence[str]) -> None:
+        """Make the database refuse the COMMIT of a transaction that changed these buys' status.
+
+        The same status-change test as :meth:`poison_media_buy_status_writes`, on a
+        deferred constraint trigger: it fires at COMMIT, after every savepoint the
+        sweep released, so each per-buy write succeeds and only the terminal commit fails.
+        """
+        self._install_media_buy_status_trigger(media_buy_ids, action="RAISE EXCEPTION 'commit refused';", deferred=True)
+
+    def _install_media_buy_status_trigger(self, media_buy_ids: Sequence[str], *, action: str, deferred: bool) -> None:
+        """Run *action* when one of *media_buy_ids* changes status: per row, or at COMMIT if *deferred*."""
         if not media_buy_ids:
-            raise ValueError("poison_media_buy_status_writes requires at least one media_buy_id")
+            raise ValueError("a media buy status fault requires at least one media_buy_id")
+        create = (
+            f"CREATE CONSTRAINT TRIGGER {_STATUS_FAULT} AFTER UPDATE ON media_buys DEFERRABLE INITIALLY DEFERRED"
+            if deferred
+            else f"CREATE TRIGGER {_STATUS_FAULT} BEFORE UPDATE ON media_buys"
+        )
         self._commit_factory_data()
         url = self._fault_target_url()
         with _admin_cursor(url) as cur:
@@ -222,10 +246,9 @@ class DatabaseFaultMixin:
                 cur.execute("SELECT quote_literal(%s)", (media_buy_id,))
                 literals.append(cur.fetchone()[0])
             listed = ", ".join(literals)
-            action = "PERFORM pg_terminate_backend(pg_backend_pid());" if terminate else "RAISE EXCEPTION 'poison';"
             cur.execute(
                 f"""
-                CREATE OR REPLACE FUNCTION poison_media_buy_status_write() RETURNS trigger
+                CREATE OR REPLACE FUNCTION {_STATUS_FAULT}() RETURNS trigger
                 LANGUAGE plpgsql AS $fn$
                 BEGIN
                   IF NEW.media_buy_id IN ({listed}) AND NEW.status IS DISTINCT FROM OLD.status THEN
@@ -234,18 +257,17 @@ class DatabaseFaultMixin:
                   RETURN NEW;
                 END
                 $fn$;
-                DROP TRIGGER IF EXISTS poison_media_buy_status_write ON media_buys;
-                CREATE TRIGGER poison_media_buy_status_write
-                BEFORE UPDATE ON media_buys
-                FOR EACH ROW EXECUTE FUNCTION poison_media_buy_status_write();
+                DROP TRIGGER IF EXISTS {_STATUS_FAULT} ON media_buys;
+                {create}
+                FOR EACH ROW EXECUTE FUNCTION {_STATUS_FAULT}();
                 """
             )
         self._guard("db_fault:poison_status", self._drop_media_buy_status_poison)
 
     def _drop_media_buy_status_poison(self) -> None:
         with _admin_cursor(self._fault_target_url()) as cur:
-            cur.execute("DROP TRIGGER IF EXISTS poison_media_buy_status_write ON media_buys")
-            cur.execute("DROP FUNCTION IF EXISTS poison_media_buy_status_write()")
+            cur.execute(f"DROP TRIGGER IF EXISTS {_STATUS_FAULT} ON media_buys")
+            cur.execute(f"DROP FUNCTION IF EXISTS {_STATUS_FAULT}()")
 
     def accept_new_connections(self) -> None:
         """Let the database accept connections again. Idempotent; also the refusal's cleanup."""

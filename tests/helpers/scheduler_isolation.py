@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
-from datetime import UTC, datetime, timedelta
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager, nullcontext
+from datetime import UTC, date, datetime, timedelta
+from enum import Enum
+from typing import TYPE_CHECKING, Literal
 from unittest.mock import MagicMock, patch
 
 from sqlalchemy.exc import (
@@ -19,22 +22,41 @@ from sqlalchemy.exc import (
     ProgrammingError,
 )
 
-from src.services.media_buy_status_scheduler import STATUS_BATCH_SUMMARY_PREFIX
+from src.core.database.models import MediaBuy, PersistedMediaBuyStatus
+from src.services.media_buy_status_scheduler import (
+    STATUS_BATCH_SUMMARY_PREFIX,
+    STATUS_FLIP_PREFIX,
+    STATUS_ISOLATED_BUY_PREFIX,
+    STATUS_TICK_FAILED_PREFIX,
+)
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from src.core.database.models import Principal, Tenant
+
+#: The shape of ``MediaBuyStatusScheduler._compute_new_status``, which every stand-in mimics.
+type StatusCompute = Callable[[MediaBuy, datetime, Session], PersistedMediaBuyStatus | str | None]
 
 
-def summary_lines(records: Sequence[logging.LogRecord]) -> list[tuple[str, str]]:
-    """``(level name, rendered message)`` for each record, in order."""
-    return [(record.levelname, record.getMessage()) for record in records]
+def records_with_prefix(records: Sequence[logging.LogRecord], prefix: str) -> list[logging.LogRecord]:
+    """The records whose rendered message starts with *prefix*, at ANY level.
+
+    The one matching rule for the tick's log lines. Selecting at any level means a
+    negative cannot pass vacuously because a line moved level; a reader that cares
+    about the level asserts it on the result.
+    """
+    return [record for record in records if record.getMessage().startswith(prefix)]
 
 
-def logged(records: Sequence[logging.LogRecord], level: str, needle: str) -> list[str]:
-    """Rendered messages at ``level`` whose text contains ``needle``."""
-    return [message for record_level, message in summary_lines(records) if record_level == level and needle in message]
+def lines_with_prefix(records: Sequence[logging.LogRecord], prefix: str) -> list[tuple[str, str]]:
+    """:func:`records_with_prefix` as ``(level name, rendered message)`` pairs."""
+    return [(record.levelname, record.getMessage()) for record in records_with_prefix(records, prefix)]
 
 
 def tick_summaries(records: Sequence[logging.LogRecord]) -> list[tuple[str, str]]:
-    """The tick's summary lines, as ``(level name, rendered message)``."""
-    return [line for line in summary_lines(records) if STATUS_BATCH_SUMMARY_PREFIX in line[1]]
+    """The tick's summary lines."""
+    return lines_with_prefix(records, STATUS_BATCH_SUMMARY_PREFIX)
 
 
 def assert_tick_summary(records: Sequence[logging.LogRecord], severity: str, text: str) -> None:
@@ -54,40 +76,131 @@ def assert_isolated_buy_logged(
     principal_id: str,
     media_buy_id: str,
 ) -> None:
-    """Exactly one ERROR record, naming the buy's three ids, with the traceback attached."""
+    """One isolated-buy line, at ERROR, naming the buy's three ids, with the traceback attached.
+
+    It is also the tick's only ERROR record.
+    """
+    isolated = records_with_prefix(records, STATUS_ISOLATED_BUY_PREFIX)
     errors = [record for record in records if record.levelname == "ERROR"]
-    assert len(errors) == 1, [record.getMessage() for record in errors]
-    message = errors[0].getMessage()
+    assert len(isolated) == 1 and errors == isolated, [r.getMessage() for r in [*isolated, *errors]]
+    message = isolated[0].getMessage()
     assert f"tenant_id={tenant_id}" in message
     assert f"principal_id={principal_id}" in message
     assert f"media_buy_id={media_buy_id}" in message
-    assert errors[0].exc_info, "the isolated buy's ERROR record must carry exc_info"
+    assert isolated[0].exc_info, "the isolated buy's ERROR record must carry exc_info"
 
 
 def flip_lines(records: Sequence[logging.LogRecord]) -> list[str]:
-    """The per-buy flip lines the tick logged after its commit."""
-    return logged(records, "INFO", "Updated media buy ")
+    """The per-buy flip lines the tick logged after its commit, at any level."""
+    return [message for _level, message in lines_with_prefix(records, f"{STATUS_FLIP_PREFIX} ")]
+
+
+def tick_failures(records: Sequence[logging.LogRecord]) -> list[tuple[str, str]]:
+    """The outer handler's tick-failure lines."""
+    return lines_with_prefix(records, STATUS_TICK_FAILED_PREFIX)
 
 
 def assert_tick_stopped(records: Sequence[logging.LogRecord]) -> None:
-    """The tick stopped on the outer handler, and no buy took the isolate path."""
-    error_msgs = logged(records, "ERROR", "")
-    assert any("Failed to update media buy statuses" in msg for msg in error_msgs), error_msgs
-    assert not any("Error updating media buy status" in msg for msg in error_msgs), error_msgs
+    """The tick stopped on the outer handler, at ERROR, and no buy took the isolate path."""
+    failures = tick_failures(records)
+    assert failures and all(level == "ERROR" for level, _ in failures), failures
+    assert lines_with_prefix(records, STATUS_ISOLATED_BUY_PREFIX) == []
 
 
-async def run_status_tick(scheduler=None) -> list[logging.LogRecord]:
-    """One status-sweep tick and the log records it produced."""
+def assert_tick_not_stopped(records: Sequence[logging.LogRecord]) -> None:
+    """The outer handler did not run.
+
+    The INFO summary does not prove this on its own: ``reached_end`` is set inside
+    the session block, so a failure on the way out of it logs here and still leaves
+    the summary at INFO.
+    """
+    assert tick_failures(records) == []
+
+
+class _Real(Enum):
+    """The typed sentinel for "run the real ``_compute_new_status``"."""
+
+    COMPUTE = "real"
+
+
+_REAL_COMPUTE: Literal[_Real.COMPUTE] = _Real.COMPUTE
+
+
+async def run_status_tick(
+    scheduler=None,
+    *,
+    compute: StatusCompute | PersistedMediaBuyStatus | str | None | Literal[_Real.COMPUTE] = _REAL_COMPUTE,
+    visited: list[str] | None = None,
+) -> list[logging.LogRecord]:
+    """One status-sweep tick and the log records it produced.
+
+    ``compute`` replaces ``_compute_new_status``: a callable is a side effect,
+    anything else is the return value. Left out, the real method runs.
+    ``visited`` collects the ``media_buy_id`` of every buy the tick computed, in
+    order, so a test can tell a tick that continued past a failure from one that
+    stopped on it.
+    """
     from tests.helpers.log_capture import capture_logs
 
     if scheduler is None:
         from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
 
         scheduler = MediaBuyStatusScheduler()
+    if compute is _REAL_COMPUTE:
+        inner = scheduler._compute_new_status
+    elif callable(compute):
+        inner = compute
+    else:
+
+        def inner(_media_buy, _now, _session):
+            return compute
+
+    def _stand_in(media_buy, now, session):
+        if visited is not None:
+            visited.append(media_buy.media_buy_id)
+        return inner(media_buy, now, session)
+
+    replaced = compute is not _REAL_COMPUTE or visited is not None
     logger_name = "src.services.media_buy_status_scheduler"
-    with capture_logs(logger_name, level=logging.INFO) as captured:
+    with (
+        patch.object(scheduler, "_compute_new_status", side_effect=_stand_in) if replaced else nullcontext(),
+        capture_logs(logger_name, level=logging.INFO) as captured,
+    ):
         await scheduler._update_statuses()
     return list(captured.log_records)
+
+
+def fail_one(
+    media_buy_id: str,
+    fault: BaseException | Callable[[Session], object],
+    otherwise: str | BaseException | StatusCompute | None = "completed",
+) -> StatusCompute:
+    """``_compute_new_status`` stand-in: *fault* for one buy, *otherwise* for every other.
+
+    *fault* is raised, or, when callable, called with the tick's session (a statement the
+    database refuses). *otherwise* is a status to return (``None`` makes the others no-ops),
+    an exception to raise, or a ``_compute_new_status``-shaped callable to delegate to.
+    """
+
+    def _compute(media_buy: MediaBuy, now: datetime, session: Session) -> PersistedMediaBuyStatus | str | None:
+        if media_buy.media_buy_id == media_buy_id:
+            if isinstance(fault, BaseException):
+                raise fault
+            fault(session)
+        if isinstance(otherwise, BaseException):
+            raise otherwise
+        return otherwise(media_buy, now, session) if callable(otherwise) else otherwise
+
+    return _compute
+
+
+def fail_all(exc: BaseException) -> StatusCompute:
+    """``_compute_new_status`` stand-in: raise *exc* for every buy."""
+
+    def _compute(_media_buy: MediaBuy, _now: datetime, _session: Session) -> PersistedMediaBuyStatus | None:
+        raise exc
+
+    return _compute
 
 
 async def run_mocked_tick(buys, compute, *, session: MagicMock | None = None) -> list[logging.LogRecord]:
@@ -100,17 +213,14 @@ async def run_mocked_tick(buys, compute, *, session: MagicMock | None = None) ->
     cm = mock_get_db_session_cm(session)
     from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
 
-    scheduler = MediaBuyStatusScheduler()
-    compute_patch = {"side_effect": compute} if callable(compute) else {"return_value": compute}
     with (
         patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
         patch(
             "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
             return_value=buys,
         ),
-        patch.object(scheduler, "_compute_new_status", **compute_patch),
     ):
-        return await run_status_tick(scheduler)
+        return await run_status_tick(MediaBuyStatusScheduler(), compute=compute)
 
 
 class _Answered(Exception):
@@ -162,8 +272,9 @@ def bare_disconnection_error() -> DisconnectionError:
     return DisconnectionError("connection closed")
 
 
-async def assert_propagated_session_error(run, *, trips_fail_fast: bool) -> None:
-    """Run ``run`` through the real ``get_db_session`` and check the fail-fast.
+@contextmanager
+def assert_propagated_session_error(*, trips_fail_fast: bool) -> Iterator[None]:
+    """Run the block through the real ``get_db_session`` and check the fail-fast after it.
 
     The oracle is the next session open, through ``check_database_health``.
     Only a connect the server never answered makes that call report the
@@ -173,7 +284,7 @@ async def assert_propagated_session_error(run, *, trips_fail_fast: bool) -> None
 
     reset_health_state()
     try:
-        await run()
+        yield
         assert_next_session(trips_fail_fast=trips_fail_fast)
     finally:
         reset_health_state()
@@ -210,23 +321,16 @@ async def assert_propagated_failure_stops_batch(
     is true only for a connect the server never answered.
     """
     assert buy_count >= 2, "seed at least two buys so a continued batch is visible"
-    from tests.helpers.metrics import assert_counter_delta
+    from tests.helpers.metrics import assert_isolation_delta
 
     processed: list[str] = []
-
-    def _raise(media_buy, _now, _session):
-        processed.append(media_buy.media_buy_id)
-        raise exc
-
-    async def _run() -> None:
-        with patch.object(scheduler, "_compute_new_status", side_effect=_raise):
-            await scheduler._update_statuses()
-
-    with assert_counter_delta(
-        "scheduler_isolation_errors_total", 0, scheduler="media_buy_status", tenant_id=tenant_id, error_type="db_error"
+    with (
+        assert_isolation_delta(0, tenant_id=tenant_id, error_type="db_error"),
+        assert_propagated_session_error(trips_fail_fast=trips_fail_fast),
     ):
-        await assert_propagated_session_error(_run, trips_fail_fast=trips_fail_fast)
+        records = await run_status_tick(scheduler, compute=fail_all(exc), visited=processed)
     assert len(processed) == 1
+    assert_tick_stopped(records)
 
 
 def mock_savepoint_session(*, release_exc: Exception | None = None) -> MagicMock:
@@ -281,29 +385,69 @@ def mock_media_buy(
     return buy
 
 
-def seed_active_expired_buys(
-    create_media_buy: Callable[..., str],
-    *,
-    tenant_id: str,
-    principal_id: str,
-    buy_ids: Sequence[str],
-) -> tuple[datetime, datetime]:
-    """Seed active buys whose flight window is already past (ready to complete).
+@contextmanager
+def status_party(tenant_id: str) -> Iterator[tuple[Tenant, Principal]]:
+    """A tenant and its principal, through the factories, for the sweep's integration tests.
 
-    Real-DB peer of :func:`mock_media_buy` — collapses the
-    ``now/past_start/past_end`` + ``_create_media_buy(..., status="active", …)``
-    preamble shared by the isolation integration oracles.
+    Rows a test creates inside the block commit as they are made, so the tick's
+    own session sees them after the block exits.
+    """
+    from tests.harness._base import BareIntegrationEnv
+
+    with BareIntegrationEnv(tenant_id=tenant_id) as env:
+        yield env.setup_default_data()
+
+
+def seed_status_buys(
+    tenant: Tenant,
+    principal: Principal,
+    buy_ids: Sequence[str],
+    *,
+    status: str,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    **columns: object,
+) -> list[MediaBuy]:
+    """Insert media buys in *status* with this flight window, through ``MediaBuyFactory``.
+
+    The one row builder for the status sweep's real-database tests: the BDD Givens
+    and the integration tests both seed through it. A date not given is the date
+    of its datetime. *columns* go to the factory as they are (``confirmed_at=None``
+    for a test that grades the repository's own confirmation stamp).
+    """
+    from tests.factories import MediaBuyFactory
+
+    return [
+        MediaBuyFactory(
+            tenant=tenant,
+            principal=principal,
+            media_buy_id=media_buy_id,
+            status=status,
+            start_time=start_time,
+            end_time=end_time,
+            start_date=start_date or start_time.date(),
+            end_date=end_date or end_time.date(),
+            **columns,
+        )
+        for media_buy_id in buy_ids
+    ]
+
+
+def seed_active_expired_buys(tenant_id: str, buy_ids: Sequence[str]) -> str:
+    """Seed a tenant, its principal, and active buys whose flight has ended (ready to complete).
+
+    Returns the principal id.
     """
     now = datetime.now(UTC)
-    past_start = now - timedelta(days=7)
-    past_end = now - timedelta(hours=1)
-    for mid in buy_ids:
-        create_media_buy(
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            media_buy_id=mid,
+    with status_party(tenant_id) as (tenant, principal):
+        seed_status_buys(
+            tenant,
+            principal,
+            buy_ids,
             status="active",
-            start_time=past_start,
-            end_time=past_end,
+            start_time=now - timedelta(days=7),
+            end_time=now - timedelta(hours=1),
         )
-    return past_start, past_end
+        return principal.principal_id

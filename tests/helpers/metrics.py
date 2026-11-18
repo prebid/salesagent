@@ -8,7 +8,7 @@ them instead of matching a scrape line by substring.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 
 
 def counter_samples(sample_name: str) -> dict[tuple[tuple[str, str], ...], float]:
@@ -23,23 +23,19 @@ def counter_samples(sample_name: str) -> dict[tuple[tuple[str, str], ...], float
     return out
 
 
-def counter_total(sample_name: str) -> float:
-    return sum(counter_samples(sample_name).values())
+#: The scheduler-isolation counter and the status sweep's ``scheduler`` label, named once for every test.
+ISOLATION_METRIC = "scheduler_isolation_errors_total"
+STATUS_SCHEDULER = "media_buy_status"
 
 
-def counter_value(scheduler: str, tenant_id: str, error_type: str) -> float:
-    """The isolation counter for one scheduler, tenant, and error type.
+def counter_total(sample_name: str, **labels: str) -> float:
+    """Sum of the *sample_name* samples whose labels include *labels*. A missing series is zero."""
+    return sum(samples_with(sample_name, **labels).values())
 
-    A missing series is zero. Reading it must not create the series.
-    """
-    return sum(
-        samples_with(
-            "scheduler_isolation_errors_total",
-            scheduler=scheduler,
-            tenant_id=tenant_id,
-            error_type=error_type,
-        ).values()
-    )
+
+def isolation_error_count(tenant_id: str, error_type: str, *, scheduler: str = STATUS_SCHEDULER) -> float:
+    """The isolation counter for one scheduler, tenant, and error type. Reading it does not create the series."""
+    return counter_total(ISOLATION_METRIC, scheduler=scheduler, tenant_id=tenant_id, error_type=error_type)
 
 
 def samples_with(sample_name: str, **labels: str) -> dict[tuple[tuple[str, str], ...], float]:
@@ -59,11 +55,16 @@ def assert_counter_delta(metric: str, expected: int, *, why: str = "", **labels:
     ``expected=0`` is a first-class case. "Production did not count this" is as
     much of an observable as "it counted once".
     """
-    before = sum(samples_with(metric, **labels).values())
+    before = counter_total(metric, **labels)
     yield
-    after = sum(samples_with(metric, **labels).values())
+    after = counter_total(metric, **labels)
     scope = f"{{{', '.join(f'{k}={v}' for k, v in labels.items())}}}" if labels else ""
     detail = f" {why}" if why else ""
     assert after == before + expected, (
         f"{metric}{scope} must move by {expected} across this block; it went {before} -> {after}.{detail}"
     )
+
+
+def assert_isolation_delta(expected: int, **labels: str) -> AbstractContextManager[None]:
+    """:func:`assert_counter_delta` on the isolation counter, scoped to the status sweep."""
+    return assert_counter_delta(ISOLATION_METRIC, expected, scheduler=STATUS_SCHEDULER, **labels)

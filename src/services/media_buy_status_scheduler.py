@@ -20,7 +20,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from src.core.config import get_settings
-from src.core.database.database_session import _connection_lost, _server_never_answered, get_db_session
+from src.core.database.database_session import get_db_session, session_unusable
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, PersistedMediaBuyStatus
 from src.core.database.repositories import MediaBuyRepository
 from src.core.metrics import record_scheduler_isolation_error
@@ -29,8 +29,12 @@ from src.core.tools._media_buy_transitions import resolve_flight_window_status
 logger = logging.getLogger(__name__)
 
 
-# Batch summary prefix — shared with tests via this constant (not a string literal).
+# Log-line prefixes — shared with tests via these constants (not string literals).
 STATUS_BATCH_SUMMARY_PREFIX = "Media buy status update complete"
+STATUS_FLIP_PREFIX = "Updated media buy"
+STATUS_ISOLATED_BUY_PREFIX = "Error updating media buy status"
+STATUS_HANDLER_FAILED_PREFIX = "Status isolation error handler failed"
+STATUS_TICK_FAILED_PREFIX = "Failed to update media buy statuses"
 
 
 class _BuyOutcome(Enum):
@@ -50,17 +54,6 @@ def _classify_scheduler_error(exc: Exception) -> str:
     string to :func:`record_scheduler_isolation_error`.
     """
     return "db_error" if isinstance(exc, SQLAlchemyError) else "other"
-
-
-def _propagates_to_session(exc: BaseException) -> bool:
-    """Whether ``exc`` must leave the per-buy handler and reach ``get_db_session``.
-
-    A dropped connection (``_connection_lost``) or a connect the server never
-    answered (``_server_never_answered``) leaves this session unusable. The
-    unanswered connect is also what trips the process-wide fail-fast. A data
-    or statement failure stays inside the buy so the rest of the batch continues.
-    """
-    return isinstance(exc, SQLAlchemyError) and (_connection_lost(exc) or _server_never_answered(exc))
 
 
 _ACTIVATABLE_STATUSES = frozenset(
@@ -167,11 +160,12 @@ class MediaBuyStatusScheduler:
                         # happened earlier, at the synchronous create or at approval,
                         # and confirmed_at is write-once so a stamped row is untouched.
                         # ACTIVE is passed as committing anyway, and the PIN is the
-                        # reason: create-media-buy-response.json @ 3.1.1 constrains
-                        # confirmed_at in exactly one direction -- a null value forbids
-                        # status "active". This sweep is the last writer before a buyer
-                        # can observe that combination, so it must not be able to
-                        # produce it. Any row reaching ACTIVE unstamped is already a
+                        # reason: get-media-buys-response.json @ 3.2.7
+                        # (media_buys.items.allOf[3]) constrains confirmed_at in exactly
+                        # one direction -- a null value forbids status "active", and a
+                        # buyer reads the sweep's output there. This sweep is the last
+                        # writer before a buyer can observe that combination, so it must
+                        # not be able to produce it. Any row reaching ACTIVE unstamped is already a
                         # defect upstream; stamping here keeps the defect from becoming
                         # a schema-invalid document on the wire.
                         seller_committed=new_status == PersistedMediaBuyStatus.ACTIVE,
@@ -183,32 +177,23 @@ class MediaBuyStatusScheduler:
                         # for a row the sweep tried to move.
                         raise LookupError(media_buy_id)
         except Exception as exc:
-            if _propagates_to_session(exc):
+            if session_unusable(exc):
                 raise
+            buy = f"(tenant_id={tenant_id}, principal_id={principal_id}, media_buy_id={media_buy_id})"
             try:
-                logger.error(
-                    f"Error updating media buy status "
-                    f"(tenant_id={tenant_id}, principal_id={principal_id}, "
-                    f"media_buy_id={media_buy_id}): {exc}",
-                    exc_info=True,
-                )
+                logger.error(f"{STATUS_ISOLATED_BUY_PREFIX} {buy}: {exc}", exc_info=True)
                 record_scheduler_isolation_error(
                     scheduler="media_buy_status",
                     tenant_id=tenant_id,
                     error_type=_classify_scheduler_error(exc),
                 )
             except Exception as handler_exc:
-                logger.error(
-                    f"Status isolation error handler failed "
-                    f"(tenant_id={tenant_id}, principal_id={principal_id}, "
-                    f"media_buy_id={media_buy_id}): {handler_exc}",
-                    exc_info=True,
-                )
+                logger.error(f"{STATUS_HANDLER_FAILED_PREFIX} {buy}: {handler_exc}", exc_info=True)
             return _BuyOutcome.ISOLATED
 
         if not new_status or old_status is None:
             return _BuyOutcome.NOOP
-        flip_lines.append(f"Updated media buy {media_buy_id} status: {old_status} -> {new_status}")
+        flip_lines.append(f"{STATUS_FLIP_PREFIX} {media_buy_id} status: {old_status} -> {new_status}")
         return _BuyOutcome.FLIPPED
 
     async def _update_statuses(self) -> None:
@@ -251,7 +236,7 @@ class MediaBuyStatusScheduler:
                 reached_end = True
 
         except Exception as e:
-            logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)
+            logger.error(f"{STATUS_TICK_FAILED_PREFIX}: {e}", exc_info=True)
         finally:
             self._log_batch_summary(
                 seen=seen,

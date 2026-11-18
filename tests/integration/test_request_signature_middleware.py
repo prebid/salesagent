@@ -124,8 +124,7 @@ registry-as-fallback precedence and the production refusal).
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager
 from typing import Any
 
 import pytest
@@ -785,8 +784,7 @@ class TestNoneBucketCostsNothing:
 _CAPABILITIES_OPERATION = "get_adcp_capabilities"
 
 
-@contextmanager
-def _assert_ignored_recorded(operation: str, expected: int = 1) -> Iterator[None]:
+def _assert_ignored_recorded(operation: str, expected: int = 1) -> AbstractContextManager[None]:
     """``adcp_request_unsigned_total{operation, reason="ignored"}`` moved by *expected*.
 
     Read on the LABELLED series rather than on the metric total, because "the series
@@ -797,13 +795,12 @@ def _assert_ignored_recorded(operation: str, expected: int = 1) -> Iterator[None
     ``expected=0`` is a first-class case here — it is how a row says the pass-through
     arm was NOT the one taken.
     """
-    before = sum(_samples_with(UNSIGNED_METRIC, operation=operation, reason="ignored").values())
-    yield
-    after = sum(_samples_with(UNSIGNED_METRIC, operation=operation, reason="ignored").values())
-    assert after == before + expected, (
-        f"{UNSIGNED_METRIC}{{operation={operation!r}, reason='ignored'}} must move by "
-        f"{expected} across this block; it went {before} -> {after}. This series is what "
-        "tells 'the none bucket passed a request through' apart from 'traffic stopped'"
+    return assert_counter_delta(
+        UNSIGNED_METRIC,
+        expected,
+        why="This series is what tells 'the none bucket passed a request through' apart from 'traffic stopped'",
+        operation=operation,
+        reason="ignored",
     )
 
 

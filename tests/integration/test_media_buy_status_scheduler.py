@@ -15,165 +15,37 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import text
 
-from src.core.database.database_session import get_db_session
-from src.core.database.models import (
-    Creative,
-    CreativeAssignment,
-    MediaBuy,
-    PersistedMediaBuyStatus,
-    Principal,
-    Tenant,
-)
+from src.core.database.models import MediaBuy, PersistedMediaBuyStatus, Principal, Tenant
 from src.core.database.repositories import MediaBuyRepository
 from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
-from tests.factories import stamp_format_identity
-from tests.factories.principal import plaintext_token_for
+from tests.factories import CreativeAssignmentFactory, CreativeFactory
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
     read_media_buy_state,
 )
-from tests.helpers.metrics import assert_counter_delta
+from tests.helpers.metrics import assert_isolation_delta
 from tests.helpers.scheduler_isolation import (
     INVALIDATED_ESCAPE_ERROR_TYPES,
     assert_isolated_buy_logged,
     assert_propagated_session_error,
     assert_tick_summary,
+    bare_disconnection_error,
+    fail_one,
     flip_lines,
+    invalidated_dbapi_error,
     run_status_tick,
     seed_active_expired_buys,
+    seed_status_buys,
+    server_never_answered_error,
     statement_failure,
+    status_party,
 )
-from tests.utils.database_helpers import add_product_prerequisites, vhost_for
 
 
-def _create_test_tenant(tenant_id: str = "test_tenant") -> str:
-    """Create a test tenant with required setup data."""
-    with get_db_session() as session:
-        tenant = Tenant(
-            tenant_id=tenant_id,
-            name="Test Tenant",
-            subdomain="test",
-            virtual_host=vhost_for(tenant_id),
-            ad_server="mock",
-            is_active=True,
-        )
-        session.add(tenant)
-
-        # Required: the USD CurrencyLimit and the "all_inventory" PropertyTag.
-        add_product_prerequisites(
-            session,
-            tenant_id,
-            min_package_budget=1.00,
-            max_daily_package_spend=100000.00,
-            tag_description="All available inventory",
-        )
-
-        session.commit()
-
-    return tenant_id
-
-
-def _create_test_principal(tenant_id: str, principal_id: str = "test_principal") -> str:
-    """Create a test principal."""
-    with get_db_session() as session:
-        principal = Principal.with_token(
-            plaintext_token_for(principal_id),
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            name="Test Principal",
-            platform_mappings={"mock": {"advertiser_id": "mock_adv_123"}},
-        )
-        session.add(principal)
-        session.commit()
-
-    return principal_id
-
-
-def _create_media_buy(
-    tenant_id: str,
-    principal_id: str,
-    media_buy_id: str,
-    status: str,
-    start_time: datetime | None = None,
-    end_time: datetime | None = None,
-    start_date=None,
-    end_date=None,
-) -> str:
-    """Create a media buy with specified status and flight dates.
-
-    If start_date/end_date are not provided, they are derived from start_time/end_time.
-    Pass explicit values to override this behavior.
-    """
-    # Derive start_date and end_date from start_time and end_time if not explicitly provided
-    now = datetime.now(UTC)
-    if start_date is None:
-        start_date = start_time.date() if start_time else now.date()
-    if end_date is None:
-        end_date = end_time.date() if end_time else (now + timedelta(days=7)).date()
-
-    with get_db_session() as session:
-        media_buy = MediaBuy(
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            media_buy_id=media_buy_id,
-            status=status,
-            start_date=start_date,
-            end_date=end_date,
-            start_time=start_time,
-            end_time=end_time,
-            order_name="Test Order",
-            advertiser_name="Test Advertiser",
-            raw_request={},  # Required field
-        )
-        session.add(media_buy)
-        session.commit()
-
-    return media_buy_id
-
-
-def _create_creative(
-    tenant_id: str,
-    principal_id: str,
-    creative_id: str,
-    status: str = "approved",
-) -> str:
-    """Create a creative with specified status."""
-    with get_db_session() as session:
-        creative = Creative(
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            creative_id=creative_id,
-            name="Test Creative",
-            status=status,
-            data={"type": "display", "width": 300, "height": 250},
-        )
-        stamp_format_identity(creative, format_id="display_300x250")
-        session.add(creative)
-        session.commit()
-
-    return creative_id
-
-
-def _create_creative_assignment(
-    tenant_id: str,
-    media_buy_id: str,
-    creative_id: str,
-    principal_id: str = "test_principal",
-) -> None:
-    """Assign a creative to a media buy."""
-    import uuid
-
-    with get_db_session() as session:
-        assignment = CreativeAssignment(
-            assignment_id=f"assign_{uuid.uuid4().hex[:8]}",
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            media_buy_id=media_buy_id,
-            creative_id=creative_id,
-            package_id="default_package",  # Required field
-        )
-        session.add(assignment)
-        session.commit()
+def _assign_creative(tenant: Tenant, principal: Principal, media_buy: MediaBuy, *, status: str) -> None:
+    """Assign one creative in *status* to *media_buy*."""
+    creative = CreativeFactory(tenant=tenant, principal=principal, status=status)
+    CreativeAssignmentFactory(creative=creative, media_buy=media_buy)
 
 
 # =============================================================================
@@ -185,21 +57,24 @@ def _create_creative_assignment(
 @pytest.mark.asyncio
 async def test_scheduled_transitions_to_active_when_start_time_passed(integration_db):
     """Media buy in 'scheduled' status should transition to 'active' when start_time passes."""
-    tenant_id = _create_test_tenant("tenant_scheduled_active")
-    principal_id = _create_test_principal(tenant_id)
+    tenant_id = "tenant_scheduled_active"
 
     # Create media buy with start_time in the past
     past_start = datetime.now(UTC) - timedelta(hours=1)
     future_end = datetime.now(UTC) + timedelta(days=7)
 
-    media_buy_id = _create_media_buy(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        media_buy_id="mb_scheduled_to_active",
-        status="scheduled",
-        start_time=past_start,
-        end_time=future_end,
-    )
+    media_buy_id = "mb_scheduled_to_active"
+    with status_party(tenant_id) as (tenant, principal):
+        # confirmed_at=None: this test grades the repository's own confirmation stamp.
+        seed_status_buys(
+            tenant,
+            principal,
+            [media_buy_id],
+            status="scheduled",
+            start_time=past_start,
+            end_time=future_end,
+            confirmed_at=None,
+        )
 
     # Verify initial status
     before = read_media_buy_state(tenant_id, media_buy_id)
@@ -230,21 +105,17 @@ async def test_scheduled_transitions_to_active_when_start_time_passed(integratio
 @pytest.mark.asyncio
 async def test_scheduled_stays_scheduled_when_start_time_not_passed(integration_db):
     """Media buy in 'scheduled' status should stay 'scheduled' if start_time is in the future."""
-    tenant_id = _create_test_tenant("tenant_scheduled_stays")
-    principal_id = _create_test_principal(tenant_id)
+    tenant_id = "tenant_scheduled_stays"
 
     # Create media buy with start_time in the future
     future_start = datetime.now(UTC) + timedelta(hours=1)
     future_end = datetime.now(UTC) + timedelta(days=7)
 
-    media_buy_id = _create_media_buy(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        media_buy_id="mb_scheduled_stays",
-        status="scheduled",
-        start_time=future_start,
-        end_time=future_end,
-    )
+    media_buy_id = "mb_scheduled_stays"
+    with status_party(tenant_id) as (tenant, principal):
+        seed_status_buys(
+            tenant, principal, [media_buy_id], status="scheduled", start_time=future_start, end_time=future_end
+        )
 
     # Verify initial status
     assert read_media_buy_state(tenant_id, media_buy_id).status == "scheduled"
@@ -266,30 +137,19 @@ async def test_scheduled_stays_scheduled_when_start_time_not_passed(integration_
 @pytest.mark.asyncio
 async def test_pending_activation_transitions_to_active_with_approved_creatives(integration_db):
     """Media buy in 'pending_activation' should transition to 'active' when start_time passes and creatives approved."""
-    tenant_id = _create_test_tenant("tenant_pending_active")
-    principal_id = _create_test_principal(tenant_id)
+    tenant_id = "tenant_pending_active"
 
     # Create media buy with start_time in the past
     past_start = datetime.now(UTC) - timedelta(hours=1)
     future_end = datetime.now(UTC) + timedelta(days=7)
 
-    media_buy_id = _create_media_buy(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        media_buy_id="mb_pending_to_active",
-        status="pending_activation",
-        start_time=past_start,
-        end_time=future_end,
-    )
-
-    # Create an approved creative and assign it to the media buy
-    creative_id = _create_creative(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        creative_id="creative_approved",
-        status="approved",
-    )
-    _create_creative_assignment(tenant_id, media_buy_id, creative_id)
+    media_buy_id = "mb_pending_to_active"
+    with status_party(tenant_id) as (tenant, principal):
+        (media_buy,) = seed_status_buys(
+            tenant, principal, [media_buy_id], status="pending_activation", start_time=past_start, end_time=future_end
+        )
+        # Create an approved creative and assign it to the media buy
+        _assign_creative(tenant, principal, media_buy, status="approved")
 
     # Verify initial status
     assert read_media_buy_state(tenant_id, media_buy_id).status == "pending_activation"
@@ -306,30 +166,19 @@ async def test_pending_activation_transitions_to_active_with_approved_creatives(
 @pytest.mark.asyncio
 async def test_pending_activation_stays_pending_with_unapproved_creatives(integration_db):
     """Media buy in 'pending_activation' should stay pending if creatives are not approved."""
-    tenant_id = _create_test_tenant("tenant_pending_unapproved")
-    principal_id = _create_test_principal(tenant_id)
+    tenant_id = "tenant_pending_unapproved"
 
     # Create media buy with start_time in the past
     past_start = datetime.now(UTC) - timedelta(hours=1)
     future_end = datetime.now(UTC) + timedelta(days=7)
 
-    media_buy_id = _create_media_buy(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        media_buy_id="mb_pending_unapproved",
-        status="pending_activation",
-        start_time=past_start,
-        end_time=future_end,
-    )
-
-    # Create a pending creative and assign it
-    creative_id = _create_creative(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        creative_id="creative_pending",
-        status="pending_approval",  # Not approved!
-    )
-    _create_creative_assignment(tenant_id, media_buy_id, creative_id)
+    media_buy_id = "mb_pending_unapproved"
+    with status_party(tenant_id) as (tenant, principal):
+        (media_buy,) = seed_status_buys(
+            tenant, principal, [media_buy_id], status="pending_activation", start_time=past_start, end_time=future_end
+        )
+        # Create a pending creative and assign it
+        _assign_creative(tenant, principal, media_buy, status="pending_review")
 
     # Verify initial status
     assert read_media_buy_state(tenant_id, media_buy_id).status == "pending_activation"
@@ -346,21 +195,17 @@ async def test_pending_activation_stays_pending_with_unapproved_creatives(integr
 @pytest.mark.asyncio
 async def test_pending_activation_activates_without_creatives(integration_db):
     """Media buy in 'pending_activation' with no creatives should transition to 'active'."""
-    tenant_id = _create_test_tenant("tenant_pending_no_creatives")
-    principal_id = _create_test_principal(tenant_id)
+    tenant_id = "tenant_pending_no_creatives"
 
     # Create media buy with start_time in the past - NO creatives assigned
     past_start = datetime.now(UTC) - timedelta(hours=1)
     future_end = datetime.now(UTC) + timedelta(days=7)
 
-    media_buy_id = _create_media_buy(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        media_buy_id="mb_pending_no_creatives",
-        status="pending_activation",
-        start_time=past_start,
-        end_time=future_end,
-    )
+    media_buy_id = "mb_pending_no_creatives"
+    with status_party(tenant_id) as (tenant, principal):
+        seed_status_buys(
+            tenant, principal, [media_buy_id], status="pending_activation", start_time=past_start, end_time=future_end
+        )
 
     # Verify initial status
     assert read_media_buy_state(tenant_id, media_buy_id).status == "pending_activation"
@@ -377,30 +222,19 @@ async def test_pending_activation_activates_without_creatives(integration_db):
 @pytest.mark.asyncio
 async def test_pending_activation_stays_pending_when_start_time_not_passed(integration_db):
     """Media buy in 'pending_activation' should stay pending if start_time is in the future."""
-    tenant_id = _create_test_tenant("tenant_pending_future")
-    principal_id = _create_test_principal(tenant_id)
+    tenant_id = "tenant_pending_future"
 
     # Create media buy with start_time in the future
     future_start = datetime.now(UTC) + timedelta(hours=1)
     future_end = datetime.now(UTC) + timedelta(days=7)
 
-    media_buy_id = _create_media_buy(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        media_buy_id="mb_pending_future",
-        status="pending_activation",
-        start_time=future_start,
-        end_time=future_end,
-    )
-
-    # Create approved creative
-    creative_id = _create_creative(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        creative_id="creative_approved_future",
-        status="approved",
-    )
-    _create_creative_assignment(tenant_id, media_buy_id, creative_id)
+    media_buy_id = "mb_pending_future"
+    with status_party(tenant_id) as (tenant, principal):
+        (media_buy,) = seed_status_buys(
+            tenant, principal, [media_buy_id], status="pending_activation", start_time=future_start, end_time=future_end
+        )
+        # Create approved creative
+        _assign_creative(tenant, principal, media_buy, status="approved")
 
     # Verify initial status
     assert read_media_buy_state(tenant_id, media_buy_id).status == "pending_activation"
@@ -422,16 +256,10 @@ async def test_pending_activation_stays_pending_when_start_time_not_passed(integ
 @pytest.mark.asyncio
 async def test_active_transitions_to_completed_when_end_time_passed(integration_db):
     """Media buy in 'active' status should transition to 'completed' when end_time passes."""
-    tenant_id = _create_test_tenant("tenant_active_completed")
-    principal_id = _create_test_principal(tenant_id)
+    tenant_id = "tenant_active_completed"
 
     media_buy_id = "mb_active_to_completed"
-    seed_active_expired_buys(
-        _create_media_buy,
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        buy_ids=[media_buy_id],
-    )
+    seed_active_expired_buys(tenant_id, [media_buy_id])
 
     # Verify initial status
     assert read_media_buy_state(tenant_id, media_buy_id).status == "active"
@@ -448,21 +276,15 @@ async def test_active_transitions_to_completed_when_end_time_passed(integration_
 @pytest.mark.asyncio
 async def test_active_stays_active_when_end_time_not_passed(integration_db):
     """Media buy in 'active' status should stay 'active' if end_time is in the future."""
-    tenant_id = _create_test_tenant("tenant_active_stays")
-    principal_id = _create_test_principal(tenant_id)
+    tenant_id = "tenant_active_stays"
 
     # Create media buy with end_time in the future
     past_start = datetime.now(UTC) - timedelta(days=1)
     future_end = datetime.now(UTC) + timedelta(days=7)
 
-    media_buy_id = _create_media_buy(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        media_buy_id="mb_active_stays",
-        status="active",
-        start_time=past_start,
-        end_time=future_end,
-    )
+    media_buy_id = "mb_active_stays"
+    with status_party(tenant_id) as (tenant, principal):
+        seed_status_buys(tenant, principal, [media_buy_id], status="active", start_time=past_start, end_time=future_end)
 
     # Verify initial status
     assert read_media_buy_state(tenant_id, media_buy_id).status == "active"
@@ -484,40 +306,38 @@ async def test_active_stays_active_when_end_time_not_passed(integration_db):
 @pytest.mark.asyncio
 async def test_scheduler_updates_multiple_media_buys(integration_db):
     """Scheduler should update multiple media buys in a single run."""
-    tenant_id = _create_test_tenant("tenant_multi")
-    principal_id = _create_test_principal(tenant_id)
+    tenant_id = "tenant_multi"
 
     now = datetime.now(UTC)
 
-    # Media buy 1: scheduled -> active
-    _create_media_buy(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        media_buy_id="mb_multi_1",
-        status="scheduled",
-        start_time=now - timedelta(hours=1),
-        end_time=now + timedelta(days=7),
-    )
-
-    # Media buy 2: active -> completed
-    _create_media_buy(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        media_buy_id="mb_multi_2",
-        status="active",
-        start_time=now - timedelta(days=7),
-        end_time=now - timedelta(hours=1),
-    )
-
-    # Media buy 3: scheduled but start_time in future (no change)
-    _create_media_buy(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        media_buy_id="mb_multi_3",
-        status="scheduled",
-        start_time=now + timedelta(hours=1),
-        end_time=now + timedelta(days=7),
-    )
+    with status_party(tenant_id) as (tenant, principal):
+        # Media buy 1: scheduled -> active
+        seed_status_buys(
+            tenant,
+            principal,
+            ["mb_multi_1"],
+            status="scheduled",
+            start_time=now - timedelta(hours=1),
+            end_time=now + timedelta(days=7),
+        )
+        # Media buy 2: active -> completed
+        seed_status_buys(
+            tenant,
+            principal,
+            ["mb_multi_2"],
+            status="active",
+            start_time=now - timedelta(days=7),
+            end_time=now - timedelta(hours=1),
+        )
+        # Media buy 3: scheduled but start_time in future (no change)
+        seed_status_buys(
+            tenant,
+            principal,
+            ["mb_multi_3"],
+            status="scheduled",
+            start_time=now + timedelta(hours=1),
+            end_time=now + timedelta(days=7),
+        )
 
     # Verify initial statuses
     assert read_media_buy_state(tenant_id, "mb_multi_1").status == "scheduled"
@@ -550,8 +370,7 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
     timeout (SQLSTATE 57014) are both answers the server gave, so the buy is
     isolated, its siblings still flip, and the fail-fast stays unarmed.
     """
-    tenant_id = _create_test_tenant(f"iso_{fault[:3]}_{raiser_slot}")
-    principal_id = _create_test_principal(tenant_id)
+    tenant_id = f"iso_{fault[:3]}_{raiser_slot}"
 
     buy_ids = [
         f"mb_{fault[:3]}_{raiser_slot}_a",
@@ -561,39 +380,21 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
     bad_buy_id = buy_ids[raiser_slot]
     good_ids = [mid for mid in buy_ids if mid != bad_buy_id]
 
-    seed_active_expired_buys(
-        _create_media_buy,
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        buy_ids=buy_ids,
-    )
+    principal_id = seed_active_expired_buys(tenant_id, buy_ids)
 
     for mid in buy_ids:
         assert read_media_buy_state(tenant_id, mid).status == "active"
 
     scheduler = MediaBuyStatusScheduler()
-    real_compute = scheduler._compute_new_status
     processed: list[str] = []
+    raiser = (lambda session: session.execute(text("SELECT 1/0"))) if fault == "division" else statement_failure()
+    compute = fail_one(bad_buy_id, raiser, otherwise=scheduler._compute_new_status)
 
-    def _compute_with_raiser(media_buy, now_arg, session):
-        processed.append(media_buy.media_buy_id)
-        if media_buy.media_buy_id == bad_buy_id:
-            if fault == "division":
-                session.execute(text("SELECT 1/0"))
-            else:
-                raise statement_failure()
-        return real_compute(media_buy, now_arg, session)
-
-    records: list = []
-
-    async def _run() -> None:
-        with patch.object(scheduler, "_compute_new_status", side_effect=_compute_with_raiser):
-            records.extend(await run_status_tick(scheduler))
-
-    with assert_counter_delta(
-        "scheduler_isolation_errors_total", 1, scheduler="media_buy_status", tenant_id=tenant_id, error_type="db_error"
+    with (
+        assert_isolation_delta(1, tenant_id=tenant_id, error_type="db_error"),
+        assert_propagated_session_error(trips_fail_fast=False),
     ):
-        await assert_propagated_session_error(_run, trips_fail_fast=False)
+        records = await run_status_tick(scheduler, compute=compute, visited=processed)
 
     assert set(processed) == set(buy_ids)
     for mid in good_ids:
@@ -602,38 +403,6 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
 
     assert_isolated_buy_logged(records, tenant_id=tenant_id, principal_id=principal_id, media_buy_id=bad_buy_id)
     assert_tick_summary(records, "INFO", "2 updated, 1 errors")
-
-
-@pytest.mark.requires_db
-@pytest.mark.asyncio
-async def test_all_failing_flips_emit_warning_summary(integration_db):
-    """All-fail batch must WARNING the summary; INFO must not carry it."""
-    tenant_id = _create_test_tenant("tenant_isolation_all_fail_1714")
-    principal_id = _create_test_principal(tenant_id)
-
-    buy_ids = ["mb_all_fail_a", "mb_all_fail_b", "mb_all_fail_c"]
-    seed_active_expired_buys(
-        _create_media_buy,
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        buy_ids=buy_ids,
-    )
-
-    scheduler = MediaBuyStatusScheduler()
-
-    def _always_fail(_media_buy, _now_arg, _session):
-        raise ValueError("flip failed")
-
-    # Non-SQLAlchemyError → _classify_scheduler_error → "other"
-    with (
-        assert_counter_delta(
-            "scheduler_isolation_errors_total", 3, scheduler="media_buy_status", tenant_id=tenant_id, error_type="other"
-        ),
-        patch.object(scheduler, "_compute_new_status", side_effect=_always_fail),
-    ):
-        records = await run_status_tick(scheduler)
-
-    assert_tick_summary(records, "WARNING", "0 updated, 3 errors")
 
 
 @pytest.mark.requires_db
@@ -650,16 +419,10 @@ async def test_savepoint_release_failure_not_counted_processed_and_warns(integra
     from src.core.database.models import PersistedMediaBuyStatus
     from src.core.database.repositories.media_buy import MediaBuyRepository
 
-    tenant_id = _create_test_tenant("tenant_isolation_release_fail_1714")
-    principal_id = _create_test_principal(tenant_id)
+    tenant_id = "tenant_isolation_release_fail_1714"
 
     buy_ids = ["mb_rel_a", "mb_rel_b", "mb_rel_c"]
-    seed_active_expired_buys(
-        _create_media_buy,
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        buy_ids=buy_ids,
-    )
+    seed_active_expired_buys(tenant_id, buy_ids)
 
     scheduler = MediaBuyStatusScheduler()
     real_update = MediaBuyRepository.update_status
@@ -672,11 +435,8 @@ async def test_savepoint_release_failure_not_counted_processed_and_warns(integra
             updated.order_name = "x" * 300
         return updated
 
-    with (
-        patch.object(scheduler, "_compute_new_status", return_value=PersistedMediaBuyStatus.COMPLETED),
-        patch.object(MediaBuyRepository, "update_status", _update_then_poison_order_name),
-    ):
-        records = await run_status_tick(scheduler)
+    with patch.object(MediaBuyRepository, "update_status", _update_then_poison_order_name):
+        records = await run_status_tick(scheduler, compute=PersistedMediaBuyStatus.COMPLETED)
 
     for mid in buy_ids:
         assert read_media_buy_state(tenant_id, mid).status == "active"
@@ -685,32 +445,19 @@ async def test_savepoint_release_failure_not_counted_processed_and_warns(integra
     assert flip_lines(records) == []
 
 
-def _propagated_session_cases():
-    for exc_type in INVALIDATED_ESCAPE_ERROR_TYPES:
-        yield pytest.param(exc_type.__name__, False, id=exc_type.__name__)
-    yield pytest.param("server_never_answered", True, id="server_never_answered")
-    yield pytest.param("DisconnectionError", False, id="DisconnectionError")
-
-
-def _propagated_session_error(kind: str):
-    from tests.helpers.scheduler_isolation import (
-        bare_disconnection_error,
-        invalidated_dbapi_error,
-        server_never_answered_error,
-    )
-
-    if kind == "server_never_answered":
-        return server_never_answered_error()
-    if kind == "DisconnectionError":
-        return bare_disconnection_error()
-    exc_type = next(exc_type for exc_type in INVALIDATED_ESCAPE_ERROR_TYPES if exc_type.__name__ == kind)
-    return invalidated_dbapi_error(exc_type)
+_PROPAGATED_SESSION_CASES = [
+    *((exc_type.__name__, invalidated_dbapi_error(exc_type), False) for exc_type in INVALIDATED_ESCAPE_ERROR_TYPES),
+    ("server_never_answered", server_never_answered_error(), True),
+    ("DisconnectionError", bare_disconnection_error(), False),
+]
 
 
 @pytest.mark.requires_db
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("kind", "trips_fail_fast"), _propagated_session_cases())
-async def test_propagated_session_error_stops_the_tick(integration_db, kind, trips_fail_fast):
+@pytest.mark.parametrize(
+    ("kind", "exc", "trips_fail_fast"), [pytest.param(*case, id=case[0]) for case in _PROPAGATED_SESSION_CASES]
+)
+async def test_propagated_session_error_stops_the_tick(integration_db, kind, exc, trips_fail_fast):
     """A session-level database error stops the tick.
 
     A discarded connection and a dropped connection leave the fail-fast unarmed.
@@ -719,17 +466,10 @@ async def test_propagated_session_error_stops_the_tick(integration_db, kind, tri
     """
     from tests.helpers.scheduler_isolation import assert_propagated_failure_stops_batch
 
-    exc = _propagated_session_error(kind)
-    tenant_id = _create_test_tenant(f"iso_{kind}_{int(trips_fail_fast)}")
-    principal_id = _create_test_principal(tenant_id)
+    tenant_id = f"iso_{kind}_{int(trips_fail_fast)}"
     buy_ids = [f"mb_{kind}_a", f"mb_{kind}_b"]
 
-    seed_active_expired_buys(
-        _create_media_buy,
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        buy_ids=buy_ids,
-    )
+    seed_active_expired_buys(tenant_id, buy_ids)
 
     await assert_propagated_failure_stops_batch(
         MediaBuyStatusScheduler(),
@@ -749,23 +489,17 @@ async def test_propagated_session_error_stops_the_tick(integration_db, kind, tri
 @pytest.mark.asyncio
 async def test_scheduler_uses_start_date_when_start_time_not_set(integration_db):
     """Scheduler should fall back to start_date/end_date when start_time/end_time are not set."""
-    tenant_id = _create_test_tenant("tenant_date_fallback")
-    principal_id = _create_test_principal(tenant_id)
+    tenant_id = "tenant_date_fallback"
 
     # Create media buy with start_date in the past but no start_time
     past_date = (datetime.now(UTC) - timedelta(days=1)).date()
     future_date = (datetime.now(UTC) + timedelta(days=7)).date()
 
-    media_buy_id = _create_media_buy(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        media_buy_id="mb_date_fallback",
-        status="scheduled",
-        start_time=None,  # No start_time
-        end_time=None,  # No end_time
-        start_date=past_date,  # But start_date is in the past
-        end_date=future_date,
-    )
+    media_buy_id = "mb_date_fallback"
+    with status_party(tenant_id) as (tenant, principal):
+        seed_status_buys(
+            tenant, principal, [media_buy_id], status="scheduled", start_date=past_date, end_date=future_date
+        )
 
     # Verify initial status
     assert read_media_buy_state(tenant_id, media_buy_id).status == "scheduled"
@@ -782,23 +516,27 @@ async def test_scheduler_uses_start_date_when_start_time_not_set(integration_db)
 @pytest.mark.asyncio
 async def test_scheduler_idempotent(integration_db):
     """Running scheduler multiple times should be idempotent."""
-    tenant_id = _create_test_tenant("tenant_idempotent")
-    principal_id = _create_test_principal(tenant_id)
+    tenant_id = "tenant_idempotent"
 
     # Create media buy that should transition
     past_start = datetime.now(UTC) - timedelta(hours=1)
     future_end = datetime.now(UTC) + timedelta(days=7)
 
-    media_buy_id = _create_media_buy(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        media_buy_id="mb_idempotent",
-        status="scheduled",
-        start_time=past_start,
-        end_time=future_end,
-    )
+    media_buy_id = "mb_idempotent"
+    with status_party(tenant_id) as (tenant, principal):
+        # confirmed_at=None: this test grades the repository's own confirmation stamp.
+        seed_status_buys(
+            tenant,
+            principal,
+            [media_buy_id],
+            status="scheduled",
+            start_time=past_start,
+            end_time=future_end,
+            confirmed_at=None,
+        )
 
     before = read_media_buy_state(tenant_id, media_buy_id)
+    assert before.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
 
     scheduler = MediaBuyStatusScheduler()
 
@@ -854,30 +592,25 @@ async def test_sweep_does_not_count_a_write_the_repository_declined(integration_
     so the buy rolls back, the batch summary reports ``0 updated, 1 errors``,
     and the isolation counter increments with ``error_type`` ``other``.
     """
-    tenant_id = _create_test_tenant("tenant_declined_write")
-    principal_id = _create_test_principal(tenant_id)
+    tenant_id = "tenant_declined_write"
 
     # A row the sweep WOULD transition: scheduled, start_time already passed.
     past_start = datetime.now(UTC) - timedelta(hours=1)
     future_end = datetime.now(UTC) + timedelta(days=7)
 
-    media_buy_id = _create_media_buy(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        media_buy_id="mb_declined_write",
-        status="scheduled",
-        start_time=past_start,
-        end_time=future_end,
-    )
+    media_buy_id = "mb_declined_write"
+    with status_party(tenant_id) as (tenant, principal):
+        principal_id = principal.principal_id
+        seed_status_buys(
+            tenant, principal, [media_buy_id], status="scheduled", start_time=past_start, end_time=future_end
+        )
 
     before = read_media_buy_state(tenant_id, media_buy_id)
     assert before.status == "scheduled"
 
     scheduler = MediaBuyStatusScheduler()
     with (
-        assert_counter_delta(
-            "scheduler_isolation_errors_total", 1, scheduler="media_buy_status", tenant_id=tenant_id, error_type="other"
-        ),
+        assert_isolation_delta(1, tenant_id=tenant_id, error_type="other"),
         patch.object(MediaBuyRepository, "update_status", return_value=None) as mock_update,
     ):
         records = await run_status_tick(scheduler)
