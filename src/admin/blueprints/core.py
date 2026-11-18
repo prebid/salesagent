@@ -380,7 +380,7 @@ def health_config():
                     "status": "unhealthy",
                     "service": "admin-ui",
                     "component": "configuration",
-                    "error": safe_error_message(e),
+                    "error": safe_error_message(e, "Configuration validation failed"),
                 }
             ),
             500,

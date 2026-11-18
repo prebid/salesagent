@@ -515,7 +515,7 @@ def update_tenant(tenant_id):
         except Exception as e:
             db_session.rollback()
             logger.error(f"Error updating tenant {tenant_id}: {str(e)}")
-            return jsonify({"error": f"Failed to update tenant: {safe_error_message(e)}"}), 500
+            return jsonify({"error": safe_error_message(e, "Failed to update tenant")}), 500
 
 
 @tenant_management_api.route("/tenants/<tenant_id>", methods=["DELETE"])
@@ -562,4 +562,4 @@ def delete_tenant(tenant_id):
         except Exception as e:
             db_session.rollback()
             logger.error(f"Error deleting tenant {tenant_id}: {str(e)}")
-            return jsonify({"error": f"Failed to delete tenant: {safe_error_message(e)}"}), 500
+            return jsonify({"error": safe_error_message(e, "Failed to delete tenant")}), 500
