@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -344,9 +345,18 @@ def test_scorecard_workflow_present() -> None:
 
 @pytest.mark.arch_guard
 def test_checkout_pins_consistent_on_hardened_workflows() -> None:
-    """Hardened workflows use a single actions/checkout SHA pin."""
-    expected = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
+    """Hardened workflows use a single actions/checkout SHA pin.
+
+    The SHA itself is not named here: Dependabot bumps it, and pinact checks it
+    matches a tag. This guard only requires every reference to be a full SHA and
+    all of them to agree, so a partial bump fails.
+    """
+    pins: dict[str, set[str]] = {}
     for wf_name in ("ci.yml", "security.yml", "codeql.yml", "release-please.yml", "publish-creative-agent.yml"):
         text = (repo_root() / ".github/workflows" / wf_name).read_text(encoding="utf-8")
-        assert expected in text, f"{wf_name} must pin checkout to {expected}"
-        assert "actions/checkout@11bd719" not in text, f"{wf_name} still uses stale checkout pin"
+        refs = re.findall(r"actions/checkout@(\S+)", text)
+        assert refs, f"{wf_name} has no actions/checkout step"
+        for ref in refs:
+            assert re.fullmatch(r"[0-9a-f]{40}", ref), f"{wf_name} must pin checkout to a full commit SHA, got {ref}"
+            pins.setdefault(ref, set()).add(wf_name)
+    assert len(pins) == 1, f"hardened workflows pin different actions/checkout SHAs: {pins}"
