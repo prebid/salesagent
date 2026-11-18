@@ -54,8 +54,13 @@ def gam_tenant(integration_db):
 
 
 @pytest.fixture
-def google(gam_tenant):
-    """Google's OAuth and Ad Manager clients, with the seller's OAuth app configured."""
+def google(gam_tenant, authenticated_admin_client):
+    """Google's OAuth and Ad Manager clients, with the seller's OAuth app configured.
+
+    Depends on the admin client so the app exists first: ``create_app()`` calls
+    ``load_settings()``, which replaces the settings object, so patching before it would
+    patch an object the endpoints never read.
+    """
     network_service = MagicMock()
     network_service.getAllNetworks.return_value = [NETWORK]
     network_service.getCurrentNetwork.return_value = NETWORK
