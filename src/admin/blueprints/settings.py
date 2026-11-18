@@ -626,6 +626,7 @@ def test_ai_connection(tenant_id):
 
     from src.services.ai import AIServiceFactory
 
+    model = None  # read before the request body parses, so the error classifier can be called
     try:
         data = request.get_json() or {}
         provider = data.get("provider", "gemini")
@@ -696,14 +697,14 @@ def test_ai_connection(tenant_id):
         return jsonify({"success": False, "error": error_msg}), 400
 
 
-def _ai_connection_error_message(e: Exception, model: str) -> str:
+def _ai_connection_error_message(e: Exception, model: str | None) -> str:
     """Operator text for a failed AI connection test: a known cause, or a logged reference."""
     error_text = str(e).lower()
     if "expired" in error_text:
         return "API key expired. Please renew your API key."
     if "401" in error_text or "authentication" in error_text or "api_key_invalid" in error_text:
         return "Invalid API key. Please check your credentials."
-    if "404" in error_text or "not found" in error_text:
+    if model and ("404" in error_text or "not found" in error_text):
         return f"Model '{model}' not found. Please check the model name."
     if "rate" in error_text or "quota" in error_text:
         return "Rate limit exceeded. Please try again later."
