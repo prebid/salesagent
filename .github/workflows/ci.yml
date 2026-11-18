@@ -221,9 +221,9 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/_setup-env
-      - uses: ./.github/actions/_adcp-bundle
-      - uses: ./.github/actions/_pytest
+      - uses: $/.github/actions/_setup-env
+      - uses: $/.github/actions/_adcp-bundle
+      - uses: $/.github/actions/_pytest
         with:
           paths: tests/unit/ tests/harness/
           extra_args: -n auto --dist loadgroup --json-report --json-report-file=unit-windows-ci.json
