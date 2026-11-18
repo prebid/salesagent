@@ -1828,7 +1828,12 @@ class AdapterConfig(Base):
 
     # Google Ad Manager
     gam_network_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    gam_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    _gam_refresh_token: Mapped[str | None] = mapped_column(
+        "gam_refresh_token",
+        Text,
+        nullable=True,
+        comment="Encrypted OAuth refresh token (OAuth auth method). A credential to the publisher's GAM network.",
+    )
     _gam_service_account_json: Mapped[str | None] = mapped_column(
         "gam_service_account_json",
         Text,
@@ -1939,6 +1944,29 @@ class AdapterConfig(Base):
         from src.core.utils.encryption import encrypt_api_key
 
         self._gam_service_account_json = encrypt_api_key(value)
+
+    @property
+    def gam_refresh_token(self) -> str | None:
+        """Get the decrypted GAM OAuth refresh token."""
+        if not self._gam_refresh_token:
+            return None
+        from src.core.utils.encryption import decrypt_api_key
+
+        try:
+            return decrypt_api_key(self._gam_refresh_token)
+        except ValueError as exc:
+            raise AdCPConfigurationError(details=ConfigurationDetails(tenant_id=self.tenant_id)) from exc
+
+    @gam_refresh_token.setter
+    def gam_refresh_token(self, value: str | None) -> None:
+        """Set the GAM OAuth refresh token, encrypted."""
+        if not value:
+            self._gam_refresh_token = None
+            return
+
+        from src.core.utils.encryption import encrypt_api_key
+
+        self._gam_refresh_token = encrypt_api_key(value)
 
 
 class CreativeAgent(Base):
