@@ -5,7 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.1.0](https://github.com/prebid/salesagent/compare/v2.0.0...v2.1.0) (2026-11-18)
+## [3.0.0](https://github.com/prebid/salesagent/compare/v2.0.0...v3.0.0) (2026-11-18)
+
+### ⚠ BREAKING CHANGES
+
+* Several migrations stop the upgrade until data or configuration is fixed (missing or malformed `virtual_host`, unknown media buy statuses, creatives with no canonical format, legacy publisher selections, undecryptable legacy Gemini keys, GAM refresh tokens without `ENCRYPTION_KEY`). See [docs/releases/3.0.0.md](docs/releases/3.0.0.md) before upgrading.
+* `ENCRYPTION_KEY` is required for tenants that use GAM OAuth credentials; the refresh token is encrypted at rest.
+* Publishers and their properties come from each publisher's `adagents.json` (`publisher_partners` becomes `publishers`, `authorized_properties` is dropped); the tenant format catalog and the mock adapter's `dry_run` are removed.
+* Buyer-facing changes: the AdCP 3.2 canonical format model with adcp 9.x, one error-code table, the `completed_views` rename and the media-buy status taxonomy.
 
 
 ### Features
