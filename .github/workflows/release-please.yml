@@ -232,12 +232,12 @@ jobs:
           set -euo pipefail
           [[ -n "$DIGEST" ]] || { echo "ERROR: build-and-push image_digest is empty"; exit 1; }
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "ERROR: not an image digest: $DIGEST"; exit 1; }
-          read -ra images <<< "$IMAGES"
+          read -ra image_list <<< "$IMAGES"
           # Signing nothing must fail, not pass silently as it did for 3.0.1.
-          [[ "${#images[@]}" -gt 0 ]] || { echo "ERROR: no images to sign"; exit 1; }
+          [[ "${#image_list[@]}" -gt 0 ]] || { echo "ERROR: no images to sign"; exit 1; }
           mkdir -p "$BUNDLE_DIR"
           count=0
-          for image in "${images[@]}"; do
+          for image in "${image_list[@]}"; do
             signed=false
             safe_name="${image//\//-}"
             for attempt in 1 2 3; do
@@ -255,7 +255,7 @@ jobs:
             fi
             count=$((count + 1))
           done
-          [[ "$count" -eq "${#images[@]}" ]] || { echo "ERROR: signed $count of ${#images[@]} images"; exit 1; }
+          [[ "$count" -eq "${#image_list[@]}" ]] || { echo "ERROR: signed $count of ${#image_list[@]} images"; exit 1; }
       - name: Upload cosign bundles
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
