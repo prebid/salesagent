@@ -100,43 +100,46 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     And Google Ad Manager associated that creative with the line item it created, at its own size
 
   # A GAM creative has one size for life. The first size the option declares that a line item
-  # placeholder takes is the creative's; the other declared sizes a placeholder takes ride the
-  # association. The 160x600 placeholder is no size the option declares, so it is not one.
+  # placeholder takes is the creative's; the association carries every declared size a
+  # placeholder takes, the creative's own first, because its sizes "override" Creative.size.
+  # The 160x600 placeholder is no size the option declares, so it is not one.
   @T-UC-002-local-gam-creative-multi-size @extension
-  Scenario: A multi-size display_tag creative is created at its first declared size, and its association carries the other
+  Scenario: A multi-size display_tag creative is created at its first declared size, and its association carries both
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_inline_multi", "params": {"sizes": [{"width": 728, "height": 90}, {"width": 300, "height": 250}], "supported_delivery_types": ["inline_markup"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}]}', with product settings '{"creative_placeholders": [{"width": 160, "height": 600}, {"width": 300, "height": 250}, {"width": 728, "height": 90}]}'
     And the package references the buyer's approved display_tag creative "cr-multi" carrying the inline markup "<div>Example tag</div>" of type "standard"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And Google Ad Manager created one third-party creative for advertiser "3000001" whose snippet is "<div>Example tag</div>" and which names no image URL
     And Google Ad Manager created that creative at size 728x90
-    And Google Ad Manager associated that creative with the line item it created, overriding its size with "300x250"
+    And Google Ad Manager associated that creative with the line item it created, overriding its size with "728x90,300x250"
 
   # A responsive option states bounds, not sizes ("Minimum accepted width for responsive
   # third-party tags. Pair with `max_width`"). Every placeholder inside them, each bound
   # inclusive, is a size the tag accepts, in the line item's order: 728x90 sits on the width and
-  # height bounds, 300x250 on the others, and 160x600 is outside.
+  # height bounds, 300x250 on the others, and 160x600 is outside. The association carries both,
+  # the creative's own size first.
   @T-UC-002-local-gam-creative-responsive-size @extension
-  Scenario: A responsive display_tag creative is created at the first placeholder inside its bounds, and its association carries the rest
+  Scenario: A responsive display_tag creative is created at the first placeholder inside its bounds, and its association carries every one
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_responsive", "params": {"min_width": 300, "max_width": 728, "min_height": 90, "max_height": 250}}]}', with product settings '{"creative_placeholders": [{"width": 160, "height": 600}, {"width": 728, "height": 90}, {"width": 300, "height": 250}]}'
     And the package references the buyer's approved display_tag creative "cr-responsive" carrying the tag URL "https://ads.example.com/responsive.js"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And Google Ad Manager created one third-party creative for advertiser "3000001" whose snippet is '<script src="https://ads.example.com/responsive.js"></script>' and which names no image URL
     And Google Ad Manager created that creative at size 728x90
-    And Google Ad Manager associated that creative with the line item it created, overriding its size with "300x250"
+    And Google Ad Manager associated that creative with the line item it created, overriding its size with "728x90,300x250"
 
   # An option stating no size mode "accepts any dimensions": every placeholder of the line item
-  # is a size the tag accepts, the first one the creative's own.
+  # is a size the tag accepts, the first one the creative's own, and the association carries
+  # them all in the line item's order.
   @T-UC-002-local-gam-creative-any-size @extension
-  Scenario: A display_tag creative whose option states no size is created at the line item's first placeholder, and its association carries the rest
+  Scenario: A display_tag creative whose option states no size is created at the line item's first placeholder, and its association carries every placeholder
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_any", "params": {}}]}', with product settings '{"creative_placeholders": [{"width": 300, "height": 600}, {"width": 728, "height": 90}]}'
     And the package references the buyer's approved display_tag creative "cr-any" carrying the tag URL "https://ads.example.com/any.js"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And Google Ad Manager created one third-party creative for advertiser "3000001" whose snippet is '<script src="https://ads.example.com/any.js"></script>' and which names no image URL
     And Google Ad Manager created that creative at size 300x600
-    And Google Ad Manager associated that creative with the line item it created, overriding its size with "728x90"
+    And Google Ad Manager associated that creative with the line item it created, overriding its size with "300x600,728x90"
 
   # The option declares 300x250 and the seller's line items take 728x90 only: there is no size
   # to create the creative at, and none is invented. The refusal comes before GAM is written to.

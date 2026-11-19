@@ -290,11 +290,16 @@ class GAMCreativesManager:
     def _lica_sizes_by_line_item(
         plan: GamCreativePlan, creative_placeholders: dict[str, list]
     ) -> dict[str, list[dict[str, int]]]:
-        """Per line item, the plan's association sizes that line item has a placeholder for."""
+        """Per line item, the plan's association sizes that line item has a placeholder for.
+
+        A line item left with only the creative's own size states none, as the plan does for a
+        creative with one candidate size.
+        """
         by_line_item = {}
         for line_item_id, placeholders in creative_placeholders.items():
             taken = {(size.width, size.height) for size in placeholder_sizes(placeholders)}
-            by_line_item[line_item_id] = [s for s in plan.lica_sizes if (s["width"], s["height"]) in taken]
+            sizes = [s for s in plan.lica_sizes if (s["width"], s["height"]) in taken]
+            by_line_item[line_item_id] = [] if sizes == [plan.creative["size"]] else sizes
         return by_line_item
 
     def _legacy_validation_failure(
