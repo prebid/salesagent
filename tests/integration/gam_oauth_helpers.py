@@ -15,13 +15,14 @@ from __future__ import annotations
 
 from urllib.parse import parse_qs, urlsplit
 
+from tests.helpers.admin_session import tenant_user_session
+
 AUTH_CODE = "4/single-use-authorization-code"
 
 
 def log_in(client, user) -> None:
     """Authenticate *client* as *user* with a plain session and no test-mode keys."""
-    with client.session_transaction() as sess:
-        sess["user"] = {"email": user.email}
+    tenant_user_session(client, user.email)
 
 
 def authorize(client, tenant_id: str):

@@ -14,7 +14,8 @@ from typing import Any, NamedTuple
 import pytest
 from sqlalchemy import select
 
-from src.core.database.models import AuditLog, Tenant, TenantAuthConfig, User
+from src.core.database.models import Tenant, TenantAuthConfig, User
+from tests.helpers.admin_session import tenant_user_session
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -31,7 +32,7 @@ def rbac_tenant(integration_db):
     from tests.factories import TenantAuthConfigFactory, TenantFactory, UserFactory
     from tests.harness._base import IntegrationEnv
 
-    with IntegrationEnv() as env:
+    with IntegrationEnv(tenant_id=TENANT_ID) as env:
         tenant = TenantFactory(
             tenant_id=TENANT_ID,
             name="RBAC",
@@ -47,10 +48,8 @@ def rbac_tenant(integration_db):
 
 def _client_as(app, role):
     client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["user"] = {"email": EMAILS[role]}
-        # signed in through SSO, which disable-setup-mode requires of its caller
-        sess["auth_method"] = "oidc"
+    # signed in through SSO, which disable-setup-mode requires of its caller
+    tenant_user_session(client, EMAILS[role], auth_method="oidc")
     return client
 
 
@@ -200,29 +199,20 @@ def _set_role(client, role, new_role):
 LAST_ADMIN_ERROR = b"is the last active admin of this tenant"
 
 
-def _last_audit(env, operation):
-    """The newest audit row for *operation* (``AdminUI.<view>``, as log_admin_action names it) on the tenant."""
-    session = env.get_session()
-    session.expire_all()
-    return session.scalars(
-        select(AuditLog).filter_by(tenant_id=TENANT_ID, operation=operation).order_by(AuditLog.log_id.desc())
-    ).first()
-
-
 @pytest.mark.parametrize("new_role", ["manager", "viewer"])
 def test_the_last_active_admin_may_not_be_demoted(rbac_tenant, test_admin_app, new_role):
     response = _set_role(_client_as(test_admin_app, "admin"), "admin", new_role)
     assert LAST_ADMIN_ERROR in response.data
     assert _user(rbac_tenant, "admin").role == "admin"
     # the refusal is audited as a failure, not as a successful change
-    assert _last_audit(rbac_tenant, "AdminUI.update_role").success is False
+    assert rbac_tenant.get_audit_logs("AdminUI.update_role")[-1].success is False
 
 
 def test_the_last_active_admin_may_not_be_deactivated(rbac_tenant, test_admin_app):
     response = _toggle(_client_as(test_admin_app, "admin"), "admin")
     assert LAST_ADMIN_ERROR in response.data
     assert _user(rbac_tenant, "admin").is_active is True
-    assert _last_audit(rbac_tenant, "AdminUI.toggle_user").success is False
+    assert rbac_tenant.get_audit_logs("AdminUI.toggle_user")[-1].success is False
 
 
 def test_an_admin_may_be_demoted_once_there_is_another(rbac_tenant, test_admin_app):
