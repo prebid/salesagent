@@ -17,7 +17,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import json_error, refusal_error, safe_error_message
+from src.admin.utils.operator_errors import refusal_error, safe_error_message
 from src.admin.utils.url_policy import redirect_if_url_blocked
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -329,177 +329,161 @@ def update_general(tenant_id):
 )
 def update_adapter(tenant_id):
     """Update the active adapter for a tenant."""
-    try:
-        # Support both JSON (from our frontend) and form data (from tests)
-        if request.is_json:
-            new_adapter = request.json.get("adapter")
-            logger.info(f"update_adapter received JSON payload: {request.json}")
-        else:
-            new_adapter = request.form.get("adapter")
+    # Support both JSON (from our frontend) and form data (from tests)
+    if request.is_json:
+        new_adapter = request.json.get("adapter")
+        logger.info(f"update_adapter received JSON payload: {request.json}")
+    else:
+        new_adapter = request.form.get("adapter")
 
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                if request.is_json:
-                    return jsonify({"success": False, "error": "Tenant not found"}), 404
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            if request.is_json:
+                return jsonify({"success": False, "error": "Tenant not found"}), 404
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
 
-            # If no adapter specified, use current adapter (for updating config only)
+        # If no adapter specified, use current adapter (for updating config only)
+        if not new_adapter:
+            new_adapter = tenant.ad_server
             if not new_adapter:
-                new_adapter = tenant.ad_server
-                if not new_adapter:
-                    if request.is_json:
-                        return jsonify({"success": False, "error": "No adapter configured"}), 400
-                    flash("No adapter configured", "error")
-                    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="adapter"))
-
-            # Update or create adapter config
-            adapter_config_obj = tenant.adapter_config
-            if adapter_config_obj:
-                # Update existing config
-                adapter_config_obj.adapter_type = new_adapter
-            else:
-                # Create new config
-                from src.core.database.models import AdapterConfig
-
-                adapter_config_obj = AdapterConfig(tenant_id=tenant_id, adapter_type=new_adapter)
-                db_session.add(adapter_config_obj)
-
-            # Extract AXE keys (adapter-agnostic, work for all adapters)
-            if request.is_json:
-                # Three separate AXE keys per AdCP spec
-                axe_include_key = (
-                    request.json.get("axe_include_key", "").strip() if request.json.get("axe_include_key") else None
-                )
-                axe_exclude_key = (
-                    request.json.get("axe_exclude_key", "").strip() if request.json.get("axe_exclude_key") else None
-                )
-                axe_macro_key = (
-                    request.json.get("axe_macro_key", "").strip() if request.json.get("axe_macro_key") else None
-                )
-            else:
-                # Three separate AXE keys per AdCP spec
-                axe_include_key = request.form.get("axe_include_key", "").strip() or None
-                axe_exclude_key = request.form.get("axe_exclude_key", "").strip() or None
-                axe_macro_key = request.form.get("axe_macro_key", "").strip() or None
-
-            # Update AXE keys (adapter-agnostic)
-            if axe_include_key is not None:
-                adapter_config_obj.axe_include_key = axe_include_key
-            if axe_exclude_key is not None:
-                adapter_config_obj.axe_exclude_key = axe_exclude_key
-            if axe_macro_key is not None:
-                adapter_config_obj.axe_macro_key = axe_macro_key
-
-            # Handle adapter-specific configuration
-            if new_adapter == "google_ad_manager":
                 if request.is_json:
-                    network_code = (
-                        request.json.get("gam_network_code", "").strip() if request.json.get("gam_network_code") else ""
-                    )
-                    refresh_token = (
-                        request.json.get("gam_refresh_token", "").strip()
-                        if request.json.get("gam_refresh_token")
-                        else ""
-                    )
-                    trafficker_id = (
-                        request.json.get("gam_trafficker_id", "").strip()
-                        if request.json.get("gam_trafficker_id")
-                        else ""
-                    )
-                    order_name_template = (
-                        request.json.get("order_name_template", "").strip()
-                        if request.json.get("order_name_template")
-                        else ""
-                    )
-                    line_item_name_template = (
-                        request.json.get("line_item_name_template", "").strip()
-                        if request.json.get("line_item_name_template")
-                        else ""
-                    )
-                    manual_approval = request.json.get("gam_manual_approval", False)
-                    network_currency = (
-                        request.json.get("network_currency", "").strip()[:3].upper()
-                        if request.json.get("network_currency")
-                        else None
-                    )
-                    secondary_currencies = request.json.get("secondary_currencies", [])
-                    # Validate and sanitize secondary currencies
-                    if isinstance(secondary_currencies, list):
-                        secondary_currencies = [str(c).strip()[:3].upper() for c in secondary_currencies if c]
-                    else:
-                        secondary_currencies = []
-                    network_timezone = (
-                        request.json.get("network_timezone", "").strip()[:100]
-                        if request.json.get("network_timezone")
-                        else None
-                    )
+                    return jsonify({"success": False, "error": "No adapter configured"}), 400
+                flash("No adapter configured", "error")
+                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="adapter"))
 
-                    # Special handler for "Edit Configuration" action from UI
-                    # When action == "edit_config", we want to clear the stored GAM network code
-                    # (and associated trafficker ID) so the UI shows the configuration wizard again,
-                    # while preserving the existing refresh token.
-                    action = request.json.get("action")
-                    if action == "edit_config" and adapter_config_obj:
-                        adapter_config_obj.gam_network_code = None
-                        adapter_config_obj.gam_trafficker_id = None
-                else:
-                    network_code = request.form.get("gam_network_code", "").strip()
-                    refresh_token = request.form.get("gam_refresh_token", "").strip()
-                    trafficker_id = request.form.get("gam_trafficker_id", "").strip()
-                    order_name_template = request.form.get("order_name_template", "").strip()
-                    line_item_name_template = request.form.get("line_item_name_template", "").strip()
-                    manual_approval = request.form.get("gam_manual_approval") == "on"
-                    # Currency/timezone info not typically sent via form (comes from detect-network)
-                    network_currency = None
-                    secondary_currencies = []
-                    network_timezone = None
+        # Update or create adapter config
+        adapter_config_obj = tenant.adapter_config
+        if adapter_config_obj:
+            # Update existing config
+            adapter_config_obj.adapter_type = new_adapter
+        else:
+            # Create new config
+            from src.core.database.models import AdapterConfig
 
-                if network_code:
-                    adapter_config_obj.gam_network_code = network_code
-                if refresh_token:
-                    adapter_config_obj.gam_refresh_token = refresh_token
-                if trafficker_id:
-                    adapter_config_obj.gam_trafficker_id = trafficker_id
-                if order_name_template:
-                    adapter_config_obj.gam_order_name_template = order_name_template
-                if line_item_name_template:
-                    adapter_config_obj.gam_line_item_name_template = line_item_name_template
-                # Save detected currency/timezone info from GAM network
-                if network_currency:
-                    adapter_config_obj.gam_network_currency = network_currency
-                if secondary_currencies:
-                    adapter_config_obj.gam_secondary_currencies = secondary_currencies
-                if network_timezone:
-                    adapter_config_obj.gam_network_timezone = network_timezone
-                adapter_config_obj.gam_manual_approval_required = manual_approval
-            elif new_adapter == "mock":
-                if request.is_json:
-                    manual_approval = request.json.get("mock_manual_approval", False)
-                else:
-                    manual_approval = request.form.get("mock_manual_approval") == "on"
-                adapter_config_obj.mock_manual_approval_required = manual_approval
+            adapter_config_obj = AdapterConfig(tenant_id=tenant_id, adapter_type=new_adapter)
+            db_session.add(adapter_config_obj)
 
-            # Update the tenant
-            tenant.ad_server = new_adapter
-            tenant.updated_at = datetime.now(UTC)
-            db_session.commit()
-
-            # Return appropriate response based on request type
-            if request.is_json:
-                return jsonify({"success": True, "message": f"Adapter changed to {new_adapter}"}), 200
-
-            flash(f"Adapter changed to {new_adapter}", "success")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="adapter"))
-
-    except Exception as e:
-        logger.error(f"Error updating adapter: {e}", exc_info=True)
-
+        # Extract AXE keys (adapter-agnostic, work for all adapters)
         if request.is_json:
-            return json_error(e, status_code=400, success=False)
+            # Three separate AXE keys per AdCP spec
+            axe_include_key = (
+                request.json.get("axe_include_key", "").strip() if request.json.get("axe_include_key") else None
+            )
+            axe_exclude_key = (
+                request.json.get("axe_exclude_key", "").strip() if request.json.get("axe_exclude_key") else None
+            )
+            axe_macro_key = request.json.get("axe_macro_key", "").strip() if request.json.get("axe_macro_key") else None
+        else:
+            # Three separate AXE keys per AdCP spec
+            axe_include_key = request.form.get("axe_include_key", "").strip() or None
+            axe_exclude_key = request.form.get("axe_exclude_key", "").strip() or None
+            axe_macro_key = request.form.get("axe_macro_key", "").strip() or None
 
-        flash(f"Error updating adapter: {safe_error_message(e)}", "error")
+        # Update AXE keys (adapter-agnostic)
+        if axe_include_key is not None:
+            adapter_config_obj.axe_include_key = axe_include_key
+        if axe_exclude_key is not None:
+            adapter_config_obj.axe_exclude_key = axe_exclude_key
+        if axe_macro_key is not None:
+            adapter_config_obj.axe_macro_key = axe_macro_key
+
+        # Handle adapter-specific configuration
+        if new_adapter == "google_ad_manager":
+            if request.is_json:
+                network_code = (
+                    request.json.get("gam_network_code", "").strip() if request.json.get("gam_network_code") else ""
+                )
+                refresh_token = (
+                    request.json.get("gam_refresh_token", "").strip() if request.json.get("gam_refresh_token") else ""
+                )
+                trafficker_id = (
+                    request.json.get("gam_trafficker_id", "").strip() if request.json.get("gam_trafficker_id") else ""
+                )
+                order_name_template = (
+                    request.json.get("order_name_template", "").strip()
+                    if request.json.get("order_name_template")
+                    else ""
+                )
+                line_item_name_template = (
+                    request.json.get("line_item_name_template", "").strip()
+                    if request.json.get("line_item_name_template")
+                    else ""
+                )
+                manual_approval = request.json.get("gam_manual_approval", False)
+                network_currency = (
+                    request.json.get("network_currency", "").strip()[:3].upper()
+                    if request.json.get("network_currency")
+                    else None
+                )
+                secondary_currencies = request.json.get("secondary_currencies", [])
+                # Validate and sanitize secondary currencies
+                if isinstance(secondary_currencies, list):
+                    secondary_currencies = [str(c).strip()[:3].upper() for c in secondary_currencies if c]
+                else:
+                    secondary_currencies = []
+                network_timezone = (
+                    request.json.get("network_timezone", "").strip()[:100]
+                    if request.json.get("network_timezone")
+                    else None
+                )
+
+                # Special handler for "Edit Configuration" action from UI
+                # When action == "edit_config", we want to clear the stored GAM network code
+                # (and associated trafficker ID) so the UI shows the configuration wizard again,
+                # while preserving the existing refresh token.
+                action = request.json.get("action")
+                if action == "edit_config" and adapter_config_obj:
+                    adapter_config_obj.gam_network_code = None
+                    adapter_config_obj.gam_trafficker_id = None
+            else:
+                network_code = request.form.get("gam_network_code", "").strip()
+                refresh_token = request.form.get("gam_refresh_token", "").strip()
+                trafficker_id = request.form.get("gam_trafficker_id", "").strip()
+                order_name_template = request.form.get("order_name_template", "").strip()
+                line_item_name_template = request.form.get("line_item_name_template", "").strip()
+                manual_approval = request.form.get("gam_manual_approval") == "on"
+                # Currency/timezone info not typically sent via form (comes from detect-network)
+                network_currency = None
+                secondary_currencies = []
+                network_timezone = None
+
+            if network_code:
+                adapter_config_obj.gam_network_code = network_code
+            if refresh_token:
+                adapter_config_obj.gam_refresh_token = refresh_token
+            if trafficker_id:
+                adapter_config_obj.gam_trafficker_id = trafficker_id
+            if order_name_template:
+                adapter_config_obj.gam_order_name_template = order_name_template
+            if line_item_name_template:
+                adapter_config_obj.gam_line_item_name_template = line_item_name_template
+            # Save detected currency/timezone info from GAM network
+            if network_currency:
+                adapter_config_obj.gam_network_currency = network_currency
+            if secondary_currencies:
+                adapter_config_obj.gam_secondary_currencies = secondary_currencies
+            if network_timezone:
+                adapter_config_obj.gam_network_timezone = network_timezone
+            adapter_config_obj.gam_manual_approval_required = manual_approval
+        elif new_adapter == "mock":
+            if request.is_json:
+                manual_approval = request.json.get("mock_manual_approval", False)
+            else:
+                manual_approval = request.form.get("mock_manual_approval") == "on"
+            adapter_config_obj.mock_manual_approval_required = manual_approval
+
+        # Update the tenant
+        tenant.ad_server = new_adapter
+        tenant.updated_at = datetime.now(UTC)
+        db_session.commit()
+
+        # Return appropriate response based on request type
+        if request.is_json:
+            return jsonify({"success": True, "message": f"Adapter changed to {new_adapter}"}), 200
+
+        flash(f"Adapter changed to {new_adapter}", "success")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="adapter"))
 
 
@@ -758,9 +742,6 @@ def test_logfire_connection(tenant_id):
 
     except ImportError:
         return jsonify({"success": False, "error": "Logfire package not installed"}), 400
-    except Exception as e:
-        logger.error(f"Logfire test connection failed: {e}", exc_info=True)
-        return json_error(e, status_code=400, success=False)
 
 
 @settings_bp.route("/ai/models", methods=["GET"])
@@ -1264,15 +1245,6 @@ def update_business_rules(tenant_id):
             flash(f"{field}: {error}", "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="business-rules"))
 
-    except Exception as e:
-        logger.error(f"Error updating business rules: {e}", exc_info=True)
-
-        if request.is_json:
-            return json_error(e, success=False)
-
-        flash(f"Error updating business rules: {safe_error_message(e)}", "error")
-        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="business-rules"))
-
 
 def _resolve_owned_domain(tenant_id: str, domain: str | None) -> OwnedDomain | None:
     """Prove the tenant owns *domain*, or report that the tenant is missing.
@@ -1344,10 +1316,6 @@ def check_approximated_domain_status(tenant_id):
         # three routes agree on.
         return refusal_error(refusal, success=False)
 
-    except Exception as e:
-        logger.error(f"Error checking domain status: {e}", exc_info=True)
-        return json_error(e, success=False)
-
 
 @settings_bp.route("/approximated-register-domain", methods=["POST"])
 @require_tenant_access()
@@ -1397,10 +1365,6 @@ def register_approximated_domain(tenant_id):
     except DomainNotOwned as refusal:
         return refusal_error(refusal, success=False)
 
-    except Exception as e:
-        logger.error(f"Error registering domain: {e}", exc_info=True)
-        return json_error(e, success=False)
-
 
 @settings_bp.route("/approximated-unregister-domain", methods=["POST"])
 @require_tenant_access()
@@ -1440,43 +1404,34 @@ def unregister_approximated_domain(tenant_id):
     except DomainNotOwned as refusal:
         return refusal_error(refusal, success=False)
 
-    except Exception as e:
-        logger.error(f"Error unregistering domain: {e}", exc_info=True)
-        return json_error(e, success=False)
-
 
 @settings_bp.route("/approximated-token", methods=["POST"])
 @require_tenant_access()
 def get_approximated_token(tenant_id):
     """Generate an Approximated DNS widget token and get DNS target."""
-    try:
-        # Get API key from environment
-        approximated_api_key = get_settings().integrations.approximated_api_key
-        if not approximated_api_key:
-            logger.error("APPROXIMATED_API_KEY not configured in environment")
-            return jsonify({"success": False, "error": "DNS widget not configured on server"}), 500
+    # Get API key from environment
+    approximated_api_key = get_settings().integrations.approximated_api_key
+    if not approximated_api_key:
+        logger.error("APPROXIMATED_API_KEY not configured in environment")
+        return jsonify({"success": False, "error": "DNS widget not configured on server"}), 500
 
-        # The IP address of your Approximated proxy cluster
-        approximated_proxy_ip = get_settings().integrations.approximated_proxy_ip
+    # The IP address of your Approximated proxy cluster
+    approximated_proxy_ip = get_settings().integrations.approximated_proxy_ip
 
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                return jsonify({"success": False, "error": "Tenant not found"}), 404
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return jsonify({"success": False, "error": "Tenant not found"}), 404
 
-            # Request a token via the Approximated service. Every status this
-            # operation can receive is a genuine failure, so the upstream status
-            # is propagated from the typed error -- an operator with bad
-            # Approximated credentials must still see 401 here, not a blanket 500.
-            try:
-                dns = get_dns_token(approximated_api_key)
-            except OutboundError as exc:
-                logger.error("Approximated API error requesting a DNS token: %s", exc)
-                return jsonify({"success": False, "error": "Approximated API error"}), exc.http_status or 502
+        # Request a token via the Approximated service. Every status this
+        # operation can receive is a genuine failure, so the upstream status
+        # is propagated from the typed error -- an operator with bad
+        # Approximated credentials must still see 401 here, not a blanket 500.
+        try:
+            dns = get_dns_token(approximated_api_key)
+        except OutboundError as exc:
+            logger.error("Approximated API error requesting a DNS token: %s", exc)
+            return jsonify({"success": False, "error": "Approximated API error"}), exc.http_status or 502
 
-            logger.info("Approximated API response: %s", dns)
-            return jsonify({"success": True, "token": dns.token, "proxy_ip": approximated_proxy_ip})
-
-    except Exception as e:
-        logger.error(f"Error generating Approximated token: {e}", exc_info=True)
-        return json_error(e, success=False)
+        logger.info("Approximated API response: %s", dns)
+        return jsonify({"success": True, "token": dns.token, "proxy_ip": approximated_proxy_ip})

@@ -18,6 +18,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import PropertyTag, Tenant
 from src.core.database.repositories.uow import PublisherUoW
+from src.core.operator_errors import safe_error_message
 from src.core.publisher_format_catalog import authorized_properties
 from src.core.schemas import PROPERTY_ERROR_MESSAGES
 
@@ -109,8 +110,7 @@ def list_property_tags(tenant_id: str) -> str | Response:
             )
 
     except Exception as e:
-        logger.error(f"Error listing property tags: {e}")
-        flash(f"Error loading tags: {str(e)}", "error")
+        flash(safe_error_message(e, "Error loading tags"), "error")
         return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
 
@@ -170,8 +170,7 @@ def create_property_tag(tenant_id: str) -> Response:
             flash(f"Tag '{name}' created successfully", "success")
 
     except Exception as e:
-        logger.error(f"Error creating property tag: {e}")
-        flash(f"Error creating tag: {str(e)}", "error")
+        flash(safe_error_message(e, "Error creating tag"), "error")
 
     return redirect(url_for("authorized_properties.list_property_tags", tenant_id=tenant_id))
 

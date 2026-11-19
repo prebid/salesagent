@@ -9,7 +9,6 @@ import logging
 
 from flask import Blueprint, jsonify
 
-from src.admin.utils.operator_errors import safe_error_message
 from src.core.domain_config import get_sales_agent_url
 from src.core.schema_validation import create_schema_registry
 
@@ -29,48 +28,43 @@ def get_schema(schema_name: str):
     Returns:
         JSON Schema object for the requested response type
     """
-    try:
-        # Get the schema registry
-        schema_registry = create_schema_registry()
+    # Get the schema registry
+    schema_registry = create_schema_registry()
 
-        # Normalize schema name
-        normalized_name = schema_name.lower().replace("_", "").replace("-", "")
+    # Normalize schema name
+    normalized_name = schema_name.lower().replace("_", "").replace("-", "")
 
-        # Find matching schema
-        for registry_name, schema in schema_registry.items():
-            if registry_name.replace("_", "").replace("-", "") == normalized_name:
-                # Add metadata to the schema
-                base_url = get_sales_agent_url()
-                schema_with_meta = {
-                    "$schema": "https://json-schema.org/draft/2020-12/schema",
-                    "$id": f"{base_url}/schemas/adcp/v2.4/{schema_name}.json",
-                    "title": f"AdCP {registry_name.title()} Response Schema",
-                    "description": f"JSON Schema for AdCP v2.4 {registry_name} response validation",
-                    **schema,
-                }
+    # Find matching schema
+    for registry_name, schema in schema_registry.items():
+        if registry_name.replace("_", "").replace("-", "") == normalized_name:
+            # Add metadata to the schema
+            base_url = get_sales_agent_url()
+            schema_with_meta = {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": f"{base_url}/schemas/adcp/v2.4/{schema_name}.json",
+                "title": f"AdCP {registry_name.title()} Response Schema",
+                "description": f"JSON Schema for AdCP v2.4 {registry_name} response validation",
+                **schema,
+            }
 
-                # Log the schema request
-                logger.info(f"Serving schema for: {schema_name} (matched: {registry_name})")
+            # Log the schema request
+            logger.info(f"Serving schema for: {schema_name} (matched: {registry_name})")
 
-                return jsonify(schema_with_meta)
+            return jsonify(schema_with_meta)
 
-        # Schema not found
-        available_schemas = list(schema_registry.keys())
-        return (
-            jsonify(
-                {
-                    "error": "Schema not found",
-                    "requested_schema": schema_name,
-                    "available_schemas": available_schemas,
-                    "note": "Schema names are case-insensitive and support both underscore and hyphen separators",
-                }
-            ),
-            404,
-        )
-
-    except Exception as e:
-        logger.error(f"Error serving schema {schema_name}: {e}")
-        return jsonify({"error": "Internal server error", "message": safe_error_message(e)}), 500
+    # Schema not found
+    available_schemas = list(schema_registry.keys())
+    return (
+        jsonify(
+            {
+                "error": "Schema not found",
+                "requested_schema": schema_name,
+                "available_schemas": available_schemas,
+                "note": "Schema names are case-insensitive and support both underscore and hyphen separators",
+            }
+        ),
+        404,
+    )
 
 
 @schemas_bp.route("/adcp/v2.4/", methods=["GET"])
@@ -81,29 +75,24 @@ def list_schemas():
     Returns:
         JSON object with available schema names and URLs
     """
-    try:
-        schema_registry = create_schema_registry()
-        base_url = f"{get_sales_agent_url()}/schemas/adcp/v2.4"
+    schema_registry = create_schema_registry()
+    base_url = f"{get_sales_agent_url()}/schemas/adcp/v2.4"
 
-        schemas_index = {
-            "schemas": {},
-            "version": "AdCP v2.4",
-            "schema_version": "draft-2020-12",
-            "base_url": base_url,
-            "description": "JSON Schemas for AdCP v2.4 API response validation",
+    schemas_index = {
+        "schemas": {},
+        "version": "AdCP v2.4",
+        "schema_version": "draft-2020-12",
+        "base_url": base_url,
+        "description": "JSON Schemas for AdCP v2.4 API response validation",
+    }
+
+    for schema_name in schema_registry.keys():
+        schemas_index["schemas"][schema_name] = {
+            "url": f"{base_url}/{schema_name}.json",
+            "description": f"Schema for {schema_name} responses",
         }
 
-        for schema_name in schema_registry.keys():
-            schemas_index["schemas"][schema_name] = {
-                "url": f"{base_url}/{schema_name}.json",
-                "description": f"Schema for {schema_name} responses",
-            }
-
-        return jsonify(schemas_index)
-
-    except Exception as e:
-        logger.error(f"Error listing schemas: {e}")
-        return jsonify({"error": "Internal server error", "message": safe_error_message(e)}), 500
+    return jsonify(schemas_index)
 
 
 @schemas_bp.route("/adcp/", methods=["GET"])
@@ -154,32 +143,18 @@ def schema_health():
     Returns:
         JSON object with service status
     """
-    try:
-        # Test that we can generate schemas
-        schema_registry = create_schema_registry()
-        schema_count = len(schema_registry)
+    # Test that we can generate schemas
+    schema_registry = create_schema_registry()
+    schema_count = len(schema_registry)
 
-        return jsonify(
-            {
-                "status": "healthy",
-                "schemas_available": schema_count,
-                "service": "AdCP Schema Validation Service",
-                "version": "1.0.0",
-            }
-        )
-
-    except Exception as e:
-        logger.error(f"Schema service health check failed: {e}")
-        return (
-            jsonify(
-                {
-                    "status": "unhealthy",
-                    "error": safe_error_message(e, "Schema service health check failed"),
-                    "service": "AdCP Schema Validation Service",
-                }
-            ),
-            500,
-        )
+    return jsonify(
+        {
+            "status": "healthy",
+            "schemas_available": schema_count,
+            "service": "AdCP Schema Validation Service",
+            "version": "1.0.0",
+        }
+    )
 
 
 # Error handlers for the blueprint

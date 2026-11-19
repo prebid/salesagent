@@ -24,6 +24,7 @@ from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.operator_errors import safe_error_message
 from src.services.ai.factory import tenant_ai_enabled
 from src.services.setup_checklist_service import SetupChecklistService
 from src.services.slack_notifier import SlackNotifier
@@ -116,40 +117,7 @@ def dashboard(tenant_id):
         )
 
     except Exception as e:
-        import traceback
-
-        error_detail = traceback.format_exc()
-        logger.error(f"Error loading tenant dashboard: {e}\nFull traceback:\n{error_detail}")
-        # Secure error handling - show safe errors to users, log full details
-        error_str = str(e).lower()
-        sensitive_keywords = [
-            "database",
-            "connection",
-            "password",
-            "secret",
-            "key",
-            "token",
-            "postgresql",
-            "psycopg2",
-            "sqlalchemy",
-            "alembic",
-            "psql",
-            "host=",
-            "port=",
-            "user=",
-            "dbname=",
-            "sslmode=",
-        ]
-
-        # Check if error contains sensitive information
-        if any(keyword in error_str for keyword in sensitive_keywords):
-            flash("Dashboard temporarily unavailable - please contact administrator", "error")
-        else:
-            # Safe to show user-friendly errors (validation, not found, etc.)
-            flash(f"Dashboard Error: {str(e)}", "error")
-
-        # Always log full details for debugging (only visible to administrators)
-        logger.error(f"Dashboard traceback: {error_detail}")
+        flash(safe_error_message(e, "Dashboard error"), "error")
         return redirect(url_for("core.index"))
 
 
@@ -175,8 +143,7 @@ def setup_checklist(tenant_id):
             )
 
     except Exception as e:
-        logger.error(f"Error loading setup checklist: {e}")
-        flash(f"Error loading setup checklist: {str(e)}", "error")
+        flash(safe_error_message(e, "Error loading setup checklist"), "error")
         return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
 
@@ -593,8 +560,7 @@ def deactivate_tenant(tenant_id):
             return redirect(url_for("auth.login"))
 
     except Exception as e:
-        logger.error(f"Error deactivating tenant {tenant_id}: {e}", exc_info=True)
-        flash(f"Error deactivating sales agent: {str(e)}", "error")
+        flash(safe_error_message(e, "Error deactivating sales agent"), "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="danger-zone"))
 
 
@@ -670,8 +636,7 @@ def media_buys_list(tenant_id):
             )
 
     except Exception as e:
-        logger.error(f"Error listing media buys for tenant {tenant_id}: {e}", exc_info=True)
-        flash(f"Error loading media buys: {str(e)}", "error")
+        flash(safe_error_message(e, "Error loading media buys"), "error")
         return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
 

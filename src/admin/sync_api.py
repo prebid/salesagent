@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.admin.auth_helpers import api_key_prefix, mint_stored_api_key, require_api_key_auth
-from src.admin.utils.operator_errors import json_error, safe_error_message
+from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.models import AdapterConfig, SyncJob, Tenant
 from src.services.gam_inventory_service import db_session as gam_db_session
 
@@ -189,10 +189,6 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
 
             return jsonify({"sync_id": sync_id, "status": "failed", "error": error_message}), 500
 
-    except Exception as e:
-        logger.error(f"Failed to trigger sync: {e}", exc_info=True)
-        db_session.rollback()
-        return json_error(e)
     finally:
         db_session.remove()
 
@@ -234,9 +230,6 @@ def get_sync_status(sync_id: str) -> tuple[Response, int]:
 
         return jsonify(response_dict), 200
 
-    except Exception as e:
-        logger.error(f"Failed to get sync status: {e}", exc_info=True)
-        return json_error(e)
     finally:
         db_session.remove()
 
@@ -301,9 +294,6 @@ def get_sync_history(tenant_id: str) -> tuple[Response, int]:
 
         return jsonify({"total": total, "limit": limit, "offset": offset, "results": results}), 200
 
-    except Exception as e:
-        logger.error(f"Failed to get sync history: {e}", exc_info=True)
-        return json_error(e)
     finally:
         db_session.remove()
 
@@ -357,9 +347,6 @@ def list_tenants() -> tuple[Response, int]:
 
         return jsonify({"total": len(results), "tenants": results}), 200
 
-    except Exception as e:
-        logger.error(f"Failed to list tenants: {e}", exc_info=True)
-        return json_error(e)
     finally:
         db_session.remove()
 
@@ -448,9 +435,6 @@ def get_sync_stats() -> tuple[Response, int]:
             200,
         )
 
-    except Exception as e:
-        logger.error(f"Failed to get sync stats: {e}", exc_info=True)
-        return json_error(e)
     finally:
         db_session.remove()
 
@@ -543,10 +527,6 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
 
             return jsonify({"sync_id": sync_id, "status": "failed", "error": error_message}), 500
 
-    except Exception as e:
-        logger.error(f"Failed to trigger orders sync: {e}", exc_info=True)
-        db_session.rollback()
-        return json_error(e)
     finally:
         db_session.remove()
 
@@ -601,9 +581,6 @@ def get_tenant_orders(tenant_id: str) -> tuple[Response, int]:
 
         return jsonify({"total": len(orders), "orders": orders}), 200
 
-    except Exception as e:
-        logger.error(f"Failed to get orders: {e}", exc_info=True)
-        return json_error(e)
     finally:
         db_session.remove()
 
@@ -631,9 +608,6 @@ def get_order_details(tenant_id: str, order_id: str) -> tuple[Response, int]:
 
         return jsonify(order_details), 200
 
-    except Exception as e:
-        logger.error(f"Failed to get order details: {e}", exc_info=True)
-        return json_error(e)
     finally:
         db_session.remove()
 
@@ -663,9 +637,6 @@ def get_tenant_line_items(tenant_id: str) -> tuple[Response, int]:
 
         return jsonify({"total": len(line_items), "line_items": line_items}), 200
 
-    except Exception as e:
-        logger.error(f"Failed to get line items: {e}", exc_info=True)
-        return json_error(e)
     finally:
         db_session.remove()
 

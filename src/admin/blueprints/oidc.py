@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from src.admin.auth_utils import extract_user_info
 from src.admin.utils import require_tenant_access
-from src.admin.utils.operator_errors import json_error, refusal_error, safe_error_message
+from src.admin.utils.operator_errors import refusal_error, safe_error_message
 from src.admin.utils.url_policy import json_error_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -134,8 +134,6 @@ def save_config(tenant_id: str):
 
     except DiscoveryUrlRequired as refusal:
         return refusal_error(refusal)
-    except Exception as e:
-        return json_error(e, "Failed to save configuration")
 
 
 @oidc_bp.route("/tenant/<tenant_id>/enable", methods=["POST"])
@@ -221,188 +219,182 @@ def test_initiate(tenant_id: str):
 @oidc_bp.route("/callback")
 def callback():
     """Handle OAuth callback for both test and production flows."""
-    try:
-        # Check if this is a test flow
-        is_test = session.pop("oidc_test_flow", False)
-        tenant_id = session.pop("oidc_test_tenant_id", None) or session.get("oidc_login_tenant_id")
+    # Check if this is a test flow
+    is_test = session.pop("oidc_test_flow", False)
+    tenant_id = session.pop("oidc_test_tenant_id", None) or session.get("oidc_login_tenant_id")
 
-        logger.info(f"OAuth callback: is_test={is_test}, tenant_id={tenant_id}")
+    logger.info(f"OAuth callback: is_test={is_test}, tenant_id={tenant_id}")
 
-        if not tenant_id:
-            flash("Invalid OAuth callback - no tenant context", "error")
-            return redirect(url_for("auth.login"))
-
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("auth.login"))
-
-            # Get OIDC config directly from this session to avoid nested session issues
-            from src.core.database.models import TenantAuthConfig
-
-            config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
-            if not config or not config.oidc_client_id:
-                flash("OIDC not configured", "error")
-                return redirect(url_for("auth.login"))
-
-            # Get decrypted secret while session is still active
-            client_secret = config.oidc_client_secret
-            logger.info(f"OAuth callback: got config for {tenant_id}, client_id={config.oidc_client_id[:20]}...")
-
-            # Create OAuth client - must use same name as the initiate function
-            # test_initiate uses "test_oidc", login uses "login_oidc"
-            oauth = OAuth()
-            oauth.init_app(current_app)
-
-            client_name = "test_oidc" if is_test else "login_oidc"
-            oauth.register(
-                name=client_name,
-                client_id=config.oidc_client_id,
-                client_secret=client_secret,
-                server_metadata_url=config.oidc_discovery_url,
-                client_kwargs={"scope": config.oidc_scopes or "openid email profile"},
-            )
-
-            try:
-                oauth_client = getattr(oauth, client_name)
-                token = oauth_client.authorize_access_token()
-                logger.info("OAuth callback: token exchange successful")
-            except Exception as e:
-                logger.error(f"OAuth token exchange failed: {e}", exc_info=True)
-                flash(safe_error_message(e, "OAuth authentication failed"), "error")
-                if is_test:
-                    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
-                return redirect(url_for("auth.login"))
-
-        if not token:
-            flash("OAuth token exchange failed", "error")
-            if is_test:
-                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
-            return redirect(url_for("auth.login"))
-
-        # Extract user info
-        user_info = extract_user_info(token)
-        if not user_info or not user_info.get("email"):
-            flash("Could not get user email from OAuth provider", "error")
-            if is_test:
-                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
-            return redirect(url_for("auth.login"))
-
-        email = user_info["email"]
-
-        if is_test:
-            # Test flow - mark config as verified and enable SSO in one transaction
-            redirect_uri = get_tenant_redirect_uri(tenant)
-            from datetime import UTC, datetime
-
-            from src.core.database.models import TenantAuthConfig
-
-            with get_db_session() as db_session:
-                config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
-                if config:
-                    config.oidc_verified_at = datetime.now(UTC)
-                    config.oidc_verified_redirect_uri = redirect_uri
-                    config.oidc_enabled = True
-                    config.updated_at = datetime.now(UTC)
-                    db_session.commit()
-                    logger.info(f"Verified and enabled SSO for tenant {tenant_id}")
-                else:
-                    logger.warning(f"No auth config found for tenant {tenant_id}")
-
-            return render_template(
-                "oidc_test_success.html",
-                tenant=tenant,
-                tenant_id=tenant_id,
-                email=email,
-                name=user_info.get("name", email),
-            )
-
-        # Production flow - check user exists and create session
-        session.pop("oidc_login_tenant_id", None)
-
-        with get_db_session() as db_session:
-            user_stmt = select(User).filter_by(email=email.lower(), tenant_id=tenant_id)
-            user = db_session.scalars(user_stmt).first()
-
-            if not user:
-                # Check if user's domain is authorized - auto-create user if so
-                tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-                email_domain = email.lower().split("@")[1] if "@" in email else None
-                authorized_domains = tenant.authorized_domains or [] if tenant else []
-
-                if email_domain and email_domain in authorized_domains:
-                    # Auto-create user from authorized domain
-                    import uuid
-                    from datetime import UTC, datetime
-
-                    new_user = User(
-                        user_id=str(uuid.uuid4()),
-                        tenant_id=tenant_id,
-                        email=email.lower(),
-                        name=user_info.get("name", email),
-                        role="admin",  # RBAC not yet implemented
-                        is_active=True,
-                        created_at=datetime.now(UTC),
-                    )
-                    winner = resolve_or_write(
-                        db_session,
-                        conflict=lambda: db_session.scalars(user_stmt).first(),
-                        write=lambda: db_session.add(new_user),
-                        constraint="uq_users_tenant_email",
-                    )
-                    if winner is not None:
-                        # A concurrent login for the same address got its row in
-                        # first; adopt it, exactly as the pre-check above would have.
-                        user = winner
-                    else:
-                        user = new_user
-                        db_session.commit()
-                        db_session.refresh(user)
-                        logger.info(f"Auto-created user {email} from authorized domain {email_domain}")
-                else:
-                    flash("Access denied. You don't have permission to access this tenant.", "error")
-                    logger.warning(f"OIDC login denied: no User record for {email} in tenant {tenant_id}")
-                    return redirect(url_for("auth.login"))
-
-            if not user.is_active:
-                flash("Your account has been disabled. Please contact your administrator.", "error")
-                logger.warning(f"OIDC login denied: user {email} is disabled in tenant {tenant_id}")
-                return redirect(url_for("auth.login"))
-
-            # Update user's name from SSO if we got one
-            sso_name = user_info.get("name")
-            if sso_name and sso_name != user.name:
-                user.name = sso_name
-                logger.info(f"Updated user {email} name from SSO: {sso_name}")
-
-            # Create session
-            session["user"] = user.email
-            session["user_name"] = user.name or user.email
-            session["tenant_id"] = tenant_id
-            session["authenticated"] = True
-            session["auth_method"] = "oidc"
-
-            # Update last login
-            from datetime import UTC, datetime
-
-            user.last_login = datetime.now(UTC)
-            db_session.commit()
-
-            # Extract user info before session closes
-            user_display_name = user.name or user.email
-
-        flash(f"Welcome {user_display_name}!", "success")
-        # Redirect to original requested URL if available, otherwise dashboard
-        next_url = session.pop("login_next_url", None)
-        if next_url:
-            return redirect(next_url)
-        return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
-
-    except Exception as e:
-        logger.error(f"OAuth callback error: {e}", exc_info=True)
-        flash(safe_error_message(e, "Authentication error"), "error")
+    if not tenant_id:
+        flash("Invalid OAuth callback - no tenant context", "error")
         return redirect(url_for("auth.login"))
+
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("auth.login"))
+
+        # Get OIDC config directly from this session to avoid nested session issues
+        from src.core.database.models import TenantAuthConfig
+
+        config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
+        if not config or not config.oidc_client_id:
+            flash("OIDC not configured", "error")
+            return redirect(url_for("auth.login"))
+
+        # Get decrypted secret while session is still active
+        client_secret = config.oidc_client_secret
+        logger.info(f"OAuth callback: got config for {tenant_id}, client_id={config.oidc_client_id[:20]}...")
+
+        # Create OAuth client - must use same name as the initiate function
+        # test_initiate uses "test_oidc", login uses "login_oidc"
+        oauth = OAuth()
+        oauth.init_app(current_app)
+
+        client_name = "test_oidc" if is_test else "login_oidc"
+        oauth.register(
+            name=client_name,
+            client_id=config.oidc_client_id,
+            client_secret=client_secret,
+            server_metadata_url=config.oidc_discovery_url,
+            client_kwargs={"scope": config.oidc_scopes or "openid email profile"},
+        )
+
+        try:
+            oauth_client = getattr(oauth, client_name)
+            token = oauth_client.authorize_access_token()
+            logger.info("OAuth callback: token exchange successful")
+        except Exception as e:
+            logger.error(f"OAuth token exchange failed: {e}", exc_info=True)
+            flash(safe_error_message(e, "OAuth authentication failed"), "error")
+            if is_test:
+                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+            return redirect(url_for("auth.login"))
+
+    if not token:
+        flash("OAuth token exchange failed", "error")
+        if is_test:
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+        return redirect(url_for("auth.login"))
+
+    # Extract user info
+    user_info = extract_user_info(token)
+    if not user_info or not user_info.get("email"):
+        flash("Could not get user email from OAuth provider", "error")
+        if is_test:
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+        return redirect(url_for("auth.login"))
+
+    email = user_info["email"]
+
+    if is_test:
+        # Test flow - mark config as verified and enable SSO in one transaction
+        redirect_uri = get_tenant_redirect_uri(tenant)
+        from datetime import UTC, datetime
+
+        from src.core.database.models import TenantAuthConfig
+
+        with get_db_session() as db_session:
+            config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
+            if config:
+                config.oidc_verified_at = datetime.now(UTC)
+                config.oidc_verified_redirect_uri = redirect_uri
+                config.oidc_enabled = True
+                config.updated_at = datetime.now(UTC)
+                db_session.commit()
+                logger.info(f"Verified and enabled SSO for tenant {tenant_id}")
+            else:
+                logger.warning(f"No auth config found for tenant {tenant_id}")
+
+        return render_template(
+            "oidc_test_success.html",
+            tenant=tenant,
+            tenant_id=tenant_id,
+            email=email,
+            name=user_info.get("name", email),
+        )
+
+    # Production flow - check user exists and create session
+    session.pop("oidc_login_tenant_id", None)
+
+    with get_db_session() as db_session:
+        user_stmt = select(User).filter_by(email=email.lower(), tenant_id=tenant_id)
+        user = db_session.scalars(user_stmt).first()
+
+        if not user:
+            # Check if user's domain is authorized - auto-create user if so
+            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            email_domain = email.lower().split("@")[1] if "@" in email else None
+            authorized_domains = tenant.authorized_domains or [] if tenant else []
+
+            if email_domain and email_domain in authorized_domains:
+                # Auto-create user from authorized domain
+                import uuid
+                from datetime import UTC, datetime
+
+                new_user = User(
+                    user_id=str(uuid.uuid4()),
+                    tenant_id=tenant_id,
+                    email=email.lower(),
+                    name=user_info.get("name", email),
+                    role="admin",  # RBAC not yet implemented
+                    is_active=True,
+                    created_at=datetime.now(UTC),
+                )
+                winner = resolve_or_write(
+                    db_session,
+                    conflict=lambda: db_session.scalars(user_stmt).first(),
+                    write=lambda: db_session.add(new_user),
+                    constraint="uq_users_tenant_email",
+                )
+                if winner is not None:
+                    # A concurrent login for the same address got its row in
+                    # first; adopt it, exactly as the pre-check above would have.
+                    user = winner
+                else:
+                    user = new_user
+                    db_session.commit()
+                    db_session.refresh(user)
+                    logger.info(f"Auto-created user {email} from authorized domain {email_domain}")
+            else:
+                flash("Access denied. You don't have permission to access this tenant.", "error")
+                logger.warning(f"OIDC login denied: no User record for {email} in tenant {tenant_id}")
+                return redirect(url_for("auth.login"))
+
+        if not user.is_active:
+            flash("Your account has been disabled. Please contact your administrator.", "error")
+            logger.warning(f"OIDC login denied: user {email} is disabled in tenant {tenant_id}")
+            return redirect(url_for("auth.login"))
+
+        # Update user's name from SSO if we got one
+        sso_name = user_info.get("name")
+        if sso_name and sso_name != user.name:
+            user.name = sso_name
+            logger.info(f"Updated user {email} name from SSO: {sso_name}")
+
+        # Create session
+        session["user"] = user.email
+        session["user_name"] = user.name or user.email
+        session["tenant_id"] = tenant_id
+        session["authenticated"] = True
+        session["auth_method"] = "oidc"
+
+        # Update last login
+        from datetime import UTC, datetime
+
+        user.last_login = datetime.now(UTC)
+        db_session.commit()
+
+        # Extract user info before session closes
+        user_display_name = user.name or user.email
+
+    flash(f"Welcome {user_display_name}!", "success")
+    # Redirect to original requested URL if available, otherwise dashboard
+    next_url = session.pop("login_next_url", None)
+    if next_url:
+        return redirect(next_url)
+    return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
 
 @oidc_bp.route("/login/<tenant_id>")

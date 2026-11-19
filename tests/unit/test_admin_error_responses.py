@@ -100,7 +100,7 @@ def test_custom_oidc_provider_without_discovery_url_gets_the_refusal(client):
 
 
 def test_other_oidc_save_failures_get_the_generic_answer(client):
-    """A missing ENCRYPTION_KEY is a ValueError too; it must not read as a discovery-URL hint."""
+    """A missing ENCRYPTION_KEY is a ValueError too; the app error handler answers it, not a discovery-URL hint."""
     with (
         patch("src.admin.blueprints.oidc.get_or_create_auth_config"),
         patch("src.admin.blueprints.oidc.save_oidc_config", side_effect=ValueError(_SECRET)),
@@ -112,6 +112,66 @@ def test_other_oidc_save_failures_get_the_generic_answer(client):
 
     assert response.status_code == 500
     error = response.get_json()["error"]
-    assert error.startswith("Failed to save configuration")
+    assert error.startswith("An unexpected error occurred")
     assert _REFERENCE_TAIL.search(error)
     assert _SECRET not in error
+
+
+@pytest.fixture
+def failing_client():
+    """The real admin app, plus one route that raises, so the app's own error handler answers."""
+    from werkzeug.exceptions import NotFound
+
+    from src.admin.app import create_app
+
+    app = create_app({"TESTING": True, "SECRET_KEY": "test-secret", "WTF_CSRF_ENABLED": False})
+
+    def boom():
+        raise RuntimeError(_SECRET)
+
+    def missing():
+        raise NotFound()
+
+    app.add_url_rule("/_test/boom", "test_boom", boom, methods=["GET", "POST"])
+    app.add_url_rule("/_test/missing", "test_missing", missing)
+    return app.test_client()
+
+
+def test_unhandled_error_answers_json_with_a_reference(failing_client):
+    response = failing_client.get("/_test/boom", headers={"Accept": "*/*"})
+
+    assert response.status_code == 500
+    body = response.get_json()
+    assert body["success"] is False
+    assert body["error"].startswith("An unexpected error occurred")
+    assert _REFERENCE_TAIL.search(body["error"])
+    assert _SECRET not in response.get_data(as_text=True)
+
+
+def test_unhandled_error_in_a_form_post_flashes_and_goes_back(failing_client):
+    response = failing_client.post(
+        "/_test/boom", headers={"Accept": "text/html", "Referer": "http://localhost/tenant/t1/settings"}
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == "http://localhost/tenant/t1/settings"
+    with failing_client.session_transaction() as sess:
+        ((category, message),) = sess["_flashes"]
+    assert category == "error"
+    assert _REFERENCE_TAIL.search(message)
+    assert _SECRET not in message
+
+
+@pytest.mark.parametrize("referer", [None, "https://elsewhere.example/page"], ids=["no-referer", "other-site"])
+def test_unhandled_error_without_a_same_site_page_renders_the_error_page(failing_client, referer):
+    headers = {"Accept": "text/html"} | ({"Referer": referer} if referer else {})
+    response = failing_client.get("/_test/boom", headers=headers)
+
+    assert response.status_code == 500
+    page = response.get_data(as_text=True)
+    assert "The details have been logged (reference " in page
+    assert _SECRET not in page
+
+
+def test_http_exceptions_pass_through(failing_client):
+    assert failing_client.get("/_test/missing").status_code == 404

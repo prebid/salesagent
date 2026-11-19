@@ -176,4 +176,6 @@ class TestDashboardService:
         health = DashboardService.health_check()
 
         assert health["status"] == "unhealthy"
-        assert "Database connection failed" in health["error"]
+        # The exception is logged under a reference; the returned text carries none of it.
+        assert "Database connection failed" not in health["error"]
+        assert health["error"].startswith("Dashboard service health check failed. The details have been logged")

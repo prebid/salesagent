@@ -31,6 +31,7 @@ from src.core.domain_config import (
     get_sales_agent_url,
     get_super_admin_domain,
 )
+from src.core.operator_errors import safe_error_message
 from src.core.security.outbound_http import OutboundError
 from src.services.google_oauth_client import exchange_authorization_code
 
@@ -471,10 +472,7 @@ def google_callback():
             token = oauth.google.authorize_access_token()
             logger.info(f"Token exchange result: {token is not None}")
         except Exception as auth_error:
-            logger.error(
-                f"Authlib error during token exchange: {type(auth_error).__name__}: {auth_error}", exc_info=True
-            )
-            flash(f"Authentication error: {str(auth_error)}", "error")
+            flash(safe_error_message(auth_error, "Authentication error"), "error")
             # Preserve tenant context on error - redirect to tenant login to avoid redirect loop
             if tenant_context:
                 return redirect(url_for("auth.tenant_login", tenant_id=tenant_context, logged_out=1))
@@ -762,8 +760,7 @@ def gam_authorize(tenant_id):
             if not gam_auth.gam_oauth_configured:
                 raise ValueError("GAM OAuth credentials not configured")
         except Exception as config_error:
-            logger.error(f"GAM OAuth configuration error: {config_error}")
-            flash(f"GAM OAuth not properly configured: {str(config_error)}", "error")
+            flash(safe_error_message(config_error, "GAM OAuth is not properly configured"), "error")
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
         # Store tenant context for callback. The Host is the operator's own domain, so it
@@ -809,8 +806,7 @@ def gam_authorize(tenant_id):
         return redirect(auth_url)
 
     except Exception as e:
-        logger.error(f"Error initiating GAM OAuth for tenant {tenant_id}: {e}")
-        flash(f"Error starting OAuth flow: {str(e)}", "error")
+        flash(safe_error_message(e, "Error starting OAuth flow"), "error")
         return redirect(url_for("tenants.settings", tenant_id=tenant_id))
 
 

@@ -38,6 +38,7 @@ from src.admin.blueprints.tenants import tenants_bp
 from src.admin.blueprints.users import users_bp
 from src.admin.blueprints.workflows import workflows_bp
 from src.admin.csrf import init_csrf_protection
+from src.admin.utils.operator_errors import register_error_handler
 from src.core.config import load_settings
 from src.core.config_loader import is_single_tenant_mode
 from src.core.domain_config import (
@@ -362,6 +363,9 @@ def create_app(config=None, settings=None):
         logger.info("Registered GAM inventory endpoints")
     except ImportError:
         logger.warning("gam_inventory_service not found")
+
+    # One answer for any exception a route lets escape: fixed text plus a log reference.
+    register_error_handler(app)
 
     return app
 

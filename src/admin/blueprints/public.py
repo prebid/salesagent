@@ -14,6 +14,7 @@ from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.operator_errors import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -311,8 +312,7 @@ def provision_tenant():
             return render_template("signup_complete.html", tenant=new_tenant, api_token=demo_token)
 
     except Exception as e:
-        logger.error(f"Error provisioning tenant: {e}", exc_info=True)
-        flash(f"Error creating your account: {str(e)}", "error")
+        flash(safe_error_message(e, "Error creating your account"), "error")
         return redirect(url_for("public.signup_onboarding"))
 
 

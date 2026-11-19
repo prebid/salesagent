@@ -14,6 +14,7 @@ from src.admin.services.media_buy_readiness_service import MediaBuyReadinessServ
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, PersistedMediaBuyStatus, Product, Tenant
 from src.core.database.repositories import MediaBuyRepository
+from src.core.operator_errors import safe_error_message
 from src.core.schemas import CreativeStatusEnum
 
 logger = logging.getLogger(__name__)
@@ -321,4 +322,8 @@ class DashboardService:
                 "message": "Dashboard service using single data source pattern",
             }
         except Exception as e:
-            return {"status": "unhealthy", "error": str(e), "message": "Dashboard service health check failed"}
+            return {
+                "status": "unhealthy",
+                "error": safe_error_message(e, "Dashboard service health check failed"),
+                "message": "Dashboard service health check failed",
+            }

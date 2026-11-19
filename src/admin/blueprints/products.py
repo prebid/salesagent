@@ -20,7 +20,7 @@ from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.admin.form_validation import sanitize_form_data
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import json_error, safe_error_message
+from src.admin.utils.operator_errors import json_error
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import (
@@ -617,140 +617,134 @@ def create_custom_key_inventory_mappings(
 @require_tenant_access()
 def list_products(tenant_id):
     """List all products for a tenant."""
-    try:
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
 
-            products = (
-                db_session.scalars(
-                    select(Product)
-                    .options(joinedload(Product.pricing_options))
-                    .options(joinedload(Product.inventory_profile))
-                    .filter_by(tenant_id=tenant_id)
-                    .order_by(Product.name)
+        products = (
+            db_session.scalars(
+                select(Product)
+                .options(joinedload(Product.pricing_options))
+                .options(joinedload(Product.inventory_profile))
+                .filter_by(tenant_id=tenant_id)
+                .order_by(Product.name)
+            )
+            .unique()
+            .all()
+        )
+
+        # Get inventory details for all products (breakdown by type)
+        inventory_details = {}
+        for product in products:
+            # Get all mappings for this product
+            mappings = db_session.scalars(
+                select(ProductInventoryMapping).where(
+                    ProductInventoryMapping.tenant_id == tenant_id,
+                    ProductInventoryMapping.product_id == product.product_id,
                 )
-                .unique()
-                .all()
-            )
+            ).all()
 
-            # Get inventory details for all products (breakdown by type)
-            inventory_details = {}
-            for product in products:
-                # Get all mappings for this product
-                mappings = db_session.scalars(
-                    select(ProductInventoryMapping).where(
-                        ProductInventoryMapping.tenant_id == tenant_id,
-                        ProductInventoryMapping.product_id == product.product_id,
-                    )
-                ).all()
+            # Count by inventory type
+            ad_unit_count = sum(1 for m in mappings if m.inventory_type == "ad_unit")
+            placement_count = sum(1 for m in mappings if m.inventory_type == "placement")
+            custom_key_count = sum(1 for m in mappings if m.inventory_type == "custom_key")
 
-                # Count by inventory type
-                ad_unit_count = sum(1 for m in mappings if m.inventory_type == "ad_unit")
-                placement_count = sum(1 for m in mappings if m.inventory_type == "placement")
-                custom_key_count = sum(1 for m in mappings if m.inventory_type == "custom_key")
+            inventory_details[product.product_id] = {
+                "total": len(mappings),
+                "ad_units": ad_unit_count,
+                "placements": placement_count,
+                "custom_keys": custom_key_count,
+            }
 
-                inventory_details[product.product_id] = {
-                    "total": len(mappings),
-                    "ad_units": ad_unit_count,
-                    "placements": placement_count,
-                    "custom_keys": custom_key_count,
+        # What a buyer is sold is resolved against these, so the page marks a product
+        # get_products leaves out (#1845).
+        catalog = _publisher_catalog(db_session, tenant_id)
+
+        # Convert products to dict format for template
+        products_list = []
+        for product in products:
+            # Use helper function to get pricing options (handles legacy fallback)
+            pricing_options_list = get_product_pricing_options(product)
+
+            # What the product is announced with: its canonical declarations, or the
+            # legacy arm of a product that has none (salesagent-gi2du).
+            resolved_formats = [
+                {"format_id": label, "name": label} for label in _format_labels(product.format_contract)
+            ]
+
+            # Get inventory profile info if product uses one
+            inventory_profile_dict = None
+            if product.inventory_profile:
+                # Generate inventory summary from profile
+                inventory_config = product.inventory_profile.inventory_config or {}
+                ad_units = inventory_config.get("ad_units", [])
+                placements = inventory_config.get("placements", [])
+
+                summary_parts = []
+                if ad_units:
+                    summary_parts.append(f"{len(ad_units)} ad unit{'s' if len(ad_units) != 1 else ''}")
+                if placements:
+                    summary_parts.append(f"{len(placements)} placement{'s' if len(placements) != 1 else ''}")
+
+                inventory_summary = ", ".join(summary_parts) if summary_parts else "No inventory"
+
+                inventory_profile_dict = {
+                    "id": product.inventory_profile.id,
+                    "profile_id": product.inventory_profile.profile_id,
+                    "name": product.inventory_profile.name,
+                    "description": product.inventory_profile.description,
+                    "inventory_summary": inventory_summary,
                 }
 
-            # What a buyer is sold is resolved against these, so the page marks a product
-            # get_products leaves out (#1845).
-            catalog = _publisher_catalog(db_session, tenant_id)
-
-            # Convert products to dict format for template
-            products_list = []
-            for product in products:
-                # Use helper function to get pricing options (handles legacy fallback)
-                pricing_options_list = get_product_pricing_options(product)
-
-                # What the product is announced with: its canonical declarations, or the
-                # legacy arm of a product that has none (salesagent-gi2du).
-                resolved_formats = [
-                    {"format_id": label, "name": label} for label in _format_labels(product.format_contract)
-                ]
-
-                # Get inventory profile info if product uses one
-                inventory_profile_dict = None
-                if product.inventory_profile:
-                    # Generate inventory summary from profile
-                    inventory_config = product.inventory_profile.inventory_config or {}
-                    ad_units = inventory_config.get("ad_units", [])
-                    placements = inventory_config.get("placements", [])
-
-                    summary_parts = []
-                    if ad_units:
-                        summary_parts.append(f"{len(ad_units)} ad unit{'s' if len(ad_units) != 1 else ''}")
-                    if placements:
-                        summary_parts.append(f"{len(placements)} placement{'s' if len(placements) != 1 else ''}")
-
-                    inventory_summary = ", ".join(summary_parts) if summary_parts else "No inventory"
-
-                    inventory_profile_dict = {
-                        "id": product.inventory_profile.id,
-                        "profile_id": product.inventory_profile.profile_id,
-                        "name": product.inventory_profile.name,
-                        "description": product.inventory_profile.description,
-                        "inventory_summary": inventory_summary,
-                    }
-
-                product_dict = {
-                    "product_id": product.product_id,
-                    "name": product.name,
-                    "description": product.description,
-                    "pricing_options": pricing_options_list,
-                    "formats": resolved_formats,
-                    "countries": (
-                        product.countries
-                        if isinstance(product.countries, list)
-                        else json.loads(product.countries)
-                        if product.countries
-                        else []
-                    ),
-                    "implementation_config": (
-                        product.implementation_config
-                        if isinstance(product.implementation_config, dict)
-                        else json.loads(product.implementation_config)
-                        if product.implementation_config
-                        else {}
-                    ),
-                    "created_at": getattr(product, "created_at", None),
-                    "inventory_details": inventory_details.get(
-                        product.product_id,
-                        {
-                            "total": 0,
-                            "ad_units": 0,
-                            "placements": 0,
-                            "custom_keys": 0,
-                        },
-                    ),
-                    "inventory_profile": inventory_profile_dict,
-                    "not_offered_reason": offer_refusal(
-                        product, product.resolve_publisher_properties(catalog.refs), catalog
-                    ),
-                    # Dynamic product fields
-                    "is_dynamic": getattr(product, "is_dynamic", False),
-                    "is_dynamic_variant": getattr(product, "is_dynamic_variant", False),
-                    "activation_key": getattr(product, "activation_key", None),
-                    "product_card": getattr(product, "product_card", None),
-                }
-                products_list.append(product_dict)
-            return render_template(
-                "products.html",
-                tenant=tenant,
-                tenant_id=tenant_id,
-                products=products_list,
-            )
-
-    except Exception as e:
-        logger.error(f"Error loading products: {e}", exc_info=True)
-        flash("Error loading products", "error")
-        return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+            product_dict = {
+                "product_id": product.product_id,
+                "name": product.name,
+                "description": product.description,
+                "pricing_options": pricing_options_list,
+                "formats": resolved_formats,
+                "countries": (
+                    product.countries
+                    if isinstance(product.countries, list)
+                    else json.loads(product.countries)
+                    if product.countries
+                    else []
+                ),
+                "implementation_config": (
+                    product.implementation_config
+                    if isinstance(product.implementation_config, dict)
+                    else json.loads(product.implementation_config)
+                    if product.implementation_config
+                    else {}
+                ),
+                "created_at": getattr(product, "created_at", None),
+                "inventory_details": inventory_details.get(
+                    product.product_id,
+                    {
+                        "total": 0,
+                        "ad_units": 0,
+                        "placements": 0,
+                        "custom_keys": 0,
+                    },
+                ),
+                "inventory_profile": inventory_profile_dict,
+                "not_offered_reason": offer_refusal(
+                    product, product.resolve_publisher_properties(catalog.refs), catalog
+                ),
+                # Dynamic product fields
+                "is_dynamic": getattr(product, "is_dynamic", False),
+                "is_dynamic_variant": getattr(product, "is_dynamic_variant", False),
+                "activation_key": getattr(product, "activation_key", None),
+                "product_card": getattr(product, "product_card", None),
+            }
+            products_list.append(product_dict)
+        return render_template(
+            "products.html",
+            tenant=tenant,
+            tenant_id=tenant_id,
+            products=products_list,
+        )
 
 
 def _own_selectors(product: Product) -> list[dict]:
@@ -2161,76 +2155,203 @@ def assign_inventory_to_product(tenant_id, product_id):
         "is_primary": false  # optional, default false
     }
     """
-    try:
-        from src.core.database.models import GAMInventory, ProductInventoryMapping
+    from src.core.database.models import GAMInventory, ProductInventoryMapping
 
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "Request body required"}), 400
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Request body required"}), 400
 
-        inventory_id = data.get("inventory_id")
-        inventory_type = data.get("inventory_type")
-        is_primary = data.get("is_primary", False)
+    inventory_id = data.get("inventory_id")
+    inventory_type = data.get("inventory_type")
+    is_primary = data.get("is_primary", False)
 
-        if not inventory_id or not inventory_type:
-            return jsonify({"error": "inventory_id and inventory_type are required"}), 400
+    if not inventory_id or not inventory_type:
+        return jsonify({"error": "inventory_id and inventory_type are required"}), 400
 
-        with get_db_session() as db_session:
-            # Verify product exists
-            product = db_session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
+    with get_db_session() as db_session:
+        # Verify product exists
+        product = db_session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
 
-            if not product:
-                return jsonify({"error": "Product not found"}), 404
+        if not product:
+            return jsonify({"error": "Product not found"}), 404
 
-            # Verify inventory exists
-            inventory = db_session.scalars(
+        # Verify inventory exists
+        inventory = db_session.scalars(
+            select(GAMInventory).filter_by(
+                tenant_id=tenant_id, inventory_id=inventory_id, inventory_type=inventory_type
+            )
+        ).first()
+
+        if not inventory:
+            return jsonify({"error": "Inventory item not found"}), 404
+
+        # Check if mapping already exists
+        mapping_stmt = select(ProductInventoryMapping).filter_by(
+            tenant_id=tenant_id, product_id=product_id, inventory_id=inventory_id, inventory_type=inventory_type
+        )
+        mapping = ProductInventoryMapping(
+            tenant_id=tenant_id,
+            product_id=product_id,
+            inventory_id=inventory_id,
+            inventory_type=inventory_type,
+            is_primary=is_primary,
+        )
+        existing = resolve_or_write(
+            db_session,
+            conflict=lambda: db_session.scalars(mapping_stmt).first(),
+            write=lambda: db_session.add(mapping),
+            constraint="uq_product_inventory",
+        )
+        if existing is not None:
+            # Update existing mapping — also where an insert that lost the race lands.
+            existing.is_primary = is_primary
+        db_session.commit()
+
+        # CRITICAL: Update product's implementation_config with inventory targeting
+        # GAM adapter requires this to create line items
+        from sqlalchemy.orm import attributes
+
+        if not product.implementation_config:
+            product.implementation_config = {}
+
+        # Get all inventory mappings for this product
+        all_mappings = db_session.scalars(
+            select(ProductInventoryMapping).filter_by(tenant_id=tenant_id, product_id=product_id)
+        ).all()
+
+        # Build targeted_ad_unit_ids and targeted_placement_ids from mappings
+        ad_unit_ids = []
+        placement_ids = []
+
+        for m in all_mappings:
+            inv = db_session.scalars(
                 select(GAMInventory).filter_by(
-                    tenant_id=tenant_id, inventory_id=inventory_id, inventory_type=inventory_type
+                    tenant_id=tenant_id, inventory_id=m.inventory_id, inventory_type=m.inventory_type
                 )
             ).first()
 
-            if not inventory:
-                return jsonify({"error": "Inventory item not found"}), 404
+            if inv:
+                if m.inventory_type == "ad_unit":
+                    ad_unit_ids.append(inv.inventory_id)
+                elif m.inventory_type == "placement":
+                    placement_ids.append(inv.inventory_id)
 
-            # Check if mapping already exists
-            mapping_stmt = select(ProductInventoryMapping).filter_by(
-                tenant_id=tenant_id, product_id=product_id, inventory_id=inventory_id, inventory_type=inventory_type
+        # Update implementation_config
+        if ad_unit_ids:
+            product.implementation_config["targeted_ad_unit_ids"] = ad_unit_ids
+        if placement_ids:
+            product.implementation_config["targeted_placement_ids"] = placement_ids
+
+        # Mark as modified for SQLAlchemy to detect JSONB change
+        attributes.flag_modified(product, "implementation_config")
+        db_session.commit()
+
+        if existing:
+            return jsonify(
+                {
+                    "message": "Inventory assignment updated",
+                    "mapping_id": existing.id,
+                    "inventory_name": inventory.name,
+                }
             )
-            mapping = ProductInventoryMapping(
-                tenant_id=tenant_id,
-                product_id=product_id,
-                inventory_id=inventory_id,
-                inventory_type=inventory_type,
-                is_primary=is_primary,
+        else:
+            return (
+                jsonify(
+                    {
+                        "message": "Inventory assigned to product successfully",
+                        "mapping_id": mapping.id,
+                        "inventory_name": inventory.name,
+                    }
+                ),
+                201,
             )
-            existing = resolve_or_write(
-                db_session,
-                conflict=lambda: db_session.scalars(mapping_stmt).first(),
-                write=lambda: db_session.add(mapping),
-                constraint="uq_product_inventory",
-            )
-            if existing is not None:
-                # Update existing mapping — also where an insert that lost the race lands.
-                existing.is_primary = is_primary
-            db_session.commit()
 
-            # CRITICAL: Update product's implementation_config with inventory targeting
-            # GAM adapter requires this to create line items
-            from sqlalchemy.orm import attributes
 
-            if not product.implementation_config:
-                product.implementation_config = {}
+@products_bp.route("/<product_id>/inventory", methods=["GET"])
+@require_tenant_access(api_mode=True)
+def get_product_inventory(tenant_id, product_id):
+    """Get all inventory items assigned to a product."""
+    from src.core.database.models import GAMInventory, ProductInventoryMapping
 
-            # Get all inventory mappings for this product
-            all_mappings = db_session.scalars(
+    with get_db_session() as db_session:
+        # Verify product exists
+        product = db_session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
+
+        if not product:
+            return jsonify({"error": "Product not found"}), 404
+
+        # Get all mappings for this product
+        mappings = db_session.scalars(
+            select(ProductInventoryMapping).filter_by(tenant_id=tenant_id, product_id=product_id)
+        ).all()
+
+        # Fetch inventory details for each mapping
+        result = []
+        for mapping in mappings:
+            inventory = db_session.scalars(
+                select(GAMInventory).filter_by(
+                    tenant_id=tenant_id, inventory_id=mapping.inventory_id, inventory_type=mapping.inventory_type
+                )
+            ).first()
+
+            if inventory:
+                result.append(
+                    {
+                        "mapping_id": mapping.id,
+                        "inventory_id": inventory.inventory_id,
+                        "inventory_name": inventory.name,
+                        "inventory_type": mapping.inventory_type,
+                        "is_primary": mapping.is_primary,
+                        "status": inventory.status,
+                        "path": inventory.path,
+                    }
+                )
+
+        return jsonify({"inventory": result, "count": len(result)})
+
+
+@products_bp.route("/<product_id>/inventory/<int:mapping_id>", methods=["DELETE"])
+@log_admin_action("unassign_inventory_from_product")
+@require_tenant_access(api_mode=True)
+def unassign_inventory_from_product(tenant_id, product_id, mapping_id):
+    """Remove an inventory assignment from a product (API endpoint)."""
+    from src.core.database.models import ProductInventoryMapping
+
+    with get_db_session() as db_session:
+        # Find the mapping
+        stmt = select(ProductInventoryMapping).filter_by(id=mapping_id, tenant_id=tenant_id, product_id=product_id)
+        mapping = db_session.scalars(stmt).first()
+
+        if not mapping:
+            return jsonify({"success": False, "message": "Inventory assignment not found"}), 404
+
+        # Store details for logging
+        inventory_name = f"{mapping.inventory_type}:{mapping.inventory_id}"
+        inventory_id_to_remove = mapping.inventory_id
+        inventory_type_to_remove = mapping.inventory_type
+
+        # Delete the mapping
+        db_session.delete(mapping)
+        db_session.commit()
+
+        # Update product's implementation_config to remove the inventory ID
+        from sqlalchemy.orm import attributes
+
+        from src.core.database.models import GAMInventory
+
+        product = db_session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
+
+        if product and product.implementation_config:
+            # Get remaining inventory mappings
+            remaining_mappings = db_session.scalars(
                 select(ProductInventoryMapping).filter_by(tenant_id=tenant_id, product_id=product_id)
             ).all()
 
-            # Build targeted_ad_unit_ids and targeted_placement_ids from mappings
+            # Rebuild targeted IDs from remaining mappings
             ad_unit_ids = []
             placement_ids = []
 
-            for m in all_mappings:
+            for m in remaining_mappings:
                 inv = db_session.scalars(
                     select(GAMInventory).filter_by(
                         tenant_id=tenant_id, inventory_id=m.inventory_id, inventory_type=m.inventory_type
@@ -2246,164 +2367,22 @@ def assign_inventory_to_product(tenant_id, product_id):
             # Update implementation_config
             if ad_unit_ids:
                 product.implementation_config["targeted_ad_unit_ids"] = ad_unit_ids
+            else:
+                # Remove key if no ad units remain
+                product.implementation_config.pop("targeted_ad_unit_ids", None)
+
             if placement_ids:
                 product.implementation_config["targeted_placement_ids"] = placement_ids
+            else:
+                # Remove key if no placements remain
+                product.implementation_config.pop("targeted_placement_ids", None)
 
-            # Mark as modified for SQLAlchemy to detect JSONB change
+            # Mark as modified for SQLAlchemy
             attributes.flag_modified(product, "implementation_config")
             db_session.commit()
 
-            if existing:
-                return jsonify(
-                    {
-                        "message": "Inventory assignment updated",
-                        "mapping_id": existing.id,
-                        "inventory_name": inventory.name,
-                    }
-                )
-            else:
-                return (
-                    jsonify(
-                        {
-                            "message": "Inventory assigned to product successfully",
-                            "mapping_id": mapping.id,
-                            "inventory_name": inventory.name,
-                        }
-                    ),
-                    201,
-                )
+        logger.info(
+            f"Removed inventory assignment: product={product_id}, inventory={inventory_name}, mapping_id={mapping_id}"
+        )
 
-    except Exception as e:
-        logger.error(f"Error assigning inventory to product: {e}", exc_info=True)
-        return json_error(e)
-
-
-@products_bp.route("/<product_id>/inventory", methods=["GET"])
-@require_tenant_access(api_mode=True)
-def get_product_inventory(tenant_id, product_id):
-    """Get all inventory items assigned to a product."""
-    try:
-        from src.core.database.models import GAMInventory, ProductInventoryMapping
-
-        with get_db_session() as db_session:
-            # Verify product exists
-            product = db_session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
-
-            if not product:
-                return jsonify({"error": "Product not found"}), 404
-
-            # Get all mappings for this product
-            mappings = db_session.scalars(
-                select(ProductInventoryMapping).filter_by(tenant_id=tenant_id, product_id=product_id)
-            ).all()
-
-            # Fetch inventory details for each mapping
-            result = []
-            for mapping in mappings:
-                inventory = db_session.scalars(
-                    select(GAMInventory).filter_by(
-                        tenant_id=tenant_id, inventory_id=mapping.inventory_id, inventory_type=mapping.inventory_type
-                    )
-                ).first()
-
-                if inventory:
-                    result.append(
-                        {
-                            "mapping_id": mapping.id,
-                            "inventory_id": inventory.inventory_id,
-                            "inventory_name": inventory.name,
-                            "inventory_type": mapping.inventory_type,
-                            "is_primary": mapping.is_primary,
-                            "status": inventory.status,
-                            "path": inventory.path,
-                        }
-                    )
-
-            return jsonify({"inventory": result, "count": len(result)})
-
-    except Exception as e:
-        logger.error(f"Error fetching product inventory: {e}", exc_info=True)
-        return json_error(e)
-
-
-@products_bp.route("/<product_id>/inventory/<int:mapping_id>", methods=["DELETE"])
-@log_admin_action("unassign_inventory_from_product")
-@require_tenant_access(api_mode=True)
-def unassign_inventory_from_product(tenant_id, product_id, mapping_id):
-    """Remove an inventory assignment from a product (API endpoint)."""
-    try:
-        from src.core.database.models import ProductInventoryMapping
-
-        with get_db_session() as db_session:
-            # Find the mapping
-            stmt = select(ProductInventoryMapping).filter_by(id=mapping_id, tenant_id=tenant_id, product_id=product_id)
-            mapping = db_session.scalars(stmt).first()
-
-            if not mapping:
-                return jsonify({"success": False, "message": "Inventory assignment not found"}), 404
-
-            # Store details for logging
-            inventory_name = f"{mapping.inventory_type}:{mapping.inventory_id}"
-            inventory_id_to_remove = mapping.inventory_id
-            inventory_type_to_remove = mapping.inventory_type
-
-            # Delete the mapping
-            db_session.delete(mapping)
-            db_session.commit()
-
-            # Update product's implementation_config to remove the inventory ID
-            from sqlalchemy.orm import attributes
-
-            from src.core.database.models import GAMInventory
-
-            product = db_session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
-
-            if product and product.implementation_config:
-                # Get remaining inventory mappings
-                remaining_mappings = db_session.scalars(
-                    select(ProductInventoryMapping).filter_by(tenant_id=tenant_id, product_id=product_id)
-                ).all()
-
-                # Rebuild targeted IDs from remaining mappings
-                ad_unit_ids = []
-                placement_ids = []
-
-                for m in remaining_mappings:
-                    inv = db_session.scalars(
-                        select(GAMInventory).filter_by(
-                            tenant_id=tenant_id, inventory_id=m.inventory_id, inventory_type=m.inventory_type
-                        )
-                    ).first()
-
-                    if inv:
-                        if m.inventory_type == "ad_unit":
-                            ad_unit_ids.append(inv.inventory_id)
-                        elif m.inventory_type == "placement":
-                            placement_ids.append(inv.inventory_id)
-
-                # Update implementation_config
-                if ad_unit_ids:
-                    product.implementation_config["targeted_ad_unit_ids"] = ad_unit_ids
-                else:
-                    # Remove key if no ad units remain
-                    product.implementation_config.pop("targeted_ad_unit_ids", None)
-
-                if placement_ids:
-                    product.implementation_config["targeted_placement_ids"] = placement_ids
-                else:
-                    # Remove key if no placements remain
-                    product.implementation_config.pop("targeted_placement_ids", None)
-
-                # Mark as modified for SQLAlchemy
-                attributes.flag_modified(product, "implementation_config")
-                db_session.commit()
-
-            logger.info(
-                f"Removed inventory assignment: product={product_id}, inventory={inventory_name}, mapping_id={mapping_id}"
-            )
-
-            return jsonify({"success": True, "message": "Inventory assignment removed successfully"})
-
-    except Exception as e:
-        logger.error(f"Error removing inventory assignment: {e}", exc_info=True)
-        return jsonify({"success": False, "message": safe_error_message(e)}), 500
+        return jsonify({"success": True, "message": "Inventory assignment removed successfully"})
