@@ -1,8 +1,9 @@
 """Steps for the local-gam-*.feature files: what a Google Ad Manager seller sends GAM, and what it reports.
 
-local-gam-seller.feature, local-gam-line-item-flight.feature, local-gam-geo-targeting.feature
-(create_media_buy on ``MediaBuyCreateEnv``) and local-uc006-gam-assignment-trafficking.feature
-(sync_creatives and the seller's creative approval on ``CreativeSyncEnv``): the Given makes the
+local-gam-seller.feature, local-gam-line-item-flight.feature, local-gam-geo-targeting.feature,
+local-gam-creative-kinds.feature (create_media_buy on ``MediaBuyCreateEnv``) and
+local-uc006-gam-assignment-trafficking.feature (sync_creatives and the seller's creative
+approval on ``CreativeSyncEnv``): the Given makes the
 env's tenant a GAM seller (``GamSellerMixin.sell_through_gam``). The Thens read two things: the
 buyer's wire response, and the stand-in GAM network's record of what the seller sent it and what
 it created. Their expectations are the scenario's literals, or links the stand-in itself
@@ -52,6 +53,7 @@ from tests.helpers.gam_client import gam_delivery_row
         r'"(?P<ad_unit_id>[^"]+)", and the buyer is its advertiser "(?P<advertiser_id>[^"]+)"'
         r'(?:, on a network (?:in time zone "(?P<network_time_zone>[^"]+)"'
         r'|that refuses to name its time zone with "(?P<network_fault>[^"]+)"))?'
+        r"(?:, with product formats '(?P<product_formats>[^']*)')?"
         r"(?:, with product settings '(?P<product_settings>[^']*)')?"
     )
 )
@@ -62,6 +64,7 @@ def given_seller_sells_through_gam(
     advertiser_id: str,
     network_time_zone: str | None,
     network_fault: str | None,
+    product_formats: str | None,
     product_settings: str | None,
 ) -> None:
     """Onboard the env's tenant to GAM and sell every product the scenario built on one ad unit.
@@ -73,7 +76,9 @@ def given_seller_sells_through_gam(
 
     The optional network clause states the GAM network's own time zone, or the ``ApiError``
     reason with which the network refuses to name it; without it the stand-in network keeps
-    its default zone. The optional
+    its default zone. The optional product-formats clause is a JSON object of the format
+    arms each product sells (``format_ids``, ``format_options``; an arm it omits is none),
+    from which the GAM configuration is generated. The optional
     product-settings clause is a JSON object of ``implementation_config`` keys the seller
     wrote over the generated GAM configuration of each product it sells. A scenario that
     needs another seller fact adds a clause to this sentence rather than a second seller
@@ -95,6 +100,7 @@ def given_seller_sells_through_gam(
         network_time_zone=network_time_zone,
         network_fault=network_fault,
         implementation_config=json.loads(product_settings) if product_settings is not None else None,
+        product_formats=json.loads(product_formats) if product_formats is not None else None,
     )
 
 
@@ -345,24 +351,25 @@ def _library_image_creative(
 def _library_creative(
     ctx: dict,
     creative_id: str,
-    format_id: str,
-    asset: Any,
-    *,
+    format_id: str | None,
+    *assets: Any,
     status: str = "approved",
     principal: Any = None,
+    canonical_kind: str | None = None,
     **data: Any,
 ) -> None:
-    """A creative stored in the library with one asset, in reference-catalog format *format_id*."""
+    """A creative stored in the library with *assets*: in reference-catalog format *format_id*, or of *canonical_kind*."""
     from tests.factories.creative import CreativeFactory
     from tests.factories.creative_asset import build_assets
 
+    identity = {"canonical_kind": canonical_kind} if canonical_kind is not None else {"format": format_id}
     CreativeFactory(
         creative_id=creative_id,
         tenant=ctx["tenant"],
         principal=principal or ctx["principal"],
-        format=format_id,
         status=status,
-        data={"assets": build_assets(asset), **data},
+        data={"assets": build_assets(*assets), **data},
+        **identity,
     )
 
 
@@ -450,6 +457,145 @@ def given_buyer_holds_html_creative(ctx: dict, creative_id: str, markup: str, pr
         height=250,
     )
     ctx["env"]._commit_factory_data()
+
+
+def _package_references_library_creative(
+    ctx: dict, creative_id: str, format_id: str | None, *assets: Any, canonical_kind: str | None = None
+) -> None:
+    """An approved library creative with *assets*, named in the package's creative_ids."""
+    from tests.bdd.steps.generic.given_media_buy import _add_creative_ids_to_package
+
+    _library_creative(ctx, creative_id, format_id, *assets, canonical_kind=canonical_kind)
+    ctx["env"]._commit_factory_data()
+    _add_creative_ids_to_package(ctx, [creative_id])
+
+
+@given(
+    parsers.re(
+        r'the package references the buyer\'s approved display_tag creative "(?P<creative_id>[^"]+)" carrying '
+        r'(?:the inline markup "(?P<markup>[^"]+)" of type "(?P<markup_type>[^"]+)"'
+        r'|the tag URL "(?P<tag_url>[^"]+)"'
+        r'|the paired redirect "(?P<ad_request_url>[^"]+)" with click-through "(?P<clickthrough_url>[^"]+)")$'
+    )
+)
+def given_package_references_display_tag_creative(
+    ctx: dict,
+    creative_id: str,
+    markup: str | None,
+    markup_type: str | None,
+    tag_url: str | None,
+    ad_request_url: str | None,
+    clickthrough_url: str | None,
+) -> None:
+    """A canonical ``display_tag`` creative carrying one of the kind's three representations.
+
+    AdCP 3.2.7 formats/canonical/display_tag.json: the default slot is ``tag_url``, a url
+    asset with ``url_type: ad_request``; an option accepting inline or paired delivery
+    replaces the slots with a ``display_tag`` asset, here under ``serving_tag``
+    (core/assets/display-tag-asset.json: ``delivery_type`` ``inline_markup`` with
+    ``markup`` and ``markup_type``, or ``paired_redirect`` with ``ad_request_url`` and
+    ``clickthrough_url``).
+    """
+    from tests.factories.creative_asset import asset_spec, url_spec
+
+    if tag_url is not None:
+        asset = url_spec("tag_url", url=tag_url, url_type="ad_request")
+    elif markup is not None:
+        asset = asset_spec(
+            "serving_tag", "display_tag", delivery_type="inline_markup", markup=markup, markup_type=markup_type
+        )
+    else:
+        asset = asset_spec(
+            "serving_tag",
+            "display_tag",
+            delivery_type="paired_redirect",
+            ad_request_url=ad_request_url,
+            clickthrough_url=clickthrough_url,
+        )
+    _package_references_library_creative(ctx, creative_id, None, asset, canonical_kind="display_tag")
+
+
+def _html5_zip_bundle() -> bytes:
+    """A one-file HTML5 bundle, as a zip archive with a fixed timestamp so its bytes are stable."""
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as bundle:
+        bundle.writestr(
+            zipfile.ZipInfo("index.html", date_time=(2026, 1, 1, 0, 0, 0)),
+            '<html><body><a href="javascript:window.open(clickTag)">Example ad</a></body></html>',
+        )
+    return buffer.getvalue()
+
+
+@given(
+    parsers.re(
+        r'the package references the buyer\'s approved html5 creative "(?P<creative_id>[^"]+)" carrying a zip '
+        r'bundle from the buyer\'s bundle host and the backup image "(?P<backup_url>[^"]+)"$'
+    )
+)
+def given_package_references_html5_creative(ctx: dict, creative_id: str, backup_url: str) -> None:
+    """A canonical ``html5`` creative: a zip bundle the buyer's host serves, and a 300x250 backup image.
+
+    AdCP 3.2.7 formats/canonical/html5.json: slot ``html5_bundle`` (zip asset) and the
+    optional ``backup_image``. The bundle's bytes are kept to compare with what GAM receives.
+    """
+    from tests.factories.creative_asset import asset_spec, image_spec
+
+    ctx["html5_bundle"] = _html5_zip_bundle()
+    bundle_url = ctx["env"].serve_html5_bundle(ctx["html5_bundle"])
+    _package_references_library_creative(
+        ctx,
+        creative_id,
+        None,
+        asset_spec("html5_bundle", "zip", url=bundle_url),
+        image_spec("backup_image", url=backup_url),
+        canonical_kind="html5",
+    )
+
+
+@given(
+    parsers.parse(
+        'the package references the buyer\'s approved 300x250 HTML creative "{creative_id}" with markup "{markup}", '
+        "stored without a URL"
+    )
+)
+def given_package_references_html_creative(ctx: dict, creative_id: str, markup: str) -> None:
+    """A library creative in the reference HTML format whose one asset is its markup, and no root URL or size."""
+    from tests.factories.creative_asset import asset_spec
+
+    _package_references_library_creative(
+        ctx, creative_id, "display_300x250_html", asset_spec("html_creative", "html", content=markup)
+    )
+
+
+@given(
+    parsers.parse(
+        'the package references the buyer\'s approved native_in_feed creative "{creative_id}" titled "{title}" '
+        'by "{advertiser}", landing on "{landing_url}", with main image "{image_url}"'
+    )
+)
+def given_package_references_native_creative(
+    ctx: dict, creative_id: str, title: str, advertiser: str, landing_url: str, image_url: str
+) -> None:
+    """A canonical ``native_in_feed`` creative: its required slots and a main image.
+
+    AdCP 3.2.7 formats/canonical/native_in_feed.json requires ``title``,
+    ``advertiser_name`` and ``landing_page_url``; ``main_image`` is optional.
+    """
+    from tests.factories.creative_asset import image_spec, text_spec, url_spec
+
+    _package_references_library_creative(
+        ctx,
+        creative_id,
+        None,
+        text_spec("title", content=title),
+        text_spec("advertiser_name", content=advertiser),
+        url_spec("landing_page_url", url=landing_url),
+        image_spec("main_image", url=image_url),
+        canonical_kind="native_in_feed",
+    )
 
 
 @given(parsers.parse('the seller\'s ad server is now "{adapter_type}", which takes no creatives from the seller'))
@@ -801,14 +947,87 @@ def then_gam_created_image_creatives(ctx: dict, advertiser_id: str, urls: str) -
 
 
 @then(
-    parsers.parse(
-        'Google Ad Manager created one third-party creative for advertiser "{advertiser_id}" whose snippet is '
-        '"{snippet}" and which names no image URL'
+    parsers.re(
+        r'Google Ad Manager created one third-party creative for advertiser "(?P<advertiser_id>\d+)" whose snippet is '
+        r"(?:\"(?P<double_quoted>[^\"]+)\"|'(?P<single_quoted>[^']+)') and which names no image URL$"
     )
 )
-def then_gam_created_one_third_party_creative(ctx: dict, advertiser_id: str, snippet: str) -> None:
-    """GAM holds exactly one creative from this scenario: the markup itself, not a picture of a page."""
-    _assert_creatives_created(ctx, [("ThirdPartyCreative", advertiser_id, None, snippet)])
+def then_gam_created_one_third_party_creative(
+    ctx: dict, advertiser_id: str, double_quoted: str | None, single_quoted: str | None
+) -> None:
+    """GAM holds exactly one creative from this scenario: the markup itself, not a picture of a page.
+
+    The snippet is quoted with whichever quote it does not contain, and compared byte for byte.
+    """
+    _assert_creatives_created(ctx, [("ThirdPartyCreative", advertiser_id, None, double_quoted or single_quoted)])
+
+
+@then(
+    parsers.parse(
+        'Google Ad Manager created one image redirect creative for advertiser "{advertiser_id}" showing '
+        '"{image_url}" and clicking through to "{destination_url}"'
+    )
+)
+def then_gam_created_one_image_redirect(ctx: dict, advertiser_id: str, image_url: str, destination_url: str) -> None:
+    """GAM holds exactly one creative from this scenario: an image redirect over exactly this pair of URLs."""
+    created = [
+        (c["xsi_type"], str(c["advertiserId"]), c.get("imageUrl"), c.get("destinationUrl"))
+        for c in _creatives_created(ctx)
+    ]
+    expected = [("ImageRedirectCreative", advertiser_id, image_url, destination_url)]
+    assert created == expected, f"expected GAM to create {expected}; it created {created}"
+
+
+@then(
+    parsers.parse(
+        'Google Ad Manager created one HTML5 creative for advertiser "{advertiser_id}" whose html5 asset is the '
+        "buyer's zip bundle, in a file with a zip extension, and which names no image URL"
+    )
+)
+def then_gam_created_one_html5_creative(ctx: dict, advertiser_id: str) -> None:
+    """GAM holds exactly one creative from this scenario: an ``Html5Creative`` carrying the bundle's own bytes.
+
+    Ad Manager API v202602 ``Html5Creative.html5Asset``: the ``assetByteArray`` "must be a
+    zip bundle" and the ``fileName`` "must have a zip extension". The bytes are the ones the
+    buyer's bundle host served, so a bundle the seller did not fetch cannot pass.
+    """
+    created = _creatives_created(ctx)
+    kinds = [(c["xsi_type"], str(c["advertiserId"]), c.get("imageUrl")) for c in created]
+    assert kinds == [("Html5Creative", advertiser_id, None)], f"expected one Html5Creative; GAM created {created}"
+    asset = created[0]["html5Asset"]
+    assert asset.get("assetByteArray") == ctx["html5_bundle"], "the html5 asset is not the buyer's zip bundle"
+    assert str(asset.get("fileName", "")).endswith(".zip"), f"the html5 asset's file name {asset.get('fileName')!r}"
+
+
+@then(parsers.re(r"Google Ad Manager created that creative at size (?P<width>\d+)x(?P<height>\d+)$"))
+def then_gam_created_creative_at_size(ctx: dict, width: str, height: str) -> None:
+    """The one creative GAM created has this ``size``: GAM keeps a creative's size for life."""
+    sizes = [c.get("size") for c in _creatives_created(ctx)]
+    expected = [{"width": int(width), "height": int(height)}]
+    assert sizes == expected, f"expected GAM to create one creative at {expected}; it created sizes {sizes}"
+
+
+@then(
+    parsers.re(
+        r"Google Ad Manager associated that creative with the line item it created, "
+        r'(?:overriding its size with "(?P<sizes>[^"]+)"|at its own size)$'
+    )
+)
+def then_gam_associated_with_size_override(ctx: dict, sizes: str | None) -> None:
+    """One association, of the one creative onto the one line item, whose ``sizes`` are exactly these or none.
+
+    Ad Manager API v202602 ``LineItemCreativeAssociation.sizes``: "Overrides the value set for
+    Creative.size, which allows the creative to be served to ad units that would otherwise
+    not be compatible for its actual size." "At its own size" is an association stating none.
+    """
+    (creative,) = _creatives_created(ctx)
+    expected_sizes = [
+        {"width": int(width), "height": int(height)}
+        for width, height in (size.strip().split("x") for size in (sizes.split(",") if sizes else ()))
+    ]
+    held = [(str(a["creativeId"]), str(a["lineItemId"]), list(a.get("sizes") or [])) for a in _licas_created(ctx)]
+    expected = [(str(creative["id"]), str(_line_item_created(ctx)["id"]), expected_sizes)]
+    assert held == expected, f"expected GAM to hold {expected}; it holds {held}"
 
 
 @then(parsers.parse('creative "{creative_id}" failed with error {code} and recovery {recovery}'))

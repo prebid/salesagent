@@ -122,6 +122,7 @@ class GamSellerMixin:
         network_time_zone: str | None = None,
         network_fault: str | None = None,
         implementation_config: Mapping[str, Any] | None = None,
+        product_formats: Mapping[str, Any] | None = None,
     ) -> None:
         """Make this env's tenant a Google Ad Manager seller selling *products* on one ad unit.
 
@@ -149,6 +150,10 @@ class GamSellerMixin:
 
         ``implementation_config`` is what the seller wrote over each product's generated GAM
         configuration (``_sell_product_through_gam``): its keys replace the generated ones.
+
+        ``product_formats`` is the format arms each product sells, ``format_ids`` and
+        ``format_options`` as ``core/product.json`` names them; an arm it leaves out is none.
+        Omitted, every product sells ``display_300x250_image``.
         """
         from tests.factories import GAMInventoryFactory
         from tests.utils.tenant_setup import onboard_gam
@@ -165,7 +170,7 @@ class GamSellerMixin:
         }
         GAMInventoryFactory(tenant=tenant, inventory_id=ad_unit_id)
         for product in products:
-            self._sell_product_through_gam(product, ad_unit_id, implementation_config or {})
+            self._sell_product_through_gam(product, ad_unit_id, implementation_config or {}, product_formats)
         self._commit_factory_data()
         self.sell_through_tenant_adapter()
 
@@ -269,28 +274,39 @@ class GamSellerMixin:
         assert response.status_code == 200, f"approving creative {creative_id} answered {response.status_code}"
 
     def _sell_product_through_gam(
-        self, product: Any, ad_unit_id: str, implementation_config: Mapping[str, Any]
+        self,
+        product: Any,
+        ad_unit_id: str,
+        implementation_config: Mapping[str, Any],
+        product_formats: Mapping[str, Any] | None = None,
     ) -> None:
         """Configure *product* for GAM on one ad unit.
 
-        * Its format is ``display_300x250_image`` from the reference catalog. The adapter
-          resolves each line item's creative size through ``format_resolver.get_format``,
-          and the creative registry serves the checked-in reference catalog only while the
-          testing flag's ``reference_formats_only`` holds (#2255).
+        * Its formats are *product_formats*, else ``display_300x250_image`` from the
+          reference catalog. The adapter resolves each line item's creative size through
+          ``format_resolver.get_format``, and the creative registry serves the checked-in
+          reference catalog only while the testing flag's ``reference_formats_only`` holds
+          (#2255).
         * Its ``implementation_config`` is ``GAMProductConfigService.generate_default_config``
-          for its delivery type and format, the generator the Admin UI's product form calls,
+          for its delivery type and formats, the generator the Admin UI's product form calls,
           plus the ad unit, with *implementation_config* (the keys the seller wrote by hand)
           over both.
         """
         from src.core.format_cache import DEFAULT_AGENT_URL
         from src.services.gam_product_config_service import GAMProductConfigService
 
-        product.format_ids = [{"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_image"}]
-        product.implementation_config = {
-            **GAMProductConfigService.generate_default_config(product.delivery_type, ["display_300x250_image"]),
-            "targeted_ad_unit_ids": [ad_unit_id],
-            **implementation_config,
-        }
+        if product_formats is None:
+            product.format_ids = [{"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_image"}]
+            generated = GAMProductConfigService.generate_default_config(
+                product.delivery_type, ["display_300x250_image"]
+            )
+        else:
+            product.format_ids = product_formats.get("format_ids")
+            product.format_options = product_formats.get("format_options")
+            generated = GAMProductConfigService.generate_default_config(
+                product.delivery_type, product.format_ids, format_options=product.format_options
+            )
+        product.implementation_config = {**generated, "targeted_ad_unit_ids": [ad_unit_id], **implementation_config}
 
     def refuse_gam_association(self, line_item_id: str, reason: str) -> None:
         """The stand-in GAM network refuses creative associations on *line_item_id*, with this ``ApiError`` reason."""
@@ -306,6 +322,26 @@ class GamSellerMixin:
 
         line_items = self.mock["gam_client"].return_value.GetService("LineItemService")
         line_items.getLineItemsByStatement.side_effect = gam_fault(reason)
+
+    def serve_html5_bundle(self, bundle: bytes) -> str:
+        """Serve *bundle* as a zip from a loopback origin over TLS; return its URL.
+
+        The buyer's bundle host, which the seller fetches the bundle from through the egress
+        seam: so the env trusts the shared test CA and opens the private-range hatch, each
+        released with the env. In process only, as every GAM seller scenario is.
+        """
+        from unittest.mock import patch
+
+        from src.core.config import get_settings
+        from tests.helpers.tls_material import start_tls_origin, trust_test_ca
+
+        trust_test_ca(self._guard)
+        hatch = patch.object(get_settings().limits, "adcp_outbound_allow_private", True)
+        hatch.start()
+        self._guard("html5 bundle egress hatch", hatch.stop)
+        origin = start_tls_origin(self._guard, "html5 bundle origin")
+        origin.respond_with(200, body=bundle, content_type="application/zip")
+        return f"{origin.base_url}/bundle.zip"
 
     def gam_objects_sent(self, service: str, method: str) -> list[Any]:
         """Every object the seller sent the stand-in GAM network through ``service.method``, in order.
