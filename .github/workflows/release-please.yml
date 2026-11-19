@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+  # Sign and attest an image that's already published, for a release whose sign-and-attest job failed
+  # (3.0.1: its image_tags output was dropped). Only sign-and-attest runs.
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: Image digest to sign and attest (sha256:...), as pushed to ghcr.io and Docker Hub
+        required: true
+        type: string
 
 concurrency:
   group: release-please
@@ -13,6 +21,7 @@ permissions: {}
 
 jobs:
   release-please:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -178,8 +187,11 @@ jobs:
 
   sign-and-attest:
     needs: [release-please, build-and-push]
-    if: ${{ needs.release-please.outputs.release_created }}
+    # After a release's build, or on dispatch (when the other two jobs are skipped).
+    if: ${{ !cancelled() && (needs.build-and-push.result == 'success' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
+    env:
+      IMAGE_DIGEST: ${{ github.event_name == 'workflow_dispatch' && inputs.digest || needs.build-and-push.outputs.image_digest }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -205,7 +217,7 @@ jobs:
           cosign login docker.io -u "$DH_USER" -p "$DH_PASS"
       - name: Sign image with cosign keyless
         env:
-          DIGEST: ${{ needs.build-and-push.outputs.image_digest }}
+          DIGEST: ${{ env.IMAGE_DIGEST }}
           # The image names, not build-and-push's image_tags output: the tags include the Docker Hub
           # user, a secret, so GitHub drops that output between jobs ("Skip output 'image_tags' since
           # it may contain secret") and nothing was signed. A signature attaches to the digest, so
@@ -215,6 +227,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ -n "$DIGEST" ]] || { echo "ERROR: build-and-push image_digest is empty"; exit 1; }
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "ERROR: not an image digest: $DIGEST"; exit 1; }
           mkdir -p "$BUNDLE_DIR"
           count=0
           for image in $IMAGES; do
@@ -246,17 +259,17 @@ jobs:
       - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-name: ghcr.io/${{ github.repository }}
-          subject-digest: ${{ needs.build-and-push.outputs.image_digest }}
+          subject-digest: ${{ env.IMAGE_DIGEST }}
           push-to-registry: true
       - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-name: docker.io/${{ secrets.DOCKERHUB_USER }}/salesagent
-          subject-digest: ${{ needs.build-and-push.outputs.image_digest }}
+          subject-digest: ${{ env.IMAGE_DIGEST }}
           push-to-registry: true
       - name: Scan image for OS-layer CVEs (SARIF report)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository }}@${{ needs.build-and-push.outputs.image_digest }}
+          image-ref: ghcr.io/${{ github.repository }}@${{ env.IMAGE_DIGEST }}
           severity: CRITICAL,HIGH
           vuln-type: os,library
           ignore-unfixed: true
