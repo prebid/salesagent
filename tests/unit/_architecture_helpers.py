@@ -1087,7 +1087,8 @@ def python_version_pattern_map() -> dict[str, str]:
 
 
 def _repo_relative(path: Path, repo: Path) -> str:
-    return str(path.relative_to(repo))
+    """Repo-relative path with forward slashes on every platform, so prefix checks match on Windows."""
+    return path.relative_to(repo).as_posix()
 
 
 def _github_yaml_candidate(path: Path, repo: Path) -> bool:
@@ -1209,7 +1210,7 @@ def extract_dockerfile_python_version(text: str) -> str | None:
 def _pins_by_file(pins: Iterable[tuple[Path, str]], repo: Path | None = None) -> dict[str, set[str]]:
     by_file: dict[str, set[str]] = {}
     for path, ref in pins:
-        key = (path.relative_to(repo) if repo else path).as_posix()
+        key = _repo_relative(path, repo) if repo else path.as_posix()
         by_file.setdefault(key, set()).add(ref)
     return by_file
 
@@ -1231,15 +1232,17 @@ def assert_single_sha_pin(pins: Iterable[tuple[Path, str]], action: str) -> None
 
 
 def assert_setup_uv_single_pinned_source(pins: Iterable[tuple[Path, str]], repo: Path) -> None:
-    """Assert ``astral-sh/setup-uv`` is pinned to one full SHA, in exactly one composite action file."""
-    pin_list = list(pins)
-    by_file = _pins_by_file(pin_list, repo)
-    if by_file and set(by_file) != {_INSTALL_UV_ACTION}:
+    """Assert ``astral-sh/setup-uv`` is referenced from one composite action file and nowhere else.
+
+    The pin itself (full SHA, one value) is ``assert_single_sha_pin``'s rule, which
+    ``test_action_pinned_to_one_full_sha`` applies to setup-uv.
+    """
+    by_file = _pins_by_file(pins, repo)
+    if set(by_file) != {_INSTALL_UV_ACTION}:
         raise AssertionError(
             f"astral-sh/setup-uv must be referenced only from {_INSTALL_UV_ACTION} — found pins in:\n"
-            + _render_pins(by_file)
+            + (_render_pins(by_file) or "  (none)")
         )
-    assert_single_sha_pin(pin_list, "astral-sh/setup-uv")
 
 
 def iter_action_pins(repo: Path, action: str) -> Iterator[tuple[Path, str]]:

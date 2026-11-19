@@ -219,11 +219,11 @@ def test_python_version_anchors_consistent() -> None:
 @pytest.mark.arch_guard
 def test_python_anchor_scan_includes_github_yaml_surfaces() -> None:
     """Workflow and composite-action YAML must be in the python anchor scan surface."""
-    from tests.unit._architecture_helpers import _python_anchor_candidate, iter_git_tracked_files
+    from tests.unit._architecture_helpers import _python_anchor_candidate, _repo_relative, iter_git_tracked_files
 
     repo = repo_root()
     candidates = {
-        str(path.relative_to(repo))
+        _repo_relative(path, repo)
         for path in iter_git_tracked_files(repo)
         if _python_anchor_candidate(path, repo) and path.suffix in {".yml", ".yaml"}
     }
