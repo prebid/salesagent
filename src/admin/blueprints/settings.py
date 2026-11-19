@@ -196,12 +196,12 @@ def update_general(tenant_id):
                     # spelled out here refused the ':' in 'host:8443' -- a form that cannot
                     # save what the column legitimately holds, so a tenant served on a
                     # non-default port could not be renamed.
-                    from src.core.http_utils import validate_virtual_host
+                    from src.core.http_utils import InvalidVirtualHost, validate_virtual_host
 
                     try:
                         virtual_host = validate_virtual_host(virtual_host)
-                    except ValueError as exc:
-                        flash(str(exc), "error")
+                    except InvalidVirtualHost as refusal:
+                        flash(refusal.MESSAGE, "error")
                         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
                     # Check if virtual host is already in use by another tenant.

@@ -119,3 +119,14 @@ def test_operator_refusals_are_not_value_errors():
     ):
         assert not issubclass(refusal, ValueError), refusal
         assert isinstance(refusal.MESSAGE, str) and refusal.MESSAGE, refusal
+
+
+def test_an_invalid_virtual_host_is_answered_with_fixed_text():
+    """The refusal's own text quotes the value; responses use MESSAGE, which does not."""
+    from src.core.http_utils import InvalidVirtualHost, validate_virtual_host
+
+    with pytest.raises(InvalidVirtualHost) as raised:
+        validate_virtual_host("https://evil.example/<script>")
+
+    assert isinstance(raised.value, ValueError), "the ORM validator still handles it as a ValueError"
+    assert "evil.example" not in InvalidVirtualHost.MESSAGE

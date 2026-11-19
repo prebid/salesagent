@@ -143,7 +143,7 @@ def create_principal(tenant_id):
     principal_name = request.form.get("name", "").strip()
     if not principal_name:
         flash("Principal name is required", "error")
-        return redirect(request.url)
+        return redirect(url_for("principals.create_principal", tenant_id=tenant_id))
 
     principal_id = f"prin_{uuid.uuid4().hex[:8]}"
 
@@ -162,7 +162,7 @@ def create_principal(tenant_id):
                 "Please select a valid advertiser from the dropdown.",
                 "error",
             )
-            return redirect(request.url)
+            return redirect(url_for("principals.create_principal", tenant_id=tenant_id))
 
         platform_mappings["google_ad_manager"] = {
             "advertiser_id": gam_advertiser_id,
@@ -264,7 +264,7 @@ def edit_principal(tenant_id, principal_id):
                 int(gam_advertiser_id)
             except (ValueError, TypeError):
                 flash("GAM Advertiser ID must be numeric", "error")
-                return redirect(request.url)
+                return redirect(url_for("principals.edit_principal", tenant_id=tenant_id, principal_id=principal_id))
 
             platform_mappings["google_ad_manager"] = {
                 "advertiser_id": gam_advertiser_id,

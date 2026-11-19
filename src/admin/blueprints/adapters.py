@@ -167,7 +167,13 @@ def save_adapter_config(tenant_id, **kwargs):
         try:
             validated_config = schemas.connection_config(**config_data)
         except ValidationError as e:
-            return jsonify({"success": False, "error": f"Validation error: {e}"}), 400
+            # Locations and messages only: pydantic's own text and the error dicts' "input"
+            # echo the submitted values, which can be credentials.
+            problems = [
+                {"loc": list(err["loc"]), "msg": err["msg"]}
+                for err in e.errors(include_url=False, include_input=False, include_context=False)
+            ]
+            return jsonify({"success": False, "error": "Validation error", "errors": problems}), 400
 
     # Use the validated model for DB write (JSONType + engine json_serializer
     # handle BaseModel serialization). Fall back to raw dict if no schema.

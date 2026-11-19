@@ -24,6 +24,8 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
+from src.core.operator_errors import OperatorRefusal
+
 
 class HeaderSource(Protocol):
     """Anything that can list its headers.
@@ -71,8 +73,23 @@ def requested_host(headers: HeaderSource) -> str | None:
     return get_header_case_insensitive(headers, "Host")
 
 
+class InvalidVirtualHost(OperatorRefusal, ValueError):
+    """A ``virtual_host`` that is not a bare ``host`` or ``host:port``.
+
+    The exception's own text says exactly what is wrong and quotes the value; it is for
+    the log and the ORM validator. Responses answer with ``MESSAGE``. Also a
+    ``ValueError``, unlike the other refusals, because the ``Tenant.virtual_host``
+    validator and its callers handle shape errors as ``ValueError``.
+    """
+
+    MESSAGE = (
+        "virtual_host must be a bare host or host:port that a client can dial, "
+        "e.g. 'seller.example.com' or 'seller.example.com:8443'"
+    )
+
+
 def validate_virtual_host(value: str | None) -> str:
-    """The host a tenant is served at, folded to lowercase — or a ValueError saying why not.
+    """The host a tenant is served at, folded to lowercase — or an ``InvalidVirtualHost`` saying why not.
 
     ONE definition of the shape, so the ORM validator, the admin form and the management
     API cannot disagree about it. The card publishes this string verbatim, so a value that
@@ -88,36 +105,35 @@ def validate_virtual_host(value: str | None) -> str:
     the card publishes this string verbatim and a client dials what the card says.
     """
     if value is None or not value.strip():
-        raise ValueError("virtual_host is required: a tenant declares the host it is served at")
+        raise InvalidVirtualHost("virtual_host is required: a tenant declares the host it is served at")
     host = value.strip().lower()
     if any(ch.isspace() for ch in host):
-        raise ValueError(f"virtual_host {value!r} contains whitespace, so no Host header can name it")
-    # EVERY ValueError out of here carries an authored message. ``urlsplit`` raises its own
-    # for an unterminated IPv6 bracket ("Invalid IPv6 URL"), and the management API answers
-    # 400 with ``str(exc)`` -- so an uncaught one puts urllib's text in a response body,
-    # which is the exposure CodeQL flags on that line. Re-raised like the port below.
+        raise InvalidVirtualHost(f"virtual_host {value!r} contains whitespace, so no Host header can name it")
+    # EVERY error out of here is an InvalidVirtualHost. ``urlsplit`` raises its own ValueError
+    # for an unterminated IPv6 bracket ("Invalid IPv6 URL"); it is re-raised like the port
+    # below, so callers catch one type and answer with its MESSAGE.
     try:
         parts = urlsplit(f"//{host}")
     except ValueError as exc:
-        raise ValueError(f"virtual_host {value!r} is not a host this seller can be served at") from exc
+        raise InvalidVirtualHost(f"virtual_host {value!r} is not a host this seller can be served at") from exc
     if parts.path or parts.query or parts.fragment:
-        raise ValueError(
+        raise InvalidVirtualHost(
             f"virtual_host {value!r} is not a bare host: it carries a scheme or a path. "
             "Store the host a request names, e.g. 'seller.example.com' or 'seller.example.com:8443'"
         )
     if parts.netloc != host or "@" in parts.netloc:
-        raise ValueError(f"virtual_host {value!r} is not a bare host[:port]")
+        raise InvalidVirtualHost(f"virtual_host {value!r} is not a bare host[:port]")
     # A trailing colon parses as "no port" rather than as an error, so `host:` and `[::1]:`
     # would store and then publish `https://host:/a2a` on the card. The card is dialled
     # verbatim, so a host that cannot be dialled is the defect this function exists to catch.
     if host.endswith(":"):
-        raise ValueError(f"virtual_host {value!r} ends with a colon but names no port")
+        raise InvalidVirtualHost(f"virtual_host {value!r} ends with a colon but names no port")
     try:
         parts.port  # noqa: B018 — raises for a non-numeric port
     except ValueError as exc:
-        raise ValueError(f"virtual_host {value!r} has a non-numeric port") from exc
+        raise InvalidVirtualHost(f"virtual_host {value!r} has a non-numeric port") from exc
     if not parts.hostname:
-        raise ValueError(f"virtual_host {value!r} names no host")
+        raise InvalidVirtualHost(f"virtual_host {value!r} names no host")
     return host
 
 

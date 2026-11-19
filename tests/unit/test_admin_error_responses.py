@@ -154,7 +154,7 @@ def test_unhandled_error_in_a_form_post_flashes_and_goes_back(failing_client):
     )
 
     assert response.status_code == 302
-    assert response.headers["Location"] == "http://localhost/tenant/t1/settings"
+    assert response.headers["Location"] == "/tenant/t1/settings"
     with failing_client.session_transaction() as sess:
         ((category, message),) = sess["_flashes"]
     assert category == "error"
@@ -162,7 +162,16 @@ def test_unhandled_error_in_a_form_post_flashes_and_goes_back(failing_client):
     assert _SECRET not in message
 
 
-@pytest.mark.parametrize("referer", [None, "https://elsewhere.example/page"], ids=["no-referer", "other-site"])
+@pytest.mark.parametrize(
+    "referer",
+    [
+        None,
+        "https://elsewhere.example/page",
+        "http://localhost//evil.example/page",
+        "http://localhost/\\evil.example/page",
+    ],
+    ids=["no-referer", "other-site", "double-slash-path", "backslash-path"],
+)
 def test_unhandled_error_without_a_same_site_page_renders_the_error_page(failing_client, referer):
     headers = {"Accept": "text/html"} | ({"Referer": referer} if referer else {})
     response = failing_client.get("/_test/boom", headers=headers)
@@ -175,3 +184,27 @@ def test_unhandled_error_without_a_same_site_page_renders_the_error_page(failing
 
 def test_http_exceptions_pass_through(failing_client):
     assert failing_client.get("/_test/missing").status_code == 404
+
+
+def test_same_site_referrer_keeps_only_path_and_query(failing_client):
+    response = failing_client.post(
+        "/_test/boom", headers={"Accept": "text/html", "Referer": "http://localhost/tenant/t1/products?page=2"}
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/tenant/t1/products?page=2"
+
+
+def test_adapter_config_validation_answers_locations_not_input(client):
+    """pydantic's text and its error dicts echo the submitted value, which can be a credential."""
+    secret = "sk-live-0123456789abcdef"
+    response = client.post(
+        "/api/tenant/default/adapter-config",
+        json={"adapter_type": "mock", "config": {"manual_approval_required": secret}},
+    )
+
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"] == "Validation error"
+    assert [e["loc"] for e in body["errors"]] == [["manual_approval_required"]]
+    assert secret not in response.get_data(as_text=True)

@@ -44,14 +44,25 @@ def _wants_html() -> bool:
 
 
 def _same_site_referrer() -> str | None:
-    """The page the request came from, when it is on this host and is not this URL."""
+    """The page the request came from, as a relative path, when it is on this host and is not this URL.
+
+    Only the referrer's path and query are used, so no scheme or host from the ``Referer``
+    header reaches ``redirect()``. The path must start with exactly one ``/`` and hold no
+    backslash: browsers read ``//host`` and ``/\\host`` as another site.
+    """
     referrer = request.referrer
     if not referrer:
         return None
     parsed = urlsplit(referrer)
-    if parsed.scheme not in ("http", "https") or parsed.netloc != request.host or referrer == request.url:
+    if parsed.scheme not in ("http", "https") or parsed.netloc != request.host:
         return None
-    return referrer
+    path = parsed.path
+    if not path.startswith("/") or path.startswith("//") or "\\" in path or "\\" in parsed.query:
+        return None
+    target = f"{path}?{parsed.query}" if parsed.query else path
+    if target == request.full_path.rstrip("?"):
+        return None
+    return target
 
 
 def handle_unexpected_error(e: Exception) -> ResponseReturnValue:

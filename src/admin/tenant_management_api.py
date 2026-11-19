@@ -8,6 +8,7 @@ from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import delete, func, select
 
 from src.admin.auth_helpers import require_api_key_auth
+from src.admin.utils.operator_errors import refusal_error
 from src.admin.utils.url_policy import json_error_if_url_blocked
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -22,7 +23,7 @@ from src.core.database.models import (
 )
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.http_utils import validate_virtual_host
+from src.core.http_utils import InvalidVirtualHost, validate_virtual_host
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +135,8 @@ def create_tenant():
         # SELLER broke about a value the caller chose, with no field named.
         try:
             data["virtual_host"] = validate_virtual_host(data["virtual_host"])
-        except ValueError as exc:
-            return jsonify({"error": str(exc), "field": "virtual_host"}), 400
+        except InvalidVirtualHost as refusal:
+            return refusal_error(refusal, field="virtual_host")
 
         if blocked := _webhook_url_refusal(data):
             return blocked
