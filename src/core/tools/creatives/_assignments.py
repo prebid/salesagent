@@ -476,8 +476,9 @@ def _process_assignments(
                 index = next(i for i, r in enumerate(results) if r.creative_id == creative_id)
                 if creative_id in referenced_only and not assigned:
                     # Nothing of a referenced creative was assigned. core/error.json: correctable
-                    # is "fix the request and resend", so the ad server's own fault keeps its
-                    # code; the adapter's own refusal (a size) has no error and is the buyer's.
+                    # is "fix the request and resend", so a typed refusal keeps its code (the GAM
+                    # plan's CREATIVE_SIZE_MISMATCH for a kind-carrying creative); an asset the
+                    # adapter failed without one is the buyer's VALIDATION_ERROR.
                     cause = failure.error or AdCPValidationError(details=ValidationDetails(creative_id=creative_id))
                     results[index] = _failed_sync_result(creative_id, cause)
                 results[index].assigned_to = assigned or None
