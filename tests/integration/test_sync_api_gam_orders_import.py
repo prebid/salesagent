@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import pytest
 
+from src.admin.utils.operator_errors import register_error_handler
+
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 TENANT_ID = "sync_api_gam_import"
@@ -87,6 +89,7 @@ def sync_api_client(seeded_tenant, monkeypatch):
     app = Flask(__name__)
     app.config["TESTING"] = True
     app.register_blueprint(sync_api, url_prefix="/api/sync")
+    register_error_handler(app)  # as create_app composes it
     return app.test_client()
 
 

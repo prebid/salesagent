@@ -6,6 +6,7 @@ from flask import Flask
 from sqlalchemy import delete
 
 from src.admin.tenant_management_api import tenant_management_api
+from src.admin.utils.operator_errors import register_error_handler
 from src.core.database.models import Tenant
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -52,6 +53,7 @@ def app(integration_db, mock_api_key_auth):
     app = Flask(__name__)
     app.config["TESTING"] = True
     app.register_blueprint(tenant_management_api)
+    register_error_handler(app)  # as create_app composes it
     return app
 
 
@@ -401,6 +403,7 @@ class TestTenantManagementEnvVarAuth:
         app = Flask(__name__)
         app.config["TESTING"] = True
         app.register_blueprint(tenant_management_api)
+        register_error_handler(app)  # as create_app composes it
 
         with app.test_client() as client:
             resp = client.get(
@@ -416,6 +419,7 @@ class TestTenantManagementEnvVarAuth:
         app = Flask(__name__)
         app.config["TESTING"] = True
         app.register_blueprint(tenant_management_api)
+        register_error_handler(app)  # as create_app composes it
 
         with app.test_client() as client:
             # DB key should be rejected when env var is set
@@ -456,6 +460,7 @@ class TestTenantManagementAuthRejection:
         app = Flask(__name__)
         app.config["TESTING"] = True
         app.register_blueprint(tenant_management_api)
+        register_error_handler(app)  # as create_app composes it
 
         with app.test_client() as client:
             resp = client.get(
@@ -477,6 +482,7 @@ class TestSyncApiAuth:
         app = Flask(__name__)
         app.config["TESTING"] = True
         app.register_blueprint(sync_api)
+        register_error_handler(app)  # as create_app composes it
         return app
 
     def test_env_var_auth_succeeds(self, sync_app, monkeypatch):

@@ -41,6 +41,7 @@ from adcp.types import AuthenticationScheme, ErrorCode
 from sqlalchemy import select
 
 from src.admin.blueprints import principals as principals_blueprint
+from src.admin.utils.operator_errors import register_error_handler
 from src.core.database.models import CreativeAgent, PushNotificationConfig, SignalsAgent, Tenant
 from src.core.errors.codes import CODE_TABLE, Recovery
 from src.core.exceptions import AdCPSalesAgentError
@@ -112,6 +113,7 @@ def management_api_client(seeded_tenant, monkeypatch):
     app = Flask(__name__)
     app.config["TESTING"] = True
     app.register_blueprint(tenant_management_api)
+    register_error_handler(app)  # as create_app composes it
     return app.test_client()
 
 
