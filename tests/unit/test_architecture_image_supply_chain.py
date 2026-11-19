@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +76,12 @@ def _assert_harden_runner_job(wf_name: str, job_name: str, job: dict[str, Any]) 
             assert sudo_disabled, f"{wf_name} job {job_name} must set disable-sudo-and-containers: true"
 
 
+def _resolve_job_env(job: dict[str, Any], value: str) -> str:
+    """Expand a whole-value ``${{ env.NAME }}`` reference from the job's ``env``."""
+    match = re.fullmatch(r"\$\{\{\s*env\.(\w+)\s*\}\}", value)
+    return str(job.get("env", {}).get(match.group(1), value)) if match else value
+
+
 def _assert_sign_and_attest_job(job: dict[str, Any]) -> None:
     perms = job.get("permissions", {})
     assert isinstance(perms, dict)
@@ -97,18 +107,11 @@ def _assert_sign_and_attest_job(job: dict[str, Any]) -> None:
     assert any('[[ -n "$DIGEST" ]]' in run for run in login_runs), (
         "sign-and-attest must guard empty image_digest before cosign sign"
     )
-    # build-and-push's image_tags output contains the Docker Hub user (a secret), so GitHub drops it
-    # between jobs; signing from it signed nothing in the 3.0.1 release.
-    sign_env = " ".join(str(step.get("env", {})) for step in steps if "cosign sign" in (step.get("run") or ""))
-    assert "outputs.image_tags" not in sign_env, (
-        "sign-and-attest must not sign from build-and-push's image_tags output (dropped as secret-bearing)"
-    )
     attest_steps = [step for step in steps if _step_uses(step).startswith("actions/attest-build-provenance@")]
     assert len(attest_steps) >= 2, "sign-and-attest must attest ghcr.io and Docker Hub images"
-    ghcr_attest = [s for s in attest_steps if "ghcr.io/" in str(s.get("with", {}).get("subject-name", ""))]
-    dockerhub_attest = [
-        s for s in attest_steps if str(s.get("with", {}).get("subject-name", "")).startswith("docker.io/")
-    ]
+    subjects = [_resolve_job_env(job, str(s.get("with", {}).get("subject-name", ""))) for s in attest_steps]
+    ghcr_attest = [subject for subject in subjects if "ghcr.io/" in subject]
+    dockerhub_attest = [subject for subject in subjects if subject.startswith("docker.io/")]
     assert ghcr_attest, "sign-and-attest must attest ghcr.io image with registry host"
     assert dockerhub_attest, "sign-and-attest Docker Hub attest must use docker.io/ registry host in subject-name"
     assert any(u.startswith("actions/upload-artifact@") for u in step_uses), (
@@ -181,13 +184,115 @@ def test_release_workflow_supply_chain_wiring() -> None:
     _assert_build_and_push_job(jobs["build-and-push"])
     _assert_sign_and_attest_job(jobs[_SIGN_ATTEST_JOB])
 
+    # build-and-push's image_tags output contains the Docker Hub user (a secret), so GitHub drops it
+    # between jobs; signing from it signed nothing in the 3.0.1 release.
+    build_outputs = jobs["build-and-push"].get("outputs", {})
+    assert "image_tags" not in build_outputs, "build-and-push must not export image_tags (dropped as secret-bearing)"
+    assert "image_digest" in build_outputs
+
     text = wf_path.read_text(encoding="utf-8")
-    assert "image_tags:" in text
-    assert "image_digest:" in text
     assert "ghcr_image:" not in text
     assert "concurrency:" in text
     assert "provenance: mode=max" in text
     assert "sbom: true" in text
+
+
+def _release_sign_job() -> dict[str, Any]:
+    return _load_workflow(repo_root() / ".github/workflows/release-please.yml")["jobs"][_SIGN_ATTEST_JOB]
+
+
+def _release_sign_step() -> dict[str, Any]:
+    steps = [step for step in _job_steps(_release_sign_job()) if "cosign sign" in (step.get("run") or "")]
+    assert len(steps) == 1, "release sign-and-attest must have exactly one cosign sign step"
+    return steps[0]
+
+
+_STUB_COSIGN = '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$COSIGN_LOG"\n'
+
+
+def _run_sign_script(tmp_path: Path, images: str, digest: str) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Run the release sign step's script under bash with a stub cosign that records its arguments."""
+    bash = shutil.which("bash")
+    assert bash, "bash is required to run the release sign step's script"
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    cosign = stub_dir / "cosign"
+    cosign.write_text(_STUB_COSIGN, encoding="utf-8", newline="\n")
+    cosign.chmod(0o755)
+    log = tmp_path / "cosign.log"
+    script = tmp_path / "sign.sh"
+    script.write_text(_release_sign_step()["run"], encoding="utf-8", newline="\n")
+    env = {
+        **os.environ,
+        "PATH": f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "COSIGN_LOG": log.as_posix(),
+        "DIGEST": digest,
+        "IMAGES": images,
+        "BUNDLE_DIR": (tmp_path / "bundles").as_posix(),
+    }
+    result = subprocess.run([bash, script.as_posix()], env=env, capture_output=True, text=True, timeout=60, check=False)
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return result, calls
+
+
+_DIGEST = "sha256:" + "0" * 64
+
+
+@pytest.mark.arch_guard
+def test_release_sign_script_signs_each_image_once_at_the_digest(tmp_path: Path) -> None:
+    """Two image names give one cosign sign call per <image>@<digest>, and the step passes."""
+    result, calls = _run_sign_script(tmp_path, "ghcr.io/org/repo docker.io/user/salesagent", _DIGEST)
+    assert result.returncode == 0, result.stdout + result.stderr
+    signed = [call.split()[-1] for call in calls if call.startswith("sign ")]
+    assert signed == [f"ghcr.io/org/repo@{_DIGEST}", f"docker.io/user/salesagent@{_DIGEST}"]
+
+
+@pytest.mark.arch_guard
+@pytest.mark.parametrize("images", ["", "   "])
+def test_release_sign_script_fails_when_there_is_nothing_to_sign(tmp_path: Path, images: str) -> None:
+    """An empty image list fails the step; 3.0.1 signed nothing and passed."""
+    result, calls = _run_sign_script(tmp_path, images, _DIGEST)
+    assert result.returncode != 0
+    assert not [call for call in calls if call.startswith("sign ")]
+
+
+@pytest.mark.arch_guard
+def test_release_sign_and_attest_reads_image_names_from_job_env() -> None:
+    """Signing, both attestations and the scan read the image names from one job-level env."""
+    job = _release_sign_job()
+    job_env = job.get("env", {})
+    assert job_env.get("GHCR_IMAGE") == "ghcr.io/${{ github.repository }}"
+    assert job_env.get("DOCKERHUB_IMAGE") == "docker.io/${{ secrets.DOCKERHUB_USER }}/salesagent"
+    assert _release_sign_step().get("env", {}).get("IMAGES") == "${{ env.GHCR_IMAGE }} ${{ env.DOCKERHUB_IMAGE }}"
+    steps = _job_steps(job)
+    subjects = sorted(
+        str(step.get("with", {}).get("subject-name"))
+        for step in steps
+        if _step_uses(step).startswith("actions/attest-build-provenance@")
+    )
+    assert subjects == ["${{ env.DOCKERHUB_IMAGE }}", "${{ env.GHCR_IMAGE }}"]
+    scan_refs = [
+        str(step.get("with", {}).get("image-ref"))
+        for step in steps
+        if _step_uses(step).startswith("aquasecurity/trivy-action@")
+    ]
+    assert scan_refs == ["${{ env.GHCR_IMAGE }}@${{ env.IMAGE_DIGEST }}"]
+
+
+@pytest.mark.arch_guard
+def test_release_sign_and_attest_dispatch_is_main_only_and_does_not_attest() -> None:
+    """A dispatch run signs from main only, and leaves build provenance to the run that built the image."""
+    job = _release_sign_job()
+    condition = str(job.get("if", ""))
+    assert "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" in condition, (
+        "dispatch from a branch signs with an identity ADR-007's cosign verify rejects"
+    )
+    attest_steps = [step for step in _job_steps(job) if _step_uses(step).startswith("actions/attest-build-provenance@")]
+    assert attest_steps
+    for step in attest_steps:
+        assert step.get("if") == "github.event_name == 'push'", (
+            "build provenance must come from the run that built the image, not a dispatch run"
+        )
 
 
 @pytest.mark.arch_guard

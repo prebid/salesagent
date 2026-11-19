@@ -59,6 +59,15 @@ cosign verify \
 Cosign bundle files uploaded as workflow artifacts support offline `cosign verify-blob`
 for detached signatures; registry-attached signatures use the command above.
 
+**Recovering a release whose signing failed.** Running `release-please.yml` by hand on `main`
+with a `digest` input signs that published digest again; a run from any other branch is
+skipped, because its signature would carry a `refs/heads/<branch>` identity that the
+`cosign verify` command above rejects. A recovery run does not call
+`actions/attest-build-provenance`: it did not build the image, so it would record itself as
+the builder. A recovered release keeps the BuildKit provenance (`provenance: mode=max`)
+attached by its original build, and is verified with `cosign verify`;
+`gh attestation verify` finds no GitHub attestation for it.
+
 ## Consequences
 
 **Positive.**

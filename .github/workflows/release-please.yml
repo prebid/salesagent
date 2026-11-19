@@ -4,12 +4,12 @@ on:
   push:
     branches:
       - main
-  # Sign and attest an image that's already published, for a release whose sign-and-attest job failed
-  # (3.0.1: its image_tags output was dropped). Only sign-and-attest runs.
+  # Sign an image that's already published, for a release whose sign-and-attest job failed (3.0.1:
+  # its image_tags output was dropped). Only sign-and-attest runs, and only from main.
   workflow_dispatch:
     inputs:
       digest:
-        description: Image digest to sign and attest (sha256:...), as pushed to ghcr.io and Docker Hub
+        description: Image digest to sign (sha256:...), as pushed to ghcr.io and Docker Hub
         required: true
         type: string
 
@@ -52,7 +52,6 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image_tags: ${{ steps.meta.outputs.tags }}
       image_digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
@@ -187,11 +186,16 @@ jobs:
 
   sign-and-attest:
     needs: [release-please, build-and-push]
-    # After a release's build, or on dispatch (when the other two jobs are skipped).
-    if: ${{ !cancelled() && (needs.build-and-push.result == 'success' || github.event_name == 'workflow_dispatch') }}
+    # After a release's build, or on dispatch from main (when the other two jobs are skipped). A run
+    # from another branch would sign with a refs/heads/<branch> identity that ADR-007's cosign verify
+    # rejects.
+    if: ${{ !cancelled() && (needs.build-and-push.result == 'success' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) }}
     runs-on: ubuntu-latest
     env:
       IMAGE_DIGEST: ${{ github.event_name == 'workflow_dispatch' && inputs.digest || needs.build-and-push.outputs.image_digest }}
+      # The image names are written only here; signing, attestation and the scan all read them.
+      GHCR_IMAGE: ghcr.io/${{ github.repository }}
+      DOCKERHUB_IMAGE: docker.io/${{ secrets.DOCKERHUB_USER }}/salesagent
     timeout-minutes: 15
     permissions:
       contents: read
@@ -222,15 +226,18 @@ jobs:
           # user, a secret, so GitHub drops that output between jobs ("Skip output 'image_tags' since
           # it may contain secret") and nothing was signed. A signature attaches to the digest, so
           # signing each image at the digest covers every tag.
-          IMAGES: ghcr.io/${{ github.repository }} docker.io/${{ secrets.DOCKERHUB_USER }}/salesagent
+          IMAGES: ${{ env.GHCR_IMAGE }} ${{ env.DOCKERHUB_IMAGE }}
           BUNDLE_DIR: /tmp/cosign-bundles-${{ github.run_id }}
         run: |
           set -euo pipefail
           [[ -n "$DIGEST" ]] || { echo "ERROR: build-and-push image_digest is empty"; exit 1; }
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "ERROR: not an image digest: $DIGEST"; exit 1; }
+          read -ra images <<< "$IMAGES"
+          # Signing nothing must fail, not pass silently as it did for 3.0.1.
+          [[ "${#images[@]}" -gt 0 ]] || { echo "ERROR: no images to sign"; exit 1; }
           mkdir -p "$BUNDLE_DIR"
           count=0
-          for image in $IMAGES; do
+          for image in "${images[@]}"; do
             signed=false
             safe_name="${image//\//-}"
             for attempt in 1 2 3; do
@@ -248,28 +255,31 @@ jobs:
             fi
             count=$((count + 1))
           done
-          # Signing nothing must fail, not pass silently as it did for 3.0.1.
-          [[ "$count" -eq 2 ]] || { echo "ERROR: signed $count images, expected 2"; exit 1; }
+          [[ "$count" -eq "${#images[@]}" ]] || { echo "ERROR: signed $count of ${#images[@]} images"; exit 1; }
       - name: Upload cosign bundles
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cosign-bundles-${{ github.run_id }}
           path: /tmp/cosign-bundles-${{ github.run_id }}/*.json
           if-no-files-found: error
+      # Build provenance comes only from the run that built the image. A dispatch run signs an image
+      # it didn't build, so that release keeps only its original BuildKit provenance (ADR-007).
       - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        if: github.event_name == 'push'
         with:
-          subject-name: ghcr.io/${{ github.repository }}
+          subject-name: ${{ env.GHCR_IMAGE }}
           subject-digest: ${{ env.IMAGE_DIGEST }}
           push-to-registry: true
       - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        if: github.event_name == 'push'
         with:
-          subject-name: docker.io/${{ secrets.DOCKERHUB_USER }}/salesagent
+          subject-name: ${{ env.DOCKERHUB_IMAGE }}
           subject-digest: ${{ env.IMAGE_DIGEST }}
           push-to-registry: true
       - name: Scan image for OS-layer CVEs (SARIF report)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository }}@${{ env.IMAGE_DIGEST }}
+          image-ref: ${{ env.GHCR_IMAGE }}@${{ env.IMAGE_DIGEST }}
           severity: CRITICAL,HIGH
           vuln-type: os,library
           ignore-unfixed: true
