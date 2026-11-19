@@ -441,7 +441,7 @@ def _plain(value: Any) -> Any:
     return value
 
 
-def _declared_params(declaration: LibraryFormatDeclaration) -> Mapping[str, Any]:
+def declared_params(declaration: LibraryFormatDeclaration) -> Mapping[str, Any]:
     """The constraints one declaration states, as plain values keyed by param name."""
     params = _plain(declaration.params)
     return params if isinstance(params, Mapping) else {}
@@ -612,7 +612,7 @@ def declaration_slot_asset_ids(declaration: LibraryFormatDeclaration, asset_type
     That is what makes consulting this strictly safer than consulting the kind rather than
     a second, divergent answer.
     """
-    slots = _declared_params(declaration).get("slots")
+    slots = declared_params(declaration).get("slots")
     return _slot_asset_ids(tuple(slot for slot in slots or () if isinstance(slot, Mapping)), asset_types)
 
 
@@ -1047,7 +1047,7 @@ def _manifest_shortfalls(declaration: LibraryFormatDeclaration, manifest: Mappin
     required ratio" -- graded on the ratio each rendition was graded at
     (:func:`_coverage_shortfalls`).
     """
-    declared = dict(_declared_params(declaration))
+    declared = dict(declared_params(declaration))
     slots = tuple(_effective_slot(slot, declared) for slot in declared.get("slots") or () if isinstance(slot, Mapping))
     shortfalls = _manifest_slot_shortfalls(slots, manifest)
     primary = _primary_media_slot(slots)
@@ -1824,7 +1824,7 @@ def _legacy_route(
     narrowing = [
         declaration
         for declaration in declarations
-        if _legacy_claim_satisfies(str(declaration.format_kind), _declared_params(declaration), kind, projected)
+        if _legacy_claim_satisfies(str(declaration.format_kind), declared_params(declaration), kind, projected)
     ]
     if narrowing:
         return _selecting(narrowing, params, exact=True, manifest=manifest)
@@ -1961,7 +1961,7 @@ def _graded(
     resolved = FormatSatisfaction(satisfied=True, selection=(selected,))
     if params is None:
         return resolved
-    declared = _declared_params(selected)
+    declared = declared_params(selected)
     constraints = _stated_constraints(declared, params) if exact else declared
     if not (failed := _unsatisfied_params(params, constraints)):
         return resolved
@@ -2609,8 +2609,8 @@ def _effective_declaration(
         return _narrowed(selected, accepted) if option == _option_identity(selected) else None
     if str(accepted.format_kind) != str(selected.format_kind):
         return None
-    claim = {key: value for key, value in _declared_params(accepted).items() if value is not None}
-    offered = {key: value for key, value in _declared_params(selected).items() if value is not None}
+    claim = {key: value for key, value in declared_params(accepted).items() if value is not None}
+    offered = {key: value for key, value in declared_params(selected).items() if value is not None}
     inherited = _stated_constraints(offered, claim)
     if "duration_ms_range" in claim and "duration_ms_exact" in offered:
         inherited["duration_ms_exact"] = offered["duration_ms_exact"]
