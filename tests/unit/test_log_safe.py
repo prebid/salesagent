@@ -12,13 +12,17 @@ import pytest
 
 from src.core.logging_config import log_safe
 
+# Every character ``str.splitlines()`` treats as a line boundary, built from code
+# points so this file carries none of them literally. One list for every test here.
+_ALL_BREAKS = "".join(chr(c) for c in (0x0A, 0x0D, 0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029))
+
 
 class TestLogSafe:
     """log_safe escapes every character that can start a new log line."""
 
     @pytest.mark.parametrize(
         "char",
-        ["\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", " ", " "],
+        list(_ALL_BREAKS),
         ids=["lf", "cr", "vt", "ff", "fs", "gs", "rs", "nel", "ls", "ps"],
     )
     def test_line_breaking_characters_are_escaped(self, char):
@@ -45,7 +49,7 @@ class TestLogSafe:
 
     def test_output_matches_a_unicode_escape_of_each_line_break(self):
         """The ``.replace`` chain produces what the earlier ``str.translate`` table did."""
-        breaks = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+        breaks = _ALL_BREAKS
         table = str.maketrans({c: c.encode("unicode_escape").decode("ascii") for c in breaks})
         sample = "a" + "b".join(breaks) + "\\n\r\n" + "z" + breaks[::-1]
         assert log_safe(sample) == sample.translate(table)
@@ -117,49 +121,83 @@ class TestCallSites:
         assert len(message.splitlines()) == 1, f"a non-str __repr__ forged a line: {message!r}"
 
 
-# Every character ``str.splitlines()`` treats as a line boundary, built from code
-# points so this file carries none of them literally.
-_ALL_BREAKS = "".join(chr(c) for c in (0x0A, 0x0D, 0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029))
+_PROPAGATING_LOGGERS = ("adcp.audit", "adcp.oauth")
+_LIBRARY_LOGGERS = ("uvicorn", "uvicorn.access", "uvicorn.error", "fastmcp", "starlette")
 
 
-def _audit_handlers() -> list[logging.Handler]:
-    import src.core.audit_logger  # noqa: F401 - attaches the adcp.audit handlers
+@pytest.fixture
+def configured_logging(monkeypatch):
+    """Run the real logging setup in one mode, and put the global logging state back after."""
+    from unittest.mock import PropertyMock
 
-    return list(logging.getLogger("adcp.audit").handlers)
+    from src.core.config import get_settings
+    from src.core.logging_config import setup_oauth_logging, setup_structured_logging
+
+    root = logging.getLogger()
+    saved = {
+        name: (lg.handlers[:], lg.propagate, lg.level)
+        for name, lg in ((n, logging.getLogger(n)) for n in ("", *_LIBRARY_LOGGERS))
+    }
+
+    def configure(structured: bool) -> None:
+        import src.core.audit_logger  # noqa: F401 - attaches the adcp.audit handlers
+
+        monkeypatch.setattr(type(get_settings()), "structured_logging", PropertyMock(return_value=structured))
+        setup_structured_logging()
+        setup_oauth_logging()
+
+    yield configure
+
+    for name, (handlers, propagate, level) in saved.items():
+        lg = root if name == "" else logging.getLogger(name)
+        lg.handlers = handlers
+        lg.propagate = propagate
+        lg.setLevel(level)
 
 
-def _oauth_handlers() -> list[logging.Handler]:
-    from src.core.logging_config import oauth_logger, setup_oauth_logging
+def _record(name: str) -> logging.LogRecord:
+    try:
+        raise RuntimeError(f"remote said{_ALL_BREAKS}FORGED")
+    except RuntimeError as exc:
+        return logging.LogRecord(
+            name,
+            logging.ERROR,
+            __file__,
+            1,
+            f"op{_ALL_BREAKS}%s",
+            (f"arg{_ALL_BREAKS}FORGED",),
+            (type(exc), exc, None),
+        )
 
-    setup_oauth_logging()
-    return list(oauth_logger.handlers)
 
+class TestEveryHandlerWritesOneLinePerRecord:
+    """A record is one line in every handler it reaches, following propagation to root.
 
-class TestHandlersWriteOneLinePerRecord:
-    """The audit and OAuth handlers bypass the root JSON formatter, even in production.
-
-    So their formatter keeps each record on one line itself, whatever the call
-    site passed in, including the exception text attached to the record.
+    The record goes through ``Logger.handle`` after the real setup, in both modes, so
+    the check covers whatever handlers that setup attaches: the root handler (JSON in
+    production, text in development) and each logger's own handlers.
     """
 
-    @pytest.mark.parametrize("handlers", [_audit_handlers, _oauth_handlers], ids=["adcp.audit", "adcp.oauth"])
-    def test_a_record_with_every_line_break_renders_as_one_line(self, handlers):
-        try:
-            raise RuntimeError(f"remote said{_ALL_BREAKS}FORGED")
-        except RuntimeError as exc:
-            record = logging.LogRecord(
-                "adcp.audit",
-                logging.ERROR,
-                __file__,
-                1,
-                f"op{_ALL_BREAKS}%s",
-                (f"arg{_ALL_BREAKS}FORGED",),
-                (type(exc), exc, None),
-            )
+    @pytest.mark.parametrize("structured", [True, False], ids=["production", "development"])
+    @pytest.mark.parametrize("logger_name", _PROPAGATING_LOGGERS)
+    def test_a_record_with_every_line_break_renders_as_one_line(
+        self, configured_logging, monkeypatch, structured, logger_name
+    ):
+        configured_logging(structured)
+        reached: list[logging.Handler] = []
+        logger: logging.Logger | None = logging.getLogger(logger_name)
+        while logger is not None:
+            reached += logger.handlers
+            logger = logger.parent if logger.propagate else None
+        assert reached, "nothing to check"
 
-        attached = handlers()
-        assert attached, "nothing to check"
-        for handler in attached:
-            rendered = handler.format(record)
+        written: list[tuple[logging.Handler, str]] = []
+        for handler in reached:
+            monkeypatch.setattr(handler, "emit", lambda r, h=handler: written.append((h, h.format(r))))
+
+        logging.getLogger(logger_name).handle(_record(logger_name))
+
+        assert {h for h, _ in written} == set(reached), "every handler on the path wrote the record"
+        for handler, rendered in written:
             assert len(rendered.splitlines()) == 1, (handler, rendered)
             assert "FORGED" in rendered, "escaped, not dropped"

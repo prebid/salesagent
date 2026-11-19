@@ -133,13 +133,13 @@ def setup_structured_logging() -> None:
 
         logging.info("JSON structured logging enabled for production")
     else:
-        # Development mode - use standard format
+        # Development mode - human-readable text, one line per record like the JSON
+        # above: adcp.audit and adcp.oauth propagate here, so a plain formatter would
+        # undo the escaping their own handlers do. A traceback renders on one line.
         # force=True ensures configuration is applied even if logging was already configured
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            force=True,
-        )
+        handler = logging.StreamHandler()
+        handler.setFormatter(LineSafeFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
 
 
 # Create custom logger for OAuth operations
