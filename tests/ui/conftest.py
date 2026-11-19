@@ -37,13 +37,12 @@ def base_url():
     return f"http://{host}:{port}"
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _ensure_test_auth_enabled():
-    """Enable auth_setup_mode on the default tenant, which is what gates a setup session.
+@pytest.fixture(scope="session")
+def server_db_url():
+    """The SERVER's database (/adcp) — the one the browser's requests read and write.
 
-    Seeds the SERVER's database (/adcp). In-network there is no published
-    Postgres port, so honor the service-name URL the runner exports
-    (E2E_DATABASE_URL=postgres:5432/adcp); on the host path fall back to
+    In-network there is no published Postgres port, so honor the service-name URL the
+    runner exports (E2E_DATABASE_URL=postgres:5432/adcp); on the host path fall back to
     localhost:<published POSTGRES_PORT>.
     """
     db_url = os.environ.get("E2E_DATABASE_URL")
@@ -53,6 +52,13 @@ def _ensure_test_auth_enabled():
             pytest.skip("neither E2E_DATABASE_URL nor POSTGRES_PORT set — cannot configure test auth")
         db_host = os.environ.get("ADCP_TEST_DB_HOST", "localhost")
         db_url = f"postgresql://adcp_user:secure_password_change_me@{db_host}:{pg_port}/adcp"
+    return db_url
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_test_auth_enabled(server_db_url):
+    """Enable auth_setup_mode on the default tenant, which is what gates a setup session."""
+    db_url = server_db_url
 
     from sqlalchemy import create_engine, text
 
