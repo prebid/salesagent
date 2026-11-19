@@ -43,10 +43,9 @@ from src.core.format_satisfaction import (
     declared_slots_by_kind,
 )
 from src.core.helpers.creative_helpers import (
+    _read_media_assets,
     extract_click_url,
     extract_impression_tracker_url,
-    extract_media_url_and_dimensions,
-    media_asset_requires_dimensions,
     url_asset_identification,
 )
 
@@ -213,10 +212,10 @@ def read_creative_to_traffic(
         return TrafficRefusal(creative_id, TrafficRefusalReason.NO_SERVING_CONTENT)
 
     if isinstance(representation, MediaRepresentation):
-        _url, width, height = extract_media_url_and_dimensions(data, format_spec, kind, declarations)
+        _url, width, height, owes_dimensions = _read_media_assets(data, format_spec, kind, declarations)
         if width and height:
             sizes, size_ranges = (TrafficSize(width=width, height=height),), ()
-        elif not sizes and media_asset_requires_dimensions(data, format_spec, kind, declarations):
+        elif not sizes and owes_dimensions:
             return TrafficRefusal(creative_id, TrafficRefusalReason.NO_DIMENSIONS)
 
     impression_tracker = extract_impression_tracker_url(data, format_spec)
@@ -260,7 +259,7 @@ def _representation(
         # agent's preview page there.
         return None
 
-    url, _width, _height = extract_media_url_and_dimensions(data, format_spec, kind, declarations)
+    url, _width, _height, _owes_dimensions = _read_media_assets(data, format_spec, kind, declarations)
     if not url:
         return None
     return MediaRepresentation(asset_type=_media_asset_type(assets, kind, declarations), url=str(url))

@@ -41,7 +41,7 @@ BEHAVIORAL_MOCK_CONSTRUCTION_CAP: dict[str, int] = {
     # answers every unstubbed attribute with a truthy child, so it graded the mock.
     # 26 -> 20: the six tests of ``_validate_and_convert_format_ids`` deleted with it. No
     # production path called it; the package format selector gate refuses those references.
-    "tests/integration/test_create_media_buy_behavioral.py": 20,
+    "tests/integration/test_create_media_buy_behavioral.py": 17,
     "tests/integration/test_delivery_poll_behavioral.py": 2,
     "tests/integration/test_delivery_webhook_behavioral.py": 0,
     # 44 -> 40: TestAdapterSupportAnnotation deleted (it graded a field no model declares).

@@ -86,8 +86,7 @@ def uploadable_creative(creative_factory: Any, **kwargs: Any) -> Any:
     """A creative that survives the asset gate an approval runs before uploading.
 
     ``_build_adapter_asset_from_creative`` resolves the creative's format spec and
-    then pulls url/width/height out of ``data["assets"]`` via
-    ``extract_media_url_and_dimensions``. ``CreativeFactory``'s defaults do not get
+    then reads its media out of ``data["assets"]`` via ``read_creative_to_traffic``. ``CreativeFactory``'s defaults do not get
     through it: the format ``display_300x250`` is a legacy id absent from the
     reference catalog, and the asset is keyed ``banner``, which is neither an
     asset_id any format spec declares nor a member of production's

@@ -25,6 +25,17 @@
 # the retroactive push of a creative approved after its buy went live (both
 # adapter.creatives_manager.add_creative_assets).
 #
+# The retroactive push withholds a misfit creative and pushes the others. The pin permits a
+# per-creative failure inside a successful sync: creative/sync-creatives-response.json, "Items
+# with action='failed' indicate per-item validation/processing failures, not operation-level
+# failures", and sync_creatives.mdx, "`creatives` - Results for each creative processed
+# (includes both successful and failed items)". That response is not this push's, though: the
+# push graded here follows the seller's approval of a creative in the Admin UI, a request no
+# buyer makes and no buyer response answers, and no buyer readback carries a push's outcome
+# (the assignment row stays, so the buyer's re-send is pushed again). A buyer's sync assigning
+# the same creative is refused at its own assignment validation, before any push, by the
+# validator the push asks. So the push is graded at the ad server's creative manager.
+#
 # Ungraded by the storyboard runner: the ad server's input is not observable on the buyer's
 # wire. Transports: a2a, mcp, rest and e2e_rest. In process the ad server is the env's
 # adapter stand-in; on e2e_rest the create path's upload is read off the receipt the live
@@ -41,6 +52,8 @@
 # @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/build_creative.mdx
 # @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/enums/error-code.json
 # @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/media-buy/package-request.json pointer=/properties/format_option_refs
+# @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/creative/sync-creatives-response.json
+# @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/sync_creatives.mdx
 Feature: The ad server receives each creative as its canonical kind and the representation the buyer sent (local)
 
   @T-UC-002-local-creative-kind-inline-markup @extension @creative
@@ -184,8 +197,10 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   # CREATIVE_SIZE_MISMATCH: "The submitted creative dimensions do not match any size accepted
   # by the selected packages. Sellers SHOULD identify the offending creative in error.field
   # ... Recovery: correctable". The request names the creative at packages[0].creative_ids[0].
-  # The two operator paths are each given a fitting creative too, so a path that never
-  # reached the upload cannot pass.
+  # The seller's approval of a held buy books the buy as create does, so it is refused the same
+  # way: no order is booked and no creative is handed over. The retroactive push is per
+  # creative, so it withholds the misfit and pushes the other; it is given a fitting creative
+  # too, so a path that never reached the upload cannot pass.
   @T-UC-002-local-creative-kind-size-refused-create @extension @creative
   Scenario: A 300x250 image is refused at create against an option accepting only 728x90, before the ad server
     Given a valid create_media_buy request
@@ -197,7 +212,7 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     And the ad server adapter should never be invoked
 
   @T-UC-002-local-creative-kind-size-refused-approval-replay @extension @creative
-  Scenario: The seller's approval of a held buy does not hand the ad server a creative its option's sizes refuse
+  Scenario: The seller's approval of a held buy holding a creative its option's sizes refuse is refused before the ad server
     Given a valid create_media_buy request
     And the account exists and is active
     And the package references the buyer's approved 728x90 image creative "cr-fits" showing "https://cdn.example.com/fits.png", for a format option accepting sizes "728x90"
@@ -207,7 +222,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     Then the response status should be "submitted"
     Given the buyer's creative "cr-misfit", approved, a 300x250 image showing "https://cdn.example.com/misfit.png", is assigned to the media buy awaiting approval
     When the seller approves the media buy
-    Then the ad server's creative manager is handed creative "cr-fits" and not creative "cr-misfit"
+    Then the seller's approval is refused, and the media buy still awaits approval
+    And the ad server's creative manager is handed no creative
 
   @T-UC-002-local-creative-kind-size-refused-retroactive-push @extension @creative
   Scenario: Approving a creative its option's sizes refuse does not push it to the live buy

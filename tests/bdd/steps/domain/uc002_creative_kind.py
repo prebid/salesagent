@@ -119,9 +119,9 @@ def _size_range(min_width: str, max_width: str, min_height: str, max_height: str
 def given_inline_markup_creative(ctx: dict, creative_id: str, markup_type: str) -> None:
     """An inline-markup display_tag creative whose row also holds the preview back-fill.
 
-    ``_store_previews`` writes the first render's ``preview_url`` into the root ``url``, and its
-    dimensions, when the buyer sent none; an inline-markup manifest sends neither, so a synced
-    row carries exactly this.
+    Sync used to write the first render's ``preview_url`` into the root ``url``, and its
+    dimensions, when the buyer sent none; an inline-markup manifest sends neither, so a row
+    synced then carries exactly this.
     """
     tag = asset_spec(
         "serving_tag", "display_tag", delivery_type="inline_markup", markup_type=markup_type, markup=INLINE_MARKUP
@@ -485,6 +485,26 @@ def then_creative_manager_handed_one_not_other(ctx: dict, handed: str, withheld:
         f"the ad server's creative manager was handed {withheld!r}, a creative its product's option refuses: "
         f"{received!r}"
     )
+
+
+@then("the seller's approval is refused, and the media buy still awaits approval")
+def then_approval_refused_still_awaiting(ctx: dict) -> None:
+    """The approval failed before booking anything, so the buy is left awaiting approval to retry."""
+    from src.core.tools.media_buy_create import ApprovalOutcome
+
+    result = ctx["approval_result"]
+    assert result.outcome is ApprovalOutcome.FAILED, (
+        f"expected the seller's approval to be refused; it returned {result}"
+    )
+    pending = ctx["env"].media_buys_awaiting_approval()
+    assert len(pending) == 1, f"expected the media buy to still await approval; {len(pending)} buys do"
+
+
+@then("the ad server's creative manager is handed no creative")
+def then_creative_manager_handed_no_creative(ctx: dict) -> None:
+    """Neither operator path's upload ran."""
+    handed = ctx["env"].creative_manager_assets()
+    assert handed == [], f"the ad server's creative manager was handed {[a.get('creative_id') for a in handed]!r}"
 
 
 @then("the ad server is handed no creative")

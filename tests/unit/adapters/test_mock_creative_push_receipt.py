@@ -52,7 +52,6 @@ def _asset(creative_id: str = "cr_1") -> dict[str, Any]:
         "height": 250,
         "url": "https://cdn.example.com/banner.png",
         "click_url": CLICK_URL,
-        "asset_type": "image",
         "name": "Banner",
     }
 

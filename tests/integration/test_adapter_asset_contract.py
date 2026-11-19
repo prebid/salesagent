@@ -81,6 +81,9 @@ def test_the_adapter_names_the_creative_the_builder_named(bound_factory_session)
         creative,
         [{"package_id": PACKAGE_ID, "weight": 100}],
         tenant_id=tenant.tenant_id,
+        # A legacy creative on a product declaring no canonical option: its format spec
+        # states its size, and no product declaration narrows it.
+        declarations=(),
     )
     assert build_err is None, build_err
     assert asset is not None

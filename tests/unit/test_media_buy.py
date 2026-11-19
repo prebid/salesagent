@@ -787,12 +787,15 @@ class TestBuildAdapterAssetFormatFallback:
         from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
 
         spec = MagicMock()
+        # A reference format: a MagicMock answers a truthy Mock for the unstubbed attribute,
+        # which reads as a generative format with no build output.
+        spec.output_format_ids = None
         with (
             patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
             patch("src.core.format_resolver.get_format", return_value=spec) as resolver,
         ):
             asset, err = _build_adapter_asset_from_creative(
-                self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
+                self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1", declarations=()
             )
         resolver.assert_called_once_with(
             "display_300x250",
@@ -812,7 +815,7 @@ class TestBuildAdapterAssetFormatFallback:
             patch("src.core.format_resolver.get_format", side_effect=AdCPFormatNotFoundError()),
         ):
             asset, err = _build_adapter_asset_from_creative(
-                self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
+                self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1", declarations=()
             )
         # Raw creative data carries url/width/height, so the asset still builds.
         assert err is None and asset is not None
@@ -831,7 +834,7 @@ class TestBuildAdapterAssetFormatFallback:
         ):
             with pytest.raises(AdCPRateLimitError):
                 _build_adapter_asset_from_creative(
-                    self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
+                    self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1", declarations=()
                 )
         resolver.assert_not_called()
 
@@ -848,7 +851,7 @@ class TestBuildAdapterAssetFormatFallback:
         ):
             with pytest.raises(AdCPServiceUnavailableError):
                 _build_adapter_asset_from_creative(
-                    self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
+                    self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1", declarations=()
                 )
 
     def test_fallback_forwards_the_same_provenance_as_the_first_fetch(self):
@@ -880,7 +883,9 @@ class TestBuildAdapterAssetFormatFallback:
             patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
             patch("src.core.format_resolver.fetch_format_spec", return_value=None) as fetch_spec,
         ):
-            _build_adapter_asset_from_creative(self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1")
+            _build_adapter_asset_from_creative(
+                self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1", declarations=()
+            )
 
         fetch_spec.assert_called_once_with(
             "https://creative.adcontextprotocol.org",
@@ -915,10 +920,7 @@ class TestCreateMediaBuyCreativeValidation:
         package.creative_ids = ["c_1"]
         package.package_id = "pkg_1"
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),
-            patch("src.core.tools.media_buy_create.extract_media_url_and_dimensions", return_value=(None, None, None)),
-        ):
+        with patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec):
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
@@ -1002,10 +1004,14 @@ class TestCreateMediaBuyCreativeValidation:
             ("creative", mock_creative.creative_id, mock_creative.status)
         ]
 
-    def test_generative_creatives_skip_validation(self):
-        """UC-002-C05: generative formats (with output_format_ids) not pre-validated.
+    def test_generative_creative_with_no_build_output_is_refused(self):
+        """UC-002-C05: a generative creative is read like any other, and one never built is refused.
 
-        Spec: UNSPECIFIED (implementation-defined creative validation bypass)
+        Its build output is what is served (build_creative.mdx), so with none there is
+        nothing an ad server can traffic. This once asserted the opposite -- generative
+        creatives skipped the gate -- which let an unbuilt creative reach the adapter.
+
+        Spec: UNSPECIFIED (implementation-defined creative pre-validation)
         Priority: P2
         Type: unit
         Source: UC-002
@@ -1023,7 +1029,7 @@ class TestCreateMediaBuyCreativeValidation:
         # with. Every real generative format in the pinned capture (7 of 76) declares
         # ``canonical.kind`` and so projects in production, where the spec IS passed.
         stamp_format_identity(mock_creative, format_id="display_300x250")
-        mock_creative.data = {}  # No media_url -- but generative should skip validation
+        mock_creative.data = {}  # No build output
 
         mock_format_spec = MagicMock()
         mock_format_spec.output_format_ids = ["display_300x250"]  # Non-None = generative
@@ -1036,8 +1042,10 @@ class TestCreateMediaBuyCreativeValidation:
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
-            # Should NOT raise -- generative creatives are skipped
-            _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
+            with pytest.raises(AdCPValidationError) as exc_info:
+                _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
+
+            assert [reason for reason in exc_info.value.details.reasons or [] if "c_gen" in reason]
 
     def test_multiple_creative_errors_accumulated(self):
         """UC-002-C06: all creative validation errors collected before raising.
@@ -1068,13 +1076,7 @@ class TestCreateMediaBuyCreativeValidation:
         package.creative_ids = ["c_1", "c_2"]
         package.package_id = "pkg_1"
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),
-            patch(
-                "src.core.tools.media_buy_create.extract_media_url_and_dimensions",
-                return_value=(None, None, None),
-            ),
-        ):
+        with patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec):
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative_1, mock_creative_2]
 
@@ -1281,6 +1283,7 @@ class TestCreateMediaBuyAdapterInteraction:
                     end_time=datetime.now(UTC) + timedelta(days=7),
                     package_pricing_info={},
                     identity=_make_identity(),
+                    creatives_by_package={},
                 )
 
     # test_dry_run_skips_adapter (UC-002-AD03 / UC-002-MAIN-19) is REMOVED. It drove

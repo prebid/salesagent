@@ -630,32 +630,18 @@ def _request_static_preview(
 
 
 def _store_previews(data: dict[str, Any], preview_result: Mapping[str, Any] | None) -> bool:
-    """Write the agent's previews into *data*. Returns whether it answered any.
+    """Keep the agent's previews in *data* for the admin UI (AdCP PR #119). Returns whether it answered any.
 
-    The full answer is kept for the admin UI (AdCP PR #119), and the first render
-    back-fills ``url`` and the dimensions only where the buyer supplied none, so a buyer's
-    own values are never overwritten by a render. ``False`` is the no-previews state
-    :func:`_no_previews_refusal` owns.
+    Kept under ``preview_response`` and nowhere else. A render is not serving content:
+    preview_creative.mdx says "Every render's ``preview_url`` returns an untrusted HTML page
+    for cross-origin iframe embedding", so it is never written into the creative's own
+    ``url`` or dimensions, which is where an ad server's asset is read from. ``False`` is
+    the no-previews state :func:`_no_previews_refusal` owns.
     """
     if not (preview_result and preview_result.get("previews")):
         return False
     data["preview_response"] = preview_result
-    renders = preview_result["previews"][0].get("renders", [])
-    if renders:
-        first_render = renders[0]
-        if first_render.get("preview_url") and not data.get("url"):
-            data["url"] = first_render["preview_url"]
-        dimensions = first_render.get("dimensions", {})
-        for key in ("width", "height", "duration"):
-            if dimensions.get(key) and not data.get(key):
-                data[key] = dimensions[key]
-    logger.info(
-        "[sync_creatives] Preview data populated: url=%s, width=%s, height=%s, variants=%s",
-        bool(data.get("url")),
-        data.get("width"),
-        data.get("height"),
-        len(preview_result["previews"]),
-    )
+    logger.info("[sync_creatives] Preview data stored: variants=%s", len(preview_result["previews"]))
     return True
 
 

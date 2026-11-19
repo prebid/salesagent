@@ -277,19 +277,15 @@ class TestCreativeMissingUrl:
         mock_format_spec = MagicMock()
         mock_format_spec.output_format_ids = None  # Not generative
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync") as mock_get_format,
-            patch("src.core.tools.media_buy_create.extract_media_url_and_dimensions") as mock_extract,
-        ):
+        # The creative's data is read for real, by the one reader: it carries no asset an
+        # ad server can serve.
+        with patch("src.core.tools.media_buy_create._get_format_spec_sync") as mock_get_format:
             # DB returns the creative
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
             # Format spec found (non-generative)
             mock_get_format.return_value = mock_format_spec
-
-            # URL extraction returns None (missing)
-            mock_extract.return_value = (None, None, None)
 
             with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call(
@@ -319,16 +315,12 @@ class TestCreativeMissingUrl:
         mock_format_spec = MagicMock()
         mock_format_spec.output_format_ids = None
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync") as mock_get_format,
-            patch("src.core.tools.media_buy_create.extract_media_url_and_dimensions") as mock_extract,
-        ):
+        # Read for real: a root-level image URL with no size, and a format spec stating none.
+        with patch("src.core.tools.media_buy_create._get_format_spec_sync") as mock_get_format:
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
             mock_get_format.return_value = mock_format_spec
-            # Has URL but no dimensions
-            mock_extract.return_value = ("https://example.com/ad.jpg", None, None)
 
             with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call(
@@ -503,16 +495,12 @@ class TestMultipleInvalidCreativesAccumulated:
         mock_format_spec = MagicMock()
         mock_format_spec.output_format_ids = None  # Non-generative
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync") as mock_get_format,
-            patch("src.core.tools.media_buy_create.extract_media_url_and_dimensions") as mock_extract,
-        ):
+        # Read for real: none of the three carries an asset an ad server can serve.
+        with patch("src.core.tools.media_buy_create._get_format_spec_sync") as mock_get_format:
             session = MagicMock()
             session.scalars.return_value.all.return_value = creatives
 
             mock_get_format.return_value = mock_format_spec
-            # All creatives missing URL and dimensions
-            mock_extract.return_value = (None, None, None)
 
             with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call(
