@@ -19,10 +19,13 @@ Which one a creative carries is read off the asset's own ``asset_type`` (and, fo
 url-asset ladder), never off the kind alone: the reference creative agent declares its
 ``display_*_html`` formats as kind ``html5`` while their one asset is inline ``html``.
 
-Sizes come from the product's format option (``width``/``height``, or ``sizes[]``), else the
-legacy format's primary render, else a media asset's own dimensions. A responsive option, or
-none, states no size, and the carrier then holds none: which size to traffic is the adapter's
-decision against its own inventory.
+Sizes come from the product's format option, else the legacy format's primary render, and a
+media file's own dimensions win over both. ``formats/canonical/display_tag.json`` gives an option
+exactly one size mode: "Exactly one of ``(width, height)``, ``sizes[]``, or ``min/max_width`` +
+``min/max_height``". A fixed or multi-size option lands in ``sizes``; a responsive one in
+``size_ranges`` ("Minimum accepted width for responsive third-party tags. Pair with
+``max_width``"). A creative carrying neither declared no size, and the adapter may traffic it at
+any size its inventory takes.
 """
 
 from collections.abc import Mapping, Sequence
@@ -33,7 +36,12 @@ from typing import Annotated, Any, Literal
 from adcp.types.domains.core.assets.display_tag_asset import MarkupType as LibraryMarkupType
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from src.core.format_satisfaction import canonical_slot_asset_ids, declaration_slot_asset_ids, declared_params
+from src.core.format_satisfaction import (
+    canonical_slot_asset_ids,
+    declaration_slot_asset_ids,
+    declared_params,
+    declared_slots_by_kind,
+)
 from src.core.helpers.creative_helpers import (
     extract_click_url,
     extract_impression_tracker_url,
@@ -46,7 +54,7 @@ _FROZEN = ConfigDict(frozen=True, extra="forbid")
 
 MediaType = Literal["image", "video", "audio"]
 
-#: The media types, in the order a kind's declared slots are asked for one.
+#: The media types, in the order an option's declared slots are asked for one.
 _MEDIA_TYPES: dict[str, MediaType] = {"image": "image", "video": "video", "audio": "audio"}
 
 
@@ -57,6 +65,17 @@ class TrafficSize(BaseModel):
 
     width: int
     height: int
+
+
+class TrafficSizeRange(BaseModel):
+    """A responsive option's accepted bounds, in pixels. An absent bound does not constrain."""
+
+    model_config = _FROZEN
+
+    min_width: int | None = None
+    max_width: int | None = None
+    min_height: int | None = None
+    max_height: int | None = None
 
 
 class MediaRepresentation(BaseModel):
@@ -137,6 +156,7 @@ class CreativeToTraffic(BaseModel):
     format_kind: str
     representation: Representation
     sizes: tuple[TrafficSize, ...] = ()
+    size_ranges: tuple[TrafficSizeRange, ...] = ()
     clickthrough_url: str | None = None
     impression_tracker_urls: tuple[str, ...] = ()
 
@@ -163,8 +183,9 @@ def read_creative_to_traffic(
     creative_id: str,
     creative_data: Mapping[str, Any],
     kind: str,
-    format_spec: Any | None = None,
-    declarations: Sequence[Any] = (),
+    *,
+    format_spec: Any | None,
+    declarations: Sequence[Any],
 ) -> CreativeToTraffic | TrafficRefusal:
     """The ONE reader of a stored creative for trafficking. Pure: it fetches and writes nothing.
 
@@ -172,12 +193,16 @@ def read_creative_to_traffic(
         creative_id: the creative's id.
         creative_data: the stored ``Creative.data`` document.
         kind: the creative's canonical ``format_kind`` (``CreativeFormatIdentity.kind``).
-        format_spec: the legacy format declaration its retained reference resolved to, if any.
-        declarations: the product format declarations the creative resolved to, if known.
+        format_spec: the legacy format declaration its retained reference resolved to, or
+            ``None`` when it retains none.
+        declarations: the product format declarations the creative RESOLVED to on the path
+            pushing it. Required, with no default: an empty tuple reads as "the option states
+            no size", which lets the adapter pick any size, so a caller that has not resolved
+            the product must refuse rather than pass nothing.
     """
     data = dict(creative_data)
     assets = _assets(data)
-    declared_sizes = _declared_sizes(declarations, format_spec)
+    sizes, size_ranges = _declared_sizes(declarations, format_spec)
     try:
         representation = _representation(data, assets, kind, format_spec, declarations)
     except ValidationError:
@@ -187,11 +212,10 @@ def read_creative_to_traffic(
     if representation is None:
         return TrafficRefusal(creative_id, TrafficRefusalReason.NO_SERVING_CONTENT)
 
-    sizes = declared_sizes
     if isinstance(representation, MediaRepresentation):
         _url, width, height = extract_media_url_and_dimensions(data, format_spec, kind, declarations)
         if width and height:
-            sizes = (TrafficSize(width=width, height=height),)
+            sizes, size_ranges = (TrafficSize(width=width, height=height),), ()
         elif not sizes and media_asset_requires_dimensions(data, format_spec, kind, declarations):
             return TrafficRefusal(creative_id, TrafficRefusalReason.NO_DIMENSIONS)
 
@@ -201,6 +225,7 @@ def read_creative_to_traffic(
         format_kind=kind,
         representation=representation,
         sizes=sizes,
+        size_ranges=size_ranges,
         clickthrough_url=(
             None
             if isinstance(representation, PairedRedirectRepresentation)
@@ -219,7 +244,7 @@ def _representation(
 ) -> Representation | None:
     """The representation the buyer sent, most specific first; ``None`` when there is none."""
     if format_spec is not None and getattr(format_spec, "output_format_ids", None):
-        return _generated_media(data, kind)
+        return _generated(data, kind, declarations)
 
     if tag := _first_of_type(assets, "display_tag"):
         return _display_tag(tag)
@@ -286,30 +311,53 @@ def _ad_request_url(
     return None
 
 
-def _generated_media(data: dict[str, Any], kind: str) -> MediaRepresentation | None:
-    """A generative creative's build output: the file ``build_creative`` produced, read as its kind's media.
+def _generated(data: dict[str, Any], kind: str, declarations: Sequence[Any]) -> Representation | None:
+    """A generative creative's build output, read as a synced manifest would be.
 
-    The output is what is served. Its URL is the one sync stored from the build output
-    (``output_format.url``), never a preview, and a creative with no build output has nothing
-    to serve yet.
+    What ``build_creative`` produced is what is served, never a preview. Build output that
+    carries assets goes through the same ladder as a buyer's manifest. Output that is only a
+    URL (``output_format.url``, as sync stores it) names no asset type, so it is read as a file
+    only for a kind whose serving content IS a file; for any other kind a bare URL says nothing
+    about how to serve it. A creative with no build output has nothing to serve yet.
     """
     output = data.get("output_format")
-    url = output.get("url") if isinstance(output, Mapping) else None
-    if not url:
+    if not isinstance(output, Mapping):
         return None
-    return MediaRepresentation(asset_type=_media_asset_type({}, kind, ()), url=str(url))
+    output_assets = _assets(output)
+    if output_assets:
+        return _representation(
+            {**data, "assets": dict(output_assets), "url": None}, output_assets, kind, None, declarations
+        )
+    url = output.get("url")
+    media_type = _required_media_type(kind)
+    if not url or media_type is None:
+        return None
+    return MediaRepresentation(asset_type=media_type, url=str(url))
+
+
+def _required_media_type(kind: str) -> MediaType | None:
+    """The media type of the file the kind requires: ``image``, ``video_hosted``, ``audio_hosted``.
+
+    Read off the kind's declared slots, so a kind whose media is optional (a native card's
+    ``main_image``, a tag's ``backup_image``, a video's ``thumbnail``) is not answered by it.
+    """
+    for slot in declared_slots_by_kind().get(kind, ()):
+        media_type = _MEDIA_TYPES.get(str(slot.get("asset_type")))
+        if media_type and slot.get("required"):
+            return media_type
+    return None
 
 
 def _media_asset_type(assets: Mapping[str, Mapping[str, Any]], kind: str, declarations: Sequence[Any]) -> MediaType:
-    """The media type the creative's file is: its own asset's, else the first its kind or option declares."""
+    """The media type the creative's file is: its own asset's, else the kind's required media, else an option's."""
     for asset in assets.values():
         own = _MEDIA_TYPES.get(str(asset.get("asset_type")))
         if own and asset.get("url"):
             return own
+    if required := _required_media_type(kind):
+        return required
     for media_type in _MEDIA_TYPES.values():
-        if canonical_slot_asset_ids(kind, {media_type}) or any(
-            declaration_slot_asset_ids(declaration, {media_type}) for declaration in declarations
-        ):
+        if any(declaration_slot_asset_ids(declaration, {media_type}) for declaration in declarations):
             return media_type
     return "image"
 
@@ -338,27 +386,37 @@ def _assets(data: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     return {str(asset_id): asset for asset_id, asset in raw.items() if isinstance(asset, Mapping)}
 
 
-def _declared_sizes(declarations: Sequence[Any], format_spec: Any | None) -> tuple[TrafficSize, ...]:
-    """The sizes the format accepts: each option's ``width``/``height`` or ``sizes[]``, else the legacy render."""
+def _declared_sizes(
+    declarations: Sequence[Any], format_spec: Any | None
+) -> tuple[tuple[TrafficSize, ...], tuple[TrafficSizeRange, ...]]:
+    """The sizes and responsive ranges the format accepts, over every declaration, else the legacy render."""
     sizes: list[TrafficSize] = []
+    ranges: list[TrafficSizeRange] = []
     for declaration in declarations:
-        params = declared_params(declaration)
-        if params.get("width") and params.get("height"):
-            sizes.append(TrafficSize(width=int(params["width"]), height=int(params["height"])))
-        for size in params.get("sizes") or ():
-            sizes.append(TrafficSize(width=int(size["width"]), height=int(size["height"])))
-    if not sizes and format_spec is not None:
-        sizes.extend(_render_sizes(format_spec))
-    return tuple(dict.fromkeys(sizes))
+        _add_size_mode(declared_params(declaration), sizes, ranges)
+    if not sizes and not ranges and format_spec is not None:
+        for render in getattr(format_spec, "renders", None) or ():
+            dimensions = getattr(render, "dimensions", None)
+            if getattr(render, "role", None) == "primary" and dimensions is not None:
+                _add_size_mode(_attributes(dimensions), sizes, ranges)
+                break
+    return tuple(dict.fromkeys(sizes)), tuple(dict.fromkeys(ranges))
 
 
-def _render_sizes(format_spec: Any) -> list[TrafficSize]:
-    """A legacy format's primary render, when it states a fixed width and height."""
-    for render in getattr(format_spec, "renders", None) or ():
-        dimensions = getattr(render, "dimensions", None)
-        if getattr(render, "role", None) != "primary" or dimensions is None:
-            continue
-        width, height = getattr(dimensions, "width", None), getattr(dimensions, "height", None)
-        if width and height:
-            return [TrafficSize(width=int(width), height=int(height))]
-    return []
+_RANGE_BOUNDS = ("min_width", "max_width", "min_height", "max_height")
+
+
+def _add_size_mode(params: Mapping[str, Any], sizes: list[TrafficSize], ranges: list[TrafficSizeRange]) -> None:
+    """One option's size mode: a fixed size, a list of sizes, or a responsive range."""
+    if params.get("width") and params.get("height"):
+        sizes.append(TrafficSize(width=int(params["width"]), height=int(params["height"])))
+    for size in params.get("sizes") or ():
+        sizes.append(TrafficSize(width=int(size["width"]), height=int(size["height"])))
+    bounds = {bound: int(params[bound]) for bound in _RANGE_BOUNDS if params.get(bound)}
+    if bounds:
+        ranges.append(TrafficSizeRange(**bounds))
+
+
+def _attributes(dimensions: Any) -> dict[str, Any]:
+    """A legacy render's dimensions as plain params."""
+    return {name: getattr(dimensions, name, None) for name in ("width", "height", *_RANGE_BOUNDS)}
