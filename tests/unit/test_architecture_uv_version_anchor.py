@@ -18,10 +18,10 @@ from tests.unit._architecture_helpers import (
     assert_setup_uv_single_pinned_source,
     extract_dockerfile_python_version,
     extract_python_version_anchors,
+    iter_action_pins,
     iter_hardcoded_python_version_yaml,
     iter_hardcoded_uv_version_env,
     iter_python_version_anchors,
-    iter_setup_uv_action_pins,
     iter_workflow_files,
     python_version_pattern_map,
     repo_root,
@@ -48,8 +48,8 @@ _KNOWN_BAD_TARGET_VERSION_SOURCES = [
 ]
 
 _KNOWN_BAD_SETUP_UV_PINS = [
-    (Path(".github/actions/_install-uv/action.yml"), "astral-sh/setup-uv@1111111111111111111111111111111111111111"),
-    (Path(".github/workflows/ci.yml"), "astral-sh/setup-uv@2222222222222222222222222222222222222222"),
+    (Path(".github/actions/_install-uv/action.yml"), "1111111111111111111111111111111111111111"),
+    (Path(".github/workflows/ci.yml"), "2222222222222222222222222222222222222222"),
 ]
 
 _BAD_PYTHON_VERSION_WORKFLOW = """\
@@ -121,7 +121,7 @@ def test_workflows_do_not_hardcode_uv_version_env() -> None:
 def test_setup_uv_action_pinned_in_single_source() -> None:
     """``astral-sh/setup-uv`` SHA pin lives only in _install-uv (guard widened per review)."""
     repo = repo_root()
-    assert_setup_uv_single_pinned_source(iter_setup_uv_action_pins(repo), repo)
+    assert_setup_uv_single_pinned_source(iter_action_pins(repo, "astral-sh/setup-uv"), repo)
 
     for wf in iter_workflow_files(repo):
         assert "astral-sh/setup-uv@" not in wf.read_text(encoding="utf-8"), (
@@ -163,6 +163,17 @@ def test_setup_uv_pin_detector_catches_known_bad_multi_source() -> None:
     bad_pins = [(repo / rel, pin) for rel, pin in _KNOWN_BAD_SETUP_UV_PINS]
     with pytest.raises(AssertionError, match="astral-sh/setup-uv must be referenced only"):
         assert_setup_uv_single_pinned_source(bad_pins, repo)
+
+
+@pytest.mark.arch_guard
+def test_action_pin_walk_reports_every_tracked_reference(tmp_path: Path) -> None:
+    """The walk yields tag refs as well as SHAs, from any tracked workflow, so the SHA rule can see them."""
+    repo = _github_yaml_repo(
+        tmp_path,
+        ".github/workflows/scorecard.yml",
+        "steps:\n  - uses: actions/checkout@v7\n  - uses: actions/checkout@" + "3" * 40 + " # v7.0.1\n",
+    )
+    assert sorted(ref for _, ref in iter_action_pins(repo, "actions/checkout")) == ["3" * 40, "v7"]
 
 
 @pytest.mark.arch_guard
