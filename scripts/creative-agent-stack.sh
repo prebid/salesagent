@@ -27,6 +27,10 @@ set -euo pipefail
 # scripts/refresh-reference-formats.py, which reads this line; re-capture on every bump.
 ADCP_PIN="8d1d3244b2ef"
 
+# The source patches applied to the pinned agent, each a function defined below. IMAGE_TAG
+# carries a checksum of their text, so adding a patch means adding its name here.
+_PATCH_FUNCTIONS=(_dockerfile_without_fly_size_check _raise_mcp_rate_limit _dockerfile_with_dependency_updates)
+
 # The canonical local tag is pin-keyed so a cached image from a DIFFERENT pin
 # can never satisfy _ensure_image (a bare `adcp-creative-agent` image left by
 # another branch/worktree on a shared Docker host would silently substitute
@@ -34,15 +38,16 @@ ADCP_PIN="8d1d3244b2ef"
 # docker-compose.e2e.yml and the standalone `up` path run; _ensure_image
 # repoints it at this pin before every run.
 #
-# The tag also carries a checksum of this file's three source patches below (the Fly size
+# The tag also carries a checksum of the source patches in _PATCH_FUNCTIONS (the Fly size
 # check, the MCP rate limit and the dependency updates), read from the script's own text.
 # Changing any patch changes the tag, locally and on ghcr.io, so no host reuses an image built
 # with an older patch or with none (an image from before the rate-limit patch carries the bare
 # pin as its tag).
-_PATCHES="$(awk '/^(_dockerfile_without_fly_size_check|_raise_mcp_rate_limit|_dockerfile_with_dependency_updates)[(][)] [{]$/ { n++; on = 1 }
+_PATCHES="$(awk -v names="$(IFS='|'; echo "${_PATCH_FUNCTIONS[*]}")" -v want="${#_PATCH_FUNCTIONS[@]}" '
+                 $0 ~ "^(" names ")[(][)] [{]$" { n++; on = 1 }
                  on { print }
                  on && /^}$/ { on = 0 }
-                 END { exit n == 3 ? 0 : 1 }' "${BASH_SOURCE[0]}")" || {
+                 END { exit n == want ? 0 : 1 }' "${BASH_SOURCE[0]}")" || {
     echo "[creative-agent] ERROR: the source patch functions were not found in ${BASH_SOURCE[0]}" >&2
     exit 1
 }
@@ -185,8 +190,11 @@ _raise_mcp_rate_limit() {
 # rebuild resolves the same tree; @modelcontextprotocol/core follows client and server so one
 # copy is installed. The Debian upgrade is not pinned: the security archive keeps only the
 # latest build of a package, so a pinned one would stop building at the next update. The build
-# fails when the Dockerfile no longer has its two `COPY package*.json ./` lines. Drop an entry
-# once the pinned release locks that version or newer, and the patch once none is left.
+# fails when the Dockerfile no longer has its two `COPY package*.json ./` lines. It also fails,
+# naming the entry, when the pin's package-lock.json locks every copy of an entry's package at
+# that version or newer, or any copy (or a direct dependency's declared range) above it: the
+# entry is then redundant or would set the package back. Drop such an entry, and the patch once
+# none is left.
 _dockerfile_with_dependency_updates() {
     local src_dockerfile="$(_dockerfile_without_fly_size_check)"
     local out="${SRC}/Dockerfile.salesagent-deps"
@@ -229,15 +237,38 @@ VERSIONS
 COPY <<'MERGE' /tmp/salesagent-dependency-updates.cjs
   const fs = require("fs");
   const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+  const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
   const updates = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
   const major = (spec) => spec.replace(/^[^0-9]*/, "").split(".")[0];
+  const parts = (v) => v.replace(/^[^0-9]*/, "").split(/[-+]/)[0].split(".").map(Number);
+  const atLeast = (v, min) => {
+    const [a, b] = [parts(v), parts(min)];
+    const i = [0, 1, 2].find((n) => (a[n] || 0) !== (b[n] || 0));
+    return i === undefined || (a[i] || 0) > (b[i] || 0);
+  };
+  const stale = [];
   pkg.overrides = pkg.overrides || {};
   for (const [key, version] of Object.entries(updates)) {
     const name = key.replace(/(.)@.*$/, "$1");
+    const line = key.slice(name.length + 1);
     const field = ["dependencies", "devDependencies", "optionalDependencies"].find(
       (f) => pkg[f] && name in pkg[f] && major(pkg[f][name]) === major(version));
+    const locked = Object.entries(lock.packages || {})
+      .filter(([path, e]) => path.split("node_modules/").length > 1
+        && path.split("node_modules/").pop() === name && e.version
+        && (!line || (e.version + ".").startsWith(line + ".")))
+      .map(([, e]) => e.version);
+    const newer = locked.concat(field ? [pkg[field][name]] : []).filter((v) => !atLeast(version, v));
+    if (newer.length || (locked.length && locked.every((v) => atLeast(v, version)))) {
+      stale.push(`${key} (${version}; the pin has ${locked.concat(newer).join(", ")})`);
+    }
     if (field) pkg[field][name] = version;
     pkg.overrides[key] = field ? "$" + name : version;
+  }
+  if (stale.length) {
+    console.error("salesagent-deps: the pin already has these versions or newer; drop them from"
+      + " _dockerfile_with_dependency_updates: " + stale.join("; "));
+    process.exit(1);
   }
   fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
 MERGE
@@ -265,19 +296,19 @@ STAGE
     echo "$out"
 }
 
-_build_image_local() {
-    local dockerfile
+# The one docker build both paths use, so the local image and the published one under
+# IMAGE_TAG come from the same patched Dockerfile. Arguments: the tags to apply.
+_docker_build() {
+    local dockerfile tag tags=()
     dockerfile="$(_dockerfile_with_dependency_updates)" || return 1
-    echo "[creative-agent] docker build $IMAGE (adcp@${ADCP_PIN})"
-    docker build -f "$dockerfile" -t "$IMAGE" "$SRC"
+    for tag in "$@"; do tags+=(-t "$tag"); done
+    echo "[creative-agent] docker build $* (adcp@${ADCP_PIN})"
+    docker build -f "$dockerfile" "${tags[@]}" "$SRC"
 }
 
-_build_for_ghcr() {
-    local ref="$(_ghcr_ref)" dockerfile
-    dockerfile="$(_dockerfile_with_dependency_updates)" || return 1
-    echo "[creative-agent] docker build ${ref} (adcp@${ADCP_PIN})"
-    docker build -f "$dockerfile" -t "$ref" -t "$IMAGE" "$SRC"
-}
+_build_image_local() { _docker_build "$IMAGE"; }
+
+_build_for_ghcr() { _docker_build "$(_ghcr_ref)" "$IMAGE"; }
 
 _push_to_ghcr() {
     local ref="$(_ghcr_ref)"
