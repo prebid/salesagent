@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 import re
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -12,6 +10,7 @@ from typing import Any
 import pytest
 import yaml
 
+from tests.helpers.bash_stubs import run_bash_with_stubs
 from tests.unit._architecture_helpers import repo_root
 
 _IMAGE_PUBLISHING_WORKFLOWS = frozenset({"release-please.yml", "publish-creative-agent.yml"})
@@ -76,13 +75,26 @@ def _assert_harden_runner_job(wf_name: str, job_name: str, job: dict[str, Any]) 
             assert sudo_disabled, f"{wf_name} job {job_name} must set disable-sudo-and-containers: true"
 
 
-def _resolve_job_env(job: dict[str, Any], value: str) -> str:
-    """Expand a whole-value ``${{ env.NAME }}`` reference from the job's ``env``."""
+_ATTEST = "actions/attest-build-provenance@"
+
+
+def _steps_using(job: dict[str, Any], prefix: str) -> list[dict[str, Any]]:
+    """Steps of *job* whose ``uses:`` starts with *prefix* (``owner/action@``)."""
+    return [step for step in _job_steps(job) if _step_uses(step).startswith(prefix)]
+
+
+def _attest_subjects(job: dict[str, Any]) -> list[str]:
+    """``subject-name`` of each attest-build-provenance step, as written in the workflow."""
+    return [str(step.get("with", {}).get("subject-name", "")) for step in _steps_using(job, _ATTEST)]
+
+
+def _resolve_env(env: dict[str, Any], value: str) -> str:
+    """Expand a whole-value ``${{ env.NAME }}`` reference from *env*."""
     match = re.fullmatch(r"\$\{\{\s*env\.(\w+)\s*\}\}", value)
-    return str(job.get("env", {}).get(match.group(1), value)) if match else value
+    return str(env.get(match.group(1), value)) if match else value
 
 
-def _assert_sign_and_attest_job(job: dict[str, Any]) -> None:
+def _assert_sign_and_attest_job(job: dict[str, Any], workflow_env: dict[str, Any] | None = None) -> None:
     perms = job.get("permissions", {})
     assert isinstance(perms, dict)
     for perm in ("id-token", "attestations", "packages", "security-events"):
@@ -107,9 +119,9 @@ def _assert_sign_and_attest_job(job: dict[str, Any]) -> None:
     assert any('[[ -n "$DIGEST" ]]' in run for run in login_runs), (
         "sign-and-attest must guard empty image_digest before cosign sign"
     )
-    attest_steps = [step for step in steps if _step_uses(step).startswith("actions/attest-build-provenance@")]
-    assert len(attest_steps) >= 2, "sign-and-attest must attest ghcr.io and Docker Hub images"
-    subjects = [_resolve_job_env(job, str(s.get("with", {}).get("subject-name", ""))) for s in attest_steps]
+    env = {**(workflow_env or {}), **job.get("env", {})}
+    subjects = [_resolve_env(env, subject) for subject in _attest_subjects(job)]
+    assert len(subjects) >= 2, "sign-and-attest must attest ghcr.io and Docker Hub images"
     ghcr_attest = [subject for subject in subjects if "ghcr.io/" in subject]
     dockerhub_attest = [subject for subject in subjects if subject.startswith("docker.io/")]
     assert ghcr_attest, "sign-and-attest must attest ghcr.io image with registry host"
@@ -145,7 +157,7 @@ def _assert_build_and_push_job(job: dict[str, Any]) -> None:
     assert arm64_gate[0].get("env", {}).get("TRIVY_PLATFORM") == "linux/arm64", (
         "arm64 pre-push Trivy must set TRIVY_PLATFORM=linux/arm64"
     )
-    push_steps = [step for step in steps if _step_uses(step).startswith("docker/build-push-action@")]
+    push_steps = _steps_using(job, "docker/build-push-action@")
     assert len(push_steps) >= 3, "build-and-push must gate amd64, gate arm64, then push multi-arch"
     assert push_steps[-1].get("with", {}).get("push") is True, "final build step must push to registry"
 
@@ -177,12 +189,13 @@ def test_image_publishing_workflows_harden_runner_per_job() -> None:
 @pytest.mark.arch_guard
 def test_release_workflow_supply_chain_wiring() -> None:
     """release-please.yml must gate before push, then sign/attest with registry auth."""
-    wf_path = repo_root() / ".github/workflows/release-please.yml"
-    jobs = _load_workflow(wf_path).get("jobs", {})
+    wf_path = repo_root() / _RELEASE_WORKFLOW
+    workflow = _load_workflow(wf_path)
+    jobs = workflow.get("jobs", {})
     assert "build-and-push" in jobs
     assert _SIGN_ATTEST_JOB in jobs
     _assert_build_and_push_job(jobs["build-and-push"])
-    _assert_sign_and_attest_job(jobs[_SIGN_ATTEST_JOB])
+    _assert_sign_and_attest_job(jobs[_SIGN_ATTEST_JOB], workflow.get("env"))
 
     # build-and-push's image_tags output contains the Docker Hub user (a secret), so GitHub drops it
     # between jobs; signing from it signed nothing in the 3.0.1 release.
@@ -197,53 +210,73 @@ def test_release_workflow_supply_chain_wiring() -> None:
     assert "sbom: true" in text
 
 
+_RELEASE_WORKFLOW = ".github/workflows/release-please.yml"
+
+
+def _release_workflow() -> dict[str, Any]:
+    return _load_workflow(repo_root() / _RELEASE_WORKFLOW)
+
+
 def _release_sign_job() -> dict[str, Any]:
-    return _load_workflow(repo_root() / ".github/workflows/release-please.yml")["jobs"][_SIGN_ATTEST_JOB]
+    return _release_workflow()["jobs"][_SIGN_ATTEST_JOB]
 
 
-def _release_sign_step() -> dict[str, Any]:
-    steps = [step for step in _job_steps(_release_sign_job()) if "cosign sign" in (step.get("run") or "")]
-    assert len(steps) == 1, "release sign-and-attest must have exactly one cosign sign step"
+def _release_step(step_id: str) -> dict[str, Any]:
+    steps = [step for step in _job_steps(_release_sign_job()) if step.get("id") == step_id]
+    assert len(steps) == 1, f"release sign-and-attest must have exactly one step with id {step_id!r}"
     return steps[0]
 
 
-_STUB_COSIGN = '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$COSIGN_LOG"\n'
+def _run_release_step(
+    tmp_path: Path, step_id: str, stubs: dict[str, str], env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Run one sign-and-attest step's ``run:`` script under bash, with *stubs* first on ``PATH``."""
+    script = tmp_path / f"{step_id}.sh"
+    script.write_text(_release_step(step_id)["run"], encoding="utf-8", newline="\n")
+    return run_bash_with_stubs([script.as_posix()], stub_dir=tmp_path / "bin", stubs=stubs, env=env)
 
 
-def _run_sign_script(tmp_path: Path, images: str, digest: str) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-    """Run the release sign step's script under bash with a stub cosign that records its arguments."""
-    bash = shutil.which("bash")
-    assert bash, "bash is required to run the release sign step's script"
-    stub_dir = tmp_path / "bin"
-    stub_dir.mkdir()
-    cosign = stub_dir / "cosign"
-    cosign.write_text(_STUB_COSIGN, encoding="utf-8", newline="\n")
-    cosign.chmod(0o755)
-    log = tmp_path / "cosign.log"
-    script = tmp_path / "sign.sh"
-    script.write_text(_release_sign_step()["run"], encoding="utf-8", newline="\n")
-    env = {
-        **os.environ,
-        "PATH": f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}",
-        "COSIGN_LOG": log.as_posix(),
-        "DIGEST": digest,
-        "IMAGES": images,
-        "BUNDLE_DIR": (tmp_path / "bundles").as_posix(),
-    }
-    result = subprocess.run([bash, script.as_posix()], env=env, capture_output=True, text=True, timeout=60, check=False)
-    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
-    return result, calls
+def _read_lines(path: Path) -> list[str]:
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
 
 
 _DIGEST = "sha256:" + "0" * 64
+_OTHER_DIGEST = "sha256:" + "1" * 64
+_TWO_IMAGES = "ghcr.io/org/repo docker.io/user/salesagent"
+
+# Logs every call; fails any call whose arguments contain $COSIGN_FAIL_FOR (when set).
+_STUB_COSIGN = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$COSIGN_LOG"
+if [[ -n "${COSIGN_FAIL_FOR:-}" && "$*" == *"$COSIGN_FAIL_FOR"* ]]; then exit 1; fi
+exit 0
+"""
+# The sign step sleeps 30s between attempts.
+_STUB_SLEEP = "#!/usr/bin/env bash\nexit 0\n"
+
+
+def _run_sign_script(tmp_path: Path, images: str, *, fail_for: str = "") -> tuple[int, list[str]]:
+    """Run the sign step with a stub cosign; return its exit code and the ``<image>@<digest>`` of each sign call."""
+    log = tmp_path / "cosign.log"
+    result = _run_release_step(
+        tmp_path,
+        "sign",
+        {"cosign": _STUB_COSIGN, "sleep": _STUB_SLEEP},
+        {
+            "COSIGN_LOG": log.as_posix(),
+            "COSIGN_FAIL_FOR": fail_for,
+            "DIGEST": _DIGEST,
+            "IMAGES": images,
+            "BUNDLE_DIR": (tmp_path / "bundles").as_posix(),
+        },
+    )
+    return result.returncode, [call.split()[-1] for call in _read_lines(log) if call.startswith("sign ")]
 
 
 @pytest.mark.arch_guard
 def test_release_sign_script_signs_each_image_once_at_the_digest(tmp_path: Path) -> None:
     """Two image names give one cosign sign call per <image>@<digest>, and the step passes."""
-    result, calls = _run_sign_script(tmp_path, "ghcr.io/org/repo docker.io/user/salesagent", _DIGEST)
-    assert result.returncode == 0, result.stdout + result.stderr
-    signed = [call.split()[-1] for call in calls if call.startswith("sign ")]
+    returncode, signed = _run_sign_script(tmp_path, _TWO_IMAGES)
+    assert returncode == 0
     assert signed == [f"ghcr.io/org/repo@{_DIGEST}", f"docker.io/user/salesagent@{_DIGEST}"]
 
 
@@ -251,43 +284,160 @@ def test_release_sign_script_signs_each_image_once_at_the_digest(tmp_path: Path)
 @pytest.mark.parametrize("images", ["", "   "])
 def test_release_sign_script_fails_when_there_is_nothing_to_sign(tmp_path: Path, images: str) -> None:
     """An empty image list fails the step; 3.0.1 signed nothing and passed."""
-    result, calls = _run_sign_script(tmp_path, images, _DIGEST)
-    assert result.returncode != 0
-    assert not [call for call in calls if call.startswith("sign ")]
+    returncode, signed = _run_sign_script(tmp_path, images)
+    assert returncode != 0
+    assert signed == []
 
 
 @pytest.mark.arch_guard
-def test_release_sign_and_attest_reads_image_names_from_job_env() -> None:
-    """Signing, both attestations and the scan read the image names from one job-level env."""
-    job = _release_sign_job()
-    job_env = job.get("env", {})
-    assert job_env.get("GHCR_IMAGE") == "ghcr.io/${{ github.repository }}"
-    assert job_env.get("DOCKERHUB_IMAGE") == "docker.io/${{ secrets.DOCKERHUB_USER }}/salesagent"
-    assert _release_sign_step().get("env", {}).get("IMAGES") == "${{ env.GHCR_IMAGE }} ${{ env.DOCKERHUB_IMAGE }}"
-    steps = _job_steps(job)
-    subjects = sorted(
-        str(step.get("with", {}).get("subject-name"))
-        for step in steps
-        if _step_uses(step).startswith("actions/attest-build-provenance@")
+def test_release_sign_script_fails_when_one_registry_fails(tmp_path: Path) -> None:
+    """A registry that refuses all three attempts fails the step, after the other one was signed."""
+    returncode, signed = _run_sign_script(tmp_path, _TWO_IMAGES, fail_for="docker.io/")
+    assert returncode != 0
+    assert signed == [f"ghcr.io/org/repo@{_DIGEST}"] + [f"docker.io/user/salesagent@{_DIGEST}"] * 3
+
+
+# Answers token requests, and manifest HEADs with the Docker-Content-Digest set per registry.
+_STUB_CURL = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$CURL_LOG"
+case "$*" in
+  *ghcr.io/token*|*auth.docker.io/token*) echo '{"token":"stub-token"}' ;;
+  *https://ghcr.io/v2/*) printf 'HTTP/2 200\\r\\ndocker-content-digest: %s\\r\\n\\r\\n' "$STUB_GHCR_DIGEST" ;;
+  *https://registry-1.docker.io/v2/*) printf 'HTTP/1.1 200 OK\\r\\nDocker-Content-Digest: %s\\r\\n\\r\\n' "$STUB_DOCKERHUB_DIGEST" ;;
+  *) exit 22 ;;
+esac
+"""
+# `gh release view v<version> ...` succeeds only for $STUB_RELEASE.
+_STUB_GH = """#!/usr/bin/env bash
+case "$*" in "release view v${STUB_RELEASE:-none} "*) exit 0 ;; esac
+exit 1
+"""
+
+
+def _run_resolve_step(tmp_path: Path, **env: str) -> tuple[int, list[str], list[str]]:
+    """Run the digest step with stub gh and curl; return its exit code, its outputs, and the curl calls."""
+    output, curl_log = tmp_path / "github_output", tmp_path / "curl.log"
+    result = _run_release_step(
+        tmp_path,
+        "digest",
+        {"curl": _STUB_CURL, "gh": _STUB_GH},
+        {
+            "GITHUB_OUTPUT": output.as_posix(),
+            "GITHUB_REPOSITORY": "org/repo",
+            "GHCR_IMAGE": "ghcr.io/org/repo",
+            "DOCKERHUB_IMAGE": "docker.io/user/salesagent",
+            "GH_TOKEN": "t",
+            "GHCR_USER": "u",
+            "DH_USER": "user",
+            "DH_PASS": "p",
+            "CURL_LOG": curl_log.as_posix(),
+            "BUILD_DIGEST": "",
+            "VERSION": "",
+            "STUB_RELEASE": "3.0.1",
+            "STUB_GHCR_DIGEST": _DIGEST,
+            "STUB_DOCKERHUB_DIGEST": _DIGEST,
+            **env,
+        },
     )
-    assert subjects == ["${{ env.DOCKERHUB_IMAGE }}", "${{ env.GHCR_IMAGE }}"]
-    scan_refs = [
-        str(step.get("with", {}).get("image-ref"))
-        for step in steps
-        if _step_uses(step).startswith("aquasecurity/trivy-action@")
-    ]
-    assert scan_refs == ["${{ env.GHCR_IMAGE }}@${{ env.IMAGE_DIGEST }}"]
+    return result.returncode, _read_lines(output), _read_lines(curl_log)
 
 
 @pytest.mark.arch_guard
-def test_release_sign_and_attest_dispatch_is_main_only_and_does_not_attest() -> None:
-    """A dispatch run signs from main only, and leaves build provenance to the run that built the image."""
+def test_release_digest_on_push_is_the_built_digest(tmp_path: Path) -> None:
+    """After a release build, the job signs the digest build-and-push pushed, without asking a registry."""
+    returncode, outputs, curl_calls = _run_resolve_step(tmp_path, EVENT_NAME="push", BUILD_DIGEST=_DIGEST)
+    assert returncode == 0
+    assert outputs == [f"digest={_DIGEST}"]
+    assert curl_calls == []
+
+
+@pytest.mark.arch_guard
+def test_release_digest_on_dispatch_is_the_released_tag_in_both_registries(tmp_path: Path) -> None:
+    """A recovery run signs the digest that <image>:<version> names in both registries."""
+    returncode, outputs, curl_calls = _run_resolve_step(tmp_path, EVENT_NAME="workflow_dispatch", VERSION="3.0.1")
+    assert returncode == 0
+    assert outputs == [f"digest={_DIGEST}"]
+    manifests = [call.split()[-1] for call in curl_calls if "/manifests/" in call]
+    assert manifests == [
+        "https://ghcr.io/v2/org/repo/manifests/3.0.1",
+        "https://registry-1.docker.io/v2/user/salesagent/manifests/3.0.1",
+    ]
+
+
+@pytest.mark.arch_guard
+@pytest.mark.parametrize(
+    "env",
+    [
+        pytest.param({"EVENT_NAME": "push", "BUILD_DIGEST": ""}, id="push-without-digest"),
+        pytest.param({"EVENT_NAME": "workflow_dispatch", "VERSION": "3.0.2"}, id="no-such-release"),
+        pytest.param(
+            {"EVENT_NAME": "workflow_dispatch", "VERSION": "3.0.1", "STUB_DOCKERHUB_DIGEST": _OTHER_DIGEST},
+            id="registries-disagree",
+        ),
+        pytest.param(
+            {
+                "EVENT_NAME": "workflow_dispatch",
+                "VERSION": "3.0.1",
+                "STUB_GHCR_DIGEST": "",
+                "STUB_DOCKERHUB_DIGEST": "",
+            },
+            id="tag-not-found",
+        ),
+        pytest.param({"EVENT_NAME": "workflow_dispatch", "VERSION": "latest"}, id="not-a-version"),
+    ],
+)
+def test_release_digest_refuses_anything_but_a_release(tmp_path: Path, env: dict[str, str]) -> None:
+    """No digest is produced for a missing release, a tag the registries disagree on, or a malformed input."""
+    returncode, outputs, _ = _run_resolve_step(tmp_path, **env)
+    assert returncode != 0
+    assert outputs == []
+
+
+@pytest.mark.arch_guard
+def test_release_image_names_have_one_source() -> None:
+    """The build, signing, both attestations and the scan read the image names from the workflow env."""
+    workflow = _release_workflow()
+    assert workflow.get("env", {}).get("GHCR_IMAGE") == "ghcr.io/${{ github.repository }}"
+    assert workflow.get("env", {}).get("DOCKERHUB_IMAGE") == "docker.io/${{ secrets.DOCKERHUB_USER }}/salesagent"
+    names = ["${{ env.GHCR_IMAGE }}", "${{ env.DOCKERHUB_IMAGE }}"]
+
+    meta = _steps_using(workflow["jobs"]["build-and-push"], "docker/metadata-action@")
+    assert len(meta) == 1
+    assert str(meta[0].get("with", {}).get("images")).strip().splitlines() == names
     job = _release_sign_job()
-    condition = str(job.get("if", ""))
-    assert "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" in condition, (
+    assert _release_step("sign").get("env", {}).get("IMAGES") == " ".join(names)
+    assert sorted(_attest_subjects(job)) == sorted(names)
+    scan_refs = [str(step.get("with", {}).get("image-ref")) for step in _steps_using(job, "aquasecurity/trivy-action@")]
+    assert scan_refs == ["${{ env.GHCR_IMAGE }}@${{ steps.digest.outputs.digest }}"]
+
+    text = (repo_root() / _RELEASE_WORKFLOW).read_text(encoding="utf-8")
+    assert text.count("ghcr.io/${{ github.repository }}") == 1
+    assert text.count("${{ secrets.DOCKERHUB_USER }}/salesagent") == 1
+
+
+@pytest.mark.arch_guard
+def test_release_sign_and_attest_signs_the_resolved_digest() -> None:
+    """Signing and both attestations read the digest step's output, so a dispatch signs only what it resolved."""
+    job = _release_sign_job()
+    resolved = "${{ steps.digest.outputs.digest }}"
+    assert _release_step("sign").get("env", {}).get("DIGEST") == resolved
+    attest_digests = [step.get("with", {}).get("subject-digest") for step in _steps_using(job, _ATTEST)]
+    assert attest_digests == [resolved, resolved]
+
+
+@pytest.mark.arch_guard
+def test_release_dispatch_takes_a_version_runs_from_main_and_does_not_attest() -> None:
+    """A dispatch names a release version, runs from main only, and leaves build provenance to the build."""
+    workflow = _release_workflow()
+    triggers = workflow.get("on", workflow.get(True, {}))  # PyYAML reads the bare key `on` as True
+    assert set(triggers["workflow_dispatch"]["inputs"]) == {"version"}, (
+        "a dispatch must name a release, not a digest: any digest would get the main-branch signature"
+    )
+    job = _release_sign_job()
+    assert "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" in str(job.get("if", "")), (
         "dispatch from a branch signs with an identity ADR-007's cosign verify rejects"
     )
-    attest_steps = [step for step in _job_steps(job) if _step_uses(step).startswith("actions/attest-build-provenance@")]
+    attest_steps = _steps_using(job, _ATTEST)
     assert attest_steps
     for step in attest_steps:
         assert step.get("if") == "github.event_name == 'push'", (
