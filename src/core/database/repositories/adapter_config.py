@@ -116,7 +116,7 @@ class AdapterConfigRepository:
         """
         if config.adapter_type != "google_ad_manager":
             return False
-        return bool(config.gam_refresh_token or config.gam_service_account_json)
+        return bool(config._gam_refresh_token or config.gam_service_account_json)
 
     @staticmethod
     def get_gam_config(config: AdapterConfig) -> dict[str, Any]:

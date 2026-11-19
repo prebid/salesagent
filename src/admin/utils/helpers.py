@@ -89,8 +89,6 @@ def get_tenant_config_from_db(tenant_id):
                 if adapter_type == "google_ad_manager":
                     if adapter_obj.gam_network_code:
                         adapter_config[adapter_type]["network_code"] = adapter_obj.gam_network_code
-                    if adapter_obj.gam_refresh_token:
-                        adapter_config[adapter_type]["refresh_token"] = adapter_obj.gam_refresh_token
                     # NOTE: gam_company_id removed - advertiser_id is per-principal
                     if adapter_obj.gam_trafficker_id:
                         adapter_config[adapter_type]["trafficker_id"] = adapter_obj.gam_trafficker_id

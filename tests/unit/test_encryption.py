@@ -295,6 +295,51 @@ class TestTenantModelIntegration:
         # code's table entry now, so assert it exactly.
 
 
+class TestAdapterConfigRefreshToken:
+    """``AdapterConfig.gam_refresh_token`` is stored encrypted, like the service account JSON."""
+
+    TOKEN = "1//oauth-refresh-token-for-the-publisher-network"
+
+    def test_the_constructor_stores_ciphertext(self, set_encryption_key):
+        from src.core.database.models import AdapterConfig
+
+        config = AdapterConfig(tenant_id="t1", adapter_type="google_ad_manager", gam_refresh_token=self.TOKEN)
+
+        assert config._gam_refresh_token != self.TOKEN
+        assert decrypt_api_key(config._gam_refresh_token) == self.TOKEN
+        assert config.gam_refresh_token == self.TOKEN
+
+    def test_assignment_stores_ciphertext(self, set_encryption_key):
+        from src.core.database.models import AdapterConfig
+
+        config = AdapterConfig(tenant_id="t1", adapter_type="google_ad_manager")
+        config.gam_refresh_token = self.TOKEN
+
+        assert decrypt_api_key(config._gam_refresh_token) == self.TOKEN
+        assert config.gam_refresh_token == self.TOKEN
+
+    @pytest.mark.parametrize("cleared", [None, ""])
+    def test_a_cleared_token_is_stored_as_null(self, set_encryption_key, cleared):
+        from src.core.database.models import AdapterConfig
+
+        config = AdapterConfig(tenant_id="t1", adapter_type="google_ad_manager", gam_refresh_token=self.TOKEN)
+        config.gam_refresh_token = cleared
+
+        assert config._gam_refresh_token is None
+        assert config.gam_refresh_token is None
+
+    def test_a_value_that_does_not_decrypt_is_a_configuration_error(self, set_encryption_key):
+        from src.core.database.models import AdapterConfig
+        from src.core.exceptions import AdCPConfigurationError
+
+        config = AdapterConfig(tenant_id="t1", adapter_type="google_ad_manager")
+        config._gam_refresh_token = self.TOKEN  # plaintext, as stored before encryption
+
+        with pytest.raises(AdCPConfigurationError) as raised:
+            _ = config.gam_refresh_token
+        assert raised.value.details.tenant_id == "t1"
+
+
 class TestErrorHandling:
     """Test error handling in encryption utilities."""
 
