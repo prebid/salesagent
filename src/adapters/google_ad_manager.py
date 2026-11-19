@@ -14,6 +14,7 @@ __all__ = [
 
 import logging
 import uuid
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -34,6 +35,7 @@ from src.adapters.base import (
 
 # Import modular components
 from src.adapters.gam.client import GAMClientManager, current_network_time_zone
+from src.adapters.gam.creative_plan import GamCreativeRefusal, placeholder_sizes, plan_gam_creative
 from src.adapters.gam.managers import (
     GAMCreativesManager,
     GAMInventoryManager,
@@ -52,6 +54,7 @@ from src.adapters.gam.pricing_compatibility import PricingCompatibility
 from src.adapters.gam_data_freshness import GAMDataFreshnessValidator
 from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.core.audit_logger import AuditLogger
+from src.core.creative_to_traffic import CreativeToTraffic
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.details import (
     AdapterFailureDetails,
@@ -354,6 +357,45 @@ class GoogleAdManager(AdServerAdapter):
     @property
     def SUPPORTED_MEDIA_TYPES(self):
         return self.targeting_manager.SUPPORTED_MEDIA_TYPES
+
+    def check_creatives_before_booking(
+        self,
+        packages: Sequence[MediaPackage],
+        creatives_by_package: Mapping[str, Sequence[CreativeToTraffic]],
+    ) -> None:
+        """Refuse a creative GAM has no creative for on its package's line item, before the order exists.
+
+        Interim seam; RFC #2529 folds it into plan(buy).
+
+        Each creative is planned (``plan_gam_creative``) against the placeholders the
+        package's line item will be created with (``GAMOrdersManager.line_item_placeholders``,
+        the computation ``create_line_items`` writes), so a size or kind refused here is one
+        the creatives manager would refuse after the order and line items were written.
+        Raises the first refusal's typed error.
+        """
+        planned = [package for package in packages if creatives_by_package.get(package.package_id)]
+        if not planned:
+            return
+        from src.core.database.repositories.uow import ProductUoW
+
+        # Read and closed before the placeholders are computed: the computation opens a
+        # session of its own, which would close one still open here.
+        with ProductUoW(self.tenant_id) as uow:
+            assert uow.products is not None
+            impl_configs = {}
+            for package in planned:
+                product = uow.products.get_by_id(package.product_id) if package.product_id else None
+                impl_configs[package.package_id] = dict((product.implementation_config if product else None) or {})
+        for package in planned:
+            sizes = placeholder_sizes(
+                self.orders_manager.line_item_placeholders(
+                    package, impl_configs[package.package_id], tenant_id=self.tenant_id, log=self.log
+                )
+            )
+            for creative in creatives_by_package[package.package_id]:
+                plan = plan_gam_creative(creative, sizes)
+                if isinstance(plan, GamCreativeRefusal):
+                    raise plan.error()
 
     def create_media_buy(
         self,

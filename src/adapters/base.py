@@ -572,12 +572,16 @@ class AdServerAdapter(ABC):
         return problems
 
     def check_creatives_before_booking(
-        self, packages: Sequence[MediaPackage], creatives_by_package: Mapping[str, Sequence[CreativeToTraffic]]
+        self,
+        packages: Sequence[MediaPackage],
+        creatives_by_package: Mapping[str, Sequence[CreativeToTraffic]],
     ) -> None:
         """Refuse, before any ad-server write, a creative this adapter cannot traffic on its package.
 
-        Interim seam; RFC #2529 folds it into plan(buy). Raises the refusal's typed
-        AdCPSalesAgentError. The default accepts everything.
+        Interim seam; RFC #2529 folds it into plan(buy).
+
+        *creatives_by_package* maps a package id to the creatives the buy names on it. Raises
+        the refusal's typed ``AdCPSalesAgentError``. The default accepts everything.
         """
 
     @abstractmethod

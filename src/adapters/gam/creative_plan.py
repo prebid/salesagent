@@ -63,8 +63,8 @@ class GamCreativePlan:
     """The GAM creative to create for one creative, and the sizes its associations carry.
 
     ``creative`` is the GAM ``Creative`` without ``advertiserId`` and ``name``.
-    ``lica_sizes`` are GAM ``Size`` objects for ``LineItemCreativeAssociation.sizes``; empty
-    means the association states none. ``html5_bundle_url`` is set for an ``Html5Creative``
+    ``lica_sizes`` are GAM ``Size`` objects for ``LineItemCreativeAssociation.sizes``, the
+    creative's own size first; empty means the association states none. ``html5_bundle_url`` is set for an ``Html5Creative``
     only: its zip bytes are not in ``creative`` until :meth:`with_html5_bundle` fills them.
     """
 
@@ -143,8 +143,11 @@ def plan_gam_creative(
 
     Size: the candidates are the declared ``sizes`` a placeholder takes, plus the placeholders
     inside a declared ``size_ranges`` entry (every stated bound inclusive); with neither
-    declared, every placeholder. The first candidate is the creative's size and the others go
-    to ``lica_sizes``. No candidate, or no placeholder, is a refusal: there is no default size.
+    declared, every placeholder. The first candidate is the creative's size. With more than
+    one, ``lica_sizes`` is every candidate, the creative's own first: the association's sizes
+    "override" ``Creative.size``, and listing its own keeps it served at that size whether GAM
+    adds them or replaces it. With one, the association states none. No candidate, or no
+    placeholder, is a refusal: there is no default size.
     """
     representation = ctt.representation
     if ctt.format_kind in _KINDS_NOT_PLANNED or (
@@ -157,7 +160,8 @@ def plan_gam_creative(
     sizes = _candidate_sizes(ctt, placeholder_sizes)
     if isinstance(sizes, GamCreativeRefusal):
         return sizes
-    size, *lica_sizes = ({"width": s.width, "height": s.height} for s in sizes)
+    size, *others = candidates = tuple({"width": s.width, "height": s.height} for s in sizes)
+    lica_sizes = candidates if others else ()
 
     creative: dict[str, Any] = {"size": size}
     bundle_url = None
@@ -184,7 +188,7 @@ def plan_gam_creative(
 
     if ctt.impression_tracker_urls:
         creative["thirdPartyImpressionTrackingUrls"] = substitute_tracking_urls(list(ctt.impression_tracker_urls))
-    return GamCreativePlan(creative=creative, lica_sizes=tuple(lica_sizes), html5_bundle_url=bundle_url)
+    return GamCreativePlan(creative=creative, lica_sizes=lica_sizes, html5_bundle_url=bundle_url)
 
 
 def _destination(ctt: CreativeToTraffic) -> dict[str, str]:

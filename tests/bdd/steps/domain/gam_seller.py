@@ -1248,6 +1248,19 @@ def then_approval_fails_on_missing_pricing_info(ctx: dict) -> None:
     assert len(pending) == 1, f"expected the media buy to still await approval; {len(pending)} buys do"
 
 
+@then(parsers.parse('the seller\'s approval fails with error code "{code}"'))
+def then_approval_fails_with_code(ctx: dict, code: str) -> None:
+    """The approval failed, and its error names the code's message from the one code table."""
+    from src.core.errors.codes import CODE_TABLE, ErrorCode
+    from src.core.tools.media_buy_create import ApprovalOutcome
+
+    result = ctx["approval_result"]
+    message = CODE_TABLE[ErrorCode(code)].message
+    assert result.outcome is ApprovalOutcome.FAILED and message in (result.error_msg or ""), (
+        f"expected the seller's approval to fail with {code} ({message!r}); it returned {result}"
+    )
+
+
 @then("Google Ad Manager received no order and no line item")
 def then_no_order_and_no_line_item(ctx: dict) -> None:
     """The seller sent GAM no order and no line item: the refusal left nothing behind in GAM."""
