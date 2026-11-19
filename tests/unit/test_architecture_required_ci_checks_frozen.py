@@ -18,9 +18,9 @@ REQUIRED_RENDERED_CHECKS = {
     "CI / Quickstart",
     "CI / Smoke Tests",
     "CI / Unit Tests",
-    # The unit run on windows-latest. Not in the Summary job's `needs` and not a
-    # required check yet; making it one is a branch-protection edit. Listed
-    # because rendered_ci_check_names() renders every job.
+    # The windows-latest row of the unit-tests matrix. It gates merges through
+    # Summary (which needs `unit-tests`, whose result covers every row), so no
+    # branch-protection edit is needed for it to block.
     "CI / Unit Tests (Windows)",
     "CI / Integration (creative)",
     "CI / Integration (product)",
