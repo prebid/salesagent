@@ -79,6 +79,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_v31_request",
     "tests.bdd.steps.domain.uc002_v31_proposal_targeting",
     "tests.bdd.steps.domain.uc002_invariants",
+    "tests.bdd.steps.domain.uc002_creative_kind",
     "tests.bdd.steps.domain.gam_seller",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
@@ -7256,6 +7257,9 @@ ENV_ROUTES: list[EnvRoute] = [
                 # request the Givens built. The row claims that feature's tag prefix once, so
                 # a new GAM scenario joins it without editing this predicate.
                 or any(t.startswith("T-UC-002-local-gam-") for t in m)
+                # local-uc002-creative-kind-reaches-adapter.feature, for the same reason:
+                # the create chain and the create dispatch, claimed by its tag prefix once.
+                or any(t.startswith("T-UC-002-local-creative-kind-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
