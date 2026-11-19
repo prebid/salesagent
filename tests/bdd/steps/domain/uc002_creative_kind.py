@@ -17,6 +17,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then
 
+from tests.bdd.steps.domain.gam_seller import assert_media_buy_still_awaits_approval
 from tests.bdd.steps.generic.given_media_buy import (
     _add_creative_ids_to_package,
     _ensure_request_defaults,
@@ -155,6 +156,13 @@ def given_tag_url_creative(
         size_params = _size_range(min_width, max_width, min_height, max_height)
     _reference_creative(ctx, creative_id, {"assets": _tag_url_assets(url)}, kind="display_tag")
     _publish_on_default_product(ctx, _display_tag_option("tag_url", size_params))
+
+
+@given("the product publishes no format_ids")
+def given_product_publishes_no_format_ids(ctx: dict) -> None:
+    """The default product drops its legacy arm, so the canonical options a later Given publishes are its only formats."""
+    ctx["default_product"].format_ids = None
+    ctx["env"]._commit_factory_data()
 
 
 @given("the package selects that format option by its format_option_ref")
@@ -487,6 +495,25 @@ def then_creative_manager_handed_one_not_other(ctx: dict, handed: str, withheld:
     )
 
 
+@then(
+    parsers.parse(
+        'the seller\'s approval of creative "{withheld}" tells the seller it was not pushed to the live media buy, '
+        'with code "{code}", and the approval of creative "{pushed}" reports nothing'
+    )
+)
+def then_seller_told_creative_withheld(ctx: dict, withheld: str, code: str, pushed: str) -> None:
+    """The Admin UI route's answer names the withheld creative, the buy and the refusal's code; the pushed one's is clean."""
+    approvals = ctx["seller_creative_approvals"]
+    buy_id = ctx["live_media_buy"].media_buy_id
+    assert approvals[withheld].get("warnings") == [f"Creative {withheld} was not pushed to buy {buy_id}: {code}"], (
+        f"expected the seller to be told {withheld!r} was not pushed to {buy_id!r} with {code}; "
+        f"the approval answered {approvals[withheld]!r}"
+    )
+    assert "warnings" not in approvals[pushed], (
+        f"the approval of {pushed!r}, which was pushed, answered {approvals[pushed]!r}"
+    )
+
+
 @then("the seller's approval is refused, and the media buy still awaits approval")
 def then_approval_refused_still_awaiting(ctx: dict) -> None:
     """The approval failed before booking anything, so the buy is left awaiting approval to retry."""
@@ -496,8 +523,7 @@ def then_approval_refused_still_awaiting(ctx: dict) -> None:
     assert result.outcome is ApprovalOutcome.FAILED, (
         f"expected the seller's approval to be refused; it returned {result}"
     )
-    pending = ctx["env"].media_buys_awaiting_approval()
-    assert len(pending) == 1, f"expected the media buy to still await approval; {len(pending)} buys do"
+    assert_media_buy_still_awaits_approval(ctx)
 
 
 @then("the ad server's creative manager is handed no creative")

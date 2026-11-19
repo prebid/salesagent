@@ -692,7 +692,15 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                     f"[CREATIVE APPROVAL] Retroactive push failed for creative {creative_id} → buy {buy_id}: "
                     f"{push_failure.reason}"
                 )
-                push_warnings.append(f"Creative push to buy {buy_id} failed — see server logs for details")
+                # The seller's one answer for a push it triggered: which creative was not
+                # pushed, and the code of the typed refusal when there is one (a size its
+                # product's option does not accept, say). The reason text stays in the log.
+                if push_failure.error is not None:
+                    push_warnings.append(
+                        f"Creative {creative_id} was not pushed to buy {buy_id}: {push_failure.error.error_code}"
+                    )
+                else:
+                    push_warnings.append(f"Creative push to buy {buy_id} failed — see server logs for details")
 
         response_body: dict[str, Any] = {"success": True, "status": "approved"}
         if push_warnings:

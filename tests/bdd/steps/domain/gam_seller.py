@@ -866,8 +866,8 @@ def given_gam_refuses_line_item_read(ctx: dict, reason: str) -> None:
 
 @when(parsers.parse('the seller approves creative "{creative_id}"'))
 def when_seller_approves_creative(ctx: dict, creative_id: str) -> None:
-    """The seller approves the creative in the Admin UI's review queue."""
-    ctx["env"].approve_creative_as_seller(creative_id)
+    """The seller approves the creative in the Admin UI's review queue, keeping what the route answered."""
+    ctx.setdefault("seller_creative_approvals", {})[creative_id] = ctx["env"].approve_creative_as_seller(creative_id)
 
 
 def _creatives_created(ctx: dict) -> list[Any]:
@@ -1235,6 +1235,12 @@ def then_approval_books_media_buy(ctx: dict) -> None:
     assert pending == [], f"expected no media buy to await approval; {len(pending)} still do"
 
 
+def assert_media_buy_still_awaits_approval(ctx: dict) -> None:
+    """The one media buy the scenario held is still ``pending_approval``, read off the stored row."""
+    pending = ctx["env"].media_buys_awaiting_approval()
+    assert len(pending) == 1, f"expected the media buy to still await approval; {len(pending)} buys do"
+
+
 @then("the seller's approval fails on the package's missing pricing_info, and the media buy still awaits approval")
 def then_approval_fails_on_missing_pricing_info(ctx: dict) -> None:
     """The approval failed naming the missing ``pricing_info``, and left the buy awaiting approval."""
@@ -1244,8 +1250,13 @@ def then_approval_fails_on_missing_pricing_info(ctx: dict) -> None:
     assert result.outcome is ApprovalOutcome.FAILED and "missing pricing_info" in (result.error_msg or ""), (
         f"expected the approval to fail on the package's missing pricing_info; it returned {result}"
     )
-    pending = ctx["env"].media_buys_awaiting_approval()
-    assert len(pending) == 1, f"expected the media buy to still await approval; {len(pending)} buys do"
+    assert_media_buy_still_awaits_approval(ctx)
+
+
+@then("the media buy still awaits approval")
+def then_media_buy_still_awaits_approval(ctx: dict) -> None:
+    """A refused approval booked nothing, so the buy is left awaiting approval for the seller to retry."""
+    assert_media_buy_still_awaits_approval(ctx)
 
 
 @then(parsers.parse('the seller\'s approval fails with error code "{code}"'))

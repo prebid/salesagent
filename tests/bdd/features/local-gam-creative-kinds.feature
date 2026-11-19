@@ -142,7 +142,8 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     And Google Ad Manager associated that creative with the line item it created, overriding its size with "300x600,728x90"
 
   # The option declares 300x250 and the seller's line items take 728x90 only: there is no size
-  # to create the creative at, and none is invented. The refusal comes before GAM is written to.
+  # to create the creative at, and none is invented. The refusal comes before GAM is written to,
+  # and before the seller stores a buy, as the core creative gate's refusal on create does.
   @T-UC-002-local-gam-creative-size-mismatch @extension
   Scenario: A creative whose declared size matches no line item placeholder is refused, and nothing is created in GAM
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_300x250", "params": {"width": 300, "height": 250}}]}', with product settings '{"creative_placeholders": [{"width": 728, "height": 90}]}'
@@ -150,6 +151,7 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail with error code "CREATIVE_SIZE_MISMATCH"
     And the error recovery should be "correctable"
+    And no media buy is persisted for the tenant
     And Google Ad Manager received no order and no line item
     And Google Ad Manager created no creative
 
@@ -162,6 +164,7 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail with error code "UNSUPPORTED_FEATURE"
     And the error recovery should be "correctable"
+    And no media buy is persisted for the tenant
     And Google Ad Manager received no order and no line item
     And Google Ad Manager created no creative
 
@@ -180,7 +183,9 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     And Google Ad Manager associated that creative with the line item it created, at its own size
 
   # The seller's approval is what books a held buy's order, so the refusal comes before it:
-  # the approval fails, and GAM is not written to.
+  # the approval fails, GAM is not written to, and the buy still awaits approval, as it does
+  # when the seller's own creative check refuses it: nothing was booked, so there is nothing
+  # that failed, and the seller can retry once the creative is fixed.
   @T-UC-002-local-gam-creative-size-mismatch-on-approval @extension
   Scenario: A held buy whose creative matches no line item placeholder is refused at the seller's approval, and nothing is created in GAM
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_300x250", "params": {"width": 300, "height": 250}}]}', with product settings '{"creative_placeholders": [{"width": 728, "height": 90}]}'
@@ -190,5 +195,6 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     Then the response status should be "submitted"
     When the seller approves the media buy
     Then the seller's approval fails with error code "CREATIVE_SIZE_MISMATCH"
+    And the media buy still awaits approval
     And Google Ad Manager received no order and no line item
     And Google Ad Manager created no creative

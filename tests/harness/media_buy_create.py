@@ -546,6 +546,17 @@ class MediaBuyCreateEnv(
             tenant_ai_config=None,
         ).validate_media_buy_request
         mock_adapter.add_creative_assets.return_value = None
+
+        # The approval replay and the retroactive push upload through the creatives manager
+        # and read its answer: a creative it reports no status for is a failed push, which
+        # the seller is told about. A real manager answers one status per asset, "approved"
+        # when it took it (GAMCreativesManager.add_creative_assets), so this one does too.
+        def _creatives_manager_statuses(media_buy_id: str, assets: list[dict[str, Any]], today: Any) -> list[Any]:
+            from src.core.schemas import AssetStatus
+
+            return [AssetStatus(creative_id=asset["creative_id"], status="approved") for asset in assets]
+
+        mock_adapter.creatives_manager.add_creative_assets.side_effect = _creatives_manager_statuses
         mock_adapter.associate_creatives.return_value = None
         mock_adapter.manual_approval_required = False
         mock_adapter.manual_approval_operations = []

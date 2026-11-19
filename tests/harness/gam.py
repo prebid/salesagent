@@ -275,8 +275,11 @@ class GamSellerMixin:
             **buy,
         )
 
-    def approve_creative_as_seller(self, creative_id: str) -> None:
-        """The seller approves *creative_id* in the Admin UI's creative review queue, in this process."""
+    def approve_creative_as_seller(self, creative_id: str) -> dict[str, Any]:
+        """The seller approves *creative_id* in the Admin UI's creative review queue, in this process.
+
+        Returns the route's JSON answer, which is what the seller is told about the approval.
+        """
         from tests.harness.admin_client import AdminClient
 
         self._commit_factory_data()
@@ -289,6 +292,8 @@ class GamSellerMixin:
             json={"approved_by": "seller@example.com"},
         )
         assert response.status_code == 200, f"approving creative {creative_id} answered {response.status_code}"
+        answer: dict[str, Any] = response.get_json()
+        return answer
 
     def _sell_product_through_gam(
         self,

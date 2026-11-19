@@ -34,7 +34,9 @@
 # buyer makes and no buyer response answers, and no buyer readback carries a push's outcome
 # (the assignment row stays, so the buyer's re-send is pushed again). A buyer's sync assigning
 # the same creative is refused at its own assignment validation, before any push, by the
-# validator the push asks. So the push is graded at the ad server's creative manager.
+# validator the push asks. So the push is graded at the ad server's creative manager, and the
+# seller who approved the creative is told in the Admin UI route's answer which creative was
+# not pushed and the refusal's code.
 #
 # Ungraded by the storyboard runner: the ad server's input is not observable on the buyer's
 # wire. Transports: a2a, mcp, rest and e2e_rest. In process the ad server is the env's
@@ -182,6 +184,25 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     And the ad server's creative manager receives creative "cr-held-buy" of kind "display_tag" as the ad tag "https://ads.example-adserver.com/tag?slot=11"
     And the ad server's creative manager receives creative "cr-held-buy" sized "300x250, 728x90"
 
+  # A package that names no format option records no format contract, and on a product
+  # publishing only canonical options (no format_ids) create places it on those options
+  # (core/product.json: "New products MUST author canonical format_options[]"). The seller's
+  # approval reconstructs the package from the same product, so it books the buy as create
+  # would have, and the creative carries the sizes of the option it resolved to.
+  @T-UC-002-local-creative-kind-approval-canonical-only @extension @creative
+  Scenario: The seller's approval books a held buy whose package names no format option, on a product publishing only canonical options
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the product publishes no format_ids
+    And the package references the buyer's approved display_tag creative "cr-held-canonical" requesting ad tag "https://ads.example-adserver.com/tag?slot=13", for a format option accepting sizes "300x250, 728x90"
+    And the tenant requires manual approval
+    When the Buyer Agent sends the create_media_buy request
+    Then the response status should be "submitted"
+    When the seller approves the media buy
+    Then the seller's approval books the media buy
+    And the ad server's creative manager receives creative "cr-held-canonical" of kind "display_tag" as the ad tag "https://ads.example-adserver.com/tag?slot=13"
+    And the ad server's creative manager receives creative "cr-held-canonical" sized "300x250, 728x90"
+
   @T-UC-002-local-creative-kind-retroactive-push @extension @creative
   Scenario: A creative the seller approves after its buy went live reaches the ad server as its kind, representation and declared sizes
     Given the product publishes a display_tag format option accepting sizes "300x250, 728x90"
@@ -234,3 +255,4 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     When the seller approves creative "cr-fits-late"
     And the seller approves creative "cr-misfit-late"
     Then the ad server's creative manager is handed creative "cr-fits-late" and not creative "cr-misfit-late"
+    And the seller's approval of creative "cr-misfit-late" tells the seller it was not pushed to the live media buy, with code "CREATIVE_SIZE_MISMATCH", and the approval of creative "cr-fits-late" reports nothing

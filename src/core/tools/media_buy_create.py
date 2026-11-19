@@ -12,7 +12,7 @@ import logging
 import secrets
 import time
 import uuid
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypedDict, cast
@@ -1125,6 +1125,7 @@ def _execute_adapter_media_buy_creation(
     package_pricing_info: dict[str, dict[str, Any]],
     identity: ResolvedIdentity,
     creatives_by_package: Mapping[str, Sequence[CreativeToTraffic]],
+    on_refused_before_booking: Callable[[], None] | None = None,
 ) -> AdapterCreateResult:
     """Execute adapter's create_media_buy call.
 
@@ -1144,6 +1145,8 @@ def _execute_adapter_media_buy_creation(
         creatives_by_package: Per package id, each creative it names as the pre-adapter
             gate read it. The adapter refuses, before booking anything, a creative it
             cannot traffic on its package.
+        on_refused_before_booking: Called when the adapter's creative check refuses, before
+            the refusal is raised: nothing was booked. Any other raise may follow a booking.
 
     Returns:
         AdapterCreateResult from the adapter
@@ -1156,7 +1159,12 @@ def _execute_adapter_media_buy_creation(
 
     # Both order-writing paths, the direct create and the manual approval, come through here,
     # so this is the one place an adapter refuses a creative before its ad server is written.
-    adapter.check_creatives_before_booking(packages, creatives_by_package)
+    try:
+        adapter.check_creatives_before_booking(packages, creatives_by_package)
+    except AdCPSalesAgentError:
+        if on_refused_before_booking is not None:
+            on_refused_before_booking()
+        raise
 
     # Call adapter with detailed error logging
     try:
@@ -1882,9 +1890,15 @@ def execute_approved_media_buy(
             # Execute adapter creation (outside session to avoid conflicts)
             # Set BEFORE the call, not after: the condition is whether the ad server was
             # ASKED, not whether it answered. A raising adapter may still have created a
-            # partial order, so that buy has failed — where a buy that never reached the
-            # boundary was simply never attempted.
+            # partial order, so that buy has failed. The one exception is the adapter's own
+            # creative check, which runs first and writes nothing: its refusal leaves the buy
+            # pending_approval, as the gate's refusal above does, because nothing was booked.
             adapter_ran = True
+
+            def _nothing_booked() -> None:
+                nonlocal adapter_ran
+                adapter_ran = False
+
             response = _execute_adapter_media_buy_creation(
                 request,
                 packages,
@@ -1893,6 +1907,7 @@ def execute_approved_media_buy(
                 package_pricing_info,
                 identity,
                 creatives_by_package,
+                on_refused_before_booking=_nothing_booked,
             )
             order_id = response.media_buy_id
             creative_deadline = response.creative_deadline
