@@ -65,8 +65,8 @@ def test_a_viewer_may_read(rbac_tenant, test_admin_app):
 
 
 def test_a_viewer_may_not_change_tenant_settings_but_a_manager_may(rbac_tenant, test_admin_app):
-    path = f"/tenant/{TENANT_ID}/update"
-    form = {"name": "Renamed", "subdomain": "rbac"}
+    path = f"/tenant/{TENANT_ID}/settings/general"  # the settings page's General form
+    form = {"name": "Renamed"}
     assert _client_as(test_admin_app, "viewer").post(path, data=form).status_code == 403
     assert _tenant(rbac_tenant).name == "RBAC"
     assert _client_as(test_admin_app, "manager").post(path, data=form).status_code == 302
@@ -237,9 +237,9 @@ def test_an_admin_may_be_demoted_once_there_is_another(rbac_tenant, test_admin_a
 def test_an_admin_may_be_deactivated_once_there_is_another(rbac_tenant, test_admin_app):
     client = _client_as(test_admin_app, "admin")
     _set_role(client, "manager", "admin")
-    response = _toggle(client, "admin")
-    assert LAST_ADMIN_ERROR not in response.data
-    assert b"deactivated" in response.data
+    # no redirect-following: once deactivated, the admin may not load the Users page
+    response = client.post(f"/tenant/{TENANT_ID}/users/{USER_IDS['admin']}/toggle")
+    assert response.status_code == 302
     assert _user(rbac_tenant, "admin").is_active is False
 
 
