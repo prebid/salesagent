@@ -161,3 +161,31 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     And the error recovery should be "correctable"
     And Google Ad Manager received no order and no line item
     And Google Ad Manager created no creative
+
+  # A 1x1 placeholder is a size like any other: a creative whose option declares 300x250 is
+  # created at 300x250 on a line item that also takes a 1x1 placeholder, and its association
+  # states no size. The 1x1 placeholder neither accepts every creative nor becomes one of
+  # this creative's sizes.
+  @T-UC-002-local-gam-creative-one-by-one-placeholder @extension
+  Scenario: A declared 300x250 creative on a line item that also takes a 1x1 placeholder is created at 300x250
+    Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_300x250", "params": {"width": 300, "height": 250}}]}', with product settings '{"creative_placeholders": [{"width": 1, "height": 1}, {"width": 300, "height": 250}]}'
+    And the package references the buyer's approved display_tag creative "cr-tag" carrying the tag URL "https://ads.example.com/tag.js?slot=1"
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And Google Ad Manager created one third-party creative for advertiser "3000001" whose snippet is '<script src="https://ads.example.com/tag.js?slot=1"></script>' and which names no image URL
+    And Google Ad Manager created that creative at size 300x250
+    And Google Ad Manager associated that creative with the line item it created, at its own size
+
+  # The seller's approval is what books a held buy's order, so the refusal comes before it:
+  # the approval fails, and GAM is not written to.
+  @T-UC-002-local-gam-creative-size-mismatch-on-approval @extension
+  Scenario: A held buy whose creative matches no line item placeholder is refused at the seller's approval, and nothing is created in GAM
+    Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_300x250", "params": {"width": 300, "height": 250}}]}', with product settings '{"creative_placeholders": [{"width": 728, "height": 90}]}'
+    And the tenant requires manual approval
+    And the package references the buyer's approved display_tag creative "cr-tag" carrying the tag URL "https://ads.example.com/tag.js?slot=1"
+    When the Buyer Agent sends the create_media_buy request
+    Then the response status should be "submitted"
+    When the seller approves the media buy
+    Then the seller's approval fails with error code "CREATIVE_SIZE_MISMATCH"
+    And Google Ad Manager received no order and no line item
+    And Google Ad Manager created no creative

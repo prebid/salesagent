@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 if TYPE_CHECKING:
+    from src.core.creative_to_traffic import CreativeToTraffic
     from src.core.schemas import Snapshot, Targeting
 
 from adcp.types import BrandReference
@@ -569,6 +570,19 @@ class AdServerAdapter(ABC):
                     )
 
         return problems
+
+    def check_creatives_before_booking(
+        self,
+        packages: Sequence[MediaPackage],
+        creatives_by_package: Mapping[str, Sequence[CreativeToTraffic]],
+    ) -> None:
+        """Refuse, before any ad-server write, a creative this adapter cannot traffic on its package.
+
+        Interim seam; RFC #2529 folds it into plan(buy).
+
+        *creatives_by_package* maps a package id to the creatives the buy names on it. Raises
+        the refusal's typed ``AdCPSalesAgentError``. The default accepts everything.
+        """
 
     @abstractmethod
     def create_media_buy(

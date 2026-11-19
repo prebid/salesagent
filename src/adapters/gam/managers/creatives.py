@@ -11,10 +11,13 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
+from src.core.creative_to_traffic import CreativeToTraffic
 from src.core.errors.details import CreativeRejectionDetails
 from src.core.exceptions import AdCPCreativeRejectedError, AdCPInternalError, AdCPSalesAgentError
 from src.core.schemas import AssetStatus
+from src.core.security.outbound_http import CounterpartyUrl, send
 
+from ..creative_plan import GamCreativePlan, GamCreativeRefusal, placeholder_sizes, plan_gam_creative
 from ..utils.error_handler import map_gam_exception
 from ..utils.validation import GAMValidator
 
@@ -40,6 +43,25 @@ def _line_item_weights(package_assignments: list[dict[str, Any]]) -> list[tuple[
         else:
             logger.warning(f"Package {assignment.get('package_id')} has no GAM line item; assignment skipped")
     return result
+
+
+def _placement_targeting_name(
+    asset: dict[str, Any], placement_targeting_map: dict[str, str] | None
+) -> tuple[str | None, str | None]:
+    """(targetingName, the placement id it is for) of an asset's creative-level placement targeting (adcp#208)."""
+    assignment_placement_ids = asset.get("placement_ids", [])
+    if not (assignment_placement_ids and placement_targeting_map):
+        return None, None
+    # Use first placement_id - GAM LICA only supports one targetingName per association
+    first_placement_id = assignment_placement_ids[0]
+    if first_placement_id not in placement_targeting_map:
+        return None, first_placement_id
+    if len(assignment_placement_ids) > 1:
+        logger.warning(
+            f"Creative has {len(assignment_placement_ids)} placement_ids but GAM LICA "
+            f"only supports one targetingName. Using first: {first_placement_id}"
+        )
+    return placement_targeting_map[first_placement_id], first_placement_id
 
 
 class GAMCreativesManager:
@@ -126,49 +148,28 @@ class GAMCreativesManager:
             logger.info(
                 f"[DEBUG] Processing asset {asset.get('creative_id')} with package_assignments: {asset.get('package_assignments', [])}"
             )
-            # Validate creative asset against GAM requirements
-            # Use adapter's method if available for test compatibility, otherwise use our own
-            if self.adapter and hasattr(self.adapter, "_validate_creative_for_gam"):
-                validation_issues = self.adapter._validate_creative_for_gam(asset)
-            else:
-                validation_issues = self._validate_creative_for_gam(asset)
-
-            # Add creative size validation against placeholders
-            size_validation_issues = self._validate_creative_size_against_placeholders(asset, creative_placeholders)
-            validation_issues.extend(size_validation_issues)
-
-            if validation_issues:
-                # Use adapter log function if available, otherwise use logger
-                if self.log_func:
-                    self.log_func(f"[red]Creative {asset['creative_id']} failed GAM validation:[/red]")
-                    for issue in validation_issues:
-                        self.log_func(f"[red]  - {issue}[/red]")
-                else:
-                    # Fallback to logger if no log function provided
-                    logger.error(f"Creative {asset['creative_id']} failed GAM validation:")
-                    for issue in validation_issues:
-                        logger.error(f"  - {issue}")
-                created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
-                continue
-
-            # Determine creative type using AdCP v1.3+ logic
-            # Use adapter's method if available for test compatibility, otherwise use our own
-            if self.adapter and hasattr(self.adapter, "_get_creative_type"):
-                creative_type = self.adapter._get_creative_type(asset)
-            else:
-                creative_type = self._get_creative_type(asset)
-
-            if creative_type == "vast":
-                # VAST is handled at line item level, not creative level
-                logger.info(f"VAST creative {asset['creative_id']} - configuring at line item level")
-                self._configure_vast_for_line_items(media_buy_id, asset)
-                created_asset_statuses.append(_approved(asset["creative_id"]))
-                continue
-
             # Get placeholders for this asset's package assignments
             asset_placeholders = []
             for line_item_id, _ in _line_item_weights(asset.get("package_assignments", [])):
                 asset_placeholders.extend(creative_placeholders.get(line_item_id, []))
+
+            # A creative that states its kind and representation is planned (``_plan``), and
+            # none of the guessing below reaches it: no validation of legacy keys, no type
+            # sniffing, no 1x1 wildcard, no size default.
+            ctt: CreativeToTraffic | None = asset.get("creative")
+            creative_type = "planned"
+            if ctt is None:
+                validation_status = self._legacy_validation_failure(asset, creative_placeholders)
+                if validation_status is not None:
+                    created_asset_statuses.append(validation_status)
+                    continue
+                creative_type = self._legacy_creative_type(asset)
+                if creative_type == "vast":
+                    # VAST is handled at line item level, not creative level
+                    logger.info(f"VAST creative {asset['creative_id']} - configuring at line item level")
+                    self._configure_vast_for_line_items(media_buy_id, asset)
+                    created_asset_statuses.append(_approved(asset["creative_id"]))
+                    continue
 
             # Create GAM creative object
             try:
@@ -176,9 +177,14 @@ class GAMCreativesManager:
                 # its content changed since, GAM's copy is updated first, keeping its id and its
                 # associations. Nobody has tried updateCreatives against real GAM. Creative.size
                 # is read-only after creation, so a changed size is not expected to take effect.
+                plan = self._plan(ctt, asset_placeholders) if ctt is not None else None
                 gam_creative_id = asset.get("platform_creative_id")
                 if not gam_creative_id or asset.get("platform_creative_outdated"):
-                    creative = self._create_gam_creative(asset, creative_type, asset_placeholders)
+                    creative = (
+                        self._planned_creative(asset, plan)
+                        if plan is not None
+                        else self._create_gam_creative(asset, creative_type, asset_placeholders)
+                    )
                     if not creative:
                         logger.warning(
                             f"Skipping unsupported creative {asset['creative_id']} with type: {creative_type}"
@@ -212,6 +218,7 @@ class GAMCreativesManager:
                     asset,
                     lica_service,
                     placement_targeting_map,
+                    lica_sizes=self._lica_sizes_by_line_item(plan, creative_placeholders) if plan else None,
                 )
                 # Content that changed was held from serving while it was under review
                 # (``set_creative_serving``); its approval is what this push carries.
@@ -254,6 +261,77 @@ class GAMCreativesManager:
                 )
 
         return created_asset_statuses
+
+    @staticmethod
+    def _plan(ctt: CreativeToTraffic, placeholders: list[Any]) -> GamCreativePlan:
+        """The GAM creative *ctt* becomes on line items with these *placeholders*; raises the refusal."""
+        plan = plan_gam_creative(ctt, placeholder_sizes(placeholders))
+        if isinstance(plan, GamCreativeRefusal):
+            raise plan.error()
+        return plan
+
+    def _planned_creative(self, asset: dict[str, Any], plan: GamCreativePlan) -> dict[str, Any]:
+        """The planned GAM creative, with the advertiser and name this manager owns, and an html5 bundle's bytes.
+
+        The bundle is fetched from the buyer's host through the egress seam. The URL is the
+        buyer's, so a refused or failed fetch raises the seam's own typed error.
+        """
+        creative = plan.creative
+        if plan.html5_bundle_url is not None:
+            bundle = send(plan.html5_bundle_url, method="GET", provenance=CounterpartyUrl()).content
+            creative = plan.with_html5_bundle(bundle)
+        return {
+            **creative,
+            "advertiserId": self.advertiser_id,
+            "name": asset.get("name", f"AdCP Creative {asset['creative_id']}"),
+        }
+
+    @staticmethod
+    def _lica_sizes_by_line_item(
+        plan: GamCreativePlan, creative_placeholders: dict[str, list]
+    ) -> dict[str, list[dict[str, int]]]:
+        """Per line item, the plan's association sizes that line item has a placeholder for."""
+        by_line_item = {}
+        for line_item_id, placeholders in creative_placeholders.items():
+            taken = {(size.width, size.height) for size in placeholder_sizes(placeholders)}
+            by_line_item[line_item_id] = [s for s in plan.lica_sizes if (s["width"], s["height"]) in taken]
+        return by_line_item
+
+    def _legacy_validation_failure(
+        self, asset: dict[str, Any], creative_placeholders: dict[str, list]
+    ) -> AssetStatus | None:
+        """The failed status of an asset stating no kind that GAM's checks refuse, or None when it passes."""
+        # Validate creative asset against GAM requirements
+        # Use adapter's method if available for test compatibility, otherwise use our own
+        if self.adapter and hasattr(self.adapter, "_validate_creative_for_gam"):
+            validation_issues = self.adapter._validate_creative_for_gam(asset)
+        else:
+            validation_issues = self._validate_creative_for_gam(asset)
+
+        # Add creative size validation against placeholders
+        size_validation_issues = self._validate_creative_size_against_placeholders(asset, creative_placeholders)
+        validation_issues.extend(size_validation_issues)
+
+        if not validation_issues:
+            return None
+        # Use adapter log function if available, otherwise use logger
+        if self.log_func:
+            self.log_func(f"[red]Creative {asset['creative_id']} failed GAM validation:[/red]")
+            for issue in validation_issues:
+                self.log_func(f"[red]  - {issue}[/red]")
+        else:
+            # Fallback to logger if no log function provided
+            logger.error(f"Creative {asset['creative_id']} failed GAM validation:")
+            for issue in validation_issues:
+                logger.error(f"  - {issue}")
+        return AssetStatus(creative_id=asset["creative_id"], status="failed")
+
+    def _legacy_creative_type(self, asset: dict[str, Any]) -> str:
+        """The creative type of an asset stating no kind, guessed from its legacy keys."""
+        # Use adapter's method if available for test compatibility, otherwise use our own
+        if self.adapter and hasattr(self.adapter, "_get_creative_type"):
+            return self.adapter._get_creative_type(asset)
+        return self._get_creative_type(asset)
 
     def set_creative_serving(self, gam_creative_id: str, *, serving: bool) -> None:
         """Activate or deactivate every line item creative association of a GAM creative.
@@ -891,6 +969,7 @@ class GAMCreativesManager:
         asset: dict[str, Any],
         lica_service,
         placement_targeting_map: dict[str, str] | None = None,
+        lica_sizes: dict[str, list[dict[str, int]]] | None = None,
     ) -> None:
         """Associate creative with those of its assigned line items it is not on yet.
 
@@ -907,6 +986,9 @@ class GAMCreativesManager:
             lica_service: GAM LICA service
             placement_targeting_map: Optional map of placement_id → targeting_name for
                 creative-level targeting. Built from product impl_config.placement_targeting.
+            lica_sizes: Optional line item id → the association's ``sizes``, which
+                "Overrides the value set for Creative.size" (Ad Manager API v202602). A line
+                item with none states none.
         """
         # A creative GAM held before this call may already be on some of these line items:
         # GAM is asked, and only the missing associations are created. The statement names
@@ -930,26 +1012,15 @@ class GAMCreativesManager:
                 logger.info(f"Creative {gam_creative_id} is already on line item {line_item_id}")
                 continue
 
-            # Determine targetingName for creative-level placement targeting (adcp#208)
-            targeting_name = None
-            first_placement_id = None
-            assignment_placement_ids = asset.get("placement_ids", [])
-            if assignment_placement_ids and placement_targeting_map:
-                # Use first placement_id - GAM LICA only supports one targetingName per association
-                first_placement_id = assignment_placement_ids[0]
-                if first_placement_id in placement_targeting_map:
-                    targeting_name = placement_targeting_map[first_placement_id]
-                    if len(assignment_placement_ids) > 1:
-                        logger.warning(
-                            f"Creative has {len(assignment_placement_ids)} placement_ids but GAM LICA "
-                            f"only supports one targetingName. Using first: {first_placement_id}"
-                        )
+            targeting_name, first_placement_id = _placement_targeting_name(asset, placement_targeting_map)
 
             # Create Line Item Creative Association (weight support + adcp#208 placement targeting)
-            association: dict[str, str | int] = {
+            association: dict[str, Any] = {
                 "creativeId": gam_creative_id,
                 "lineItemId": line_item_id,
             }
+            if sizes := (lica_sizes or {}).get(line_item_id):
+                association["sizes"] = sizes
 
             # Add weight for manual rotation if not default
             # GAM uses manualCreativeRotationWeight for MANUAL rotation type
