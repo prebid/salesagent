@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from functools import wraps
-from typing import TYPE_CHECKING, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, NamedTuple, NoReturn, TypeVar
 
 from flask import abort, g, jsonify, make_response, redirect, request, session, url_for
 from sqlalchemy import select
@@ -318,38 +318,44 @@ def _setup_session_reaches(tenant_id: str) -> bool:
     return session.get("test_tenant_id") == tenant_id or session.get("test_user_role") == "super_admin"
 
 
-def role_permits(role: str, method: str, *, admin_only: bool) -> bool:
-    """Whether a tenant user with *role* may make a *method* request to a route.
+def role_permits(role: str, method: str, *, minimum: UserRole = UserRole.VIEWER) -> bool:
+    """Whether a tenant user with *role* may make a *method* request to a route that needs *minimum*.
 
-    ``admin`` may do anything; ``admin_only`` routes (managing users, sign-in and the
-    tenant itself) admit no one else. ``manager`` may change everything else.
-    ``viewer``, and any role this code does not know, is read-only.
+    Any write (a method outside ``SAFE_METHODS``) needs at least ``manager``; a route
+    can ask for more with *minimum* (``admin`` for managing users, sign-in and the tenant
+    itself). A role this code does not know ranks as ``viewer``, so it is read-only.
     """
-    if role == UserRole.ADMIN:
-        return True
-    if admin_only:
-        return False
-    if role == UserRole.MANAGER:
-        return True
-    return method in SAFE_METHODS
-
-
-def _enforce_role(role: str, tenant_id: str, *, api_mode: bool, admin_only: bool) -> None:
-    """Raise ``Forbidden`` unless *role* permits the current request (JSON body in API mode)."""
-    if role_permits(role, request.method, admin_only=admin_only):
-        return
-    logger.warning(
-        "Refused %s %s for tenant %s: role %r", request.method, log_safe(request.path), log_safe(tenant_id), role
+    ranks = list(UserRole)
+    held = UserRole(role) if role in UserRole else UserRole.VIEWER
+    needed = (
+        ranks.index(minimum) if method in SAFE_METHODS else max(ranks.index(minimum), ranks.index(UserRole.MANAGER))
     )
-    body = make_response(jsonify({"error": "Your role does not allow this"}), 403) if api_mode else None
+    return ranks.index(held) >= needed
+
+
+def _wants_json(api_mode: bool) -> bool:
+    """Whether the caller reads a JSON answer: an API-mode route, a JSON request, or a ``fetch``.
+
+    ``fetch`` sends ``Accept: */*`` and a browser navigation prefers ``text/html``, so
+    asking for the better of the two tells them apart.
+    """
+    if api_mode or request.is_json:
+        return True
+    return request.accept_mimetypes.best_match(["application/json", "text/html"]) == "application/json"
+
+
+def _forbid(message: str, *, api_mode: bool) -> NoReturn:
+    """Refuse the request with a 403: a JSON ``{"error": message}`` if the caller reads JSON, else the HTML page."""
+    body = make_response(jsonify({"error": message}), 403) if _wants_json(api_mode) else None
     raise Forbidden(response=body)
 
 
-def require_tenant_access(api_mode=False, admin_only=False):
+def require_tenant_access(api_mode: bool = False, role: UserRole = UserRole.VIEWER):
     """Decorator to require tenant access for routes.
 
     A tenant user must also hold a role that permits the request (:func:`role_permits`);
-    ``admin_only=True`` limits the route to tenant admins. Super admins pass regardless.
+    *role* is the least role the route needs, so ``role=UserRole.ADMIN`` limits it to
+    tenant admins. Super admins pass regardless.
     """
 
     def decorator(f):
@@ -408,11 +414,16 @@ def require_tenant_access(api_mode=False, admin_only=False):
                     user = db_session.scalars(stmt).first()
 
                     if not user:
-                        if api_mode:
-                            return jsonify({"error": "Access denied"}), 403
-                        abort(403)
-
-                    _enforce_role(user.role, tenant_id, api_mode=api_mode, admin_only=admin_only)
+                        _forbid("Access denied", api_mode=api_mode)
+                    if not role_permits(user.role, request.method, minimum=role):
+                        logger.warning(
+                            "Refused %s %s for tenant %s: role %s",
+                            log_safe(request.method),
+                            log_safe(request.path),
+                            log_safe(tenant_id),
+                            log_safe(user.role),
+                        )
+                        _forbid("Your role does not allow this", api_mode=api_mode)
                     return f(tenant_id, *args, **kwargs)
 
             except Exception as e:

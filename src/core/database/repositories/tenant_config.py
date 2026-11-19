@@ -4,7 +4,8 @@ Provides access to the Tenant row and AdapterConfig for _impl functions
 that need tenant-level configuration data without calling get_db_session(),
 plus the one write path admin settings handlers need (``update_tenant``) and
 the atomic authorized-list mutators shared by the admin surfaces, and the tenant's
-users for the admin Users page (``get_user``, ``is_last_active_admin``).
+users' role and active flag for the admin Users page (``set_user_role``,
+``toggle_user_active``), which refuse to leave the tenant without an active admin.
 
 Core invariant: every query includes tenant_id in the WHERE clause. The tenant_id
 is set at construction time and injected into all queries automatically.
@@ -14,7 +15,7 @@ is set at construction time and injected into all queries automatically.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 from typing import cast as type_cast
 
 from sqlalchemy import inspect as sa_inspect
@@ -29,6 +30,19 @@ from src.core.database.models import AdapterConfig, Tenant, User, UserRole
 AuthorizedListColumn = Literal["authorized_domains", "authorized_emails"]
 AddOutcome = Literal["added", "duplicate", "missing_tenant"]
 RemoveOutcome = Literal["removed", "absent", "missing_tenant"]
+UserChangeOutcome = Literal["changed", "missing_user", "last_admin"]
+
+
+class UserChange(NamedTuple):
+    """What ``set_user_role`` / ``toggle_user_active`` did, read before the transaction ends.
+
+    ``email`` and ``is_active`` are empty unless the user exists; ``is_active`` is the
+    value after the call.
+    """
+
+    outcome: UserChangeOutcome
+    email: str = ""
+    is_active: bool = False
 
 
 class TenantConfigRepository:
@@ -162,19 +176,38 @@ class TenantConfigRepository:
     # Tenant users
     # ------------------------------------------------------------------
 
-    def get_user(self, user_id: str) -> User | None:
-        """Get one of the tenant's users by id."""
+    def set_user_role(self, user_id: str, role: UserRole) -> UserChange:
+        """Give the tenant's user *user_id* *role*, unless that demotes the last active admin."""
+        user = self._get_user(user_id)
+        if user is None:
+            return UserChange("missing_user")
+        if role != UserRole.ADMIN and self._is_last_active_admin(user):
+            return UserChange("last_admin", user.email, user.is_active)
+        user.role = role
+        return UserChange("changed", user.email, user.is_active)
+
+    def toggle_user_active(self, user_id: str) -> UserChange:
+        """Flip whether the tenant's user *user_id* is active, unless that deactivates the last active admin."""
+        user = self._get_user(user_id)
+        if user is None:
+            return UserChange("missing_user")
+        if self._is_last_active_admin(user):
+            return UserChange("last_admin", user.email, user.is_active)
+        user.is_active = not user.is_active
+        return UserChange("changed", user.email, user.is_active)
+
+    def _get_user(self, user_id: str) -> User | None:
         stmt = select(User).filter_by(tenant_id=self._tenant_id, user_id=user_id)
         return self._session.scalars(stmt).first()
 
-    def is_last_active_admin(self, user: User) -> bool:
+    def _is_last_active_admin(self, user: User) -> bool:
         """Whether *user* is the tenant's only active admin.
 
         Locks the tenant's active admin rows (``FOR UPDATE``, in id order) until the
-        caller's transaction ends, so two admins demoting or deactivating each other
-        at the same time cannot both pass: the second waits for the first to commit,
-        and PostgreSQL re-checks the locked rows against the ``WHERE`` before
-        returning them.
+        transaction ends, so two admins demoting or deactivating each other at the same
+        time cannot both pass: the second waits for the first to commit, and PostgreSQL
+        re-checks the locked rows against the ``WHERE`` before returning them. This holds
+        because the callers above check and write in the same transaction.
         """
         if user.role != UserRole.ADMIN or not user.is_active:
             return False
