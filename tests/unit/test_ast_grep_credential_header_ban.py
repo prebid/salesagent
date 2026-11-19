@@ -158,31 +158,6 @@ _KNOWN_BAD = _CREDENTIAL_SHAPES[0][1]
 _CLEAN = 'def build():\n    return {"Content-Type": "application/json"}\n'
 
 
-def _ast_grep_bin() -> Path:
-    """The venv-local ast-grep — exactly what ``uv run ast-grep`` resolves to.
-
-    Resolved next to ``sys.executable`` and NOWHERE ELSE, on purpose. A PATH
-    lookup would find the homebrew binary that is the only copy on this machine
-    today, so this module would pass locally while the ``quality-ci`` line it
-    grades failed in CI with command-not-found — the review finding this
-    resolution exists to close.
-
-    Absence FAILS, it does not skip. ast-grep is declared nowhere in
-    pyproject.toml, and a skip here is the same silent nothing-graded outcome as
-    a ``quality-ci`` line arranged to tolerate the binary's absence. The fix is
-    to declare ``ast-grep-cli`` in the dev group, which is part of the work this
-    module grades.
-    """
-    candidate = venv_ast_grep()
-    assert candidate.exists(), (
-        f"{candidate} does not exist: ast-grep is not installed in this environment's venv.\n"
-        "Declare `ast-grep-cli` in the pyproject dev group so `uv run ast-grep` resolves — "
-        "the homebrew binary on PATH is deliberately NOT used here, because relying on it "
-        "would let this test pass while the make quality-ci line fails in CI."
-    )
-    return candidate
-
-
 def _scan(
     *paths: str,
     rule_args: tuple[str, ...] = ("--rule", RULE_FILE),
@@ -195,7 +170,7 @@ def _scan(
     file, same output format — so a passing case proves the REAL gate line
     would behave this way, not a lookalike.
     """
-    cmd = [str(_ast_grep_bin()), "scan", *rule_args, *paths, "--json=compact"]
+    cmd = [str(venv_ast_grep()), "scan", *rule_args, *paths, "--json=compact"]
     for glob in globs:
         cmd += ["--globs", glob]
     return subprocess.run(
@@ -385,7 +360,7 @@ class TestExemptionForm:
     """
 
     def test_pinned_version_is_the_one_whose_suppression_was_measured(self) -> None:
-        proc = subprocess.run([str(_ast_grep_bin()), "--version"], capture_output=True, text=True, check=True)
+        proc = subprocess.run([str(venv_ast_grep()), "--version"], capture_output=True, text=True, check=True)
         assert proc.stdout.split()[-1] == _MEASURED_VERSION, (
             f"ast-grep is {proc.stdout.strip()!r}, and suppression parsing was measured on "
             f"{_MEASURED_VERSION}. Re-measure both cases below against the new version before "

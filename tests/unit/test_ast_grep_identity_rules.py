@@ -48,7 +48,6 @@ _RULES: tuple[tuple[str, str, str, str], ...] = (
 def _scan(root: Path, rule_id: str, rel_path: str) -> list[dict]:
     """Run the real ast-grep from the staged *root*, project config, one rule, one file; return its matches."""
     binary = venv_ast_grep()
-    assert binary.exists(), f"{binary} missing: ast-grep-cli is not installed in this venv"
     proc = subprocess.run(
         [str(binary), "scan", "--config", "sgconfig.yml", "--filter", f"^{rule_id}$", rel_path, "--json=compact"],
         capture_output=True,

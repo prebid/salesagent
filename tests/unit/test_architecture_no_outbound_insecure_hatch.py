@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.unit._architecture_helpers import assert_scanned_paths_exist
+from tests.unit._architecture_helpers import assert_scanned_paths_exist, rel
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -220,7 +220,7 @@ def find_allow_private_declaring_files(repo_root: Path) -> set[str]:
                 if line.strip().startswith("#"):
                     continue
                 if _ALLOW_PRIVATE_FLAG in line:
-                    hits.add(path.relative_to(repo_root).as_posix())
+                    hits.add(rel(path, repo_root))
                     break
     return hits
 

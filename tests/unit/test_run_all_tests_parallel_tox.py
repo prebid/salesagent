@@ -246,7 +246,7 @@ def _provision_runner_dependencies(workdir: Path) -> None:
     for relative, body in _HOST_SCRIPT_STUBS.items():
         destination = workdir / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(body)
+        destination.write_text(body, encoding="utf-8")
         _make_executable(destination)
 
 
@@ -263,7 +263,7 @@ def _run_with_stubbed_docker(tmp_path: Path, **extra_env: str) -> tuple[subproce
     stub_bin = tmp_path / "stub_bin"
     stub_bin.mkdir()
     docker_stub = stub_bin / "docker"
-    docker_stub.write_text(_DOCKER_STUB)
+    docker_stub.write_text(_DOCKER_STUB, encoding="utf-8")
     _make_executable(docker_stub)
 
     docker_log = tmp_path / "docker_calls.log"

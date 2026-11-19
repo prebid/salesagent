@@ -57,7 +57,7 @@ import ast
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, repo_root
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, rel, repo_root
 
 #: The modules that OWN the derivation: the pluck plus the announced mode, and the arm
 #: actually taken. Two entries, not one, because the announcement and the delivery arm sit
@@ -235,7 +235,7 @@ def _derivations() -> set[tuple[str, str]]:
     root = repo_root()
     found: set[tuple[str, str]] = set()
     for path in sorted((root / "src").rglob("*.py")):
-        relative = path.relative_to(root).as_posix()
+        relative = rel(path, root)
         if relative in _CANONICAL_HOMES:
             continue
         try:

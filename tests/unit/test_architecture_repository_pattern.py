@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions, rel
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -39,12 +39,7 @@ _IMPL_LEGACY_EXTRA_FILES = frozenset({"src/core/context_manager.py", "src/admin/
 
 def _glob_python_files(root: Path, dirs: tuple[str, ...]) -> set[str]:
     """``.py`` files under any of ``dirs`` (relative to ``root``), pycache excluded."""
-    return {
-        p.relative_to(root).as_posix()
-        for scan_dir in dirs
-        for p in (root / scan_dir).rglob("*.py")
-        if "__pycache__" not in str(p)
-    }
+    return {rel(p, root) for scan_dir in dirs for p in (root / scan_dir).rglob("*.py") if "__pycache__" not in str(p)}
 
 
 def _discover_impl_files() -> list[str]:
@@ -1236,7 +1231,7 @@ def _find_repository_protocol_imports() -> list[tuple[str, str, int]]:
     for py_file in sorted((ROOT / REPOSITORIES_DIR).rglob("*.py")):
         if "__pycache__" in str(py_file):
             continue
-        rel_path = py_file.relative_to(ROOT).as_posix()
+        rel_path = rel(py_file, ROOT)
         tree = ast.parse(py_file.read_text(encoding="utf-8"))
         violations.extend((rel_path, module, lineno) for module, lineno in _scan_for_protocol_imports(tree))
     return violations

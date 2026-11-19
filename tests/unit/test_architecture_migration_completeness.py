@@ -29,7 +29,7 @@ from scripts.ci.migration_helpers import (
     iter_migration_trees,
     parse_function,
 )
-from tests.unit._architecture_helpers import iter_call_expressions
+from tests.unit._architecture_helpers import iter_call_expressions, rel
 
 _HOOKS_DIR = Path(__file__).resolve().parents[2] / ".pre-commit-hooks"
 
@@ -255,7 +255,7 @@ class TestPrePushHookAgreesWithGuard:
         """
         hook = _load_hook("check_migration_completeness")
         repo_root = Path(__file__).resolve().parents[2]
-        migrations = [p.relative_to(repo_root).as_posix() for p in get_migration_files()]
+        migrations = [rel(p, repo_root) for p in get_migration_files()]
 
         monkeypatch.setattr(sys, "argv", ["check_migration_completeness.py", *migrations])
         monkeypatch.chdir(repo_root)

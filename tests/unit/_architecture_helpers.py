@@ -48,8 +48,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src/core/tools", REPO_ROOT / "src/adapters"]
 
 
-def rel(path: Path) -> str:
-    """Return path relative to repo root for stable allowlist keys.
+def rel(path: Path, root: Path = REPO_ROOT) -> str:
+    """Return *path* relative to *root* (the repo root by default), ``/``-separated, for stable allowlist keys.
 
     A path outside the repo root has no stable key to give, so it returns its
     own absolute form rather than raising: every real caller scans repo paths,
@@ -58,7 +58,7 @@ def rel(path: Path) -> str:
     independently of whatever the repo happens to contain.
     """
     try:
-        return path.relative_to(REPO_ROOT).as_posix()
+        return path.relative_to(root).as_posix()
     except ValueError:
         return str(path)
 
@@ -1086,19 +1086,15 @@ def python_version_pattern_map() -> dict[str, str]:
     }
 
 
-def _repo_relative(path: Path, repo: Path) -> str:
-    return path.relative_to(repo).as_posix()
-
-
 def _github_yaml_candidate(path: Path, repo: Path) -> bool:
-    rel_path = _repo_relative(path, repo)
+    rel_path = rel(path, repo)
     return path.suffix in {".yml", ".yaml"} and (
         rel_path.startswith(".github/workflows/") or rel_path.startswith(".github/actions/")
     )
 
 
 def _python_anchor_candidate(path: Path, repo: Path) -> bool:
-    rel_path = _repo_relative(path, repo)
+    rel_path = rel(path, repo)
     if path.name.startswith("Dockerfile"):
         return True
     if path.name in _PYTHON_ANCHOR_NAMES:
@@ -1963,12 +1959,25 @@ AST_GREP_RULE_DIR = ".ast-grep"
 
 
 def venv_ast_grep() -> Path:
-    """Where the venv-local ast-grep lives: next to ``sys.executable``, ``.exe`` on Windows.
+    """The venv-local ast-grep -- what ``uv run ast-grep`` resolves to, and nothing else.
 
-    The path only; each caller asserts it exists with its own message. A PATH lookup is
-    deliberately not used -- see ``test_ast_grep_credential_header_ban._ast_grep_bin``.
+    Resolved next to ``sys.executable`` (``.exe`` on Windows) and NOWHERE ELSE, on purpose.
+    A PATH lookup would find a homebrew binary that exists on a developer machine and not
+    in CI, so a guard would pass locally while the ``quality-ci`` line it grades failed in
+    CI with command-not-found.
+
+    Absence FAILS, it does not skip: a skip is the same silent nothing-graded outcome as a
+    ``quality-ci`` line arranged to tolerate the binary's absence. The fix is to declare
+    ``ast-grep-cli`` in the pyproject dev group.
     """
-    return Path(sys.executable).parent / ("ast-grep.exe" if os.name == "nt" else "ast-grep")
+    candidate = Path(sys.executable).parent / ("ast-grep.exe" if os.name == "nt" else "ast-grep")
+    assert candidate.exists(), (
+        f"{candidate} does not exist: ast-grep is not installed in this environment's venv. "
+        "Declare `ast-grep-cli` in the pyproject dev group so `uv run ast-grep` resolves -- "
+        "a binary on PATH is deliberately NOT used, because relying on it would let a guard "
+        "pass while the make quality-ci line fails in CI."
+    )
+    return candidate
 
 
 def stage_ast_grep_root(tmp_dir: Path) -> Path:

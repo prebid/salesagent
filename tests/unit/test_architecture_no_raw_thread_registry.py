@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, rel
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -67,7 +67,7 @@ def _find_raw_thread_registries() -> list[str]:
     src_dir = ROOT / "src"
 
     for py_file in src_dir.rglob("*.py"):
-        rel_path = py_file.relative_to(ROOT).as_posix()
+        rel_path = rel(py_file, ROOT)
         if rel_path == REGISTRY_FILE:
             continue
 
