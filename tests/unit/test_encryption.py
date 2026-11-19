@@ -13,6 +13,7 @@ from src.core.utils.encryption import (
     generate_encryption_key,
     is_encrypted,
 )
+from tests.helpers.environ import isolated_environ
 
 
 @pytest.fixture
@@ -71,13 +72,13 @@ class TestEncryptDecrypt:
 
     def test_encrypt_without_key_fails(self):
         """Test that encryption fails without ENCRYPTION_KEY set."""
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             with pytest.raises(ValueError, match="ENCRYPTION_KEY environment variable not set"):
                 encrypt_api_key("test-key")
 
     def test_decrypt_without_key_fails(self):
         """Test that decryption fails without ENCRYPTION_KEY set."""
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             with pytest.raises(ValueError, match="ENCRYPTION_KEY environment variable not set"):
                 decrypt_api_key("some-encrypted-data")
 
