@@ -185,7 +185,8 @@ _raise_mcp_rate_limit() {
 #     as npm requires); any other key is an override. A key with "@<major>" touches only that
 #     line (undici has three: the agent's 8.x, @slack/bolt's 7.x, @adcp/sdk's 6.x);
 #   - the runtime stage upgrades its Debian packages from bookworm-security and replaces the
-#     bundled npm with npm_version.
+#     bundled npm with npm_version, after running that bundled version through the same
+#     check as the entries below (as an "npm" entry).
 # Each version is the lowest release that fixes every alert open on that package, pinned so a
 # rebuild resolves the same tree; @modelcontextprotocol/core follows client and server so one
 # copy is installed. The Debian upgrade is not pinned: the security archive keeps only the
@@ -193,7 +194,8 @@ _raise_mcp_rate_limit() {
 # fails when the Dockerfile no longer has its two `COPY package*.json ./` lines. It also fails,
 # naming the entry, when the pin's package-lock.json locks every copy of an entry's package at
 # that version or newer, or any copy (or a direct dependency's declared range) above it: the
-# entry is then redundant or would set the package back. Drop such an entry, and the patch once
+# entry is then redundant or would set the package back. The same holds for npm_version against
+# the npm the runtime base image bundles. Drop such an entry, and the patch once
 # none is left. Upstream updates these on main (adcp #9107, for #9106, merged 2026-11-19), but
 # no release tag carries it yet. Remove this once a release that carries it is pinned.
 _dockerfile_with_dependency_updates() {
@@ -279,16 +281,29 @@ STAGE
         echo " && npm install --package-lock-only --ignore-scripts --no-audit --no-fund"
         echo
     } > "$out"
-    if ! awk -v last="$last_from" -v npm_version="$npm_version" '
+    # The runtime stage's npm goes through the same merge script, as an "npm" entry whose
+    # locked version is the one the runtime base image bundles, so a base image that already
+    # ships npm_version or newer stops the build instead of being set back.
+    local runtime_head
+    runtime_head="$(cat <<RUNTIME
+COPY --from=salesagent-deps /tmp/salesagent-dependency-updates.cjs /tmp/salesagent-npm-check/merge.cjs
+RUN apt-get update \\
+ && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \\
+ && rm -rf /var/lib/apt/lists/* \\
+ && cd /tmp/salesagent-npm-check \\
+ && echo '{}' > package.json \\
+ && printf '{"packages":{"node_modules/npm":{"version":"%s"}}}' "\$(npm --version)" > package-lock.json \\
+ && printf '{"npm":"%s"}' "${npm_version}" > updates.json \\
+ && node merge.cjs updates.json \\
+ && cd / && rm -rf /tmp/salesagent-npm-check \\
+ && npm install -g npm@${npm_version} \\
+ && npm cache clean --force
+RUNTIME
+)"
+    if ! RUNTIME_HEAD="$runtime_head" awk -v last="$last_from" '
              $0 == "COPY package*.json ./" { print "COPY --from=salesagent-deps /app/package*.json ./"; copied++; next }
              { print }
-             NR == last {
-                 print "RUN apt-get update \\"
-                 print " && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \\"
-                 print " && rm -rf /var/lib/apt/lists/* \\"
-                 print " && npm install -g npm@" npm_version " \\"
-                 print " && npm cache clean --force"
-             }
+             NR == last { print ENVIRON["RUNTIME_HEAD"] }
              END { exit copied == 2 ? 0 : 1 }' "$src_dockerfile" >> "$out"; then
         echo "[creative-agent] ERROR: two 'COPY package*.json ./' lines not found in ${src_dockerfile}" \
             "(adcp@${ADCP_PIN}); update _dockerfile_with_dependency_updates for this pin" >&2

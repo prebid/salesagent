@@ -126,3 +126,41 @@ def test_newer_copy_of_an_unqualified_entry_is_stale(tmp_path: Path) -> None:
 
     assert proc.returncode != 0
     assert "hono" in proc.stderr
+
+
+def _npm_version() -> str:
+    for line in STACK_SCRIPT.read_text(encoding="utf-8").splitlines():
+        if line.strip().startswith('local npm_version="'):
+            return line.split('"')[1]
+    raise AssertionError("npm_version not found in creative-agent-stack.sh")
+
+
+def _bump(version: str, index: int) -> str:
+    parts = [int(p) for p in version.split(".")]
+    parts[index] += 1
+    return ".".join(str(p) for p in parts[: index + 1] + [0] * (2 - index))
+
+
+def _run_npm_check(tmp_path: Path, bundled: str) -> subprocess.CompletedProcess[str]:
+    # The runtime stage writes these three files before `npm install -g`: an empty package.json,
+    # a lock naming the base image's bundled npm, and an "npm" entry for npm_version.
+    lock = {"packages": {"node_modules/npm": {"version": bundled}}}
+    return _run(tmp_path, {}, lock, {"npm": _npm_version()})
+
+
+def test_bundled_npm_below_npm_version_is_replaced(tmp_path: Path) -> None:
+    older = "11.6.2"
+    assert older != _npm_version()
+
+    proc = _run_npm_check(tmp_path, older)
+
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_bundled_npm_at_or_above_npm_version_stops_the_build(tmp_path: Path) -> None:
+    for bundled in (_npm_version(), _bump(_npm_version(), 1), _bump(_npm_version(), 0)):
+        proc = _run_npm_check(tmp_path, bundled)
+
+        assert proc.returncode != 0, bundled
+        assert "npm (" in proc.stderr, proc.stderr
+        assert bundled in proc.stderr
