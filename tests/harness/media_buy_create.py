@@ -17,10 +17,10 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.adapters.base import AdapterCreateResult, ResponsePackage
 from src.adapters.mock_ad_server import MockAdServer
@@ -466,13 +466,24 @@ class MediaBuyCreateEnv(
         Every admin approval route calls ``execute_approved_media_buy``; ``run_approval`` is
         the one spelling of that call in tests. Raises ``RuntimeError`` unless exactly one
         buy awaits approval.
+
+        THE AD SERVER IS THIS ENV'S FOR BOTH OF THE APPROVAL'S LOOKUPS. It books the order
+        through this module's ``get_adapter``, which ``EXTERNAL_PATCHES`` replaces, but it
+        uploads the creatives through a call-time ``from src.core.helpers.adapter_helpers
+        import get_adapter``, which that patch does not reach: unpatched, the upload went to
+        the tenant's real Mock adapter, which has no ``creatives_manager``, and was skipped
+        ("Adapter does not support creative upload"). So the second spelling is pointed at the
+        same stand-in for the approval's duration. A seller that runs its real adapter
+        (``sell_through_tenant_adapter``) still gets it on both: the stand-in's side effect is
+        production's ``get_adapter`` itself.
         """
         from tests.helpers.media_buy_approval import run_approval
 
         pending = self.media_buys_awaiting_approval()
         if len(pending) != 1:
             raise RuntimeError(f"expected exactly one media buy awaiting approval; found {len(pending)}")
-        return run_approval(pending[0].media_buy_id, self._tenant_id)
+        with patch("src.core.helpers.adapter_helpers.get_adapter", self.mock["adapter"]):
+            return run_approval(pending[0].media_buy_id, self._tenant_id)
 
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
@@ -644,11 +655,46 @@ class MediaBuyCreateEnv(
         whenever they happened. A Then reading ``[-1]`` gets the newest update upload in a
         scenario that updates, and the newest create upload in one that only creates.
         """
+        return self._assets_handed_to(lambda adapter: adapter.add_creative_assets)
+
+    def creative_manager_assets(self) -> list[dict[str, Any]]:
+        """The asset dicts the approval replay and the retroactive push handed the ad server.
+
+        Both reach it through ``adapter.creatives_manager.add_creative_assets``
+        (``execute_approved_media_buy`` and ``push_creative_to_existing_buy``), not the
+        ``adapter.add_creative_assets`` the synchronous create path calls, so this is a seam
+        of its own rather than a widened :meth:`uploaded_adapter_assets`: which path ran is
+        what a scenario reading it asserts.
+
+        NO SEPARATE e2e REALIZATION, because none is needed and none exists. Both paths are
+        operator actions, and the steps that take them run them IN THIS PROCESS on every
+        transport: the seller's approval of a buy is ``run_approval`` and the seller's
+        approval of a creative is the Admin UI route through the in-process
+        :class:`AdminClient` (``approve_creative_as_seller``), each with this env's adapter
+        patch in force and production's engine pointed at the live server's database. So the
+        call lands on this mock over e2e_rest too. The server leaves no trace to read
+        instead: ``MockAdServer`` has no ``creatives_manager``, so a server-side approval
+        replay skips the upload ("Adapter does not support creative upload") and a
+        server-side push returns that refusal, writing nothing.
+        """
+        return self._assets_handed_to(lambda adapter: adapter.creatives_manager.add_creative_assets)
+
+    def _assets_handed_to(self, upload: Callable[[MagicMock], MagicMock]) -> list[dict[str, Any]]:
+        """Every asset dict passed to *upload* on each adapter of :meth:`adapter_mocks`, in call order.
+
+        Each asset as the persistence edge projects it (``pydantic_core.to_jsonable_python``
+        with the ``fallback=str`` of ``database_session._pydantic_json_serializer``), so a
+        typed value an asset carries reads here exactly as the e2e branch reads it back off
+        the audit row's JSONType column, and one assertion grades both. The projection is the
+        harness's: production hands the adapter the typed value and never dumps it.
+        """
+        from pydantic_core import to_jsonable_python
+
         uploaded: list[dict[str, Any]] = []
         for adapter in self.adapter_mocks():
-            for call in adapter.add_creative_assets.call_args_list:
+            for call in upload(adapter).call_args_list:
                 assets = call.args[1] if len(call.args) > 1 else call.kwargs.get("assets")
-                uploaded.extend(assets or [])
+                uploaded.extend(to_jsonable_python(asset, fallback=str) for asset in assets or [])
         return uploaded
 
     def adapter_mocks(self) -> list[MagicMock]:

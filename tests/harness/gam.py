@@ -185,32 +185,49 @@ class GamSellerMixin:
     ) -> Any:
         """A buy the seller already booked in GAM as order *order_id*: the env's buyer's, unless *principal* names another.
 
-        The rows the create path leaves: one package on *product* for each (package id, line
-        item id, creative size) of *line_items*, whose ``package_config`` carries the order
-        id and that line item id. The stand-in network holds each line item, accepting
-        creatives of its size.
+        The rows :meth:`book_at_ad_server` leaves, one package for each (package id, line
+        item id, creative size) of *line_items*; the stand-in network holds each line item,
+        accepting creatives of its size.
+        """
+        from tests.helpers.gam_client import gam_line_item
+
+        media_buy = self.book_at_ad_server(
+            line_items={package_id: line_item_id for package_id, line_item_id, _ in line_items},
+            order_id=order_id,
+            product=product,
+            status=status,
+            principal=principal,
+        )
+        for package_id, line_item_id, size in line_items:
+            self.mock["gam_client"].return_value.line_items.append(
+                gam_line_item(package_id, item_id=line_item_id, sizes=(size,))
+            )
+        return media_buy
+
+    def book_at_ad_server(
+        self, *, line_items: Mapping[str, str], order_id: str, product: Any, status: str, principal: Any = None
+    ) -> Any:
+        """A buy the seller already booked at its ad server as order *order_id*, whatever the ad server.
+
+        The rows the create path leaves: one package on *product* per package id of
+        *line_items*, whose ``package_config`` carries the order id and that package's line
+        item id. The env's buyer's buy, unless *principal* names another.
         """
         from datetime import UTC, datetime
 
-        from tests.helpers.gam_client import gam_line_item
-
         media_buy = self._seed_buy(
-            package_ids=[package_id for package_id, _, _ in line_items],
+            package_ids=list(line_items),
             product=product,
             principal=principal,
             status=status,
             confirmed_at=datetime.now(UTC),
         )
-        packages = {package.package_id: package for package in media_buy.packages}
-        for package_id, line_item_id, size in line_items:
-            packages[package_id].package_config = {
-                **packages[package_id].package_config,
+        for package in media_buy.packages:
+            package.package_config = {
+                **package.package_config,
                 "platform_order_id": order_id,
-                "platform_line_item_id": line_item_id,
+                "platform_line_item_id": line_items[package.package_id],
             }
-            self.mock["gam_client"].return_value.line_items.append(
-                gam_line_item(package_id, item_id=line_item_id, sizes=(size,))
-            )
         self._commit_factory_data()
         return media_buy
 

@@ -2538,16 +2538,23 @@ def given_request_inline_creatives_valid(ctx: dict) -> None:
     # this scenario tests. display_300x250_image's asset_id is banner_image.
     creative = _create_approved_creative(ctx, "cr-upload-ok", fmt="display_300x250_image", asset_key="banner_image")
     _add_creative_ids_to_package(ctx, [creative.creative_id])
-    # The default product only accepts display_300x250 — add the real format so
-    # the creative-vs-product compat check passes on the server DB too.
+    accept_on_default_product(ctx, "display_300x250_image")
+
+
+def accept_on_default_product(ctx: dict, format_id: str) -> None:
+    """Add the reference agent's legacy *format_id* to the default product's ``format_ids``, then auto-approve.
+
+    The default product only accepts ``display_300x250``, so a creative in another catalog
+    format needs the product to name it or the creative-vs-product check refuses the buy on
+    the server DB too. Auto-approval is seeded so the create takes the synchronous path.
+    """
     product = ctx.get("default_product")
     if product is not None:
-        env = ctx["env"]
         product.format_ids = [
             *(product.format_ids or []),
-            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": format_id},
         ]
-        env._commit_factory_data()
+        ctx["env"]._commit_factory_data()
     _seed_auto_approval(ctx)
 
 
