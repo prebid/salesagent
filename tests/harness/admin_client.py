@@ -93,6 +93,13 @@ class AdminResponse:
         )
 
 
+#: The ``Accept`` a browser sends when it loads a page or submits a form. The admin UI
+#: answers a caller that prefers JSON (``fetch``'s ``*/*``) with JSON and a browser page
+#: with HTML (``caller_reads_json`` in src/admin/utils/helpers.py), so a step that drives
+#: a page sends what a browser sends; a step that drives a ``fetch`` passes its own.
+BROWSER_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+
+
 class AdminClient:
     """An admin's client on one transport: a Flask test client, or an HTTP session.
 
@@ -142,7 +149,14 @@ class AdminClient:
         json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
     ) -> AdminResponse:
-        """Send *method* to *path* (``/tenant/...``) with a form body or a JSON body."""
+        """Send *method* to *path* (``/tenant/...``) with a form body or a JSON body.
+
+        Sent as a browser sends it (:data:`BROWSER_ACCEPT`) unless *headers* say otherwise,
+        on both transports: ``requests`` would otherwise send ``Accept: */*`` and the Flask
+        test client none, so the same step would read as a ``fetch`` on one and a page on
+        the other.
+        """
+        headers = {"Accept": BROWSER_ACCEPT, **(headers or {})}
         if self._flask_client is not None:
             # Over https, because a production app marks its session cookie Secure.
             response = self._flask_client.open(
