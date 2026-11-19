@@ -194,8 +194,8 @@ _raise_mcp_rate_limit() {
 # naming the entry, when the pin's package-lock.json locks every copy of an entry's package at
 # that version or newer, or any copy (or a direct dependency's declared range) above it: the
 # entry is then redundant or would set the package back. Drop such an entry, and the patch once
-# none is left. Upstream request to update these in adcp itself: adcontextprotocol/adcp#9106
-# (PR adcontextprotocol/adcp#9107). Remove this once a release that carries it is pinned.
+# none is left. Upstream updates these on main (adcp #9107, for #9106, merged 2026-11-19), but
+# no release tag carries it yet. Remove this once a release that carries it is pinned.
 _dockerfile_with_dependency_updates() {
     local src_dockerfile="$(_dockerfile_without_fly_size_check)"
     local out="${SRC}/Dockerfile.salesagent-deps"
