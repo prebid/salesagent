@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 from tests.helpers.bash_stubs import run_bash_with_stubs
-from tests.unit._architecture_helpers import repo_root
+from tests.unit._architecture_helpers import assert_single_sha_pin, iter_action_pins, repo_root
 
 _IMAGE_PUBLISHING_WORKFLOWS = frozenset({"release-please.yml", "publish-creative-agent.yml"})
 _SIGN_ATTEST_JOB = "sign-and-attest"
@@ -604,10 +604,40 @@ def test_scorecard_workflow_present() -> None:
 
 
 @pytest.mark.arch_guard
-def test_checkout_pins_consistent_on_hardened_workflows() -> None:
-    """Hardened workflows use a single actions/checkout SHA pin."""
-    expected = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
-    for wf_name in ("ci.yml", "security.yml", "codeql.yml", "release-please.yml", "publish-creative-agent.yml"):
-        text = (repo_root() / ".github/workflows" / wf_name).read_text(encoding="utf-8")
-        assert expected in text, f"{wf_name} must pin checkout to {expected}"
-        assert "actions/checkout@11bd719" not in text, f"{wf_name} still uses stale checkout pin"
+@pytest.mark.parametrize("action", ["actions/checkout", "actions/cache", "astral-sh/setup-uv"])
+def test_action_pinned_to_one_full_sha(action: str) -> None:
+    """Every git-tracked workflow and action pins *action* to the same full commit SHA.
+
+    The SHA itself is not named here: Dependabot bumps it, and pinact checks it
+    matches a tag. This guard only requires every reference to be a full SHA and
+    all of them to agree, so a partial bump fails.
+    """
+    assert_single_sha_pin(iter_action_pins(repo_root(), action), action)
+
+
+_KNOWN_BAD_CHECKOUT_PINS = {
+    "partial bump": (
+        [
+            (Path(".github/workflows/ci.yml"), "1" * 40),
+            (Path(".github/workflows/scorecard.yml"), "2" * 40),
+        ],
+        "pinned to different SHAs",
+    ),
+    "tag ref": ([(Path(".github/workflows/ci.yml"), "v7")], "full commit SHA"),
+}
+
+
+@pytest.mark.arch_guard
+@pytest.mark.parametrize("case", sorted(_KNOWN_BAD_CHECKOUT_PINS))
+def test_single_sha_pin_detector_catches_known_bad_pins(case: str) -> None:
+    """Mutation self-test: a partial bump and a tag ref must both fail the guard."""
+    pins, message = _KNOWN_BAD_CHECKOUT_PINS[case]
+    with pytest.raises(AssertionError, match=message):
+        assert_single_sha_pin(pins, "actions/checkout")
+
+
+@pytest.mark.arch_guard
+def test_single_sha_pin_detector_refuses_no_pins() -> None:
+    """Non-vacuity: an action with no references at all fails rather than passing."""
+    with pytest.raises(AssertionError, match="non-vacuity"):
+        assert_single_sha_pin([], "actions/checkout")
