@@ -180,12 +180,14 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     And Google Ad Manager associated that creative with the line item it created, at its own size
 
   # The seller's approval is what books a held buy's order, so the refusal comes before it:
-  # the approval fails, and GAM is not written to.
+  # the approval fails, and GAM is not written to. The package names its option because the
+  # seller's approval reconstructs each package from the format contract the create recorded.
   @T-UC-002-local-gam-creative-size-mismatch-on-approval @extension
   Scenario: A held buy whose creative matches no line item placeholder is refused at the seller's approval, and nothing is created in GAM
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_300x250", "params": {"width": 300, "height": 250}}]}', with product settings '{"creative_placeholders": [{"width": 728, "height": 90}]}'
     And the tenant requires manual approval
     And the package references the buyer's approved display_tag creative "cr-tag" carrying the tag URL "https://ads.example.com/tag.js?slot=1"
+    And the package selects that format option by its format_option_ref
     When the Buyer Agent sends the create_media_buy request
     Then the response status should be "submitted"
     When the seller approves the media buy

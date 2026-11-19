@@ -641,15 +641,20 @@ def _creative_declarations(
     A replay reads each product's declarations as they are NOW. Binding an approval to the
     plan the buy was booked with is RFC #2529's plan hash, not this function.
 
+    When no product resolves, a legacy creative is read with no declaration, its format spec
+    stating its size, as the pre-adapter gate reads it (:func:`_read_for_packages`).
+
     Raises:
         The creative refusal (``creative_refusal``) when a product refuses the creative.
-        AdCPValidationError when no product resolved at all: an unresolved declaration is
-            never read as "any size".
+        AdCPValidationError when no product resolved for a canonical creative: an unresolved
+            declaration is never read as "any size".
     """
     from src.core.format_satisfaction import creative_refusal
 
     verdicts = _resolved_format_verdicts(products, packages, [creative])
     if not verdicts:
+        if CreativeFormatIdentity.from_row(creative).assertion is not None:
+            return ()
         raise AdCPValidationError(details=ValidationDetails(creative_id=creative.creative_id))
     for product_id, cid, verdict in verdicts:
         if not verdict:
