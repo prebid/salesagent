@@ -77,7 +77,6 @@ from src.core.exceptions import (
     AdCPValidationError,
     AdCPWorkflowError,
 )
-from src.core.logging_config import log_safe
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AffectedPackage,
@@ -955,7 +954,7 @@ class GoogleAdManager(AdServerAdapter):
 
         # Input validation
         if not media_buy_id or not isinstance(media_buy_id, str):
-            logger.error(f"Invalid media_buy_id: {log_safe(media_buy_id)}")
+            logger.error(f"Invalid media_buy_id: {media_buy_id}")
             return AdapterGetMediaBuyDeliveryResponse(
                 media_buy_id=str(media_buy_id) if media_buy_id else "invalid",
                 reporting_period=date_range,
@@ -968,7 +967,7 @@ class GoogleAdManager(AdServerAdapter):
 
         # Sanitize input (basic security check)
         if len(media_buy_id) > 255 or not media_buy_id.isprintable():
-            logger.error(f"Suspicious media_buy_id format: {log_safe(media_buy_id)}")
+            logger.error(f"Suspicious media_buy_id format: {media_buy_id}")
             return AdapterGetMediaBuyDeliveryResponse(
                 media_buy_id=media_buy_id[:50],  # Truncate for safety
                 reporting_period=date_range,
@@ -987,7 +986,7 @@ class GoogleAdManager(AdServerAdapter):
             media_buy = repo.get_by_id(media_buy_id)
 
             if not media_buy:
-                logger.error(f"Media buy {log_safe(media_buy_id)} not found in database")
+                logger.error(f"Media buy {media_buy_id} not found in database")
                 return AdapterGetMediaBuyDeliveryResponse(
                     media_buy_id=media_buy_id,
                     reporting_period=date_range,

@@ -16,7 +16,6 @@ from adcp.webhooks import GeneratedTaskStatus
 
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import AdCPValidationError
-from src.core.logging_config import log_safe
 from src.core.schemas import CreativeFormatIdentity
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import run_async_in_sync_context
@@ -140,7 +139,7 @@ async def _deliver_sync_creatives_webhook(
 
         return True
     except Exception as send_e:
-        logger.error("Failed to send protocol webhook for creative %r: %s", log_safe(creative_id), send_e)
+        logger.error("Failed to send protocol webhook for creative %r: %s", creative_id, send_e)
         return False
 
 
@@ -169,15 +168,13 @@ async def _call_webhook_for_creative_status(
             mapping = uow.workflows.get_latest_mapping_for_object("creative", creative_id)
 
             if not mapping:
-                logger.debug(
-                    f"No workflow mapping found for creative {log_safe(creative_id)}; skipping webhook notification"
-                )
+                logger.debug(f"No workflow mapping found for creative {creative_id}; skipping webhook notification")
                 return False
 
             step = uow.workflows.get_step_by_id(mapping.step_id)
             if not step or not step.request_data:
                 logger.debug(
-                    f"Workflow step missing or has no request_data for creative {log_safe(creative_id)}; skipping webhook notification"
+                    f"Workflow step missing or has no request_data for creative {creative_id}; skipping webhook notification"
                 )
                 return False
 
@@ -197,7 +194,7 @@ async def _call_webhook_for_creative_status(
 
             if pending_count > 0:
                 logger.info(
-                    f"Creative {log_safe(creative_id)} reviewed, but {pending_count}/{len(all_creatives)} "
+                    f"Creative {creative_id} reviewed, but {pending_count}/{len(all_creatives)} "
                     f"creatives still pending in task {step.step_id}; not firing webhook yet"
                 )
                 return False
@@ -246,7 +243,7 @@ async def _call_webhook_for_creative_status(
             cfg_dict = step.request_data.get("push_notification_config") or {}
             url = cfg_dict.get("url")
             if not url:
-                logger.error(f"No push notification URL present for creative {log_safe(creative_id)}")
+                logger.error(f"No push notification URL present for creative {creative_id}")
                 return False
 
             registration_config = stored_registration_fields(cfg_dict)
@@ -260,7 +257,7 @@ async def _call_webhook_for_creative_status(
                 # a logged non-delivery, not an exception that breaks the sync.
                 logger.error(
                     "Refusing to send completion webhook for creative %r: its push_notification_config is invalid (%s)",
-                    log_safe(creative_id),
+                    creative_id,
                     exc,
                 )
                 return False
@@ -292,7 +289,7 @@ async def _call_webhook_for_creative_status(
         )
 
     except Exception as e:
-        logger.error(f"Error sending protocol webhook for creative {log_safe(creative_id)}: {e}", exc_info=True)
+        logger.error(f"Error sending protocol webhook for creative {creative_id}: {e}", exc_info=True)
         return False
 
 
@@ -605,7 +602,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             assignment_buy_ids = [a.media_buy_id for a in assignments]
 
             logger.info(
-                f"[CREATIVE APPROVAL] Creative {log_safe(creative_id)} approved, checking {len(assignments)} media buy assignments"
+                f"[CREATIVE APPROVAL] Creative {creative_id} approved, checking {len(assignments)} media buy assignments"
             )
 
             # Snapshot buy statuses here to avoid a second UoW after commit
@@ -684,7 +681,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
         ]
 
         for buy_id in buys_to_push:
-            logger.info(f"[CREATIVE APPROVAL] Retroactive push: creative {log_safe(creative_id)} → live buy {buy_id}")
+            logger.info(f"[CREATIVE APPROVAL] Retroactive push: creative {creative_id} → live buy {buy_id}")
             push_failure = push_creative_to_existing_buy(
                 creative_id=creative_id,
                 media_buy_id=buy_id,
@@ -692,7 +689,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             )
             if push_failure is not None:
                 logger.error(
-                    f"[CREATIVE APPROVAL] Retroactive push failed for creative {log_safe(creative_id)} → buy {buy_id}: "
+                    f"[CREATIVE APPROVAL] Retroactive push failed for creative {creative_id} → buy {buy_id}: "
                     f"{push_failure.reason}"
                 )
                 push_warnings.append(f"Creative push to buy {buy_id} failed — see server logs for details")
@@ -1027,10 +1024,10 @@ def _create_review_record(
 
         creative_repo.create_review(review_record)
 
-        logger.debug(f"Created review record {review_id} for creative {log_safe(creative_id)}")
+        logger.debug(f"Created review record {review_id} for creative {creative_id}")
 
     except Exception as e:
-        logger.error(f"Error creating review record for creative {log_safe(creative_id)}: {e}", exc_info=True)
+        logger.error(f"Error creating review record for creative {creative_id}: {e}", exc_info=True)
         # Don't fail the review if we can't create the record — let UoW handle rollback
 
 

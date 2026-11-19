@@ -40,7 +40,6 @@ from typing import Any
 from flask import Response, flash, jsonify, redirect
 from werkzeug.wrappers import Response as WerkzeugResponse
 
-from src.core.logging_config import log_safe
 from src.core.security.outbound_http import OutboundRequestBlocked, validate_url
 
 logger = logging.getLogger(__name__)
@@ -70,7 +69,7 @@ def _is_allowed(url: Any, label: str) -> bool:
     try:
         validate_url(url)
     except OutboundRequestBlocked:
-        logger.warning("[SECURITY] Rejected %s at ingest: %r", label, log_safe(url))
+        logger.warning("[SECURITY] Rejected %s at ingest: %r", label, url)
         return False
     return True
 

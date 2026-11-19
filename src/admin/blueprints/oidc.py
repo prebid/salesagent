@@ -15,7 +15,6 @@ from src.admin.utils.url_policy import json_error_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, User
-from src.core.logging_config import log_safe
 from src.services.auth_config_service import (
     disable_oidc,
     enable_oidc,
@@ -149,7 +148,7 @@ def enable(tenant_id: str):
         with get_db_session() as db_session:
             config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
             actual_enabled = config.oidc_enabled if config else False
-            logger.info(f"After enable_oidc, oidc_enabled={actual_enabled} for tenant {log_safe(tenant_id)}")
+            logger.info(f"After enable_oidc, oidc_enabled={actual_enabled} for tenant {tenant_id}")
 
         return jsonify(
             {
@@ -213,7 +212,7 @@ def test_initiate(tenant_id: str):
         # Get redirect URI
         redirect_uri = get_tenant_redirect_uri(tenant)
 
-        logger.info(f"Initiating test OIDC flow for tenant {log_safe(tenant_id)}, redirect_uri={redirect_uri}")
+        logger.info(f"Initiating test OIDC flow for tenant {tenant_id}, redirect_uri={redirect_uri}")
 
         return oauth.test_oidc.authorize_redirect(redirect_uri)
 
@@ -450,6 +449,6 @@ def login(tenant_id: str):
         session["oidc_login_tenant_id"] = tenant_id
 
         redirect_uri = get_tenant_redirect_uri(tenant)
-        logger.info(f"Initiating OIDC login for tenant {log_safe(tenant_id)}")
+        logger.info(f"Initiating OIDC login for tenant {tenant_id}")
 
         return oauth.login_oidc.authorize_redirect(redirect_uri)

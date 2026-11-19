@@ -21,7 +21,6 @@ from src.adapters.gam_reporting_service import GAMReportingService
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Tenant
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -73,12 +72,12 @@ def require_auth(f):
         # Admin UI sets session["user"] on successful authentication
         has_user = "user" in session
         logger.debug(
-            f"GAM API auth check - path: {log_safe(request.path)}, session keys: {list(session.keys())}, has_user: {has_user}"
+            f"GAM API auth check - path: {request.path}, session keys: {list(session.keys())}, has_user: {has_user}"
         )
 
         if not has_user:
             logger.warning(
-                f"GAM API authentication failed - no user in session. Path: {log_safe(request.path)}, Session keys: {list(session.keys())}"
+                f"GAM API authentication failed - no user in session. Path: {request.path}, Session keys: {list(session.keys())}"
             )
             return jsonify({"error": "Authentication required. Please log in to the admin UI."}), 401
 
@@ -162,25 +161,25 @@ def get_gam_reporting(tenant_id: str):
 
     try:
         # Get the GAM client for this tenant
-        logger.info(f"Getting GAM client for tenant {log_safe(tenant_id)}")
+        logger.info(f"Getting GAM client for tenant {tenant_id}")
         gam_client = get_ad_manager_client_for_tenant(tenant_id)
 
         if not gam_client:
-            logger.error(f"Failed to get GAM client for tenant {log_safe(tenant_id)}")
+            logger.error(f"Failed to get GAM client for tenant {tenant_id}")
             return jsonify({"error": "GAM client not configured for this tenant"}), 500
 
         # Get the network timezone (fetching if necessary)
         from scripts.ops.gam_helper import ensure_network_timezone
 
-        logger.info(f"Getting network timezone for tenant {log_safe(tenant_id)}")
+        logger.info(f"Getting network timezone for tenant {tenant_id}")
         network_timezone = ensure_network_timezone(tenant_id)
 
         # Create reporting service
-        logger.info(f"Creating reporting service for tenant {log_safe(tenant_id)}")
+        logger.info(f"Creating reporting service for tenant {tenant_id}")
         reporting_service = GAMReportingService(gam_client, network_timezone)
 
         # Get the reporting data
-        logger.info(f"Getting reporting data for tenant {log_safe(tenant_id)}, date_range={date_range}")
+        logger.info(f"Getting reporting data for tenant {tenant_id}, date_range={date_range}")
         # Type narrowing: We validated date_range above
         date_range_literal = cast(Literal["lifetime", "this_month", "today"], date_range)
         report_data = reporting_service.get_reporting_data(
@@ -210,7 +209,7 @@ def get_gam_reporting(tenant_id: str):
         return jsonify(response)
 
     except Exception as e:
-        logger.error(f"Error getting GAM reporting data for tenant {log_safe(tenant_id)}: {str(e)}", exc_info=True)
+        logger.error(f"Error getting GAM reporting data for tenant {tenant_id}: {str(e)}", exc_info=True)
         return jsonify({"error": f"Failed to get reporting data: {str(e)}"}), 500
 
 

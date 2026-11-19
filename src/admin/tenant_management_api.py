@@ -24,7 +24,6 @@ from src.core.database.models import (
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.http_utils import validate_virtual_host
-from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +164,7 @@ def create_tenant():
                     # Auto-add creator as fallback with warning
                     email_list.append(creator_email)
                     logger.warning(
-                        f"No access control specified for tenant {log_safe(data['name'])}, auto-adding creator {log_safe(creator_email)}"
+                        f"No access control specified for tenant {data['name']}, auto-adding creator {creator_email}"
                     )
                 else:
                     return (
@@ -409,7 +408,7 @@ def get_tenant(tenant_id):
             return jsonify(result)
 
         except Exception as e:
-            logger.error(f"Error getting tenant {log_safe(tenant_id)}: {str(e)}")
+            logger.error(f"Error getting tenant {tenant_id}: {str(e)}")
             return jsonify({"error": "Failed to get tenant"}), 500
 
 
@@ -515,7 +514,7 @@ def update_tenant(tenant_id):
 
         except Exception as e:
             db_session.rollback()
-            logger.error(f"Error updating tenant {log_safe(tenant_id)}: {str(e)}")
+            logger.error(f"Error updating tenant {tenant_id}: {str(e)}")
             return jsonify({"error": f"Failed to update tenant: {safe_error_message(e)}"}), 500
 
 
@@ -562,5 +561,5 @@ def delete_tenant(tenant_id):
 
         except Exception as e:
             db_session.rollback()
-            logger.error(f"Error deleting tenant {log_safe(tenant_id)}: {str(e)}")
+            logger.error(f"Error deleting tenant {tenant_id}: {str(e)}")
             return jsonify({"error": f"Failed to delete tenant: {safe_error_message(e)}"}), 500

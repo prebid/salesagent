@@ -65,7 +65,7 @@ def get_tenant_config_from_db(tenant_id):
             stmt = select(Tenant).filter_by(tenant_id=tenant_id)
             tenant = db_session.scalars(stmt).first()
             if not tenant:
-                logger.warning(f"Tenant not found: {log_safe(tenant_id)}")
+                logger.warning(f"Tenant not found: {tenant_id}")
                 return {}
 
             # Build config from individual columns
@@ -328,7 +328,7 @@ def require_tenant_access(api_mode=False):
             has_session = "user" in session
             has_cookies = bool(request.cookies)
             logger.info(
-                f"Auth check - tenant: {tenant_id}, method: {log_safe(request.method)}, has_session: {has_session}, has_cookies: {has_cookies}, session_keys: {list(session.keys())}"
+                f"Auth check - tenant: {tenant_id}, method: {request.method}, has_session: {has_session}, has_cookies: {has_cookies}, session_keys: {list(session.keys())}"
             )
 
             # A SETUP-MODE SESSION, decided from the session alone — NO DATABASE READ.

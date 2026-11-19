@@ -12,7 +12,6 @@ from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Tenant
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +58,7 @@ def targeting_browser(tenant_id):
 @require_tenant_access(api_mode=True)
 def get_targeting_data(tenant_id):
     """Get all targeting data (custom targeting keys, audience segments, labels) from database."""
-    logger.info(f"Targeting data request for tenant: {log_safe(tenant_id)}")
+    logger.info(f"Targeting data request for tenant: {tenant_id}")
     try:
         with get_db_session() as db_session:
             from src.core.database.models import GAMInventory
@@ -159,7 +158,7 @@ def get_targeting_data(tenant_id):
             )
 
     except Exception as e:
-        logger.error(f"Error fetching targeting data for tenant {log_safe(tenant_id)}: {e}", exc_info=True)
+        logger.error(f"Error fetching targeting data for tenant {tenant_id}: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -200,7 +199,7 @@ def get_targeting_values(tenant_id, key_id):
 
             # Query GAM in real-time for values
             adapter_config = tenant.adapter_config
-            logger.info(f"Fetching targeting values for tenant={log_safe(tenant_id)}, key_id={log_safe(key_id)}")
+            logger.info(f"Fetching targeting values for tenant={tenant_id}, key_id={key_id}")
             logger.debug(f"Adapter config exists: {adapter_config is not None}")
             if adapter_config:
                 logger.debug(
@@ -211,10 +210,10 @@ def get_targeting_values(tenant_id, key_id):
                 )
 
             if not adapter_config:
-                logger.error(f"No adapter configured for tenant {log_safe(tenant_id)}")
+                logger.error(f"No adapter configured for tenant {tenant_id}")
                 return jsonify({"error": "No adapter configured for this tenant"}), 400
             if not adapter_config.gam_network_code:
-                logger.error(f"GAM network code not configured for tenant {log_safe(tenant_id)}")
+                logger.error(f"GAM network code not configured for tenant {tenant_id}")
                 return jsonify({"error": "GAM network code not configured"}), 400
 
             # Check for EITHER OAuth or Service Account authentication
@@ -222,7 +221,7 @@ def get_targeting_values(tenant_id, key_id):
             has_service_account = bool(adapter_config.gam_service_account_json)
 
             if not has_oauth and not has_service_account:
-                logger.error(f"No GAM authentication configured for tenant {log_safe(tenant_id)}")
+                logger.error(f"No GAM authentication configured for tenant {tenant_id}")
                 return (
                     jsonify({"error": "GAM authentication not configured. Please connect to GAM in tenant settings."}),
                     400,
@@ -238,7 +237,7 @@ def get_targeting_values(tenant_id, key_id):
 
             # Create authentication client based on configured method
             if has_service_account:
-                logger.debug(f"Using service account authentication for tenant {log_safe(tenant_id)}")
+                logger.debug(f"Using service account authentication for tenant {tenant_id}")
                 # Write service account JSON to temp file
                 service_account_json = adapter_config.gam_service_account_json
                 with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -265,7 +264,7 @@ def get_targeting_values(tenant_id, key_id):
                     except Exception as e:
                         logger.warning(f"Failed to delete temp service account file: {e}")
             else:
-                logger.debug(f"Using OAuth authentication for tenant {log_safe(tenant_id)}")
+                logger.debug(f"Using OAuth authentication for tenant {tenant_id}")
                 # Create OAuth client
                 gam_auth = get_settings().auth
                 oauth2_client = oauth2.GoogleRefreshTokenClient(
@@ -305,7 +304,7 @@ def get_targeting_values(tenant_id, key_id):
             return response
 
     except Exception as e:
-        logger.error(f"Error fetching targeting values for key {log_safe(key_id)}: {e}", exc_info=True)
+        logger.error(f"Error fetching targeting values for key {key_id}: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -1003,7 +1002,7 @@ def get_inventory_tree(tenant_id):
 
     # --- Mode 2: Children of a specific parent (lightweight) ---
     if parent_id_param:
-        logger.info(f"Fetching children of {log_safe(parent_id_param)} for tenant: {log_safe(tenant_id)}")
+        logger.info(f"Fetching children of {parent_id_param} for tenant: {tenant_id}")
         try:
             with get_db_session() as db_session:
                 stmt = (
@@ -1018,10 +1017,10 @@ def get_inventory_tree(tenant_id):
                 )
                 children, truncated = execute_limited(db_session, stmt, _TREE_LIMIT)
                 units = [_unit_to_dict(u) for u in children]
-                logger.info(f"Found {len(units)} children of {log_safe(parent_id_param)} (truncated: {truncated})")
+                logger.info(f"Found {len(units)} children of {parent_id_param} (truncated: {truncated})")
                 return jsonify({"units": units, "truncated": truncated})
         except Exception as e:
-            logger.error(f"Error fetching children for {log_safe(parent_id_param)}: {e}", exc_info=True)
+            logger.error(f"Error fetching children for {parent_id_param}: {e}", exc_info=True)
             return jsonify({"error": str(e)}), 500
 
     # --- Cache (root mode only, no search, no parent_id) ---
@@ -1049,17 +1048,17 @@ def get_inventory_tree(tenant_id):
                 ).first()
                 if last_sync and last_sync.completed_at:
                     if last_sync.completed_at.timestamp() > cached_time:
-                        logger.info(f"Invalidating stale cache for tenant {log_safe(tenant_id)}")
+                        logger.info(f"Invalidating stale cache for tenant {tenant_id}")
                         cache.delete(cache_key)
                         cache.delete(cache_time_key)
                     else:
-                        logger.info(f"Returning cached inventory tree for tenant: {log_safe(tenant_id)}")
+                        logger.info(f"Returning cached inventory tree for tenant: {tenant_id}")
                         return cached_result
                 else:
-                    logger.info(f"Returning cached inventory tree for tenant: {log_safe(tenant_id)}")
+                    logger.info(f"Returning cached inventory tree for tenant: {tenant_id}")
                     return cached_result
 
-    logger.info(f"Building inventory tree for tenant: {log_safe(tenant_id)}, search: '{log_safe(search)}'")
+    logger.info(f"Building inventory tree for tenant: {tenant_id}, search: '{search}'")
     try:
         with get_db_session() as db_session:
             # Base filter: active ad units for this tenant
@@ -1157,7 +1156,7 @@ def get_inventory_tree(tenant_id):
                 return result
 
     except Exception as e:
-        logger.error(f"Error building inventory tree for tenant {log_safe(tenant_id)}: {e}", exc_info=True)
+        logger.error(f"Error building inventory tree for tenant {tenant_id}: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -1189,12 +1188,12 @@ def get_inventory_list(tenant_id):
             cache_key = f"inventory_list:{tenant_id}:{inventory_type or 'all'}:{status}"
             cached_result = cache.get(cache_key)
             if cached_result:
-                logger.info(f"Returning cached inventory list for tenant: {log_safe(tenant_id)}")
+                logger.info(f"Returning cached inventory list for tenant: {tenant_id}")
                 return cached_result
 
         logger.info(
-            f"Building inventory list: tenant={log_safe(tenant_id)}, type={log_safe(inventory_type or 'all')}, "
-            f"search='{log_safe(search)}', status={log_safe(status)}"
+            f"Building inventory list: tenant={tenant_id}, type={inventory_type or 'all'}, "
+            f"search='{search}', status={status}"
         )
 
         with get_db_session() as db_session:
@@ -1224,7 +1223,7 @@ def get_inventory_list(tenant_id):
 
                     # Still apply type filter if specified
                     if inventory_type:
-                        logger.info(f"Applying type filter: {log_safe(inventory_type)}")
+                        logger.info(f"Applying type filter: {inventory_type}")
                         stmt = stmt.filter(GAMInventory.inventory_type == inventory_type)
 
                     items = db_session.scalars(stmt).all()
@@ -1275,7 +1274,7 @@ def get_inventory_list(tenant_id):
 
             logger.info(
                 f"Query returned {len(items)} items after filtering "
-                f"(filters: type={log_safe(inventory_type or 'all')}, status={log_safe(status)}, search='{log_safe(search)}')"
+                f"(filters: type={inventory_type or 'all'}, status={status}, search='{search}')"
             )
 
             # Format response
@@ -1414,7 +1413,7 @@ def get_inventory_sizes(tenant_id):
             sorted_sizes = sorted(sizes, key=size_sort_key)
 
             logger.info(
-                f"Extracted {len(sorted_sizes)} unique sizes from {len(items)} inventory items for tenant {log_safe(tenant_id)}"
+                f"Extracted {len(sorted_sizes)} unique sizes from {len(items)} inventory items for tenant {tenant_id}"
             )
 
             return jsonify({"sizes": sorted_sizes, "count": len(sorted_sizes)})

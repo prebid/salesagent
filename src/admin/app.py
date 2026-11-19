@@ -43,10 +43,7 @@ from src.core.config_loader import is_single_tenant_mode
 from src.core.domain_config import (
     get_session_cookie_domain,
 )
-from src.core.logging_config import log_safe
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -247,16 +244,14 @@ def create_app(config=None, settings=None):
                     parts = cookie.split(";")
                     cookie_name = parts[0].split("=")[0] if parts else "unknown"
                     attrs = "; ".join(p.strip() for p in parts[1:] if p.strip())
-                    logger.warning(
-                        f"[SESSION_DEBUG] Set-Cookie on {log_safe(request.path)}: name={cookie_name}, attrs=[{attrs}]"
-                    )
+                    logger.warning(f"[SESSION_DEBUG] Set-Cookie on {request.path}: name={cookie_name}, attrs=[{attrs}]")
             else:
                 # Only log if session was modified
                 from flask import session
 
                 if session.modified:
                     logger.warning(
-                        f"[SESSION_DEBUG] NO Set-Cookie on {log_safe(request.path)} "
+                        f"[SESSION_DEBUG] NO Set-Cookie on {request.path} "
                         f"(session.modified={session.modified}, keys={list(session.keys())})"
                     )
         return response

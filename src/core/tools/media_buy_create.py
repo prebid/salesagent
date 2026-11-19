@@ -1091,7 +1091,7 @@ def _persist_adapter_package_ids(
             continue
         pkg_record.package_config["platform_order_id"] = new_id
         attributes.flag_modified(pkg_record, "package_config")
-    logger.info(f"{prefix}Persisted platform_order_id to {len(all_pkgs)} package(s) for {log_safe(media_buy_id)}")
+    logger.info(f"{prefix}Persisted platform_order_id to {len(all_pkgs)} package(s) for {media_buy_id}")
 
     if not platform_line_item_ids:
         logger.info(f"{prefix}No platform_line_item_ids found on response object")
@@ -1387,7 +1387,7 @@ def execute_approved_media_buy(
 
             if not tenant_obj:
                 error_msg = f"Tenant {tenant_id} not found"
-                logger.error(f"[APPROVAL] {log_safe(error_msg)}")
+                logger.error(f"[APPROVAL] {error_msg}")
                 return ApprovalResult.failed(error_msg)
 
             # Load media buy
@@ -1396,7 +1396,7 @@ def execute_approved_media_buy(
 
             if not media_buy:
                 error_msg = f"Media buy {media_buy_id} not found"
-                logger.error(f"[APPROVAL] {log_safe(error_msg)}")
+                logger.error(f"[APPROVAL] {error_msg}")
                 return ApprovalResult.failed(error_msg)
 
             # THE creative gate. One gate, before the adapter runs, tenant-scoped by
@@ -1473,7 +1473,7 @@ def execute_approved_media_buy(
 
             if not db_packages:
                 error_msg = f"No packages found for media buy {media_buy_id}"
-                logger.error(f"[APPROVAL] {log_safe(error_msg)}")
+                logger.error(f"[APPROVAL] {error_msg}")
                 return ApprovalResult.failed(error_msg)
 
             # The order the ad server already holds for this buy, when create booked it before
@@ -1559,7 +1559,7 @@ def execute_approved_media_buy(
                     # Note: Product model has 'formats' not 'format_ids'
                     if not package_id:
                         error_msg = f"Package ID missing for package in media buy {media_buy_id}"
-                        logger.error(f"[APPROVAL] {log_safe(error_msg)}")
+                        logger.error(f"[APPROVAL] {error_msg}")
                         return ApprovalResult.failed(error_msg)
 
                     delivery_type_str = enum_value(product.delivery_type)
@@ -1704,7 +1704,7 @@ def execute_approved_media_buy(
             # Validate required datetime fields
             if not start_time or not end_time:
                 error_msg = f"Media buy {media_buy_id} missing required start_time or end_time"
-                logger.error(f"[APPROVAL] {log_safe(error_msg)}")
+                logger.error(f"[APPROVAL] {error_msg}")
                 return ApprovalResult.failed(error_msg)
 
             # Captured while the session is open, because media_buy detaches when this
@@ -1712,7 +1712,7 @@ def execute_approved_media_buy(
             buy_principal_id = media_buy.principal_id
 
             logger.info(
-                f"[APPROVAL] Calling adapter for {log_safe(media_buy_id)}: "
+                f"[APPROVAL] Calling adapter for {media_buy_id}: "
                 f"{len(packages)} packages, start={start_time}, end={end_time}"
             )
 
@@ -1977,7 +1977,7 @@ def execute_approved_media_buy(
         # ran, so this is a store defect and not an adapter failure. The buy stays
         # pending_approval so an operator who repairs the row can retry.
         error_msg = f"Persisted media buy {media_buy_id} cannot be acted on: {e}"
-        logger.error(f"[APPROVAL] {log_safe(error_msg)}", exc_info=True)
+        logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
         return ApprovalResult.failed(error_msg)
     except Exception as e:
         import traceback

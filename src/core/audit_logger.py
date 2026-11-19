@@ -21,7 +21,7 @@ from sqlalchemy import select
 from src.core.config import RuntimeSettings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog
-from src.core.logging_config import LineSafeFormatter, log_safe
+from src.core.logging_config import LineSafeFormatter
 
 # Directory holding the FILE BACKUP of the audit trail. The database is the
 # audit authority (see the module docstring); these files are a secondary sink.
@@ -236,12 +236,12 @@ class AuditLogger:
         message = f"{self.adapter_name}.{operation} for principal '{principal_name}' ({self.adapter_name} advertiser ID: {adapter_id})"
 
         if success:
-            audit_logger.info(log_safe(message))
+            audit_logger.info(message)
             if details:
                 for key, value in details.items():
-                    audit_logger.info(f"  {key}: {log_safe(value)}")
+                    audit_logger.info(f"  {key}: {value}")
         else:
-            audit_logger.error(f"{log_safe(message)} - FAILED")
+            audit_logger.error(f"{message} - FAILED")
             if error:
                 audit_logger.error(f"  Error: {error}")
 

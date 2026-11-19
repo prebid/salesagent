@@ -15,7 +15,6 @@ from sqlalchemy import select
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
-from src.core.logging_config import log_safe
 from src.core.thread_registry import ThreadRegistry
 
 logger = logging.getLogger(__name__)
@@ -131,7 +130,7 @@ def start_inventory_sync_background(
     _active_syncs.add(sync_id, thread)
 
     thread.start()
-    logger.info(f"Started background sync thread: {log_safe(sync_id)}")
+    logger.info(f"Started background sync thread: {sync_id}")
 
     return sync_id
 

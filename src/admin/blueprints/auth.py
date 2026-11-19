@@ -31,7 +31,6 @@ from src.core.domain_config import (
     get_sales_agent_url,
     get_super_admin_domain,
 )
-from src.core.logging_config import log_safe
 from src.core.security.outbound_http import OutboundError
 from src.services.google_oauth_client import exchange_authorization_code
 
@@ -60,7 +59,7 @@ def _safe_redirect(url: str | None, fallback: str) -> str:
         or "\\" in decoded
         or not decoded.startswith("/")
     ):
-        logger.warning("[SECURITY] Rejected unsafe redirect URL: %r", log_safe(url))
+        logger.warning("[SECURITY] Rejected unsafe redirect URL: %r", url)
         return fallback
 
     return decoded
@@ -188,7 +187,7 @@ def login():
     For multi-tenant deployments, detects tenant from subdomain and checks
     for tenant-specific OIDC configuration first.
     """
-    logger.debug("login route hit, has_user=%s, args=%s", "user" in session, log_safe(dict(request.args)))
+    logger.debug("login route hit, has_user=%s, args=%s", "user" in session, dict(request.args))
 
     # Capture 'next' parameter for redirect after login — validate before storing
     next_url = _safe_redirect(request.args.get("next"), fallback="")
@@ -341,7 +340,7 @@ def google_auth():
     # but Flask only knows about /auth/google/callback
 
     # Debug: Log request context
-    logger.info(f"OAuth initiation - Request URL: {log_safe(request.url)}")
+    logger.info(f"OAuth initiation - Request URL: {request.url}")
     logger.info(f"OAuth initiation - Request host: {request.host}")
     logger.info(f"OAuth initiation - Request scheme: {request.scheme}")
 
@@ -455,7 +454,7 @@ def tenant_google_auth(tenant_id):
 @auth_bp.route("/auth/google/callback")
 def google_callback():
     """Handle Google OAuth callback - simplified version."""
-    logger.debug("google_callback hit, args=%s", log_safe(dict(request.args)))
+    logger.debug("google_callback hit, args=%s", dict(request.args))
 
     oauth = current_app.oauth if hasattr(current_app, "oauth") else None
     if not oauth:
@@ -676,9 +675,9 @@ def select_tenant():
 
                 try:
                     ensure_user_in_tenant(email, tenant_id, role=role, name=user_name)
-                    logger.info(f"Ensured User record exists for {email} in tenant {log_safe(tenant_id)}")
+                    logger.info(f"Ensured User record exists for {email} in tenant {tenant_id}")
                 except Exception as e:
-                    logger.error(f"Failed to create User record for {email} in tenant {log_safe(tenant_id)}: {e}")
+                    logger.error(f"Failed to create User record for {email} in tenant {tenant_id}: {e}")
                     flash("Error setting up user access. Please contact support.", "error")
                     return redirect(url_for("auth.select_tenant"))
 
@@ -792,7 +791,7 @@ def gam_authorize(tenant_id):
             callback_uri = url_for("auth.gam_callback", _external=True)
 
         # Log the callback URI for debugging
-        logger.info(f"Initiating GAM OAuth flow for tenant {log_safe(tenant_id)} with callback_uri: {callback_uri}")
+        logger.info(f"Initiating GAM OAuth flow for tenant {tenant_id} with callback_uri: {callback_uri}")
 
         # Build authorization URL with GAM-specific scope
         auth_url = (
@@ -810,7 +809,7 @@ def gam_authorize(tenant_id):
         return redirect(auth_url)
 
     except Exception as e:
-        logger.error(f"Error initiating GAM OAuth for tenant {log_safe(tenant_id)}: {e}")
+        logger.error(f"Error initiating GAM OAuth for tenant {tenant_id}: {e}")
         flash(f"Error starting OAuth flow: {str(e)}", "error")
         return redirect(url_for("tenants.settings", tenant_id=tenant_id))
 
@@ -825,10 +824,8 @@ def gam_callback():
         error = request.args.get("error")
 
         # Log all callback parameters for debugging
-        logger.info(
-            f"GAM OAuth callback received - code present: {bool(code)}, state: {log_safe(state)}, error: {log_safe(error)}"
-        )
-        logger.debug(f"GAM OAuth callback full args: {log_safe(dict(request.args))}")
+        logger.info(f"GAM OAuth callback received - code present: {bool(code)}, state: {state}, error: {error}")
+        logger.debug(f"GAM OAuth callback full args: {dict(request.args)}")
 
         # The flow's context lives only in the session that started it. Popped
         # first so a nonce is consumed whatever the outcome of this callback.
@@ -838,7 +835,7 @@ def gam_callback():
 
         if error:
             error_description = request.args.get("error_description", "No description provided")
-            logger.error(f"GAM OAuth error: {log_safe(error)} - {log_safe(error_description)}")
+            logger.error(f"GAM OAuth error: {error} - {error_description}")
             flash(f"OAuth authorization failed: {error_description}", "error")
             return redirect(url_for("auth.login"))
 

@@ -14,7 +14,6 @@ from src.admin.services.media_buy_readiness_service import MediaBuyReadinessServ
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, PersistedMediaBuyStatus, Product, Tenant
 from src.core.database.repositories import MediaBuyRepository
-from src.core.logging_config import log_safe
 from src.core.schemas import CreativeStatusEnum
 
 logger = logging.getLogger(__name__)
@@ -134,12 +133,10 @@ class DashboardService:
                 }
 
         except (ValueError, TypeError) as e:
-            logger.error(f"Data validation error calculating metrics for {log_safe(self.tenant_id)}: {e}")
+            logger.error(f"Data validation error calculating metrics for {self.tenant_id}: {e}")
             raise
         except Exception as e:
-            logger.error(
-                f"Unexpected error calculating dashboard metrics for {log_safe(self.tenant_id)}: {e}", exc_info=True
-            )
+            logger.error(f"Unexpected error calculating dashboard metrics for {self.tenant_id}: {e}", exc_info=True)
             raise
 
     def get_recent_media_buys(self, limit: int = 10) -> list:
@@ -176,10 +173,10 @@ class DashboardService:
                 return list(recent_buys)
 
         except (ValueError, TypeError) as e:
-            logger.error(f"Data validation error getting media buys for {log_safe(self.tenant_id)}: {e}")
+            logger.error(f"Data validation error getting media buys for {self.tenant_id}: {e}")
             return []
         except Exception as e:
-            logger.error(f"Database error getting recent media buys for {log_safe(self.tenant_id)}: {e}", exc_info=True)
+            logger.error(f"Database error getting recent media buys for {self.tenant_id}: {e}", exc_info=True)
             return []
 
     def _calculate_revenue_trend(

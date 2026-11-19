@@ -35,8 +35,6 @@ from urllib.parse import urlsplit
 
 from flask import Flask, abort, current_app, request
 
-from src.core.logging_config import log_safe
-
 logger = logging.getLogger(__name__)
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -97,10 +95,10 @@ def _verify_request() -> None:
         return
     logger.warning(
         "Refused a cross-origin %s %s (Sec-Fetch-Site=%r, Origin=%r)",
-        log_safe(request.method),
-        log_safe(request.path),
-        log_safe(request.headers.get("Sec-Fetch-Site")),
-        log_safe(request.headers.get("Origin")),
+        request.method,
+        request.path,
+        request.headers.get("Sec-Fetch-Site"),
+        request.headers.get("Origin"),
     )
     abort(403, description="Cross-origin request refused")
 

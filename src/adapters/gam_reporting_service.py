@@ -21,7 +21,6 @@ import pytz
 
 from src.adapters.gam.client import current_network_time_zone
 from src.core.exceptions import AdCPAdapterError, AdCPSalesAgentError
-from src.core.logging_config import log_safe
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError, send
 
 logger = logging.getLogger(__name__)
@@ -255,7 +254,7 @@ class GAMReportingService:
                     {"key": "advertiserId", "value": {"value": str(advertiser_id_int), "xsi_type": "NumberValue"}}
                 )
             except (ValueError, TypeError):
-                logger.warning(f"Invalid advertiser_id format: {log_safe(advertiser_id)}")
+                logger.warning(f"Invalid advertiser_id format: {advertiser_id}")
 
         if order_id:
             # Validate numeric ID
@@ -266,7 +265,7 @@ class GAMReportingService:
                     {"key": "orderId", "value": {"value": str(order_id_int), "xsi_type": "NumberValue"}}
                 )
             except (ValueError, TypeError):
-                logger.warning(f"Invalid order_id format: {log_safe(order_id)}")
+                logger.warning(f"Invalid order_id format: {order_id}")
 
         if line_item_id:
             # Validate numeric ID
@@ -277,7 +276,7 @@ class GAMReportingService:
                     {"key": "lineItemId", "value": {"value": str(line_item_id_int), "xsi_type": "NumberValue"}}
                 )
             except (ValueError, TypeError):
-                logger.warning(f"Invalid line_item_id format: {log_safe(line_item_id)}")
+                logger.warning(f"Invalid line_item_id format: {line_item_id}")
 
         # Add minimum impressions filter for aggregated queries to reduce noise
         # NOTE: AD_SERVER_IMPRESSIONS is not filterable in WHERE clause, but we can

@@ -19,7 +19,6 @@ from src.adapters.gam_orders_discovery import GAMOrdersDiscovery, LineItem, Orde
 from src.core.database.db_config import DatabaseConfig
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import GAMLineItem, GAMOrder
-from src.core.logging_config import log_safe
 
 # Create database session factory
 engine = create_engine(DatabaseConfig.get_connection_string())
@@ -47,7 +46,7 @@ class GAMOrdersService:
         Returns:
             Sync summary with counts and timing
         """
-        logger.info(f"Starting orders sync for tenant {log_safe(tenant_id)}")
+        logger.info(f"Starting orders sync for tenant {tenant_id}")
 
         # Create discovery instance
         discovery = GAMOrdersDiscovery(gam_client, tenant_id)

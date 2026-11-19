@@ -20,7 +20,6 @@ from src.core.database.repositories.tenant_config import (
 )
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.domain_config import get_super_admin_domain
-from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +57,7 @@ def find_tenant_by_authorized_domain(domain: str) -> Tenant | None:
                         domains = tenant.authorized_domains
 
                     if domain in domains:
-                        logger.info(f"Found tenant {tenant.tenant_id} for domain {log_safe(domain)}")
+                        logger.info(f"Found tenant {tenant.tenant_id} for domain {domain}")
                         return tenant
 
                 except (json.JSONDecodeError, TypeError) as e:
@@ -97,7 +96,7 @@ def find_tenants_by_authorized_email(email: str) -> list[Tenant]:
                         emails = tenant.authorized_emails
 
                     if email_lower in [e.lower() for e in emails]:
-                        logger.info(f"Found tenant {tenant.tenant_id} for email {log_safe(email)}")
+                        logger.info(f"Found tenant {tenant.tenant_id} for email {email}")
                         matching_tenants.append(tenant)
 
                 except (json.JSONDecodeError, TypeError) as e:
@@ -139,7 +138,7 @@ def find_tenants_by_user_record(email: str) -> list[Tenant]:
         tenants = session.scalars(tenant_stmt).all()
 
         for tenant in tenants:
-            logger.info(f"Found tenant {tenant.tenant_id} for user record {log_safe(email)}")
+            logger.info(f"Found tenant {tenant.tenant_id} for user record {email}")
 
         return list(tenants)
 
@@ -188,14 +187,14 @@ def ensure_user_in_tenant(email: str, tenant_id: str, role: str = "admin", name:
             # (tenant, email) leaves us, so both callers get the same row back.
             if not user.is_active:
                 user.is_active = True
-                logger.info(f"Reactivated user {email} in tenant {log_safe(tenant_id)}")
+                logger.info(f"Reactivated user {email} in tenant {tenant_id}")
             user.last_login = datetime.now(UTC)
             session.commit()
             return user
 
         session.commit()
 
-        logger.info(f"Created new user {email} in tenant {log_safe(tenant_id)} with role {role}")
+        logger.info(f"Created new user {email} in tenant {tenant_id} with role {role}")
         return new_user
 
 
@@ -288,10 +287,10 @@ def _mutate_authorized_list(op: AuthorizedListOp, column: AuthorizedListColumn, 
             else:
                 outcome = uow.tenant_config.remove_from_authorized_list(column, value)
         if outcome in ("added", "removed"):
-            logger.info(f"{op} {log_safe(value)} on {column} for tenant {tenant_id}")
+            logger.info(f"{op} {value} on {column} for tenant {tenant_id}")
         return outcome != "missing_tenant"
     except Exception as e:
-        logger.error(f"Error on {op} {log_safe(value)} ({column}) for tenant {tenant_id}: {e}")
+        logger.error(f"Error on {op} {value} ({column}) for tenant {tenant_id}: {e}")
         return False
 
 
@@ -311,7 +310,7 @@ def add_authorized_domain(tenant_id: str, domain: str) -> bool:
 
     # Security check - prevent super admin domain hijacking
     if domain_lower == super_admin_domain:
-        logger.error(f"Attempted to add super admin domain {log_safe(domain)} to tenant {tenant_id}")
+        logger.error(f"Attempted to add super admin domain {domain} to tenant {tenant_id}")
         return False
 
     return _mutate_authorized_list("add", "authorized_domains", tenant_id, domain_lower)
@@ -347,7 +346,7 @@ def add_authorized_email(tenant_id: str, email: str) -> bool:
 
     # Security check - prevent super admin domain email hijacking
     if email_lower.endswith(f"@{super_admin_domain}"):
-        logger.error(f"Attempted to add super admin domain email {log_safe(email)} to tenant {tenant_id}")
+        logger.error(f"Attempted to add super admin domain email {email} to tenant {tenant_id}")
         return False
 
     return _mutate_authorized_list("add", "authorized_emails", tenant_id, email_lower)

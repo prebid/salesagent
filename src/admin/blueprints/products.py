@@ -50,7 +50,6 @@ from src.core.helpers.publisher_property_helpers import (
     publisher_tag_selection,
     selection_digest,
 )
-from src.core.logging_config import log_safe
 from src.core.publisher_format_catalog import (
     PublisherCatalog,
     format_declarations_type,
@@ -1788,7 +1787,7 @@ def edit_product(tenant_id, product_id):
                 # Debug: Log final state before commit
                 from sqlalchemy import inspect as sa_inspect
 
-                logger.info(f"[DEBUG] About to commit product {log_safe(product_id)}")
+                logger.info(f"[DEBUG] About to commit product {product_id}")
                 logger.info(f"[DEBUG] product.format_ids = {product.format_ids}")
                 logger.info(f"[DEBUG] product.format_ids type = {type(product.format_ids)}")
                 logger.info(f"[DEBUG] SQLAlchemy dirty objects: {db_session.dirty}")
@@ -2042,7 +2041,7 @@ def edit_product(tenant_id, product_id):
         # The traceback goes to the log, where a diagnostic belongs, and the response is a 500,
         # which is both honest to the operator and visible to whatever watches status codes.
         logger.error(
-            f"Unhandled error editing product {log_safe(product_id)} for tenant {tenant_id}",
+            f"Unhandled error editing product {product_id} for tenant {tenant_id}",
             exc_info=True,
         )
         abort(500)
@@ -2118,12 +2117,12 @@ def delete_product(tenant_id, product_id):
             db_session.delete(product)
             db_session.commit()
 
-            logger.info(f"Product {log_safe(product_id)} ({product_name}) deleted by tenant {tenant_id}")
+            logger.info(f"Product {product_id} ({product_name}) deleted by tenant {tenant_id}")
 
             return jsonify({"success": True, "message": f"Product '{product_name}' deleted successfully"})
 
     except Exception as e:
-        logger.error(f"Error deleting product {log_safe(product_id)}: {e}", exc_info=True)
+        logger.error(f"Error deleting product {product_id}: {e}", exc_info=True)
 
         # Rollback on any error
         try:
@@ -2136,15 +2135,15 @@ def delete_product(tenant_id, product_id):
 
         # Check for common error types
         if "ForeignKeyViolation" in error_message or "foreign key constraint" in error_message.lower():
-            logger.error(f"Foreign key constraint violation when deleting product {log_safe(product_id)}")
+            logger.error(f"Foreign key constraint violation when deleting product {product_id}")
             return jsonify({"error": "Cannot delete product - it is referenced by other records"}), 400
 
         if "ValidationError" in error_message or "pattern" in error_message.lower():
-            logger.warning(f"Product validation error for {log_safe(product_id)}: {error_message}")
+            logger.warning(f"Product validation error for {product_id}: {error_message}")
             return jsonify({"error": "Product data validation failed"}), 400
 
         # Generic error
-        logger.error(f"Product deletion failed for {log_safe(product_id)}: {error_message}")
+        logger.error(f"Product deletion failed for {product_id}: {error_message}")
         return jsonify({"error": f"Failed to delete product: {error_message}"}), 500
 
 
@@ -2399,7 +2398,7 @@ def unassign_inventory_from_product(tenant_id, product_id, mapping_id):
                 db_session.commit()
 
             logger.info(
-                f"Removed inventory assignment: product={log_safe(product_id)}, inventory={inventory_name}, mapping_id={log_safe(mapping_id)}"
+                f"Removed inventory assignment: product={product_id}, inventory={inventory_name}, mapping_id={mapping_id}"
             )
 
             return jsonify({"success": True, "message": "Inventory assignment removed successfully"})

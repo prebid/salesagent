@@ -26,7 +26,6 @@ from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant
 from src.core.database.repositories import TenantLookupRepository
 from src.core.http_utils import requested_host
-from src.core.logging_config import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -559,13 +558,13 @@ def reactivate_tenant(tenant_id):
             db_session.commit()
 
             logger.info(
-                f"Tenant {log_safe(tenant_id)} ({tenant.name}) reactivated by super admin {session.get('user', 'unknown')}"
+                f"Tenant {tenant_id} ({tenant.name}) reactivated by super admin {session.get('user', 'unknown')}"
             )
 
             flash(f"Sales agent '{tenant.name}' has been reactivated successfully", "success")
             return redirect(url_for("core.index"))
 
     except Exception as e:
-        logger.error(f"Error reactivating tenant {log_safe(tenant_id)}: {e}", exc_info=True)
+        logger.error(f"Error reactivating tenant {tenant_id}: {e}", exc_info=True)
         flash(f"Error reactivating sales agent: {safe_error_message(e)}", "error")
         return redirect(url_for("core.index"))

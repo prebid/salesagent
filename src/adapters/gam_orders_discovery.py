@@ -18,7 +18,6 @@ from zeep.helpers import serialize_object
 
 from src.adapters.gam.utils.error_handler import with_retry
 from src.adapters.gam.utils.logging import GAMOperation, log_gam_operation, logger
-from src.core.logging_config import log_safe
 
 
 def safe_parse_gam_datetime(dt_obj, field_name="datetime", logger_name="gam_orders_discovery"):
@@ -519,7 +518,7 @@ class GAMOrdersDiscovery:
         Returns:
             List of discovered orders
         """
-        logger.info(f"Discovering orders for tenant {log_safe(self.tenant_id)}")
+        logger.info(f"Discovering orders for tenant {self.tenant_id}")
 
         order_service = self.client.GetService("OrderService")
 
@@ -571,8 +570,7 @@ class GAMOrdersDiscovery:
             List of discovered line items
         """
         logger.info(
-            f"Discovering line items for tenant {log_safe(self.tenant_id)}"
-            + (f" (order: {order_id})" if order_id else "")
+            f"Discovering line items for tenant {self.tenant_id}" + (f" (order: {order_id})" if order_id else "")
         )
 
         line_item_service = self.client.GetService("LineItemService")
@@ -620,7 +618,7 @@ class GAMOrdersDiscovery:
         Returns:
             Summary of synced data
         """
-        logger.info(f"Starting full orders sync for tenant {log_safe(self.tenant_id)}")
+        logger.info(f"Starting full orders sync for tenant {self.tenant_id}")
 
         start_time = datetime.now(UTC)
 

@@ -22,7 +22,6 @@ from src.core.database.models import PersistedMediaBuyStatus, WebhookDeliveryLog
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import MediaBuyRepository
 from src.core.exceptions import AdCPSalesAgentError, AdCPValidationError
-from src.core.logging_config import log_safe
 from src.core.schemas import GetMediaBuyDeliveryResponse
 from src.core.tools.media_buy_delivery import delivery_for_media_buy
 from src.core.utils import utc_flight_start
@@ -173,22 +172,20 @@ class DeliveryWebhookScheduler:
                 media_buy = repo.get_by_id(media_buy_id)
 
                 if not media_buy:
-                    logger.warning(f"Cannot trigger report: Media buy {log_safe(media_buy_id)} not found")
+                    logger.warning(f"Cannot trigger report: Media buy {media_buy_id} not found")
                     return False
 
                 raw_request = media_buy.raw_request or {}
                 reporting_webhook = raw_request.get("reporting_webhook")
 
                 if not reporting_webhook:
-                    logger.warning(
-                        f"Cannot trigger report: No reporting_webhook configured for {log_safe(media_buy_id)}"
-                    )
+                    logger.warning(f"Cannot trigger report: No reporting_webhook configured for {media_buy_id}")
                     return False
 
                 # Force sending even if already sent today (for testing)
                 return await self._send_report_for_media_buy(media_buy, reporting_webhook, session, force=True)
         except Exception as e:
-            logger.error(f"Error manually triggering report for {log_safe(media_buy_id)}: {e}", exc_info=True)
+            logger.error(f"Error manually triggering report for {media_buy_id}: {e}", exc_info=True)
             return False
 
     async def _send_report_for_media_buy(

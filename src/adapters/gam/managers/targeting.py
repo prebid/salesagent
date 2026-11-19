@@ -23,7 +23,6 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPValidationError,
 )
-from src.core.logging_config import log_safe
 from src.services.targeting_capabilities import (
     extract_simple_values,
     extract_system_values,
@@ -165,11 +164,11 @@ class GAMTargetingManager:
             self.axe_macro_key = targeting_config.get("axe_macro_key")
             self.custom_targeting_key_ids = targeting_config.get("custom_targeting_keys", {})
             logger.info(
-                f"Loaded AXE keys for tenant {log_safe(tenant_id)} from injected config: "
+                f"Loaded AXE keys for tenant {tenant_id} from injected config: "
                 f"include={self.axe_include_key}, exclude={self.axe_exclude_key}, macro={self.axe_macro_key}"
             )
             logger.info(
-                f"Loaded {len(self.custom_targeting_key_ids)} custom targeting key IDs for tenant {log_safe(tenant_id)} from injected config"
+                f"Loaded {len(self.custom_targeting_key_ids)} custom targeting key IDs for tenant {tenant_id} from injected config"
             )
         else:
             # Fallback: load from DB (backward compat for callers that don't pass config)
@@ -202,13 +201,13 @@ class GAMTargetingManager:
                     self.axe_macro_key = adapter_config.axe_macro_key
 
                     logger.info(
-                        f"Loaded AXE keys for tenant {log_safe(self.tenant_id)}: "
+                        f"Loaded AXE keys for tenant {self.tenant_id}: "
                         f"include={self.axe_include_key}, "
                         f"exclude={self.axe_exclude_key}, "
                         f"macro={self.axe_macro_key}"
                     )
                 else:
-                    logger.warning(f"No adapter config found for tenant {log_safe(self.tenant_id)}")
+                    logger.warning(f"No adapter config found for tenant {self.tenant_id}")
         except Exception as e:
             logger.warning(f"Failed to load AXE keys from config: {e}")
 
@@ -231,11 +230,11 @@ class GAMTargetingManager:
                 if adapter_config and adapter_config.custom_targeting_keys:
                     self.custom_targeting_key_ids = adapter_config.custom_targeting_keys
                     logger.info(
-                        f"Loaded {len(self.custom_targeting_key_ids)} custom targeting key ID mappings for tenant {log_safe(self.tenant_id)}"
+                        f"Loaded {len(self.custom_targeting_key_ids)} custom targeting key ID mappings for tenant {self.tenant_id}"
                     )
                 else:
                     logger.warning(
-                        f"No custom targeting key mappings found for tenant {log_safe(self.tenant_id)}. "
+                        f"No custom targeting key mappings found for tenant {self.tenant_id}. "
                         "Run sync_custom_targeting_keys() to fetch from GAM."
                     )
         except Exception as e:

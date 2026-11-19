@@ -14,7 +14,6 @@ from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.errors.details import RejectionReasonDetails
 from src.core.exceptions import AdCPMediaBuyRejectedError
-from src.core.logging_config import log_safe
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Error, Package
 from src.core.tools.media_buy_create import ApprovalOutcome
 from src.core.webhooks.delivery import WebhookTaskContext
@@ -262,7 +261,7 @@ def media_buy_detail(tenant_id, media_buy_id):
                             "by_package": delivery_response.by_package,
                         }
                 except Exception as e:
-                    logger.warning(f"Could not fetch delivery metrics for {log_safe(media_buy_id)}: {e}")
+                    logger.warning(f"Could not fetch delivery metrics for {media_buy_id}: {e}")
                     # Continue without metrics - don't fail the whole page
 
             return render_template(
@@ -402,7 +401,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                         )
 
-                    logger.info(f"[APPROVAL] Adapter creation succeeded for {log_safe(media_buy_id)}")
+                    logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}")
 
                     # Send webhook notification to buyer
                     webhook_config = None
@@ -445,7 +444,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                                     result=create_media_buy_approved_result,
                                 )
                             )
-                            logger.info(f"Sent webhook notification for approved media buy {log_safe(media_buy_id)}")
+                            logger.info(f"Sent webhook notification for approved media buy {media_buy_id}")
                         except Exception as webhook_err:
                             logger.warning(f"Failed to send webhook notification: {webhook_err}")
 
@@ -532,7 +531,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                                 result=create_media_buy_rejected_result,
                             )
                         )
-                        logger.info(f"Sent webhook notification for rejected media buy {log_safe(media_buy_id)}")
+                        logger.info(f"Sent webhook notification for rejected media buy {media_buy_id}")
 
                     except Exception as webhook_err:
                         logger.warning(f"Failed to send webhook notification: {webhook_err}")
@@ -542,7 +541,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
             return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
     except Exception as e:
-        logger.error(f"Error approving/rejecting media buy {log_safe(media_buy_id)}: {e}", exc_info=True)
+        logger.error(f"Error approving/rejecting media buy {media_buy_id}: {e}", exc_info=True)
         flash("Error processing approval", "error")
         return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
@@ -568,7 +567,7 @@ def trigger_delivery_webhook(tenant_id, media_buy_id, **kwargs):
         return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
     except Exception as e:
-        logger.error(f"Error triggering delivery webhook for {log_safe(media_buy_id)}: {e}", exc_info=True)
+        logger.error(f"Error triggering delivery webhook for {media_buy_id}: {e}", exc_info=True)
         flash("Error triggering delivery webhook", "error")
         return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
