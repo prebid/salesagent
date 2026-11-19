@@ -208,9 +208,11 @@ class TenantConfigRepository:
         time cannot both pass: the second waits for the first to commit, and PostgreSQL
         re-checks the locked rows against the ``WHERE`` before returning them. This holds
         because the callers above check and write in the same transaction.
+
+        The answer comes from the locked query alone, never from *user*'s own (unlocked)
+        ``role`` / ``is_active``: a target read as a viewer may have been promoted since,
+        and deciding from that read would take no lock at all.
         """
-        if user.role != UserRole.ADMIN or not user.is_active:
-            return False
         stmt = (
             select(User.user_id)
             .filter_by(tenant_id=self._tenant_id, role=UserRole.ADMIN, is_active=True)

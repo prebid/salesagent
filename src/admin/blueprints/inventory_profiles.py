@@ -25,6 +25,7 @@ from src.admin.blueprints.products import (
 )
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.helpers import caller_reads_json
 from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -188,7 +189,7 @@ def _answer_a_fetch_refusal_as_json(response: Response) -> Response:
     A browser form still gets the flash and the redirect.
     """
     refused = response.status_code in (301, 302, 303) and request.method == "POST"
-    if not refused or request.accept_mimetypes.best_match(["text/html", "application/json"]) != "application/json":
+    if not refused or not caller_reads_json():
         return response
     errors = [message for category, message in session.get("_flashes", []) if category == "error"]
     if not errors:

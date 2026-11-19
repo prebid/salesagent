@@ -84,3 +84,37 @@ def test_the_role_check_constraint_is_derived_from_user_role():
 
     (constraint,) = [c for c in User.__table__.constraints if isinstance(c, CheckConstraint)]
     assert str(constraint.sqltext) == "role IN ('admin', 'manager', 'viewer')"
+
+
+@pytest.mark.parametrize(
+    ("headers", "json_body"),
+    [
+        ({"Accept": "*/*"}, True),  # a Users-page fetch() whose session has expired
+        ({"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}, False),  # a page
+    ],
+)
+def test_a_signed_out_caller_is_answered_in_the_form_it_reads(headers, json_body):
+    """No session: a fetch gets a JSON 401 it can read; a page gets the login redirect."""
+    from flask import Flask
+
+    from src.admin.utils.helpers import require_tenant_access
+
+    app = Flask(__name__)
+    app.secret_key = "test"
+
+    @app.route("/tenant/<tenant_id>/thing", methods=["POST"])
+    @require_tenant_access()
+    def thing(tenant_id):
+        return "reached"
+
+    @app.route("/tenant/<tenant_id>/login", endpoint="auth.tenant_login")
+    def tenant_login(tenant_id):
+        return "login"
+
+    response = app.test_client().post("/tenant/t1/thing", headers=headers)
+    if json_body:
+        assert response.status_code == 401
+        assert response.get_json() == {"error": "Authentication required"}
+    else:
+        assert response.status_code == 302
+        assert "/tenant/t1/login" in response.headers["Location"]

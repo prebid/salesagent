@@ -333,20 +333,23 @@ def role_permits(role: str, method: str, *, minimum: UserRole = UserRole.VIEWER)
     return ranks.index(held) >= needed
 
 
-def _wants_json(api_mode: bool) -> bool:
-    """Whether the caller reads a JSON answer: an API-mode route, a JSON request, or a ``fetch``.
+def caller_reads_json() -> bool:
+    """Whether the current request's caller reads a JSON answer rather than an HTML page.
 
-    ``fetch`` sends ``Accept: */*`` and a browser navigation prefers ``text/html``, so
-    asking for the better of the two tells them apart.
+    True for a JSON request body, or an ``Accept`` that prefers ``application/json`` to
+    ``text/html``. ``fetch`` sends ``Accept: */*`` and a browser navigation or form post
+    prefers ``text/html``, so ``*/*`` counts as JSON. The one answer to this question for
+    the admin UI: the refusals in :func:`require_tenant_access` and the inventory-profile
+    form refusals both ask it.
     """
-    if api_mode or request.is_json:
+    if request.is_json:
         return True
     return request.accept_mimetypes.best_match(["application/json", "text/html"]) == "application/json"
 
 
 def _forbid(message: str, *, api_mode: bool) -> NoReturn:
     """Refuse the request with a 403: a JSON ``{"error": message}`` if the caller reads JSON, else the HTML page."""
-    body = make_response(jsonify({"error": message}), 403) if _wants_json(api_mode) else None
+    body = make_response(jsonify({"error": message}), 403) if api_mode or caller_reads_json() else None
     raise Forbidden(response=body)
 
 
@@ -394,7 +397,7 @@ def require_tenant_access(api_mode: bool = False, role: UserRole = UserRole.VIEW
                 return f(tenant_id, *args, **kwargs)
 
             if "user" not in session:
-                if api_mode:
+                if api_mode or caller_reads_json():
                     return jsonify({"error": "Authentication required"}), 401
                 # Redirect to tenant-specific login (preserves tenant context)
                 return redirect(url_for("auth.tenant_login", tenant_id=tenant_id, next=request.url))
@@ -432,7 +435,7 @@ def require_tenant_access(api_mode: bool = False, role: UserRole = UserRole.VIEW
                     raise
 
                 logger.error(f"Error checking tenant access: {e}")
-                if api_mode:
+                if api_mode or caller_reads_json():
                     return jsonify({"error": "Internal server error"}), 500
                 abort(500)
 
