@@ -631,6 +631,17 @@ class TestStaticPreviewUpdate:
             assert "SERVICE_UNAVAILABLE" in _error_codes(creative_result.errors)
 
 
+def _stored_data(env: CreativeSyncEnv, creative_id: str) -> dict:
+    """The creative's stored ``data``, read back through its own unit of work after the sync returned."""
+    from src.core.database.repositories.uow import CreativeUoW
+
+    with CreativeUoW(env._tenant_id) as uow:
+        assert uow.creatives is not None
+        row = uow.creatives.get_by_id(creative_id, env._principal_id)
+        assert row is not None, f"creative {creative_id!r} was not stored"
+        return dict(row.data or {})
+
+
 class TestStaticPreviewKeptOutOfTheCreative:
     """A preview render is kept for the admin UI and never written into the creative itself.
 
@@ -679,10 +690,9 @@ class TestStaticPreviewKeptOutOfTheCreative:
 
             assert result.creatives[0].action == "updated"
 
-            with get_db_session() as session:
-                db = session.scalars(select(DBCreative).filter_by(creative_id="c_dims_up")).first()
-                assert db.data.get("preview_response") == preview_with_dims
-                assert (db.data.get("width"), db.data.get("height"), db.data.get("duration")) == (None, None, None)
+            data = _stored_data(env, "c_dims_up")
+            assert data.get("preview_response") == preview_with_dims
+            assert (data.get("width"), data.get("height"), data.get("duration")) == (None, None, None)
 
     def test_create_keeps_the_preview_url_and_dimensions_out_of_the_creative(self, integration_db):
         """Create: a creative that sent no url or size is not given the render's."""
@@ -719,10 +729,9 @@ class TestStaticPreviewKeptOutOfTheCreative:
 
             assert result.creatives[0].action == "created"
 
-            with get_db_session() as session:
-                db = session.scalars(select(DBCreative).filter_by(creative_id="c_dims_create")).first()
-                assert db.data.get("preview_response") == preview_with_dims
-                assert (db.data.get("url"), db.data.get("width"), db.data.get("height")) == (None, None, None)
+            data = _stored_data(env, "c_dims_create")
+            assert data.get("preview_response") == preview_with_dims
+            assert (data.get("url"), data.get("width"), data.get("height")) == (None, None, None)
 
 
 # ── Format Change Detection (covers lines 87-91) ──────────────────────────
