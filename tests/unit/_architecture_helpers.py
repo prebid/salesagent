@@ -411,7 +411,7 @@ def read_source_roots(roots: Iterable[str]) -> dict[str, str]:
         for path in sorted((REPO_ROOT / root).rglob("*.py")):
             if is_untracked_repo_file(path):
                 continue
-            sources[path.relative_to(REPO_ROOT).as_posix()] = path.read_text(encoding="utf-8")
+            sources[rel(path)] = path.read_text(encoding="utf-8")
     return sources
 
 
@@ -775,7 +775,7 @@ def find_raw_select_violations(
     repo = repo_root()
     violations: list[tuple[str, str, str, int]] = []
     for py_file in (repo / "src").rglob("*.py"):
-        rel_path = py_file.relative_to(repo).as_posix()
+        rel_path = rel(py_file, repo)
         if skip(rel_path):
             continue
         tree = safe_parse(py_file)
@@ -1190,7 +1190,7 @@ def _postgres_scan_candidate(path: Path) -> bool:
     )
 
 
-_SETUP_UV_ACTION = re.compile(r"astral-sh/setup-uv@([0-9a-f]{40})")
+_FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _INSTALL_UV_ACTION = ".github/actions/_install-uv/action.yml"
 _HARDCODED_UV_VERSION_ENV_RE = re.compile(r'^\s*UV_VERSION:\s*["\']')
 _HARDCODED_PYTHON_VERSION_RE = re.compile(r"python-version:\s*['\"]?[0-9]")
@@ -1202,45 +1202,59 @@ def extract_dockerfile_python_version(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-def assert_setup_uv_single_pinned_source(pins: Iterable[tuple[Path, str]], repo: Path) -> None:
-    """Assert ``astral-sh/setup-uv`` is pinned in exactly one composite action file."""
-    pin_list = list(pins)
-    if not pin_list:
-        raise AssertionError("non-vacuity: no astral-sh/setup-uv references found")
-
+def _pins_by_file(pins: Iterable[tuple[Path, str]], repo: Path | None = None) -> dict[str, set[str]]:
     by_file: dict[str, set[str]] = {}
-    for path, pin in pin_list:
-        rel = path.relative_to(repo).as_posix()
-        by_file.setdefault(rel, set()).add(pin)
+    for path, ref in pins:
+        key = rel(path, repo) if repo else path.as_posix()
+        by_file.setdefault(key, set()).add(ref)
+    return by_file
 
+
+def _render_pins(by_file: dict[str, set[str]]) -> str:
+    return "\n".join(f"  {path}: {sorted(refs)}" for path, refs in sorted(by_file.items()))
+
+
+def assert_single_sha_pin(pins: Iterable[tuple[Path, str]], action: str) -> None:
+    """Assert every ``(path, ref)`` pin of *action* is a full commit SHA, and that all are the same SHA."""
+    by_file = _pins_by_file(pins)
+    if not by_file:
+        raise AssertionError(f"non-vacuity: no {action} references found")
+    not_sha = {path: refs for path, refs in by_file.items() if any(not _FULL_SHA.fullmatch(ref) for ref in refs)}
+    if not_sha:
+        raise AssertionError(f"{action} must be pinned to a full commit SHA:\n{_render_pins(not_sha)}")
+    if len(set().union(*by_file.values())) > 1:
+        raise AssertionError(f"{action} is pinned to different SHAs:\n{_render_pins(by_file)}")
+
+
+def assert_setup_uv_single_pinned_source(pins: Iterable[tuple[Path, str]], repo: Path) -> None:
+    """Assert ``astral-sh/setup-uv`` is referenced from one composite action file and nowhere else.
+
+    The pin itself (full SHA, one value) is ``assert_single_sha_pin``'s rule, which
+    ``test_action_pinned_to_one_full_sha`` applies to setup-uv.
+    """
+    by_file = _pins_by_file(pins, repo)
     if set(by_file) != {_INSTALL_UV_ACTION}:
         raise AssertionError(
-            "astral-sh/setup-uv must be referenced only from "
-            f"{_INSTALL_UV_ACTION} — found pins in:\n"
-            + "\n".join(f"  {path}: {sorted(values)}" for path, values in sorted(by_file.items()))
-        )
-    if len(by_file[_INSTALL_UV_ACTION]) != 1:
-        raise AssertionError(
-            f"expected exactly one setup-uv pin in {_INSTALL_UV_ACTION}, got {sorted(by_file[_INSTALL_UV_ACTION])}"
+            f"astral-sh/setup-uv must be referenced only from {_INSTALL_UV_ACTION} — found pins in:\n"
+            + (_render_pins(by_file) or "  (none)")
         )
 
 
-def iter_setup_uv_action_pins(repo: Path) -> Iterator[tuple[Path, str]]:
-    """Yield (file_path, full_pin) for every ``astral-sh/setup-uv@<sha>`` reference."""
-    install_uv = repo / _INSTALL_UV_ACTION
-    if install_uv.is_file():
-        for m in _SETUP_UV_ACTION.finditer(install_uv.read_text(encoding="utf-8")):
-            yield install_uv, m.group(0)
+def iter_action_pins(repo: Path, action: str) -> Iterator[tuple[Path, str]]:
+    """Yield ``(file_path, ref)`` for every ``<action>@<ref>`` in a git-tracked YAML file.
 
+    *ref* is whatever follows ``@``, a SHA or a tag, so a tag ref is reported rather than skipped.
+    """
+    pattern = re.compile(rf"(?<![\w./-]){re.escape(action)}@([^\s'\"]+)")
     for path in iter_git_tracked_files(repo):
-        if path == install_uv or path.suffix not in {".yml", ".yaml"}:
+        if path.suffix not in {".yml", ".yaml"}:
             continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for m in _SETUP_UV_ACTION.finditer(text):
-            yield path, m.group(0)
+        for m in pattern.finditer(text):
+            yield path, m.group(1)
 
 
 def _iter_hardcoded_yaml_anchor(
@@ -1285,7 +1299,7 @@ def assert_adr008_target_version_pinned(anchors: Iterable[tuple[Path, str, str]]
     if not target_versions:
         raise AssertionError("non-vacuity: pyproject.toml target-version anchor must be scanned")
     drift = [
-        f"{path.relative_to(repo).as_posix()}: {version}"
+        f"{rel(path, repo)}: {version}"
         for path, version, anchor_kind in anchors
         if anchor_kind == "target-version" and version != _ADR_008_TARGET_VERSION
     ]
