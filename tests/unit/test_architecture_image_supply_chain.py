@@ -97,6 +97,12 @@ def _assert_sign_and_attest_job(job: dict[str, Any]) -> None:
     assert any('[[ -n "$DIGEST" ]]' in run for run in login_runs), (
         "sign-and-attest must guard empty image_digest before cosign sign"
     )
+    # build-and-push's image_tags output contains the Docker Hub user (a secret), so GitHub drops it
+    # between jobs; signing from it signed nothing in the 3.0.1 release.
+    sign_env = " ".join(str(step.get("env", {})) for step in steps if "cosign sign" in (step.get("run") or ""))
+    assert "outputs.image_tags" not in sign_env, (
+        "sign-and-attest must not sign from build-and-push's image_tags output (dropped as secret-bearing)"
+    )
     attest_steps = [step for step in steps if _step_uses(step).startswith("actions/attest-build-provenance@")]
     assert len(attest_steps) >= 2, "sign-and-attest must attest ghcr.io and Docker Hub images"
     ghcr_attest = [s for s in attest_steps if "ghcr.io/" in str(s.get("with", {}).get("subject-name", ""))]

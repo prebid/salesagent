@@ -206,29 +206,37 @@ jobs:
       - name: Sign image with cosign keyless
         env:
           DIGEST: ${{ needs.build-and-push.outputs.image_digest }}
-          TAGS: ${{ needs.build-and-push.outputs.image_tags }}
+          # The image names, not build-and-push's image_tags output: the tags include the Docker Hub
+          # user, a secret, so GitHub drops that output between jobs ("Skip output 'image_tags' since
+          # it may contain secret") and nothing was signed. A signature attaches to the digest, so
+          # signing each image at the digest covers every tag.
+          IMAGES: ghcr.io/${{ github.repository }} docker.io/${{ secrets.DOCKERHUB_USER }}/salesagent
           BUNDLE_DIR: /tmp/cosign-bundles-${{ github.run_id }}
         run: |
           set -euo pipefail
           [[ -n "$DIGEST" ]] || { echo "ERROR: build-and-push image_digest is empty"; exit 1; }
           mkdir -p "$BUNDLE_DIR"
-          for tag in $TAGS; do
+          count=0
+          for image in $IMAGES; do
             signed=false
-            safe_tag="${tag//\//-}"
+            safe_name="${image//\//-}"
             for attempt in 1 2 3; do
-              bundle_path="${BUNDLE_DIR}/${safe_tag}-${attempt}.json"
-              if cosign sign --yes --bundle "$bundle_path" "${tag}@${DIGEST}"; then
+              bundle_path="${BUNDLE_DIR}/${safe_name}-${attempt}.json"
+              if cosign sign --yes --bundle "$bundle_path" "${image}@${DIGEST}"; then
                 signed=true
                 break
               fi
-              echo "cosign attempt $attempt failed for ${tag} — retrying..."
+              echo "cosign attempt $attempt failed for ${image} — retrying..."
               sleep 30
             done
             if [ "$signed" != true ]; then
-              echo "ERROR: cosign sign failed for ${tag} after 3 attempts"
+              echo "ERROR: cosign sign failed for ${image} after 3 attempts"
               exit 1
             fi
+            count=$((count + 1))
           done
+          # Signing nothing must fail, not pass silently as it did for 3.0.1.
+          [[ "$count" -eq 2 ]] || { echo "ERROR: signed $count images, expected 2"; exit 1; }
       - name: Upload cosign bundles
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
