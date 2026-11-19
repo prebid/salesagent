@@ -631,14 +631,17 @@ class TestStaticPreviewUpdate:
             assert "SERVICE_UNAVAILABLE" in _error_codes(creative_result.errors)
 
 
-class TestStaticPreviewDimensionExtraction:
-    """Preview dimensions extracted from creative agent on update + create.
+class TestStaticPreviewKeptOutOfTheCreative:
+    """A preview render is kept for the admin UI and never written into the creative itself.
 
-    Lines covered: 351-383 (update), 687-702 (create)
+    preview_creative.mdx: "Every render's ``preview_url`` returns an untrusted HTML page for
+    cross-origin iframe embedding". The creative's own ``url`` and dimensions are where an ad
+    server's asset is read from, so a render's URL or size written there is handed to the ad
+    server as if it were the creative. Sync used to back-fill both; these held that.
     """
 
-    def test_update_preview_dimensions_extracted(self, integration_db):
-        """Update: preview agent returns dimensions → stored in DB."""
+    def test_update_keeps_the_preview_dimensions_out_of_the_creative(self, integration_db):
+        """Update: the agent's render, with its size, is stored as the preview and nowhere else."""
         from unittest.mock import AsyncMock
 
         preview_with_dims = {
@@ -678,11 +681,11 @@ class TestStaticPreviewDimensionExtraction:
 
             with get_db_session() as session:
                 db = session.scalars(select(DBCreative).filter_by(creative_id="c_dims_up")).first()
-                assert db.data.get("width") == 300
-                assert db.data.get("height") == 250
+                assert db.data.get("preview_response") == preview_with_dims
+                assert (db.data.get("width"), db.data.get("height"), db.data.get("duration")) == (None, None, None)
 
-    def test_create_preview_dimensions_extracted(self, integration_db):
-        """Create: preview agent returns dimensions → stored in DB."""
+    def test_create_keeps_the_preview_url_and_dimensions_out_of_the_creative(self, integration_db):
+        """Create: a creative that sent no url or size is not given the render's."""
         from unittest.mock import AsyncMock
 
         preview_with_dims = {
@@ -702,8 +705,8 @@ class TestStaticPreviewDimensionExtraction:
             env.setup_default_data()
 
             env.mock["registry"].return_value.preview_creative = AsyncMock(return_value=preview_with_dims)
-            # A format whose required assets carry no url, so the preview URL is not
-            # overshadowed by a user URL.
+            # A format whose required assets carry no url, so nothing of the buyer's would
+            # stand where the render's URL used to be written.
             result = env.call_impl(
                 creatives=[
                     _creative(
@@ -718,9 +721,8 @@ class TestStaticPreviewDimensionExtraction:
 
             with get_db_session() as session:
                 db = session.scalars(select(DBCreative).filter_by(creative_id="c_dims_create")).first()
-                assert db.data.get("url") == "https://agent.example.com/creative.png"
-                assert db.data.get("width") == 728
-                assert db.data.get("height") == 90
+                assert db.data.get("preview_response") == preview_with_dims
+                assert (db.data.get("url"), db.data.get("width"), db.data.get("height")) == (None, None, None)
 
 
 # ── Format Change Detection (covers lines 87-91) ──────────────────────────

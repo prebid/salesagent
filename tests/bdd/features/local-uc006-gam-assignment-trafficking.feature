@@ -69,7 +69,9 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     And Google Ad Manager created no creative
 
   # GAM is asked again when the assignment is sent again: that it holds the creative from
-  # another package does not place the creative on this one.
+  # another package does not place the creative on this one. The size refusal carries its own
+  # code, enums/error-code.json CREATIVE_SIZE_MISMATCH: "The submitted creative dimensions do
+  # not match any size accepted by the selected packages ... Recovery: correctable".
   @T-UC-006-local-gam-refused-assignment-resent
   Scenario: A refused assignment of a creative GAM already holds is refused again when re-sent
     Given the buyer holds a buy booked in Google Ad Manager as order "6000003" whose package "pkg-leader" is line item "5000003" accepting 728x90
@@ -78,7 +80,7 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
     When the Buyer Agent references library creative "cr-banner", without resending it, assigned to package "pkg-leader"
     Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
-    And creative "cr-banner" failed with error VALIDATION_ERROR and recovery correctable
+    And creative "cr-banner" failed with error CREATIVE_SIZE_MISMATCH and recovery correctable
     And Google Ad Manager associated that creative with line items "5000001"
 
   # A fault in GAM is not fixed by changing the request. core/error.json: correctable is "fix

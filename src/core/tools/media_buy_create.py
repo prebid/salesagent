@@ -1769,7 +1769,12 @@ def execute_approved_media_buy(
                     # whole contract; failing on the legacy arm alone would refuse at approval
                     # time exactly the shape ``core/product.json`` tells new products to
                     # author ("New products MUST author canonical format_options[]").
-                    if not format_ids_list and not recorded:
+                    #
+                    # Nor is a package that recorded no snapshot on a product that declares
+                    # canonical options: its request named no selector, so create recorded
+                    # none (``_package_format_snapshots``) and placed it on the product's
+                    # declarations with no legacy projection. The approval places it the same.
+                    if not format_ids_list and not recorded and not product.format_contract.format_options:
                         error_msg = (
                             f"Failed to reconstruct package {package_id}: "
                             f"Product {product_id} has no valid formats - cannot create media buy"
