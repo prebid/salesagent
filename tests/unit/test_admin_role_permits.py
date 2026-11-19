@@ -45,8 +45,12 @@ def test_viewer_and_unknown_roles_are_read_only(role):
 @pytest.mark.parametrize(
     ("headers", "api_mode", "json_body"),
     [
-        ({"Accept": "*/*"}, False, True),  # fetch() with no Accept header of its own
+        ({"Accept": "*/*", "Sec-Fetch-Mode": "cors"}, False, True),  # a browser fetch() with no Accept of its own
+        ({"X-Requested-With": "XMLHttpRequest"}, False, True),
+        ({"Accept": "application/json"}, False, True),
         ({"Content-Type": "application/json"}, False, True),
+        ({"Accept": "*/*"}, False, False),  # curl or an HTTP library: a tie, answered as before
+        ({"Accept": "text/html", "Sec-Fetch-Mode": "navigate"}, False, False),  # a page load
         ({"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}, False, False),  # a page
         ({"Accept": "text/html"}, True, True),  # an API-mode route always answers JSON
     ],
@@ -89,8 +93,9 @@ def test_the_role_check_constraint_is_derived_from_user_role():
 @pytest.mark.parametrize(
     ("headers", "json_body"),
     [
-        ({"Accept": "*/*"}, True),  # a Users-page fetch() whose session has expired
+        ({"Accept": "*/*", "Sec-Fetch-Mode": "cors"}, True),  # a Users-page fetch() whose session has expired
         ({"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}, False),  # a page
+        ({"Accept": "*/*"}, False),  # curl: the login redirect, as before
     ],
 )
 def test_a_signed_out_caller_is_answered_in_the_form_it_reads(headers, json_body):

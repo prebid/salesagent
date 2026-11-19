@@ -333,18 +333,27 @@ def role_permits(role: str, method: str, *, minimum: UserRole = UserRole.VIEWER)
     return ranks.index(held) >= needed
 
 
+#: ``Sec-Fetch-Mode`` values a browser sends on a script's ``fetch``/XHR; a page load or
+#: form submit is ``navigate``.
+_SCRIPT_FETCH_MODES = frozenset({"cors", "same-origin"})
+
+
 def caller_reads_json() -> bool:
     """Whether the current request's caller reads a JSON answer rather than an HTML page.
 
-    True for a JSON request body, or an ``Accept`` that prefers ``application/json`` to
-    ``text/html``. ``fetch`` sends ``Accept: */*`` and a browser navigation or form post
-    prefers ``text/html``, so ``*/*`` counts as JSON. The one answer to this question for
-    the admin UI: the refusals in :func:`require_tenant_access` and the inventory-profile
-    form refusals both ask it.
+    True for a JSON request body, a script's ``fetch`` or XHR (``Sec-Fetch-Mode`` of
+    ``cors``/``same-origin``, which every current browser sends, or
+    ``X-Requested-With: XMLHttpRequest``), or an ``Accept`` that prefers
+    ``application/json`` to ``text/html``. ``Accept: */*`` on its own (curl, most HTTP
+    libraries) ties, and a tie is HTML, as it was before this predicate existed. The one
+    answer to this question for the admin UI: the refusals in
+    :func:`require_tenant_access` and the inventory-profile form refusals both ask it.
     """
-    if request.is_json:
+    if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return True
-    return request.accept_mimetypes.best_match(["application/json", "text/html"]) == "application/json"
+    if request.headers.get("Sec-Fetch-Mode") in _SCRIPT_FETCH_MODES:
+        return True
+    return request.accept_mimetypes.best_match(["text/html", "application/json"]) == "application/json"
 
 
 def _forbid(message: str, *, api_mode: bool) -> NoReturn:
