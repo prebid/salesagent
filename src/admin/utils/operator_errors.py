@@ -59,7 +59,9 @@ def _same_site_referrer() -> str | None:
     path = parsed.path
     if not path.startswith("/") or path.startswith("//") or "\\" in path or "\\" in parsed.query:
         return None
-    target = f"{path}?{parsed.query}" if parsed.query else path
+    # A constant "/" followed by the rest of the path: the result is always a path on
+    # this host, whatever the referrer held.
+    target = "/" + path[1:] + (f"?{parsed.query}" if parsed.query else "")
     if target == request.full_path.rstrip("?"):
         return None
     return target
