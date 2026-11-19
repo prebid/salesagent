@@ -33,6 +33,7 @@ import json
 import re
 from collections.abc import Callable
 from contextlib import contextmanager
+from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import SplitResult, urlsplit
 
@@ -64,6 +65,20 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from sqlalchemy.orm import Session
+
+
+def _not_yet_started() -> dict[str, Any]:
+    """A buy waiting to start, whose flight has not begun, so it STAYS waiting.
+
+    ``pending_start`` with the factory's default flight (starting 2025-01-01) is a state the
+    server's own status scheduler moves to ``active`` on its next tick
+    (``resolve_flight_window_status``). Over e2e_rest that tick can land between the Given and
+    the sync, and a content change on an active package is then refused, so the scenario
+    raced the clock. A flight that starts in the future is the state the Given means.
+    """
+    today = date.today()
+    return {"status": "pending_start", "start_date": today + timedelta(days=30), "end_date": today + timedelta(days=90)}
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # E2E format helpers — real creative agent data for Docker transport
@@ -1513,7 +1528,7 @@ def given_assignment_already_exists(ctx: dict) -> None:
     # Use UUID-based IDs for e2e_rest to avoid collisions with Docker's persistent DB.
     # Not delivering: the seeded row's content differs from the payload, and a content change to
     # a creative on an active package is refused (sync_creatives.mdx v3.2.7, best practice 6).
-    mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "pending_start"}
+    mb_kwargs: dict = {"tenant": tenant, "principal": principal, **_not_yet_started()}
     prod_kwargs: dict = {"tenant": tenant, "format_ids": [fmt_entry]}
     if is_e2e(ctx):
         mb_kwargs["media_buy_id"] = _e2e_unique_id("mb")
@@ -1597,7 +1612,7 @@ def given_creative_already_assigned_to_package(ctx: dict) -> None:
 
     # Not delivering: the seeded row's content differs from the payload, and a content change to
     # a creative on an active package is refused (sync_creatives.mdx v3.2.7, best practice 6).
-    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="pending_start")
+    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, **_not_yet_started())
     product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package = MediaPackageFactory(
         media_buy=media_buy,
@@ -6313,7 +6328,7 @@ def given_creative_already_assigned_to_package_partition(ctx: dict) -> None:
 
     # Not delivering: the seeded row's content differs from the payload, and a content change to
     # a creative on an active package is refused (sync_creatives.mdx v3.2.7, best practice 6).
-    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="pending_start")
+    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, **_not_yet_started())
     product = ProductFactory(
         tenant=tenant,
         format_ids=[_scenario_format_entry(ctx, env)],
