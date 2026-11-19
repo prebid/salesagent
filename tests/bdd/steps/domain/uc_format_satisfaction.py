@@ -3175,11 +3175,20 @@ def _assert_entry_failed_and_nothing_stored(ctx: dict, code: str) -> None:
 def then_creative_refused_naming_packages(ctx: dict, code: str) -> None:
     """The create path's manifest refusal: the code, the ``packages`` pointer and the creative.
 
-    enums/error-code.json on CREATIVE_SIZE_MISMATCH: "Sellers SHOULD identify the offending
-    creative" -- the pointer names the request field the buyer sent (the packages array, as
-    every creative refusal on this path does) and ``details.creative_id`` names the creative.
+    The pointer names the request field the buyer sent and ``details.creative_id`` names the
+    creative.
     """
     _assert_creative_refused(ctx, code, field="packages")
+
+
+@then(parsers.parse('the creative is refused {code:w} naming the creative at "{field}"'))
+def then_creative_refused_naming_creative(ctx: dict, code: str, field: str) -> None:
+    """The create path's size refusal, pointing at the creative where the request named it.
+
+    enums/error-code.json on CREATIVE_SIZE_MISMATCH: "Sellers SHOULD identify the offending
+    creative in error.field".
+    """
+    _assert_creative_refused(ctx, code, field=field)
 
 
 @then(parsers.parse('the creative is refused {code:w} naming the "{array}" array'))

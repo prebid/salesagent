@@ -2430,7 +2430,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Given the seller declares a canonical format option "fixed_300x250"
     And the buyer assigns a canonical "image" creative carrying the "image_728x90" manifest
     When the Buyer Agent sends the create_media_buy request
-    Then the creative is refused CREATIVE_SIZE_MISMATCH naming the packages field
+    Then the creative is refused CREATIVE_SIZE_MISMATCH naming the creative at "packages[0].creative_ids[0]"
     And the refusal names "assets.image_main.width" stating "728" where "300" is accepted
     And the refusal names "assets.image_main.height" stating "90" where "250" is accepted
 
