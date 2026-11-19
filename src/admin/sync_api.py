@@ -182,10 +182,7 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
             # request answers with the same reference and no exception text.
             error_message = safe_error_message(e, "Sync failed")
             try:
-                sync_job.status = "failed"
-                # Type ignore for SQLAlchemy DateTime column assignment
-                sync_job.completed_at = datetime.now(UTC)
-                sync_job.error_message = error_message
+                sync_job.mark_failed(error_message)
                 db_session.commit()
             except Exception:
                 logger.warning("Failed to update sync_job error record", exc_info=True)
@@ -541,10 +538,7 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
 
             # The job keeps the text the response carries (see trigger_sync).
             error_message = safe_error_message(e, "Orders sync failed")
-            sync_job.status = "failed"
-            # Type ignore for SQLAlchemy DateTime column assignment
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.error_message = error_message
+            sync_job.mark_failed(error_message)
             db_session.commit()
 
             return jsonify({"sync_id": sync_id, "status": "failed", "error": error_message}), 500

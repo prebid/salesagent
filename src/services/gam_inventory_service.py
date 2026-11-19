@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session, scoped_session, sessionmaker
 from src.adapters.gam_inventory_discovery import (
     GAMInventoryDiscovery,
 )
-from src.admin.utils.operator_errors import json_error
 from src.core.database.db_config import DatabaseConfig
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
@@ -1482,6 +1481,10 @@ def create_inventory_endpoints(app):
     This function is kept for backward compatibility but does nothing.
     TODO: Remove this function entirely after confirming no other code depends on it.
     """
+    # Imported here, not at module level: GAMSyncManager and the background sync
+    # thread import this module, and they must not load the admin package.
+    from src.admin.utils.operator_errors import json_error
+
     logger.info("Skipping GAM inventory endpoint registration (handled by inventory blueprint)")
     return
 

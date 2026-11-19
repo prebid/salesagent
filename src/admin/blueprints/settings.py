@@ -17,7 +17,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import json_error, safe_error_message
+from src.admin.utils.operator_errors import json_error, refusal_error, safe_error_message
 from src.admin.utils.url_policy import redirect_if_url_blocked
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -1338,11 +1338,11 @@ def check_approximated_domain_status(tenant_id):
             }
         )
 
-    except DomainNotOwned:
+    except DomainNotOwned as refusal:
         # Ahead of the broad handler on purpose: caught below it, an ownership
         # refusal would answer 500 with exception text instead of the 400 the
         # three routes agree on.
-        return jsonify({"success": False, "error": DomainNotOwned.MESSAGE}), 400
+        return refusal_error(refusal, success=False)
 
     except Exception as e:
         logger.error(f"Error checking domain status: {e}", exc_info=True)
@@ -1394,8 +1394,8 @@ def register_approximated_domain(tenant_id):
         logger.info("✅ Registered domain with Approximated: %s", domain)
         return jsonify({"success": True, "message": f"Domain {domain} registered successfully"})
 
-    except DomainNotOwned:
-        return jsonify({"success": False, "error": DomainNotOwned.MESSAGE}), 400
+    except DomainNotOwned as refusal:
+        return refusal_error(refusal, success=False)
 
     except Exception as e:
         logger.error(f"Error registering domain: {e}", exc_info=True)
@@ -1437,8 +1437,8 @@ def unregister_approximated_domain(tenant_id):
         logger.info("✅ Unregistered domain from Approximated: %s", domain)
         return jsonify({"success": True, "message": f"Domain {domain} unregistered successfully"})
 
-    except DomainNotOwned:
-        return jsonify({"success": False, "error": DomainNotOwned.MESSAGE}), 400
+    except DomainNotOwned as refusal:
+        return refusal_error(refusal, success=False)
 
     except Exception as e:
         logger.error(f"Error unregistering domain: {e}", exc_info=True)

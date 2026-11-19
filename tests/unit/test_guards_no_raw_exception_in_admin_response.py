@@ -45,7 +45,7 @@ _FILES = [
     "src/routes/health.py",
 ]
 
-_RESPONSE_HINT = re.compile(r"flash\(|jsonify\(|[\"']error[\"']|[\"']message[\"']")
+_RESPONSE_HINT = re.compile(r"flash\(|jsonify\(|render_template\(|[\"']error[\"']|[\"']message[\"']|\berror=")
 _RAW_E = re.compile(r"(?<![\w.])str\(e\)|\{e\}|\{str\(e\)\}")
 
 
@@ -93,6 +93,10 @@ class TestGuardMetaCases:
 
     def test_flags_bare_e_interpolation_in_jsonify(self):
         src = 'try:\n    x()\nexcept Exception as e:\n    return jsonify({"error": f"failed: {e}"}), 500\n'
+        assert _scan_source(src, "m.py") != []
+
+    def test_flags_str_e_passed_to_render_template(self):
+        src = 'try:\n    x()\nexcept Exception as e:\n    return render_template("error.html", error=f"x: {str(e)}"), 500\n'
         assert _scan_source(src, "m.py") != []
 
     def test_accepts_safe_error_message(self):

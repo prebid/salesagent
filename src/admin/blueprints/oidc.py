@@ -11,12 +11,13 @@ from sqlalchemy import select
 
 from src.admin.auth_utils import extract_user_info
 from src.admin.utils import require_tenant_access
-from src.admin.utils.operator_errors import json_error, safe_error_message
+from src.admin.utils.operator_errors import json_error, refusal_error, safe_error_message
 from src.admin.utils.url_policy import json_error_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, User
 from src.services.auth_config_service import (
+    DiscoveryUrlRequired,
     disable_oidc,
     enable_oidc,
     get_auth_config_summary,
@@ -131,11 +132,10 @@ def save_config(tenant_id: str):
             }
         )
 
-    except ValueError as e:
-        return json_error(e, "Invalid OIDC configuration; a custom provider needs a discovery URL", status_code=400)
+    except DiscoveryUrlRequired as refusal:
+        return refusal_error(refusal)
     except Exception as e:
-        logger.error(f"Error saving OIDC config: {e}", exc_info=True)
-        return jsonify({"error": "Failed to save configuration"}), 500
+        return json_error(e, "Failed to save configuration")
 
 
 @oidc_bp.route("/tenant/<tenant_id>/enable", methods=["POST"])

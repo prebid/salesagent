@@ -24,7 +24,7 @@ from src.adapters.gam.client import GAMClientManager
 from src.adapters.gam.managers.inventory import GAMInventoryManager
 from src.adapters.gam.managers.orders import GAMOrdersManager
 from src.core.database.models import SyncJob
-from src.core.operator_errors import SYNC_FAILED_OPERATOR_MESSAGE
+from src.core.operator_errors import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -126,11 +126,7 @@ class GAMSyncManager:
         except Exception as e:
             logger.error(f"Inventory sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
 
-            # Update sync job with error
-            sync_job.status = "failed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.error_message = SYNC_FAILED_OPERATOR_MESSAGE
+            sync_job.mark_failed(safe_error_message(e, "Inventory sync failed"))
             db_session.commit()
 
             raise
@@ -191,11 +187,7 @@ class GAMSyncManager:
         except Exception as e:
             logger.error(f"Orders sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
 
-            # Update sync job with error
-            sync_job.status = "failed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.error_message = SYNC_FAILED_OPERATOR_MESSAGE
+            sync_job.mark_failed(safe_error_message(e, "Orders sync failed"))
             db_session.commit()
 
             raise
@@ -258,11 +250,7 @@ class GAMSyncManager:
         except Exception as e:
             logger.error(f"Full sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
 
-            # Update sync job with error
-            sync_job.status = "failed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.error_message = SYNC_FAILED_OPERATOR_MESSAGE
+            sync_job.mark_failed(safe_error_message(e, "Full sync failed"))
             db_session.commit()
 
             raise
@@ -330,11 +318,7 @@ class GAMSyncManager:
         except Exception as e:
             logger.error(f"Selective sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
 
-            # Update sync job with error
-            sync_job.status = "failed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.error_message = SYNC_FAILED_OPERATOR_MESSAGE
+            sync_job.mark_failed(safe_error_message(e, "Selective sync failed"))
             db_session.commit()
 
             raise

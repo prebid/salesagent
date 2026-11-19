@@ -2,7 +2,7 @@
 
 import logging
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -2406,6 +2406,15 @@ class SyncJob(Base):
         Index("idx_sync_jobs_status", "status"),
         Index("idx_sync_jobs_started", "started_at"),
     )
+
+    def mark_failed(self, operator_message: str) -> None:
+        """Record the failure. The status endpoints return ``error_message`` to the admin UI,
+        so ``operator_message`` is fixed text: ``safe_error_message(exc, context)`` for a
+        caught exception (which logs it under the reference the text ends with), never
+        ``str(exc)``."""
+        self.status = "failed"
+        self.completed_at = datetime.now(UTC)
+        self.error_message = operator_message
 
 
 class Context(Base):

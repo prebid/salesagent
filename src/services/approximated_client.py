@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pydantic import JsonValue
 
 from src.core.database.models import Tenant
+from src.core.operator_errors import OperatorRefusal
 from src.core.security.egress.destination import VendorConstant
 from src.core.security.outbound_http import OutboundError, OutboundResult, send
 
@@ -43,7 +44,7 @@ def _api(method: str, path: str, api_key: str, *, json_body: JsonValue | None = 
     )
 
 
-class DomainNotOwned(Exception):
+class DomainNotOwned(OperatorRefusal):
     """The acting tenant does not own the domain the request named.
 
     Raised by :func:`tenant_owns_domain`, which is the only producer of the

@@ -59,17 +59,18 @@ from sqlalchemy import select
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig
+from src.core.operator_errors import OperatorRefusal
 
 logger = logging.getLogger(__name__)
 
 
-class TenantAdapterConfigMissing(ValueError):
+class TenantAdapterConfigMissing(OperatorRefusal):
     """The tenant has no adapter config to attach a service account to."""
 
     MESSAGE = "This tenant has no ad server configuration yet"
 
 
-class ServiceAccountAlreadyExists(ValueError):
+class ServiceAccountAlreadyExists(OperatorRefusal):
     """The tenant already has a service account; it is not replaced."""
 
     MESSAGE = "This tenant already has a service account"

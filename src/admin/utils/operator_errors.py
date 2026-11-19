@@ -7,9 +7,9 @@ This module adds the Flask response shape around it.
 
 from flask import Response, jsonify
 
-from src.core.operator_errors import safe_error_message
+from src.core.operator_errors import OperatorRefusal, safe_error_message
 
-__all__ = ["json_error", "safe_error_message"]
+__all__ = ["json_error", "refusal_error", "safe_error_message"]
 
 
 def json_error(
@@ -21,3 +21,8 @@ def json_error(
     ``sync_id=...``) so the admin JavaScript reading it keeps working.
     """
     return jsonify({**fields, "error": safe_error_message(e, context)}), status_code
+
+
+def refusal_error(refusal: OperatorRefusal, status_code: int = 400, **fields: object) -> tuple[Response, int]:
+    """A ``(jsonify(...), status_code)`` answer whose ``error`` is the refusal's ``MESSAGE``."""
+    return jsonify({**fields, "error": refusal.MESSAGE}), status_code

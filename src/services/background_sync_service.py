@@ -15,7 +15,7 @@ from sqlalchemy import select
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
-from src.core.operator_errors import SYNC_FAILED_OPERATOR_MESSAGE
+from src.core.operator_errors import OperatorRefusal, safe_error_message
 from src.core.thread_registry import ThreadRegistry
 
 logger = logging.getLogger(__name__)
@@ -28,10 +28,9 @@ logger = logging.getLogger(__name__)
 _active_syncs = ThreadRegistry()
 
 
-class SyncAlreadyRunning(ValueError):
+class SyncAlreadyRunning(OperatorRefusal):
     """An inventory sync is already running for the tenant; ``sync_id`` names it.
 
-    A ``ValueError`` so callers that caught the bare refusal keep working.
     ``MESSAGE`` is the operator-facing text; the exception's own text carries
     the tenant and start time for the log.
     """
@@ -491,7 +490,7 @@ def _run_sync_thread(
 
     except Exception as e:
         logger.error(f"[{sync_id}] Sync failed: {e}", exc_info=True)
-        _mark_sync_failed(sync_id, SYNC_FAILED_OPERATOR_MESSAGE)
+        _mark_sync_failed(sync_id, safe_error_message(e, "Inventory sync failed"))
 
     finally:
         # Remove from active syncs
@@ -537,11 +536,7 @@ def _mark_sync_failed(sync_id: str, error_message: str):
             stmt = select(SyncJob).where(SyncJob.sync_id == sync_id)
             sync_job = db.scalars(stmt).first()
             if sync_job:
-                sync_job.status = "failed"
-                # SQLAlchemy DateTime column accepts datetime objects
-                completed_at = datetime.now(UTC)
-                sync_job.completed_at = completed_at
-                sync_job.error_message = error_message
+                sync_job.mark_failed(error_message)
                 # Note: SyncJob doesn't have duration_seconds field - duration is calculated from started_at/completed_at
                 db.commit()
     except Exception as e:

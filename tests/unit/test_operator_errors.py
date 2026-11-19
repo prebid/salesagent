@@ -92,3 +92,30 @@ def test_json_error_status_code_and_extra_fields():
     assert body["sync_id"] == "s1"
     assert body["status"] == "failed"
     assert _SECRET not in body["error"]
+
+
+def test_an_operator_refusal_must_declare_its_message():
+    from src.core.operator_errors import OperatorRefusal
+
+    with pytest.raises(TypeError, match="MESSAGE"):
+
+        class NoMessage(OperatorRefusal):
+            pass
+
+
+def test_operator_refusals_are_not_value_errors():
+    """A broad ``except ValueError`` must not absorb a refusal meant to be answered by type."""
+    from src.services.approximated_client import DomainNotOwned
+    from src.services.auth_config_service import DiscoveryUrlRequired
+    from src.services.background_sync_service import SyncAlreadyRunning
+    from src.services.gcp_service_account_service import ServiceAccountAlreadyExists, TenantAdapterConfigMissing
+
+    for refusal in (
+        DomainNotOwned,
+        DiscoveryUrlRequired,
+        SyncAlreadyRunning,
+        ServiceAccountAlreadyExists,
+        TenantAdapterConfigMissing,
+    ):
+        assert not issubclass(refusal, ValueError), refusal
+        assert isinstance(refusal.MESSAGE, str) and refusal.MESSAGE, refusal

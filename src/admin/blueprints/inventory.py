@@ -8,7 +8,7 @@ from sqlalchemy import String, func, or_, select
 
 from src.admin.utils import execute_limited, get_tenant_config_from_db, require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import json_error
+from src.admin.utils.operator_errors import json_error, refusal_error
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Tenant
@@ -748,7 +748,7 @@ def sync_inventory(tenant_id):
         )
 
     except SyncAlreadyRunning as running:
-        return jsonify({"error": SyncAlreadyRunning.MESSAGE, "sync_id": running.sync_id}), 400
+        return refusal_error(running, sync_id=running.sync_id)
     except Exception as e:
         logger.error(f"Error starting inventory sync: {e}", exc_info=True)
         return json_error(e)

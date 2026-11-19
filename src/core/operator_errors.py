@@ -20,6 +20,7 @@ wrapper lives in ``src.admin.utils.operator_errors``.
 
 import logging
 import secrets
+from typing import ClassVar
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -27,9 +28,24 @@ logger = logging.getLogger(__name__)
 
 DB_ERROR_OPERATOR_MESSAGE = "A database error occurred"
 GENERIC_OPERATOR_MESSAGE = "An unexpected error occurred"
-# Stored on a failed sync job, which a later status request returns. The failure
-# itself is logged where it is caught, next to the tenant and sync it belongs to.
-SYNC_FAILED_OPERATOR_MESSAGE = "The sync failed. The details have been logged."
+
+
+class OperatorRefusal(Exception):
+    """An expected refusal whose operator-facing text is the class's ``MESSAGE``.
+
+    Raised on purpose (a sync already running, a domain the tenant does not own)
+    and answered with ``MESSAGE``, never with the exception's own text, which may
+    carry ids for the log. Based on ``Exception`` rather than ``ValueError`` so a
+    broad ``except ValueError`` cannot absorb one. Every subclass must set
+    ``MESSAGE``; defining one without it fails at import.
+    """
+
+    MESSAGE: ClassVar[str]
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        if not isinstance(cls.__dict__.get("MESSAGE"), str):
+            raise TypeError(f"{cls.__name__} must define MESSAGE as a str")
 
 
 def safe_error_message(e: BaseException, context: str | None = None) -> str:

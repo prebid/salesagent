@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.core.config import get_settings
+from src.services.auth_config_service import DiscoveryUrlRequired
 from src.services.background_sync_service import SyncAlreadyRunning
 from src.services.gcp_service_account_service import ServiceAccountAlreadyExists, TenantAdapterConfigMissing
 from tests.helpers.admin_session import admin_auth_session
@@ -84,3 +85,33 @@ def test_service_account_refusal_says_which_one(client, refusal):
 
     assert response.status_code == 400
     assert response.get_json() == {"success": False, "error": type(refusal).MESSAGE}
+
+
+def test_custom_oidc_provider_without_discovery_url_gets_the_refusal(client):
+    """The real ``save_oidc_config`` refuses before touching the database."""
+    with patch("src.admin.blueprints.oidc.get_or_create_auth_config"):
+        response = client.post(
+            "/auth/oidc/tenant/default/config",
+            json={"provider": "custom", "client_id": "c", "client_secret": "s"},
+        )
+
+    assert response.status_code == 400
+    assert response.get_json() == {"error": DiscoveryUrlRequired.MESSAGE}
+
+
+def test_other_oidc_save_failures_get_the_generic_answer(client):
+    """A missing ENCRYPTION_KEY is a ValueError too; it must not read as a discovery-URL hint."""
+    with (
+        patch("src.admin.blueprints.oidc.get_or_create_auth_config"),
+        patch("src.admin.blueprints.oidc.save_oidc_config", side_effect=ValueError(_SECRET)),
+    ):
+        response = client.post(
+            "/auth/oidc/tenant/default/config",
+            json={"provider": "google", "client_id": "c", "client_secret": "s"},
+        )
+
+    assert response.status_code == 500
+    error = response.get_json()["error"]
+    assert error.startswith("Failed to save configuration")
+    assert _REFERENCE_TAIL.search(error)
+    assert _SECRET not in error

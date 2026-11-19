@@ -13,7 +13,7 @@ from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
 from src.adapters.gam_reporting_service import GAMReportingService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import json_error, safe_error_message
+from src.admin.utils.operator_errors import json_error, refusal_error, safe_error_message
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -615,7 +615,7 @@ def view_gam_line_item(tenant_id, line_item_id):
 
     except Exception as e:
         logger.error(f"Error viewing GAM line item {line_item_id}: {e}")
-        return render_template("error.html", error=f"Error loading line item: {str(e)}"), 500
+        return render_template("error.html", error=safe_error_message(e, "Error loading line item")), 500
 
 
 # API endpoints for GAM
@@ -839,7 +839,7 @@ def create_service_account(tenant_id):
             )
 
         except (TenantAdapterConfigMissing, ServiceAccountAlreadyExists) as refusal:
-            return jsonify({"success": False, "error": refusal.MESSAGE}), 400
+            return refusal_error(refusal, success=False)
 
         except Exception as e:
             logger.error(f"Error creating service account for tenant {tenant_id}: {e}", exc_info=True)
