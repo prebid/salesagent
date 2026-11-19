@@ -39,4 +39,7 @@ def test_declared_sizes_and_bounds_together_take_their_union_declared_sizes_firs
     plan = plan_gam_creative(ctt, placeholders)
 
     assert isinstance(plan, GamCreativePlan)
-    assert (plan.creative["size"], plan.lica_sizes) == ({"width": 300, "height": 250}, ({"width": 728, "height": 90},))
+    assert (plan.creative["size"], plan.lica_sizes) == (
+        {"width": 300, "height": 250},
+        ({"width": 300, "height": 250}, {"width": 728, "height": 90}),
+    )
