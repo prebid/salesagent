@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import errno
 import ipaddress
 import os
 import sys
@@ -61,11 +62,13 @@ if sys.platform == "win32":
         lock_fp.seek(0)
         while True:
             try:
-                # LK_LOCK gives up after ten one-second retries; keep waiting, as flock does.
                 msvcrt.locking(lock_fp.fileno(), msvcrt.LK_LOCK, 1)
                 return
-            except OSError:
-                continue
+            except OSError as exc:
+                # LK_LOCK gives up with EDEADLOCK after ten one-second retries; keep
+                # waiting, as flock does. Any other error (EBADF, EACCES) is permanent.
+                if exc.errno != errno.EDEADLOCK:
+                    raise
 
     def _unlock(lock_fp: Any) -> None:
         lock_fp.seek(0)
