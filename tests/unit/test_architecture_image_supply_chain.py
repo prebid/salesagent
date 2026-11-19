@@ -426,8 +426,8 @@ def test_release_sign_and_attest_signs_the_resolved_digest() -> None:
 
 
 @pytest.mark.arch_guard
-def test_release_dispatch_takes_a_version_runs_from_main_and_does_not_attest() -> None:
-    """A dispatch names a release version, runs from main only, and leaves build provenance to the build."""
+def test_release_dispatch_takes_a_version_runs_from_main_and_attests() -> None:
+    """A dispatch names a release version, runs from main only, and attests like a release run."""
     workflow = _release_workflow()
     triggers = workflow.get("on", workflow.get(True, {}))  # PyYAML reads the bare key `on` as True
     assert set(triggers["workflow_dispatch"]["inputs"]) == {"version"}, (
@@ -440,8 +440,8 @@ def test_release_dispatch_takes_a_version_runs_from_main_and_does_not_attest() -
     attest_steps = _steps_using(job, _ATTEST)
     assert attest_steps
     for step in attest_steps:
-        assert step.get("if") == "github.event_name == 'push'", (
-            "build provenance must come from the run that built the image, not a dispatch run"
+        assert "if" not in step, (
+            "a recovery run attests too, so `gh attestation verify` works for the release it recovers"
         )
 
 

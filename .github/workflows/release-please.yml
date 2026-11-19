@@ -305,16 +305,14 @@ jobs:
           name: cosign-bundles-${{ github.run_id }}
           path: /tmp/cosign-bundles-${{ github.run_id }}/*.json
           if-no-files-found: error
-      # Build provenance comes only from the run that built the image. A dispatch run signs an image
-      # it didn't build, so that release keeps only its original BuildKit provenance (ADR-007).
+      # A recovery run attests too, so `gh attestation verify` works for the release; its attestation
+      # names the recovery run as the builder (ADR-007).
       - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
-        if: github.event_name == 'push'
         with:
           subject-name: ${{ env.GHCR_IMAGE }}
           subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: true
       - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
-        if: github.event_name == 'push'
         with:
           subject-name: ${{ env.DOCKERHUB_IMAGE }}
           subject-digest: ${{ steps.digest.outputs.digest }}

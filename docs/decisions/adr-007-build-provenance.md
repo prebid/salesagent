@@ -64,11 +64,11 @@ with a `version` input signs that release again. The run refuses unless the `v<v
 GitHub release exists and `<image>:<version>` names the same digest on ghcr.io and Docker
 Hub, so the main-branch signature only goes on an image this workflow released. A run from
 any other branch is skipped, because its signature would carry a `refs/heads/<branch>`
-identity that the `cosign verify` command above rejects. A recovery run does not call
-`actions/attest-build-provenance`: it did not build the image, so it would record itself as
-the builder. A recovered release keeps the BuildKit provenance (`provenance: mode=max`)
-attached by its original build, and is verified with `cosign verify`;
-`gh attestation verify` finds no GitHub attestation for it.
+identity that the `cosign verify` command above rejects. A recovery run also calls
+`actions/attest-build-provenance`, so `gh attestation verify` works for the recovered
+release. That attestation names the recovery run as the builder, because it is the run
+that made it; the BuildKit provenance (`provenance: mode=max`) attached by the original
+build still describes the build itself.
 
 ## Consequences
 
