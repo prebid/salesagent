@@ -25,6 +25,7 @@ from sqlalchemy.orm import class_mapper
 
 from src.core.database.json_type import JSONType
 from src.core.database.models import Base
+from tests.unit._architecture_helpers import rel
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODELS_MODULE = "src.core.database.models"
@@ -70,7 +71,7 @@ def _scan_file(path: Path, by_class: dict[str, set[str]]) -> list[tuple[str, str
         if isinstance(node, ast.ImportFrom) and node.module == MODELS_MODULE:
             for alias in node.names:
                 bindings[alias.asname or alias.name] = alias.name
-    rel = path.relative_to(REPO_ROOT).as_posix()
+    relpath = rel(path, REPO_ROOT)
     hits: list[tuple[str, str, int]] = []
     for node in ast.walk(tree):
         # Form A: Model(col=json.dumps(...)) with Model imported from models.py
@@ -79,12 +80,12 @@ def _scan_file(path: Path, by_class: dict[str, set[str]]) -> list[tuple[str, str
             if orm in by_class:
                 for kw in node.keywords:
                     if kw.arg in by_class[orm] and _is_json_dumps(kw.value):
-                        hits.append((rel, f"{orm}.{kw.arg}", node.lineno))
+                        hits.append((relpath, f"{orm}.{kw.arg}", node.lineno))
         # Form B: obj.col = json.dumps(...) where col is a JSONType column name
         if isinstance(node, ast.Assign) and _is_json_dumps(node.value):
             for tgt in node.targets:
                 if isinstance(tgt, ast.Attribute) and tgt.attr in all_json_cols:
-                    hits.append((rel, f".{tgt.attr}", node.lineno))
+                    hits.append((relpath, f".{tgt.attr}", node.lineno))
     return hits
 
 

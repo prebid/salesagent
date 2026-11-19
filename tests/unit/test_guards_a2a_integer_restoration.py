@@ -38,6 +38,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: The construction sites the integer-restoration fix actually covers: ``_dict_to_value``
@@ -75,7 +77,7 @@ def _struct_value_construction_sites(repo_root: Path = REPO_ROOT) -> list[str]:
             src_name = node.func.value
             if node.func.attr in {"Value", "Struct"} and isinstance(src_name, ast.Name) and src_name.id == "struct_pb2":
                 where = enclosing.get(node.lineno, "<module>")
-                sites.append(f"{path.relative_to(repo_root).as_posix()}:{node.lineno}:{where}")
+                sites.append(f"{rel(path, repo_root)}:{node.lineno}:{where}")
     return sites
 
 

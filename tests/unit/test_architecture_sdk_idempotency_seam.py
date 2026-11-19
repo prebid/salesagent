@@ -15,6 +15,8 @@ protected only by a docstring.
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 SRC = Path(__file__).parent.parent.parent / "src"
 SEAM_MODULE = "adcp.server.idempotency"
 # The single production module permitted to import the engine (path relative to src/).
@@ -79,12 +81,12 @@ def test_sdk_idempotency_canonicalizer_has_single_import_seam():
     """No src/ module outside the allowlist imports the SDK canonicalizer directly."""
     violations = []
     for py in SRC.rglob("*.py"):
-        rel = py.relative_to(SRC).as_posix()
-        if rel in ALLOWED:
+        rel_path = rel(py, SRC)
+        if rel_path in ALLOWED:
             continue
         line = _seam_import_line(py)
         if line is not None:
-            violations.append(f"{rel}:{line}")
+            violations.append(f"{rel_path}:{line}")
 
     assert not violations, (
         f"'{SEAM_MODULE}' may be imported only by {sorted(ALLOWED)} (the single production "

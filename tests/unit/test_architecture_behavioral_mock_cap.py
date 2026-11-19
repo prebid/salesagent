@@ -28,7 +28,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests.unit._architecture_helpers import iter_call_expressions
+from tests.unit._architecture_helpers import iter_call_expressions, rel
 
 # Per-file cap on hand-rolled mock constructions in behavioral test files.
 # Frozen at the current count; can only shrink. New behavioral files with mock
@@ -105,7 +105,7 @@ _SCAN_DIRS = [_REPO_ROOT / "tests"]
 
 
 def _rel(path: Path) -> str:
-    return path.relative_to(_REPO_ROOT).as_posix().replace("\\", "/")
+    return rel(path, _REPO_ROOT).replace("\\", "/")
 
 
 from tests.unit._per_file_cap_guard import (

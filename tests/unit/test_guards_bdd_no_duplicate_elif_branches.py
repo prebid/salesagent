@@ -29,6 +29,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_FILES = [REPO_ROOT / "tests" / "bdd" / "conftest.py"]
 
@@ -98,7 +100,7 @@ def test_no_duplicate_dispatch_tests_in_bdd_conftest():
     for path in SCAN_FILES:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for offender in find_duplicate_dispatch_tests(tree):
-            violations.append(f"{path.relative_to(REPO_ROOT).as_posix()}: {offender}")
+            violations.append(f"{rel(path, REPO_ROOT)}: {offender}")
     assert not violations, (
         "Duplicate dispatch test expression — the later branch is unreachable "
         "(shadowed by an earlier identical test in the same chain, or by an "

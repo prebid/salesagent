@@ -22,6 +22,8 @@ import ast
 import re
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: Capability-gap phrasing. Matched against the joined literal fragments of
@@ -72,7 +74,7 @@ def _scan_adapters() -> list[str]:
         for msg, lineno in _find_capability_valueerrors(ast.parse(path.read_text(encoding="utf-8"))):
             if any(msg.startswith(prefix) for prefix in ALLOWLIST_PREFIXES):
                 continue
-            violations.append(f"{path.relative_to(REPO_ROOT).as_posix()}:{lineno} ValueError({msg[:60]!r}...)")
+            violations.append(f"{rel(path, REPO_ROOT)}:{lineno} ValueError({msg[:60]!r}...)")
     return violations
 
 

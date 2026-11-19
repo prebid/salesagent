@@ -25,6 +25,7 @@ from tests.unit._architecture_helpers import (
     assert_detector_catches_ast_snippets,
     assert_violations_match_allowlist,
     iter_call_expressions,
+    rel,
 )
 
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
@@ -88,7 +89,7 @@ def _scan_bdd_steps() -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
         tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
-        relative = py_file.relative_to(_BDD_STEPS_DIR.parents[1]).as_posix()
+        relative = rel(py_file, _BDD_STEPS_DIR.parents[1])
         for _lineno, func_name in find_swallowed_dispatch_error_violations(tree):
             found.append((relative, func_name))
     return found

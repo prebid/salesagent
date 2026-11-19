@@ -39,6 +39,7 @@ from tests.helpers.signing_vectors import (
     load_vector_manifest,
     vectors_with_expected_signature_base,
 )
+from tests.unit._architecture_helpers import rel
 
 #: The vector files that ship ``expected_signature_base``, measured from the re-vendored set.
 #:
@@ -91,9 +92,7 @@ def test_vendored_file_set_matches_the_manifest() -> None:
     """No file added, dropped or renamed under the vendored tree."""
     manifest = load_vector_manifest()
     on_disk = {
-        path.relative_to(VECTORS_DIR).as_posix()
-        for path in VECTORS_DIR.rglob("*")
-        if path.is_file() and path.name != "MANIFEST.json"
+        rel(path, VECTORS_DIR) for path in VECTORS_DIR.rglob("*") if path.is_file() and path.name != "MANIFEST.json"
     }
     assert on_disk == set(manifest["files"]), (
         f"Vendored vector file set drifted from MANIFEST.json.\n"

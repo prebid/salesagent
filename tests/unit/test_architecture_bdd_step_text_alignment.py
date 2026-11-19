@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import rel
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 _INSPECT_SCRIPT = Path(__file__).resolve().parents[2] / ".claude" / "scripts" / "inspect_bdd_steps.py"
 
@@ -77,9 +79,7 @@ class TestBddStepTextAlignment:
                 continue
             referenced = _field_names_referenced(func)
             if "account_id" not in referenced:
-                violations.append(
-                    f"{py_file.relative_to(Path.cwd()).as_posix()}:{func.lineno} {func.name} — step mentions account_id"
-                )
+                violations.append(f"{rel(py_file, Path.cwd())}:{func.lineno} {func.name} — step mentions account_id")
 
         assert not violations, (
             f"Found {len(violations)} Then step(s) mentioning account_id without referencing it in code:\n"
@@ -99,7 +99,7 @@ class TestBddStepTextAlignment:
             referenced = _field_names_referenced(func)
             if field_name not in referenced:
                 violations.append(
-                    f"{py_file.relative_to(Path.cwd()).as_posix()}:{func.lineno} {func.name} — step claims response field '{field_name}'"
+                    f"{rel(py_file, Path.cwd())}:{func.lineno} {func.name} — step claims response field '{field_name}'"
                 )
 
         assert not violations, (

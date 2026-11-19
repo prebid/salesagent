@@ -22,6 +22,7 @@ from pathlib import Path
 from sqlalchemy.orm import class_mapper
 
 from src.core.database.models import Base
+from tests.unit._architecture_helpers import rel
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODELS_MODULE = "src.core.database.models"
@@ -64,7 +65,7 @@ def _scan_file(path: Path, mapped: dict[str, set[str]]) -> list[tuple[str, str, 
             continue
         bad = [kw.arg for kw in node.keywords if kw.arg and kw.arg not in mapped[orm_name]]
         if bad:
-            violations.append((path.relative_to(REPO_ROOT).as_posix(), orm_name, bad, node.lineno))
+            violations.append((rel(path, REPO_ROOT), orm_name, bad, node.lineno))
     return violations
 
 

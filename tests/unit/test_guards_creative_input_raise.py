@@ -20,6 +20,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _BANNED = {"ValueError", "Exception"}
@@ -28,14 +30,14 @@ _BANNED = {"ValueError", "Exception"}
 ALLOWLIST: set[tuple[str, str]] = set()
 
 
-def _scan_source_text(rel: str, text: str) -> list[tuple[str, str, int]]:
+def _scan_source_text(rel_path: str, text: str) -> list[tuple[str, str, int]]:
     hits: list[tuple[str, str, int]] = []
     for node in ast.walk(ast.parse(text)):
         if not (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)):
             continue
         func = node.exc.func
         if isinstance(func, ast.Name) and func.id in _BANNED:
-            hits.append((rel, func.id, node.lineno))
+            hits.append((rel_path, func.id, node.lineno))
     return hits
 
 
@@ -46,8 +48,8 @@ def _creative_modules() -> list[Path]:
 def _scan() -> list[tuple[str, str, int]]:
     hits: list[tuple[str, str, int]] = []
     for path in _creative_modules():
-        rel = path.relative_to(REPO_ROOT).as_posix()
-        hits.extend(_scan_source_text(rel, path.read_text(encoding="utf-8")))
+        rel_path = rel(path, REPO_ROOT)
+        hits.extend(_scan_source_text(rel_path, path.read_text(encoding="utf-8")))
     return hits
 
 

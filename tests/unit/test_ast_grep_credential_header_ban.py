@@ -73,7 +73,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import repo_root, stage_ast_grep_root, venv_ast_grep, write_ast_grep_probe
+from tests.unit._architecture_helpers import rel, repo_root, stage_ast_grep_root, venv_ast_grep, write_ast_grep_probe
 
 # The rule's id, and the path it is committed at. Both are pinned so that a
 # rule filed under another name fails with a path in the message rather than a
@@ -316,13 +316,13 @@ class TestLiveTreeAndExemptions:
         directive = re.compile(rf"#\s*ast-grep-ignore:\s*{re.escape(RULE_ID)}\b")
         # This module is excluded: it spells the directive inside string
         # literals as TEST DATA (TestExemptionForm), which is not an exemption.
-        this_module = Path(__file__).resolve().relative_to(repo_root()).as_posix()
+        this_module = rel(Path(__file__).resolve(), repo_root())
         # Probes are excluded here for the same reason the live-tree scan excludes
         # them: a sibling test on another xdist worker writes and removes them, so one
         # can vanish between rglob and read_text -- a FileNotFoundError that read as
         # this test failing on two box runs with nothing else changed.
         found = {
-            path.relative_to(repo_root()).as_posix()
+            rel(path, repo_root())
             for path in (repo_root() / "tests").rglob("*.py")
             if not path.name.startswith(_PROBE_STEM)
             and directive.search(path.read_text(encoding="utf-8", errors="ignore"))
@@ -337,11 +337,11 @@ class TestLiveTreeAndExemptions:
     def test_each_exemption_is_a_real_violation_without_its_suppression(self, staged_root: Path) -> None:
         directive = re.compile(r"#\s*ast-grep-ignore:[^\n]*")
         vacuous: list[str] = []
-        for rel in sorted(_RECORDED_EXEMPTIONS):
-            source = (repo_root() / rel).read_text(encoding="utf-8")
+        for relpath in sorted(_RECORDED_EXEMPTIONS):
+            source = (repo_root() / relpath).read_text(encoding="utf-8")
             probe_path = _probe(staged_root, "tests/unit", directive.sub("", source))
             if not _matches(_scan(probe_path, cwd=staged_root)):
-                vacuous.append(rel)
+                vacuous.append(relpath)
         assert vacuous == [], (
             "these files are exempted but do not violate the rule once their suppression "
             f"comment is removed — the exemption is prose, delete it: {vacuous}"

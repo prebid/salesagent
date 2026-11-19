@@ -28,6 +28,8 @@ import pathlib
 
 import pytest
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SRC = REPO_ROOT / "src"
 
@@ -70,13 +72,13 @@ def collect_handrolled_recoveries() -> dict[tuple[str, str], int]:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except SyntaxError:
             continue
-        rel = path.relative_to(SRC).as_posix()
+        rel_path = rel(path, SRC)
         for node in ast.walk(tree):
             if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                 continue
             if not (_opens_savepoint(node) and _handles_integrity_error(node)):
                 continue
-            key = (rel, node.name)
+            key = (rel_path, node.name)
             if key in SANCTIONED:
                 continue
             found[key] = node.lineno

@@ -29,6 +29,8 @@ from pathlib import Path
 
 import yaml
 
+from tests.unit._architecture_helpers import rel
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _COMPOSE_FILE = _REPO_ROOT / "docker-compose.e2e.yml"
 _TLS_TEMPLATE_MOUNT = "config/nginx/nginx-tls-test.conf.template"
@@ -144,7 +146,7 @@ def find_resurrected_allow_insecure_in_src(src_root: Path) -> list[str]:
     violations: list[str] = []
     for path in sorted(src_root.rglob("*.py")):
         if "ADCP_OUTBOUND_ALLOW_INSECURE" in path.read_text(encoding="utf-8"):
-            violations.append(f"{path.relative_to(src_root.parent).as_posix()} references ADCP_OUTBOUND_ALLOW_INSECURE")
+            violations.append(f"{rel(path, src_root.parent)} references ADCP_OUTBOUND_ALLOW_INSECURE")
     return violations
 
 

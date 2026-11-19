@@ -42,6 +42,7 @@ from tests.helpers.environ import isolated_environ
 from tests.unit._architecture_helpers import (
     format_failure,
     iter_call_expressions,
+    rel,
     repo_root,
     safe_parse,
     src_python_files,
@@ -113,7 +114,7 @@ def _is_seam_owned(relative: str) -> bool:
 def _find_private_destination_violations(repo) -> list[str]:
     violations: list[str] = []
     for path in src_python_files(repo):
-        if _is_seam_owned(path.relative_to(repo).as_posix()):
+        if _is_seam_owned(rel(path, repo)):
             continue
         tree = safe_parse(path)
         if tree is None:
@@ -269,11 +270,11 @@ def _find_env_hatch_violations(repo) -> list[str]:
             continue
         if FORBIDDEN_ENV_HATCH not in text:
             continue
-        if _is_seam_owned(path.relative_to(repo).as_posix()):
+        if _is_seam_owned(rel(path, repo)):
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
             if FORBIDDEN_ENV_HATCH in line:
-                violations.append(f"{path.relative_to(repo).as_posix()}:{lineno}: names {FORBIDDEN_ENV_HATCH}")
+                violations.append(f"{rel(path, repo)}:{lineno}: names {FORBIDDEN_ENV_HATCH}")
     return violations
 
 
