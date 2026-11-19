@@ -220,8 +220,7 @@ def setup_oauth_logging() -> None:
     # Add handler if not already present
     if not oauth_logger.handlers:
         handler = logging.StreamHandler()
-        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        handler.setFormatter(formatter)
+        handler.setFormatter(LineSafeFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
         oauth_logger.addHandler(handler)
 
     oauth_logger.info("OAuth structured logging initialized")
@@ -255,3 +254,17 @@ def log_safe(value: object) -> str:
     for char, escaped in _LOG_SAFE_ESCAPES:
         text = text.replace(char, escaped)
     return text
+
+
+class LineSafeFormatter(logging.Formatter):
+    """A text formatter whose every record renders as one line.
+
+    For the handlers that write text without going through ``JSONFormatter`` (the
+    ``adcp.audit`` files and the ``adcp.oauth`` stream). ``log_safe`` runs over the
+    whole rendered record, so a line break in the message, an argument or the
+    attached exception text comes out escaped, whatever the call site passed in.
+    A traceback becomes one line with ``\\n`` between its frames.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        return log_safe(super().format(record))

@@ -115,3 +115,51 @@ class TestCallSites:
         assert len(records) == 1, f"expected one WARNING, got {[r.getMessage() for r in records]}"
         message = records[0].getMessage()
         assert len(message.splitlines()) == 1, f"a non-str __repr__ forged a line: {message!r}"
+
+
+# Every character ``str.splitlines()`` treats as a line boundary, built from code
+# points so this file carries none of them literally.
+_ALL_BREAKS = "".join(chr(c) for c in (0x0A, 0x0D, 0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029))
+
+
+def _audit_handlers() -> list[logging.Handler]:
+    import src.core.audit_logger  # noqa: F401 - attaches the adcp.audit handlers
+
+    return list(logging.getLogger("adcp.audit").handlers)
+
+
+def _oauth_handlers() -> list[logging.Handler]:
+    from src.core.logging_config import oauth_logger, setup_oauth_logging
+
+    setup_oauth_logging()
+    return list(oauth_logger.handlers)
+
+
+class TestHandlersWriteOneLinePerRecord:
+    """The audit and OAuth handlers bypass the root JSON formatter, even in production.
+
+    So their formatter keeps each record on one line itself, whatever the call
+    site passed in, including the exception text attached to the record.
+    """
+
+    @pytest.mark.parametrize("handlers", [_audit_handlers, _oauth_handlers], ids=["adcp.audit", "adcp.oauth"])
+    def test_a_record_with_every_line_break_renders_as_one_line(self, handlers):
+        try:
+            raise RuntimeError(f"remote said{_ALL_BREAKS}FORGED")
+        except RuntimeError as exc:
+            record = logging.LogRecord(
+                "adcp.audit",
+                logging.ERROR,
+                __file__,
+                1,
+                f"op{_ALL_BREAKS}%s",
+                (f"arg{_ALL_BREAKS}FORGED",),
+                (type(exc), exc, None),
+            )
+
+        attached = handlers()
+        assert attached, "nothing to check"
+        for handler in attached:
+            rendered = handler.format(record)
+            assert len(rendered.splitlines()) == 1, (handler, rendered)
+            assert "FORGED" in rendered, "escaped, not dropped"
