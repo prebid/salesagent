@@ -13,6 +13,7 @@ from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Tenant
 from src.core.database.repositories.principal import PrincipalRepository
+from src.services.background_sync_service import SyncAlreadyRunning, start_inventory_sync_background
 
 logger = logging.getLogger(__name__)
 
@@ -683,8 +684,6 @@ def sync_inventory(tenant_id):
         404 Not Found if tenant doesn't exist
     """
     try:
-        from src.services.background_sync_service import start_inventory_sync_background
-
         # Validate tenant exists
         with get_db_session() as db_session:
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -748,9 +747,8 @@ def sync_inventory(tenant_id):
             202,
         )
 
-    except ValueError as e:
-        # Sync already running or validation error
-        return json_error(e, "A sync is already running for this tenant, or the request was invalid", status_code=400)
+    except SyncAlreadyRunning as running:
+        return jsonify({"error": SyncAlreadyRunning.MESSAGE, "sync_id": running.sync_id}), 400
     except Exception as e:
         logger.error(f"Error starting inventory sync: {e}", exc_info=True)
         return json_error(e)

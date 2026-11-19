@@ -11,12 +11,12 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from sqlalchemy import select
 
-from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.domain_routing import RoutingResult, is_served_host, route_landing_page
+from src.core.operator_errors import safe_error_message
 from src.landing import generate_tenant_landing_page
 
 logger = logging.getLogger(__name__)

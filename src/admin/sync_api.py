@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.admin.auth_helpers import api_key_prefix, mint_stored_api_key, require_api_key_auth
-from src.admin.utils.operator_errors import json_error
+from src.admin.utils.operator_errors import json_error, safe_error_message
 from src.core.database.models import AdapterConfig, SyncJob, Tenant
 from src.services.gam_inventory_service import db_session as gam_db_session
 
@@ -178,17 +178,19 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
         except Exception as e:
             logger.error(f"Sync failed for tenant {tenant_id}: {e}", exc_info=True)
 
-            # Update sync job with error (if it was created)
+            # The job keeps the text the response carries, so a later status
+            # request answers with the same reference and no exception text.
+            error_message = safe_error_message(e, "Sync failed")
             try:
                 sync_job.status = "failed"
                 # Type ignore for SQLAlchemy DateTime column assignment
                 sync_job.completed_at = datetime.now(UTC)
-                sync_job.error_message = str(e)
+                sync_job.error_message = error_message
                 db_session.commit()
             except Exception:
                 logger.warning("Failed to update sync_job error record", exc_info=True)
 
-            return json_error(e, sync_id=sync_id, status="failed")
+            return jsonify({"sync_id": sync_id, "status": "failed", "error": error_message}), 500
 
     except Exception as e:
         logger.error(f"Failed to trigger sync: {e}", exc_info=True)
@@ -537,14 +539,15 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
         except Exception as e:
             logger.error(f"Orders sync failed for tenant {tenant_id}: {e}", exc_info=True)
 
-            # Update sync job with error
+            # The job keeps the text the response carries (see trigger_sync).
+            error_message = safe_error_message(e, "Orders sync failed")
             sync_job.status = "failed"
             # Type ignore for SQLAlchemy DateTime column assignment
             sync_job.completed_at = datetime.now(UTC)
-            sync_job.error_message = str(e)
+            sync_job.error_message = error_message
             db_session.commit()
 
-            return json_error(e, sync_id=sync_id, status="failed")
+            return jsonify({"sync_id": sync_id, "status": "failed", "error": error_message}), 500
 
     except Exception as e:
         logger.error(f"Failed to trigger orders sync: {e}", exc_info=True)

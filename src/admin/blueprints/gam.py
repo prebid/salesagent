@@ -818,7 +818,11 @@ def create_service_account(tenant_id):
                 500,
             )
 
-        from src.services.gcp_service_account_service import GCPServiceAccountService
+        from src.services.gcp_service_account_service import (
+            GCPServiceAccountService,
+            ServiceAccountAlreadyExists,
+            TenantAdapterConfigMissing,
+        )
 
         service = GCPServiceAccountService(gcp_project_id=gcp_project_id)
 
@@ -834,11 +838,8 @@ def create_service_account(tenant_id):
                 }
             )
 
-        except ValueError as e:
-            # Tenant not found or already has service account
-            return json_error(
-                e, "Tenant not found, or it already has a service account", status_code=400, success=False
-            )
+        except (TenantAdapterConfigMissing, ServiceAccountAlreadyExists) as refusal:
+            return jsonify({"success": False, "error": refusal.MESSAGE}), 400
 
         except Exception as e:
             logger.error(f"Error creating service account for tenant {tenant_id}: {e}", exc_info=True)

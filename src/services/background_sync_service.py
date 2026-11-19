@@ -15,6 +15,7 @@ from sqlalchemy import select
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
+from src.core.operator_errors import SYNC_FAILED_OPERATOR_MESSAGE
 from src.core.thread_registry import ThreadRegistry
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,21 @@ logger = logging.getLogger(__name__)
 # otherwise pin captured DB sessions, GAM clients, and result payloads (leak
 # triage #5 from the production OOM-cycle).
 _active_syncs = ThreadRegistry()
+
+
+class SyncAlreadyRunning(ValueError):
+    """An inventory sync is already running for the tenant; ``sync_id`` names it.
+
+    A ``ValueError`` so callers that caught the bare refusal keep working.
+    ``MESSAGE`` is the operator-facing text; the exception's own text carries
+    the tenant and start time for the log.
+    """
+
+    MESSAGE = "A sync is already running for this tenant"
+
+    def __init__(self, tenant_id: str, sync_id: str, started_at: datetime):
+        super().__init__(f"Sync already running for tenant {tenant_id}: {sync_id} (started {started_at})")
+        self.sync_id = sync_id
 
 
 def start_inventory_sync_background(
@@ -48,7 +64,7 @@ def start_inventory_sync_background(
         sync_id: The sync job ID for tracking progress
 
     Raises:
-        ValueError: If a sync is already running for this tenant
+        SyncAlreadyRunning: If a sync is already running for this tenant
     """
 
     # Create sync job record
@@ -93,9 +109,7 @@ def start_inventory_sync_background(
                 )
             else:
                 # Sync is actually running, raise error
-                raise ValueError(
-                    f"Sync already running for tenant {tenant_id}: {existing_sync.sync_id} (started {started_at_value})"
-                )
+                raise SyncAlreadyRunning(tenant_id, existing_sync.sync_id, started_at_value)
 
         # Create new sync job
         sync_id = f"sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"
@@ -477,7 +491,7 @@ def _run_sync_thread(
 
     except Exception as e:
         logger.error(f"[{sync_id}] Sync failed: {e}", exc_info=True)
-        _mark_sync_failed(sync_id, str(e))
+        _mark_sync_failed(sync_id, SYNC_FAILED_OPERATOR_MESSAGE)
 
     finally:
         # Remove from active syncs

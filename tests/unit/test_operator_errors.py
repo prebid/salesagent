@@ -53,7 +53,7 @@ def test_default_text_without_context():
 def test_exception_is_logged_with_traceback_under_the_same_reference(caplog):
     exc = _raised(RuntimeError(_SECRET))
 
-    with caplog.at_level(logging.ERROR, logger="src.admin.utils.operator_errors"):
+    with caplog.at_level(logging.ERROR, logger="src.core.operator_errors"):
         message = safe_error_message(exc, "Error syncing inventory")
 
     reference = _REFERENCE.search(message).group(1)

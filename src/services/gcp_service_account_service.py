@@ -63,6 +63,18 @@ from src.core.database.models import AdapterConfig
 logger = logging.getLogger(__name__)
 
 
+class TenantAdapterConfigMissing(ValueError):
+    """The tenant has no adapter config to attach a service account to."""
+
+    MESSAGE = "This tenant has no ad server configuration yet"
+
+
+class ServiceAccountAlreadyExists(ValueError):
+    """The tenant already has a service account; it is not replaced."""
+
+    MESSAGE = "This tenant already has a service account"
+
+
 class GCPServiceAccountService:
     """Service for managing GCP service accounts for GAM integration."""
 
@@ -118,7 +130,8 @@ class GCPServiceAccountService:
             Tuple of (service_account_email, service_account_json)
 
         Raises:
-            ValueError: If tenant not found or already has a service account
+            TenantAdapterConfigMissing: If the tenant has no adapter config
+            ServiceAccountAlreadyExists: If the tenant already has a service account
             Exception: If service account creation fails
         """
         with get_db_session() as session:
@@ -127,11 +140,11 @@ class GCPServiceAccountService:
             adapter_config = session.scalars(stmt).first()
 
             if not adapter_config:
-                raise ValueError(f"Tenant {tenant_id} not found or has no adapter config")
+                raise TenantAdapterConfigMissing(f"Tenant {tenant_id} not found or has no adapter config")
 
             # Check if service account already exists
             if adapter_config.gam_service_account_email:
-                raise ValueError(
+                raise ServiceAccountAlreadyExists(
                     f"Tenant {tenant_id} already has a service account: {adapter_config.gam_service_account_email}"
                 )
 
