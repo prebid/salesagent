@@ -605,7 +605,7 @@ These files carry the most remaining debt. **Do not copy their patterns into cod
 | `src/core/tools/media_buy_create.py` | 4079 lines; raw `select()` inside `_create_media_buy_impl` and `execute_approved_media_buy`; the deprecated `uow.session` reached through `assert uow.session is not None` at eight sites; scattered `"USD"` defaults | `FIXME(#1119)`, `test_architecture_no_raw_select.py`'s allowlist (two entries for this file) |
 | `src/core/tools/media_buy_update.py` | Two remaining `uow.session` reads | `FIXME(#1119)` |
 | `src/core/tools/media_buy_delivery.py` | Repositories constructed from `uow.session` rather than reached off the UoW; one `session.add()` for an audit row | `FIXME(#1119)` |
-| `src/admin/blueprints/*` | 189 `get_db_session()` and 43 `session.add()` sites | `.admin-raw-session-baseline` (shrink-only) |
+| `src/admin/blueprints/*` | Raw `get_db_session()` and `session.add()` calls; the baseline file holds the two counts for all of `src/admin` | `.admin-raw-session-baseline` (shrink-only) |
 
 When you work in these files, follow the patterns in this document, not the surrounding code. The fix for one of these reads is a repository method you add, never a second copy of the read.
 
