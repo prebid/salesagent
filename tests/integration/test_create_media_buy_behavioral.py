@@ -1414,7 +1414,6 @@ class TestExtensionObligations:
 
         Covers: UC-002-EXT-F-01
         """
-        from pydantic import ValidationError
 
         from src.core.schemas import Targeting
 
@@ -1461,7 +1460,6 @@ class TestExtensionObligations:
         """
         from src.core.database.repositories import MediaBuyUoW
         from src.core.exceptions import AdCPRateLimitError
-        from tests.helpers.envelope_assertions import raises_adcp
 
         req = _make_request()
 

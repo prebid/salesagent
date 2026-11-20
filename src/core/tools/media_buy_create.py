@@ -1497,7 +1497,6 @@ def execute_approved_media_buy(
     Returns:
         Tuple of (success: bool, error_message: str | None)
     """
-    from sqlalchemy import select
 
     from src.core.database.models import MediaPackage as DBMediaPackage
     from src.core.database.repositories import MediaBuyUoW
@@ -1930,9 +1929,6 @@ def execute_approved_media_buy(
                     )
             else:
                 logger.info("[APPROVAL] Adapter returned no media_buy_id — skipping ID persistence")
-
-        # Import adapter helper here (used for both creative upload and order approval)
-        from src.core.helpers.adapter_helpers import get_adapter
 
         # Resolved before the unit opens: get_adapter reads the adapter config in a session of
         # its own, which would close the unit's session and lose the enrichment written below.
@@ -2511,7 +2507,6 @@ def _validate_pricing_model_selection(
     Raises:
         ToolError: If pricing_model validation fails
     """
-    from decimal import Decimal
 
     # Log pricing validation details at debug level
     logger.debug(

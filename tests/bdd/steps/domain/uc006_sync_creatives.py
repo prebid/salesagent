@@ -1212,7 +1212,6 @@ def _seed_library_creative(ctx: dict, creative_id: str) -> None:
     (sync-creatives-request.json: ``creatives`` minItems 1), so the scenario's anchor
     creative stays in ``ctx["creatives"]`` and this row is the one the assignment names.
     """
-    from tests.factories import CreativeFactory
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -1398,7 +1397,7 @@ def given_library_creative_on_buy(ctx: dict, creative_id: str, status: str, paus
 
     The buy's flight began in 2025 and runs to 2099, so a buy in a serving status is delivering.
     """
-    from datetime import UTC, date, datetime
+    from datetime import UTC, datetime
 
     from tests.factories import CreativeAssignmentFactory, MediaBuyFactory, MediaPackageFactory, ProductFactory
 
@@ -1511,13 +1510,7 @@ def then_processing_continues(ctx: dict) -> None:
 @given("an assignment that already exists for this creative")
 def given_assignment_already_exists(ctx: dict) -> None:
     """Seed a pre-existing CreativeAssignment row so the sync acts as idempotent upsert."""
-    from tests.factories import (
-        CreativeAssignmentFactory,
-        CreativeFactory,
-        MediaBuyFactory,
-        MediaPackageFactory,
-        ProductFactory,
-    )
+    from tests.factories import CreativeAssignmentFactory, MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -1592,13 +1585,7 @@ def given_creative_already_assigned_to_package(ctx: dict) -> None:
     treats this as an update (existing creative + existing assignment).
     Stores the assignment_id and weight for verification in the Then step.
     """
-    from tests.factories import (
-        CreativeAssignmentFactory,
-        CreativeFactory,
-        MediaBuyFactory,
-        MediaPackageFactory,
-        ProductFactory,
-    )
+    from tests.factories import CreativeAssignmentFactory, MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -2649,7 +2636,6 @@ def given_creative_already_exists(ctx: dict, stored_name: str | None = None) -> 
     these scenarios passed on it -- which is exactly the vacuous pass salesagent-jnp2s
     uncovered, not a behavior to preserve.
     """
-    from tests.factories import CreativeFactory
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -3207,12 +3193,7 @@ def given_existing_assignment_in_media_buy(ctx: dict) -> None:
     so that the sync sees it as a pre-existing assignment (for upsert).
     The media buy must already be created by a preceding Given step.
     """
-    from tests.factories import (
-        CreativeAssignmentFactory,
-        CreativeFactory,
-        MediaPackageFactory,
-        ProductFactory,
-    )
+    from tests.factories import CreativeAssignmentFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -4316,7 +4297,7 @@ def given_creative_exists_for_principal(ctx: dict, creative_id: str, principal_i
     principal's creative), so it gets its own get-or-create row.
     """
     from src.core.database.models import Principal, Tenant
-    from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
+    from tests.factories import PrincipalFactory, TenantFactory
     from tests.factories.core import get_or_create
 
     env = ctx["env"]
@@ -4782,7 +4763,6 @@ def given_idempotency_key(ctx: dict, key_value: str | None, empty: str | None) -
 
 def _expand_length_notation(value: str) -> str:
     """Expand ]xN notation: 'a]x254' -> 'a' repeated to 254 chars."""
-    import re
 
     match = re.match(r"^(.)]x(\d+)$", value)
     if match:
@@ -5525,7 +5505,6 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
     generative_status, and generative_context_id in its data field.
     The update step will then modify this creative without a prompt.
     """
-    from tests.factories import CreativeFactory
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -6313,13 +6292,7 @@ def given_creative_already_assigned_to_package_partition(ctx: dict) -> None:
     Used by the assignment_format partition scenario. Creates a Creative ORM row,
     a package, and a CreativeAssignment row. The sync should update (not duplicate).
     """
-    from tests.factories import (
-        CreativeAssignmentFactory,
-        CreativeFactory,
-        MediaBuyFactory,
-        MediaPackageFactory,
-        ProductFactory,
-    )
+    from tests.factories import CreativeAssignmentFactory, MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -6835,7 +6808,6 @@ def _preseed_creative_for_principal(ctx: dict, creative_id: str, principal_id: s
     from sqlalchemy import select
 
     from src.core.database.models import Principal, Tenant
-    from tests.factories import CreativeFactory
 
     env = ctx["env"]
     _ensure_tenant_principal_from_db(ctx, env)

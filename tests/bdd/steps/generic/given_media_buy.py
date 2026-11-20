@@ -499,7 +499,6 @@ def _set_max_daily_package_spend(ctx: dict, amount: int) -> None:
 
     Shared helper for both the parameterized and bare 'configured' steps.
     """
-    from decimal import Decimal
 
     from sqlalchemy import select
 
@@ -721,7 +720,6 @@ def given_packages_valid_pricing(ctx: dict) -> None:
     """
     from sqlalchemy import select
 
-    from src.core.database.models import PricingOption
     from tests.bdd.steps._harness_db import db_session
 
     kwargs = ctx.get("request_kwargs")
@@ -2612,7 +2610,7 @@ def given_request_canonical_creative_with_clickthrough(ctx: dict, signal: str) -
     upload, and the scenario would grade the closed set instead of the clickthrough.
     """
     from tests.factories.creative import CreativeFactory
-    from tests.factories.creative_asset import build_assets, image_spec, url_spec
+    from tests.factories.creative_asset import url_spec
 
     assert signal in _CLICK_SIGNALS, f"unknown click signal {signal!r}; known: {sorted(_CLICK_SIGNALS)}"
     asset_key, url_type = _CLICK_SIGNALS[signal]
@@ -2647,7 +2645,7 @@ def given_request_canonical_audio_creative(ctx: dict) -> None:
     audio asset has no width or height, and the buy must be accepted anyway.
     """
     from tests.factories.creative import CreativeFactory
-    from tests.factories.creative_asset import asset_spec, build_assets
+    from tests.factories.creative_asset import asset_spec
 
     _ensure_request_defaults(ctx)
     env = ctx["env"]

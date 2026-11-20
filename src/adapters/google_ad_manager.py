@@ -1166,7 +1166,7 @@ class GoogleAdManager(AdServerAdapter):
         Uses stats stored in the GAMLineItem table (synced every ~15 minutes by the
         background sync job). The staleness is derived from the last_synced timestamp.
         """
-        from datetime import UTC, datetime
+        from datetime import UTC
 
         from sqlalchemy import select
 

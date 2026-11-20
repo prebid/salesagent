@@ -5745,8 +5745,6 @@ def e2e_stack():
     server_host = os.environ.get("E2E_SERVER_HOST")
     worker = os.environ.get("PYTEST_XDIST_WORKER")  # e.g. "gw3"
     if os.environ.get("E2E_PER_WORKER") == "1" and worker and worker.startswith("gw"):
-        import re
-
         # Server containers are named "<project>-server-gwN" (globally-unique so
         # parallel worktrees don't collide) and reachable by that name on the
         # compose network. Hit the server directly on :8080 (SKIP_NGINX).

@@ -20,7 +20,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from src.adapters.base import AdapterCreateResult, ResponsePackage
 from src.adapters.mock_ad_server import MockAdServer
@@ -466,24 +466,13 @@ class MediaBuyCreateEnv(
         Every admin approval route calls ``execute_approved_media_buy``; ``run_approval`` is
         the one spelling of that call in tests. Raises ``RuntimeError`` unless exactly one
         buy awaits approval.
-
-        THE AD SERVER IS THIS ENV'S FOR BOTH OF THE APPROVAL'S LOOKUPS. It books the order
-        through this module's ``get_adapter``, which ``EXTERNAL_PATCHES`` replaces, but it
-        uploads the creatives through a call-time ``from src.core.helpers.adapter_helpers
-        import get_adapter``, which that patch does not reach: unpatched, the upload went to
-        the tenant's real Mock adapter, which has no ``creatives_manager``, and was skipped
-        ("Adapter does not support creative upload"). So the second spelling is pointed at the
-        same stand-in for the approval's duration. A seller that runs its real adapter
-        (``sell_through_tenant_adapter``) still gets it on both: the stand-in's side effect is
-        production's ``get_adapter`` itself.
         """
         from tests.helpers.media_buy_approval import run_approval
 
         pending = self.media_buys_awaiting_approval()
         if len(pending) != 1:
             raise RuntimeError(f"expected exactly one media buy awaiting approval; found {len(pending)}")
-        with patch("src.core.helpers.adapter_helpers.get_adapter", self.mock["adapter"]):
-            return run_approval(pending[0].media_buy_id, self._tenant_id)
+        return run_approval(pending[0].media_buy_id, self._tenant_id)
 
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""

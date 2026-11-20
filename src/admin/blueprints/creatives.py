@@ -1092,7 +1092,6 @@ def _ai_review_creative_impl_inner(
     When db_session is provided, uses it directly (caller owns lifecycle).
     When db_session is None, creates an AdminCreativeUoW and uses its session.
     """
-    from src.core.database.repositories.creative import CreativeRepository
     from src.core.database.repositories.media_buy import MediaBuyRepository
     from src.core.database.repositories.product import ProductRepository
     from src.core.database.repositories.tenant_config import TenantConfigRepository

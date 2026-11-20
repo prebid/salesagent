@@ -197,7 +197,6 @@ def process_and_upload_package_creatives(
         >>> # updated_pkgs[0].creative_ids contains uploaded IDs
         >>> assert uploaded_ids["p1"] == ["c1", "c2"]
     """
-    import logging
 
     # Lazy import to avoid circular dependency
     from src.core.exceptions import AdCPAdapterError, AdCPCreativeRejectedError, AdCPSalesAgentError

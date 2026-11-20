@@ -233,7 +233,7 @@ def _run_execute_approved(media_buy_id, tenant_id, adapter_response):
         ),
         patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
         patch(
-            "src.core.helpers.adapter_helpers.get_adapter",
+            "src.core.tools.media_buy_create.get_adapter",
             return_value=type("MockAdapter", (), {"orders_manager": None})(),
         ),
     ):
@@ -267,7 +267,7 @@ class TestExecuteApprovedPlatformIds:
             ),
             patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
             patch(
-                "src.core.helpers.adapter_helpers.get_adapter",
+                "src.core.tools.media_buy_create.get_adapter",
                 return_value=type("MockAdapter", (), {"orders_manager": None})(),
             ),
         ):
@@ -527,7 +527,7 @@ class TestExecuteApprovedEnrichesSellerConcept:
                 "src.core.tools.media_buy_create._build_adapter_asset_from_creative",
                 return_value=(valid_asset, None),
             ),
-            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=mock_adapter),
+            patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
         ):
             result = run_approval(media_buy_id, tenant_id)
 

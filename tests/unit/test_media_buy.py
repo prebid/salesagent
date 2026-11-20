@@ -105,8 +105,6 @@ def _stub_media_buy_reads(repo, row, media_buy_id: str | None = None):
         # it raises. A stub that returned None here would let production walk past a
         # missing row and fail later with an AttributeError instead of the typed
         # MEDIA_BUY_NOT_FOUND the buyer is owed.
-        from src.core.errors.details import EntityRefDetails
-        from src.core.exceptions import AdCPMediaBuyNotFoundError
 
         # Mirrors MediaBuyRepository.get_by_id_or_raise exactly: the identity travels
         # as typed details, and the buyer-facing message/suggestion are functions of
@@ -1862,8 +1860,6 @@ class TestUpdateMediaBuyTiming:
             # Precondition + currency check + date check
             mock_uow.media_buys.get_by_id.side_effect = [mock_buy, mock_buy, mock_buy]
 
-            from src.core.exceptions import AdCPValidationError
-
             with pytest.raises(AdCPValidationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
@@ -1935,8 +1931,6 @@ class TestUpdateMediaBuyTiming:
             mock_uow_cls.return_value = mock_uow
 
             _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
-
-            from src.core.exceptions import AdCPBudgetExceededError
 
             with pytest.raises(AdCPBudgetExceededError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
