@@ -19,8 +19,10 @@
 # Ungraded by the storyboard runner.
 #
 # Transports: a2a, mcp and rest with the real GoogleAdManager adapter over a stand-in SOAP
-# client. The live server has no stand-in GAM network, so the setup declares itself
-# unrealizable on e2e (GamSellerMixin.sell_through_gam).
+# client. On e2e the tenant
+# sells on the GAM network the environment configures, and each GAM Then reads it back
+# (tests/harness/gam_network.py); a Given the configured network cannot be made into
+# declares that with its own reason (GamSellerMixin).
 #
 # @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/sync_creatives.mdx
 # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json

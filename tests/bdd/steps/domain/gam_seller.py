@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -331,7 +332,7 @@ def given_package_references_creative_gam_holds(
         library_image_assets(url),
         fmt=LIBRARY_IMAGE_FORMAT,
         status="approved" if status == "approved" else "pending_review",
-        ad_server_creative_id=gam_id,
+        ad_server_creative_id=ctx["env"].hold_gam_creative(gam_id, url),
     )
 
 
@@ -576,16 +577,49 @@ def then_one_line_item_on_ad_unit(ctx: dict, ad_unit_id: str) -> None:
     assert line_items == expected, f"expected GAM to receive line items {expected}; it received {line_items}"
 
 
+@then("Google Ad Manager holds the order it created as approved")
+def then_gam_holds_created_order_approved(ctx: dict) -> None:
+    """GAM created exactly one order, and holds it APPROVED (``Order.status``), as the seller's approval left it."""
+    statuses = [order.get("status") for order in _orders_created(ctx)]
+    assert statuses == ["APPROVED"], f"expected GAM to hold one APPROVED order; it holds orders in {statuses}"
+
+
+@when("the Buyer Agent pauses the buy it holds booked in Google Ad Manager")
+def when_buyer_pauses_booked_buy(ctx: dict) -> None:
+    """update_media_buy with ``paused: true`` for the buyer's buy booked in GAM."""
+    from tests.bdd.steps.domain.uc003_storyboard_generic_client import dispatch_update
+
+    dispatch_update(ctx, {"media_buy_id": ctx["live_media_buy"].media_buy_id, "paused": True})
+
+
+@then("the update is not refused on the wire")
+def then_update_not_refused(ctx: dict) -> None:
+    """The update crossed the wire and the seller answered no error envelope.
+
+    The generic client this When dispatches through parses no update body for a create
+    env, so the success body is not read here; the refusal is what is ruled out.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_error_envelope_or_none
+
+    assert ctx["result"].has_wire, "the update never crossed a wire"
+    envelope = wire_error_envelope_or_none(ctx)
+    assert envelope is None and ctx.get("error") is None, f"the seller refused the update: {envelope}"
+
+
+@then(parsers.parse('Google Ad Manager holds line item "{line_item_id}" as paused'))
+def then_gam_holds_line_item_paused(ctx: dict, line_item_id: str) -> None:
+    """GAM holds the line item PAUSED (``LineItemSummary.status``), read from what GAM holds."""
+    status = ctx["env"].gam_line_item(line_item_id).get("status")
+    assert status == "PAUSED", f"expected GAM to hold line item {line_item_id} as PAUSED; it holds it {status}"
+
+
 #: The keys of a GAM line item or order that carry its flight.
 _FLIGHT_KEYS = ("startDateTimeType", "startDateTime", "endDateTime")
 
 
 def _flights(ctx: dict, service: str, method: str) -> list[dict[str, Any]]:
     """For each object the stand-in GAM network created through ``service.method``, its flight keys that are present."""
-    return [
-        {key: created[key] for key in _FLIGHT_KEYS if key in created}
-        for created in ctx["env"].gam_objects_created(service, method)
-    ]
+    return ctx["env"].gam_flights(service, method, _FLIGHT_KEYS)
 
 
 def _gam_datetime(literal: str, time_zone: str) -> dict[str, Any]:
@@ -898,14 +932,16 @@ def then_gam_created_one_html5_creative(ctx: dict, advertiser_id: str) -> None:
     """GAM holds exactly one creative from this scenario: an ``Html5Creative`` carrying the bundle's own bytes.
 
     Ad Manager API v202602 ``Html5Creative.html5Asset``: the ``assetByteArray`` "must be a
-    zip bundle" and the ``fileName`` "must have a zip extension". The bytes are the ones the
-    buyer's bundle host served, so a bundle the seller did not fetch cannot pass.
+    zip bundle" and the ``fileName`` "must have a zip extension". In process the bytes are the
+    ones the buyer's bundle host served, so a bundle the seller did not fetch cannot pass; a
+    real network does not read the bytes back, and answers the asset GAM holds by its
+    ``assetId`` (``gam_asset_is_the_bundle``).
     """
     created = _creatives_created(ctx)
     kinds = [(c["xsi_type"], str(c["advertiserId"]), c.get("imageUrl")) for c in created]
     assert kinds == [("Html5Creative", advertiser_id, None)], f"expected one Html5Creative; GAM created {created}"
     asset = created[0]["html5Asset"]
-    assert asset.get("assetByteArray") == ctx["html5_bundle"], "the html5 asset is not the buyer's zip bundle"
+    assert ctx["env"].gam_asset_is_the_bundle(asset, ctx["html5_bundle"]), f"the html5 asset {asset} is not the bundle"
     assert str(asset.get("fileName", "")).endswith(".zip"), f"the html5 asset's file name {asset.get('fileName')!r}"
 
 
@@ -924,17 +960,27 @@ def then_gam_created_creative_at_size(ctx: dict, width: str, height: str) -> Non
     )
 )
 def then_gam_associated_with_size_override(ctx: dict, sizes: str | None) -> None:
-    """One association, of the one creative onto the one line item, whose ``sizes`` are exactly these or none.
+    """One association, of the one creative onto the one line item, carrying exactly these sizes, or none.
 
     Ad Manager API v202602 ``LineItemCreativeAssociation.sizes``: "Overrides the value set for
     Creative.size, which allows the creative to be served to ad units that would otherwise
     not be compatible for its actual size." "At its own size" is an association stating none.
+    The scenarios say the association "carries" its sizes, which is a set: they are compared
+    as a multiset, so a missing, extra or repeated size fails and their order does not. A
+    real network does not keep the order the seller sent. The creative's own size, the
+    first one, is graded by "created that creative at size".
     """
     (creative,) = _creatives_created(ctx)
-    expected_sizes = parse_sizes(sizes or "")
-    held = [(str(a["creativeId"]), str(a["lineItemId"]), list(a.get("sizes") or [])) for a in _licas_created(ctx)]
-    expected = [(str(creative["id"]), str(_line_item_created(ctx)["id"]), expected_sizes)]
+    held = [
+        (str(a["creativeId"]), str(a["lineItemId"]), _size_counts(a.get("sizes") or [])) for a in _licas_created(ctx)
+    ]
+    expected = [(str(creative["id"]), str(_line_item_created(ctx)["id"]), _size_counts(parse_sizes(sizes or "")))]
     assert held == expected, f"expected GAM to hold {expected}; it holds {held}"
+
+
+def _size_counts(sizes: list[Any]) -> Counter[tuple[int, int]]:
+    """Each (width, height) of *sizes*, counted: the sizes as a multiset."""
+    return Counter((int(size["width"]), int(size["height"])) for size in sizes)
 
 
 @then(
@@ -1013,10 +1059,11 @@ def then_gam_association_serving(ctx: dict, line_items: str, status: str) -> Non
 def then_gam_serving_actions(ctx: dict) -> None:
     """GAM received exactly a deactivate and then an activate of the associations of the one creative it created."""
     (creative,) = _creatives_created(ctx)
-    lica = ctx["env"].mock["gam_client"].return_value.GetService("LineItemCreativeAssociationService")
     sent = [
-        (call.args[0]["xsi_type"], [v["value"]["value"] for v in call.args[1]["values"] if v["key"] == "creativeId"])
-        for call in lica.performLineItemCreativeAssociationAction.call_args_list
+        (action["xsi_type"], [v["value"]["value"] for v in statement["values"] if v["key"] == "creativeId"])
+        for action, statement in ctx["env"].gam_actions_performed(
+            "LineItemCreativeAssociationService", "performLineItemCreativeAssociationAction"
+        )
     ]
     expected = [
         ("DeactivateLineItemCreativeAssociations", [int(creative["id"])]),
@@ -1028,8 +1075,9 @@ def then_gam_serving_actions(ctx: dict) -> None:
 @then("Google Ad Manager was asked to change no association's serving")
 def then_gam_no_serving_change(ctx: dict) -> None:
     """Nothing reached GAM's association activate or deactivate action."""
-    lica = ctx["env"].mock["gam_client"].return_value.GetService("LineItemCreativeAssociationService")
-    calls = lica.performLineItemCreativeAssociationAction.call_args_list
+    calls = ctx["env"].gam_actions_performed(
+        "LineItemCreativeAssociationService", "performLineItemCreativeAssociationAction"
+    )
     assert calls == [], f"expected no association action; GAM received {calls}"
 
 
@@ -1254,10 +1302,9 @@ def then_gam_associated_each_creative_with_created_line_item(ctx: dict) -> None:
 def then_gam_approved_created_order_twice(ctx: dict) -> None:
     """Both approvals the seller sent GAM name the one order GAM created."""
     (order,) = _orders_created(ctx)
-    order_actions = ctx["env"].mock["gam_client"].return_value.GetService("OrderService").performOrderAction
     approvals = [
         str(bound["value"]["value"])
-        for action, statement in (call.args for call in order_actions.call_args_list)
+        for action, statement in ctx["env"].gam_actions_performed("OrderService", "performOrderAction")
         if action["xsi_type"].startswith("Approve")
         for bound in statement["values"]
         if bound["key"] == "orderId"

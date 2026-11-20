@@ -454,9 +454,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/admin/test_workflows_blueprint.py
     ("tests/admin/test_workflows_blueprint.py", "test_tenant"),
     ("tests/admin/test_workflows_blueprint.py", "_create_context_and_step"),
-    # ── tests/e2e/ — pre-existing violations from e2e lifecycle test ──
-    ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
-    ("tests/e2e/test_gam_lifecycle.py", "_persist_media_buy"),
 }
 
 
@@ -654,8 +651,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/admin/test_workflows_blueprint.py", "test_reject_step_sets_status_rejected"),
     ("tests/admin/test_workflows_blueprint.py", "test_reject_step_without_reason_uses_default"),
     ("tests/admin/test_workflows_blueprint.py", "test_tenant"),
-    ("tests/e2e/test_gam_lifecycle.py", "_persist_media_buy"),
-    ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
     ("tests/helpers/creative_test_helpers.py", "assert_stored_creative_assets"),
     ("tests/integration/conftest.py", "authenticated_admin_session"),
     ("tests/integration/conftest.py", "cleanup_tenant"),

@@ -888,6 +888,15 @@ services:
       BDD_LIVENESS_SESSIONS: "${BDD_LIVENESS_SESSIONS:-}"
       GEMINI_API_KEY: ${GEMINI_API_KEY:-test_key}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}  # TEST ONLY — never use in production
+      # The Google Ad Manager network the GAM tests run against (ToolingSettings.gam_suite_network),
+      # passed through from the host that run_all_tests.sh's preflight checked. No default:
+      # unset here, the GAM tests fail naming the setting. A key FILE is mounted below and
+      # named by its in-container path; the server never reads any of these.
+      GAM_SERVICE_ACCOUNT_JSON: "${GAM_SERVICE_ACCOUNT_JSON:-}"
+      GAM_SERVICE_ACCOUNT_KEY_FILE: "${GAM_SERVICE_ACCOUNT_KEY_FILE:+/run/gam-service-account.json}"
+      GAM_SUITE_NETWORK_CODE: "${GAM_SUITE_NETWORK_CODE:-}"
+      GAM_SUITE_ADVERTISER_ID: "${GAM_SUITE_ADVERTISER_ID:-}"
+      GAM_SUITE_AD_UNIT_IDS: "${GAM_SUITE_AD_UNIT_IDS:-}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -910,6 +919,9 @@ services:
       - single-request-reopen
     volumes:
       - .:/app
+      # The GAM service-account key file, when the host names one (GAM_SERVICE_ACCOUNT_KEY_FILE
+      # above). /dev/null stands in when it names none, and the variable is then unset in here.
+      - ${GAM_SERVICE_ACCOUNT_KEY_FILE:-/dev/null}:/run/gam-service-account.json:ro
       # Restored with the removal of the `user:` pin above (Aug 2026), matching
       # main. It had been dropped because a fresh named volume's mountpoint is
       # created root:root by the daemon before the container process starts,
