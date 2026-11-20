@@ -26,7 +26,6 @@ from src.core.errors.details import (
     EntityRefDetails,
     ErrorProblem,
     RejectionReasonDetails,
-    ValidationDetails,
 )
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -391,7 +390,6 @@ class MockAdServer(AdServerAdapter):
             AdCPAdapterError,
             AdCPConfigurationError,
             AdCPRateLimitError,
-            AdCPValidationError,
         )
 
         # A throttled ad server is its own fault, not a recovery class: RATE_LIMITED shares
@@ -777,13 +775,6 @@ class MockAdServer(AdServerAdapter):
                             capability="keywords_any_of", rejected_value=targeting.keywords_any_of
                         )
                     )
-
-        # GAM-like validation (based on real GAM behavior)
-        validation_errors = self.validate_media_buy_request(
-            request, packages, start_time, end_time, package_pricing_info, creatives_by_package={}
-        )
-        if validation_errors:
-            raise AdCPValidationError(details=ValidationDetails(reasons=validation_errors))
 
         # If no AI scenario or scenario accepts, proceed with normal flow
         # HITL Mode Processing
