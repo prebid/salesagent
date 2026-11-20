@@ -5,13 +5,11 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-import zeep.exceptions
 from flask import Blueprint, jsonify, render_template, request, session
-from google.auth.exceptions import GoogleAuthError
 from googleads import ad_manager, oauth2
-from googleads.errors import GoogleAdsError
 from sqlalchemy import select
 
+from src.adapters.gam.utils.error_handler import GAM_CALL_ERRORS
 from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
 from src.adapters.gam_reporting_service import GAMReportingService
 from src.admin.utils import require_tenant_access
@@ -22,20 +20,11 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, GAMLineItem, GAMOrder, Tenant
 from src.core.database.repositories.adapter_config import AdapterConfigRepository, read_adapter_config
-from src.core.exceptions import AdCPSalesAgentError
 
 logger = logging.getLogger(__name__)
 
 # Create blueprint
 gam_bp = Blueprint("gam", __name__, url_prefix="/tenant/<tenant_id>/gam")
-
-#: What a googleads SOAP service call raises when GAM, or the way to it, fails: the
-#: client turns a SOAP fault into ``GoogleAdsServerFault`` (a ``GoogleAdsError``), zeep
-#: raises its own ``Error`` for a reply that is not SOAP, google-auth raises
-#: ``GoogleAuthError`` when the credentials cannot be refreshed, and the transport's
-#: ``requests.RequestException`` is an ``OSError`` (``requests`` itself is banned in
-#: ``src/`` by ruff-egress.toml, so it is not named here).
-GAM_CALL_ERRORS: tuple[type[Exception], ...] = (GoogleAdsError, zeep.exceptions.Error, GoogleAuthError, OSError)
 
 
 @dataclass(frozen=True)
@@ -904,6 +893,8 @@ def test_gam_connection(tenant_id):
 
         # Test if credentials are valid by trying to refresh
         oauth2_client.Refresh()
+        # The adapter config keys GAMAuthManager reads (build_gam_config_from_adapter's).
+        gam_config = {"refresh_token": refresh_token}
 
     elif auth_method == "service_account":
         # Service account flow
@@ -951,6 +942,7 @@ def test_gam_connection(tenant_id):
             )
             # Wrap in GoogleCredentialsClient for AdManagerClient compatibility
             oauth2_client = oauth2.GoogleCredentialsClient(credentials)
+            gam_config = {"service_account_json": adapter_config.gam_service_account_json}
 
     else:
         return jsonify({"error": f"Invalid auth_method: {auth_method}"}), 400
@@ -1034,16 +1026,7 @@ def test_gam_connection(tenant_id):
                 },
             )
 
-            # Build GAM config from OAuth credentials
-            gam_config = {
-                "oauth_credentials": {
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "refresh_token": refresh_token,
-                }
-            }
-
-            # Initialize adapter
+            # Initialize adapter with the credentials just tested
             adapter = GoogleAdManager(
                 config=gam_config,
                 principal=mock_principal,
@@ -1067,9 +1050,8 @@ def test_gam_connection(tenant_id):
                 "email": current_user.email,
             }
 
-        except (*GAM_CALL_ERRORS, AdCPSalesAgentError) as e:
-            # It's okay if we can't fetch companies/users. The adapter refuses its
-            # configuration with an AdCPSalesAgentError; GAM itself fails as GAM_CALL_ERRORS.
+        except GAM_CALL_ERRORS as e:
+            # It's okay if we can't fetch companies/users.
             result["warning"] = safe_error_message(e, "Connected but couldn't fetch all resources")
 
     return jsonify(result)
