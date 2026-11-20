@@ -42,7 +42,9 @@ The following table shows where each task is described.
 | **Danger Zone** | Deactivation of the tenant | [Danger zone](#danger-zone) |
 
 Each section saves on its own. A button such as **Save Account Settings**
-saves only the form that contains it.
+saves only the form that contains it. One exception: the Google Ad Manager
+**Save Configuration** button also stores the current naming templates, as
+[Naming conventions](#naming-conventions) describes.
 
 ## Account
 
@@ -76,8 +78,9 @@ is read-only, and saving the form does not change it.
 
 ### Set the favicon
 
-Under **Branding**, the **Favicon** area accepts an ICO, PNG, or SVG file of
-at most 1 MB, or a URL.
+Under **Branding**, the **Favicon** area accepts a URL, or a file of at most
+1 MB with the extension `.ico`, `.png`, `.svg`, `.jpg`, or `.jpeg`. The file
+picker offers the first three.
 
 - To upload a file, choose the file and click **Upload**.
 - To use a hosted file, enter the address under **Or provide a URL** and click
@@ -86,8 +89,9 @@ at most 1 MB, or a URL.
 
 ### Register the custom domain
 
-A multi-tenant deployment that uses Approximated for custom domains shows two
-more boxes in this section:
+A multi-tenant deployment shows two more boxes in this section while
+**Custom Domain** has a value. They work only when the deployment sets
+`APPROXIMATED_API_KEY`:
 
 - **Configure DNS Records** shows the DNS record that points your domain at
   the proxy.
@@ -99,11 +103,13 @@ A single-tenant deployment does not show these boxes.
 
 ### Control who can sign in
 
-Under **Access Control**, two lists decide which people can sign in to this
-tenant with the deployment's OAuth sign-in:
+Under **Access Control**, two lists admit people to this tenant through the
+deployment's OAuth sign-in, in addition to the users on the
+**Users & Access** page:
 
-- **Authorized Domains** admits every address of an email domain. Enter the
-  domain, for example `company.com`, and click **Add Domain**.
+- **Authorized Domains** admits the addresses of an email domain, except the
+  super admin domain, to the first active tenant that lists the domain.
+  Enter the domain, for example `company.com`, and click **Add Domain**.
 - **Authorized Emails** admits one address. Enter the address and click
   **Add Email**.
 
@@ -123,21 +129,23 @@ a **Configure** link to the place where you complete it.
 
 The critical tasks matter most: while one of them is incomplete, the tenant
 refuses a buyer's request to create a media buy. The buyer receives a
-configuration error that names the missing tasks. A request for a sandbox
+configuration error whose details list the keys of the incomplete tasks,
+such as `currency_limits`. A request for a sandbox
 account skips the tasks that concern the real ad server.
 
 | Critical task | Complete when | Where to complete it |
 |---------------|---------------|----------------------|
 | **Ad Server Configuration** | An ad server is selected | [Ad server](#ad-server) |
 | **Single Sign-On (SSO)** | SSO is enabled and setup mode is off (single-tenant deployments only) | [Users and access](#users-and-access) |
-| **Currency Configuration** | At least one currency has limits | [Budget controls](#budget-controls) |
-| **Authorized Properties** | At least one authorized property exists | [Publishers and authorized properties](publishers.md) |
+| **Currency Configuration** | At least one currency is in the **Budget Controls** list, with or without values | [Budget controls](#budget-controls) |
+| **Authorized Properties** | A publisher's stored `adagents.json`, fetched in the last 24 hours, authorizes at least one property | [Publishers and authorized properties](publishers.md) |
 | **Inventory Sync** | Synced inventory exists (Google Ad Manager tenants only) | [Inventory and inventory profiles](inventory.md) |
 | **Products** | At least one product exists | [Products](products.md) |
 | **Advertisers (Principals)** | At least one advertiser exists | [Advertisers](advertisers.md) |
 
-The Mock ad server completes **Ad Server Configuration** only in a testing
-deployment. For a tenant that does not use Google Ad Manager, the inventory
+**Currency Configuration**, the inventory task, and **Products** appear only
+after **Ad Server Configuration** is complete. The Mock ad server completes
+**Ad Server Configuration** only in a testing deployment. For a tenant that does not use Google Ad Manager, the inventory
 task is named **Inventory Configuration** and is always complete.
 
 The recommended tasks are **Account Name**, **Creative Approval Guidelines**,
@@ -147,13 +155,15 @@ The recommended tasks are **Account Name**, **Creative Approval Guidelines**,
 **Signals Discovery Agent**, **Gemini AI Features**, **Message Signing Key**,
 and **Multiple Currencies**.
 
-The application caches the checklist for five minutes, so a task can stay
-incomplete for a short time after you fix it.
+The checklist page and the media buy check read the current state on every
+request. Only the setup status in the super admin tenant list is cached, for
+five minutes.
 
 ## Users and access
 
-The **Users & Access** page at `/tenant/<tenant_id>/users` lists the people
-who can sign in to the tenant and holds the SSO configuration.
+The **Users & Access** page at `/tenant/<tenant_id>/users` lists the tenant's
+users and allowed domains, and holds the SSO configuration. A person whom an
+allowed domain or email admits gets a user row at the first sign-in.
 
 ### Add or deactivate a user
 
@@ -163,8 +173,7 @@ who can sign in to the tenant and holds the SSO configuration.
 
 The **Users** table shows each user's name, role, status, and last login. To
 change a role, select it in the user's row and click **Change**. Click
-**Deactivate** to stop a user from signing in, and **Activate** to reverse
-that. The page has no button that deletes a user.
+**Deactivate** to mark a user inactive, and **Activate** to reverse that. The page has no button that deletes a user.
 
 ### Allow a whole email domain
 
@@ -189,7 +198,8 @@ signed in through SSO in the current session.
 
 The following roles decide what a tenant user can do:
 
-- **Viewer** - Opens pages and changes nothing.
+- **Viewer** - Opens pages. The role check refuses its `POST`, `PUT`, `PATCH`,
+  and `DELETE` requests.
 - **Manager** - Changes settings, products, and campaigns, but cannot use the
   admin-only actions.
 - **Admin** - Also manages users and roles, allowed domains and emails, setup
@@ -202,7 +212,8 @@ allowed domain or email without an invitation becomes an admin.
 ## Ad server
 
 The **Ad Server** section selects the ad server that receives the tenant's
-media buys. The status line at the top shows either
+media buys. For **Broadstreet Ads**, media buys go to the Mock adapter,
+because the adapter lookup has no Broadstreet branch. The status line at the top shows either
 **Connected to** and the name of the ad server, or **No Ad Server Connected**.
 
 ### Select an ad server
@@ -249,21 +260,26 @@ code. A single-tenant deployment asks for **Service Account JSON Key** and
 [Service account setup](../adapters/gam/service-account-setup.md) describes
 the steps in Google Cloud and in Google Ad Manager.
 
-When you save the configuration with a detected network currency and the
-tenant has no limits for that currency, the application creates them. After
-the connection works, sync the inventory as described in
+**Save Configuration** stores the detected network currency and creates no
+currency limit. **Refresh GAM Info** adds a limit for the network's primary
+currency, with a minimum of 1.00 and a maximum daily spend of 10000.00, when
+the tenant has none for it. After the connection works, sync the inventory as
+described in
 [Inventory and inventory profiles](inventory.md).
 
 ## Policies and workflows
 
 The **Policies & Workflows** section is one form. **Save Business Rules**
-saves every part of it, and **Reset** discards your unsaved changes.
+saves every part of it. **Reset** restores the field values from page load,
+but does not undo added or removed currencies or measurement providers.
 
 ### Budget controls
 
 **Budget Controls** lists the currencies that the tenant accepts. Each
 currency has a **Min Package Budget** and a **Max Daily Package Spend**. Click
-**Add Currency** to add one, and enter its three-letter code.
+**Add Currency** to add one, and enter its three-letter code. A Google Ad
+Manager tenant with a detected network currency picks from that network's
+currencies instead.
 
 A buyer can create a media buy only in a currency that this list contains. The
 form refuses a minimum budget that exceeds the maximum daily spend.
@@ -273,19 +289,31 @@ form refuses a minimum budget that exceeds the maximum daily spend.
 **Brand Context Requirement** decides what a buyer must provide to see
 products. The following table lists the choices.
 
-| Choice | Authentication | Brand information |
-|--------|----------------|-------------------|
+| Choice | Credentials | Brand information |
+|--------|-------------|-------------------|
 | **Require Authentication** (the default) | Required | Optional |
-| **Require Authentication + Brand Manifest** | Required | Required |
-| **Public** | Not required; products show no pricing | Optional |
+| **Require Authentication + Brand Manifest** | Not required | Required; a request without it is refused with `PERMISSION_DENIED` |
+| **Public** | Not required | Optional |
+
+A caller without credentials gets products without pricing. Despite its name,
+**Require Authentication + Brand Manifest** does not require credentials.
 
 ### Naming conventions
 
-**Order Name Template** and **Line Item Name Template** build the names of
-the orders and line items that the tenant creates in the ad server. A
-template is text with variables in braces, such as
+**Order Name Template** and **Line Item Name Template** hold naming
+templates: text with variables in braces, such as
 `{order_name} - {product_name}`. The form refuses an empty template and a
 template with unbalanced braces.
+
+The ad servers use the templates in the following ways:
+
+- The Mock adapter names orders with **Order Name Template**.
+- The Google Ad Manager adapter reads neither field. It uses copies that its
+  **Save Configuration** button stores from the current field values, and
+  that **Refresh GAM Info** clears. Without copies, it names an order
+  `{campaign_name|brand_name} - {media_buy_id} - {date_range}` and a line
+  item `{product_name}`.
+- The Kevel and Triton Digital adapters use no template.
 
 ### Measurement providers
 
@@ -296,7 +324,9 @@ needs at least one provider.
 ### Approval workflow
 
 **Require manual approval for order activation** makes every media buy wait
-for an operator. The option is on by default.
+for an operator. The option is on for a tenant created by signup or by the
+Tenant Management API. A tenant created on the super admin
+**Create New Account** page starts with it off.
 [Media buys, approvals, and workflows](media-buys.md) describes how you
 approve or reject a waiting media buy.
 
@@ -307,7 +337,10 @@ approve or reject a waiting media buy.
 **AI-powered review**. [Creatives](creatives.md) describes each mode and the
 review page.
 
-The AI mode needs an AI provider under [Integrations](#integrations).
+The AI mode uses the provider set under [Integrations](#integrations), or
+the deployment's own AI key when the tenant sets none. It also needs
+**AI Review Criteria**. Without a model or criteria, each creative waits for
+human review.
 
 ### Advertising policy
 
@@ -319,8 +352,9 @@ request.
 
 ### Product ranking
 
-**AI Ranking Prompt** tells the AI provider how to order products for a
-buyer's brief. An empty prompt turns ranking off.
+**AI Ranking Prompt** tells the AI provider how to rank products for a
+buyer's brief. Ranking runs only for a request with a brief, and it drops
+products that score below 0.1. An empty prompt turns ranking off.
 
 ## Integrations
 
@@ -334,8 +368,9 @@ The **Integrations** section connects the tenant to outside services.
 3. Click **Save Slack Settings**.
 4. Click **Test Connection**.
 
-**Test Connection** sends a message to the saved task webhook. It does not
-read the field, so save before you test. It does not test the audit webhook.
+**Test Connection** refuses to run while the field is empty, but the server
+ignores the field's value and sends a message to the saved task webhook. Save
+before you test. It does not test the audit webhook.
 
 To turn off Slack notifications, clear both fields and save.
 
@@ -350,9 +385,10 @@ product ranking use.
 4. Click **Save AI Settings**.
 5. Click **Test AI Connection**.
 
-Leave **API Key** blank to keep the stored key. The optional
-**Logfire Token (Optional)** field sends AI traces to Logfire, and
-**Test Logfire** checks the token.
+Leave **API Key** blank to keep the stored key. **Logfire Token (Optional)**
+holds a token for AI tracing. **Test Logfire** works only on a token typed
+into the field, and its success message does not confirm that Logfire
+accepts the token.
 
 ### Creative agents and signals agents
 
@@ -368,15 +404,15 @@ with the same row actions.
 
 ## Shortcut sections
 
-Four sections of the page link to other areas instead of holding settings.
-The following table shows where each one leads.
+Four sections of the page show other areas of the Admin UI instead of
+holding settings. The following table shows what each one offers.
 
 | Section | What it shows | Guide |
 |---------|---------------|-------|
 | **Products** | Links to the product list and the form that adds a product | [Products](products.md) |
-| **Advertisers** | The advertisers and a link that creates one | [Advertisers](advertisers.md) |
+| **Advertisers** | The advertisers, with token rotation, A2A and MCP configuration to copy, editing, and deletion on each row, and a link that creates one | [Advertisers](advertisers.md) |
 | **Inventory** | The sync status and sync buttons of a Google Ad Manager tenant | [Inventory and inventory profiles](inventory.md) |
-| **Publishers** | An earlier publisher list that does not show the stored state | [Publishers and authorized properties](publishers.md) |
+| **Publishers** | A publisher list that shows the domain, name, and property count, but shows every publisher as pending and cannot delete one | [Publishers and authorized properties](publishers.md) |
 
 Manage publishers on the **Publishers & Properties** tab that the publishers
 guide describes, not in the **Publishers** section of this page.
@@ -386,7 +422,7 @@ guide describes, not in the **Publishers** section of this page.
 The **Signing Keys** page at `/tenant/<tenant_id>/signing-keys/` holds the
 keys that sign the tenant's outbound messages. No section of the
 **Settings** page links to it. Open it from the **Message Signing Key** task
-on the setup checklist, or enter the address.
+on the setup checklist while that task is incomplete, or enter the address.
 
 - To create a key, select an **Algorithm** and click **Provision Key**. The
   application publishes the key immediately.
@@ -437,12 +473,13 @@ it with a `POST` request to `/admin/tenant/<tenant_id>/reactivate`.
 
 A super admin sees pages that cover the whole deployment:
 
-- The tenant list at the root of the Admin UI shows every active tenant, with
-  filters for configuration and activity. Click **Manage** to open a tenant.
+- In a multi-tenant deployment, the tenant list at the root of the Admin UI
+  shows the active tenants, 50 to a page by default, with filters for
+  configuration and activity. Click **Manage** to open a tenant.
 - **Create New Account** at `/create_tenant` creates a tenant. The form
-  requires **Publisher Name**, **Virtual Host**, and
-  **Authorized Email Addresses**. The application adds your own address to
-  the authorized emails.
+  requires **Publisher Name** and **Virtual Host**.
+  **Authorized Email Addresses** carries an asterisk but is not required. The
+  application adds your own address to the authorized emails.
 - **Tenant Management Settings** at `/settings` shows whether the deployment
   has the Google Ad Manager OAuth variables. The page is read-only.
 
@@ -459,10 +496,16 @@ The page has the following limits:
   value that the reviewer does not read.
 - The **Kevel** and **Triton Digital** cards have no connection form.
 - The Mock form's **Save Configuration** button does not store its value.
-- The naming presets insert the variable `{buyer_ref}`, which the templates
-  do not replace.
+- The **Campaign-First** and **Detailed** naming presets insert `{buyer_ref}`.
+  The preview shows `PO-12345`, but the server replaces it with an empty
+  string.
 - The **Gemini AI Features** checklist task does not read the provider that
   you configure under **AI Services**.
+- **Broadstreet Ads** stores a connection, but media buys go to the Mock
+  adapter.
+- **Require Authentication + Brand Manifest** does not require credentials.
+- The **Publishers** section shows every publisher as pending and cannot
+  delete one.
 
 ## Related documentation
 

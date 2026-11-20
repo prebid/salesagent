@@ -51,7 +51,7 @@ The Admin UI recognizes two kinds of user:
 
 A tenant user's role decides what that user can do in the tenant:
 
-- **Viewer** - Opens pages and changes nothing.
+- **Viewer** - Opens pages. The role check refuses its `POST`, `PUT`, `PATCH`, and `DELETE` requests.
 - **Manager** - Changes settings, products, and campaigns, but not the admin-only pages.
 - **Admin** - Also manages users and roles, authorized domains and emails, Setup Mode, SSO,
   and the deactivation of the tenant.
