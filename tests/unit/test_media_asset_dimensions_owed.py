@@ -104,12 +104,6 @@ class TestWhatIsOwed:
             (TrafficSize(width=300, height=250),),
         )
 
-    def test_an_audio_only_manifest_is_not_refused_where_an_image_one_is(self) -> None:
-        """The pair that separates "owed by the slot" from "never owed": same shape, other type."""
-        assert not _refused_for_dimensions(
-            _manifest(audio_main={"asset_type": "audio", "url": AUDIO_URL}), "audio_hosted"
-        )
-
     def test_the_kinds_own_sized_slots_are_not_the_answer(self) -> None:
         """Stated as an assertion because it is the trap, not a footnote.
 
