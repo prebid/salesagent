@@ -3109,8 +3109,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # new failure is a LIBRARY-REFERENCE row — assignments_only,
             # assignment_with_weight_zero, assignment_with_placement_targeting, "assignment
             # cr-001", weight=0, weight=100. The cause is symmetrical to the one above: those
-            # rows seed their creative through given_media_buy._create_approved_creative,
-            # whose default fmt is the BARE id, so moving only the product inverts the
+            # rows seeded their creative through given_media_buy._create_approved_creative (now
+            # _creative_seeding.store_package_creative), whose default fmt was then the BARE id,
+            # so moving only the product inverts the
             # product-vs-creative compatibility check for every one of them.
             #
             # THOSE SIX ROW LABELS ARE EXACTLY THE SIX THAT FAIL ON e2e_rest, which nobody

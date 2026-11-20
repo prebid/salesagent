@@ -272,6 +272,16 @@ def html5_zip_bundle() -> bytes:
     return buffer.getvalue()
 
 
+#: The reference-catalog format of the approved library creative scenarios reference by id: a
+#: format the committed capture serves and the harness's default product accepts.
+LIBRARY_IMAGE_FORMAT = "display_300x250_image"
+
+
+def library_image_assets(url: str = "https://example.com/banner.png") -> dict:
+    """A :data:`LIBRARY_IMAGE_FORMAT` creative's assets: its 300x250 ``banner_image`` showing *url*."""
+    return build_assets(image_spec("banner_image", url=url))
+
+
 def parse_sizes(text: str) -> list[dict[str, int]]:
     """``"300x250, 728x90"`` as ``{width, height}`` objects, in order: a format option's ``sizes``."""
     return [{"width": int(w), "height": int(h)} for w, h in re.findall(r"(\d+)x(\d+)", text)]

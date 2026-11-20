@@ -46,20 +46,16 @@ from tests.bdd.steps.generic._creative_seeding import store_creative, store_pack
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import rows as table_rows
 from tests.factories.creative_asset import (
+    LIBRARY_IMAGE_FORMAT,
     build_assets,
-    display_tag_spec,
-    html5_bundle_specs,
-    html5_zip_bundle,
     html_spec,
     image_spec,
+    library_image_assets,
     parse_sizes,
     text_spec,
     url_spec,
 )
 from tests.helpers.gam_client import gam_delivery_row
-
-#: The reference-catalog format a GAM seller's default product sells.
-_LIBRARY_IMAGE_FORMAT = "display_300x250_image"
 
 
 @given(
@@ -230,9 +226,9 @@ def given_package_references_ready_and_held_creatives(
     ctx: dict, ready_id: str, ready_url: str, held_id: str, held_url: str
 ) -> None:
     """Two library creatives in the format the GAM product sells, both named in the package's creative_ids."""
-    store_package_creative(ctx, ready_id, _library_image_assets(ready_url), fmt=_LIBRARY_IMAGE_FORMAT)
+    store_package_creative(ctx, ready_id, library_image_assets(ready_url), fmt=LIBRARY_IMAGE_FORMAT)
     store_package_creative(
-        ctx, held_id, _library_image_assets(held_url), fmt=_LIBRARY_IMAGE_FORMAT, status="pending_review"
+        ctx, held_id, library_image_assets(held_url), fmt=LIBRARY_IMAGE_FORMAT, status="pending_review"
     )
 
 
@@ -331,16 +327,11 @@ def given_package_references_creative_gam_holds(
     store_package_creative(
         ctx,
         creative_id,
-        _library_image_assets(url),
-        fmt=_LIBRARY_IMAGE_FORMAT,
+        library_image_assets(url),
+        fmt=LIBRARY_IMAGE_FORMAT,
         status="approved" if status == "approved" else "pending_review",
         ad_server_creative_id=gam_id,
     )
-
-
-def _library_image_assets(url: str) -> dict[str, Any]:
-    """A 300x250 image creative's assets in the reference format the GAM product sells: its ``banner_image``."""
-    return build_assets(image_spec("banner_image", url=url))
 
 
 @given(
@@ -366,8 +357,8 @@ def given_another_buyer_holds_creative(ctx: dict, creative_id: str, url: str) ->
     store_creative(
         ctx,
         creative_id,
-        _library_image_assets(url),
-        fmt=_LIBRARY_IMAGE_FORMAT,
+        library_image_assets(url),
+        fmt=LIBRARY_IMAGE_FORMAT,
         principal=PrincipalFactory(tenant=ctx["tenant"]),
     )
 
@@ -403,7 +394,7 @@ def given_gam_fails_report_job(ctx: dict, advertiser_id: str) -> None:
 def given_buyer_holds_creative_recorded_with_own_id(ctx: dict, creative_id: str, url: str) -> None:
     """A library creative whose record holds the buyer's id under ``platform_creative_id``, as #2247 wrote it."""
     store_creative(
-        ctx, creative_id, _library_image_assets(url), fmt=_LIBRARY_IMAGE_FORMAT, platform_creative_id=creative_id
+        ctx, creative_id, library_image_assets(url), fmt=LIBRARY_IMAGE_FORMAT, platform_creative_id=creative_id
     )
 
 
@@ -430,71 +421,6 @@ def given_buyer_holds_html_creative(ctx: dict, creative_id: str, markup: str, pr
         width=300,
         height=250,
     )
-
-
-@given(
-    parsers.re(
-        r'the package references the buyer\'s approved display_tag creative "(?P<creative_id>[^"]+)" carrying '
-        r'(?:the inline markup "(?P<markup>[^"]+)" of type "(?P<markup_type>[^"]+)"'
-        r'|the tag URL "(?P<tag_url>[^"]+)"'
-        r'|the paired redirect "(?P<ad_request_url>[^"]+)" with click-through "(?P<clickthrough_url>[^"]+)")'
-        r"(?:, recorded with the creative agent's preview page \"(?P<preview_url>[^\"]+)\" as its url at "
-        r"(?P<width>\d+)x(?P<height>\d+))?$"
-    )
-)
-def given_package_references_display_tag_creative(
-    ctx: dict,
-    creative_id: str,
-    markup: str | None,
-    markup_type: str | None,
-    tag_url: str | None,
-    ad_request_url: str | None,
-    clickthrough_url: str | None,
-    preview_url: str | None,
-    width: str | None,
-    height: str | None,
-) -> None:
-    """A canonical ``display_tag`` creative carrying one ``display_tag`` asset of the kind's three delivery types.
-
-    AdCP 3.2.7 core/assets/display-tag-asset.json: ``delivery_type`` ``tag_url`` with ``url``,
-    ``inline_markup`` with ``markup`` and ``markup_type``, or ``paired_redirect`` with
-    ``ad_request_url`` and ``clickthrough_url``, under the slot an option accepting it
-    declares (``serving_tag``). The product's format options are the seller Given's.
-
-    The recorded clause is a row synced before sync stopped copying the creative agent's
-    preview onto the creative: its root ``url`` is the preview page and its root size the
-    preview's.
-    """
-    if tag_url is not None:
-        asset = display_tag_spec("tag_url", url=tag_url)
-    elif markup is not None:
-        asset = display_tag_spec("inline_markup", markup=markup, markup_type=markup_type)
-    else:
-        asset = display_tag_spec("paired_redirect", ad_request_url=ad_request_url, clickthrough_url=clickthrough_url)
-    recorded = {} if preview_url is None else {"url": preview_url, "width": int(str(width)), "height": int(str(height))}
-    store_package_creative(ctx, creative_id, build_assets(asset), kind="display_tag", **recorded)
-
-
-@given(
-    parsers.re(
-        r'the package references the buyer\'s approved html5 creative "(?P<creative_id>[^"]+)" carrying a zip '
-        r'bundle from the buyer\'s bundle host and the backup image "(?P<backup_url>[^"]+)"'
-        r"(?:, sized (?P<width>\d+)x(?P<height>\d+))?$"
-    )
-)
-def given_package_references_html5_creative(
-    ctx: dict, creative_id: str, backup_url: str, width: str | None, height: str | None
-) -> None:
-    """A canonical ``html5`` creative: a zip bundle the buyer's host serves, and a backup image, 300x250 unless sized.
-
-    AdCP 3.2.7 formats/canonical/html5.json: slot ``html5_bundle`` (zip asset) and the
-    optional ``backup_image``. The bundle's bytes are kept to compare with what GAM receives.
-    """
-    ctx["html5_bundle"] = html5_zip_bundle()
-    bundle_url = ctx["env"].serve_html5_bundle(ctx["html5_bundle"])
-    size = {} if width is None else {"backup_width": int(width), "backup_height": int(str(height))}
-    assets = build_assets(*html5_bundle_specs(bundle_url, backup_url=backup_url, **size))
-    store_package_creative(ctx, creative_id, assets, kind="html5")
 
 
 @given(

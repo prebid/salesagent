@@ -66,7 +66,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   Scenario: Inline third-party markup reaches the ad server byte for byte, and the creative agent's preview page does not
     Given a valid create_media_buy request
     And the account exists and is active
-    And the package references the buyer's approved display_tag creative "cr-inline" carrying inline iframe_javascript markup, recorded with the creative agent's preview page as its url
+    And the product publishes a display_tag format option for inline_markup delivery fixed at 300x250
+    And the package references the buyer's approved display_tag creative "cr-inline" carrying its byte-sensitive inline iframe_javascript markup, recorded with the creative agent's preview page "https://creative.adcontextprotocol.org/preview/cr-inline/desktop.html" as its url at 300x250
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And the ad server receives creative "cr-inline" of kind "display_tag" as inline iframe_javascript markup, the buyer's markup byte for byte
@@ -76,7 +77,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   Scenario: A display_tag asset delivered as a tag URL reaches the ad server as that ad request
     Given a valid create_media_buy request
     And the account exists and is active
-    And the package references the buyer's approved display_tag creative "cr-tag" requesting ad tag "https://ads.example-adserver.com/tag?slot=42&cb=%%CACHEBUSTER%%"
+    And the product publishes a display_tag format option for tag_url delivery fixed at 300x250
+    And the package references the buyer's approved display_tag creative "cr-tag" carrying the tag URL "https://ads.example-adserver.com/tag?slot=42&cb=%%CACHEBUSTER%%"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And the ad server receives creative "cr-tag" of kind "display_tag" as the ad tag "https://ads.example-adserver.com/tag?slot=42&cb=%%CACHEBUSTER%%"
@@ -88,6 +90,7 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   Scenario: A url asset in the display_tag kind's tag_url slot, declaring url_type ad_request, reaches the ad server as an ad request, not an image
     Given a valid create_media_buy request
     And the account exists and is active
+    And the product publishes a display_tag format option on the kind's default slots fixed at 300x250
     And the package references the buyer's approved display_tag creative "cr-legacy-tag" whose tag_url slot carries "https://ads.example-adserver.com/legacy?cb=%%CACHEBUSTER%%" with url_type "ad_request"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
@@ -106,6 +109,7 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   Scenario: A url asset in the display_tag kind's tag_url slot with no url_type is refused before the ad server is handed the buy
     Given a valid create_media_buy request
     And the account exists and is active
+    And the product publishes a display_tag format option on the kind's default slots fixed at 300x250
     And the package references the buyer's approved display_tag creative "cr-legacy-tag" whose tag_url slot carries "https://ads.example-adserver.com/legacy?cb=%%CACHEBUSTER%%" with no url_type
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail with error code "VALIDATION_ERROR"
@@ -127,7 +131,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   Scenario: Inline markup on an option whose only delivery type is paired_redirect is refused before the ad server is handed the buy
     Given a valid create_media_buy request
     And the account exists and is active
-    And the package references the buyer's approved display_tag creative "cr-inline-misfit" carrying inline iframe_javascript markup, for a format option whose only delivery type is paired_redirect
+    And the product publishes a display_tag format option for paired_redirect delivery fixed at 300x250
+    And the package references the buyer's approved display_tag creative "cr-inline-misfit" carrying its byte-sensitive inline iframe_javascript markup
     When the Buyer Agent sends the create_media_buy request
     Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC
     And the refusal names "assets.serving_tag.delivery_type" stating "inline_markup" where "paired_redirect" is accepted
@@ -138,7 +143,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   Scenario: A paired redirect reaches the ad server as one pair, both URLs intact
     Given a valid create_media_buy request
     And the account exists and is active
-    And the package references the buyer's approved display_tag creative "cr-paired" redirecting through ad request "https://ads.example-adserver.com/ad?slot=42&cb=%%CACHEBUSTER%%" and clickthrough "https://click.example-adserver.com/redirect?dest=%%DEST_URL_ESC%%"
+    And the product publishes a display_tag format option for paired_redirect delivery fixed at 300x250
+    And the package references the buyer's approved display_tag creative "cr-paired" carrying the paired redirect "https://ads.example-adserver.com/ad?slot=42&cb=%%CACHEBUSTER%%" with click-through "https://click.example-adserver.com/redirect?dest=%%DEST_URL_ESC%%"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And the ad server receives creative "cr-paired" of kind "display_tag" as one redirect pair of ad request "https://ads.example-adserver.com/ad?slot=42&cb=%%CACHEBUSTER%%" and clickthrough "https://click.example-adserver.com/redirect?dest=%%DEST_URL_ESC%%"
@@ -160,7 +166,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   Scenario: An html5 creative reaches the ad server as its zip bundle, not as its backup image
     Given a valid create_media_buy request
     And the account exists and is active
-    And the package references the buyer's approved html5 creative "cr-bundle" bundled at "https://cdn.example.com/banner-300x250.zip" with backup image "https://cdn.example.com/banner-backup.png"
+    And the product publishes an html5 format option fixed at 300x250
+    And the package references the buyer's approved html5 creative "cr-bundle" bundled at "https://cdn.example.com/banner-300x250.zip", with backup image "https://cdn.example.com/banner-backup.png"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And the ad server receives creative "cr-bundle" of kind "html5" as the html5 bundle "https://cdn.example.com/banner-300x250.zip" with backup image "https://cdn.example.com/banner-backup.png"
@@ -176,7 +183,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   Scenario: An html5 creative whose zip bundle names no url is refused before the ad server is handed the buy
     Given a valid create_media_buy request
     And the account exists and is active
-    And the package references the buyer's approved html5 creative "cr-bundle-no-url" whose zip bundle names no url with backup image "https://cdn.example.com/banner-backup.png"
+    And the product publishes an html5 format option fixed at 300x250
+    And the package references the buyer's approved html5 creative "cr-bundle-no-url" bundled with no url, with backup image "https://cdn.example.com/banner-backup.png"
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail with error code "VALIDATION_ERROR"
     And the ad server is handed no creative
@@ -186,7 +194,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   Scenario: A display_tag creative for a multi-size option reaches the ad server with every size the option declares
     Given a valid create_media_buy request
     And the account exists and is active
-    And the package references the buyer's approved display_tag creative "cr-multi" requesting ad tag "https://ads.example-adserver.com/tag?slot=7", for a format option accepting sizes "300x250, 728x90"
+    And the product publishes a display_tag format option for tag_url delivery accepting sizes "300x250, 728x90"
+    And the package references the buyer's approved display_tag creative "cr-multi" carrying the tag URL "https://ads.example-adserver.com/tag?slot=7"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And the ad server receives creative "cr-multi" of kind "display_tag" as the ad tag "https://ads.example-adserver.com/tag?slot=7"
@@ -198,7 +207,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   Scenario: A display_tag creative for a responsive option reaches the ad server with the option's size range and no fixed size
     Given a valid create_media_buy request
     And the account exists and is active
-    And the package references the buyer's approved display_tag creative "cr-responsive" requesting ad tag "https://ads.example-adserver.com/tag?slot=9", for a format option accepting widths 300 to 970 and heights 90 to 250
+    And the product publishes a display_tag format option for tag_url delivery accepting widths 300 to 970 and heights 90 to 250
+    And the package references the buyer's approved display_tag creative "cr-responsive" carrying the tag URL "https://ads.example-adserver.com/tag?slot=9"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And the ad server receives creative "cr-responsive" of kind "display_tag" as the ad tag "https://ads.example-adserver.com/tag?slot=9"
@@ -253,7 +263,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   Scenario: The seller's approval of a held buy hands the ad server the creative as its kind, representation and declared sizes
     Given a valid create_media_buy request
     And the account exists and is active
-    And the package references the buyer's approved display_tag creative "cr-held-buy" requesting ad tag "https://ads.example-adserver.com/tag?slot=11", for a format option accepting sizes "300x250, 728x90"
+    And the product publishes a display_tag format option for tag_url delivery accepting sizes "300x250, 728x90"
+    And the package references the buyer's approved display_tag creative "cr-held-buy" carrying the tag URL "https://ads.example-adserver.com/tag?slot=11"
     And the package selects that format option by its format_option_ref
     And the tenant requires manual approval
     When the Buyer Agent sends the create_media_buy request
@@ -273,7 +284,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     Given a valid create_media_buy request
     And the account exists and is active
     And the product publishes no format_ids
-    And the package references the buyer's approved display_tag creative "cr-held-canonical" requesting ad tag "https://ads.example-adserver.com/tag?slot=13", for a format option accepting sizes "300x250, 728x90"
+    And the product publishes a display_tag format option for tag_url delivery accepting sizes "300x250, 728x90"
+    And the package references the buyer's approved display_tag creative "cr-held-canonical" carrying the tag URL "https://ads.example-adserver.com/tag?slot=13"
     And the tenant requires manual approval
     When the Buyer Agent sends the create_media_buy request
     Then the response status should be "submitted"
@@ -284,9 +296,9 @@ Feature: The ad server receives each creative as its canonical kind and the repr
 
   @T-UC-002-local-creative-kind-retroactive-push @extension @creative
   Scenario: A creative the seller approves after its buy went live reaches the ad server as its kind, representation and declared sizes
-    Given the product publishes a display_tag format option accepting sizes "300x250, 728x90"
+    Given the product publishes a display_tag format option for tag_url delivery accepting sizes "300x250, 728x90"
     And the buyer holds a live media buy booked at the ad server as order "order-live" with package "pkg-live"
-    And the buyer's creative "cr-late", under review, a display_tag requesting ad tag "https://ads.example-adserver.com/tag?slot=12", is assigned to package "pkg-live" of the live media buy
+    And the buyer's creative "cr-late", under review, a display_tag carrying the tag URL "https://ads.example-adserver.com/tag?slot=12", is assigned to package "pkg-live" of the live media buy
     When the seller approves creative "cr-late"
     Then the ad server's creative manager receives creative "cr-late" of kind "display_tag" as the ad tag "https://ads.example-adserver.com/tag?slot=12"
     And the ad server's creative manager receives creative "cr-late" sized "300x250, 728x90"
@@ -305,7 +317,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   Scenario: A 300x250 image is refused at create against an option accepting only 728x90, before the ad server
     Given a valid create_media_buy request
     And the account exists and is active
-    And the package references the buyer's approved 300x250 image creative "cr-misfit" showing "https://cdn.example.com/misfit.png", for a format option accepting sizes "728x90"
+    And the product publishes an image format option accepting sizes "728x90"
+    And the package references the buyer's approved 300x250 image creative "cr-misfit" showing "https://cdn.example.com/misfit.png"
     When the Buyer Agent sends the create_media_buy request
     Then the request is refused on the wire with code "CREATIVE_SIZE_MISMATCH" recovery "correctable" naming field "packages[0].creative_ids[0]"
     And the ad server is handed no creative
@@ -324,13 +337,15 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   Scenario: Two images an option's sizes refuse are both named in one refusal at create, before the ad server
     Given a valid create_media_buy request
     And the account exists and is active
-    And the package references the buyer's approved 300x250 image creative "cr-misfit-a" showing "https://cdn.example.com/misfit-a.png", for a format option accepting sizes "728x90"
+    And the product publishes an image format option accepting sizes "728x90"
+    And the package references the buyer's approved 300x250 image creative "cr-misfit-a" showing "https://cdn.example.com/misfit-a.png"
     And the package references the buyer's approved 160x600 image creative "cr-misfit-b" showing "https://cdn.example.com/misfit-b.png"
     When the Buyer Agent sends the create_media_buy request
     Then the request is refused on the wire with code "CREATIVE_SIZE_MISMATCH" recovery "correctable" naming field "packages[0].creative_ids[0]"
-    And the CREATIVE_SIZE_MISMATCH refusal's problems name exactly the creatives "cr-misfit-a, cr-misfit-b"
-    And the CREATIVE_SIZE_MISMATCH refusal names creative "cr-misfit-a" at "assets.image_main.width" with problem code "CREATIVE_SIZE_MISMATCH"
-    And the CREATIVE_SIZE_MISMATCH refusal names creative "cr-misfit-b" at "assets.image_main.width" with problem code "CREATIVE_SIZE_MISMATCH"
+    And the CREATIVE_SIZE_MISMATCH refusal's problems are exactly, one per creative:
+      | subject_id  | field                   | code                   |
+      | cr-misfit-a | assets.image_main.width | CREATIVE_SIZE_MISMATCH |
+      | cr-misfit-b | assets.image_main.width | CREATIVE_SIZE_MISMATCH |
     And the ad server is handed no creative
     And the ad server adapter should never be invoked
 
@@ -338,7 +353,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   Scenario: The seller's approval of a held buy holding a creative its option's sizes refuse is refused before the ad server
     Given a valid create_media_buy request
     And the account exists and is active
-    And the package references the buyer's approved 728x90 image creative "cr-fits" showing "https://cdn.example.com/fits.png", for a format option accepting sizes "728x90"
+    And the product publishes an image format option accepting sizes "728x90"
+    And the package references the buyer's approved 728x90 image creative "cr-fits" showing "https://cdn.example.com/fits.png"
     And the package selects that format option by its format_option_ref
     And the tenant requires manual approval
     When the Buyer Agent sends the create_media_buy request
@@ -369,10 +385,10 @@ Feature: The ad server receives each creative as its canonical kind and the repr
   # this one and pushes the fitting one, which proves the path reached the upload.
   @T-UC-002-local-creative-kind-unresolved-product-retroactive-push @extension @creative
   Scenario: Approving a canonical creative assigned to a package whose product resolves no declaration does not push it to the live buy
-    Given the product publishes a display_tag format option accepting sizes "300x250"
+    Given the product publishes a display_tag format option for tag_url delivery accepting sizes "300x250"
     And the buyer holds a live media buy booked at the ad server as order "order-live" with package "pkg-live", and package "pkg-gone" on product "prod-retired", which the seller no longer has
-    And the buyer's creative "cr-fits-late", under review, a display_tag requesting ad tag "https://ads.example-adserver.com/tag?slot=14", is assigned to package "pkg-live" of the live media buy
-    And the buyer's creative "cr-unresolved-late", under review, a display_tag requesting ad tag "https://ads.example-adserver.com/tag?slot=15", is assigned to packages "pkg-live, pkg-gone" of the live media buy
+    And the buyer's creative "cr-fits-late", under review, a display_tag carrying the tag URL "https://ads.example-adserver.com/tag?slot=14", is assigned to package "pkg-live" of the live media buy
+    And the buyer's creative "cr-unresolved-late", under review, a display_tag carrying the tag URL "https://ads.example-adserver.com/tag?slot=15", is assigned to packages "pkg-live, pkg-gone" of the live media buy
     When the seller approves creative "cr-fits-late"
     And the seller approves creative "cr-unresolved-late"
     Then the ad server's creative manager is handed creative "cr-fits-late" and not creative "cr-unresolved-late"

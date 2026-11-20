@@ -95,7 +95,7 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
   @T-UC-002-local-gam-creative-html5-bundle @extension
   Scenario: An html5 creative's zip bundle becomes one HTML5 creative carrying the bundle, not an image of its backup
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "html5", "format_option_id": "html5_300x250", "params": {"width": 300, "height": 250}}]}'
-    And the package references the buyer's approved html5 creative "cr-bundle" carrying a zip bundle from the buyer's bundle host and the backup image "https://cdn.example.com/backup.png"
+    And the package references the buyer's approved html5 creative "cr-bundle" bundled by the buyer's bundle host, with backup image "https://cdn.example.com/backup.png"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And Google Ad Manager created one HTML5 creative for advertiser "3000001" whose html5 asset is the buyer's zip bundle, in a file with a zip extension, and which names no image URL
@@ -156,13 +156,14 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
   # and reporting to the seller's operator is the only remediation. ... Recovery: terminal";
   # CREATIVE_SIZE_MISMATCH "Recovery: correctable (resize or replace the creative with a size
   # accepted by every selected package that may serve it)", which no size can satisfy here.
+  # The refusal still names the creative where the request named it, as the create gate's
+  # creative refusals do (packages[0].creative_ids[0]).
   @T-UC-002-local-gam-creative-size-mismatch @extension
   Scenario: A creative whose option's sizes overlap no line item placeholder is refused as the seller's configuration, and nothing is created in GAM
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_300x250", "params": {"width": 300, "height": 250, "supported_delivery_types": ["tag_url"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}]}', with product settings '{"creative_placeholders": [{"width": 728, "height": 90}]}'
     And the package references the buyer's approved display_tag creative "cr-tag" carrying the tag URL "https://ads.example.com/tag.js?slot=1"
     When the Buyer Agent sends the create_media_buy request
-    Then the operation should fail with error code "CONFIGURATION_ERROR"
-    And the error recovery should be "terminal"
+    Then the request is refused on the wire with code "CONFIGURATION_ERROR" recovery "terminal" naming field "packages[0].creative_ids[0]"
     And no media buy is persisted for the tenant
     And Google Ad Manager received no order and no line item
     And Google Ad Manager created no creative
@@ -201,7 +202,8 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
   #
   # F2 (PR #2582 review): the same non-overlap as @T-UC-002-local-gam-creative-size-mismatch,
   # so the same code, CONFIGURATION_ERROR, quoted there; today the approval fails
-  # CREATIVE_SIZE_MISMATCH.
+  # CREATIVE_SIZE_MISMATCH. The seller's approval answers a message and no error.field
+  # (ApprovalResult), so the creative's pointer is graded on create only.
   @T-UC-002-local-gam-creative-size-mismatch-on-approval @extension
   Scenario: A held buy whose creative's option sizes overlap no line item placeholder is refused at the seller's approval as the seller's configuration, and nothing is created in GAM
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_300x250", "params": {"width": 300, "height": 250, "supported_delivery_types": ["tag_url"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}]}', with product settings '{"creative_placeholders": [{"width": 728, "height": 90}]}'
@@ -286,7 +288,7 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
   Scenario: The seller's approval of a held buy creates its html5 creative as one HTML5 creative carrying the bundle
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "html5", "format_option_id": "html5_300x250", "params": {"width": 300, "height": 250}}]}'
     And the tenant requires manual approval
-    And the package references the buyer's approved html5 creative "cr-held-bundle" carrying a zip bundle from the buyer's bundle host and the backup image "https://cdn.example.com/backup.png"
+    And the package references the buyer's approved html5 creative "cr-held-bundle" bundled by the buyer's bundle host, with backup image "https://cdn.example.com/backup.png"
     When the Buyer Agent sends the create_media_buy request
     Then the response status should be "submitted"
     When the seller approves the media buy
@@ -301,7 +303,7 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
   Scenario: A display_tag creative the seller approves after its buy was booked is created as one third-party creative on the booked line item
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_728x90", "params": {"width": 728, "height": 90, "supported_delivery_types": ["tag_url"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}]}'
     And the buyer holds a buy booked in Google Ad Manager as order "8000001" in status "active" whose package "pkg-live" is line item "9000001" accepting 728x90
-    And the buyer's creative "cr-late-tag", under review, a display_tag requesting ad tag "https://ads.example.com/tag.js?slot=3", is assigned to package "pkg-live" of the live media buy
+    And the buyer's creative "cr-late-tag", under review, a display_tag carrying the tag URL "https://ads.example.com/tag.js?slot=3", is assigned to package "pkg-live" of the live media buy
     When the seller approves creative "cr-late-tag"
     Then Google Ad Manager created one third-party creative for advertiser "3000001" whose snippet is '<script src="https://ads.example.com/tag.js?slot=3"></script>' and which names no image URL
     And Google Ad Manager created that creative at size 728x90
@@ -311,7 +313,7 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
   Scenario: An html5 creative the seller approves after its buy was booked is created as one HTML5 creative on the booked line item
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "html5", "format_option_id": "html5_300x250", "params": {"width": 300, "height": 250}}]}'
     And the buyer holds a buy booked in Google Ad Manager as order "8000002" in status "active" whose package "pkg-live" is line item "9000002" accepting 300x250
-    And the buyer's creative "cr-late-bundle", under review, an html5 bundle from the buyer's bundle host with backup image "https://cdn.example.com/backup.png", is assigned to package "pkg-live" of the live media buy
+    And the buyer's creative "cr-late-bundle", under review, an html5 creative bundled by the buyer's bundle host, with backup image "https://cdn.example.com/backup.png", is assigned to package "pkg-live" of the live media buy
     When the seller approves creative "cr-late-bundle"
     Then Google Ad Manager created one HTML5 creative for advertiser "3000001" whose html5 asset is the buyer's zip bundle, in a file with a zip extension, and which names no image URL
     And Google Ad Manager created that creative at size 300x250
@@ -324,7 +326,7 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
   @T-UC-002-local-gam-creative-html5-backup-size @extension
   Scenario: An html5 creative whose backup image is a size its option does not declare is created at its option's size
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "html5", "format_option_id": "html5_300x250", "params": {"width": 300, "height": 250}}]}', with product settings '{"creative_placeholders": [{"width": 300, "height": 250}, {"width": 320, "height": 50}]}'
-    And the package references the buyer's approved html5 creative "cr-bundle" carrying a zip bundle from the buyer's bundle host and the backup image "https://cdn.example.com/backup-320x50.png", sized 320x50
+    And the package references the buyer's approved html5 creative "cr-bundle" bundled by the buyer's bundle host, with backup image "https://cdn.example.com/backup-320x50.png", sized 320x50
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And Google Ad Manager created one HTML5 creative for advertiser "3000001" whose html5 asset is the buyer's zip bundle, in a file with a zip extension, and which names no image URL
