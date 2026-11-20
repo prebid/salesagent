@@ -1,7 +1,7 @@
 """The GAM configuration preflight, through its two public surfaces: the command and run_all_tests.sh.
 
-``scripts/gam_prerequisites_check.py --test-network`` checks the configured Google Ad Manager
-test network read-only; ``run_all_tests.sh`` runs it before Docker or any suite when the run
+``scripts/gam_prerequisites_check.py --suite-network`` checks the configured Google Ad Manager
+suite network read-only; ``run_all_tests.sh`` runs it before Docker or any suite when the run
 selects a GAM leg. What is graded here needs no network: an unset setting is named, the
 opt-out runs no check and says so, the network checks refuse a company that is no
 advertiser and an ad unit that is not ACTIVE, and the runner stops before Docker on a
@@ -16,17 +16,17 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from scripts.gam_prerequisites_check import SKIPPED, check_test_network
+from scripts.gam_prerequisites_check import SKIPPED, check_suite_network
 from src.adapters.gam.utils.health_check import GAMHealthChecker, HealthStatus
 from tests.unit._run_all_tests_helpers import REPO_ROOT, RUNNER
 
 _GAM_SETTINGS = (
     "GAM_SERVICE_ACCOUNT_JSON",
     "GAM_SERVICE_ACCOUNT_KEY_FILE",
-    "GAM_TEST_NETWORK_CODE",
-    "GAM_TEST_ADVERTISER_ID",
-    "GAM_TEST_AD_UNIT_IDS",
-    "GAM_TEST_PREFLIGHT_SKIP",
+    "GAM_SUITE_NETWORK_CODE",
+    "GAM_SUITE_ADVERTISER_ID",
+    "GAM_SUITE_AD_UNIT_IDS",
+    "GAM_SUITE_PREFLIGHT_SKIP",
 )
 
 
@@ -36,25 +36,88 @@ def unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
-def test_preflight_names_every_unset_setting(unconfigured: None, capsys: pytest.CaptureFixture[str]) -> None:
-    assert check_test_network(skip=False) == 1
+def _configure(monkeypatch: pytest.MonkeyPatch, tmp_path, *names: str) -> None:
+    """Set the named GAM settings, each to a value of its kind; the credential is a key file."""
+    values = {
+        "GAM_SERVICE_ACCOUNT_KEY_FILE": str(tmp_path / "key.json"),
+        "GAM_SUITE_NETWORK_CODE": "1",
+        "GAM_SUITE_ADVERTISER_ID": "2",
+        "GAM_SUITE_AD_UNIT_IDS": "3,4",
+    }
+    (tmp_path / "key.json").write_text("{}")
+    for name in names:
+        monkeypatch.setenv(name, values[name])
+
+
+_EVERY_SETTING = (
+    "GAM_SERVICE_ACCOUNT_KEY_FILE",
+    "GAM_SUITE_NETWORK_CODE",
+    "GAM_SUITE_ADVERTISER_ID",
+    "GAM_SUITE_AD_UNIT_IDS",
+)
+
+
+def test_the_suite_network_is_none_partial_or_full(
+    unconfigured: None, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """All or nothing: no GAM setting is no network; some is a refusal naming the rest; all is the network."""
+    from src.core.config import GamSuiteNetworkUnconfigured, ToolingSettings
+
+    assert ToolingSettings().gam_suite_network() is None
+
+    _configure(monkeypatch, tmp_path, "GAM_SUITE_NETWORK_CODE")
+    with pytest.raises(GamSuiteNetworkUnconfigured) as partial:
+        ToolingSettings().gam_suite_network()
+    assert partial.value.missing == (
+        "GAM_SERVICE_ACCOUNT_JSON (or GAM_SERVICE_ACCOUNT_KEY_FILE)",
+        "GAM_SUITE_ADVERTISER_ID",
+        "GAM_SUITE_AD_UNIT_IDS",
+    )
+
+    _configure(monkeypatch, tmp_path, *_EVERY_SETTING)
+    network = ToolingSettings().gam_suite_network()
+    assert network is not None
+    assert (network.network_code, network.advertiser_id, network.ad_unit_ids) == ("1", "2", ("3", "4"))
+
+
+def test_preflight_says_not_configured_and_passes_with_no_gam_setting(
+    unconfigured: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert check_suite_network(skip=False) == 0
+    assert capsys.readouterr().out.strip() == "GAM: not configured"
+
+
+def test_preflight_names_every_unset_setting_of_a_partial_configuration(
+    unconfigured: None, monkeypatch: pytest.MonkeyPatch, tmp_path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _configure(monkeypatch, tmp_path, "GAM_SUITE_AD_UNIT_IDS")
+    assert check_suite_network(skip=False) == 1
     failed = [line.strip() for line in capsys.readouterr().out.splitlines() if "FAIL" in line]
     assert failed == [
         "FAIL settings present: GAM_SERVICE_ACCOUNT_JSON (or GAM_SERVICE_ACCOUNT_KEY_FILE)",
-        "FAIL settings present: GAM_TEST_NETWORK_CODE",
-        "FAIL settings present: GAM_TEST_ADVERTISER_ID",
-        "FAIL settings present: GAM_TEST_AD_UNIT_IDS",
+        "FAIL settings present: GAM_SUITE_NETWORK_CODE",
+        "FAIL settings present: GAM_SUITE_ADVERTISER_ID",
     ]
+
+
+def test_preflight_records_the_configured_network(
+    unconfigured: None, monkeypatch: pytest.MonkeyPatch, tmp_path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A full configuration is recorded by its network code, before any check of it (this key does not parse)."""
+    _configure(monkeypatch, tmp_path, *_EVERY_SETTING)
+    monkeypatch.setenv("ENCRYPTION_KEY", "PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=")
+    assert check_suite_network(skip=False) == 1
+    assert "GAM: configured, network 1" in capsys.readouterr().out.splitlines()
 
 
 def test_preflight_names_a_key_file_that_is_not_a_file(
     unconfigured: None, monkeypatch: pytest.MonkeyPatch, tmp_path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("GAM_SERVICE_ACCOUNT_KEY_FILE", str(tmp_path / "absent.json"))
-    monkeypatch.setenv("GAM_TEST_NETWORK_CODE", "1")
-    monkeypatch.setenv("GAM_TEST_ADVERTISER_ID", "2")
-    monkeypatch.setenv("GAM_TEST_AD_UNIT_IDS", "3")
-    assert check_test_network(skip=False) == 1
+    monkeypatch.setenv("GAM_SUITE_NETWORK_CODE", "1")
+    monkeypatch.setenv("GAM_SUITE_ADVERTISER_ID", "2")
+    monkeypatch.setenv("GAM_SUITE_AD_UNIT_IDS", "3")
+    assert check_suite_network(skip=False) == 1
     assert f"FAIL settings present: GAM_SERVICE_ACCOUNT_KEY_FILE (names {tmp_path / 'absent.json'}" in (
         capsys.readouterr().out
     )
@@ -65,8 +128,8 @@ def test_preflight_opt_out_runs_no_check_and_says_so(
     unconfigured: None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], opt_out: str
 ) -> None:
     if opt_out == "setting":
-        monkeypatch.setenv("GAM_TEST_PREFLIGHT_SKIP", "1")
-    assert check_test_network(skip=opt_out == "flag") == 0
+        monkeypatch.setenv("GAM_SUITE_PREFLIGHT_SKIP", "1")
+    assert check_suite_network(skip=opt_out == "flag") == 0
     assert capsys.readouterr().out.strip() == SKIPPED
 
 
@@ -114,7 +177,7 @@ def _run_runner(tmp_path, *args: str, uv_exit: int, stop_after_preflight: bool) 
         )
         stub.chmod(0o755)
     env = {
-        **{k: v for k, v in os.environ.items() if k not in ("E2E_WORKERS", "GAM_TEST_PREFLIGHT_SKIP")},
+        **{k: v for k, v in os.environ.items() if k not in ("E2E_WORKERS", "GAM_SUITE_PREFLIGHT_SKIP")},
         "PATH": f"{stub_bin}:{os.environ.get('PATH', '')}",
         "STUB_UV_EXIT": str(uv_exit),
         "STUB_DOCKER_EXIT": "0",
@@ -135,7 +198,7 @@ def _run_runner(tmp_path, *args: str, uv_exit: int, stop_after_preflight: bool) 
 def test_runner_stops_before_docker_when_the_preflight_fails(tmp_path) -> None:
     code, output, uv_argv, docker_argv = _run_runner(tmp_path, "e2e", uv_exit=1, stop_after_preflight=False)
     assert code == 1, output
-    assert "scripts/gam_prerequisites_check.py --test-network" in uv_argv
+    assert "scripts/gam_prerequisites_check.py --suite-network" in uv_argv
     assert "GAM preflight FAILED" in output
     assert "compose" not in docker_argv, f"Docker started after a failed preflight: {docker_argv}"
 

@@ -1,6 +1,5 @@
 """Encryption utilities for sensitive data."""
 
-import hashlib
 import logging
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -26,17 +25,6 @@ def _get_encryption_key() -> bytes:
             "Generate a key with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
         )
     return key.encode()
-
-
-def encryption_key_fingerprint() -> str | None:
-    """A short digest of ``ENCRYPTION_KEY`` that names the key without disclosing it; ``None`` when unset.
-
-    Two processes that encrypt and decrypt the same stored columns (a test process writing a
-    tenant's credentials, the server reading them) compare fingerprints to learn whether they
-    share the key; the key itself never leaves either process.
-    """
-    key = get_settings().auth.encryption_key
-    return hashlib.sha256(key.encode()).hexdigest()[:16] if key else None
 
 
 def encrypt_api_key(plaintext: str) -> str:

@@ -753,86 +753,75 @@ class ToolingSettings(BaseSettings):
 
     # The Google Ad Manager network the repo's GAM tests run against, and the service account
     # they call it as. Each contributor configures their own network; nothing compares these
-    # values with anything, and none has a default. ``gam_test_network`` hands them over, or
+    # values with anything, and none has a default. ``gam_suite_network`` hands them over, or
     # fails naming every one that is unset. The server never reads them: it builds its
     # adapter from the tenant's ``adapter_config`` row, which the tests write from these.
     gam_service_account_json: SecretStr | None = None
     gam_service_account_key_file: Path | None = None
-    gam_test_network_code: str | None = None
-    gam_test_advertiser_id: str | None = None
+    gam_suite_network_code: str | None = None
+    gam_suite_advertiser_id: str | None = None
     #: Comma-joined, as ``revoked_keyids`` is: pydantic-settings reads a ``list`` as JSON.
-    gam_test_ad_unit_ids: str | None = None
+    gam_suite_ad_unit_ids: str | None = None
     #: Run the suites without the GAM configuration preflight; the run records the skip.
-    gam_test_preflight_skip: bool = False
+    gam_suite_preflight_skip: bool = False
 
-    def gam_test_network(self) -> GamTestNetwork:
-        """The configured GAM test network, or :class:`GamTestNetworkUnconfigured` naming every unset setting.
+    def gam_suite_network(self) -> GamSuiteNetwork | None:
+        """The GAM network the suite books against: all of its settings, none of them, or a refusal.
 
-        The credential is ``GAM_SERVICE_ACCOUNT_JSON``, else the file
-        ``GAM_SERVICE_ACCOUNT_KEY_FILE`` names, read here rather than at import.
+        All or nothing, decided here and nowhere else. No GAM setting at all is ``None``: this
+        environment configures no GAM network. Some of them is :class:`GamSuiteNetworkUnconfigured`
+        naming every one that is unset. All of them is the network. The credential is
+        ``GAM_SERVICE_ACCOUNT_JSON``, else the file ``GAM_SERVICE_ACCOUNT_KEY_FILE`` names, read
+        here rather than at import. Nothing compares the values with anything.
         """
-        ad_unit_ids = tuple(_csv(self.gam_test_ad_unit_ids))
-        missing = [
-            name
-            for name, value in (
-                (
-                    "GAM_SERVICE_ACCOUNT_JSON (or GAM_SERVICE_ACCOUNT_KEY_FILE)",
-                    self.gam_service_account_json or self.gam_service_account_key_file,
-                ),
-                ("GAM_TEST_NETWORK_CODE", self.gam_test_network_code),
-                ("GAM_TEST_ADVERTISER_ID", self.gam_test_advertiser_id),
-                ("GAM_TEST_AD_UNIT_IDS", ad_unit_ids),
-            )
-            if not value
-        ]
+        ad_unit_ids = tuple(_csv(self.gam_suite_ad_unit_ids))
+        settings = (
+            (
+                "GAM_SERVICE_ACCOUNT_JSON (or GAM_SERVICE_ACCOUNT_KEY_FILE)",
+                self.gam_service_account_json or self.gam_service_account_key_file,
+            ),
+            ("GAM_SUITE_NETWORK_CODE", self.gam_suite_network_code),
+            ("GAM_SUITE_ADVERTISER_ID", self.gam_suite_advertiser_id),
+            ("GAM_SUITE_AD_UNIT_IDS", ad_unit_ids),
+        )
+        if not any(value for _, value in settings):
+            return None
+        missing = [name for name, value in settings if not value]
         key_file = self.gam_service_account_key_file
         if self.gam_service_account_json is None and key_file is not None and not key_file.is_file():
             missing.append(f"GAM_SERVICE_ACCOUNT_KEY_FILE (names {key_file}, which is not a file)")
         if missing:
-            raise GamTestNetworkUnconfigured(missing)
-        assert self.gam_test_network_code and self.gam_test_advertiser_id  # narrowed by `missing`
+            raise GamSuiteNetworkUnconfigured(missing)
+        assert self.gam_suite_network_code and self.gam_suite_advertiser_id  # narrowed by `missing`
         credential = (
             self.gam_service_account_json.get_secret_value()
             if self.gam_service_account_json is not None
             else Path(str(key_file)).read_text()
         )
-        return GamTestNetwork(
+        return GamSuiteNetwork(
             service_account_json=credential,
-            network_code=self.gam_test_network_code,
-            advertiser_id=self.gam_test_advertiser_id,
+            network_code=self.gam_suite_network_code,
+            advertiser_id=self.gam_suite_advertiser_id,
             ad_unit_ids=ad_unit_ids,
         )
 
 
-class GamTestNetworkUnconfigured(RuntimeError):
-    """A reader needs the GAM test network and a setting naming it is unset; ``missing`` names each one."""
+class GamSuiteNetworkUnconfigured(RuntimeError):
+    """A reader needs the GAM network the suite books against and a setting naming it is unset; ``missing`` names each one."""
 
     def __init__(self, missing: list[str]) -> None:
         self.missing = tuple(missing)
-        super().__init__("the GAM test network is not configured; unset: " + ", ".join(self.missing))
+        super().__init__("the GAM network the suite books against is not configured; unset: " + ", ".join(self.missing))
 
 
 @dataclass(frozen=True)
-class GamTestNetwork:
+class GamSuiteNetwork:
     """The GAM network, advertiser and ad units the GAM tests use, and the key they call it with."""
 
     service_account_json: str = field(repr=False)
     network_code: str
     advertiser_id: str
     ad_unit_ids: tuple[str, ...]
-
-    def adapter_config_columns(self) -> dict[str, str]:
-        """The ``adapter_config`` columns a seller onboarded to this network by service account has.
-
-        One mapping for every writer of such a row: the GAM tests' tenant, and the
-        preflight's in-memory row.
-        """
-        return {
-            "adapter_type": "google_ad_manager",
-            "gam_network_code": self.network_code,
-            "gam_auth_method": "service_account",
-            "gam_service_account_json": self.service_account_json,
-        }
 
 
 @dataclass(frozen=True)

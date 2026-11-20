@@ -248,7 +248,9 @@ def adcp_pin() -> dict:
     }
 
 
-def document(identity: Identity, run: pathlib.Path, adcp: dict | None, host: str, now: str) -> dict:
+def document(
+    identity: Identity, run: pathlib.Path, adcp: dict | None, host: str, now: str, gam_network: str | None = None
+) -> dict:
     """The ``meta.json`` payload."""
     return {
         "schema": SCHEMA,
@@ -262,6 +264,9 @@ def document(identity: Identity, run: pathlib.Path, adcp: dict | None, host: str
         "source": identity.source,
         "unidentified_because": identity.unidentified_because,
         "adcp": adcp,
+        # The GAM network the run books against, as run_all_tests.sh's preflight stated it
+        # ("not configured", "configured, network <code>", ...); null when nobody said.
+        "gam_network": gam_network,
     }
 
 
@@ -492,6 +497,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commit", default="", help="the sha the invoker asserts this run graded")
     parser.add_argument("--branch", default="", help="the branch the invoker asserts")
     parser.add_argument("--tree", default="", help="'clean' or 'dirty', as the invoker found it")
+    parser.add_argument(
+        "--gam-network", default="", help="the GAM network the run books against, as its preflight stated it"
+    )
     args = parser.parse_args(argv)
 
     if args.adcp:
@@ -512,6 +520,7 @@ def main(argv: list[str] | None = None) -> int:
         pin if isinstance(pin, dict) else None,
         socket.gethostname(),
         datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
+        args.gam_network or None,
     )
     args.write.mkdir(parents=True, exist_ok=True)
     (args.write / IDENTITY_FILE).write_text(json.dumps(payload, indent=1) + "\n")

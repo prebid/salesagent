@@ -7,7 +7,7 @@ is the step it ends in, on its own: for a scenario that needs the tenant's real 
 without making the tenant a GAM seller.
 
 On e2e the tenant is a seller on the Google Ad Manager network the environment configures
-(``ToolingSettings.gam_test_network``), and the live server builds production's adapter from
+(``ToolingSettings.gam_suite_network``), and the live server builds production's adapter from
 the rows this writes. Every reader of what GAM holds has two realizations: the stand-in's
 record in process, and the network read back through the GAM API on e2e
 (``tests/harness/gam_network.py``). A Given that shapes a network the configured one cannot
@@ -34,7 +34,6 @@ if TYPE_CHECKING:
     from unittest.mock import MagicMock
 
     from tests.harness.gam_network import ConfiguredGamNetwork
-    from tests.harness.transport import E2EConfig
 
 GAM_CLIENT_PATCH: dict[str, str] = {
     # Google's SOAP client on googleads' module, where GAMClientManager constructs it.
@@ -85,8 +84,9 @@ def _sell_through_the_configured_network(
     The scenario's trafficker, ad unit and advertiser name the configured network's: the
     service account's own user (the trafficker the adapter resolves when none is stored),
     the first configured ad unit, the configured advertiser. Read back, each is reported
-    under the scenario's id. The key is written encrypted through the factory, after the
-    live server is shown to share this process's ``ENCRYPTION_KEY``.
+    under the scenario's id. The key is written encrypted through the factory; a server
+    holding another ``ENCRYPTION_KEY`` refuses the row with the typed decrypt error
+    (``AdapterConfig.gam_service_account_json``), never with a GAM refusal.
     """
     if network_time_zone is not None:
         raise E2EUnsupportedSetup(
@@ -96,11 +96,11 @@ def _sell_through_the_configured_network(
     if network_fault is not None:
         raise E2EUnsupportedSetup("a real network answers getCurrentNetwork as it does: a refusal cannot be injected")
     from src.core.config import ToolingSettings
-    from tests.harness.gam_network import ConfiguredGamNetwork, assert_server_shares_the_encryption_key
+    from tests.harness.gam_network import NO_GAM_NETWORK, ConfiguredGamNetwork
 
-    network = ToolingSettings().gam_test_network()
-    assert self.e2e_config is not None, "sell_through_gam()'s e2e branch needs env.e2e_config"
-    assert_server_shares_the_encryption_key(self.e2e_config.base_url)
+    network = ToolingSettings().gam_suite_network()
+    if network is None:
+        raise E2EUnsupportedSetup(NO_GAM_NETWORK)
     gam = ConfiguredGamNetwork(network)
     self._gam_network = gam
     self._guard("gam network: archive the scenario's orders", gam.archive)
@@ -132,7 +132,7 @@ def _book_on_the_configured_network(
     """
     if principal is not None:
         raise E2EUnsupportedSetup(
-            "the configured network names one advertiser (GAM_TEST_ADVERTISER_ID), so another buyer's "
+            "the configured network names one advertiser (GAM_SUITE_ADVERTISER_ID), so another buyer's "
             "GAM advertiser has no order on it"
         )
     network_order_id, booked = self._configured_network().book(
@@ -149,6 +149,41 @@ def _book_on_the_configured_network(
 def _hold_on_the_configured_network(self: Any, gam_id: str, image_url: str) -> str:
     """``hold_gam_creative`` on e2e: the creative is created on the configured network, named under *gam_id*."""
     return self._configured_network().hold_creative(creative_id=gam_id, image_url=image_url)
+
+
+#: The buyer's bundle host on e2e: a tls-proxy alias ``publisher-origin`` serves (see
+#: ``tests/harness/publisher_authorization.py``). Bundles live under ``/bundles/<key>/``, a
+#: path no adagents.json shares.
+_BUNDLE_HOST = "pub-psatest.com"
+
+
+def _serve_from_the_publisher_origin(self: Any, bundle: bytes) -> str:
+    """``serve_html5_bundle`` on e2e: the bundle is a file ``publisher-origin`` serves, at a per-scenario path.
+
+    ``publisher-origin`` serves a dialer only the files written under that dialer's address,
+    and two processes fetch the bundle: the live server, on create, and this process, on a
+    seller's approval it runs itself. So the file is written under both addresses.
+    """
+    import shutil
+    import socket
+    import uuid
+
+    from tests.harness.publisher_authorization import PUBLISHER_FILES_DIR
+
+    self._reach_the_bundle_host()
+    key = uuid.uuid4().hex
+    runner_files = PUBLISHER_FILES_DIR / socket.gethostbyname(socket.gethostname())
+    for files in (self._registered_server_files(), runner_files):
+        bundle_file = files / _BUNDLE_HOST / "bundles" / key / "bundle.zip"
+        bundle_file.parent.mkdir(parents=True, exist_ok=True)
+        bundle_file.write_bytes(bundle)
+    self._guard("html5 bundle at this runner's address", lambda: shutil.rmtree(runner_files, ignore_errors=True))
+    return f"https://{_BUNDLE_HOST}/bundles/{key}/bundle.zip"
+
+
+def _a_network_asset_is_held(self: Any, asset: Mapping[str, Any], bundle: bytes) -> bool:
+    """``gam_asset_is_the_bundle`` on e2e: GAM holds the asset, by its reference. It does not read the bytes back."""
+    return asset.get("assetId") is not None
 
 
 def _read_back_from_the_configured_network(self: Any, service: str, method: str) -> list[Any]:
@@ -192,7 +227,6 @@ class GamSellerMixin:
         mock: dict[str, MagicMock]
         _tenant_id: str
         _session: Any
-        e2e_config: E2EConfig | None
         is_e2e: bool
 
         def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]: ...
@@ -200,6 +234,8 @@ class GamSellerMixin:
         def _commit_factory_data(self) -> None: ...
 
         def _guard(self, label: str, cleanup: Any) -> None: ...
+
+        def _registered_server_files(self) -> Any: ...
 
     @realize_e2e(_the_configured_network_answers)
     def _configure_gam_client(self, **network_answers: Any) -> None:
@@ -558,31 +594,39 @@ class GamSellerMixin:
         line_items = self.mock["gam_client"].return_value.GetService("LineItemService")
         line_items.getLineItemsByStatement.side_effect = gam_fault(reason)
 
-    @realize_e2e(
-        e2e_unsupported(
-            "the buyer's bundle host is a TLS origin on loopback in this test process, which the live "
-            "server cannot reach, and a network's Html5Creative does not read its bundle bytes back"
-        )
-    )
-    def serve_html5_bundle(self, bundle: bytes) -> str:
-        """Serve *bundle* as a zip from a loopback origin over TLS; return its URL.
+    def _reach_the_bundle_host(self) -> None:
+        """This process may fetch the buyer's bundle host: it trusts the shared test CA and opens the private-range hatch.
 
-        The buyer's bundle host, which the seller fetches the bundle from through the egress
-        seam: so the env trusts the shared test CA and opens the private-range hatch, each
-        released with the env. In process only, as every GAM seller scenario is.
+        The seller fetches a bundle through the egress seam, and the bundle host is a private
+        address on a test certificate. Both released with the env.
         """
         from unittest.mock import patch
 
         from src.core.config import get_settings
-        from tests.helpers.tls_material import start_tls_origin, trust_test_ca
+        from tests.helpers.tls_material import trust_test_ca
 
         trust_test_ca(self._guard)
         hatch = patch.object(get_settings().limits, "adcp_outbound_allow_private", True)
         hatch.start()
         self._guard("html5 bundle egress hatch", hatch.stop)
+
+    @realize_e2e(_serve_from_the_publisher_origin)
+    def serve_html5_bundle(self, bundle: bytes) -> str:
+        """Serve *bundle* as a zip from a loopback origin over TLS; return its URL.
+
+        The buyer's bundle host, which the seller fetches the bundle from (``_reach_the_bundle_host``).
+        """
+        from tests.helpers.tls_material import start_tls_origin
+
+        self._reach_the_bundle_host()
         origin = start_tls_origin(self._guard, "html5 bundle origin")
         origin.respond_with(200, body=bundle, content_type="application/zip")
         return f"{origin.base_url}/bundle.zip"
+
+    @realize_e2e(_a_network_asset_is_held)
+    def gam_asset_is_the_bundle(self, asset: Mapping[str, Any], bundle: bytes) -> bool:
+        """Whether GAM's *asset* of a creative is *bundle*: the stand-in holds the bytes the seller sent."""
+        return asset.get("assetByteArray") == bundle
 
     @realize_e2e(_read_back_what_the_network_holds)
     def gam_objects_sent(self, service: str, method: str) -> list[Any]:

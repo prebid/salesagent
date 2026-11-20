@@ -1,8 +1,8 @@
-"""The configured Google Ad Manager test network, as one e2e scenario uses it.
+"""The configured Google Ad Manager suite network, as one e2e scenario uses it.
 
 On e2e the live server builds production's ``GoogleAdManager`` from the tenant's
 ``adapter_config`` row, and the row names the network the environment configures
-(``ToolingSettings.gam_test_network``). What a GAM Then grades is then what that network
+(``ToolingSettings.gam_suite_network``). What a GAM Then grades is then what that network
 holds, read back through the GAM API here, by the scenario's own objects:
 
 * **orders**: every order whose name starts with the scenario's prefix. The seller's naming
@@ -41,9 +41,14 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
-    from src.core.config import GamTestNetwork
+    from src.core.config import GamSuiteNetwork
 
 logger = logging.getLogger(__name__)
+
+#: The declaration of every GAM test in an environment with no GAM setting at all
+#: (``ToolingSettings.gam_suite_network`` is ``None``): an e2e scenario's E2EUnsupportedSetup
+#: reason, a requires_gam test's xfail reason.
+NO_GAM_NETWORK = "this environment configures no GAM network"
 
 #: This test process's part of every name it gives a GAM object.
 RUN_PREFIX = f"sa-e2e-{uuid.uuid4().hex[:8]}"
@@ -58,32 +63,6 @@ _READ_BACK = {
     ("CreativeService", "createCreatives"): "creatives",
     ("LineItemCreativeAssociationService", "createLineItemCreativeAssociations"): "associations",
 }
-
-#: The fingerprints already compared, by live server: the comparison is once per process.
-_SHARED_KEY_CHECKED: set[str] = set()
-
-
-def assert_server_shares_the_encryption_key(base_url: str) -> None:
-    """The live server at *base_url* encrypts with this process's ``ENCRYPTION_KEY``, compared by fingerprint.
-
-    The GAM credential this process writes into ``adapter_config`` is encrypted with its key
-    and decrypted with the server's; two different keys fail here, as that, and never as a
-    GAM refusal three steps later.
-    """
-    if base_url in _SHARED_KEY_CHECKED:
-        return
-    import httpx
-
-    from src.core.utils.encryption import encryption_key_fingerprint
-
-    response = httpx.get(f"{base_url}/debug/encryption-key-fingerprint", timeout=30)
-    assert response.status_code == 200, f"the live server's key fingerprint answered {response.status_code}"
-    theirs, ours = response.json()["fingerprint"], encryption_key_fingerprint()
-    assert ours is not None and theirs == ours, (
-        f"the test process and the live server do not share ENCRYPTION_KEY (fingerprint {ours} here, "
-        f"{theirs} there): the server could not read the GAM credential this process writes"
-    )
-    _SHARED_KEY_CHECKED.add(base_url)
 
 
 def _plain(value: Any) -> Any:
@@ -115,9 +94,9 @@ def scenario_named(objects: Sequence[Any], scenario_ids: Mapping[str, str]) -> l
 
 
 class ConfiguredGamNetwork:
-    """The configured GAM test network, for one scenario: its client, its name prefix, its ids."""
+    """The configured GAM network the suite books against, for one scenario: its client, its name prefix, its ids."""
 
-    def __init__(self, network: GamTestNetwork) -> None:
+    def __init__(self, network: GamSuiteNetwork) -> None:
         from scripts.gam_prerequisites_check import network_client_manager
 
         self.network = network

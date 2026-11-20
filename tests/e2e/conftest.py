@@ -834,25 +834,31 @@ async def adcp_validator():
 
 
 @pytest.fixture(scope="session")
-def gam_test_network():
-    """The GAM network the environment configures (``ToolingSettings.gam_test_network``).
+def gam_suite_network():
+    """The GAM network the environment configures (``ToolingSettings.gam_suite_network``).
 
-    Configuration, never a constant: each contributor names their own network. A setting
-    that is unset fails every test that needs the network, naming the setting.
+    Configuration, never a constant: each contributor names their own network. With no GAM
+    setting at all every test that needs the network is an expected failure, declared
+    ``NO_GAM_NETWORK``, and never a skip; a partial configuration fails every such test,
+    naming each setting that is unset.
     """
-    from src.core.config import GamTestNetworkUnconfigured, ToolingSettings
+    from src.core.config import GamSuiteNetworkUnconfigured, ToolingSettings
+    from tests.harness.gam_network import NO_GAM_NETWORK
 
     try:
-        return ToolingSettings().gam_test_network()
-    except GamTestNetworkUnconfigured as unconfigured:
+        network = ToolingSettings().gam_suite_network()
+    except GamSuiteNetworkUnconfigured as unconfigured:
         pytest.fail(str(unconfigured), pytrace=False)
+    if network is None:
+        pytest.xfail(NO_GAM_NETWORK)
+    return network
 
 
 @pytest.fixture(scope="session")
-def gam_client_manager(gam_test_network):
+def gam_client_manager(gam_suite_network):
     """The client manager a seller onboarded to the configured network has, built as the server builds it."""
     from scripts.gam_prerequisites_check import network_client_manager
 
-    manager = network_client_manager(gam_test_network)
+    manager = network_client_manager(gam_suite_network)
     assert manager.get_client() is not None, "GAM client failed to initialize"
     return manager

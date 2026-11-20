@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
 
 if TYPE_CHECKING:
-    from src.core.config import GamTestNetwork
+    from src.core.config import GamSuiteNetwork
 
 
 def seed_gam_tenant(
@@ -72,7 +72,7 @@ def onboard_gam(
     tenant: Any,
     *,
     trafficker_id: str | None,
-    network: GamTestNetwork | None = None,
+    network: GamSuiteNetwork | None = None,
     name_prefix: str | None = None,
 ) -> Any:
     """Leave *tenant* with the rows GAM onboarding in the Admin UI writes, and return the config.
@@ -86,8 +86,8 @@ def onboard_gam(
     builds: ``gam_refresh_token`` is what makes the adapter CONSTRUCTIBLE (it builds its
     credentials in ``__init__`` and refuses a config carrying no
     key_file/service_account_json/refresh_token), and the stand-in answers to any network
-    code. With *network*, the configured GAM test network, the tenant is onboarded to it by
-    service account (``GamTestNetwork.adapter_config_columns``), and the key is stored
+    code. With *network*, the configured GAM network the suite books against, the tenant is onboarded to it by
+    service account (``scripts/gam_prerequisites_check.adapter_config_columns``), and the key is stored
     encrypted, as the column stores it. *trafficker_id* ``None`` is no trafficker, which the
     adapter resolves to the service account's own user. *name_prefix* leads every order and
     line item name the seller gives GAM (the seller's naming templates), so a run's objects on
@@ -96,11 +96,12 @@ def onboard_gam(
     The caller binds the factories to its session (an env does so on entry; otherwise wrap
     the call in ``bind_factories_to_session``).
     """
+    from scripts.gam_prerequisites_check import adapter_config_columns
     from src.core.utils.naming import DEFAULT_ORDER_NAME_TEMPLATE
     from tests.factories import AdapterConfigFactory
 
     network_columns: dict[str, Any] = (
-        network.adapter_config_columns()
+        adapter_config_columns(network)
         if network is not None
         else {
             "adapter_type": "google_ad_manager",

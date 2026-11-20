@@ -873,14 +873,16 @@ def then_gam_created_one_html5_creative(ctx: dict, advertiser_id: str) -> None:
     """GAM holds exactly one creative from this scenario: an ``Html5Creative`` carrying the bundle's own bytes.
 
     Ad Manager API v202602 ``Html5Creative.html5Asset``: the ``assetByteArray`` "must be a
-    zip bundle" and the ``fileName`` "must have a zip extension". The bytes are the ones the
-    buyer's bundle host served, so a bundle the seller did not fetch cannot pass.
+    zip bundle" and the ``fileName`` "must have a zip extension". In process the bytes are the
+    ones the buyer's bundle host served, so a bundle the seller did not fetch cannot pass; a
+    real network does not read the bytes back, and answers the asset GAM holds by its
+    ``assetId`` (``gam_asset_is_the_bundle``).
     """
     created = _creatives_created(ctx)
     kinds = [(c["xsi_type"], str(c["advertiserId"]), c.get("imageUrl")) for c in created]
     assert kinds == [("Html5Creative", advertiser_id, None)], f"expected one Html5Creative; GAM created {created}"
     asset = created[0]["html5Asset"]
-    assert asset.get("assetByteArray") == ctx["html5_bundle"], "the html5 asset is not the buyer's zip bundle"
+    assert ctx["env"].gam_asset_is_the_bundle(asset, ctx["html5_bundle"]), f"the html5 asset {asset} is not the bundle"
     assert str(asset.get("fileName", "")).endswith(".zip"), f"the html5 asset's file name {asset.get('fileName')!r}"
 
 
