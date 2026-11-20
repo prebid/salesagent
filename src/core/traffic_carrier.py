@@ -141,6 +141,9 @@ class PackageAssignmentDict(TypedDict):
     # The package's line item in the ad server (package_config["platform_line_item_id"]),
     # None for a package that has none.
     platform_line_item_id: str | None
+    # The creative as it is trafficked on this package: read with the declaration this
+    # package's product resolved to, so it states the sizes this package accepts and no other's.
+    creative: CreativeToTraffic
 
 
 class LegacyContentKeys(TypedDict, total=False):
@@ -156,7 +159,11 @@ class LegacyContentKeys(TypedDict, total=False):
 
 
 class AdapterCreativeAsset(LegacyContentKeys):
-    """One creative as ``add_creative_assets`` is handed it. ``creative`` is the carrier, always present."""
+    """One creative as ``add_creative_assets`` is handed it.
+
+    Each of ``package_assignments`` carries the creative as it is trafficked on that package.
+    ``creative`` is the first assignment's, always present, for the adapters that read one.
+    """
 
     creative_id: str
     creative: CreativeToTraffic

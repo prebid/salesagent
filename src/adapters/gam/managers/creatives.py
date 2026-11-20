@@ -18,7 +18,13 @@ from src.core.schemas import AssetStatus
 from src.core.security.outbound_http import CounterpartyUrl, send
 from src.core.traffic_carrier import AdapterCreativeAsset, CreativeToTraffic, PackageAssignmentDict
 
-from ..creative_plan import GamCreativePlan, GamCreativeRefusal, placeholder_sizes, plan_gam_creative
+from ..creative_plan import (
+    GamCreativePlan,
+    GamCreativeRefusal,
+    GamRefusalReason,
+    placeholder_sizes,
+    plan_gam_creative,
+)
 from ..utils.error_handler import map_gam_exception
 from ..utils.validation import GAMValidator
 
@@ -26,7 +32,17 @@ logger = logging.getLogger(__name__)
 
 
 def _line_item_weights(package_assignments: Sequence[PackageAssignmentDict]) -> list[tuple[str, int]]:
-    """(GAM line item id, weight) for each of an asset's package assignments.
+    """(GAM line item id, weight) for each of an asset's package assignments that has a line item."""
+    return [
+        (line_item_id, assignment.get("weight", 100))
+        for line_item_id, assignment in _assigned_line_items(package_assignments)
+    ]
+
+
+def _assigned_line_items(
+    package_assignments: Sequence[PackageAssignmentDict],
+) -> list[tuple[str, PackageAssignmentDict]]:
+    """(GAM line item id, assignment) for each of an asset's package assignments.
 
     The line item id is the seller's own package -> line item mapping: the adapter
     returns it from create_media_buy (``AdapterCreateResult.platform_line_item_ids``)
@@ -40,7 +56,7 @@ def _line_item_weights(package_assignments: Sequence[PackageAssignmentDict]) -> 
     for assignment in package_assignments:
         line_item_id = assignment.get("platform_line_item_id")
         if line_item_id:
-            result.append((str(line_item_id), assignment.get("weight", 100)))
+            result.append((str(line_item_id), assignment))
         else:
             logger.warning(f"Package {assignment.get('package_id')} has no GAM line item; assignment skipped")
     return result
@@ -149,7 +165,8 @@ class GAMCreativesManager:
             logger.info(
                 f"[DEBUG] Processing asset {asset.get('creative_id')} with package_assignments: {asset.get('package_assignments', [])}"
             )
-            # Get placeholders for this asset's package assignments
+            # The placeholders of every line item the asset is on, which only the legacy branch
+            # below reads; a planned creative is planned per line item.
             asset_placeholders = []
             for line_item_id, _ in _line_item_weights(asset.get("package_assignments", [])):
                 asset_placeholders.extend(creative_placeholders.get(line_item_id, []))
@@ -181,7 +198,10 @@ class GAMCreativesManager:
                 # its content changed since, GAM's copy is updated first, keeping its id and its
                 # associations. Nobody has tried updateCreatives against real GAM. Creative.size
                 # is read-only after creation, so a changed size is not expected to take effect.
-                plan = self._plan(ctt, asset_placeholders) if ctt is not None else None
+                # Each package's carrier on its own line item, so a creative on two packages
+                # serves on each at the sizes that package's product accepts, never their union.
+                plans = self._plans_by_line_item(asset, creative_placeholders) if ctt is not None else None
+                plan = next(iter(plans.values())) if plans else None
                 gam_creative_id = asset.get("platform_creative_id")
                 if not gam_creative_id or asset.get("platform_creative_outdated"):
                     creative = (
@@ -222,7 +242,7 @@ class GAMCreativesManager:
                     asset,
                     lica_service,
                     placement_targeting_map,
-                    lica_sizes=self._lica_sizes_by_line_item(plan, creative_placeholders) if plan else None,
+                    lica_sizes=self._lica_sizes_by_line_item(plans, plan.creative["size"]) if plans and plan else None,
                 )
                 # Content that changed was held from serving while it was under review
                 # (``set_creative_serving``); its approval is what this push carries.
@@ -274,6 +294,24 @@ class GAMCreativesManager:
             raise plan.error()
         return plan
 
+    @classmethod
+    def _plans_by_line_item(
+        cls, asset: AdapterCreativeAsset, creative_placeholders: Mapping[str, list]
+    ) -> dict[str, GamCreativePlan]:
+        """Per line item *asset* is assigned to, its package's carrier planned on that line item; raises the refusal.
+
+        Each line item's own placeholders, and the carrier core read for that package's
+        product, so nothing is planned against another package's sizes.
+        """
+        plans = {
+            line_item_id: cls._plan(assignment["creative"], creative_placeholders.get(line_item_id, []))
+            for line_item_id, assignment in _assigned_line_items(asset["package_assignments"])
+        }
+        if not plans:
+            # No assigned package has a line item, so no line item states a size.
+            raise GamCreativeRefusal(asset["creative_id"], GamRefusalReason.NO_PLACEHOLDER).error()
+        return plans
+
     def _planned_creative(self, asset: AdapterCreativeAsset, plan: GamCreativePlan) -> dict[str, Any]:
         """The planned GAM creative, with the advertiser and name this manager owns, and an html5 bundle's bytes.
 
@@ -292,18 +330,17 @@ class GAMCreativesManager:
 
     @staticmethod
     def _lica_sizes_by_line_item(
-        plan: GamCreativePlan, creative_placeholders: dict[str, list]
+        plans: Mapping[str, GamCreativePlan], creative_size: dict[str, int]
     ) -> dict[str, list[dict[str, int]]]:
-        """Per line item, the plan's association sizes that line item has a placeholder for.
+        """Per line item, the sizes its own plan serves the creative at.
 
         A line item left with only the creative's own size states none, as the plan does for a
         creative with one candidate size.
         """
         by_line_item = {}
-        for line_item_id, placeholders in creative_placeholders.items():
-            taken = {(size.width, size.height) for size in placeholder_sizes(placeholders)}
-            sizes = [s for s in plan.lica_sizes if (s["width"], s["height"]) in taken]
-            by_line_item[line_item_id] = [] if sizes == [plan.creative["size"]] else sizes
+        for line_item_id, plan in plans.items():
+            sizes = list(plan.lica_sizes) or [plan.creative["size"]]
+            by_line_item[line_item_id] = [] if sizes == [creative_size] else sizes
         return by_line_item
 
     def _legacy_validation_failure(

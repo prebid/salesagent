@@ -760,8 +760,8 @@ class TestCreateMediaBuyValidation:
         # The identifier is STRUCTURED now: details/field, not prose.
 
 
-class TestBuildAdapterAssetFormatFallback:
-    """_build_adapter_asset_from_creative format-spec fallback ( TQ-04).
+class TestStoredCreativeFormatSpecFallback:
+    """_stored_creative_format_spec format-spec fallback ( TQ-04), the retroactive push's fetch.
 
     Cache-miss (None) falls back to format_resolver.get_format; a genuinely
     unknown format proceeds with no spec (raw-data extraction); a typed
@@ -780,9 +780,15 @@ class TestBuildAdapterAssetFormatFallback:
         creative.data = {"url": "https://example.com/a.jpg", "width": 300, "height": 250}
         return creative
 
+    def _fetch(self):
+        from src.core.schemas import CreativeFormatIdentity
+        from src.core.tools.media_buy_create import _stored_creative_format_spec
+
+        creative = self._creative()
+        return _stored_creative_format_spec(creative, CreativeFormatIdentity.from_row(creative), "t1")
+
     def test_cache_miss_uses_format_resolver_fallback(self):
         from src.core.security.outbound_http import CounterpartyUrl
-        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
 
         spec = MagicMock()
         # A reference format: a MagicMock answers a truthy Mock for the unstubbed attribute,
@@ -792,9 +798,7 @@ class TestBuildAdapterAssetFormatFallback:
             patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
             patch("src.core.format_resolver.get_format", return_value=spec) as resolver,
         ):
-            asset, err = _build_adapter_asset_from_creative(
-                self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1", declarations=()
-            )
+            spec_read = self._fetch()
         resolver.assert_called_once_with(
             "display_300x250",
             agent_url="https://creative.adcontextprotocol.org",
@@ -802,26 +806,21 @@ class TestBuildAdapterAssetFormatFallback:
             product_id=None,
             provenance=CounterpartyUrl(field=None),
         )
-        assert err is None and asset is not None
+        assert spec_read is spec
 
     def test_unknown_format_proceeds_without_spec(self):
         from src.core.exceptions import AdCPFormatNotFoundError
-        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
 
         with (
             patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
             patch("src.core.format_resolver.get_format", side_effect=AdCPFormatNotFoundError()),
         ):
-            asset, err = _build_adapter_asset_from_creative(
-                self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1", declarations=()
-            )
-        # Raw creative data carries url/width/height, so the asset still builds.
-        assert err is None and asset is not None
-        assert asset["url"] == "https://example.com/a.jpg"
+            spec_read = self._fetch()
+        # No spec: the read falls back to the creative's raw data fields.
+        assert spec_read is None
 
     def test_transient_error_from_cached_fetch_propagates_without_fallback(self):
         from src.core.exceptions import AdCPRateLimitError
-        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
 
         with (
             patch(
@@ -831,14 +830,11 @@ class TestBuildAdapterAssetFormatFallback:
             patch("src.core.format_resolver.get_format") as resolver,
         ):
             with pytest.raises(AdCPRateLimitError):
-                _build_adapter_asset_from_creative(
-                    self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1", declarations=()
-                )
+                self._fetch()
         resolver.assert_not_called()
 
     def test_transient_error_from_resolver_fallback_propagates(self):
         from src.core.exceptions import AdCPServiceUnavailableError
-        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
 
         with (
             patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
@@ -848,14 +844,12 @@ class TestBuildAdapterAssetFormatFallback:
             ),
         ):
             with pytest.raises(AdCPServiceUnavailableError):
-                _build_adapter_asset_from_creative(
-                    self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1", declarations=()
-                )
+                self._fetch()
 
     def test_fallback_forwards_the_same_provenance_as_the_first_fetch(self):
         """The fallback dial must carry the SAME provenance as the cached-fetch dial.
 
-        ``_build_adapter_asset_from_creative`` dials the SAME buyer-supplied
+        ``_stored_creative_format_spec`` dials the SAME buyer-supplied
         ``creative.agent_url`` twice: once through ``_get_format_spec_sync``
         (already passes ``CounterpartyUrl(field=None)``), and again through
         ``format_resolver.get_format`` when the first dial misses. Omitting
@@ -875,15 +869,12 @@ class TestBuildAdapterAssetFormatFallback:
         down (an environment detail unrelated to what this regression is).
         """
         from src.core.security.outbound_http import CounterpartyUrl
-        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
 
         with (
             patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
             patch("src.core.format_resolver.fetch_format_spec", return_value=None) as fetch_spec,
         ):
-            _build_adapter_asset_from_creative(
-                self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1", declarations=()
-            )
+            self._fetch()
 
         fetch_spec.assert_called_once_with(
             "https://creative.adcontextprotocol.org",

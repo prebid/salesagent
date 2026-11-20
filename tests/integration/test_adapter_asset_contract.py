@@ -29,8 +29,9 @@ import pytest
 
 from src.adapters.base import AdapterCreateRequest
 from src.adapters.mock_ad_server import MockAdServer
+from src.core.database.repositories.product import ProductRepository
 from src.core.schemas import FormatId, MediaPackage, Principal
-from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
+from src.core.tools.media_buy_create import _AssignedPackage, _build_adapter_asset_from_creative, _read_for_push
 from tests.helpers.media_buy_approval import uploadable_creative
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -77,16 +78,25 @@ def test_the_adapter_names_the_creative_the_builder_named(bound_factory_session)
     creative = uploadable_creative(CreativeFactory, tenant=tenant, principal=principal_row, approved=True)
     bound_factory_session.commit()
 
-    asset, build_err = _build_adapter_asset_from_creative(
+    # Read as the retroactive push reads it. A legacy creative on a package with no stored
+    # product: its format spec states its size, and no product declaration narrows it.
+    carriers = _read_for_push(
+        ProductRepository(bound_factory_session, tenant.tenant_id),
         creative,
-        [{"package_id": PACKAGE_ID, "weight": 100}],
-        tenant_id=tenant.tenant_id,
-        # A legacy creative on a product declaring no canonical option: its format spec
-        # states its size, and no product declaration narrows it.
-        declarations=(),
+        [_AssignedPackage(PACKAGE_ID, None, [creative.creative_id])],
+        tenant.tenant_id,
     )
-    assert build_err is None, build_err
-    assert asset is not None
+    asset = _build_adapter_asset_from_creative(
+        creative,
+        [
+            {
+                "package_id": PACKAGE_ID,
+                "weight": 100,
+                "platform_line_item_id": None,
+                "creative": carriers[(PACKAGE_ID, creative.creative_id)],
+            }
+        ],
+    )
 
     adapter = MockAdServer(
         config={},

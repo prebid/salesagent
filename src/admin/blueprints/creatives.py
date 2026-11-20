@@ -598,8 +598,10 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
             # Check if this creative approval unblocks any media buys
             assignments = uow.assignments.get_by_creative(creative_id)
-            # Snapshot IDs as plain strings — ORM objects expire on session close (#1038)
-            assignment_buy_ids = [a.media_buy_id for a in assignments]
+            # Snapshot IDs as plain strings — ORM objects expire on session close (#1038).
+            # Each buy once: a creative assigned to two packages of a buy has two assignments,
+            # and the buy is executed, or the creative pushed to it, once with both packages.
+            assignment_buy_ids = list(dict.fromkeys(a.media_buy_id for a in assignments))
 
             logger.info(
                 f"[CREATIVE APPROVAL] Creative {creative_id} approved, checking {len(assignments)} media buy assignments"
@@ -607,8 +609,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
             # Snapshot buy statuses here to avoid a second UoW after commit
             assignment_buy_statuses: dict[str, str] = {}
-            for assignment in assignments:
-                media_buy_id = assignment.media_buy_id
+            for media_buy_id in assignment_buy_ids:
                 media_buy = uow.media_buys.get_by_id(media_buy_id)
 
                 if not media_buy:

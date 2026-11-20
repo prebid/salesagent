@@ -368,7 +368,7 @@ class TestCreativeUploadFailure:
             tenant, principal = env.setup_default_data()
             env.setup_product_chain(tenant)
             # Creative exists, no platform_creative_id, with extractable url/dimensions
-            # so _build_adapter_asset_from_creative succeeds and the upload runs.
+            # so the gate reads it (_read_for_packages) and the upload runs.
             # status is load-bearing: media_buy_create.py holds pending_review creatives
             # back from the adapter upload (#1038), so the upload this test exercises only
             # runs for a creative that is NOT pending_review. It used to run by accident —

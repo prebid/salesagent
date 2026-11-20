@@ -85,8 +85,8 @@ def run_approval(media_buy_id: str, tenant_id: str, *, approved_by: str = "appro
 def uploadable_creative(creative_factory: Any, **kwargs: Any) -> Any:
     """A creative that survives the asset gate an approval runs before uploading.
 
-    ``_build_adapter_asset_from_creative`` resolves the creative's format spec and
-    then reads its media out of ``data["assets"]`` via ``read_creative_to_traffic``. ``CreativeFactory``'s defaults do not get
+    The gate resolves the creative's format spec and then reads its media out of
+    ``data["assets"]`` via ``read_creative_to_traffic``. ``CreativeFactory``'s defaults do not get
     through it: the format ``display_300x250`` is a legacy id absent from the
     reference catalog, and the asset is keyed ``banner``, which is neither an
     asset_id any format spec declares nor a member of production's
