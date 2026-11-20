@@ -19,6 +19,7 @@ from tests.helpers.admin_session import (
     admin_test_app,
     authenticate_http_session,
     drop_stated_session_cookie,
+    tenant_user_session,
 )
 
 #: Where the in-process Flask client sends its requests.
@@ -126,7 +127,10 @@ class AdminClient:
     def authenticate(self, tenant_id: str, *, tenant_user: str | None = None) -> None:
         """State an authenticated super-admin session for *tenant_id*, or *tenant_user*'s session."""
         if self._flask_client is not None:
-            admin_auth_session(self._flask_client, tenant_id, tenant_user=tenant_user)
+            if tenant_user is not None:
+                tenant_user_session(self._flask_client, tenant_user, tenant_id=tenant_id)
+            else:
+                admin_auth_session(self._flask_client, tenant_id)
         else:
             authenticate_http_session(self._http, self._base_url or "", tenant_id, tenant_user=tenant_user)
 

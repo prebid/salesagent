@@ -25,7 +25,7 @@ from src.admin.blueprints.core import get_tenant_from_hostname
 from src.admin.utils import is_super_admin, require_tenant_access
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant
+from src.core.database.models import Tenant, UserRole
 from src.core.domain_config import (
     get_oauth_redirect_uri,
     get_sales_agent_url,
@@ -551,7 +551,7 @@ def google_callback():
 
                 stmt = select(User).filter_by(email=email, tenant_id=tenant.tenant_id)
                 existing_user = db_session.scalars(stmt).first()
-                is_admin = existing_user.role == "admin" if existing_user else False
+                is_admin = existing_user.role == UserRole.ADMIN if existing_user else False
 
             tenant_dict[tenant.tenant_id] = {
                 "tenant_id": tenant.tenant_id,
@@ -585,7 +585,7 @@ def google_callback():
 
                 stmt = select(User).filter_by(email=email, tenant_id=tenant.tenant_id)
                 existing_user = db_session.scalars(stmt).first()
-                is_admin = existing_user.role == "admin" if existing_user else True
+                is_admin = existing_user.role == UserRole.ADMIN if existing_user else True
 
             tenant_dict[tenant.tenant_id] = {
                 "tenant_id": tenant.tenant_id,
@@ -609,7 +609,7 @@ def google_callback():
             from src.admin.domain_access import ensure_user_in_tenant
 
             user_name = session.get("user_name", email.split("@")[0].title())
-            role = "admin" if membership.get("is_admin") else "viewer"
+            role = UserRole.ADMIN if membership.get("is_admin") else UserRole.VIEWER
 
             try:
                 ensure_user_in_tenant(email, tenant_id, role=role, name=user_name)
@@ -669,7 +669,7 @@ def select_tenant():
 
                 email = session["user"]
                 user_name = session.get("user_name", email.split("@")[0].title())
-                role = "admin" if membership["is_admin"] else "viewer"
+                role = UserRole.ADMIN if membership["is_admin"] else UserRole.VIEWER
 
                 try:
                     ensure_user_in_tenant(email, tenant_id, role=role, name=user_name)

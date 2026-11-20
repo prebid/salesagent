@@ -22,7 +22,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant
+from src.core.database.models import Tenant, UserRole
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.operator_errors import safe_error_message
 from src.services.ai.factory import tenant_ai_enabled
@@ -499,7 +499,7 @@ def test_slack(tenant_id):
 
 @tenants_bp.route("/<tenant_id>/deactivate", methods=["POST"])
 @log_admin_action("deactivate_tenant")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def deactivate_tenant(tenant_id):
     """Deactivate (soft delete) a tenant."""
     try:
