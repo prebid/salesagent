@@ -719,8 +719,7 @@ def test_auth_token(live_server):
     """Create or get a test principal with auth token.
 
     Reads the constant the seeding script owns, so this fixture cannot hand out a token
-    the stack was not seeded with (``scripts/setup/init_database_ci.py``, which is also
-    the value ``src/core/database/database.py::init_db()`` creates for the demo tenant).
+    the stack was not seeded with (``scripts/setup/init_database_ci.py``).
     """
     return CI_TEST_TOKEN
 

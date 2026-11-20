@@ -11,8 +11,6 @@ BDD cannot reach this: the subject is a repository contract, not a buyer-visible
 outcome, and the two halves differ only in rows a wire never shows.
 """
 
-from datetime import UTC, datetime
-
 import pytest
 
 from src.core.database.repositories import TenantLookupRepository
@@ -145,41 +143,6 @@ class TestVirtualHostMatchesHostToHost:
 
             assert repo.find_active_by_virtual_host("Folded.Example.COM").tenant_id == "tlr_case"
             assert repo.find_by_virtual_host("FOLDED.example.com").tenant_id == "tlr_case"
-
-
-class TestDefaultActiveTenant:
-    """The CLI/single-tenant default: the ``default`` row, else the oldest active one."""
-
-    def test_prefers_the_tenant_named_default(self, integration_db):
-        with _RepoEnv() as env:
-            TenantFactory(tenant_id="tlr_older", created_at=datetime(2020, 1, 1, tzinfo=UTC))
-            TenantFactory(tenant_id="default")
-            repo = TenantLookupRepository(env.get_session())
-
-            assert repo.find_default_active().tenant_id == "default"
-
-    def test_falls_back_to_the_oldest_active_tenant(self, integration_db):
-        with _RepoEnv() as env:
-            TenantFactory(tenant_id="tlr_newer", created_at=datetime(2024, 1, 1, tzinfo=UTC))
-            TenantFactory(tenant_id="tlr_oldest", created_at=datetime(2020, 1, 1, tzinfo=UTC))
-            repo = TenantLookupRepository(env.get_session())
-
-            assert repo.find_default_active().tenant_id == "tlr_oldest"
-
-    def test_an_inactive_default_is_not_the_default(self, integration_db):
-        with _RepoEnv() as env:
-            TenantFactory(tenant_id="default", is_active=False)
-            TenantFactory(tenant_id="tlr_live", created_at=datetime(2021, 1, 1, tzinfo=UTC))
-            repo = TenantLookupRepository(env.get_session())
-
-            assert repo.find_default_active().tenant_id == "tlr_live"
-
-    def test_no_active_tenant_at_all_is_none(self, integration_db):
-        with _RepoEnv() as env:
-            TenantFactory(tenant_id="tlr_dead", is_active=False)
-            repo = TenantLookupRepository(env.get_session())
-
-            assert repo.find_default_active() is None
 
 
 class TestUniquenessChecksStillSeeInactiveTenants:

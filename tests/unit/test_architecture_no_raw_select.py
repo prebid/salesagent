@@ -27,7 +27,6 @@ REPOSITORY_DIR = "src/core/database/repositories"
 
 INFRASTRUCTURE_FILES = {
     "src/core/database/database_session.py",
-    "src/core/database/database.py",
 }
 
 # ── Auto-discover ORM models ───────────────────────────────────────
@@ -238,7 +237,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/audit_logger.py", "log_security_violation"),
     # config_loader's tenant lookups fixed — every lookup it still has delegates to
     # TenantLookupRepository, which owns every cross-tenant query on ``tenants`` (#2263).
-    # ensure_default_tenant_exists still CREATES the row; only its lookup moved.
+    # ensure_default_tenant_exists is deleted: nothing in the serving app creates a tenant (#2260).
     # add_message removed — now sa_update + jsonb_list_append, zero selects.
     # _send_push_notifications removed — its config lookup routes through
     # PushNotificationConfigRepository.

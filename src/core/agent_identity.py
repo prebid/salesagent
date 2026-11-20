@@ -14,8 +14,8 @@ There is no default under the row either. A tenant always declares a host —
 ``Tenant.virtual_host`` refuses a blank and the column refuses NULL — so there is
 nothing for a default to answer, and :func:`canonical_agent_url` cannot return a name
 the tenant does not live at. The one place a host is still derived is
-:func:`deployment_virtual_host`, which runs at CREATION for the tenant a deployment
-bootstraps for itself and STORES its answer; see its own note for why deriving there
+:func:`deployment_virtual_host`, which runs at CREATION for the demo tenant a setup
+command makes and STORES its answer; see its own note for why deriving there
 is sound and deriving at publish time is not (#1845).
 
 Scope. This module is the DERIVATION, plus the one comparison against it: whether a
@@ -276,9 +276,9 @@ def jwks_origin(tenant: DeclaresHost) -> str:
 def deployment_virtual_host() -> str | None:
     """The host a DEPLOYMENT declares itself served at, or None when it declares none.
 
-    For the ONE tenant a deployment bootstraps for itself. Every other tenant is created by
-    somebody who knows where it answers and states it; this exists because nobody is present
-    at ``init_db`` time to state anything, and the column is mandatory.
+    The default for the demo command (``scripts/setup/demo_tenant.py``) when its operator
+    names no host, and what the setup checklist compares a tenant's host against to tell a
+    custom domain from the deployment's own. The serving app creates no tenant (#2260).
 
     Deriving a host is sound HERE and nowhere else: this runs once, at creation, and its
     answer is STORED in a column an operator can see and correct. The same derivation at
@@ -289,7 +289,7 @@ def deployment_virtual_host() -> str | None:
     ``SALES_AGENT_DOMAIN``: such an install serves nothing by ``Host`` today, and storing
     ``localhost`` would give it a row that LOOKS configured and still serves nothing. A
     wrong stored host is worse than an absent tenant — it is #1845 one step earlier. The
-    bootstraps skip creating the default tenant and log why.
+    demo command then requires ``--virtual-host``.
     """
     runtime = get_settings().runtime
     if runtime.adcp_agent_url:

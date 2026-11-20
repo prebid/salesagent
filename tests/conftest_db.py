@@ -147,11 +147,6 @@ def test_database(test_database_url):
     db_session_module._session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     db_session_module._scoped_session = scoped_session(db_session_module._session_factory)
 
-    # Initialize with test data
-    from src.core.database.database import init_db
-
-    init_db(exit_on_error=False)
-
     yield test_database_url
 
     # Cleanup is automatic for in-memory database
@@ -226,11 +221,6 @@ def clean_db(test_database):
                     logger.debug(f"Could not delete from remaining table {table}: {e}")
 
         conn.commit()
-
-    # Re-initialize with test data
-    from src.core.database.database import init_db
-
-    init_db(exit_on_error=False)
 
     yield
 

@@ -97,7 +97,7 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
     # (in-process transports mock the adapter, so the gate never fires there),
     # and with True every e2e_rest create takes the manual-approval path and
     # returns CreateMediaBuySubmitted with no media_buy_id. Mirrors the seeded
-    # dev tenant (src/core/database/database.py human_review_required=False).
+    # demo tenant (scripts/setup/demo_tenant.py, human_review_required=False).
     # Manual-approval scenarios opt IN explicitly via Given steps
     # (tests/bdd/steps/generic/given_media_buy.py) or per-test overrides.
     human_review_required = False

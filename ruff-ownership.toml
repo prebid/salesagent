@@ -45,13 +45,12 @@ select = ["TID251"]
 "src/core/database/repositories/account_lookup.py" = ["TID251"]
 # The surfaces that manage principals and accounts as DATA rather than act as a caller: the
 # admin UI and its services, the setup scripts, the two account-management tools, the
-# demo-tenant bootstrap, the GAM reporting API the admin app registers, the testing-only
-# debug routes, and the operator setup checklist. The four single files outside src/admin
+# GAM reporting API the admin app registers, the testing-only
+# debug routes, and the operator setup checklist. The single files outside src/admin
 # and scripts are listed by name so nothing else in src/ inherits the exemption.
 "src/admin/**" = ["TID251"]
 "scripts/**" = ["TID251"]
 "src/core/tools/accounts.py" = ["TID251"]
-"src/core/database/database.py" = ["TID251"]
 "src/adapters/gam_reporting_api.py" = ["TID251"]
 "src/routes/health.py" = ["TID251"]
 "src/services/setup_checklist_service.py" = ["TID251"]

@@ -37,7 +37,6 @@ _TENANT_CREATION_PATHS = (
     "src/admin/blueprints/public.py",
     "src/admin/tenant_management_api.py",
     "scripts/setup/setup_tenant.py",
-    "scripts/setup/init_database.py",
 )
 
 #: Where the harness builds the tenant every in-process scenario runs against.
