@@ -6,7 +6,7 @@
   "type": "commonjs",
   "dependencies": {
     "@a2a-js/sdk": "^1.0.1",
-    "@adcp/sdk": "16.6.0"
+    "@adcp/sdk": "16.7.2"
   },
   "scripts": {
     "postinstall": "patch-package"
