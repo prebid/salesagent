@@ -62,3 +62,65 @@ Feature: BR-ADMIN-UNEXPECTED-ERRORS Unexpected failures in the admin app
     And the answer does not carry the database fault's text
     And the database refused the write once
     And the database shows account "Fault Probe Status" with status "active"
+
+  # A JSON API blueprint answers JSON whatever the caller's Accept says: curl and most HTTP
+  # libraries send "Accept: */*", which a page-or-JSON guess from headers answers with HTML.
+  @T-ADMIN-FAULT-004 @json
+  Scenario: A script that accepts any format gets an API failure as JSON
+    Given another tenant of this seller
+    And the database refuses to change that tenant
+    When a script deletes that tenant through the tenant management API, accepting any format
+    Then the page returns status 500
+    And the JSON response has "success" as false
+    And the JSON error is a database error with a reference
+    And the answer does not carry the database fault's text
+    And the database refused the write once
+
+  # The settings page posts the business-rules form as FormData through fetch(): the route
+  # answers it in the format the handler would, so success, refusal and failure all reach
+  # the page's script as JSON.
+  @T-ADMIN-FAULT-005 @json
+  Scenario: The business-rules form posted by fetch() gets a failure as JSON
+    Given the database refuses to store the order name template "BDD fault {campaign_name}"
+    When the settings page posts the business rules form by fetch with:
+      | field               | value                     |
+      | order_name_template | BDD fault {campaign_name} |
+    Then the page returns status 500
+    And the JSON response has "success" as false
+    And the JSON error is a database error with a reference
+    And the answer does not carry the database fault's text
+    And the database refused the write once
+
+  @T-ADMIN-FAULT-006 @json
+  Scenario: The business-rules form posted by fetch() gets a refusal as JSON
+    When the settings page posts the business rules form by fetch with:
+      | field               | value           |
+      | order_name_template | {campaign_name  |
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "InvalidFormInput" refusal
+    And the JSON issues are:
+      | field               | text                                               |
+      | order_name_template | order_name_template: Template has unbalanced braces |
+
+  # A sync's failure is written in a unit of work of its own (src/services/sync_jobs.py):
+  # the session its work used holds a transaction the database aborted, and committing on
+  # it left the job running, which refused every later sync that day.
+  @T-ADMIN-FAULT-007 @json
+  Scenario: A sync whose database write fails is recorded as failed, with the reference it answered
+    Given another tenant of this seller, onboarded to Google Ad Manager
+    And the database refuses to mark that tenant's sync jobs running
+    When the sync API is asked to sync that tenant's inventory
+    Then the page returns status 500
+    And the JSON response has "status" as "failed"
+    And the JSON error is that tenant's inventory sync failure with a reference
+    And the answer does not carry the database fault's text
+    And the database refused the write once
+    And the sync API reports the answered sync job as failed, with the answered error
+
+  @T-ADMIN-FAULT-008 @json
+  Scenario: An AI connection test whose body is not a JSON object is answered with a reference
+    When the settings page tests the AI connection with the JSON body "[1]"
+    Then the page returns status 500
+    And the JSON response has "success" as false
+    And the JSON error is an unexpected error with a reference

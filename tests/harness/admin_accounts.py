@@ -22,7 +22,7 @@ from sqlalchemy import delete
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Account, Tenant
 from tests.harness.admin_client import AdminClient, AdminResponse
-from tests.utils.database_helpers import create_tenant_with_timestamps
+from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
 
 
 class AdminTransport(StrEnum):
@@ -146,9 +146,9 @@ class AdminAccountEnv:
         from sqlalchemy import select
 
         from src.core.database.models import User
-        from tests.factories import UserFactory, factories_bound_to
+        from tests.factories import UserFactory
 
-        with get_db_session() as session, factories_bound_to(session):
+        with get_db_session() as session, bind_factories_to_session(session):
             if session.scalars(select(User).filter_by(tenant_id=self._tenant_id, email=email)).first() is None:
                 UserFactory(tenant=session.get(Tenant, self._tenant_id), email=email, role="admin")
         self.client.authenticate(self._tenant_id, tenant_user=email)
@@ -202,35 +202,38 @@ class AdminAccountEnv:
 
     # ── Super-admin forms and APIs that answer with an operator refusal ──
 
-    def _submit_as_browser(self, path: str, form_data: dict[str, Any], *, from_page: bool) -> AdminResponse:
-        """POST the form at *path* as a browser does, and follow its redirect.
+    #: The create-tenant form's page, which is also where the form posts.
+    CREATE_TENANT_PAGE = "/create_tenant"
 
-        *from_page* sends the ``Referer`` a browser sends from the form's own page; without it
-        the request names no page to go back to.
+    def submit_create_tenant(self, form_data: dict[str, str], *, from_page: str | None) -> AdminResponse:
+        """POST the create-tenant form as a browser does from *from_page*, or from nowhere.
+
+        *from_page* is as :meth:`AdminClient.submit` takes it: a path on this server, or another site's URL.
         """
-        headers = {"Accept": "text/html"}
-        if from_page:
-            headers["Referer"] = f"{self.client.origin}{path}"
-        return self.client.submit(path, form_data, headers=headers)
-
-    def submit_create_tenant(self, form_data: dict[str, str], *, from_create_page: bool) -> AdminResponse:
-        """POST the create-tenant form as a browser does, from its page or from nowhere."""
-        return self._submit_as_browser("/create_tenant", form_data, from_page=from_create_page)
+        return self.client.submit(self.CREATE_TENANT_PAGE, form_data, from_page=from_page)
 
     def submit_create_account(self, form_data: dict[str, str], *, from_create_page: bool) -> AdminResponse:
         """POST the create-account form as a browser does, recording any row it created for cleanup."""
+        path = self._url("create")
         return self._recording_new_accounts(
-            lambda: self._submit_as_browser(self._url("create"), form_data, from_page=from_create_page)
+            lambda: self.client.submit(path, form_data, from_page=path if from_create_page else None)
         )
 
     def submit_create_product(self, form_data: dict[str, Any]) -> AdminResponse:
         """POST the add-product form as a browser does from its page."""
-        return self._submit_as_browser(self.products_path("add"), form_data, from_page=True)
+        path = self.products_path("add")
+        return self.client.submit(path, form_data, from_page=path)
+
+    def submit_inventory_profile_add(self, form_data: dict[str, Any]) -> AdminResponse:
+        """POST the add-profile form as a browser does from the inventory page, and follow the answer."""
+        return self.client.submit(
+            self.inventory_profiles_path("add"), form_data, from_page=f"/tenant/{self._tenant_id}/inventory"
+        )
 
     def submit_inventory_profile_edit(self, profile_id: str, form_data: dict[str, Any]) -> AdminResponse:
         """POST *profile_id*'s edit form as a browser does from its page, and follow the answer."""
         path = self.inventory_profiles_path(f"{self.inventory_profile_row_id(profile_id)}/edit")
-        return self._submit_as_browser(path, form_data, from_page=True)
+        return self.client.submit(path, form_data, from_page=path)
 
     def delete_inventory_profile_row(self, row_id: int) -> AdminResponse:
         """DELETE the profile stored under *row_id*, as the list page's delete button does with fetch()."""
@@ -239,6 +242,29 @@ class AdminAccountEnv:
             self.inventory_profiles_path(f"{row_id}/delete"),
             headers={"Content-Type": "application/json"},
         )
+
+    def submit_inventory_profile_delete(self, profile_id: str) -> AdminResponse:
+        """POST *profile_id*'s delete as a browser form does from the profiles list, and follow the answer."""
+        path = self.inventory_profiles_path(f"{self.inventory_profile_row_id(profile_id)}/delete")
+        return self.client.submit(path, {}, from_page=self.inventory_profiles_path())
+
+    def start_inventory_sync(self) -> AdminResponse:
+        """POST an inventory sync, as the settings page's sync button does with fetch()."""
+        return self.client.request(
+            "post", f"/api/tenant/{self._tenant_id}/inventory/sync", json={"mode": "incremental"}
+        )
+
+    def create_gam_service_account(self) -> AdminResponse:
+        """POST a GAM service account for this tenant, as the settings page's button does with fetch()."""
+        return self.client.request(
+            "post",
+            f"/tenant/{self._tenant_id}/gam/create-service-account",
+            headers={"Content-Type": "application/json"},
+        )
+
+    def post_adapter_config(self, body: dict[str, Any]) -> AdminResponse:
+        """POST this tenant's adapter connection config, as the adapter settings page does with fetch()."""
+        return self.client.request("post", f"/api/tenant/{self._tenant_id}/adapter-config", json=body)
 
     def post_oidc_config(self, body: dict[str, str]) -> AdminResponse:
         """POST this tenant's OIDC configuration, as the users page does with fetch()."""
@@ -250,24 +276,21 @@ class AdminAccountEnv:
             "post",
             "/api/v1/tenant-management/tenants",
             json=body,
-            headers={"X-Tenant-Management-API-Key": self._store_management_api_key()},
+            headers={"X-Tenant-Management-API-Key": self._stored_api_key("tenant_management_api_key")},
         )
 
-    def _store_management_api_key(self) -> str:
-        """Store the digest of a fixed key, the way production stores one, and return the key.
+    def _stored_api_key(self, config_key: str) -> str:
+        """Store the digest of a fixed key under *config_key*, the way production stores one, and return the key.
 
         Fixed rather than minted, so two scenarios storing it at once store the same digest.
         """
         from src.core.credentials import hash_token, token_prefix
         from src.core.database.repositories.tenant_management_config import TenantManagementConfigRepository
 
-        key = "sk-bdd-tenant-management"
+        key = f"sk-bdd-{config_key.replace('_', '-')}"
         with get_db_session() as session:
             TenantManagementConfigRepository(session).store_api_key(
-                "tenant_management_api_key",
-                digest=hash_token(key),
-                prefix=token_prefix(key),
-                description="BDD admin scenarios",
+                config_key, digest=hash_token(key), prefix=token_prefix(key), description="BDD admin scenarios"
             )
             session.commit()
         return key
@@ -334,11 +357,20 @@ class AdminAccountEnv:
         sequence before it raises, and a rollback does not undo ``nextval``, so
         :meth:`database_faults_raised` shows the refusal was this one. ``__exit__`` drops it.
         """
+        self.fail_writes_of_rows(table, where={column: value}, message=message)
+
+    def fail_writes_of_rows(self, table: str, *, where: dict[str, str], message: str) -> None:
+        """:meth:`fail_writes_of` for the *table* rows matching every ``column: value`` of *where*.
+
+        For a fault one column cannot scope: a job's ``running`` write refused while its
+        ``failed`` write, on the same row, is let through.
+        """
         import uuid
 
         # Spliced into a plpgsql body: no quote, no format placeholder, no dollar quote.
-        for literal in (value, message):
+        for literal in (*where, *where.values(), message):
             assert not set(literal) & set("'%$"), f"{literal!r} cannot be spliced into the trigger body"
+        condition = " AND ".join(f"NEW.{column} = '{value}'" for column, value in where.items())
         name = f"bdd_fault_{uuid.uuid4().hex[:12]}"
         with get_db_session() as session:
             # exec_driver_sql, not text(): text() reads every ":word" in *message* as a bind parameter.
@@ -347,7 +379,7 @@ class AdminAccountEnv:
             connection.exec_driver_sql(
                 f"CREATE FUNCTION {name}() RETURNS trigger LANGUAGE plpgsql AS $fault$\n"
                 f"BEGIN\n"
-                f"    IF NEW.{column} = '{value}' THEN\n"
+                f"    IF {condition} THEN\n"
                 f"        PERFORM nextval('{name}_seq');\n"
                 f"        RAISE EXCEPTION '{message}';\n"
                 f"    END IF;\n"
@@ -418,6 +450,32 @@ class AdminAccountEnv:
         with get_db_session() as session:
             if seed_verified_website(session, self._tenant_id, domain):
                 session.commit()
+
+    def link_product_to_inventory_profile(self, product_id: str, profile_id: str) -> None:
+        """Store a product *product_id* of this tenant that is built from the profile *profile_id*."""
+        from tests.factories import ProductFactory
+
+        row_id = self.inventory_profile_row_id(profile_id)
+        with get_db_session() as session, bind_factories_to_session(session):
+            ProductFactory(
+                tenant=session.get(Tenant, self._tenant_id), product_id=product_id, inventory_profile_id=row_id
+            )
+
+    def onboard_gam(self, *, service_account_email: str | None = None) -> None:
+        """Leave this tenant with the rows GAM onboarding writes, and the service account email if given."""
+        from tests.utils.tenant_setup import onboard_gam
+
+        with get_db_session() as session, bind_factories_to_session(session):
+            config = onboard_gam(session.get(Tenant, self._tenant_id), trafficker_id="bdd_trafficker")
+            config.gam_service_account_email = service_account_email
+            session.commit()
+
+    def seed_running_inventory_sync(self, sync_id: str) -> None:
+        """Store an inventory sync *sync_id* of this tenant that started a moment ago and is still running."""
+        from tests.factories import SyncJobFactory
+
+        with get_db_session() as session, bind_factories_to_session(session):
+            SyncJobFactory(tenant=session.get(Tenant, self._tenant_id), sync_id=sync_id)
 
     def products_path(self, path: str = "") -> str:
         """The product routes of this tenant, which the product forms post to."""
@@ -554,3 +612,63 @@ class AdminAccountEnv:
 
         with get_db_session() as session:
             return set(session.scalars(select(Account.account_id).where(Account.tenant_id == self._tenant_id)).all())
+
+    # ── API callers, the business-rules fetch, sync jobs (BR-ADMIN-UNEXPECTED-ERRORS) ──
+
+    def seed_tenant(self, *, gam: bool = False) -> str:
+        """Store a tenant of its own, for a scenario whose fault or write must not reach the shared one.
+
+        With *gam*, the tenant is onboarded to Google Ad Manager (``onboard_gam``), so the sync
+        API builds its adapter without calling Google. Returns the tenant id.
+        """
+        import uuid
+
+        from tests.factories import TenantFactory
+        from tests.utils.tenant_setup import onboard_gam
+
+        tenant_id = f"bdd_admin_{uuid.uuid4().hex[:10]}"
+        with get_db_session() as session, bind_factories_to_session(session):
+            tenant = TenantFactory(tenant_id=tenant_id, virtual_host=f"{tenant_id.replace('_', '-')}.example.com")
+            if gam:
+                onboard_gam(tenant, trafficker_id="bdd_trafficker")
+            session.commit()
+        return tenant_id
+
+    def delete_tenant_by_management_api(self, tenant_id: str) -> AdminResponse:
+        """DELETE *tenant_id* through the tenant management API as curl does: no body and ``Accept: */*``."""
+        return self.client.request(
+            "delete",
+            f"/api/v1/tenant-management/tenants/{tenant_id}",
+            headers={
+                "Accept": "*/*",
+                "X-Tenant-Management-API-Key": self._stored_api_key("tenant_management_api_key"),
+            },
+        )
+
+    def post_business_rules_by_fetch(self, form_data: dict[str, str]) -> AdminResponse:
+        """POST the business-rules form as the settings page's script does: its FormData through ``fetch()``."""
+        return self.client.request(
+            "post",
+            f"/tenant/{self._tenant_id}/settings/business-rules",
+            data=form_data,
+            headers={"Accept": "*/*", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Site": "same-origin"},
+        )
+
+    def trigger_inventory_sync_by_api(self, tenant_id: str) -> AdminResponse:
+        """POST a forced inventory sync of *tenant_id* to the sync API, as its scripted callers do."""
+        return self.client.request(
+            "post",
+            f"/api/sync/trigger/{tenant_id}",
+            json={"sync_type": "inventory", "force": True},
+            headers={"X-API-Key": self._stored_api_key("api_key")},
+        )
+
+    def sync_status_by_api(self, sync_id: str) -> AdminResponse:
+        """GET the sync job *sync_id* from the sync API's status route."""
+        return self.client.request(
+            "get", f"/api/sync/status/{sync_id}", headers={"X-API-Key": self._stored_api_key("api_key")}
+        )
+
+    def post_ai_connection_test(self, body: Any) -> AdminResponse:
+        """POST *body* as JSON to this tenant's AI connection test, as the settings page does with fetch()."""
+        return self.client.request("post", f"/tenant/{self._tenant_id}/settings/ai/test", json=body)

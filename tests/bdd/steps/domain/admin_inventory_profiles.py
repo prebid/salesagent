@@ -411,8 +411,7 @@ def when_modal_creates_without_formats(ctx: dict, profile_id: str) -> None:
 def when_form_creates_without_formats(ctx: dict, profile_id: str) -> None:
     """Posted as a browser posts it from the inventory page: the refusal goes back to that page."""
     env = ctx["env"]
-    headers = {"Accept": "text/html", "Referer": f"{env.client.origin}/tenant/{env.tenant_id}/inventory"}
-    _post(ctx, env.inventory_profiles_path("add"), _modal_form(env, profile_id, None), headers)
+    ctx["admin_page"] = env.submit_inventory_profile_add(_modal_form(env, profile_id, None))
 
 
 @given(parsers.parse('the seller holds a verified property of publisher "{domain}"'))
@@ -424,12 +423,10 @@ def given_verified_publisher(ctx: dict, domain: str) -> None:
 @given(parsers.parse('a stored profile "{profile_id}" declaring an image of {width:d}x{height:d}'))
 def given_stored_profile(ctx: dict, profile_id: str, width: int, height: int) -> None:
     env = ctx["env"]
-    form = _modal_form(env, profile_id, _image(width, height))
-    response = env.client.request(
-        "post", env.inventory_profiles_path("add"), data=form, headers={"Accept": "text/html"}
+    page = env.client.submit(env.inventory_profiles_path("add"), _modal_form(env, profile_id, _image(width, height)))
+    assert env.inventory_profile_format_options(profile_id) == _image(width, height), (
+        f"the Given's profile was not created: {page.status_code} {page.data[:500]!r}"
     )
-    assert response.status_code in (301, 302, 303), f"the Given's profile was not created: {response.status_code}"
-    assert env.inventory_profile_format_options(profile_id) == _image(width, height)
 
 
 @when(parsers.parse('the modal edits the profile "{profile_id}" to declare an image of {width:d}x{height:d}'))
@@ -518,11 +515,6 @@ def then_modal_answered_400(ctx: dict) -> None:
     body = response.get_json()
     reasons = [body["error"], *(issue["text"] for issue in body.get("issues", []))]
     assert any("format_options" in reason for reason in reasons), body
-
-
-@then("the form is redirected")
-def then_form_redirected(ctx: dict) -> None:
-    assert ctx["admin_response"].status_code in (301, 302, 303)
 
 
 @then(parsers.parse('the profile "{profile_id}" stores an image of {width:d}x{height:d}'))

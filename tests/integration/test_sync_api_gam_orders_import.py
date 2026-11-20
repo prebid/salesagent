@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.admin.utils.operator_errors import register_error_handler
+from tests.helpers.admin_session import admin_blueprint_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -72,12 +72,12 @@ def sync_api_client(seeded_tenant, monkeypatch):
     """
     import os
 
-    from flask import Flask
     from sqlalchemy import create_engine
     from sqlalchemy.orm import scoped_session, sessionmaker
 
     from src.admin import sync_api as sync_api_module
     from src.admin.sync_api import sync_api
+    from src.core.config import load_settings
 
     monkeypatch.setattr(
         sync_api_module,
@@ -86,11 +86,9 @@ def sync_api_client(seeded_tenant, monkeypatch):
     )
 
     monkeypatch.setenv("SYNC_API_KEY", API_KEY)
-    app = Flask(__name__)
-    app.config["TESTING"] = True
-    app.register_blueprint(sync_api, url_prefix="/api/sync")
-    register_error_handler(app)  # as create_app composes it
-    return app.test_client()
+    # seeded_tenant has already read (and cached) the settings, so read them again.
+    load_settings()
+    return admin_blueprint_app(sync_api, url_prefix="/api/sync").test_client()
 
 
 def _get(client, path: str):

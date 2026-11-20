@@ -70,8 +70,10 @@ def test_tenant(integration_db):
     return _TENANT_ID
 
 
+_ADD_PATH = f"/tenant/{_TENANT_ID}/inventory-profiles/add"
+
 #: The ``Referer`` a browser sends from the add page, the page a refusal goes back to.
-_FROM_THE_ADD_PAGE = {"Referer": f"http://localhost/tenant/{_TENANT_ID}/inventory-profiles/add"}
+_FROM_THE_ADD_PAGE = {"Referer": f"http://localhost{_ADD_PATH}"}
 
 
 def _auth_session(client, tenant_id):
@@ -178,7 +180,7 @@ class TestInventoryProfileCreate:
         assert profile.format_ids is None, f"the form authored a legacy arm: {profile.format_ids!r}"
 
     def test_create_profile_missing_name_redirects_without_creation(self, client, test_tenant):
-        """POST without a name, from the add page, goes back to it without creating a profile."""
+        """POST without a name, from the add page, goes back to it with the refusal and creates no profile."""
         _auth_session(client, test_tenant)
         response = client.post(
             f"/tenant/{test_tenant}/inventory-profiles/add",
@@ -190,7 +192,12 @@ class TestInventoryProfileCreate:
             },
             follow_redirects=False,
         )
-        assert response.status_code in (302, 303)
+        # The refusal's text, not the status alone: an unexpected failure goes back too.
+        assert operator_answer(client, response) == (
+            302,
+            _ADD_PATH,
+            [("error", InvalidFormInput.MESSAGE), ("error", "Profile name is required")],
+        )
 
         with get_db_session() as session:
             count = len(
@@ -212,7 +219,7 @@ class TestInventoryProfileCreate:
         ids=["no-declarations", "legacy-formats-only"],
     )
     def test_create_profile_without_declarations_redirects_without_creation(self, client, test_tenant, format_fields):
-        """POST without canonical declarations, from the add page, goes back to it without creating a profile."""
+        """POST without canonical declarations, from the add page, goes back to it with the refusal."""
         _auth_session(client, test_tenant)
         response = client.post(
             f"/tenant/{test_tenant}/inventory-profiles/add",
@@ -225,7 +232,14 @@ class TestInventoryProfileCreate:
             },
             follow_redirects=False,
         )
-        assert response.status_code in (302, 303)
+        assert operator_answer(client, response) == (
+            302,
+            _ADD_PATH,
+            [
+                ("error", InvalidFormInput.MESSAGE),
+                ("error", "At least one canonical format declaration (format_options) is required"),
+            ],
+        )
 
         listing = client.get(f"/tenant/{test_tenant}/inventory-profiles/")
         assert listing.status_code == 200
@@ -259,8 +273,8 @@ class TestInventoryProfileEditFormats:
             follow_redirects=False,
         )
         assert response.status_code in (302, 303), response.data[:2000]
-        with get_db_session() as session:
-            assert session.get(InventoryProfile, profile_pk).format_options == [IMAGE_DECLARATION]
+        factory_session.expire_all()  # the route saved in its own session
+        assert factory_session.get(InventoryProfile, profile_pk).format_options == [IMAGE_DECLARATION]
 
         # The edit form reads the declarations back into the canonical editor: its content,
         # not its placeholder, which is an image declaration too.

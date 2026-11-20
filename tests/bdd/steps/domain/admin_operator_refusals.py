@@ -6,21 +6,14 @@ refusal is answered with is read off its class, so no scenario restates it.
 
 from __future__ import annotations
 
-import html
 import json
 
 from pytest_bdd import given, parsers, then, when
 
-from src.core.http_utils import InvalidVirtualHost
-from src.core.operator_errors import InvalidFormInput, OperatorRefusal
-from src.services.auth_config_service import DiscoveryUrlRequired
-from tests.bdd.steps.domain.admin_accounts import _datatable_to_form, _env, _require_admin_page
+from tests.bdd.steps.domain.admin_accounts import _answer_text, _datatable_to_form, _env, _require_admin_page
 from tests.bdd.steps.domain.admin_inventory_profiles import IMAGE_300X250, _modal_form
 from tests.helpers.admin_product_form import minimal_product_create_form
-
-_REFUSALS: dict[str, type[OperatorRefusal]] = {
-    cls.__name__: cls for cls in (InvalidVirtualHost, DiscoveryUrlRequired, InvalidFormInput)
-}
+from tests.helpers.operator_refusals import operator_refusal_classes
 
 
 def _submitted(ctx: dict, datatable: list) -> dict[str, str]:
@@ -36,12 +29,65 @@ def given_signed_in_as_tenant_admin(ctx: dict, email: str) -> None:
 
 @when("the operator submits the create tenant form from the create tenant page with:")
 def when_submit_create_tenant_from_page(ctx: dict, datatable: list) -> None:
-    ctx["admin_page"] = _env(ctx).submit_create_tenant(_submitted(ctx, datatable), from_create_page=True)
+    env = _env(ctx)
+    ctx["admin_page"] = env.submit_create_tenant(_submitted(ctx, datatable), from_page=env.CREATE_TENANT_PAGE)
 
 
 @when("the operator submits the create tenant form with no page to go back to, with:")
 def when_submit_create_tenant_without_page(ctx: dict, datatable: list) -> None:
-    ctx["admin_page"] = _env(ctx).submit_create_tenant(_submitted(ctx, datatable), from_create_page=False)
+    ctx["admin_page"] = _env(ctx).submit_create_tenant(_submitted(ctx, datatable), from_page=None)
+
+
+@when(parsers.parse('the operator submits the create tenant form from the page "{page}" with:'))
+def when_submit_create_tenant_from_named_page(ctx: dict, page: str, datatable: list) -> None:
+    ctx["admin_page"] = _env(ctx).submit_create_tenant(_submitted(ctx, datatable), from_page=page)
+
+
+@given("the tenant is onboarded to Google Ad Manager")
+def given_tenant_on_gam(ctx: dict) -> None:
+    _env(ctx).onboard_gam()
+
+
+@given(parsers.parse('the tenant is onboarded to Google Ad Manager with the service account "{email}"'))
+def given_tenant_on_gam_with_service_account(ctx: dict, email: str) -> None:
+    _env(ctx).onboard_gam(service_account_email=email)
+
+
+@given(parsers.parse('the tenant\'s inventory sync "{sync_id}" is running'))
+def given_inventory_sync_running(ctx: dict, sync_id: str) -> None:
+    _env(ctx).seed_running_inventory_sync(sync_id)
+
+
+@given(parsers.parse('a product "{product_id}" built from the profile "{profile_id}"'))
+def given_product_built_from_profile(ctx: dict, product_id: str, profile_id: str) -> None:
+    _env(ctx).link_product_to_inventory_profile(product_id, profile_id)
+
+
+@when("the settings page starts an inventory sync")
+def when_start_inventory_sync(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).start_inventory_sync()
+
+
+@when("the settings page creates a GAM service account")
+def when_create_gam_service_account(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).create_gam_service_account()
+
+
+@when(parsers.parse('the adapter settings save a "{adapter_type}" config with "{key}" set to "{value}"'))
+def when_save_adapter_config(ctx: dict, adapter_type: str, key: str, value: str) -> None:
+    ctx["admin_submitted"] = {key: value}
+    ctx["admin_page"] = _env(ctx).post_adapter_config({"adapter_type": adapter_type, "config": {key: value}})
+
+
+@when(parsers.parse('the inventory page deletes the profile "{profile_id}"'))
+def when_delete_profile_by_fetch(ctx: dict, profile_id: str) -> None:
+    env = _env(ctx)
+    ctx["admin_page"] = env.delete_inventory_profile_row(env.inventory_profile_row_id(profile_id))
+
+
+@when(parsers.parse('a browser form on the profiles list deletes the profile "{profile_id}"'))
+def when_delete_profile_by_form(ctx: dict, profile_id: str) -> None:
+    ctx["admin_page"] = _env(ctx).submit_inventory_profile_delete(profile_id)
 
 
 @when("the operator saves an OIDC configuration with:")
@@ -84,12 +130,6 @@ def when_delete_absent_profile(ctx: dict) -> None:
     ctx["admin_page"] = _env(ctx).delete_inventory_profile_row(_ABSENT_PROFILE_ROW)
 
 
-@then("the page is the add product form")
-def then_page_is_add_product_form(ctx: dict) -> None:
-    page = _require_admin_page(ctx).data.decode()
-    assert "Add New Product" in page, "The page is not the add product form"
-
-
 @then("the answer does not carry the JSON parser's text")
 def then_answer_omits_json_parser_text(ctx: dict) -> None:
     """What ``json`` says about the submitted format options, derived by parsing them here."""
@@ -99,31 +139,31 @@ def then_answer_omits_json_parser_text(ctx: dict) -> None:
         parser_text = e.msg
     else:
         raise AssertionError("the submitted format options parse, so there is no parser text to look for")
-    answer = html.unescape(_require_admin_page(ctx).data.decode())
-    assert parser_text not in answer, f"The answer carries the parser's text {parser_text!r}"
-
-
-@then("the page is the create tenant form")
-def then_page_is_create_tenant_form(ctx: dict) -> None:
-    page = _require_admin_page(ctx).data.decode()
-    assert 'name="virtual_host"' in page, "The page has no virtual_host input, so it is not the create tenant form"
+    assert parser_text not in _answer_text(ctx), f"The answer carries the parser's text {parser_text!r}"
 
 
 @then(parsers.parse('the page shows the "{refusal}" refusal'))
 def then_page_shows_refusal(ctx: dict, refusal: str) -> None:
-    message = _REFUSALS[refusal].MESSAGE
-    page = html.unescape(_require_admin_page(ctx).data.decode())
-    assert message in page, f"The page does not show {refusal}.MESSAGE ({message!r})"
+    message = operator_refusal_classes()[refusal].MESSAGE
+    assert message in _answer_text(ctx), f"The page does not show {refusal}.MESSAGE ({message!r})"
 
 
 @then(parsers.parse('the JSON error is the "{refusal}" refusal'))
 def then_json_error_is_refusal(ctx: dict, refusal: str) -> None:
     error = _require_admin_page(ctx).get_json().get("error")
-    assert error == _REFUSALS[refusal].MESSAGE, f"Expected {refusal}.MESSAGE, got {error!r}"
+    assert error == operator_refusal_classes()[refusal].MESSAGE, f"Expected {refusal}.MESSAGE, got {error!r}"
 
 
-@then("the answer does not echo the submitted virtual host")
-def then_answer_does_not_echo_virtual_host(ctx: dict) -> None:
-    submitted = ctx["admin_submitted"]["virtual_host"]
-    answer = html.unescape(_require_admin_page(ctx).data.decode())
-    assert submitted not in answer, f"The answer echoes the refused value {submitted!r}"
+@then(parsers.parse('the answer does not echo the submitted "{field}"'))
+def then_answer_does_not_echo_submitted(ctx: dict, field: str) -> None:
+    submitted = ctx["admin_submitted"][field]
+    assert submitted not in _answer_text(ctx), f"The answer echoes the refused value {submitted!r}"
+
+
+@then("the JSON issues are:")
+def then_json_issues_are(ctx: dict, datatable: list) -> None:
+    """Each refused field and its text, in order, as ``InvalidFormInput`` answers a JSON caller."""
+    headers = [str(h) for h in datatable[0]]
+    expected = [dict(zip(headers, (str(cell) for cell in row), strict=True)) for row in datatable[1:]]
+    issues = _require_admin_page(ctx).get_json().get("issues")
+    assert issues == expected, f"Expected issues {expected!r}, got {issues!r}"

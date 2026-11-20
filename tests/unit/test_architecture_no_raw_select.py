@@ -273,7 +273,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/auth_config_service.py", "save_oidc_config"),
     # _run_approval_polling_thread removed — uses AdapterConfigRepository
     ("src/services/background_sync_service.py", "_mark_sync_complete"),
-    ("src/services/background_sync_service.py", "_mark_sync_failed"),
     ("src/services/background_sync_service.py", "_run_sync_thread"),
     ("src/services/background_sync_service.py", "_update_sync_progress"),
     ("src/services/background_sync_service.py", "start_inventory_sync_background"),
@@ -302,7 +301,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/gcp_service_account_service.py", "get_service_account_email"),
     ("src/services/media_buy_status_scheduler.py", "_are_creatives_approved"),
     ("src/services/order_approval_service.py", "_mark_approval_complete"),
-    ("src/services/order_approval_service.py", "_mark_approval_failed"),
     # _run_approval_thread removed — uses AdapterConfigRepository (salesagent-zj9)
     # _send_approval_webhook removed — auth lookup moved to _build_approval_webhook_headers
     # which routes through PushNotificationConfigRepository (C901 ratchet fix)

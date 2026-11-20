@@ -160,6 +160,24 @@ def admin_test_app() -> Any:
     return app
 
 
+def admin_blueprint_app(blueprint: Any, *, url_prefix: str | None = None) -> Any:
+    """A Flask app serving *blueprint* alone, with the admin error handler ``create_app`` installs.
+
+    For a test of one blueprint that needs none of the rest of the admin app. The handler is
+    part of the composition because a route lets its failures escape to it: without it, a
+    refusal would reach the test client as an exception instead of the answer production gives.
+    """
+    from flask import Flask
+
+    from src.admin.utils.operator_errors import register_error_handler
+
+    app = Flask(__name__)
+    app.config["TESTING"] = True
+    app.register_blueprint(blueprint, url_prefix=url_prefix)
+    register_error_handler(app)
+    return app
+
+
 def tenant_user_session(
     client: Any, email: str, *, auth_method: str | None = None, tenant_id: str | None = None
 ) -> None:

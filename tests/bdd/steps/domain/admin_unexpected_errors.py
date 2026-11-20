@@ -8,13 +8,13 @@ graded on the response itself; the trigger's own counter shows it was this fault
 
 from __future__ import annotations
 
-import html
+import json
 import re
 
 from pytest_bdd import given, parsers, then, when
 
-from src.core.operator_errors import DB_ERROR_OPERATOR_MESSAGE
-from tests.bdd.steps.domain.admin_accounts import _datatable_to_form, _env, _require_admin_page
+from src.core.operator_errors import DB_ERROR_OPERATOR_MESSAGE, GENERIC_OPERATOR_MESSAGE
+from tests.bdd.steps.domain.admin_accounts import _answer_text, _datatable_to_form, _env, _require_admin_page
 
 # What the database says when it refuses the write: plainly internal, so its appearance
 # anywhere in an answer is a leak. str() of the driver's error carries it, with the driver's
@@ -25,10 +25,6 @@ _DRIVER_TEXT = "psycopg2"
 _DATABASE_ERROR_WITH_REFERENCE = re.compile(
     re.escape(DB_ERROR_OPERATOR_MESSAGE) + r"\. The details have been logged \(reference [0-9a-f]{8}\)\."
 )
-
-
-def _answer_text(ctx: dict) -> str:
-    return html.unescape(_require_admin_page(ctx).data.decode())
 
 
 @given(parsers.parse('the database refuses to store an account named "{name}"'))
@@ -50,11 +46,6 @@ def when_submit_create_account_from_page(ctx: dict, datatable: list) -> None:
 @when("the operator submits the create account form with no page to go back to, with:")
 def when_submit_create_account_without_page(ctx: dict, datatable: list) -> None:
     ctx["admin_page"] = _env(ctx).submit_create_account(_datatable_to_form(datatable), from_create_page=False)
-
-
-@then("the page is the create account form")
-def then_page_is_create_account_form(ctx: dict) -> None:
-    assert 'name="brand_domain"' in _answer_text(ctx), "The page has no brand_domain input, so it is not the form"
 
 
 @then("the page is the error page")
@@ -97,3 +88,88 @@ def then_database_refused_once(ctx: dict) -> None:
 @then(parsers.parse('the database contains no account named "{name}"'))
 def then_no_account_named(ctx: dict, name: str) -> None:
     assert _env(ctx).get_account_from_db(name=name) is None, f"An account named {name!r} was stored"
+
+
+# ── API callers, the business-rules fetch, sync jobs ────────────────────────
+
+
+def _other_tenant_id(ctx: dict) -> str:
+    return ctx["admin_other_tenant_id"]
+
+
+@given("another tenant of this seller")
+def given_another_tenant(ctx: dict) -> None:
+    ctx["admin_other_tenant_id"] = _env(ctx).seed_tenant()
+
+
+@given("another tenant of this seller, onboarded to Google Ad Manager")
+def given_another_gam_tenant(ctx: dict) -> None:
+    ctx["admin_other_tenant_id"] = _env(ctx).seed_tenant(gam=True)
+
+
+@given("the database refuses to change that tenant")
+def given_database_refuses_tenant_change(ctx: dict) -> None:
+    _env(ctx).fail_writes_of("tenants", column="tenant_id", value=_other_tenant_id(ctx), message=_FAULT_TEXT)
+
+
+@given(parsers.parse('the database refuses to store the order name template "{template}"'))
+def given_database_refuses_order_name_template(ctx: dict, template: str) -> None:
+    _env(ctx).fail_writes_of("tenants", column="order_name_template", value=template, message=_FAULT_TEXT)
+
+
+@given("the database refuses to mark that tenant's sync jobs running")
+def given_database_refuses_running_sync_jobs(ctx: dict) -> None:
+    where = {"tenant_id": _other_tenant_id(ctx), "status": "running"}
+    _env(ctx).fail_writes_of_rows("sync_jobs", where=where, message=_FAULT_TEXT)
+
+
+@when("a script deletes that tenant through the tenant management API, accepting any format")
+def when_script_deletes_tenant(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).delete_tenant_by_management_api(_other_tenant_id(ctx))
+
+
+@when("the settings page posts the business rules form by fetch with:")
+def when_settings_page_posts_business_rules(ctx: dict, datatable: list) -> None:
+    ctx["admin_page"] = _env(ctx).post_business_rules_by_fetch(_datatable_to_form(datatable))
+
+
+@when("the sync API is asked to sync that tenant's inventory")
+def when_sync_api_syncs_inventory(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).trigger_inventory_sync_by_api(_other_tenant_id(ctx))
+
+
+@then("the JSON error is that tenant's inventory sync failure with a reference")
+def then_json_error_is_sync_failure(ctx: dict) -> None:
+    error = _require_admin_page(ctx).get_json().get("error")
+    # The context recording_failure's caller names (GAMSyncManager.sync_inventory).
+    expected = re.compile(
+        re.escape(f"Inventory sync failed for tenant {_other_tenant_id(ctx)}")
+        + r"\. The details have been logged \(reference [0-9a-f]{8}\)\."
+    )
+    assert isinstance(error, str) and expected.fullmatch(error), f"Expected the sync failure text, got {error!r}"
+
+
+@then("the sync API reports the answered sync job as failed, with the answered error")
+def then_sync_job_recorded_failed(ctx: dict) -> None:
+    answer = _require_admin_page(ctx).get_json()
+    status = _env(ctx).sync_status_by_api(answer["sync_id"])
+    assert status.status_code == 200, f"The sync API does not know job {answer['sync_id']!r}: {status.status_code}"
+    job = status.get_json()
+    assert job["status"] == "failed", f"The job is {job['status']!r}, so the failure was not recorded"
+    assert job.get("error") == answer["error"], f"The job stores {job.get('error')!r}, not {answer['error']!r}"
+
+
+@when(parsers.parse('the settings page tests the AI connection with the JSON body "{body}"'))
+def when_test_ai_connection_with_body(ctx: dict, body: str) -> None:
+    ctx["admin_page"] = _env(ctx).post_ai_connection_test(json.loads(body))
+
+
+@then("the JSON error is an unexpected error with a reference")
+def then_json_error_is_unexpected_error(ctx: dict) -> None:
+    error = _require_admin_page(ctx).get_json().get("error")
+    expected = re.compile(
+        re.escape(GENERIC_OPERATOR_MESSAGE) + r"\. The details have been logged \(reference [0-9a-f]{8}\)\."
+    )
+    assert isinstance(error, str) and expected.fullmatch(error), (
+        f"Expected {GENERIC_OPERATOR_MESSAGE!r} with a reference, got {error!r}"
+    )

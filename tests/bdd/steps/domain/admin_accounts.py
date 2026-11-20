@@ -9,6 +9,7 @@ in tests/bdd/conftest.py.
 from __future__ import annotations
 
 import re
+from html import unescape
 from typing import TYPE_CHECKING
 
 from pytest_bdd import given, parsers, then, when
@@ -57,6 +58,11 @@ def _require_admin_page(ctx: dict) -> object:
     indistinguishable from a protocol payload to anything that read it.
     """
     return _require(ctx, "admin_page", hint="The admin page request may have errored instead.")
+
+
+def _answer_text(ctx: dict) -> str:
+    """The body of the last admin answer as the operator reads it, with HTML entities decoded."""
+    return unescape(_require_admin_page(ctx).data.decode())
 
 
 @given(parsers.parse('an admin user is authenticated for tenant "{tenant_id}"'))
@@ -207,6 +213,20 @@ def then_page_contains(ctx: dict, text: str) -> None:
     """Assert page HTML contains the given text."""
     html = _require_admin_page(ctx).data.decode()
     assert text in html, f"Page does not contain '{text}'"
+
+
+#: What only that form's page holds, by the name a scenario gives the form.
+_FORM_MARKERS = {
+    "create account": 'name="brand_domain"',
+    "create tenant": 'name="virtual_host"',
+    "add product": "Add New Product",
+}
+
+
+@then(parsers.parse("the page is the {form} form"))
+def then_page_is_form(ctx: dict, form: str) -> None:
+    marker = _FORM_MARKERS[form]
+    assert marker in _answer_text(ctx), f"The page lacks {marker!r}, so it is not the {form} form"
 
 
 @then(parsers.parse("the page shows {count:d} accounts"))

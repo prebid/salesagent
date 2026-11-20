@@ -12,11 +12,6 @@ Usage::
     buy = MediaBuyFactory(tenant=tenant, principal__tenant=tenant)
 """
 
-from collections.abc import Iterator
-from contextlib import contextmanager
-
-from sqlalchemy.orm import Session
-
 from tests.factories.account import (
     AccountFactory,
     AgentAccountAccessFactory,
@@ -29,6 +24,7 @@ from tests.factories.core import (
     GAMInventoryFactory,
     PropertyTagFactory,
     SignalsAgentFactory,
+    SyncJobFactory,
     TenantFactory,
 )
 from tests.factories.creative import (
@@ -89,6 +85,7 @@ ALL_FACTORIES = [
     PublisherFactory,
     CreativeAgentFactory,
     SignalsAgentFactory,
+    SyncJobFactory,
     PrincipalFactory,
     InventoryProfileFactory,
     ProductFactory,
@@ -108,27 +105,8 @@ ALL_FACTORIES = [
     WorkflowStepFactory,
 ]
 
-
-@contextmanager
-def factories_bound_to(session: Session) -> Iterator[None]:
-    """Bind every factory in :data:`ALL_FACTORIES` to *session* for the block, and unbind it after.
-
-    Every factory rather than the ones a caller names: a factory's ``SubFactory`` reaches
-    its siblings, and an unbound one raises ``RuntimeError("No session provided.")`` from
-    inside factory_boy rather than at the call site.
-    """
-    for factory in ALL_FACTORIES:
-        factory._meta.sqlalchemy_session = session
-    try:
-        yield
-    finally:
-        for factory in ALL_FACTORIES:
-            factory._meta.sqlalchemy_session = None
-
-
 __all__ = [
     "ALL_FACTORIES",
-    "factories_bound_to",
     "OMIT",
     "AccountFactory",
     "AdapterConfigFactory",
@@ -170,6 +148,7 @@ __all__ = [
     "SigningKeyFactory",
     "SyncAccountsRequestFactory",
     "SyncCreativesRequestFactory",
+    "SyncJobFactory",
     "TargetingFactory",
     "TenantAuthConfigFactory",
     "TenantFactory",

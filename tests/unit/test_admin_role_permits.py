@@ -67,7 +67,7 @@ def test_a_refusal_is_json_for_a_caller_that_reads_json(headers, api_mode, json_
     response = refused.value.get_response()
     assert response.status_code == 403
     if json_body:
-        assert response.get_json() == {"error": "Your role does not allow this"}
+        assert response.get_json() == {"success": False, "error": "Your role does not allow this"}
     else:
         assert response.mimetype == "text/html"
 
@@ -119,7 +119,7 @@ def test_a_signed_out_caller_is_answered_in_the_form_it_reads(headers, json_body
     response = app.test_client().post("/tenant/t1/thing", headers=headers)
     if json_body:
         assert response.status_code == 401
-        assert response.get_json() == {"error": "Authentication required"}
+        assert response.get_json() == {"success": False, "error": "Authentication required"}
     else:
         assert response.status_code == 302
         assert "/tenant/t1/login" in response.headers["Location"]

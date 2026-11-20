@@ -30,7 +30,7 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     Then the page returns status 200
     And the page is the create tenant form
     And the page shows the "InvalidVirtualHost" refusal
-    And the answer does not echo the submitted virtual host
+    And the answer does not echo the submitted "virtual_host"
 
   @T-ADMIN-REFUSAL-002 @create-tenant @virtual-host
   Scenario: With no page to go back to, the refusal is shown on the error page
@@ -40,8 +40,9 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
       | subdomain    | refused_host_seller                 |
       | virtual_host | https://refused-host.example/agent  |
     Then the page returns status 400
+    And the page is the error page
     And the page shows the "InvalidVirtualHost" refusal
-    And the answer does not echo the submitted virtual host
+    And the answer does not echo the submitted "virtual_host"
 
   @T-ADMIN-REFUSAL-003 @json
   Scenario: A fetch() caller gets the refusal as JSON
@@ -66,7 +67,7 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the JSON response has "success" as false
     And the JSON error is the "InvalidVirtualHost" refusal
     And the JSON response has "field" as "virtual_host"
-    And the answer does not echo the submitted virtual host
+    And the answer does not echo the submitted "virtual_host"
 
   @T-ADMIN-REFUSAL-005 @json @tenant-user
   Scenario: A tenant's own admin gets the refusal, not a server error
@@ -90,6 +91,84 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     Then the page returns status 404
     And the JSON response has "success" as false
     And the JSON response has "error" as "Not Found"
+
+  @T-ADMIN-REFUSAL-009 @json @inventory-sync
+  Scenario: A sync started while one is running is refused with the running sync's id
+    # The settings page's script follows the sync it is given, so the refusal names it.
+    Given the tenant is onboarded to Google Ad Manager
+    And the tenant's inventory sync "sync_bdd_already_running" is running
+    When the settings page starts an inventory sync
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "SyncAlreadyRunning" refusal
+    And the JSON response has "sync_id" as "sync_bdd_already_running"
+
+  @T-ADMIN-REFUSAL-010 @json @service-account
+  Scenario: A service account for a tenant with no ad server configuration is refused
+    When the settings page creates a GAM service account
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "TenantAdapterConfigMissing" refusal
+
+  @T-ADMIN-REFUSAL-011 @json @service-account
+  Scenario: A second service account for a tenant is refused
+    Given the tenant is onboarded to Google Ad Manager with the service account "bdd-existing@sa.example"
+    When the settings page creates a GAM service account
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "ServiceAccountAlreadyExists" refusal
+
+  @T-ADMIN-REFUSAL-012 @json @inventory-profile-form
+  Scenario: A profile a product is built from is not deleted from the list page
+    Given the seller holds a verified property of publisher "pub-psatest.com"
+    And a stored profile "in_use_by_fetch" declaring an image of 300x250
+    And a product "built_from_in_use_by_fetch" built from the profile "in_use_by_fetch"
+    When the inventory page deletes the profile "in_use_by_fetch"
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "InventoryProfileInUse" refusal
+    And the profile "in_use_by_fetch" stores an image of 300x250
+
+  @T-ADMIN-REFUSAL-013 @browser @inventory-profile-form
+  Scenario: A profile a product is built from is not deleted by a form post
+    Given the seller holds a verified property of publisher "pub-psatest.com"
+    And a stored profile "in_use_by_form" declaring an image of 300x250
+    And a product "built_from_in_use_by_form" built from the profile "in_use_by_form"
+    When a browser form on the profiles list deletes the profile "in_use_by_form"
+    Then the page returns status 200
+    And the page shows the "InventoryProfileInUse" refusal
+    And the profile "in_use_by_form" stores an image of 300x250
+
+  @T-ADMIN-REFUSAL-014 @json @adapter-config
+  Scenario: An adapter config the adapter's schema refuses is answered with where, not with the value
+    # pydantic's own text and error dicts echo the submitted value, which can be a credential.
+    When the adapter settings save a "mock" config with "manual_approval_required" set to "sk-live-0123456789abcdef"
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "InvalidFormInput" refusal
+    And the JSON issues are:
+      | field  | text                                                          |
+      | config | config.manual_approval_required: This field is the wrong type. |
+    And the answer does not echo the submitted "manual_approval_required"
+
+  @T-ADMIN-REFUSAL-015 @browser @referrer
+  Scenario Outline: A refusal from a page the browser reads as another site's is shown on the error page
+    # Only a same-site path is gone back to. A browser reads //host and /\host as another
+    # site, so a Referer whose path starts with either names no page here.
+    When the operator submits the create tenant form from the page "<page>" with:
+      | field        | value                               |
+      | name         | Refused Host Seller                 |
+      | subdomain    | refused_host_seller                 |
+      | virtual_host | https://refused-host.example/agent  |
+    Then the page returns status 400
+    And the page is the error page
+    And the page shows the "InvalidVirtualHost" refusal
+
+    Examples:
+      | page                                       |
+      | https://elsewhere.example/create_tenant    |
+      | //elsewhere.example/create_tenant          |
+      | /\\elsewhere.example/create_tenant         |
 
   # A form the seller cannot save is refused with InvalidFormInput: its MESSAGE says the
   # form was refused, and each issue names a refused field in text the validator wrote,

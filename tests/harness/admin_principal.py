@@ -55,11 +55,12 @@ class AdminPrincipalEnv:
 
         Factories are bound to the session this method owns, every one of them, because
         ``PrincipalFactory`` declares ``tenant = SubFactory(TenantFactory)`` and reaches
-        siblings (see :func:`tests.factories.factories_bound_to`).
+        siblings (see :func:`tests.utils.database_helpers.bind_factories_to_session`).
         """
-        from tests.factories import PrincipalFactory, TenantFactory, factories_bound_to
+        from tests.factories import PrincipalFactory, TenantFactory
+        from tests.utils.database_helpers import bind_factories_to_session
 
-        with get_db_session() as session, factories_bound_to(session):
+        with get_db_session() as session, bind_factories_to_session(session):
             tenant = TenantFactory(tenant_id=self._tenant_id)
             PrincipalFactory(tenant=tenant, principal_id=principal_id)
         return principal_id
