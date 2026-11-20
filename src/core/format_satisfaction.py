@@ -84,8 +84,9 @@ WHAT THIS MODULE DOES NOT DO, deliberately:
   track (:func:`_level_shortfalls`). So are ``cta_values`` (:func:`_closed_value_shortfalls`,
   CREATIVE_VALUE_NOT_ALLOWED), a carousel's card count and what it states about each card's
   ``media`` (:func:`_card_media_shortfalls`), and a responsive creative's video duration
-  bounds, logo aspect ratios and image file-size cap, and a native unit's image file-size cap
-  (``max_image_file_size_kb``). Not read: ``om_sdk_required``, which no
+  bounds, logo aspect ratios and image file-size cap, a native unit's image file-size cap
+  (``max_image_file_size_kb``), and a display tag option's ``supported_delivery_types``
+  against its ``display_tag`` asset's ``delivery_type``. Not read: ``om_sdk_required``, which no
   manifest member states (adcontextprotocol/adcp#8627 asks how a seller is meant to validate it).
 """
 
@@ -1168,8 +1169,9 @@ def _set_shortfalls(path: str, member: str, constraint: str, stated: Any, accept
     """*stated*, the asset's ``member``, against the closed set *accepted* a declaration publishes.
 
     The one membership check every such set goes through: a slot's accepted ``widths`` and
-    ``heights``, its ``pixel_ratios``, ``cta_values`` (:data:`_CLOSED_VALUE_CONSTRAINT`) and a
-    card's ``allowed_card_media_asset_types``. The failure is reported at
+    ``heights``, its ``pixel_ratios``, ``cta_values`` (:data:`_CLOSED_VALUE_CONSTRAINT`), a
+    card's ``allowed_card_media_asset_types`` and a display tag's ``supported_delivery_types``
+    (:data:`_DELIVERY_TYPES_CONSTRAINT`). The failure is reported at
     ``assets.<path>.<member>`` under *constraint*. A value the asset does not state, and a set
     the declaration does not publish, are not graded here.
     """
@@ -1238,6 +1240,16 @@ _CARD_MEDIA_TYPES: frozenset[str] = frozenset({"image", "video"})
 #: ``video``") reads the other way; adcontextprotocol/adcp#8629 asks which is intended.
 _DEFAULT_CARD_MEDIA_TYPES: tuple[str, ...] = ("image",)
 
+#: formats/canonical/display_tag.json ``supported_delivery_types``: "Closed set of delivery
+#: types this format option can traffic." A ``display_tag`` asset whose ``delivery_type``
+#: (core/assets/display-tag-asset.json) is outside it is refused under this constraint name,
+#: which no specific creative code claims (:attr:`ManifestShortfall.code`), so it is
+#: ``CREATIVE_VALIDATION_FAILED_GENERIC``. core/representation-rejection.json's
+#: ``unsupported_delivery_type`` is not the code: it is the reason for one candidate of a
+#: CreativeRepresentationSet, and this is one manifest. A declaration publishing no set is not
+#: graded on delivery type.
+_DELIVERY_TYPES_CONSTRAINT = "supported_delivery_types"
+
 
 def _flat_constraint(key: str) -> tuple[str, str]:
     """The slot constraint flat declaration param *key* states, and the role it names.
@@ -1298,6 +1310,9 @@ def _effective_slot(slot: Mapping[str, Any], declared: Mapping[str, Any]) -> dic
     media because a card-asset states no dimensions of its own. A card's ``cta`` is held to
     the declaration's ``cta_values``: card-asset.json, "When the parent format declares
     ``cta_values`` (allowed CTA labels), the per-card ``cta`` MUST be one of those values".
+
+    A ``display_tag`` slot carries the declaration's ``supported_delivery_types``
+    (:data:`_DELIVERY_TYPES_CONSTRAINT`), the set its asset's ``delivery_type`` is held to.
     """
     group = str(slot.get("asset_group_id") or "")
     roles = _slot_roles(group) | {f"asset_{slot.get('asset_type')}"}
@@ -1325,6 +1340,8 @@ def _effective_slot(slot: Mapping[str, Any], declared: Mapping[str, Any]) -> dic
         effective["media"] = media
         if declared.get("cta_values"):
             effective["member_allowed_values"] = {"cta": declared["cta_values"]}
+    if slot.get("asset_type") == "display_tag" and declared.get(_DELIVERY_TYPES_CONSTRAINT):
+        effective[_DELIVERY_TYPES_CONSTRAINT] = declared[_DELIVERY_TYPES_CONSTRAINT]
     return effective
 
 
@@ -1381,7 +1398,9 @@ def _slot_constraint_shortfalls(
       the set. An unstated one is not graded: the pin infers it from "the matched logical
       size", and only the main slot has one. The main slot's set is graded with its size;
     * ``aspect_ratio``, ``widths`` and ``heights`` on a slot other than the main one
-      (:func:`_slot_dimension_shortfalls`).
+      (:func:`_slot_dimension_shortfalls`);
+    * ``supported_delivery_types`` -- a ``display_tag`` asset's ``delivery_type``
+      (:data:`_DELIVERY_TYPES_CONSTRAINT`).
 
     *slots* are effective slots (:func:`_effective_slot`): each carries the flat declaration
     params that name its role, so a limit stated either way is read here once.
@@ -1422,6 +1441,16 @@ def _slot_asset_shortfalls(
         if isinstance(text, str) and _is_number(bound) and len(text) > bound
     )
     shortfalls.extend(_closed_value_shortfalls(path, asset, slot))
+    if asset_type == "display_tag":
+        shortfalls.extend(
+            _set_shortfalls(
+                path,
+                "delivery_type",
+                _DELIVERY_TYPES_CONSTRAINT,
+                _plain(asset.get("delivery_type")),
+                slot.get(_DELIVERY_TYPES_CONSTRAINT),
+            )
+        )
     if not main and asset_type in _DIMENSIONED_ASSET_TYPES:
         shortfalls.extend(_slot_dimension_shortfalls(path, asset, slot))
     if asset_type in _DIMENSIONED_ASSET_TYPES:
