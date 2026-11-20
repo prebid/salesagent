@@ -1,3 +1,6 @@
+<!-- FIXME(#2587): this page still names code by line number. Name the function, class, test,
+constant, or section instead, and lower its count in BASELINE in
+tests/unit/test_architecture_docs_no_line_numbers.py in the same change. -->
 # Request lifecycle
 
 How a request travels from the wire to business logic, and what has already
