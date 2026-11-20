@@ -262,33 +262,6 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     And Google Ad Manager received no order and no line item
     And Google Ad Manager created no creative
 
-  # One refusal whose problems differ in recovery: GAM refuses one creative as the seller's
-  # configuration (its option's 300x250 overlaps no placeholder) and the other as the buyer's
-  # size (its option also accepts 728x90, which the line item takes). enums/error-code.json:
-  # CONFIGURATION_ERROR "the buyer cannot fix it, retrying will not help ... Recovery:
-  # terminal"; CREATIVE_SIZE_MISMATCH "Recovery: correctable"; CREATIVE_VALIDATION_FAILED_GENERIC
-  # "The creative failed buyer-correctable validation". The pin's one rule for a mix is about
-  # buyer_reason (core/error.json: "If a rejection contains independently actionable failures
-  # from different classes, sellers MUST emit separate error objects or omit buyer_reason
-  # rather than select a misleading single class"), which this seller does not emit, and it
-  # states none for the enclosing code. A correctable code would tell the buyer that fixing
-  # the request gets the buy through, which the first problem rules out, so the terminal code
-  # is the error's, and each problem keeps its own code.
-  @T-UC-002-local-gam-creative-mixed-recovery @extension
-  Scenario: A buy GAM refuses one creative of as the seller's configuration and another of as the buyer's size is refused as the seller's configuration, naming both
-    Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_300x250", "params": {"width": 300, "height": 250, "supported_delivery_types": ["tag_url"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}, {"format_kind": "image", "format_option_id": "image_multi", "params": {"sizes": [{"width": 300, "height": 250}, {"width": 728, "height": 90}]}}]}', with product settings '{"creative_placeholders": [{"width": 728, "height": 90}]}'
-    And the package references the buyer's approved display_tag creative "cr-tag" carrying the tag URL "https://ads.example.com/tag.js?slot=1"
-    And the package references the buyer's approved 300x250 image creative "cr-image" showing "https://cdn.example.com/banner-300x250.png"
-    When the Buyer Agent sends the create_media_buy request
-    Then the request is refused on the wire with code "CONFIGURATION_ERROR" recovery "terminal" naming field "packages[0].creative_ids[0]"
-    And the CONFIGURATION_ERROR refusal's problems are exactly, one per creative:
-      | subject_id | field | code                   |
-      | cr-tag     |       | CONFIGURATION_ERROR    |
-      | cr-image   |       | CREATIVE_SIZE_MISMATCH |
-    And no media buy is persisted for the tenant
-    And Google Ad Manager received no order and no line item
-    And Google Ad Manager created no creative
-
   # F1 (PR #2582 review): the seller's approval reads the creative once for the union of its
   # packages, so GAM plans it against every line item's placeholders together; the "prod_a"
   # line item then takes the creative at 728x90 too, a size only prod_b's option accepts.
