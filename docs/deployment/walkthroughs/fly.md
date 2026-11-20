@@ -219,13 +219,12 @@ fly ssh console --app your-app-name -C "cd /app && python scripts/ops/migrate.py
    - Add your email as a user OR add your domain to Allowed Domains
    - Try the SSO test again
 
-3. **Using legacy global super admin:** If you set `SUPER_ADMIN_EMAILS`, verify the format:
+3. **Check the super admin list:** If you set `SUPER_ADMIN_EMAILS`, verify the format:
    ```bash
    fly ssh console --app your-app-name -C "echo \$SUPER_ADMIN_EMAILS"
    ```
    - Correct: `user1@example.com,user2@example.com`
    - Wrong: `["user1@example.com"]` (JSON array)
-   - Wrong: `user1@example.com, user2@example.com` (spaces)
 
 4. Restart to pick up changes:
    ```bash

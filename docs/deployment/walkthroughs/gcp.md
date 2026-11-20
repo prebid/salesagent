@@ -147,7 +147,7 @@ If using a custom domain, add it as an additional redirect URI in your OAuth cre
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | Cloud SQL connection string |
 | `GEMINI_API_KEY` | No | Platform-level AI key (tenants can configure their own) |
-| `SUPER_ADMIN_EMAILS` | No | Legacy: Comma-separated admin emails (use per-tenant SSO instead) |
+| `SUPER_ADMIN_EMAILS` | No | Comma-separated super admin emails |
 | `GOOGLE_CLIENT_ID` | No | Legacy: Google OAuth client ID (use per-tenant SSO instead) |
 | `GOOGLE_CLIENT_SECRET` | No | Legacy: Google OAuth client secret |
 

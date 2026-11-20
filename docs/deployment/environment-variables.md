@@ -80,14 +80,20 @@ These variables configure a **global** OAuth provider shared by all tenants. For
 | `OAUTH_SCOPES` | `openid email profile` | OAuth scopes to request |
 | `OAUTH_PROVIDER` | `google` | Provider name for display |
 
-### Legacy: super admin access control
+### Super admin access control
+
+A super admin reaches every tenant in the Admin UI. The following variables name the super admins:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SUPER_ADMIN_EMAILS` | - | Comma-separated super admin emails. **Deprecated - use per-tenant user management.** |
-| `SUPER_ADMIN_DOMAINS` | - | Comma-separated domains for admin access. **Deprecated.** |
+| `SUPER_ADMIN_EMAILS` | - | Comma-separated super admin emails |
+| `SUPER_ADMIN_DOMAINS` | - | Comma-separated email domains whose users are super admins |
 
-> **Note**: Per-tenant SSO configuration replaces `SUPER_ADMIN_EMAILS`. Users are managed per-tenant on the Users & Access page, with authorized emails and domains configured per-tenant.
+The Admin UI checks these variables before the `super_admin_emails` and `super_admin_domains` rows of the `TenantManagementConfig` table. For the full order, see [Super admin check](../security.md#super-admin-check).
+
+`scripts/setup/init_database.py` copies these variables into those two rows when you run it. The script prefers `TENANT_MANAGEMENT_EMAILS` over `SUPER_ADMIN_EMAILS`, and `TENANT_MANAGEMENT_DOMAINS` over `SUPER_ADMIN_DOMAINS`, when they are set.
+
+> **Note**: Per-tenant SSO and the **Users & Access** page control who reaches one tenant. Neither grants super admin access.
 
 ---
 
