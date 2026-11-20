@@ -195,6 +195,11 @@ def _a_network_asset_is_held(self: Any, asset: Mapping[str, Any], bundle: bytes)
     return asset.get("assetId") is not None
 
 
+def _read_a_line_item_on_the_configured_network(self: Any, line_item_id: str) -> Mapping[str, Any]:
+    """``gam_line_item`` on e2e: the line item the configured network holds under the scenario's *line_item_id*."""
+    return self._configured_network().line_item(line_item_id)
+
+
 def _read_back_from_the_configured_network(self: Any, service: str, method: str) -> list[Any]:
     """``gam_objects_created`` on e2e: what the configured network holds of the seller's work for this scenario."""
     return self._configured_network().created(service, method, recorded_creative_ids=self._recorded_creative_ids())
@@ -680,6 +685,18 @@ class GamSellerMixin:
             {key: created[key] for key in keys if key in created}
             for created in self.gam_objects_created(service, method)
         ]
+
+    @realize_e2e(_read_a_line_item_on_the_configured_network)
+    def gam_line_item(self, line_item_id: str) -> Mapping[str, Any]:
+        """The line item the stand-in GAM network holds as *line_item_id*, as it holds it now."""
+        (held,) = [
+            item
+            for item in self.mock["gam_client"]
+            .return_value.GetService("LineItemService")
+            .getLineItemsByStatement(None)["results"]
+            if str(item.get("id")) == line_item_id
+        ]
+        return held
 
     @realize_e2e(_hold_on_the_configured_network)
     def hold_gam_creative(self, gam_id: str, image_url: str) -> str:

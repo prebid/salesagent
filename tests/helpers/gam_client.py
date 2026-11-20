@@ -135,9 +135,17 @@ def stub_gam_client(
       refuses instead, raising ``gam_fault``.
     * ``LineItemService.getLineItemsByStatement`` answers the line items the network holds,
       read at call time: ``client.line_items`` (seeded from ``line_items``; a test adds held
-      line items there), then the line items it created.
+      line items there), then the line items it created. Each answer is a copy, as a real
+      network's is: a caller that edits it changes nothing the network holds.
+    * ``LineItemService.performLineItemAction`` sets ``status`` PAUSED (PauseLineItems) or
+      READY (ResumeLineItems) on the line items it holds whose ``id`` or ``orderId`` the
+      statement binds (``lineItemId`` / ``orderId``), and answers ``numChanges``.
+      ``updateLineItems`` records what it was sent and changes no status:
+      ``LineItemSummary.status`` is "readonly" (Ad Manager API v202602).
     * ``OrderService.performOrderAction`` answers ``numChanges: 1``, so the adapter's
-      in-request approval takes its success branch (``approve_order``).
+      in-request approval takes its success branch (``approve_order``). An approval action
+      (``ApproveOrders``, ``ApproveAndOverbookOrders``) sets ``status`` APPROVED on the order it
+      created whose ``id`` the statement binds (``orderId``).
     * The ``create*`` methods in ``GAM_CREATE_METHODS`` answer each sent object with a copy
       carrying a fresh NUMERIC id, and keep that answer in ``client.created_objects``, keyed
       by ``(service, method)``: what the network holds after the scenario. The ids are
@@ -186,15 +194,38 @@ def stub_gam_client(
 
         return _answer
 
+    def _held_line_items() -> list[SoapObject]:
+        return [*client.line_items, *created.get(("LineItemService", "createLineItems"), [])]
+
+    _line_item_status = {"PauseLineItems": "PAUSED", "ResumeLineItems": "READY"}
+
+    def _line_item_action(action: Mapping[str, Any], statement: Mapping[str, Any], *_a: Any, **_k: Any) -> SoapObject:
+        bound = {v["key"]: str(v["value"]["value"]) for v in statement.get("values") or []}
+        acted = [
+            item
+            for item in _held_line_items()
+            if str(item.get("id")) == bound.get("lineItemId") or str(item.get("orderId")) == bound.get("orderId")
+        ]
+        for item in acted:
+            item["status"] = _line_item_status[action["xsi_type"]]
+        return SoapObject(numChanges=len(acted))
+
+    def _order_action(action: Mapping[str, Any], statement: Mapping[str, Any], *_a: Any, **_k: Any) -> SoapObject:
+        if action["xsi_type"] in ("ApproveOrders", "ApproveAndOverbookOrders"):
+            bound = {v["key"]: str(v["value"]["value"]) for v in statement.get("values") or []}
+            for order in created.get(("OrderService", "createOrders"), []):
+                if str(order["id"]) == bound.get("orderId"):
+                    order["status"] = "APPROVED"
+        return SoapObject(numChanges=1)
+
     services: dict[str, MagicMock] = {
         "LineItemService": MagicMock(
             getLineItemsByStatement=MagicMock(
-                side_effect=lambda *_args: SoapObject(
-                    results=[*client.line_items, *created.get(("LineItemService", "createLineItems"), [])]
-                )
-            )
+                side_effect=lambda *_args: SoapObject(results=[SoapObject(item) for item in _held_line_items()])
+            ),
+            performLineItemAction=MagicMock(side_effect=_line_item_action),
         ),
-        "OrderService": MagicMock(performOrderAction=MagicMock(return_value=SoapObject(numChanges=1))),
+        "OrderService": MagicMock(performOrderAction=MagicMock(side_effect=_order_action)),
         "NetworkService": MagicMock(
             getCurrentNetwork=MagicMock(
                 return_value=SoapObject(timeZone=network_time_zone),

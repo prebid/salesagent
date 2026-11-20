@@ -183,6 +183,12 @@ class ConfiguredGamNetwork:
             )
         )
 
+    def line_item(self, scenario_id: str) -> dict[str, Any]:
+        """The line item the scenario named *scenario_id*, as the network holds it now."""
+        (network_id,) = [network for network, named in self._scenario_ids.items() if named == scenario_id]
+        (item,) = self._select("LineItemService", "getLineItemsByStatement", f"id = {int(network_id)}")
+        return self._scenario_named([item])[0]
+
     def book(self, *, order_id: str, line_items: Sequence[tuple[str, tuple[int, int]]]) -> tuple[str, dict[str, str]]:
         """An order of the configured advertiser, with one line item per (scenario id, size), on the network.
 
