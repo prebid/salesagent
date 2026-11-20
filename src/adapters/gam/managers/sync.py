@@ -14,8 +14,6 @@ sync orchestration within the modular GAM architecture.
 
 import json
 import logging
-from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -26,39 +24,9 @@ from src.adapters.gam.client import GAMClientManager
 from src.adapters.gam.managers.inventory import GAMInventoryManager
 from src.adapters.gam.managers.orders import GAMOrdersManager
 from src.core.database.models import SyncJob
-from src.core.operator_errors import safe_error_message
+from src.services.sync_jobs import recording_failure
 
 logger = logging.getLogger(__name__)
-
-
-class SyncFailed(Exception):
-    """A sync job failed and its failure is recorded; raised in place of the cause, which it chains.
-
-    ``operator_message`` is the fixed text stored on the job, ending with the log reference
-    the cause was logged under. A caller that records the same failure on another job, or
-    answers it, reuses this text, so one failure keeps one log record and one reference.
-    """
-
-    def __init__(self, sync_id: str, operator_message: str):
-        super().__init__(f"Sync {sync_id} failed: {operator_message}")
-        self.sync_id = sync_id
-        self.operator_message = operator_message
-
-
-@contextmanager
-def recording_failure(db_session: Session, sync_job: SyncJob, context: str) -> Iterator[None]:
-    """Run a sync's work; if it raises, mark ``sync_job`` failed and raise :class:`SyncFailed`.
-
-    The cause is logged once, by ``safe_error_message(cause, context)``, unless it is a
-    nested sync's :class:`SyncFailed`, whose text (and reference) the job takes over.
-    """
-    try:
-        yield
-    except Exception as e:  # noqa: BLE001 - every failure of a sync is recorded on its job, then re-raised
-        operator_message = e.operator_message if isinstance(e, SyncFailed) else safe_error_message(e, context)
-        sync_job.mark_failed(operator_message)
-        db_session.commit()
-        raise SyncFailed(sync_job.sync_id, operator_message) from e
 
 
 class GAMSyncManager:

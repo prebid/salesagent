@@ -9,7 +9,6 @@ Inventory profiles are reusable configurations of:
 Products can reference inventory profiles to avoid duplicating configuration.
 """
 
-import json
 import logging
 import re
 from collections.abc import Sequence
@@ -20,10 +19,13 @@ from sqlalchemy import func, select
 
 from src.admin.blueprints.products import (
     _format_labels,
-    _format_options_refusal,
     _parse_authored_format_options,
     _publisher_catalog,
     _refuse_unresolved_format_options,
+)
+from src.admin.form_validation import (
+    format_options_refusal,
+    parse_json_field,
     refuse_a_stale_selection,
     selectors_or_refusal,
 )
@@ -83,13 +85,16 @@ _JSON_MODES = frozenset({"full", "all", "specific"})
 
 def _parse_targeting_template(form_data: dict[str, str]) -> Any:
     """The form's optional targeting template, parsed; ``None`` when the field is blank."""
-    raw = form_data.get("targeting_template", "").strip()
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise InvalidFormInput(FormIssue.invalid_json("targeting_template", e)) from e
+    return parse_json_field("targeting_template", form_data.get("targeting_template"))
+
+
+def _inventory_config_from_form(form_data: dict[str, str]) -> dict[str, Any]:
+    """The form's ad units and placements (JSON lists of ids) and whether descendants are included."""
+    return {
+        "ad_units": parse_json_field("targeted_ad_unit_ids", form_data.get("targeted_ad_unit_ids"), blank=[]),
+        "placements": parse_json_field("targeted_placement_ids", form_data.get("targeted_placement_ids"), blank=[]),
+        "include_descendants": form_data.get("include_descendants") == "on",
+    }
 
 
 def _selectors_from_form(
@@ -113,11 +118,7 @@ def _selectors_from_form(
         tags = [tag for tag in (t.strip().lower() for t in request.form.get("property_tags", "").split(",")) if tag]
         return selectors_or_refusal("property_tags", tag_selection(tags, authorized))
     if property_mode in _JSON_MODES:
-        raw = request.form.get("publisher_properties", "").strip()
-        try:
-            document = json.loads(raw) if raw else []
-        except json.JSONDecodeError as e:
-            raise InvalidFormInput(FormIssue.invalid_json("publisher_properties", e)) from e
+        document = parse_json_field("publisher_properties", request.form.get("publisher_properties"), blank=[])
         return selectors_or_refusal("publisher_properties", selector_selection(document, authorized, stored or []))
     return selectors_or_refusal(
         "selected_property_ids", id_selection(request.form.getlist("selected_property_ids"), authorized)
@@ -266,11 +267,7 @@ def add_inventory_profile(tenant_id: str):
         description = form_data.get("description", "").strip()
 
         # Parse inventory config
-        inventory_config = {
-            "ad_units": json.loads(form_data.get("targeted_ad_unit_ids", "[]")),
-            "placements": json.loads(form_data.get("targeted_placement_ids", "[]")),
-            "include_descendants": form_data.get("include_descendants") == "on",
-        }
+        inventory_config = _inventory_config_from_form(form_data)
 
         # Parse publisher properties based on property_mode
         # NOTE: New unified inventory page sends either:
@@ -290,7 +287,7 @@ def add_inventory_profile(tenant_id: str):
             catalog = _publisher_catalog(prop_session, tenant_id)
             format_options = _parse_authored_format_options(form_data.get("format_options"))
             if not format_options:
-                raise _format_options_refusal("At least one canonical format declaration (format_options) is required")
+                raise format_options_refusal("At least one canonical format declaration (format_options) is required")
 
             if property_mode in {"tags", "property_ids"} | _JSON_MODES:
                 publisher_properties = _selectors_from_form(catalog.refs, property_mode)
@@ -391,11 +388,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             profile.description = description if description else None
 
             # Update inventory config
-            inventory_config = {
-                "ad_units": json.loads(form_data.get("targeted_ad_unit_ids", "[]")),
-                "placements": json.loads(form_data.get("targeted_placement_ids", "[]")),
-                "include_descendants": form_data.get("include_descendants") == "on",
-            }
+            inventory_config = _inventory_config_from_form(form_data)
             profile.inventory_config = inventory_config
 
             if session.get(Tenant, tenant_id) is None:
@@ -431,7 +424,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             # The profile supplies its linked products' contract and publisher properties,
             # so each of them is held to the common-intersection rule as its own save is.
             for linked in profile.products:
-                refuse_outside_common_intersection(linked, _format_options_refusal)
+                refuse_outside_common_intersection(linked, format_options_refusal)
 
             # Count products using this profile before commit
             product_count = (

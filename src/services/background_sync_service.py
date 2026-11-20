@@ -17,6 +17,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
 from src.core.operator_errors import OperatorRefusal, safe_error_message
 from src.core.thread_registry import ThreadRegistry
+from src.services.sync_jobs import record_sync_failure
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +188,7 @@ def _run_sync_thread(
         with get_db_session() as db:
             tenant = db.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
             if not tenant:
-                _mark_sync_failed(sync_id, "Tenant not found")
+                record_sync_failure(tenant_id, sync_id, "Tenant not found")
                 return
 
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
@@ -200,7 +201,7 @@ def _run_sync_thread(
                 or adapter_config.adapter_type != "google_ad_manager"
                 or not adapter_config.gam_network_code
             ):
-                _mark_sync_failed(sync_id, "GAM not configured")
+                record_sync_failure(tenant_id, sync_id, "GAM not configured")
                 return
 
             # Determine auth method
@@ -211,14 +212,14 @@ def _run_sync_thread(
                 elif hasattr(adapter_config, "gam_service_account_json") and adapter_config.gam_service_account_json:
                     auth_method = "service_account"
                 else:
-                    _mark_sync_failed(sync_id, "No GAM authentication configured")
+                    record_sync_failure(tenant_id, sync_id, "No GAM authentication configured")
                     return
 
             # Create GAM client based on auth method
             if auth_method == "service_account":
                 service_account_json_str = adapter_config.gam_service_account_json
                 if not service_account_json_str:
-                    _mark_sync_failed(sync_id, "Service account JSON not found")
+                    record_sync_failure(tenant_id, sync_id, "Service account JSON not found")
                     return
 
                 import json as json_mod
@@ -489,7 +490,7 @@ def _run_sync_thread(
             logger.warning(f"[{sync_id}] Failed to invalidate cache: {cache_error}")
 
     except Exception as e:
-        _mark_sync_failed(sync_id, safe_error_message(e, f"Inventory sync {sync_id} failed"))
+        record_sync_failure(tenant_id, sync_id, safe_error_message(e, f"Inventory sync {sync_id} failed"))
 
     finally:
         # Remove from active syncs
@@ -526,20 +527,6 @@ def _mark_sync_complete(sync_id: str, summary: dict[str, Any]):
                 db.commit()
     except Exception as e:
         logger.error(f"Failed to mark sync complete: {e}")
-
-
-def _mark_sync_failed(sync_id: str, error_message: str):
-    """Mark sync as failed with error message."""
-    try:
-        with get_db_session() as db:
-            stmt = select(SyncJob).where(SyncJob.sync_id == sync_id)
-            sync_job = db.scalars(stmt).first()
-            if sync_job:
-                sync_job.mark_failed(error_message)
-                # Note: SyncJob doesn't have duration_seconds field - duration is calculated from started_at/completed_at
-                db.commit()
-    except Exception as e:
-        logger.error(f"Failed to mark sync failed: {e}")
 
 
 def get_active_syncs() -> list[str]:

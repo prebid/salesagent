@@ -12,11 +12,11 @@ from werkzeug.wrappers import Response
 
 from src.admin.auth_utils import OAUTH_CALLBACK_ERRORS, extract_user_info
 from src.admin.utils import require_tenant_access
-from src.admin.utils.operator_errors import safe_error_message
 from src.admin.utils.url_policy import json_error_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, User, UserRole
+from src.core.operator_errors import safe_error_message
 from src.services.auth_config_service import (
     disable_oidc,
     enable_oidc,

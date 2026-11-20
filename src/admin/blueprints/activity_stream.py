@@ -12,7 +12,7 @@ from sqlalchemy import select
 from src.admin.utils import require_tenant_access
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog
-from src.core.operator_errors import best_effort
+from src.core.operator_errors import best_effort, best_effort_call
 
 logger = logging.getLogger(__name__)
 
@@ -199,10 +199,10 @@ def _read_activities(tenant_id: str, since: datetime | None = None, limit: int =
     An open stream cannot be answered by the app's error handler, so a failed read is
     logged once under a reference and the stream sends an error event instead.
     """
-    activities = None
-    with best_effort(f"Failed to read the activity stream for tenant {tenant_id}"):
-        activities = get_recent_activities(tenant_id, since=since, limit=limit)
-    return activities
+    return best_effort_call(
+        f"Failed to read the activity stream for tenant {tenant_id}",
+        lambda: get_recent_activities(tenant_id, since=since, limit=limit),
+    )
 
 
 def _error_event(message: str) -> str:

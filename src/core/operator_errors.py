@@ -14,14 +14,14 @@ operator-facing text on purpose is raised as its own type and answered with a
 constant, as the domain routes do with ``DomainNotOwned``.
 
 This module has no web-framework dependency, so the FastAPI routes and the
-services use it without loading the admin package. The Flask ``json_error``
-wrapper lives in ``src.admin.utils.operator_errors``.
+services use it without loading the admin package. The admin app's answer to each
+of these types is ``src.admin.utils.operator_errors.handle_unexpected_error``.
 """
 
 import json
 import logging
 import secrets
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import ClassVar, NamedTuple
 
@@ -60,6 +60,23 @@ class OperatorRefusal(Exception):
     def details(self) -> tuple[str, ...]:
         """Lines a browser is shown beside ``MESSAGE``; each is text this seller wrote."""
         return ()
+
+
+class RecordedFailure(Exception):
+    """A failure already logged and already worded for the operator, raised in place of its cause.
+
+    ``operator_message`` is fixed text ending with the reference its cause was logged
+    under (:func:`safe_error_message`). It is answered as it is, with 500, and not logged
+    again, so one failure keeps one log record and one reference.
+    """
+
+    def __init__(self, operator_message: str, log_text: str) -> None:
+        super().__init__(log_text)
+        self.operator_message = operator_message
+
+    def response_fields(self) -> dict[str, object]:
+        """Keys a JSON answer carries beside ``error``, for a caller that reads one."""
+        return {}
 
 
 class FormIssue(NamedTuple):
@@ -142,7 +159,7 @@ def best_effort(context: str) -> Iterator[None]:
 
     The one catch-all the admin app has: a side effect (a Slack notice, an audit row, a
     dashboard tile) or a fallback that keeps a page rendering. A caller that needs a value
-    sets its default before the block. Anything a caller expects to fail in a known way is
+    uses :func:`best_effort_call`. Anything a caller expects to fail in a known way is
     caught by its type instead, and anything that should fail the request is left to the
     admin app's error handler.
     """
@@ -150,3 +167,11 @@ def best_effort(context: str) -> Iterator[None]:
         yield
     except Exception as e:  # noqa: BLE001 - the one sanctioned catch-all; logged with its traceback
         safe_error_message(e, context)
+
+
+def best_effort_call[T](context: str, fn: Callable[[], T]) -> T | None:
+    """*fn*'s value, or ``None`` when it raised: :func:`best_effort` for a step that returns one."""
+    value = None
+    with best_effort(context):
+        value = fn()
+    return value

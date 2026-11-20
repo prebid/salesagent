@@ -16,7 +16,14 @@ from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import joinedload
 
 from src.adapters.gam_implementation_config_schema import CustomTargeting
-from src.admin.form_validation import sanitize_form_data
+from src.admin.form_validation import (
+    FORMAT_OPTIONS,
+    format_options_refusal,
+    parse_json_field,
+    refuse_a_stale_selection,
+    sanitize_form_data,
+    selectors_or_refusal,
+)
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.operator_errors import flash_refusal
@@ -38,7 +45,6 @@ from src.core.database.repositories.publisher import PublisherRepository
 from src.core.format_resolver import linked_format_contract
 from src.core.format_satisfaction import refuse_outside_common_intersection
 from src.core.helpers.publisher_property_helpers import (
-    STALE_SELECTION_MESSAGE,
     RenderedSelection,
     SelectableProperty,
     authorized_selectors,
@@ -164,14 +170,6 @@ PUBLISHER_OPTION_KEY_ONLY = (
     "and carries only publisher_domain and format_option_id: the publisher's catalog supplies the rest."
 )
 
-#: The form field that carries a product's or a profile's canonical format declarations.
-FORMAT_OPTIONS = "format_options"
-
-
-def _format_options_refusal(text: str) -> InvalidFormInput:
-    """The refusal of the ``format_options`` field, for *text*."""
-    return InvalidFormInput(FormIssue(FORMAT_OPTIONS, text))
-
 
 def _parse_authored_format_options(raw: str | None) -> list[dict] | None:
     """The canonical arm of core/product.json's root anyOf, as the operator authored it.
@@ -196,22 +194,17 @@ def _parse_authored_format_options(raw: str | None) -> list[dict] | None:
     identity); anything more is refused. Whether the key resolves is asked once the
     selection is known (:func:`_refuse_unresolved_format_options`).
     """
-    if not raw or not raw.strip():
-        return None
-    try:
-        document = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise InvalidFormInput(FormIssue.invalid_json(FORMAT_OPTIONS, e)) from e
+    document = parse_json_field(FORMAT_OPTIONS, raw)
     if not document:
         return None
     if not isinstance(document, list):
-        raise _format_options_refusal("format_options must be a JSON array of declarations")
+        raise format_options_refusal("format_options must be a JSON array of declarations")
     product_local = [d for d in document if not (isinstance(d, dict) and option_key(d))]
     for declaration in document:
         if declaration not in product_local and (
             set(declaration) != {"publisher_domain", "format_option_id"} or not declaration["format_option_id"]
         ):
-            raise _format_options_refusal(PUBLISHER_OPTION_KEY_ONLY)
+            raise format_options_refusal(PUBLISHER_OPTION_KEY_ONLY)
     try:
         if product_local:
             format_declarations_type().validate_python(product_local)
@@ -237,7 +230,7 @@ def _refuse_unresolved_format_options(declarations, selectors: list[dict], catal
     """
     refusal = format_option_refusal(declarations, authorized_selectors(selectors, catalog.refs), catalog)
     if refusal:
-        raise _format_options_refusal(f"format_options do not resolve: {refusal}")
+        raise format_options_refusal(f"format_options do not resolve: {refusal}")
 
 
 def _refuse_a_product_with_no_format_arm(
@@ -261,7 +254,7 @@ def _refuse_a_product_with_no_format_arm(
     legacy product's first edit.
     """
     if not format_ids and not format_options:
-        raise _format_options_refusal(
+        raise format_options_refusal(
             # No spec version in the sentence: 0d8d26d72 swept version literals out of
             # src/ ("read the spec and SDK versions from the SDK, never from a comment")
             # and `AdCP 3.2` now appears nowhere under src/. An operator does not need the
@@ -782,24 +775,6 @@ _SELECTION_FIELDS = {
 }
 
 
-def selectors_or_refusal(field: str, selection: tuple[list[dict], str | None]) -> list[dict]:
-    """The selectors of a ``(selectors, refusal)`` validator answer, or :class:`InvalidFormInput` for *field*.
-
-    The selection validators (``publisher_property_helpers``) answer with their own refusal
-    text; the product and inventory-profile forms refuse with it here, in one place.
-    """
-    selectors, refusal = selection
-    if refusal:
-        raise InvalidFormInput(FormIssue(field, refusal))
-    return selectors
-
-
-def refuse_a_stale_selection(selection_save: str, subject: str) -> None:
-    """:class:`InvalidFormInput` when the selection the page rendered is no longer the stored one."""
-    if selection_save == "stale":
-        raise InvalidFormInput(FormIssue("rendered_selection", STALE_SELECTION_MESSAGE.format(subject=subject)))
-
-
 def _selectors_from_product_form(
     authorized: list[SelectableProperty] | tuple[SelectableProperty, ...], property_mode: str
 ) -> list[dict]:
@@ -1124,11 +1099,9 @@ def add_product(tenant_id):
                     )
 
                 # Parse targeting template from form (includes custom targeting key-value pairs)
-                targeting_template_json = form_data.get("targeting_template", "{}")
-                try:
-                    targeting_template = json.loads(targeting_template_json) if targeting_template_json else {}
-                except json.JSONDecodeError:
-                    targeting_template = {}
+                targeting_template = parse_json_field(
+                    "targeting_template", form_data.get("targeting_template"), blank={}
+                )
 
                 # The widget sends the product's whole custom targeting; GAM reads it from
                 # implementation_config, stored as the model writes it
@@ -1287,7 +1260,7 @@ def add_product(tenant_id):
                 # The contract the product is SERVED, whichever arm supplies it: a linked
                 # profile announces its declarations on the product's behalf. A refusal leaves the
                 # session, which closes without a commit, so the pending product is discarded.
-                refuse_outside_common_intersection(product, _format_options_refusal)
+                refuse_outside_common_intersection(product, format_options_refusal)
                 db_session.flush()  # Flush to get product ID before creating pricing options
 
                 # Create pricing options (already parsed above)
@@ -1580,11 +1553,9 @@ def edit_product(tenant_id, product_id):
                 # config directly.
 
                 # Parse targeting template from form (includes custom targeting key-value pairs)
-                targeting_template_json = form_data.get("targeting_template", "{}")
-                try:
-                    targeting_template = json.loads(targeting_template_json) if targeting_template_json else {}
-                except json.JSONDecodeError:
-                    targeting_template = {}
+                targeting_template = parse_json_field(
+                    "targeting_template", form_data.get("targeting_template"), blank={}
+                )
 
                 # The widget sends the product's whole custom targeting, stored as the model
                 # writes it. An empty one keeps a stored config GAM cannot take: the edit page
@@ -1773,7 +1744,7 @@ def edit_product(tenant_id, product_id):
 
             # Asked here, not with the anyOf above: the publisher properties it reads are
             # written after that check.
-            refuse_outside_common_intersection(product, _format_options_refusal)
+            refuse_outside_common_intersection(product, format_options_refusal)
 
             db_session.commit()
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from functools import wraps
 from typing import TYPE_CHECKING, NamedTuple, NoReturn, TypeVar
 
@@ -323,18 +324,28 @@ def role_permits(role: str, method: str, *, minimum: UserRole = UserRole.VIEWER)
 #: form submit is ``navigate``.
 _SCRIPT_FETCH_MODES = frozenset({"cors", "same-origin"})
 
+#: The blueprints whose every route answers JSON: the programmatic APIs (``/api/...``) and
+#: the schema service. Their failures are JSON too, whatever the request's headers say.
+JSON_API_BLUEPRINTS = frozenset(
+    {"api", "format_search", "gam_reporting_api", "schemas", "sync_api", "tenant_management_api"}
+)
+
 
 def caller_reads_json() -> bool:
     """Whether the current request's caller reads a JSON answer rather than an HTML page.
 
-    True for a JSON request body, a script's ``fetch`` or XHR (``Sec-Fetch-Mode`` of
-    ``cors``/``same-origin``, which every current browser sends, or
+    True for a route of a JSON API blueprint (:data:`JSON_API_BLUEPRINTS`), whose format
+    is the endpoint's, not the caller's: curl and most HTTP libraries send ``Accept: */*``.
+    Elsewhere, true for a JSON request body, a script's ``fetch`` or XHR
+    (``Sec-Fetch-Mode`` of ``cors``/``same-origin``, which every current browser sends, or
     ``X-Requested-With: XMLHttpRequest``), or an ``Accept`` that prefers
-    ``application/json`` to ``text/html``. ``Accept: */*`` on its own (curl, most HTTP
-    libraries) ties, and a tie is HTML, as it was before this predicate existed. The one
-    answer to this question for the admin UI: the refusals in
-    :func:`require_tenant_access` and the admin error handler both ask it.
+    ``application/json`` to ``text/html``; ``Accept: */*`` on its own ties, and a tie is
+    HTML. The one answer to this question for the admin UI: the refusals in
+    :func:`require_tenant_access`, the admin error handler and the routes that answer both
+    a form and a script all ask it.
     """
+    if not JSON_API_BLUEPRINTS.isdisjoint(request.blueprints):
+        return True
     if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return True
     if request.headers.get("Sec-Fetch-Mode") in _SCRIPT_FETCH_MODES:
@@ -342,17 +353,22 @@ def caller_reads_json() -> bool:
     return request.accept_mimetypes.best_match(["text/html", "application/json"]) == "application/json"
 
 
+def json_failure(message: str, status: int, fields: Mapping[str, object] | None = None) -> Response:
+    """The admin app's one JSON failure body: *fields*, then ``success`` and ``error``, which no field can replace."""
+    return make_response(jsonify({**(fields or {}), "success": False, "error": message}), status)
+
+
 def _json_refusal(status: int, message: str, *, api_mode: bool) -> Response | None:
-    """A JSON ``{"error": message}`` answer with *status* if the caller reads JSON, else ``None``.
+    """A :func:`json_failure` answer with *status* if the caller reads JSON, else ``None``.
 
     The one decision for every refusal in :func:`require_tenant_access`; each refusal
     keeps its own answer for a caller that reads HTML.
     """
-    return make_response(jsonify({"error": message}), status) if api_mode or caller_reads_json() else None
+    return json_failure(message, status) if api_mode or caller_reads_json() else None
 
 
 def _forbid(message: str, *, api_mode: bool) -> NoReturn:
-    """Refuse the request with a 403: a JSON ``{"error": message}`` if the caller reads JSON, else the HTML page."""
+    """Refuse the request with a 403: a :func:`json_failure` if the caller reads JSON, else the HTML page."""
     raise Forbidden(response=_json_refusal(403, message, api_mode=api_mode))
 
 

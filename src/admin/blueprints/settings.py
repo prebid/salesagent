@@ -17,6 +17,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.helpers import caller_reads_json
 from src.admin.utils.url_policy import redirect_if_url_blocked
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -24,6 +25,7 @@ from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, UserRole
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.core.operator_errors import FormIssue, InvalidFormInput, OperatorRefusal
 from src.core.security.outbound_http import OutboundError
 from src.services.ai.config import DEFAULT_GOOGLE_MODEL, TenantAIConfig, uses_legacy_gemini_api_key
 from src.services.approximated_client import (
@@ -324,7 +326,7 @@ def update_adapter(tenant_id):
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
-            if request.is_json:
+            if caller_reads_json():
                 return jsonify({"success": False, "error": "Tenant not found"}), 404
             flash("Tenant not found", "error")
             return redirect(url_for("core.index"))
@@ -333,7 +335,7 @@ def update_adapter(tenant_id):
         if not new_adapter:
             new_adapter = tenant.ad_server
             if not new_adapter:
-                if request.is_json:
+                if caller_reads_json():
                     return jsonify({"success": False, "error": "No adapter configured"}), 400
                 flash("No adapter configured", "error")
                 return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="adapter"))
@@ -465,7 +467,7 @@ def update_adapter(tenant_id):
         db_session.commit()
 
         # Return appropriate response based on request type
-        if request.is_json:
+        if caller_reads_json():
             return jsonify({"success": True, "message": f"Adapter changed to {new_adapter}"}), 200
 
         flash(f"Adapter changed to {new_adapter}", "success")
@@ -641,13 +643,13 @@ def test_ai_connection(tenant_id):
         try:
             response = future.result(timeout=30)
         except AIProviderError as e:
-            # The provider failed the call (run_agent classifies it); a cause the operator
-            # can fix gets its own text, anything else goes to the app's handler.
-            error_msg = _ai_connection_error_message(e, model)
-            if error_msg is None:
+            # The provider failed the call (run_agent classifies it). A refusal the operator
+            # can act on is chosen on the HTTP status it answered; anything else goes to the
+            # app's handler.
+            refusal = ai_refusal_for(e.status_code)
+            if refusal is None:
                 raise
-            logger.warning("AI connection test failed: %s", error_msg, exc_info=e)
-            return jsonify({"success": False, "error": error_msg}), 400
+            raise refusal(f"AI connection test for {provider}/{model}: HTTP {e.status_code}") from e
 
     return jsonify(
         {
@@ -659,18 +661,51 @@ def test_ai_connection(tenant_id):
     )
 
 
-def _ai_connection_error_message(e: Exception, model: str) -> str | None:
-    """Operator text for a provider failure whose cause the operator can fix, or None."""
-    error_text = str(e).lower()
-    if "expired" in error_text:
-        return "API key expired. Please renew your API key."
-    if "401" in error_text or "authentication" in error_text or "api_key_invalid" in error_text:
-        return "Invalid API key. Please check your credentials."
-    if model and ("404" in error_text or "not found" in error_text):
-        return f"Model '{model}' not found. Please check the model name."
-    if "rate" in error_text or "quota" in error_text:
-        return "Rate limit exceeded. Please try again later."
-    return None
+class AIProviderKeyRefused(OperatorRefusal):
+    """The AI provider refused the API key (HTTP 401 or 403)."""
+
+    MESSAGE = "Invalid API key. Please check your credentials."
+
+
+class AIModelNotFound(OperatorRefusal):
+    """The AI provider has no model by the name the test asked for (HTTP 404)."""
+
+    MESSAGE = "Model not found. Please check the model name."
+
+
+class AIProviderRateLimited(OperatorRefusal):
+    """The AI provider refused the call for its rate limit or quota (HTTP 429)."""
+
+    MESSAGE = "Rate limit exceeded. Please try again later."
+
+
+class AIProviderRefusedRequest(OperatorRefusal):
+    """The AI provider refused the request with another 4xx status (Gemini answers 400 for a bad or expired key)."""
+
+    MESSAGE = "The AI provider refused the request. Please check the API key and the model name."
+
+
+#: The refusal for each provider status an operator can act on; another 4xx is
+#: :class:`AIProviderRefusedRequest`, and anything else is the provider's own failure.
+_AI_REFUSAL_BY_STATUS: dict[int, type[OperatorRefusal]] = {
+    401: AIProviderKeyRefused,
+    403: AIProviderKeyRefused,
+    404: AIModelNotFound,
+    429: AIProviderRateLimited,
+}
+
+
+def ai_refusal_for(status_code: int | None) -> type[OperatorRefusal] | None:
+    """The refusal for an AI provider that answered HTTP *status_code*; ``None`` when it is not the operator's to fix."""
+    if status_code is None or not 400 <= status_code < 500:
+        return None
+    return _AI_REFUSAL_BY_STATUS.get(status_code, AIProviderRefusedRequest)
+
+
+class LogfireConfigurationRefused(OperatorRefusal):
+    """``logfire.configure`` refused the configuration the test built from the operator's token."""
+
+    MESSAGE = "Invalid Logfire token. Please check your credentials."
 
 
 @settings_bp.route("/ai/test-logfire", methods=["POST"])
@@ -696,15 +731,9 @@ def test_logfire_connection(tenant_id):
                 service_name="adcp-sales-agent-test",
             )
         except LogfireConfigError as config_error:
-            error_text = str(config_error).lower()
-            if "401" in error_text or "unauthorized" in error_text or "invalid" in error_text:
-                error_msg = "Invalid Logfire token. Please check your credentials."
-            elif "403" in error_text or "forbidden" in error_text:
-                error_msg = "Token does not have permission to send data."
-            else:
-                raise
-            logger.warning("Logfire connection test failed: %s", error_msg, exc_info=config_error)
-            return jsonify({"success": False, "error": error_msg}), 400
+            # The one type logfire.configure refuses a configuration with; it carries no
+            # status (logfire checks the token on a background thread and only warns).
+            raise LogfireConfigurationRefused(f"Logfire connection test for tenant {tenant_id}") from config_error
 
         # Send a test span to verify the token works
         with logfire.span("test_connection", _level="info") as span:
@@ -1139,7 +1168,8 @@ def update_business_rules(tenant_id):
     from src.services.policy_service import PolicyService, ValidationError
 
     try:
-        # Get form data
+        # The body is JSON or a form, whichever was sent; the answer is in the format the
+        # caller reads (caller_reads_json), which for the settings page's fetch() is JSON.
         data = request.get_json() if request.is_json else request.form
 
         # Parse form data into PolicyService format
@@ -1180,23 +1210,16 @@ def update_business_rules(tenant_id):
 
                 db_session.commit()
 
-        # Success
-        if request.is_json:
-            return jsonify({"success": True}), 200
-
-        flash("Business rules updated successfully", "success")
-        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
-
     except ValidationError as e:
-        logger.warning(f"Validation error updating business rules for tenant {tenant_id}: {e.errors}")
+        # PolicyService's errors are its own text, one per field; the admin error handler
+        # answers the refusal in the caller's format, as it answers a failure.
+        raise InvalidFormInput(*(FormIssue(field, f"{field}: {error}") for field, error in e.errors.items())) from e
 
-        if request.is_json:
-            return jsonify({"success": False, "errors": e.errors}), 400
+    if caller_reads_json():
+        return jsonify({"success": True}), 200
 
-        # Flash each validation error
-        for field, error in e.errors.items():
-            flash(f"{field}: {error}", "error")
-        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="business-rules"))
+    flash("Business rules updated successfully", "success")
+    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
 
 def _resolve_owned_domain(tenant_id: str, domain: str | None) -> OwnedDomain | None:

@@ -175,18 +175,3 @@ def schema_not_found(error):
         ),
         404,
     )
-
-
-@schemas_bp.errorhandler(500)
-def schema_internal_error(error):
-    """Handle 500 errors for schema requests."""
-    return (
-        jsonify(
-            {
-                "error": "Internal server error",
-                "message": "An error occurred while processing the schema request",
-                "service": "AdCP Schema Validation Service",
-            }
-        ),
-        500,
-    )

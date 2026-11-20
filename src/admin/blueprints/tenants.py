@@ -24,7 +24,7 @@ from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, UserRole
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.operator_errors import best_effort
+from src.core.operator_errors import best_effort_call
 from src.services.ai.factory import tenant_ai_enabled
 from src.services.setup_checklist_service import SetupChecklistService
 from src.services.slack_notifier import SlackNotifier
@@ -57,10 +57,7 @@ def get_available_currencies():
 
 def _setup_status_tile(tenant_id: str) -> dict | None:
     """The setup checklist widget's data, or None so the page still renders when it cannot be built."""
-    setup_status = None
-    with best_effort("Failed to load setup checklist"):
-        setup_status = SetupChecklistService(tenant_id).get_setup_status()
-    return setup_status
+    return best_effort_call("Failed to load setup checklist", SetupChecklistService(tenant_id).get_setup_status)
 
 
 @tenants_bp.route("/<tenant_id>")

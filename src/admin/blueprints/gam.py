@@ -12,14 +12,15 @@ from sqlalchemy import select
 from src.adapters.gam.utils.error_handler import GAM_CALL_ERRORS
 from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
 from src.adapters.gam_reporting_service import GAMReportingService
+from src.admin.form_validation import parse_json_field
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import json_error, safe_error_message
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, GAMLineItem, GAMOrder, Tenant
 from src.core.database.repositories.adapter_config import AdapterConfigRepository, read_adapter_config
+from src.core.operator_errors import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -747,24 +748,11 @@ def create_service_account(tenant_id):
     if session.get("role") == "viewer":
         return jsonify({"success": False, "error": "Access denied"}), 403
 
-    # Get GCP project ID from environment or configuration
-    gcp_project_id = get_settings().auth.gcp_project_id
-    if not gcp_project_id:
-        return (
-            jsonify(
-                {
-                    "success": False,
-                    "error": "GCP_PROJECT_ID not configured. Please set this environment variable.",
-                }
-            ),
-            500,
-        )
-
     from src.services.gcp_service_account_service import GCPServiceAccountService
 
-    service = GCPServiceAccountService(gcp_project_id=gcp_project_id)
-
-    # Create service account for tenant
+    # The service refuses on the tenant's own state first, then on a deployment with no
+    # GCP project, and only then builds the IAM client.
+    service = GCPServiceAccountService(gcp_project_id=get_settings().auth.gcp_project_id)
     service_account_email, _ = service.create_service_account_for_tenant(tenant_id=tenant_id)
 
     return jsonify(
@@ -925,13 +913,7 @@ def test_gam_connection(tenant_id):
                     400,
                 )
 
-            # Parse service account JSON
-            try:
-                import json as json_lib
-
-                service_account_info = json_lib.loads(adapter_config.gam_service_account_json)
-            except json_lib.JSONDecodeError as e:
-                return json_error(e, "Invalid service account JSON", status_code=400)
+            service_account_info = parse_json_field("gam_service_account_json", adapter_config.gam_service_account_json)
 
             # Create credentials from service account (in-memory, no temp file needed)
             from google.oauth2 import service_account

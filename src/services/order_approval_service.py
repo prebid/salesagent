@@ -21,6 +21,7 @@ from src.core.signing.outbound import delivery_signer_for_tenant
 from src.core.thread_registry import ThreadRegistry
 from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.delivery import WebhookDeliveryOutcome
+from src.services.sync_jobs import record_sync_failure
 
 logger = logging.getLogger(__name__)
 
@@ -375,25 +376,13 @@ def _mark_approval_failed(
 ):
     """Mark approval as failed and send webhook notification."""
     try:
-        # Read the progress fields BEFORE the session closes. ``db.commit()``
-        # expires every attribute on ``approval_job``, so touching ``.progress``
-        # after the ``with`` block raises DetachedInstanceError — which the
-        # ``except`` below then swallowed, and the buyer was never told the order
-        # had failed at all (salesagent-98t2, reproduced by
-        # tests/integration/test_order_approval_webhook_signing.py).
-        order_id: str | None = None
-        attempts: int | None = None
-
-        with get_db_session() as db:
-            stmt = select(SyncJob).where(SyncJob.sync_id == approval_id)
-            approval_job = db.scalars(stmt).first()
-            if approval_job:
-                approval_job.mark_failed(error_message)
-                db.commit()
-
-                progress = approval_job.progress or {}
-                order_id = progress.get("order_id")
-                attempts = progress.get("attempts")
+        # The progress is read inside the unit that records the failure: once it commits,
+        # the row is expired, and reading it after raised DetachedInstanceError, which the
+        # ``except`` below swallowed, so the buyer was never told the order had failed
+        # (salesagent-98t2, reproduced by tests/integration/test_order_approval_webhook_signing.py).
+        progress = record_sync_failure(tenant_id, approval_id, error_message)
+        order_id: str | None = progress.get("order_id")
+        attempts: int | None = progress.get("attempts")
 
         # Send webhook notification
         if webhook_url:

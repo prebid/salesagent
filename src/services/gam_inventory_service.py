@@ -12,22 +12,29 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import String, and_, create_engine, delete, func, or_, select, text
+from sqlalchemy import Engine, String, and_, delete, func, or_, select, text
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
 from src.adapters.gam_inventory_discovery import (
     GAMInventoryDiscovery,
 )
-from src.core.database.db_config import DatabaseConfig
+from src.core.database.database_session import get_engine
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
 from src.services.gam_product_config_service import product_gam_slots
 
-# Create database session factory
-engine = create_engine(DatabaseConfig.get_connection_string())
-SessionLocal = sessionmaker(bind=engine)
-# Use scoped_session for thread-local sessions
-db_session = scoped_session(SessionLocal)
+
+class _ProcessEngineSession(Session):
+    """A session on the process's one engine (``get_engine``), looked up when it connects, not at import."""
+
+    def get_bind(self, *args: Any, **kwargs: Any) -> Engine:
+        return get_engine()
+
+
+#: Thread-local sessions for the sync API, separate from ``get_db_session``'s, on the same
+#: engine: a sync's failure is recorded in a unit of work of its own while this session
+#: still holds the failed work.
+db_session: scoped_session[Session] = scoped_session(sessionmaker(class_=_ProcessEngineSession))
 
 logger = logging.getLogger(__name__)
 

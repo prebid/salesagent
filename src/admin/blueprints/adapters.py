@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import attributes
 
 from src.adapters import get_adapter_schemas
+from src.admin.form_validation import form_number
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
@@ -18,29 +19,6 @@ logger = logging.getLogger(__name__)
 
 # Create blueprint
 adapters_bp = Blueprint("adapters", __name__)
-
-
-class _InvalidMockSetting(Exception):
-    """A mock-config form value the operator must correct; ``message`` is this module's own text."""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-        self.message = message
-
-
-def _form_number[N: (int, float)](
-    cast: type[N], field_name: str, default: N, min_val: N | None = None, max_val: N | None = None
-) -> N:
-    """The form field *field_name* as *cast*, within the bounds, or refuse it in this module's words."""
-    try:
-        value = cast(request.form.get(field_name, default))
-    except (ValueError, TypeError):
-        raise _InvalidMockSetting(f"{field_name} must be a number") from None
-    if min_val is not None and value < min_val:
-        raise _InvalidMockSetting(f"{field_name} must be at least {min_val}")
-    if max_val is not None and value > max_val:
-        raise _InvalidMockSetting(f"{field_name} must be at most {max_val}")
-    return value
 
 
 @adapters_bp.route("/adapters/mock/config/<tenant_id>/<product_id>", methods=["GET", "POST"])
@@ -56,58 +34,55 @@ def mock_config(tenant_id, product_id, **kwargs):
             return redirect(url_for("products.list_products", tenant_id=tenant_id))
 
         if request.method == "POST":
-            # Handle form submission to update mock config
-            try:
-                config = product.implementation_config or {}
+            # A value the form refuses raises InvalidFormInput, which the admin error handler
+            # answers on this page; the session closes without a commit, so nothing is stored.
+            config = product.implementation_config or {}
 
-                def parse_int(field_name, default, min_val=None, max_val=None):
-                    return _form_number(int, field_name, default, min_val, max_val)
+            def parse_int(field_name, default, min_val=None, max_val=None):
+                return form_number(int, field_name, request.form.get(field_name, default), min_val, max_val)
 
-                def parse_float(field_name, default, min_val=None, max_val=None):
-                    return _form_number(float, field_name, default, min_val, max_val)
+            def parse_float(field_name, default, min_val=None, max_val=None):
+                return form_number(float, field_name, request.form.get(field_name, default), min_val, max_val)
 
-                # Traffic simulation (with validation)
-                config["daily_impressions"] = parse_int("daily_impressions", 100000, min_val=0)
-                config["fill_rate"] = parse_float("fill_rate", 85, min_val=0, max_val=100)
-                config["ctr"] = parse_float("ctr", 0.5, min_val=0, max_val=100)
-                config["viewability_rate"] = parse_float("viewability_rate", 70, min_val=0, max_val=100)
+            # Traffic simulation (with validation)
+            config["daily_impressions"] = parse_int("daily_impressions", 100000, min_val=0)
+            config["fill_rate"] = parse_float("fill_rate", 85, min_val=0, max_val=100)
+            config["ctr"] = parse_float("ctr", 0.5, min_val=0, max_val=100)
+            config["viewability_rate"] = parse_float("viewability_rate", 70, min_val=0, max_val=100)
 
-                # Performance simulation (with validation)
-                config["latency_ms"] = parse_int("latency_ms", 50, min_val=0, max_val=60000)
-                config["error_rate"] = parse_float("error_rate", 0.1, min_val=0, max_val=100)
+            # Performance simulation (with validation)
+            config["latency_ms"] = parse_int("latency_ms", 50, min_val=0, max_val=60000)
+            config["error_rate"] = parse_float("error_rate", 0.1, min_val=0, max_val=100)
 
-                # Test scenarios (validated choices)
-                test_mode = request.form.get("test_mode", "normal")
-                valid_modes = ["normal", "high_demand", "degraded", "outage"]
-                if test_mode not in valid_modes:
-                    raise _InvalidMockSetting(f"test_mode must be one of {', '.join(valid_modes)}")
-                config["test_mode"] = test_mode
-                config["price_variance"] = parse_float("price_variance", 10, min_val=0, max_val=100)
-                config["seasonal_factor"] = parse_float("seasonal_factor", 1.0, min_val=0.1, max_val=10.0)
+            # Test scenarios (validated choices)
+            test_mode = request.form.get("test_mode", "normal")
+            valid_modes = ["normal", "high_demand", "degraded", "outage"]
+            if test_mode not in valid_modes:
+                raise InvalidFormInput(FormIssue("test_mode", f"test_mode must be one of {', '.join(valid_modes)}"))
+            config["test_mode"] = test_mode
+            config["price_variance"] = parse_float("price_variance", 10, min_val=0, max_val=100)
+            config["seasonal_factor"] = parse_float("seasonal_factor", 1.0, min_val=0.1, max_val=10.0)
 
-                # Delivery simulation (with validation)
-                config["delivery_simulation"] = {
-                    "enabled": "delivery_simulation_enabled" in request.form,
-                    "time_acceleration": parse_int("time_acceleration", 3600, min_val=1, max_val=86400),
-                    "update_interval_seconds": parse_float("update_interval_seconds", 1.0, min_val=0.1, max_val=60),
-                }
+            # Delivery simulation (with validation)
+            config["delivery_simulation"] = {
+                "enabled": "delivery_simulation_enabled" in request.form,
+                "time_acceleration": parse_int("time_acceleration", 3600, min_val=1, max_val=86400),
+                "update_interval_seconds": parse_float("update_interval_seconds", 1.0, min_val=0.1, max_val=60),
+            }
 
-                # Note: Creative formats are managed in product.format_ids (via add/edit product page)
-                # NOT in implementation_config - removing format handling to avoid duplication
+            # Note: Creative formats are managed in product.format_ids (via add/edit product page)
+            # NOT in implementation_config - removing format handling to avoid duplication
 
-                # Debug settings (boolean - safe)
-                config["verbose_logging"] = "verbose_logging" in request.form
-                config["predictable_ids"] = "predictable_ids" in request.form
+            # Debug settings (boolean - safe)
+            config["verbose_logging"] = "verbose_logging" in request.form
+            config["predictable_ids"] = "predictable_ids" in request.form
 
-                product.implementation_config = config
-                attributes.flag_modified(product, "implementation_config")
-                session.commit()
+            product.implementation_config = config
+            attributes.flag_modified(product, "implementation_config")
+            session.commit()
 
-                flash("Mock adapter configuration saved successfully!", "success")
-                return redirect(url_for("adapters.mock_config", tenant_id=tenant_id, product_id=product_id))
-            except _InvalidMockSetting as e:
-                logger.info(f"Validation error in mock config: {e.message}")
-                flash(f"Invalid configuration: {e.message}", "error")
+            flash("Mock adapter configuration saved successfully!", "success")
+            return redirect(url_for("adapters.mock_config", tenant_id=tenant_id, product_id=product_id))
 
         # GET request - render template with product config
         config = product.implementation_config or {}

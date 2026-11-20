@@ -15,11 +15,11 @@ from typing import Any
 from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import func, select
 
-from src.adapters.gam.managers.sync import SyncFailed, recording_failure
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.admin.auth_helpers import api_key_prefix, mint_stored_api_key, require_api_key_auth
 from src.core.database.models import AdapterConfig, SyncJob, Tenant
 from src.services.gam_inventory_service import db_session as gam_db_session
+from src.services.sync_jobs import recording_failure
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +139,7 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
         )
 
         # The sync manager creates and records the sync job; a failed sync raises
-        # SyncFailed, which answer_failed_sync turns into the response.
+        # SyncFailed, which the admin error handler answers with the text the job stores.
         if sync_type == "full":
             # Pass custom targeting limit to prevent timeouts
             result = adapter.sync_full(db_session, force=force, custom_targeting_limit=custom_targeting_limit)
@@ -159,12 +159,6 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
 
     finally:
         db_session.remove()
-
-
-@sync_api.errorhandler(SyncFailed)
-def answer_failed_sync(e: SyncFailed) -> tuple[Response, int]:
-    """A sync that failed: its job, its status and the text the job stores, under the job's one log reference."""
-    return jsonify({"sync_id": e.sync_id, "status": "failed", "error": e.operator_message}), 500
 
 
 @sync_api.route("/status/<sync_id>", methods=["GET"])
@@ -450,8 +444,8 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
         db_session.add(sync_job)
         db_session.commit()
 
-        # A failure marks the job failed and raises SyncFailed, which answer_failed_sync
-        # answers with the text the job stores.
+        # A failure marks the job failed and raises SyncFailed, which the admin error
+        # handler answers with the text the job stores.
         with recording_failure(db_session(), sync_job, f"Orders sync failed for tenant {tenant_id}"):
             # Initialize GAM client
             from src.adapters.google_ad_manager import GoogleAdManager

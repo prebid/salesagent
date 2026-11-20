@@ -664,13 +664,15 @@ function saveBusinessRules() {
                 // No flash messages means success - reload to show updated data
                 window.location.reload();
             });
-        } else if (response.ok) {
-            // JSON response
+        } else if (contentType && contentType.includes('application/json')) {
+            // JSON response: a success, a refusal (400, with the refused fields' issues)
+            // or a failure (500, with the reference the server logged it under)
             return response.json().then(data => {
-                if (data.success) {
+                if (response.ok && data.success) {
                     window.location.reload();
                 } else {
-                    alert('Error: ' + (data.error || data.message || 'Unknown error'));
+                    const issues = (data.issues || []).map(issue => issue.text);
+                    alert('Error: ' + [data.error || data.message || 'Unknown error', ...issues].join('\n'));
                 }
             });
         } else {
