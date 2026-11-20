@@ -125,7 +125,7 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
     )
 
     with (
-        patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
+        patch("src.core.tools.media_buy_update.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
         # Mock adapter
@@ -282,7 +282,7 @@ def test_creative_assignments_with_weights(integration_db):
     )
 
     with (
-        patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
+        patch("src.core.tools.media_buy_update.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
         # Mock adapter
@@ -453,7 +453,7 @@ def test_creative_assignments_replaces_all(integration_db):
     )
 
     with (
-        patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
+        patch("src.core.tools.media_buy_update.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
         mock_adapter = MagicMock()
