@@ -712,7 +712,7 @@ def register_webhook(tenant_id, principal_id):
         # means the audit decorator would otherwise record the refusal as a
         # SUCCESSFUL admin action. Say the action failed explicitly.
         record_admin_action_failure(e)
-        flash(f"Error registering webhook: {str(e)}", "error")
+        flash(f"Error registering webhook: {e.message}", "error")
         return _redirect_to_webhooks(tenant_id, principal_id)
 
 

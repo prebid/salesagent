@@ -51,6 +51,7 @@ import json
 import logging
 from typing import Any
 
+from google.api_core.exceptions import NotFound
 from google.cloud import iam_admin_v1
 from google.cloud.iam_admin_v1 import types
 from google.oauth2 import service_account
@@ -59,7 +60,7 @@ from sqlalchemy import select
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig
-from src.core.operator_errors import OperatorRefusal
+from src.core.operator_errors import OperatorRefusal, safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -283,15 +284,13 @@ class GCPServiceAccountService:
             account = self.iam_client.get_service_account(request=request)
             logger.info(f"Found existing service account: {account.email}")
             return account
+        except NotFound:
+            logger.info(f"Service account {service_account_email} does not exist yet")
+            return None
         except Exception as e:
-            # 404 means it doesn't exist, which is fine
-            if "404" in str(e) or "NOT_FOUND" in str(e):
-                logger.info(f"Service account {service_account_email} does not exist yet")
-                return None
-            else:
-                # Some other error - log it but don't fail
-                logger.warning(f"Error checking if service account exists: {e}")
-                return None
+            # Some other error - log it but don't fail
+            logger.warning(f"Error checking if service account exists: {e}")
+            return None
 
     def _verify_service_account_exists(self, service_account_email: str) -> bool:
         """Verify that a service account exists in GCP.
@@ -373,8 +372,7 @@ class GCPServiceAccountService:
             result["service_account_count"] = account_count
             logger.info(f"Successfully listed {account_count} service accounts in project {self.gcp_project_id}")
         except Exception as e:
-            result["errors"].append(f"Failed to list service accounts: {e}")
-            logger.error(f"Failed to list service accounts: {e}", exc_info=True)
+            result["errors"].append(safe_error_message(e, "Failed to list service accounts"))
 
         # Note: We can't really test 'can_create' without actually creating one,
         # so we'll just check if we have the list permission as a basic sanity check

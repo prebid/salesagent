@@ -12,7 +12,7 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import require_tenant_access
 from src.core.billing_policy import BILLING_PARTY_VALUES
-from src.core.database.repositories.account import AccountRepository
+from src.core.database.repositories.account import AccountRepository, NaturalKeyConflict
 from src.core.database.repositories.uow import AccountUoW
 
 logger = logging.getLogger(__name__)
@@ -97,17 +97,16 @@ def create_account(tenant_id):
                 },
             )
             uow.accounts.create(new_account)
-    except ValueError as exc:
+    except NaturalKeyConflict as exc:
         # The repository refuses a create whose natural key is already occupied
         # (salesagent-0njj). Surfaced as a form error rather than a 500: this is
         # an operator mistake with an obvious remedy — edit the existing account.
         #
-        # `operator_message` rather than str(exc): NaturalKeyConflict is now an
-        # AdCPConflictError too, so str() returns CODE_TABLE's buyer-facing sentence
-        # ("Revision conflict - refetch and retry"), which tells an OPERATOR nothing
-        # about which account to edit. This is an operator surface, not the buyer
-        # wire, so the specific text is appropriate here and only here.
-        flash(getattr(exc, "operator_message", None) or str(exc), "error")
+        # `operator_message`, which the repository writes from the submitted key and the
+        # occupying account's id, names the account to edit; the error's own text is
+        # CODE_TABLE's buyer-facing CONFLICT sentence. Any other failure of the create is
+        # the admin error handler's.
+        flash(exc.operator_message, "error")
         return redirect(request.url)
 
     flash(f"Account '{name}' created successfully.", "success")
