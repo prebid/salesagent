@@ -17,7 +17,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import refusal_error, safe_error_message
+from src.admin.utils.operator_errors import safe_error_message
 from src.admin.utils.url_policy import redirect_if_url_blocked
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -28,7 +28,6 @@ from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.security.outbound_http import OutboundError
 from src.services.ai.config import DEFAULT_GOOGLE_MODEL, TenantAIConfig, uses_legacy_gemini_api_key
 from src.services.approximated_client import (
-    DomainNotOwned,
     OwnedDomain,
     get_dns_token,
     get_domain_status,
@@ -171,150 +170,140 @@ def update_admin_settings():
 @log_admin_action("update_general_settings")
 def update_general(tenant_id):
     """Update general tenant settings."""
-    try:
-        # Get the tenant name from the form field named "name"
-        tenant_name = request.form.get("name", "").strip()
+    # Get the tenant name from the form field named "name"
+    tenant_name = request.form.get("name", "").strip()
 
-        if not tenant_name:
-            flash("Tenant name is required", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
+    if not tenant_name:
+        flash("Tenant name is required", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
 
-            # Update tenant with form data
-            tenant.name = tenant_name
+        # Update tenant with form data
+        tenant.name = tenant_name
 
-            # Update virtual_host if provided
-            if "virtual_host" in request.form:
-                virtual_host = request.form.get("virtual_host", "").strip()
-                if virtual_host:
-                    # ONE definition of the shape, shared with the ORM validator. The rule
-                    # spelled out here refused the ':' in 'host:8443' -- a form that cannot
-                    # save what the column legitimately holds, so a tenant served on a
-                    # non-default port could not be renamed.
-                    from src.core.http_utils import InvalidVirtualHost, validate_virtual_host
+        # Update virtual_host if provided
+        if "virtual_host" in request.form:
+            virtual_host = request.form.get("virtual_host", "").strip()
+            if virtual_host:
+                # ONE definition of the shape, shared with the ORM validator. The rule
+                # spelled out here refused the ':' in 'host:8443' -- a form that cannot
+                # save what the column legitimately holds, so a tenant served on a
+                # non-default port could not be renamed. A bad value raises
+                # InvalidVirtualHost, which the admin error handler answers.
+                from src.core.http_utils import validate_virtual_host
 
-                    try:
-                        virtual_host = validate_virtual_host(virtual_host)
-                    except InvalidVirtualHost as refusal:
-                        flash(refusal.MESSAGE, "error")
+                virtual_host = validate_virtual_host(virtual_host)
+
+                # Check if virtual host is already in use by another tenant.
+                # The predicate depends on the winner's identity, so the race
+                # branch re-runs it rather than repeating a canned message.
+                def taken_by_another_tenant():
+                    existing_tenant = TenantLookupRepository(db_session).find_by_virtual_host(virtual_host)
+                    if existing_tenant and existing_tenant.tenant_id != tenant_id:
+                        flash("This virtual host is already in use by another tenant", "error")
                         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
+                    return None
 
-                    # Check if virtual host is already in use by another tenant.
-                    # The predicate depends on the winner's identity, so the race
-                    # branch re-runs it rather than repeating a canned message.
-                    def taken_by_another_tenant():
-                        existing_tenant = TenantLookupRepository(db_session).find_by_virtual_host(virtual_host)
-                        if existing_tenant and existing_tenant.tenant_id != tenant_id:
-                            flash("This virtual host is already in use by another tenant", "error")
-                            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
-                        return None
+                def claim_virtual_host():
+                    tenant.virtual_host = virtual_host
 
-                    def claim_virtual_host():
-                        tenant.virtual_host = virtual_host
+                # On conflict this returns before the trailing commit, so the
+                # other form fields dirtied above are never written — exactly
+                # what the pre-check branch has always done.
+                conflict = resolve_or_write(
+                    db_session,
+                    conflict=taken_by_another_tenant,
+                    write=claim_virtual_host,
+                    constraint="ux_tenants_virtual_host_name",
+                )
+                if conflict is not None:
+                    return conflict
+            else:
+                # An empty submission is refused rather than CLEARING the host, which
+                # would leave an existing tenant unreachable by any Host. A tenant can
+                # be MOVED, never un-addressed.
+                flash("Virtual host is required — it is the address this tenant is served at", "error")
+                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
-                    # On conflict this returns before the trailing commit, so the
-                    # other form fields dirtied above are never written — exactly
-                    # what the pre-check branch has always done.
-                    conflict = resolve_or_write(
-                        db_session,
-                        conflict=taken_by_another_tenant,
-                        write=claim_virtual_host,
-                        constraint="ux_tenants_virtual_host_name",
-                    )
-                    if conflict is not None:
-                        return conflict
-                else:
-                    # An empty submission is refused rather than CLEARING the host, which
-                    # would leave an existing tenant unreachable by any Host. A tenant can
-                    # be MOVED, never un-addressed.
-                    flash("Virtual host is required — it is the address this tenant is served at", "error")
-                    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
+        # Update currency limits
+        from decimal import Decimal, InvalidOperation
 
-            # Update currency limits
-            from decimal import Decimal, InvalidOperation
+        from src.core.database.models import CurrencyLimit
 
-            from src.core.database.models import CurrencyLimit
+        # Get all existing currency limits
+        stmt = select(CurrencyLimit).filter_by(tenant_id=tenant_id)
+        existing_limits = {limit.currency_code: limit for limit in db_session.scalars(stmt).all()}
 
-            # Get all existing currency limits
-            stmt = select(CurrencyLimit).filter_by(tenant_id=tenant_id)
-            existing_limits = {limit.currency_code: limit for limit in db_session.scalars(stmt).all()}
+        # Process currency_limits form data
+        # Format: currency_limits[USD][min_package_budget], currency_limits[USD][max_daily_package_spend]
+        processed_currencies = set()
 
-            # Process currency_limits form data
-            # Format: currency_limits[USD][min_package_budget], currency_limits[USD][max_daily_package_spend]
-            processed_currencies = set()
+        for key in request.form.keys():
+            if key.startswith("currency_limits["):
+                # Extract currency code from key like "currency_limits[USD][min_package_budget]"
+                parts = key.split("[")
+                if len(parts) >= 2:
+                    currency_code = parts[1].rstrip("]")
+                    processed_currencies.add(currency_code)
 
-            for key in request.form.keys():
-                if key.startswith("currency_limits["):
-                    # Extract currency code from key like "currency_limits[USD][min_package_budget]"
-                    parts = key.split("[")
-                    if len(parts) >= 2:
-                        currency_code = parts[1].rstrip("]")
-                        processed_currencies.add(currency_code)
-
-            # Update or create currency limits
-            for currency_code in processed_currencies:
-                # Check if marked for deletion
-                delete_key = f"currency_limits[{currency_code}][_delete]"
-                if delete_key in request.form and request.form.get(delete_key) == "true":
-                    # Delete this currency limit
-                    if currency_code in existing_limits:
-                        db_session.delete(existing_limits[currency_code])
-                    continue
-
-                # Validate currency code using Babel
-                is_valid = is_valid_currency_code(currency_code)
-                logger.info(f"Currency validation: {currency_code} -> valid={is_valid}")
-                if not is_valid:
-                    logger.warning(f"Rejecting invalid currency code: {currency_code}")
-                    flash(
-                        f"Invalid currency code: {currency_code}. Please use a valid ISO 4217 currency code.", "error"
-                    )
-                    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
-
-                # Get min and max values
-                min_key = f"currency_limits[{currency_code}][min_package_budget]"
-                max_key = f"currency_limits[{currency_code}][max_daily_package_spend]"
-
-                min_value_str = request.form.get(min_key, "").strip()
-                max_value_str = request.form.get(max_key, "").strip()
-
-                try:
-                    min_value = Decimal(min_value_str) if min_value_str else None
-                    max_value = Decimal(max_value_str) if max_value_str else None
-                except (ValueError, InvalidOperation):
-                    flash(f"Invalid currency limit values for {currency_code}", "error")
-                    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
-
-                # Update or create
+        # Update or create currency limits
+        for currency_code in processed_currencies:
+            # Check if marked for deletion
+            delete_key = f"currency_limits[{currency_code}][_delete]"
+            if delete_key in request.form and request.form.get(delete_key) == "true":
+                # Delete this currency limit
                 if currency_code in existing_limits:
-                    # Update existing
-                    limit = existing_limits[currency_code]
-                    limit.min_package_budget = min_value
-                    limit.max_daily_package_spend = max_value
-                    limit.updated_at = datetime.now(UTC)
-                else:
-                    # Create new
-                    limit = CurrencyLimit(
-                        tenant_id=tenant_id,
-                        currency_code=currency_code,
-                        min_package_budget=min_value,
-                        max_daily_package_spend=max_value,
-                    )
-                    db_session.add(limit)
+                    db_session.delete(existing_limits[currency_code])
+                continue
 
-            tenant.updated_at = datetime.now(UTC)
-            db_session.commit()
+            # Validate currency code using Babel
+            is_valid = is_valid_currency_code(currency_code)
+            logger.info(f"Currency validation: {currency_code} -> valid={is_valid}")
+            if not is_valid:
+                logger.warning(f"Rejecting invalid currency code: {currency_code}")
+                flash(f"Invalid currency code: {currency_code}. Please use a valid ISO 4217 currency code.", "error")
+                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
-            flash("General settings updated successfully", "success")
+            # Get min and max values
+            min_key = f"currency_limits[{currency_code}][min_package_budget]"
+            max_key = f"currency_limits[{currency_code}][max_daily_package_spend]"
 
-    except Exception as e:
-        logger.error(f"Error updating general settings: {e}", exc_info=True)
-        flash(f"Error updating settings: {safe_error_message(e)}", "error")
+            min_value_str = request.form.get(min_key, "").strip()
+            max_value_str = request.form.get(max_key, "").strip()
+
+            try:
+                min_value = Decimal(min_value_str) if min_value_str else None
+                max_value = Decimal(max_value_str) if max_value_str else None
+            except (ValueError, InvalidOperation):
+                flash(f"Invalid currency limit values for {currency_code}", "error")
+                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
+
+            # Update or create
+            if currency_code in existing_limits:
+                # Update existing
+                limit = existing_limits[currency_code]
+                limit.min_package_budget = min_value
+                limit.max_daily_package_spend = max_value
+                limit.updated_at = datetime.now(UTC)
+            else:
+                # Create new
+                limit = CurrencyLimit(
+                    tenant_id=tenant_id,
+                    currency_code=currency_code,
+                    min_package_budget=min_value,
+                    max_daily_package_spend=max_value,
+                )
+                db_session.add(limit)
+
+        tenant.updated_at = datetime.now(UTC)
+        db_session.commit()
+
+        flash("General settings updated successfully", "success")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
@@ -1259,8 +1248,8 @@ def _resolve_owned_domain(tenant_id: str, domain: str | None) -> OwnedDomain | N
 
     Returns ``None`` when the tenant row does not exist, so each route renders
     its own 404 rather than have one imposed here; raises ``DomainNotOwned``
-    when the tenant exists but does not own the domain, which the routes
-    already answer with 400.
+    when the tenant exists but does not own the domain, which the admin error
+    handler answers with 400.
     """
     with get_db_session() as db_session:
         tenant = TenantConfigRepository(db_session, tenant_id).get_tenant()
@@ -1273,48 +1262,41 @@ def _resolve_owned_domain(tenant_id: str, domain: str | None) -> OwnedDomain | N
 @require_tenant_access()
 def check_approximated_domain_status(tenant_id):
     """Check if a domain is registered with Approximated."""
+    data = request.get_json()
+    domain = data.get("domain")
+    if not domain:
+        return jsonify({"success": False, "error": "Domain required"}), 400
+
+    approximated_api_key = get_settings().integrations.approximated_api_key
+    if not approximated_api_key:
+        return jsonify({"success": False, "error": "Approximated not configured"}), 500
+
+    owned = _resolve_owned_domain(tenant_id, domain)
+    if owned is None:
+        return jsonify({"success": False, "error": "Tenant not found"}), 404
+
+    # Check domain registration status via the Approximated service. A
+    # not-registered domain is a meaningful result the service already
+    # translated from the vendor's 404 -- not an error this route interprets.
     try:
-        data = request.get_json()
-        domain = data.get("domain")
-        if not domain:
-            return jsonify({"success": False, "error": "Domain required"}), 400
+        domain_status = get_domain_status(owned, approximated_api_key)
+    except OutboundError as exc:
+        logger.error("Approximated API error: %s", exc)
+        return jsonify({"success": False, "error": "API error"}), 500
 
-        approximated_api_key = get_settings().integrations.approximated_api_key
-        if not approximated_api_key:
-            return jsonify({"success": False, "error": "Approximated not configured"}), 500
+    if not domain_status.registered:
+        return jsonify({"success": True, "registered": False})
 
-        owned = _resolve_owned_domain(tenant_id, domain)
-        if owned is None:
-            return jsonify({"success": False, "error": "Tenant not found"}), 404
-
-        # Check domain registration status via the Approximated service. A
-        # not-registered domain is a meaningful result the service already
-        # translated from the vendor's 404 -- not an error this route interprets.
-        try:
-            domain_status = get_domain_status(owned, approximated_api_key)
-        except OutboundError as exc:
-            logger.error("Approximated API error: %s", exc)
-            return jsonify({"success": False, "error": "API error"}), 500
-
-        if not domain_status.registered:
-            return jsonify({"success": True, "registered": False})
-
-        return jsonify(
-            {
-                "success": True,
-                "registered": True,
-                "status": domain_status.status,
-                "tls_enabled": domain_status.tls_enabled,
-                "ssl_active": domain_status.ssl_active,
-                "target_address": domain_status.target_address,
-            }
-        )
-
-    except DomainNotOwned as refusal:
-        # Ahead of the broad handler on purpose: caught below it, an ownership
-        # refusal would answer 500 with exception text instead of the 400 the
-        # three routes agree on.
-        return refusal_error(refusal, success=False)
+    return jsonify(
+        {
+            "success": True,
+            "registered": True,
+            "status": domain_status.status,
+            "tls_enabled": domain_status.tls_enabled,
+            "ssl_active": domain_status.ssl_active,
+            "target_address": domain_status.target_address,
+        }
+    )
 
 
 @settings_bp.route("/approximated-register-domain", methods=["POST"])
@@ -1322,48 +1304,44 @@ def check_approximated_domain_status(tenant_id):
 @log_admin_action("register_approximated_domain")
 def register_approximated_domain(tenant_id):
     """Register a domain with Approximated for TLS and routing."""
+    data = request.get_json()
+    domain = data.get("domain")
+    if not domain:
+        return jsonify({"success": False, "error": "Domain required"}), 400
+
+    approximated_api_key = get_settings().integrations.approximated_api_key
+    if not approximated_api_key:
+        return jsonify({"success": False, "error": "Approximated not configured"}), 500
+
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return jsonify({"success": False, "error": "Tenant not found"}), 404
+
+        # Ownership is proved here rather than via _resolve_owned_domain only
+        # because this handler's raw select() is a live row in the
+        # no-raw-select allowlist; folding it into the helper is a separate,
+        # owned change. The RULE is the same one the helper applies.
+        owned = tenant_owns_domain(tenant, domain)
+
+    # Get backend target address from the settings
+    backend_url = get_settings().integrations.approximated_backend_url
+
+    # Register the domain via the Approximated service. Already-registered
+    # is a meaningful result the service already translated from the
+    # vendor's 409 -- not an error this route interprets.
     try:
-        data = request.get_json()
-        domain = data.get("domain")
-        if not domain:
-            return jsonify({"success": False, "error": "Domain required"}), 400
+        result = register_domain(owned, backend_url, approximated_api_key)
+    except OutboundError as exc:
+        logger.error("Approximated API error registering %s: %s", domain, exc)
+        return jsonify({"success": False, "error": "Approximated API error"}), 502
 
-        approximated_api_key = get_settings().integrations.approximated_api_key
-        if not approximated_api_key:
-            return jsonify({"success": False, "error": "Approximated not configured"}), 500
+    if result.already_registered:
+        logger.info("✅ Domain already registered: %s", domain)
+        return jsonify({"success": True, "message": f"Domain {domain} already registered"})
 
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                return jsonify({"success": False, "error": "Tenant not found"}), 404
-
-            # Ownership is proved here rather than via _resolve_owned_domain only
-            # because this handler's raw select() is a live row in the
-            # no-raw-select allowlist; folding it into the helper is a separate,
-            # owned change. The RULE is the same one the helper applies.
-            owned = tenant_owns_domain(tenant, domain)
-
-        # Get backend target address from the settings
-        backend_url = get_settings().integrations.approximated_backend_url
-
-        # Register the domain via the Approximated service. Already-registered
-        # is a meaningful result the service already translated from the
-        # vendor's 409 -- not an error this route interprets.
-        try:
-            result = register_domain(owned, backend_url, approximated_api_key)
-        except OutboundError as exc:
-            logger.error("Approximated API error registering %s: %s", domain, exc)
-            return jsonify({"success": False, "error": "Approximated API error"}), 502
-
-        if result.already_registered:
-            logger.info("✅ Domain already registered: %s", domain)
-            return jsonify({"success": True, "message": f"Domain {domain} already registered"})
-
-        logger.info("✅ Registered domain with Approximated: %s", domain)
-        return jsonify({"success": True, "message": f"Domain {domain} registered successfully"})
-
-    except DomainNotOwned as refusal:
-        return refusal_error(refusal, success=False)
+    logger.info("✅ Registered domain with Approximated: %s", domain)
+    return jsonify({"success": True, "message": f"Domain {domain} registered successfully"})
 
 
 @settings_bp.route("/approximated-unregister-domain", methods=["POST"])
@@ -1371,38 +1349,34 @@ def register_approximated_domain(tenant_id):
 @log_admin_action("unregister_approximated_domain")
 def unregister_approximated_domain(tenant_id):
     """Unregister a domain from Approximated."""
+    data = request.get_json()
+    domain = data.get("domain")
+    if not domain:
+        return jsonify({"success": False, "error": "Domain required"}), 400
+
+    approximated_api_key = get_settings().integrations.approximated_api_key
+    if not approximated_api_key:
+        return jsonify({"success": False, "error": "Approximated not configured"}), 500
+
+    owned = _resolve_owned_domain(tenant_id, domain)
+    if owned is None:
+        return jsonify({"success": False, "error": "Tenant not found"}), 404
+
+    # Unregister the domain via the Approximated service.
+    # Already-unregistered is a meaningful result the service already
+    # translated from the vendor's 404 -- not an error this route interprets.
     try:
-        data = request.get_json()
-        domain = data.get("domain")
-        if not domain:
-            return jsonify({"success": False, "error": "Domain required"}), 400
+        result = unregister_domain(owned, approximated_api_key)
+    except OutboundError as exc:
+        logger.error("Approximated API error unregistering %s: %s", domain, exc)
+        return jsonify({"success": False, "error": "Approximated API error"}), 502
 
-        approximated_api_key = get_settings().integrations.approximated_api_key
-        if not approximated_api_key:
-            return jsonify({"success": False, "error": "Approximated not configured"}), 500
+    if result.already_unregistered:
+        logger.info("✅ Domain already unregistered: %s", domain)
+        return jsonify({"success": True, "message": f"Domain {domain} was not registered"})
 
-        owned = _resolve_owned_domain(tenant_id, domain)
-        if owned is None:
-            return jsonify({"success": False, "error": "Tenant not found"}), 404
-
-        # Unregister the domain via the Approximated service.
-        # Already-unregistered is a meaningful result the service already
-        # translated from the vendor's 404 -- not an error this route interprets.
-        try:
-            result = unregister_domain(owned, approximated_api_key)
-        except OutboundError as exc:
-            logger.error("Approximated API error unregistering %s: %s", domain, exc)
-            return jsonify({"success": False, "error": "Approximated API error"}), 502
-
-        if result.already_unregistered:
-            logger.info("✅ Domain already unregistered: %s", domain)
-            return jsonify({"success": True, "message": f"Domain {domain} was not registered"})
-
-        logger.info("✅ Unregistered domain from Approximated: %s", domain)
-        return jsonify({"success": True, "message": f"Domain {domain} unregistered successfully"})
-
-    except DomainNotOwned as refusal:
-        return refusal_error(refusal, success=False)
+    logger.info("✅ Unregistered domain from Approximated: %s", domain)
+    return jsonify({"success": True, "message": f"Domain {domain} unregistered successfully"})
 
 
 @settings_bp.route("/approximated-token", methods=["POST"])

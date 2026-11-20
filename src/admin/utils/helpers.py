@@ -368,28 +368,20 @@ def require_tenant_access(api_mode=False):
             if is_super_admin(email):
                 return f(tenant_id, *args, **kwargs)
 
-            # Check if user has access to this specific tenant
-            try:
-                with get_db_session() as db_session:
-                    stmt = select(User).filter_by(email=email.lower(), tenant_id=tenant_id, is_active=True)
-                    user = db_session.scalars(stmt).first()
+            # Check if user has access to this specific tenant. The route runs after the
+            # lookup's session has closed, as it does for a super admin above, so what the
+            # route raises reaches the admin error handler: an OperatorRefusal is answered
+            # with its MESSAGE, anything else (the lookup's own failures too) with a reference.
+            with get_db_session() as db_session:
+                stmt = select(User).filter_by(email=email.lower(), tenant_id=tenant_id, is_active=True)
+                user = db_session.scalars(stmt).first()
 
-                    if not user:
-                        if api_mode:
-                            return jsonify({"error": "Access denied"}), 403
-                        abort(403)
-
-                    return f(tenant_id, *args, **kwargs)
-
-            except Exception as e:
-                # Don't catch abort exceptions (they should propagate)
-                if hasattr(e, "code") and e.code in [403, 404]:
-                    raise
-
-                logger.error(f"Error checking tenant access: {e}")
+            if not user:
                 if api_mode:
-                    return jsonify({"error": "Internal server error"}), 500
-                abort(500)
+                    return jsonify({"error": "Access denied"}), 403
+                abort(403)
+
+            return f(tenant_id, *args, **kwargs)
 
         return decorated_function
 

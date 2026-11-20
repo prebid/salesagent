@@ -87,6 +87,9 @@ class InvalidVirtualHost(OperatorRefusal, ValueError):
         "e.g. 'seller.example.com' or 'seller.example.com:8443'"
     )
 
+    def response_fields(self) -> dict[str, object]:
+        return {"field": "virtual_host"}
+
 
 def validate_virtual_host(value: str | None) -> str:
     """The host a tenant is served at, folded to lowercase — or an ``InvalidVirtualHost`` saying why not.

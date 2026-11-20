@@ -47,6 +47,10 @@ class OperatorRefusal(Exception):
         if not isinstance(cls.__dict__.get("MESSAGE"), str):
             raise TypeError(f"{cls.__name__} must define MESSAGE as a str")
 
+    def response_fields(self) -> dict[str, object]:
+        """Keys a JSON answer carries beside ``error``, for a refusal whose caller reads one."""
+        return {}
+
 
 def safe_error_message(e: BaseException, context: str | None = None) -> str:
     """Log ``e`` with its traceback and return operator-facing text that carries none of it.

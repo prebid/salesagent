@@ -21,6 +21,9 @@ from tests.helpers.admin_session import (
     drop_stated_session_cookie,
 )
 
+#: Where the in-process Flask client sends its requests.
+_IN_PROCESS_ORIGIN = "https://localhost"
+
 
 class _CaseInsensitiveHeaders(dict):
     """Header mapping that looks up regardless of case, on either transport.
@@ -115,12 +118,17 @@ class AdminClient:
 
             self._http = requests.Session()
 
-    def authenticate(self, tenant_id: str) -> None:
-        """State an authenticated super-admin session for *tenant_id*."""
+    @property
+    def origin(self) -> str:
+        """The scheme and host requests are sent to, as a browser's ``Referer`` names a page."""
+        return self._base_url or _IN_PROCESS_ORIGIN
+
+    def authenticate(self, tenant_id: str, *, tenant_user: str | None = None) -> None:
+        """State an authenticated super-admin session for *tenant_id*, or *tenant_user*'s session."""
         if self._flask_client is not None:
-            admin_auth_session(self._flask_client, tenant_id)
+            admin_auth_session(self._flask_client, tenant_id, tenant_user=tenant_user)
         else:
-            authenticate_http_session(self._http, self._base_url or "", tenant_id)
+            authenticate_http_session(self._http, self._base_url or "", tenant_id, tenant_user=tenant_user)
 
     def clear_auth(self) -> None:
         """Drop the admin session, so the next request arrives anonymous."""
@@ -146,7 +154,7 @@ class AdminClient:
         if self._flask_client is not None:
             # Over https, because a production app marks its session cookie Secure.
             response = self._flask_client.open(
-                path, method=method.upper(), data=data, json=json, headers=headers, base_url="https://localhost"
+                path, method=method.upper(), data=data, json=json, headers=headers, base_url=_IN_PROCESS_ORIGIN
             )
             return AdminResponse.from_flask(response)
         response = self._http.request(
@@ -154,12 +162,12 @@ class AdminClient:
         )
         return AdminResponse.from_requests(response)
 
-    def submit(self, path: str, data: dict[str, Any]) -> AdminResponse:
+    def submit(self, path: str, data: dict[str, Any], *, headers: dict[str, str] | None = None) -> AdminResponse:
         """POST the form *data* to *path* and GET the page its redirect names, flash included.
 
         A form that answers without a redirect (it re-rendered with an error) is returned as is.
         """
-        response = self.request("post", path, data=data)
+        response = self.request("post", path, data=data, headers=headers)
         location = response.headers.get("location")
         if not location:
             return response

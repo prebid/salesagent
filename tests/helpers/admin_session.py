@@ -31,9 +31,26 @@ from typing import Any
 TEST_FLASK_SECRET_KEY = "adcp-test-stack-session-signing-key"
 
 
-def _session_payload(tenant_id: str, *, auth_method: str | None = None) -> dict[str, Any]:
-    """The session an authenticated super admin carries. ONE definition, both transports."""
-    payload: dict[str, Any] = {
+def _session_payload(
+    tenant_id: str, *, auth_method: str | None = None, tenant_user: str | None = None
+) -> dict[str, Any]:
+    """The session an authenticated super admin carries. ONE definition, both transports.
+
+    *tenant_user* names a user of the tenant instead, with the session its own login
+    writes (``oidc.callback``): no super-admin key, so ``require_tenant_access`` checks the
+    tenant's ``users`` row for that email, as it does for every operator who is not one.
+    """
+    if tenant_user is not None:
+        payload: dict[str, Any] = {
+            "authenticated": True,
+            "user": tenant_user,
+            "user_name": tenant_user,
+            "tenant_id": tenant_id,
+        }
+        if auth_method is not None:
+            payload["auth_method"] = auth_method
+        return payload
+    payload = {
         "authenticated": True,
         "user": {"email": "test@example.com", "is_super_admin": True},
         "email": "test@example.com",
@@ -53,7 +70,9 @@ def _session_payload(tenant_id: str, *, auth_method: str | None = None) -> dict[
     return payload
 
 
-def admin_session_cookie(tenant_id: str, *, auth_method: str | None = None, secret_key: str | None = None) -> str:
+def admin_session_cookie(
+    tenant_id: str, *, auth_method: str | None = None, secret_key: str | None = None, tenant_user: str | None = None
+) -> str:
     """A signed Flask session cookie for an authenticated super admin.
 
     Signed with Flask's own ``SecureCookieSessionInterface``, so the format follows Flask
@@ -70,10 +89,12 @@ def admin_session_cookie(tenant_id: str, *, auth_method: str | None = None, secr
     app.secret_key = secret_key or os.environ.get("FLASK_SECRET_KEY") or TEST_FLASK_SECRET_KEY
     serializer = SecureCookieSessionInterface().get_signing_serializer(app)
     assert serializer is not None, "Flask refused to build a session serializer without a secret key"
-    return serializer.dumps(_session_payload(tenant_id, auth_method=auth_method))
+    return serializer.dumps(_session_payload(tenant_id, auth_method=auth_method, tenant_user=tenant_user))
 
 
-def authenticate_http_session(session: Any, base_url: str, tenant_id: str, *, auth_method: str | None = None) -> Any:
+def authenticate_http_session(
+    session: Any, base_url: str, tenant_id: str, *, auth_method: str | None = None, tenant_user: str | None = None
+) -> Any:
     """Give a ``requests.Session`` an authenticated admin cookie, for any host.
 
     The HTTP-side twin of :func:`admin_auth_session`. Returns the session, so a caller can
@@ -90,7 +111,8 @@ def authenticate_http_session(session: Any, base_url: str, tenant_id: str, *, au
     *base_url* is still taken, because a caller naming the session's target reads better
     than one that does not, and because a future scheme- or host-specific rule belongs here.
     """
-    session.cookies.set("session", admin_session_cookie(tenant_id, auth_method=auth_method), path="/")
+    cookie = admin_session_cookie(tenant_id, auth_method=auth_method, tenant_user=tenant_user)
+    session.cookies.set("session", cookie, path="/")
     return session
 
 
@@ -141,11 +163,17 @@ def admin_test_app() -> Any:
     return app
 
 
-def admin_auth_session(client: Any, tenant_id: str, *, auth_method: str | None = None) -> None:
+def admin_auth_session(
+    client: Any, tenant_id: str, *, auth_method: str | None = None, tenant_user: str | None = None
+) -> None:
     """Populate a super-admin test-mode session on a Flask test client.
 
     Pass ``auth_method='oidc'`` to exercise routes that gate on SSO login
-    (e.g. ``disable-setup-mode``).
+    (e.g. ``disable-setup-mode``). Pass *tenant_user* for a user of the tenant instead; that
+    session REPLACES whatever the client held, as the cookie does over HTTP, so no
+    super-admin key from an earlier call survives into it.
     """
     with client.session_transaction() as sess:
-        sess.update(_session_payload(tenant_id, auth_method=auth_method))
+        if tenant_user is not None:
+            sess.clear()
+        sess.update(_session_payload(tenant_id, auth_method=auth_method, tenant_user=tenant_user))

@@ -133,6 +133,22 @@ class AdminAccountEnv:
         """Set up authenticated admin session."""
         self.client.authenticate(tenant_id or self._tenant_id)
 
+    def authenticate_as_tenant_user(self, email: str) -> None:
+        """Make *email* an active admin user of this tenant, unless it is one, and state its session.
+
+        Not a super admin, so ``require_tenant_access`` reaches the route through the
+        tenant's ``users`` row, the path every tenant's own operators take.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import User
+        from tests.factories import UserFactory, factories_bound_to
+
+        with get_db_session() as session, factories_bound_to(session):
+            if session.scalars(select(User).filter_by(tenant_id=self._tenant_id, email=email)).first() is None:
+                UserFactory(tenant=session.get(Tenant, self._tenant_id), email=email, role="admin")
+        self.client.authenticate(self._tenant_id, tenant_user=email)
+
     def clear_auth(self) -> None:
         """Clear the authenticated session."""
         self.client.clear_auth()
@@ -175,6 +191,51 @@ class AdminAccountEnv:
     def post_status_change(self, account_id: str, new_status: str) -> AdminResponse:
         """POST a status change via JSON API."""
         return self.client.request("post", self._url(f"{account_id}/status"), json={"status": new_status})
+
+    # ── Super-admin forms and APIs that answer with an operator refusal ──
+
+    def submit_create_tenant(self, form_data: dict[str, str], *, from_create_page: bool) -> AdminResponse:
+        """POST the create-tenant form as a browser does, and follow its redirect.
+
+        *from_create_page* sends the ``Referer`` a browser sends from that page; without it the
+        request names no page to go back to.
+        """
+        headers = {"Accept": "text/html"}
+        if from_create_page:
+            headers["Referer"] = f"{self.client.origin}/create_tenant"
+        return self.client.submit("/create_tenant", form_data, headers=headers)
+
+    def post_oidc_config(self, body: dict[str, str]) -> AdminResponse:
+        """POST this tenant's OIDC configuration, as the users page does with fetch()."""
+        return self.client.request("post", f"/auth/oidc/tenant/{self._tenant_id}/config", json=body)
+
+    def post_management_api_tenant(self, body: dict[str, str]) -> AdminResponse:
+        """POST *body* to the tenant management API's create route, with a key it accepts."""
+        return self.client.request(
+            "post",
+            "/api/v1/tenant-management/tenants",
+            json=body,
+            headers={"X-Tenant-Management-API-Key": self._store_management_api_key()},
+        )
+
+    def _store_management_api_key(self) -> str:
+        """Store the digest of a fixed key, the way production stores one, and return the key.
+
+        Fixed rather than minted, so two scenarios storing it at once store the same digest.
+        """
+        from src.core.credentials import hash_token, token_prefix
+        from src.core.database.repositories.tenant_management_config import TenantManagementConfigRepository
+
+        key = "sk-bdd-tenant-management"
+        with get_db_session() as session:
+            TenantManagementConfigRepository(session).store_api_key(
+                "tenant_management_api_key",
+                digest=hash_token(key),
+                prefix=token_prefix(key),
+                description="BDD admin scenarios",
+            )
+            session.commit()
+        return key
 
     # ── Data setup ────────────────────────────────────────────────────────
 

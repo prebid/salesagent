@@ -41,6 +41,9 @@ class SyncAlreadyRunning(OperatorRefusal):
         super().__init__(f"Sync already running for tenant {tenant_id}: {sync_id} (started {started_at})")
         self.sync_id = sync_id
 
+    def response_fields(self) -> dict[str, object]:
+        return {"sync_id": self.sync_id}
+
 
 def start_inventory_sync_background(
     tenant_id: str,
@@ -96,10 +99,7 @@ def start_inventory_sync_background(
 
             if is_stale:
                 # Mark stale sync as failed and allow new sync to start
-                existing_sync.status = "failed"
-                # SQLAlchemy DateTime column accepts datetime objects
-                existing_sync.completed_at = datetime.now(UTC)
-                existing_sync.error_message = (
+                existing_sync.mark_failed(
                     "Sync thread died (stale after 1+ hour with no progress) - marked as failed to allow fresh sync"
                 )
                 db.commit()

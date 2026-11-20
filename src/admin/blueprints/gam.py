@@ -13,7 +13,7 @@ from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
 from src.adapters.gam_reporting_service import GAMReportingService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import json_error, refusal_error, safe_error_message
+from src.admin.utils.operator_errors import json_error, safe_error_message
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -714,10 +714,7 @@ def reset_stuck_sync(tenant_id):
         if not running_sync:
             return jsonify({"success": False, "message": "No running sync found to reset"}), 404
 
-        # Mark as failed
-        running_sync.status = "failed"
-        running_sync.completed_at = datetime.now(UTC)
-        running_sync.error_message = "Manually reset by admin (sync appeared to be stuck)"
+        running_sync.mark_failed("Manually reset by admin (sync appeared to be stuck)")
 
         db_session.commit()
 
@@ -761,28 +758,20 @@ def create_service_account(tenant_id):
             500,
         )
 
-    from src.services.gcp_service_account_service import (
-        GCPServiceAccountService,
-        ServiceAccountAlreadyExists,
-        TenantAdapterConfigMissing,
-    )
+    from src.services.gcp_service_account_service import GCPServiceAccountService
 
     service = GCPServiceAccountService(gcp_project_id=gcp_project_id)
 
     # Create service account for tenant
-    try:
-        service_account_email, _ = service.create_service_account_for_tenant(tenant_id=tenant_id)
+    service_account_email, _ = service.create_service_account_for_tenant(tenant_id=tenant_id)
 
-        return jsonify(
-            {
-                "success": True,
-                "service_account_email": service_account_email,
-                "message": "Service account created successfully. Please add this email as a user in your Google Ad Manager with Trafficker role.",
-            }
-        )
-
-    except (TenantAdapterConfigMissing, ServiceAccountAlreadyExists) as refusal:
-        return refusal_error(refusal, success=False)
+    return jsonify(
+        {
+            "success": True,
+            "service_account_email": service_account_email,
+            "message": "Service account created successfully. Please add this email as a user in your Google Ad Manager with Trafficker role.",
+        }
+    )
 
 
 @gam_bp.route("/get-service-account-email", methods=["GET"])

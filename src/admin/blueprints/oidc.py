@@ -11,13 +11,12 @@ from sqlalchemy import select
 
 from src.admin.auth_utils import extract_user_info
 from src.admin.utils import require_tenant_access
-from src.admin.utils.operator_errors import refusal_error, safe_error_message
+from src.admin.utils.operator_errors import safe_error_message
 from src.admin.utils.url_policy import json_error_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, User
 from src.services.auth_config_service import (
-    DiscoveryUrlRequired,
     disable_oidc,
     enable_oidc,
     get_auth_config_summary,
@@ -111,29 +110,25 @@ def save_config(tenant_id: str):
     if not client_secret and not existing_config.oidc_client_secret_encrypted:
         return jsonify({"error": "client_secret is required for new configuration"}), 400
 
-    try:
-        config = save_oidc_config(
-            tenant_id=tenant_id,
-            provider=provider,
-            client_id=client_id,
-            client_secret=client_secret,
-            discovery_url=discovery_url,
-            scopes=scopes,
-            logout_url=logout_url,
-        )
+    config = save_oidc_config(
+        tenant_id=tenant_id,
+        provider=provider,
+        client_id=client_id,
+        client_secret=client_secret,
+        discovery_url=discovery_url,
+        scopes=scopes,
+        logout_url=logout_url,
+    )
 
-        # Get updated summary
-        summary = get_auth_config_summary(tenant_id)
-        return jsonify(
-            {
-                "success": True,
-                "message": "OIDC configuration saved. Please test the connection before enabling.",
-                "config": summary,
-            }
-        )
-
-    except DiscoveryUrlRequired as refusal:
-        return refusal_error(refusal)
+    # Get updated summary
+    summary = get_auth_config_summary(tenant_id)
+    return jsonify(
+        {
+            "success": True,
+            "message": "OIDC configuration saved. Please test the connection before enabling.",
+            "config": summary,
+        }
+    )
 
 
 @oidc_bp.route("/tenant/<tenant_id>/enable", methods=["POST"])

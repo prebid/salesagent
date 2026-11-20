@@ -355,15 +355,6 @@ def create_app(config=None, settings=None):
     # Register adapter-specific routes
     register_adapter_routes(app)
 
-    # Register GAM inventory endpoints
-    try:
-        from src.services.gam_inventory_service import create_inventory_endpoints
-
-        create_inventory_endpoints(app)
-        logger.info("Registered GAM inventory endpoints")
-    except ImportError:
-        logger.warning("gam_inventory_service not found")
-
     # One answer for any exception a route lets escape: fixed text plus a log reference.
     register_error_handler(app)
 

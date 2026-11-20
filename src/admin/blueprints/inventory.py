@@ -8,12 +8,11 @@ from sqlalchemy import String, func, or_, select
 
 from src.admin.utils import execute_limited, get_tenant_config_from_db, require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import refusal_error
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Tenant
 from src.core.database.repositories.principal import PrincipalRepository
-from src.services.background_sync_service import SyncAlreadyRunning, start_inventory_sync_background
+from src.services.background_sync_service import start_inventory_sync_background
 
 logger = logging.getLogger(__name__)
 
@@ -648,72 +647,69 @@ def sync_inventory(tenant_id):
         400 Bad Request if GAM not configured or sync already running
         404 Not Found if tenant doesn't exist
     """
-    try:
-        # Validate tenant exists
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                return jsonify({"error": "Tenant not found"}), 404
+    # Validate tenant exists
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return jsonify({"error": "Tenant not found"}), 404
 
-            # Check adapter type - inventory sync is only for GAM
-            adapter_type = tenant.ad_server or "mock"
-            if adapter_type != "google_ad_manager":
-                return (
-                    jsonify(
-                        {
-                            "error": f"Inventory sync is only available for Google Ad Manager. Your tenant is using the '{adapter_type}' adapter which does not require inventory sync."
-                        }
-                    ),
-                    400,
-                )
+        # Check adapter type - inventory sync is only for GAM
+        adapter_type = tenant.ad_server or "mock"
+        if adapter_type != "google_ad_manager":
+            return (
+                jsonify(
+                    {
+                        "error": f"Inventory sync is only available for Google Ad Manager. Your tenant is using the '{adapter_type}' adapter which does not require inventory sync."
+                    }
+                ),
+                400,
+            )
 
-            # Check if GAM is configured
-            from src.core.database.models import AdapterConfig
+        # Check if GAM is configured
+        from src.core.database.models import AdapterConfig
 
-            adapter_config = db_session.scalars(
-                select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
-            ).first()
+        adapter_config = db_session.scalars(
+            select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
+        ).first()
 
-            if not adapter_config or not adapter_config.gam_network_code:
-                return (
-                    jsonify(
-                        {
-                            "error": "Please connect your GAM account before trying to sync inventory. Go to Ad Server settings to configure GAM."
-                        }
-                    ),
-                    400,
-                )
+        if not adapter_config or not adapter_config.gam_network_code:
+            return (
+                jsonify(
+                    {
+                        "error": "Please connect your GAM account before trying to sync inventory. Go to Ad Server settings to configure GAM."
+                    }
+                ),
+                400,
+            )
 
-        # Parse request body
-        data = request.get_json() or {}
-        sync_mode = data.get("mode", "incremental")  # Default to incremental (safer)
-        sync_types = data.get("types", None)
-        custom_targeting_limit = data.get("custom_targeting_limit")
-        audience_segment_limit = data.get("audience_segment_limit")
+    # Parse request body
+    data = request.get_json() or {}
+    sync_mode = data.get("mode", "incremental")  # Default to incremental (safer)
+    sync_types = data.get("types", None)
+    custom_targeting_limit = data.get("custom_targeting_limit")
+    audience_segment_limit = data.get("audience_segment_limit")
 
-        # Start background sync
-        sync_id = start_inventory_sync_background(
-            tenant_id=tenant_id,
-            sync_mode=sync_mode,
-            sync_types=sync_types,
-            custom_targeting_limit=custom_targeting_limit,
-            audience_segment_limit=audience_segment_limit,
-        )
+    # Start background sync. A sync already running raises SyncAlreadyRunning, which the
+    # admin error handler answers with its MESSAGE and sync_id.
+    sync_id = start_inventory_sync_background(
+        tenant_id=tenant_id,
+        sync_mode=sync_mode,
+        sync_types=sync_types,
+        custom_targeting_limit=custom_targeting_limit,
+        audience_segment_limit=audience_segment_limit,
+    )
 
-        # Return 202 Accepted with sync_id
-        return (
-            jsonify(
-                {
-                    "sync_id": sync_id,
-                    "status": "running",
-                    "message": "Sync started in background. Check status at /api/sync/status/{sync_id}",
-                }
-            ),
-            202,
-        )
-
-    except SyncAlreadyRunning as running:
-        return refusal_error(running, sync_id=running.sync_id)
+    # Return 202 Accepted with sync_id
+    return (
+        jsonify(
+            {
+                "sync_id": sync_id,
+                "status": "running",
+                "message": "Sync started in background. Check status at /api/sync/status/{sync_id}",
+            }
+        ),
+        202,
+    )
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/inventory-stats", methods=["GET"])

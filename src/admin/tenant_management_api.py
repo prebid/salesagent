@@ -8,7 +8,6 @@ from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import delete, func, select
 
 from src.admin.auth_helpers import require_api_key_auth
-from src.admin.utils.operator_errors import refusal_error
 from src.admin.utils.url_policy import json_error_if_url_blocked
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -23,7 +22,7 @@ from src.core.database.models import (
 )
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.http_utils import InvalidVirtualHost, validate_virtual_host
+from src.core.http_utils import validate_virtual_host
 
 logger = logging.getLogger(__name__)
 
@@ -129,14 +128,11 @@ def create_tenant():
             if field not in data:
                 return jsonify({"error": f"Missing required field: {field}"}), 400
 
-        # Presence is not shape. The key being there admits "" and "https://evil.com",
-        # which the column refuses at assignment -- and that ValueError reached the
-        # generic handler below as 500 "Failed to create tenant", telling the caller the
-        # SELLER broke about a value the caller chose, with no field named.
-        try:
-            data["virtual_host"] = validate_virtual_host(data["virtual_host"])
-        except InvalidVirtualHost as refusal:
-            return refusal_error(refusal, field="virtual_host")
+        # Presence is not shape. The key being there admits "" and "https://evil.com";
+        # validate_virtual_host raises InvalidVirtualHost for those, which the admin error
+        # handler answers 400 with its MESSAGE and the field it names. The folded host it
+        # returns is the one the lookups below compare.
+        data["virtual_host"] = validate_virtual_host(data["virtual_host"])
 
         if blocked := _webhook_url_refusal(data):
             return blocked

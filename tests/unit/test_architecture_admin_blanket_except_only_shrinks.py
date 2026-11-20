@@ -19,7 +19,7 @@ from tests.unit._architecture_helpers import REPO_ROOT
 
 _BLUEPRINTS = REPO_ROOT / "src" / "admin" / "blueprints"
 _BLANKET = {"Exception", "BaseException"}
-_BASELINE = 83
+_BASELINE = 82
 
 
 def _is_blanket(handler: ast.ExceptHandler) -> bool:

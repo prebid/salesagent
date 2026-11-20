@@ -1,8 +1,9 @@
 """Admin routes answer failures with fixed text, never the exception's own text.
 
 Each test drives the real route through a Flask test client with a super-admin
-session, so the decorators and the route's own ``except`` clauses are the ones
-production runs.
+session, so the decorators and the app's error handler are the ones production runs.
+An expected refusal is answered by that handler with its class's ``MESSAGE`` and any
+key the admin JavaScript reads beside it.
 """
 
 import re
@@ -67,7 +68,7 @@ def test_inventory_sync_already_running_names_the_running_sync(client):
         response = client.post("/api/tenant/default/inventory/sync", json={})
 
     assert response.status_code == 400
-    assert response.get_json() == {"error": SyncAlreadyRunning.MESSAGE, "sync_id": "sync_default_1"}
+    assert response.get_json() == {"success": False, "error": SyncAlreadyRunning.MESSAGE, "sync_id": "sync_default_1"}
 
 
 @pytest.mark.parametrize(
@@ -96,7 +97,7 @@ def test_custom_oidc_provider_without_discovery_url_gets_the_refusal(client):
         )
 
     assert response.status_code == 400
-    assert response.get_json() == {"error": DiscoveryUrlRequired.MESSAGE}
+    assert response.get_json() == {"success": False, "error": DiscoveryUrlRequired.MESSAGE}
 
 
 def test_other_oidc_save_failures_get_the_generic_answer(client):
