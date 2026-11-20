@@ -849,12 +849,13 @@ def then_gam_created_one_third_party_creative(
 
 @then(
     parsers.parse(
-        'Google Ad Manager created one image redirect creative for advertiser "{advertiser_id}" showing '
-        '"{image_url}" and clicking through to "{destination_url}"'
+        'Google Ad Manager created one image redirect creative for advertiser "{advertiser_id}" over exactly '
+        "the creative's paired redirect"
     )
 )
-def then_gam_created_one_image_redirect(ctx: dict, advertiser_id: str, image_url: str, destination_url: str) -> None:
-    """GAM holds exactly one creative from this scenario: an image redirect over exactly this pair of URLs."""
+def then_gam_created_one_image_redirect(ctx: dict, advertiser_id: str) -> None:
+    """GAM holds exactly one creative from this scenario: an image redirect over the pair the Given stored, both URLs."""
+    image_url, destination_url = ctx["paired_redirect"]
     created = [
         (c["xsi_type"], str(c["advertiserId"]), c.get("imageUrl"), c.get("destinationUrl"))
         for c in _creatives_created(ctx)

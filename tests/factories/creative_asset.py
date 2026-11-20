@@ -221,6 +221,12 @@ def asset_spec(role: str, asset_type: str, *, multiple: bool = False, **fields: 
 DISPLAY_TAG_SLOT = "serving_tag"
 
 
+#: The click-through a creative carries when its scenario states none. A real ad server checks
+#: it: Google Ad Manager refuses ``example.com`` (``InvalidUrlError.INVALID_FORMAT`` on
+#: ``destinationUrl``), so it names a domain the network accepts.
+CLICKTHROUGH_URL = "https://prebid.org/landing"
+
+
 def display_tag_spec(delivery_type: str, *, role: str = DISPLAY_TAG_SLOT, **fields: object) -> AssetSpec:
     """A ``display_tag`` asset of *delivery_type* (core/assets/display-tag-asset.json).
 
@@ -375,7 +381,7 @@ def format_manifest(fmt: Any, *, media_url: str | None = None, prompt: str | Non
     media = {} if media_url is None else {"url": media_url}
     builders: dict[str, Callable[[str], AssetSpec]] = {
         "image": lambda asset_id: image_spec(asset_id, **media),
-        "url": lambda asset_id: url_spec(asset_id, url="https://example.com/landing"),
+        "url": lambda asset_id: url_spec(asset_id, url=CLICKTHROUGH_URL),
         "text": lambda asset_id: text_spec(asset_id, content=prompt or "Test copy"),
         "video": lambda asset_id: video_spec(asset_id, **media),
         "audio": lambda asset_id: asset_spec(asset_id, "audio", url=media_url or "https://example.com/spot.mp3"),

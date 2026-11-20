@@ -148,6 +148,7 @@ def given_display_tag_creative(
         asset = display_tag_spec("tag_url", url=tag_url)
     elif ad_request_url is not None:
         asset = display_tag_spec("paired_redirect", ad_request_url=ad_request_url, clickthrough_url=clickthrough_url)
+        ctx["paired_redirect"] = (ad_request_url, clickthrough_url)
     elif sensitive_type is not None:
         asset = display_tag_spec("inline_markup", markup=INLINE_MARKUP, markup_type=sensitive_type)
     else:

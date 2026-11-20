@@ -64,7 +64,7 @@ Feature: A Google Ad Manager seller books the buyer's media buy in Google Ad Man
     Given a valid create_media_buy request
     And the account exists and is active
     And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
-    And the package references the buyer's 300x250 image creative "cr-placed" showing "https://example.com/placed.png", <status> and already held by Google Ad Manager as creative "7000001"
+    And the package references the buyer's 300x250 image creative "cr-placed" showing "https://prebid.org/placed.png", <status> and already held by Google Ad Manager as creative "7000001"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And Google Ad Manager created no creative

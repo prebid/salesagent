@@ -47,6 +47,7 @@ from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import CreativeFactory
 from tests.factories.core import set_adapter_type
 from tests.factories.creative_asset import (
+    CLICKTHROUGH_URL,
     assert_assets,
     asset_spec,
     build_assets,
@@ -157,7 +158,7 @@ def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
         env.catalog_agent_url(_CATALOG_FORMAT_ID),
         build_assets(
             image_spec("banner_image", url="https://example.com/banner.png"),
-            url_spec("click_url", url="https://example.com/landing"),
+            url_spec("click_url", url=CLICKTHROUGH_URL),
         ),
     )
 

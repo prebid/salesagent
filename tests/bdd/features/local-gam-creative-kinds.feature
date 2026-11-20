@@ -73,10 +73,10 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
   @T-UC-002-local-gam-creative-paired-redirect @extension
   Scenario: A display_tag creative's paired redirect becomes one image redirect creative over exactly that pair
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_paired_300x250", "params": {"width": 300, "height": 250, "supported_delivery_types": ["paired_redirect"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}]}'
-    And the package references the buyer's approved display_tag creative "cr-paired" carrying the paired redirect "https://ads.example.com/ad?slot=42&cb={CACHEBUSTER}" with click-through "https://click.example.com/redirect?id=42"
+    And the package references the buyer's approved display_tag creative "cr-paired" carrying the paired redirect "https://prebid.org/ad?slot=42&cb={CACHEBUSTER}" with click-through "https://prebid.org/redirect?id=42"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
-    And Google Ad Manager created one image redirect creative for advertiser "3000001" showing "https://ads.example.com/ad?slot=42&cb={CACHEBUSTER}" and clicking through to "https://click.example.com/redirect?id=42"
+    And Google Ad Manager created one image redirect creative for advertiser "3000001" over exactly the creative's paired redirect
     And Google Ad Manager created that creative at size 300x250
     And Google Ad Manager associated that creative with the line item it created, at its own size
 
