@@ -49,6 +49,29 @@ class SoapObject(dict):
             raise AttributeError(name) from exc
 
 
+def _bound(statement: Mapping[str, Any]) -> dict[str, str]:
+    """The bind variables of a PQL *statement* GAM was sent, by name, each value as text."""
+    return {v["key"]: str(v["value"]["value"]) for v in statement.get("values") or []}
+
+
+def _update_held(held: list[SoapObject], objects: list[Any], *, readonly: tuple[str, ...] = ()) -> list[SoapObject]:
+    """GAM's ``update*``: each sent object replaces the one *held* under its ``id``, keeping its *readonly* fields.
+
+    An id the network does not hold raises ``gam_fault``. Each answer is a copy.
+    """
+    by_id = {str(item["id"]): item for item in held}
+    answered = []
+    for obj in objects:
+        item = by_id.get(str(obj["id"]))
+        if item is None:
+            raise gam_fault("CommonError.NOT_FOUND")
+        kept = {key: item[key] for key in readonly if key in item}
+        item.clear()
+        item.update(obj, **kept)
+        answered.append(SoapObject(item))
+    return answered
+
+
 def gam_line_item(name: str, *, item_id: str = "1001", sizes: tuple[tuple[int, int], ...] = ((728, 90),)) -> SoapObject:
     """One line item in a GAM order, carrying the creative sizes it accepts."""
     return SoapObject(
@@ -229,7 +252,7 @@ def stub_gam_client(
     _line_item_status = {"PauseLineItems": "PAUSED", "ResumeLineItems": "READY"}
 
     def _line_item_action(action: Mapping[str, Any], statement: Mapping[str, Any], *_a: Any, **_k: Any) -> SoapObject:
-        bound = {v["key"]: str(v["value"]["value"]) for v in statement.get("values") or []}
+        bound = _bound(statement)
         acted = [
             item
             for item in _held_line_items()
@@ -240,19 +263,11 @@ def stub_gam_client(
         return SoapObject(numChanges=len(acted))
 
     def _update_line_items(objects: list[Any], *_args: Any, **_kwargs: Any) -> list[SoapObject]:
-        held = {str(item["id"]): item for item in _held_line_items()}
-        answered = []
-        for obj in objects:
-            item = held.get(str(obj["id"]))
-            if item is None:
-                raise gam_fault("CommonError.NOT_FOUND")
-            item.update({key: value for key, value in obj.items() if key != "status"})
-            answered.append(SoapObject(item))
-        return answered
+        return _update_held(_held_line_items(), objects, readonly=("status",))
 
     def _order_action(action: Mapping[str, Any], statement: Mapping[str, Any], *_a: Any, **_k: Any) -> SoapObject:
         if action["xsi_type"] in ("ApproveOrders", "ApproveAndOverbookOrders"):
-            bound = {v["key"]: str(v["value"]["value"]) for v in statement.get("values") or []}
+            bound = _bound(statement)
             for order in created.get(("OrderService", "createOrders"), []):
                 if str(order["id"]) == bound.get("orderId"):
                     order["status"] = "APPROVED"
@@ -305,15 +320,7 @@ def stub_gam_client(
     def _update_creatives(objects: list[Any], *_args: Any, **_kwargs: Any) -> list[SoapObject]:
         if client.creative_update_fault is not None:
             raise gam_fault(client.creative_update_fault)
-        held = created.setdefault(("CreativeService", "createCreatives"), [])
-        answered = []
-        for obj in objects:
-            index = next((i for i, creative in enumerate(held) if creative["id"] == obj["id"]), None)
-            if index is None:
-                raise gam_fault("CommonError.NOT_FOUND")
-            held[index] = SoapObject(obj)
-            answered.append(held[index])
-        return answered
+        return _update_held(created.setdefault(("CreativeService", "createCreatives"), []), objects)
 
     services["CreativeService"].updateCreatives = MagicMock(side_effect=_update_creatives)
     lica = "LineItemCreativeAssociationService"
@@ -331,11 +338,11 @@ def stub_gam_client(
     _serving = {"ActivateLineItemCreativeAssociations": "ACTIVE", "DeactivateLineItemCreativeAssociations": "INACTIVE"}
 
     def _association_action(action: Mapping[str, Any], statement: Mapping[str, Any], *_a: Any, **_k: Any) -> SoapObject:
-        (creative_id,) = [int(v["value"]["value"]) for v in statement["values"] if v["key"] == "creativeId"]
+        creative_id = _bound(statement)["creativeId"]
         held = [
             a
             for a in created.get((lica, "createLineItemCreativeAssociations"), [])
-            if int(a["creativeId"]) == creative_id
+            if str(a["creativeId"]) == creative_id
         ]
         for association in held:
             association["status"] = _serving[action["xsi_type"]]
