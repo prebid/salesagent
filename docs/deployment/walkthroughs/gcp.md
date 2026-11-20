@@ -37,7 +37,7 @@ Note the **Connection name** from the instance overview (e.g., `your-project:us-
 
 ## Step 3: Deploy
 
-Deploy the application. Authentication is configured **per-tenant** via the Admin UI after deployment.
+Deploy the application. Step 4 configures the first sign-in, and each tenant then configures its own SSO in the Admin UI.
 
 ### Option A: Use Prebuilt Image (Recommended)
 
@@ -54,12 +54,14 @@ gcloud run deploy adcp-sales-agent \
   --no-cpu-throttling \
   --min-instances=1 \
   --add-cloudsql-instances YOUR_PROJECT:us-central1:adcp-sales-agent \
-  --set-env-vars "DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@/salesagent?host=/cloudsql/YOUR_PROJECT:us-central1:adcp-sales-agent"
+  --set-env-vars "DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@/salesagent?host=/cloudsql/YOUR_PROJECT:us-central1:adcp-sales-agent,ENCRYPTION_KEY=YOUR_ENCRYPTION_KEY,FLASK_SECRET_KEY=YOUR_SESSION_KEY"
 ```
 
 Replace:
 - `YOUR_PROJECT`: Your GCP project ID
 - `YOUR_PASSWORD`: The password you set when creating the Cloud SQL instance
+- `YOUR_ENCRYPTION_KEY`: A Fernet key, which encrypts stored secrets such as a tenant's SSO client secret. Generate one with `openssl rand -base64 32 | tr '+/' '-_'`. Keep it: the container refuses to start without it, and changing it makes stored secrets unreadable.
+- `YOUR_SESSION_KEY`: A long random value that signs session cookies, such as the output of `openssl rand -hex 32`. Without it, each instance generates its own, and sessions end at every restart.
 
 ### Option B: Build Your Own Image
 
@@ -80,7 +82,7 @@ gcloud run deploy adcp-sales-agent \
   --no-cpu-throttling \
   --min-instances=1 \
   --add-cloudsql-instances YOUR_PROJECT:us-central1:adcp-sales-agent \
-  --set-env-vars "DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@/salesagent?host=/cloudsql/YOUR_PROJECT:us-central1:adcp-sales-agent"
+  --set-env-vars "DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@/salesagent?host=/cloudsql/YOUR_PROJECT:us-central1:adcp-sales-agent,ENCRYPTION_KEY=YOUR_ENCRYPTION_KEY,FLASK_SECRET_KEY=YOUR_SESSION_KEY"
 ```
 
 **Important Flags Explained:**
@@ -113,9 +115,15 @@ gcloud run services update adcp-sales-agent \
   --update-env-vars "SUPER_ADMIN_EMAILS=you@example.com"
 ```
 
+The Admin UI answers under `/admin/` and at the root, and the callback follows the path that
+the sign-in starts from. Register both of the following redirect URIs with the OAuth client:
+
+- `https://YOUR-SERVICE-URL.run.app/admin/auth/google/callback`
+- `https://YOUR-SERVICE-URL.run.app/auth/google/callback`
+
 Then sign in with the following steps:
 
-1. Open `https://YOUR-SERVICE-URL.run.app/admin`
+1. Open `https://YOUR-SERVICE-URL.run.app/admin/`
 2. Log in with the deployment's own OAuth account (the address you put in
    `SUPER_ADMIN_EMAILS`). Setup Mode, enabled by default for new tenants, lets you verify
    a tenant's OIDC login before you enable it.
@@ -125,9 +133,11 @@ Then sign in with the following steps:
 
 Configure SSO via the Admin UI for production use.
 
-1. Go to **Users & Access** in the Admin UI
+1. In **Settings > Account**, set **Custom Domain** to your service's host, for example
+   `adcp-sales-agent-abc123-uc.a.run.app`. Then go to **Users & Access** in the Admin UI, which
+   builds the SSO redirect URI from that field
 2. Configure your SSO provider (Google, Microsoft, Okta, Auth0, Keycloak, or any OIDC provider)
-3. Add redirect URI to your provider: `https://YOUR-SERVICE-URL.run.app/auth/oidc/callback`
+3. Copy the **Required Redirect URI** that the page shows, and add it to your provider
 4. Test your SSO login
 5. Disable Setup Mode once SSO is working
 
@@ -142,17 +152,19 @@ gcloud beta run domain-mappings create \
   --region us-central1
 ```
 
-If using a custom domain, add it as an additional redirect URI in your OAuth credentials.
+If you use a custom domain, register the two callback URLs from Step 4 on that domain with the OAuth client as well.
 
 ## Environment Variables Reference
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | Cloud SQL connection string |
+| `ENCRYPTION_KEY` | Yes | Fernet key that encrypts stored secrets. The container refuses to start without it |
+| `FLASK_SECRET_KEY` | Yes | Signs session cookies. Unset, each instance generates its own, and sessions end at every restart |
 | `GEMINI_API_KEY` | No | Platform-level AI key (tenants can configure their own) |
-| `SUPER_ADMIN_EMAILS` | No | Comma-separated super admin emails |
-| `GOOGLE_CLIENT_ID` | No | Google OAuth client ID of the deployment's own sign-in |
-| `GOOGLE_CLIENT_SECRET` | No | Google OAuth client secret, read with `GOOGLE_CLIENT_ID` |
+| `SUPER_ADMIN_EMAILS` | For sign-in | Comma-separated super admin emails |
+| `GOOGLE_CLIENT_ID` | For sign-in | Google OAuth client ID of the deployment's own sign-in, or use the `OAUTH_*` variables from Step 4 |
+| `GOOGLE_CLIENT_SECRET` | For sign-in | Google OAuth client secret, read with `GOOGLE_CLIENT_ID` |
 
 Each tenant configures its own SSO in the Admin UI. Until a tenant enables SSO, its users sign in through the deployment's OAuth client. See [SSO Setup Guide](../../user-guide/sso-setup.md).
 

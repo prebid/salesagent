@@ -12,7 +12,7 @@ This document is the reference for the security architecture of the sales agent:
 - [Security testing requirements](#security-testing-requirements)
 - [OAuth cross-domain authentication](#oauth-cross-domain-authentication) — why cross-domain login fails, and the workaround
 - [Generic OIDC provider support](#generic-oidc-provider-support) — configuration for any OIDC provider, or Google OAuth
-- [Secrets configuration](#secrets-configuration) — the `.env.secrets` file and handling practices
+- [Secrets configuration](#secrets-configuration) — the secrets file and handling practices
 
 ## Admin authentication architecture
 
@@ -304,7 +304,7 @@ The following list shows discovery URLs for common providers:
 When you create the OAuth application in your identity provider, use the following settings:
 
 - **Application type**: Web application
-- **Redirect URI**: `http://localhost:8000/auth/google/callback` (local) or `https://your-domain/admin/auth/google/callback` (production)
+- **Redirect URI**: locally, register both `http://localhost:8000/admin/auth/google/callback` and `http://localhost:8000/auth/google/callback`. In production, register `https://your-domain/admin/auth/google/callback`, or the value of `GOOGLE_OAUTH_REDIRECT_URI`.
 - **Scopes**: At minimum `openid`, `email`, and `profile`
 - **Grant type**: Authorization Code
 
@@ -327,11 +327,13 @@ When multiple OAuth configurations exist, the system uses them in the following 
 
 ## Secrets configuration
 
-### The `.env.secrets` file
+### The secrets file
 
-All secrets must be in the `.env.secrets` file, not in environment variables.
+The Docker Compose files read secrets from files that `.gitignore` excludes.
+`docker-compose.yml` reads `.env`. `docker-compose.multi-tenant.yml` reads `.env` and then
+`.env.secrets`, so a value in `.env.secrets` wins there.
 
-Create your `.env.secrets` file:
+Create your `.env` file:
 
 ```bash
 # API Keys
@@ -360,14 +362,14 @@ GAM_OAUTH_CLIENT_SECRET=your-gam-client-secret
 SUPER_ADMIN_DOMAINS=example.com
 ```
 
-### Benefits of `.env.secrets`
+### Benefits of a secrets file
 
-The `.env.secrets` file provides the following benefits:
+A secrets file provides the following benefits:
 
 - **Single source**: All secrets live in one place.
-- **Gitignore protection**: The file is not committed to the repository.
+- **Gitignore protection**: `.gitignore` excludes `.env` and `.env.secrets`, so neither file
+  reaches the repository.
 - **Workspace isolation**: Each workspace can have different secrets.
-- **Reduced risk**: No accidental secret exposure through environment variables.
 
 ### Security best practices
 

@@ -67,7 +67,7 @@ It grants no credentials of its own — the first administrator signs in with th
 deployment's own OAuth (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` or the generic
 `OAUTH_*` variables) plus `SUPER_ADMIN_EMAILS`.
 
-Once SSO is configured and tested, disable Setup Mode from the Users & Access page. After that, only SSO authentication works for that tenant.
+Once SSO is configured and tested, sign in through **Sign in with SSO** and disable Setup Mode from the Users & Access page. After that, **Sign in with SSO** works only while the tenant's SSO is enabled.
 
 ### Deployment OAuth
 
@@ -84,6 +84,7 @@ The following variables configure the client:
 | `OAUTH_PROVIDER` | `google` | Provider name. Without `OAUTH_DISCOVERY_URL`, `google` or `microsoft` selects that provider's discovery URL |
 | `GOOGLE_CLIENT_ID` | - | Google OAuth client ID, read when the `OAUTH_*` credentials don't form a complete configuration |
 | `GOOGLE_CLIENT_SECRET` | - | Google OAuth client secret, read with `GOOGLE_CLIENT_ID` |
+| `GOOGLE_OAUTH_REDIRECT_URI` | - | Callback URL that the deployment's sign-in sends to the provider. Register the same URL with the OAuth client |
 
 The Admin UI uses the first complete configuration in the following order:
 
@@ -91,6 +92,11 @@ The Admin UI uses the first complete configuration in the following order:
 2. `OAUTH_CLIENT_ID` and `OAUTH_CLIENT_SECRET`, with `OAUTH_PROVIDER` set to `google` or `microsoft`
 3. `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, the older Google-only spelling
 4. A `client_secret.json` file of Google OAuth credentials in the application's root directory
+
+Without `GOOGLE_OAUTH_REDIRECT_URI`, the global sign-in builds the callback URL from the
+request's host, under `/admin` in production unless `SKIP_NGINX` is set. In production, a
+tenant's sign-in uses `https://<SALES_AGENT_DOMAIN>/admin/auth/google/callback`. Outside
+production, a tenant's sign-in ignores the setting and uses the request's host.
 
 ### Super admin access control
 

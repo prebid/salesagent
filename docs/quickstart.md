@@ -5,7 +5,7 @@ Get the Prebid Sales Agent running locally in under 5 minutes.
 ## Prerequisites
 
 - Docker installed
-- (Optional) OAuth credentials from your identity provider for SSO
+- OAuth credentials from your identity provider, such as Google, to sign in to the Admin UI
 
 ## Option 1: Docker Run (Quickest)
 
@@ -13,8 +13,8 @@ If you have an existing PostgreSQL database:
 
 ```bash
 # Generate an encryption key (run once, save the output)
-docker run --rm ghcr.io/prebid/salesagent:latest \
-  python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+docker run --rm --entrypoint python ghcr.io/prebid/salesagent:latest \
+  -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
 
 # Run the sales agent (replace YOUR_KEY with the generated key)
 docker run -p 8000:8000 \
@@ -42,13 +42,24 @@ curl http://localhost:8000/health
 
 ## First-Time Setup
 
-1. Configure Google OAuth before you start: set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
-   and `SUPER_ADMIN_EMAILS` in `.env.secrets` (see
+1. Configure Google OAuth before you start: set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+   and `SUPER_ADMIN_EMAILS` (see
    [Environment variables](deployment/environment-variables.md#authentication)). The login
-   page says so too, and offers nothing else.
-2. Open http://localhost:8000/admin
-3. Log in with Google as one of the `SUPER_ADMIN_EMAILS` addresses
-4. Configure per-tenant SSO in **Users & Access** (see [SSO Setup Guide](user-guide/sso-setup.md))
+   page says so too, and offers nothing else. Where you set them depends on the option you ran:
+   - For Option 1, add each one to the `docker run` command with `-e`. Add `FLASK_SECRET_KEY`
+     too, set to a long random value, so that sessions survive a restart.
+   - For Option 2, put them in `.env` with an `ENCRYPTION_KEY`, which saving a tenant's SSO
+     client secret needs. The first command under Option 1 prints one. Then run
+     `docker compose up -d` again.
+2. Register both of these redirect URIs with the OAuth client:
+   `http://localhost:8000/admin/auth/google/callback` and
+   `http://localhost:8000/auth/google/callback`. The Admin UI answers under `/admin/` and at
+   the root, and the callback follows the path that the sign-in starts from.
+3. Open http://localhost:8000/admin/
+4. Log in with Google as one of the `SUPER_ADMIN_EMAILS` addresses
+5. In **Settings > Account**, set **Custom Domain** to `localhost:8000`. **Users & Access**
+   builds the SSO redirect URI from it.
+6. Configure per-tenant SSO in **Users & Access** (see [SSO Setup Guide](user-guide/sso-setup.md))
 
 There is no password login. A route that accepted a fixed password existed for local use and
 is gone: it was composed only when a test-mode flag was set, which made the app under test a
