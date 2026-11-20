@@ -13,6 +13,7 @@ fixture supplies the address; both arrive as arguments.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import StrEnum
 from typing import Any
 
@@ -92,6 +93,8 @@ class AdminAccountEnv:
 
         self._tenant_id: str = tenant_id or self.DEFAULT_TENANT_ID
         self._created_account_ids: list[str] = []
+        #: (trigger name, table) of every fault :meth:`fail_writes_of` installed.
+        self._database_faults: list[tuple[str, str]] = []
 
     @property
     def mode(self) -> str:
@@ -112,6 +115,7 @@ class AdminAccountEnv:
         return self
 
     def __exit__(self, *exc: object) -> None:
+        self._drop_database_faults()
         self._cleanup_accounts()
         if self._client is not None:
             self._client.close()
@@ -171,8 +175,12 @@ class AdminAccountEnv:
 
     def post_create(self, form_data: dict[str, str]) -> AdminResponse:
         """POST the create account form, recording any row it created for cleanup."""
+        return self._recording_new_accounts(lambda: self.client.request("post", self._url("create"), data=form_data))
+
+    def _recording_new_accounts(self, send: Callable[[], AdminResponse]) -> AdminResponse:
+        """*send* a request, and record every account it created in this tenant for cleanup."""
         before = self._account_ids_in_tenant()
-        response = self.client.request("post", self._url("create"), data=form_data)
+        response = send()
         self._created_account_ids.extend(self._account_ids_in_tenant() - before)
         return response
 
@@ -194,16 +202,26 @@ class AdminAccountEnv:
 
     # ── Super-admin forms and APIs that answer with an operator refusal ──
 
-    def submit_create_tenant(self, form_data: dict[str, str], *, from_create_page: bool) -> AdminResponse:
-        """POST the create-tenant form as a browser does, and follow its redirect.
+    def _submit_as_browser(self, path: str, form_data: dict[str, str], *, from_page: bool) -> AdminResponse:
+        """POST the form at *path* as a browser does, and follow its redirect.
 
-        *from_create_page* sends the ``Referer`` a browser sends from that page; without it the
-        request names no page to go back to.
+        *from_page* sends the ``Referer`` a browser sends from the form's own page; without it
+        the request names no page to go back to.
         """
         headers = {"Accept": "text/html"}
-        if from_create_page:
-            headers["Referer"] = f"{self.client.origin}/create_tenant"
-        return self.client.submit("/create_tenant", form_data, headers=headers)
+        if from_page:
+            headers["Referer"] = f"{self.client.origin}{path}"
+        return self.client.submit(path, form_data, headers=headers)
+
+    def submit_create_tenant(self, form_data: dict[str, str], *, from_create_page: bool) -> AdminResponse:
+        """POST the create-tenant form as a browser does, from its page or from nowhere."""
+        return self._submit_as_browser("/create_tenant", form_data, from_page=from_create_page)
+
+    def submit_create_account(self, form_data: dict[str, str], *, from_create_page: bool) -> AdminResponse:
+        """POST the create-account form as a browser does, recording any row it created for cleanup."""
+        return self._recording_new_accounts(
+            lambda: self._submit_as_browser(self._url("create"), form_data, from_page=from_create_page)
+        )
 
     def post_oidc_config(self, body: dict[str, str]) -> AdminResponse:
         """POST this tenant's OIDC configuration, as the users page does with fetch()."""
@@ -286,6 +304,68 @@ class AdminAccountEnv:
 
         self._created_account_ids.append(account_id)
         return account_id
+
+    # ── Faults ────────────────────────────────────────────────────────────
+
+    def fail_writes_of(self, table: str, *, column: str, value: str, message: str) -> None:
+        """Make the database refuse to write the *table* row whose *column* is *value*, raising *message*.
+
+        A ``BEFORE INSERT OR UPDATE`` trigger, so the fault is real on both transports: the
+        route's own write fails in the database this env seeds, which the live server shares,
+        and nothing in ``src/`` knows a test is running. Scoped to one row, because other
+        scenarios write *table* in the same tenant at the same time. The trigger advances a
+        sequence before it raises, and a rollback does not undo ``nextval``, so
+        :meth:`database_faults_raised` shows the refusal was this one. ``__exit__`` drops it.
+        """
+        import uuid
+
+        # Spliced into a plpgsql body: no quote, no format placeholder, no dollar quote.
+        for literal in (value, message):
+            assert not set(literal) & set("'%$"), f"{literal!r} cannot be spliced into the trigger body"
+        name = f"bdd_fault_{uuid.uuid4().hex[:12]}"
+        with get_db_session() as session:
+            # exec_driver_sql, not text(): text() reads every ":word" in *message* as a bind parameter.
+            connection = session.connection()
+            connection.exec_driver_sql(f"CREATE SEQUENCE {name}_seq")
+            connection.exec_driver_sql(
+                f"CREATE FUNCTION {name}() RETURNS trigger LANGUAGE plpgsql AS $fault$\n"
+                f"BEGIN\n"
+                f"    IF NEW.{column} = '{value}' THEN\n"
+                f"        PERFORM nextval('{name}_seq');\n"
+                f"        RAISE EXCEPTION '{message}';\n"
+                f"    END IF;\n"
+                f"    RETURN NEW;\n"
+                f"END\n"
+                f"$fault$"
+            )
+            connection.exec_driver_sql(
+                f"CREATE TRIGGER {name} BEFORE INSERT OR UPDATE ON {table} FOR EACH ROW EXECUTE FUNCTION {name}()"
+            )
+            session.commit()
+        self._database_faults.append((name, table))
+
+    def database_faults_raised(self) -> int:
+        """How many times the faults :meth:`fail_writes_of` installed have refused a write."""
+        with get_db_session() as session:
+            connection = session.connection()
+            return sum(
+                connection.exec_driver_sql(
+                    f"SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM {name}_seq"
+                ).scalar_one()
+                for name, _ in self._database_faults
+            )
+
+    def _drop_database_faults(self) -> None:
+        if not self._database_faults:
+            return
+        with get_db_session() as session:
+            connection = session.connection()
+            for name, table in self._database_faults:
+                connection.exec_driver_sql(f"DROP TRIGGER IF EXISTS {name} ON {table}")
+                connection.exec_driver_sql(f"DROP FUNCTION IF EXISTS {name}()")
+                connection.exec_driver_sql(f"DROP SEQUENCE IF EXISTS {name}_seq")
+            session.commit()
+        self._database_faults.clear()
 
     def inventory_profiles_path(self, path: str = "") -> str:
         """The inventory-profile routes of this tenant, which the page's modal posts to."""
