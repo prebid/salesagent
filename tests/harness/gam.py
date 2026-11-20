@@ -56,14 +56,23 @@ def _live_server_builds_its_own_adapter(self: Any) -> None:
 def _the_configured_network_answers(self: Any, **network_answers: Any) -> None:
     """On e2e every ``AdManagerClient`` this process builds is Google's, for the configured network.
 
-    The patches stay in place and delegate, as the ``"adapter"`` patch does to ``get_adapter``:
-    a seller step this process runs itself (the seller's approval of a buy, of a creative)
-    then reaches the network the live server reaches. A stand-in answer cannot be stated to a
-    real network, so *network_answers* are refused.
+    The client's name on googleads' module is put back to Google's class for the env's life,
+    over the stand-in patch: a delegating ``side_effect`` is not enough, because
+    ``AdManagerClient.__init__`` calls ``super()`` with that very module name, which would
+    then be the mock. A seller step this process runs itself (the seller's approval of a buy,
+    of a creative) reaches the network the live server reaches. The report download
+    delegates to the egress seam. A stand-in answer cannot be stated to a real network, so
+    *network_answers* are refused.
     """
+    from unittest.mock import patch
+
+    from googleads import ad_manager
+
     if network_answers:
         raise E2EUnsupportedSetup(f"a real network gives its own answers, not these: {sorted(network_answers)}")
-    self.mock["gam_client"].side_effect = _AD_MANAGER_CLIENT
+    google_client = patch.object(ad_manager, "AdManagerClient", _AD_MANAGER_CLIENT)
+    google_client.start()
+    self._guard("gam client: Google's, on e2e", google_client.stop)
     self.mock["gam_report_download"].side_effect = _send
 
 
