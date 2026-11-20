@@ -44,6 +44,7 @@ from tests.bdd.steps.domain.uc006_sync_creatives import _ask_assignment_terms, w
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._creative_seeding import store_creative, store_package_creative
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import comma_list
 from tests.bdd.steps.generic._table import rows as table_rows
 from tests.factories.creative_asset import (
     LIBRARY_IMAGE_FORMAT,
@@ -695,7 +696,7 @@ def given_buyer_syncs_image_creative(
     succeeded, so a later step grades what the seller did with it rather than a refusal.
     """
     ctx["creatives"] = [_image_creative(creative_id, url)]
-    ctx["assignments"] = {creative_id: [package.strip() for package in packages.split(",")]}
+    ctx["assignments"] = {creative_id: comma_list(packages)}
     if weight is not None:
         for package in ctx["assignments"][creative_id]:
             _ask_assignment_terms(ctx, creative_id, package, weight=int(weight))
@@ -724,7 +725,7 @@ def when_buyer_references_library_creative(ctx: dict, creative_id: str, packages
     other creative, assigned nowhere.
     """
     ctx["creatives"] = [_image_creative(f"{creative_id}-unassigned", "https://example.com/unassigned.png")]
-    ctx["assignments"] = {creative_id: [package.strip() for package in packages.split(",")]}
+    ctx["assignments"] = {creative_id: comma_list(packages)}
     when_sync_creative_with_assignments(ctx)
 
 
