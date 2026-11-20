@@ -332,7 +332,11 @@ def canonical_assets(kind: str) -> dict:
 
 
 def named_format_assets(
-    format_id: str = "display_300x250_image", *, media_url: str | None = None, prompt: str | None = None
+    format_id: str = "display_300x250_image",
+    *,
+    media_url: str | None = None,
+    prompt: str | None = None,
+    url_type: str | None = None,
 ) -> dict:
     """The ``assets`` a manifest naming legacy *format_id* must carry: one per REQUIRED asset.
 
@@ -344,7 +348,7 @@ def named_format_assets(
     from src.core.format_cache import load_reference_formats
 
     (fmt,) = (fmt for fmt in load_reference_formats() if fmt.format_id.id == format_id)
-    return format_manifest(fmt, media_url=media_url, prompt=prompt)
+    return format_manifest(fmt, media_url=media_url, prompt=prompt, url_type=url_type)
 
 
 def prompt_assets(content: str, *also: AssetSpec, format_id: str = "display_300x250_generative") -> dict:
@@ -358,7 +362,9 @@ def prompt_assets(content: str, *also: AssetSpec, format_id: str = "display_300x
     return {**named_format_assets(format_id, prompt=content), **build_assets(*also)}
 
 
-def format_manifest(fmt: Any, *, media_url: str | None = None, prompt: str | None = None) -> dict:
+def format_manifest(
+    fmt: Any, *, media_url: str | None = None, prompt: str | None = None, url_type: str | None = None
+) -> dict:
     """The ``assets`` that fill *fmt*'s required assets, each keyed by its ``asset_id``.
 
     core/format.json: each asset's ``asset_id`` "must be used as the key in creative
@@ -367,7 +373,8 @@ def format_manifest(fmt: Any, *, media_url: str | None = None, prompt: str | Non
 
     *media_url* replaces the default URL of the image, video or audio asset, for a caller
     whose creatives must differ in what they serve; *prompt* is the content of the text
-    asset, for a generative format whose required text asset is the build's prompt.
+    asset, for a generative format whose required text asset is the build's prompt;
+    *url_type* is the url asset's own mechanism (core/assets/url-asset.json), or none.
 
     A required type with no builder raises ``KeyError`` naming it, so a scenario cannot
     silently send an incomplete manifest.
@@ -375,7 +382,7 @@ def format_manifest(fmt: Any, *, media_url: str | None = None, prompt: str | Non
     media = {} if media_url is None else {"url": media_url}
     builders: dict[str, Callable[[str], AssetSpec]] = {
         "image": lambda asset_id: image_spec(asset_id, **media),
-        "url": lambda asset_id: url_spec(asset_id, url="https://example.com/landing"),
+        "url": lambda asset_id: url_spec(asset_id, url="https://example.com/landing", url_type=url_type),
         "text": lambda asset_id: text_spec(asset_id, content=prompt or "Test copy"),
         "video": lambda asset_id: video_spec(asset_id, **media),
         "audio": lambda asset_id: asset_spec(asset_id, "audio", url=media_url or "https://example.com/spot.mp3"),
