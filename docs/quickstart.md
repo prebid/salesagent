@@ -101,7 +101,8 @@ is how a caller ends up served another tenant's catalogue.
 ```python
 from fastmcp.client import Client, StreamableHttpTransport
 
-# Get your token from Admin UI > Advertisers > View Token
+# The Admin UI shows an advertiser's token once: when you add the advertiser
+# (Settings > Advertisers > Add Advertiser) or rotate its token.
 transport = StreamableHttpTransport(
     url="http://localhost:8000/mcp/",
     headers={
@@ -114,12 +115,18 @@ async with Client(transport=transport) as client:
     # List available products
     products = await client.call_tool("get_products", {"brief": "video ads"})
 
-    # Create a media buy
+    # Create a media buy. Each package names a product and one of its pricing options.
     result = await client.call_tool("create_media_buy", {
-        "product_ids": ["prod_123"],
-        "budget": {"amount": 10000, "currency": "USD"},
-        "flight_start": "2024-02-01",
-        "flight_end": "2024-02-28"
+        "idempotency_key": "acme-video-0001-2f9c",  # 16-255 characters; repeat it only to retry
+        "account": {"account_id": "acc_123"},  # from sync_accounts or list_accounts
+        "brand": {"domain": "acme.example"},
+        "start_time": "2030-02-01T00:00:00Z",  # ISO 8601, or "asap"
+        "end_time": "2030-02-28T23:59:59Z",
+        "packages": [{
+            "product_id": "prod_123",
+            "pricing_option_id": "cpm_usd_fixed",  # from the product's pricing_options
+            "budget": 10000
+        }]
     })
 ```
 

@@ -33,9 +33,10 @@ locking yourself out if it does not.
 2. **Start the system** with `docker compose up -d`.
 3. **Log in** at `/admin` with that account.
 4. **Configure the tenant's SSO** following this guide.
-5. **Test your SSO login** works — Setup Mode allows it before you enable it.
-6. **Enable SSO and turn Setup Mode off** from Users & Access.
-5. **Disable Setup Mode** - after this, only SSO authentication works.
+5. **Test your SSO login** works — Setup Mode allows it before SSO is enabled, and a
+   successful test enables SSO.
+6. **Turn Setup Mode off**: sign in through SSO, then click **Disable Setup Mode** on
+   **Users & Access**. After this, only SSO authentication works.
 
 > **Important**: Setup Mode is only for initial configuration. Always disable it once SSO is working to ensure production security.
 

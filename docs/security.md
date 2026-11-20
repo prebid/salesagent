@@ -4,7 +4,7 @@ This document is the reference for the security architecture of the sales agent:
 
 ## Contents
 
-- [Admin authentication architecture](#admin-authentication-architecture) — environment-first super-admin check with database fallback, and cross-site request forgery protection
+- [Admin authentication architecture](#admin-authentication-architecture) — the super admin check, session caching, the tenant access guard, and cross-site request forgery protection
 - [Tenant registration security](#tenant-registration-security) — subdomain assignment, branded URLs, ad server checks
 - [Access control patterns](#access-control-patterns) — super admins, tenant users, principal isolation, audit trail
 - [Message signing (RFC 9421)](#message-signing-rfc-9421) — agent-to-agent authentication, and where it is documented in full
@@ -16,43 +16,33 @@ This document is the reference for the security architecture of the sales agent:
 
 ## Admin authentication architecture
 
-The admin authentication system uses an environment-first approach with a database fallback for secure access control.
+Two functions in `src/admin/utils/helpers.py` decide admin access. `is_super_admin()` decides whether a user is a super admin. `require_tenant_access()` decides whether a signed-in user reaches a tenant.
 
-### Implementation
+### Super admin check
 
-```python
-def is_super_admin(email):
-    """Environment-first authentication with database fallback."""
-    # 1. Check environment variables first (deployment-time config)
-    env_emails = os.environ.get("SUPER_ADMIN_EMAILS", "")
-    if env_emails:
-        emails_list = [e.strip().lower() for e in env_emails.split(",") if e.strip()]
-        if email.lower() in emails_list:
-            return True
+`is_super_admin()` reads the following sources in order and stops at the first match:
 
-    # 2. Fallback to database configuration (runtime config)
-    try:
-        with get_db_session() as db:
-            stmt = select(TenantManagementConfig).filter_by(
-                config_key="super_admin_emails"
-            )
-            config = db.scalars(stmt).first()
-            if config and config.config_value:
-                db_emails = [e.strip().lower() for e in config.config_value.split(",")]
-                return email.lower() in db_emails
-    except Exception as e:
-        logger.error(f"Database auth check failed: {e}")
+1. The session cache, when it holds a positive result for the same email.
+2. The `SUPER_ADMIN_EMAILS` list from the environment.
+3. The `SUPER_ADMIN_DOMAINS` list from the environment, compared with the domain of the email.
+4. The `super_admin_emails` row of the `TenantManagementConfig` table.
+5. The `super_admin_domains` row of the same table.
 
-    return False
-```
+The environment comes before the database, so the check works before database initialization runs. The function logs a database error and treats it as no match.
 
-### Session optimization
+### Session caching
 
-The session layer avoids redundant checks in the following ways:
+`is_super_admin()` writes its result to the session keys `is_super_admin` and `admin_email`. Only a cached positive result ends the check early. After a negative result, the next request reads the environment and the database again.
 
-- **Session caching**: The session caches super admin status to avoid redundant database calls.
-- **Trusted session state**: `require_tenant_access()` checks the session first, then validates if needed.
-- **Automatic caching**: The system updates the session when it confirms admin status.
+### Tenant access guard
+
+`require_tenant_access()` protects the tenant routes. It decides in the following order:
+
+1. Outside production, a session that carries the `test_user` key passes for the tenant it names, or for every tenant when it names the super admin role. Only the test helpers sign such a session; no route creates one.
+2. The guard redirects a request with no signed-in user to the tenant login page. In API mode, or when the caller reads JSON, it answers `401`.
+3. A super admin passes for every tenant.
+4. Any other user needs an active `User` row for the tenant. Without one, the guard answers `403`.
+5. The role on that row must permit the request, as [Tenant users](#tenant-users) describes. Otherwise the guard answers `403`.
 
 ### Cross-site request forgery
 
@@ -108,7 +98,9 @@ Each advertiser (principal) has isolated access tokens. Tokens are scoped to a s
 
 ### Audit trail
 
-The system logs all admin actions to the `audit_logs` table, including the timestamp, user, action, and result. The audit trail supports compliance and security monitoring.
+The `log_admin_action` decorator in `src/admin/utils/audit_decorator.py` writes one row to the `audit_logs` table for each call of a route that carries it. The row holds the timestamp, the user, the operation, the HTTP method, the fields of a `POST` request, and whether the call succeeded. The decorator leaves out fields with sensitive names, such as passwords, tokens, and keys. It writes a row only when the request names a tenant.
+
+For admin actions, audit coverage is per route: a route without the decorator writes no row through it. Not every state-changing admin route carries the decorator, so do not treat the `audit_logs` table as a complete record of admin actions. When you add a state-changing admin route, add the decorator to it.
 
 ## Message signing (RFC 9421)
 
@@ -181,12 +173,14 @@ For the full architecture, including how to add a new outbound call, see
 
 All authentication changes must include tests for the following:
 
-- Session timeout behavior
 - Revalidation logic
 - Environment versus database precedence
 - Audit logging completeness
 - Session security headers
-- Cross-site request forgery (CSRF) protection
+- The cross-site request check in `src/admin/csrf.py`
+- The OAuth `state` check
+
+The Admin UI sets no session lifetime. Besides the origin check that [Cross-site request forgery](#cross-site-request-forgery) describes, the OAuth `state` parameter protects the sign-in flows and the Google Ad Manager authorization flow.
 
 **Test location**: `tests/integration/test_product_deletion.py` contains comprehensive authentication tests, including validation of the environment-first approach.
 
@@ -209,7 +203,7 @@ Same-domain OAuth is fully functional:
 Cross-domain OAuth is limited:
 
 1. The user visits an external domain, for example `https://test-agent.adcontextprotocol.org/admin/`.
-2. OAuth initiation works and stores the external domain in the session.
+2. OAuth initiation works and stores the originating host and the tenant in the session.
 3. The OAuth callback cannot retrieve the session data because of cookie domain restrictions.
 4. The system redirects the user to the login page instead of back to the external domain.
 
@@ -219,21 +213,24 @@ Cross-domain OAuth is limited:
 
 ```python
 # Production session config (src/admin/app.py)
-SESSION_COOKIE_DOMAIN = ".sales-agent.example.com"  # Multi-tenant mode: scoped to the internal domain
 SESSION_COOKIE_SECURE = True                        # HTTPS only
 SESSION_COOKIE_HTTPONLY = True                      # No script reads the session cookie
 SESSION_COOKIE_SAMESITE = "Lax"                     # Sent on top-level navigations (OAuth callbacks), not on cross-site posts
 SESSION_COOKIE_PATH = "/"                           # Covers /admin/* and /auth/* (OAuth callbacks)
+SESSION_COOKIE_DOMAIN = ".sales-agent.example.com"  # Multi-tenant mode only: scoped to the internal domain
 ```
+
+Outside production, the app sets `SESSION_COOKIE_SECURE = False` and no cookie domain. The other values match production.
 
 #### OAuth flow architecture
 
 ```python
-# OAuth Initiation (stores external domain in session)
-session["oauth_external_domain"] = request.headers.get("Apx-Incoming-Host")
+# OAuth initiation for a tenant login (stores the originating host and the tenant in the session)
+session["oauth_originating_host"] = request.headers.get("Host", "")
+session["oauth_tenant_context"] = tenant_id
 
-# OAuth Callback (retrieves from session - fails cross-domain)
-external_domain = session.pop("oauth_external_domain", None)
+# OAuth callback (reads the tenant from the session - fails cross-domain)
+tenant_context = session.get("oauth_tenant_context")
 ```
 
 ### Browser security limitation
