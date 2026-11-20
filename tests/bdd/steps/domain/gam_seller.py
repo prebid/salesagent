@@ -1128,11 +1128,18 @@ def _associations(ctx: dict) -> list[tuple[str, str]]:
 
 @then(parsers.re(r'Google Ad Manager associated that creative with line items "(?P<line_items>[^"]+)"$'))
 def then_gam_associated_with_line_items(ctx: dict, line_items: str) -> None:
-    """GAM holds the one creative it created on exactly these line items, each once, in this order."""
+    """GAM holds the one creative it created on exactly these line items, each once.
+
+    A set: the associations are compared as a multiset (``collections.Counter``), so a missing,
+    extra or repeated association fails and their order does not. A real network does not keep
+    the order the seller created them in: read back in run 025d613f, a creative on line items
+    "5000001,5000002" was held as [5000002, 5000001].
+    """
     created = _creatives_created(ctx)
     assert len(created) == 1, f"'that creative' names one creative; GAM created {len(created)}"
-    expected = [(str(created[0]["id"]), line_item.strip()) for line_item in line_items.split(",")]
-    assert _associations(ctx) == expected, f"expected GAM to hold {expected}; it holds {_associations(ctx)}"
+    expected = Counter((str(created[0]["id"]), line_item.strip()) for line_item in line_items.split(","))
+    held = Counter(_associations(ctx))
+    assert held == expected, f"expected GAM to hold {sorted(expected)}; it holds {sorted(held.elements())}"
 
 
 @then(parsers.parse('Google Ad Manager associated that creative with line item "{line_item}" at weight {weight:d}'))
