@@ -92,9 +92,9 @@ FIX_HINT = (
 
 #: The issue that tracks the pages in ``BASELINE``. Each of them carries this marker in an
 #: HTML comment at its top while it is baselined.
-FIXME_MARKER = "FIXME(#2587)"
+FIXME_MARKER = "FIXME(#2613)"
 
-# FIXME(#2587): these pages predate the guard. Fix a page's references and lower its count in
+# FIXME(#2613): these pages predate the guard. Fix a page's references and lower its count in
 # the same change; at zero, delete the entry and the page's FIXME comment.
 #: Reference counts per page that the guard tolerates today. Counts only go down.
 BASELINE: dict[str, int] = {
