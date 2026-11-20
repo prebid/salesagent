@@ -2,13 +2,12 @@
 Real GAM lifecycle E2E tests that create and manage orders via the GAM API.
 
 These tests require:
-1. Valid GAM credentials (service account) — set GAM_SERVICE_ACCOUNT_JSON or GAM_SERVICE_ACCOUNT_KEY_FILE
+1. The configured GAM test network (``ToolingSettings.gam_test_network``): the service account
+   (GAM_SERVICE_ACCOUNT_JSON or GAM_SERVICE_ACCOUNT_KEY_FILE), GAM_TEST_NETWORK_CODE,
+   GAM_TEST_ADVERTISER_ID and GAM_TEST_AD_UNIT_IDS. A test fails naming any that is unset.
 2. PostgreSQL database — set DATABASE_URL
 
-They are gated behind @pytest.mark.requires_gam and skip when either is absent.
-
-Test network: 23341594478 (XFP sandbox property)
-Service account: @salesagenttest.iam.gserviceaccount.com
+They are gated behind @pytest.mark.requires_gam.
 
 WARNING: These tests create real GAM orders. Cleanup happens in fixture teardown,
 but if the process is killed, orphaned orders may remain in the test network.
@@ -26,11 +25,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from scripts.setup.seed_products import whole_publisher_selections
-from tests.e2e.conftest import (
-    GAM_TEST_AD_UNIT_IDS,
-    GAM_TEST_ADVERTISER_ID,
-    GAM_TEST_NETWORK_CODE,
-)
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.postgres_admin import drop_database
 
@@ -89,7 +83,7 @@ def _parse_database_url(url: str) -> dict:
 
 
 @pytest.fixture(scope="module")
-def gam_lifecycle_db(gam_service_account_json):
+def gam_lifecycle_db(gam_test_network):
     """Create an isolated PostgreSQL database for GAM lifecycle tests.
 
     Requires DATABASE_URL pointing to a PostgreSQL server.
@@ -163,7 +157,7 @@ def gam_lifecycle_db(gam_service_account_json):
     _lifecycle_db_url = test_url
 
     # Seed test data
-    _seed_lifecycle_test_data()
+    _seed_lifecycle_test_data(gam_test_network)
 
     yield unique_db_name
 
@@ -192,8 +186,8 @@ def gam_lifecycle_db(gam_service_account_json):
         pass
 
 
-def _seed_lifecycle_test_data():
-    """Seed the test database with tenant, principal, products, and inventory mappings."""
+def _seed_lifecycle_test_data(gam_test_network):
+    """Seed the test database with tenant, principal, products, and inventory mappings on the configured network."""
     from src.core.database.database_session import get_db_session
     from src.core.database.models import (
         GAMInventory,
@@ -229,13 +223,13 @@ def _seed_lifecycle_test_data():
             principal_id="e2e_lifecycle_test",
             name="E2E Lifecycle Test Principal",
             platform_mappings={
-                "google_ad_manager": {"advertiser_id": GAM_TEST_ADVERTISER_ID},
+                "google_ad_manager": {"advertiser_id": gam_test_network.advertiser_id},
             },
         )
         session.add(principal)
 
         # Create GAM inventory records for test ad units
-        for ad_unit_id in GAM_TEST_AD_UNIT_IDS:
+        for ad_unit_id in gam_test_network.ad_unit_ids:
             inv = GAMInventory(
                 tenant_id=GAM_LIFECYCLE_TENANT_ID,
                 inventory_type="AD_UNIT",
@@ -265,7 +259,7 @@ def _seed_lifecycle_test_data():
                 "primary_goal_type": "LIFETIME",
                 "primary_goal_unit_type": "IMPRESSIONS",
                 "creative_placeholders": [{"width": 300, "height": 250, "expected_creative_count": 1}],
-                "targeted_ad_unit_ids": [str(ad_id) for ad_id in GAM_TEST_AD_UNIT_IDS],
+                "targeted_ad_unit_ids": [str(ad_id) for ad_id in gam_test_network.ad_unit_ids],
             },
         )
         session.add(product_non_guaranteed)
@@ -289,7 +283,7 @@ def _seed_lifecycle_test_data():
                 "primary_goal_type": "LIFETIME",
                 "primary_goal_unit_type": "IMPRESSIONS",
                 "creative_placeholders": [{"width": 300, "height": 250, "expected_creative_count": 1}],
-                "targeted_ad_unit_ids": [str(ad_id) for ad_id in GAM_TEST_AD_UNIT_IDS],
+                "targeted_ad_unit_ids": [str(ad_id) for ad_id in gam_test_network.ad_unit_ids],
             },
         )
         session.add(product_guaranteed)
@@ -315,7 +309,7 @@ def _seed_lifecycle_test_data():
                 "primary_goal_type": "LIFETIME",
                 "primary_goal_unit_type": "IMPRESSIONS",
                 "creative_placeholders": [{"width": 300, "height": 250, "expected_creative_count": 1}],
-                "targeted_ad_unit_ids": [str(ad_id) for ad_id in GAM_TEST_AD_UNIT_IDS],
+                "targeted_ad_unit_ids": [str(ad_id) for ad_id in gam_test_network.ad_unit_ids],
             },
         )
         session.add(product_house)
@@ -324,7 +318,7 @@ def _seed_lifecycle_test_data():
 
         # Create inventory mappings for all products
         for product_id in ["gam_e2e_non_guaranteed", "gam_e2e_guaranteed", "gam_e2e_house"]:
-            for ad_unit_id in GAM_TEST_AD_UNIT_IDS:
+            for ad_unit_id in gam_test_network.ad_unit_ids:
                 mapping = ProductInventoryMapping(
                     tenant_id=GAM_LIFECYCLE_TENANT_ID,
                     product_id=product_id,
@@ -342,25 +336,23 @@ def _seed_lifecycle_test_data():
 
 
 @pytest.fixture(scope="module")
-def gam_adapter(gam_lifecycle_db, gam_service_account_json):
-    """Create a GoogleAdManager adapter connected to the test network with DB access."""
-    from src.adapters.google_ad_manager import GoogleAdManager
+def gam_adapter(gam_lifecycle_db, gam_client_manager, gam_test_network):
+    """Create a GoogleAdManager adapter connected to the test network with DB access.
 
-    config = {
-        "service_account_json": gam_service_account_json,
-        "network_code": GAM_TEST_NETWORK_CODE,
-    }
+    Its config is the one the server builds from the onboarded ``adapter_config`` row.
+    """
+    from src.adapters.google_ad_manager import GoogleAdManager
 
     principal = MagicMock()
     principal.tenant_id = GAM_LIFECYCLE_TENANT_ID
     principal.principal_id = "e2e_lifecycle_test"
-    principal.platform_mappings = {"gam_advertiser_id": GAM_TEST_ADVERTISER_ID}
+    principal.platform_mappings = {"gam_advertiser_id": gam_test_network.advertiser_id}
 
     adapter = GoogleAdManager(
-        config=config,
+        config=gam_client_manager.config,
         principal=principal,
-        network_code=GAM_TEST_NETWORK_CODE,
-        advertiser_id=GAM_TEST_ADVERTISER_ID,
+        network_code=gam_test_network.network_code,
+        advertiser_id=gam_test_network.advertiser_id,
         tenant_id=GAM_LIFECYCLE_TENANT_ID,
         tenant_ai_config=None,
     )
@@ -561,7 +553,7 @@ class TestGAMOrderCreation:
         for li in line_items:
             assert li["lineItemType"] == "STANDARD", f"Expected STANDARD, got {li['lineItemType']}"
 
-    def test_order_has_correct_advertiser(self, gam_adapter, gam_order_cleanup):
+    def test_order_has_correct_advertiser(self, gam_adapter, gam_order_cleanup, gam_test_network):
         """Created orders belong to the configured advertiser."""
         from src.core.schemas import CreateMediaBuySuccess
 
@@ -584,7 +576,7 @@ class TestGAMOrderCreation:
 
         assert "results" in result and len(result["results"]) > 0
         order = result["results"][0]
-        assert str(order["advertiserId"]) == GAM_TEST_ADVERTISER_ID
+        assert str(order["advertiserId"]) == gam_test_network.advertiser_id
 
 
 @pytest.mark.requires_gam

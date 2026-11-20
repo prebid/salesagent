@@ -832,57 +832,27 @@ async def adcp_validator():
 # GAM E2E Test Fixtures (real GAM API)
 # ============================================================================
 
-GAM_TEST_NETWORK_CODE = "23341594478"
-GAM_TEST_ADVERTISER_ID = "6007567433"
-GAM_TEST_AD_UNIT_IDS = ["23340594484", "23340594268"]
 
+@pytest.fixture(scope="session")
+def gam_test_network():
+    """The GAM network the environment configures (``ToolingSettings.gam_test_network``).
 
-def _get_gam_service_account_json():
-    """Get GAM service account JSON from environment variables.
-
-    Checks (in order):
-    1. GAM_SERVICE_ACCOUNT_JSON env var (raw JSON string)
-    2. GAM_SERVICE_ACCOUNT_KEY_FILE env var (path to JSON file)
+    Configuration, never a constant: each contributor names their own network. A setting
+    that is unset fails every test that needs the network, naming the setting.
     """
-    import json
+    from src.core.config import GamTestNetworkUnconfigured, ToolingSettings
 
-    # 1. Raw JSON from env var
-    sa_json = os.environ.get("GAM_SERVICE_ACCOUNT_JSON")
-    if sa_json:
-        json.loads(sa_json)  # Validate it's valid JSON
-        return sa_json
-
-    # 2. File path from env var
-    key_file = os.environ.get("GAM_SERVICE_ACCOUNT_KEY_FILE")
-    if key_file and os.path.exists(key_file):
-        with open(key_file) as f:
-            return f.read()
-
-    return None
+    try:
+        return ToolingSettings().gam_test_network()
+    except GamTestNetworkUnconfigured as unconfigured:
+        pytest.fail(str(unconfigured), pytrace=False)
 
 
 @pytest.fixture(scope="session")
-def gam_service_account_json():
-    """Provide GAM service account JSON for real API tests.
+def gam_client_manager(gam_test_network):
+    """The client manager a seller onboarded to the configured network has, built as the server builds it."""
+    from scripts.gam_prerequisites_check import network_client_manager
 
-    Skips tests if no credentials are available.
-    """
-    sa_json = _get_gam_service_account_json()
-    if sa_json is None:
-        pytest.skip("GAM credentials not available. Set GAM_SERVICE_ACCOUNT_JSON or GAM_SERVICE_ACCOUNT_KEY_FILE")
-    return sa_json
-
-
-@pytest.fixture(scope="session")
-def gam_client_manager(gam_service_account_json):
-    """Provide an initialized GAMClientManager connected to the test network."""
-    from src.adapters.gam.client import GAMClientManager
-
-    config = {"service_account_json": gam_service_account_json}
-    manager = GAMClientManager(config, network_code=GAM_TEST_NETWORK_CODE)
-
-    # Verify connection works
-    client = manager.get_client()
-    assert client is not None, "GAM client failed to initialize"
-
+    manager = network_client_manager(gam_test_network)
+    assert manager.get_client() is not None, "GAM client failed to initialize"
     return manager

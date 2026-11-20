@@ -150,6 +150,12 @@ class GAMHealthChecker:
             if "results" not in response or not response["results"]:
                 permissions_ok = False
                 missing_permissions.append("Cannot access advertiser")
+            elif response["results"][0]["type"] != "ADVERTISER":
+                # An order's advertiserId must be a company of type ADVERTISER.
+                permissions_ok = False
+                missing_permissions.append(
+                    f"Company {advertiser_id} is {response['results'][0]['type']}, not ADVERTISER"
+                )
 
             # Check if we can create orders
             # This is a read-only check, we're not actually creating anything
@@ -261,7 +267,8 @@ class GAMHealthChecker:
                     )
 
                     response = inventory_service.getAdUnitsByStatement(statement)
-                    if "results" in response and response["results"]:
+                    # A line item can target only an ACTIVE ad unit.
+                    if "results" in response and response["results"] and response["results"][0]["status"] == "ACTIVE":
                         accessible_units.append(ad_unit_id)
                     else:
                         inaccessible_units.append(ad_unit_id)

@@ -210,6 +210,12 @@ exit 0
 # without reaching the host's Python toolchain. See _HOST_SCRIPT_STUBS.
 :
 """,
+    # The GAM configuration preflight calls Google Ad Manager under the configured service
+    # account: network reach, and none of it bears on which command the runner hands to tox.
+    # A passing preflight is the faithful simulation. The gate itself is graded in
+    # tests/unit/test_gam_test_network_preflight.py.
+    "scripts/gam_prerequisites_check.py": """print("  PASS (stand-in for the GAM configuration preflight)")
+""",
 }
 
 
