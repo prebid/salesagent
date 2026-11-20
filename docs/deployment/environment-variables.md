@@ -230,7 +230,6 @@ in every deployment: properties come only from it.
 |----------|---------|-------------|
 | `ENCRYPTION_KEY` | - | Fernet key for encrypting stored secrets (OIDC client secrets, API keys, GAM service account JSON and GAM OAuth refresh tokens). The application refuses to encrypt or decrypt without it, so every deployment with a GAM tenant needs it, whichever GAM authentication method the tenant uses. The database migration that encrypts existing GAM refresh tokens stops if they exist and this is not set. Keep it stable: changing it makes the stored secrets unreadable. Generate with `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` |
 | `FLASK_SECRET_KEY` | auto-generated at startup | Flask session secret. Set it explicitly so sessions survive restarts and work across multiple processes. |
-| `WEBHOOK_SECRET` | - | Secret for verifying incoming webhooks |
 | `SYNC_API_KEY` | - | Key that the Inventory Sync API accepts in the `X-API-Key` header. When unset, the API accepts the key stored in the database. See [Tenant Management API and Inventory Sync API](../operations/admin-apis.md) |
 | `TENANT_MANAGEMENT_API_KEY` | - | Key that the Tenant Management API accepts in the `X-Tenant-Management-API-Key` header. See [Tenant Management API and Inventory Sync API](../operations/admin-apis.md) |
 
@@ -252,7 +251,6 @@ in every deployment: properties come only from it.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FLASK_DEBUG` | `0` | Enable Flask debug mode |
-| `FLASK_ENV` | `production` | Flask environment |
 | `ADCP_TESTING` | `false` | A test deployment. Selects, at composition: the reference-formats creative registry (no creative agent is dialled), the debug and reset routes, loopback webhook targets, the mock ad server's seeded delivery rows, the setup checklist counting the mock adapter as configured, and relaxed brand validation in `get_products`. Each is a named property on the settings; nothing reads the flag itself. |
 
 ### Service startup
@@ -286,7 +284,6 @@ Set these through your platform's secret store (for example, `fly secrets set`) 
 - `GOOGLE_APPLICATION_CREDENTIALS_JSON` (for GAM service accounts)
 - `OAUTH_CLIENT_SECRET` or `GOOGLE_CLIENT_SECRET` (for the deployment's own sign-in)
 - `APPROXIMATED_API_KEY`
-- `WEBHOOK_SECRET`
 - `FLASK_SECRET_KEY`
 - `SYNC_API_KEY`, `TENANT_MANAGEMENT_API_KEY` (for the Admin UI's two key-authenticated APIs)
 
