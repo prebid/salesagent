@@ -18,6 +18,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then
 
 from tests.bdd.steps.generic._creative_seeding import store_creative, store_package_creative
+from tests.bdd.steps.generic._table import comma_list
 from tests.bdd.steps.generic._table import rows as table_rows
 from tests.bdd.steps.generic.given_media_buy import (
     _ensure_request_defaults,
@@ -325,23 +326,23 @@ def _image_assets(width: int, height: int, url: str) -> dict[str, Any]:
 
 @given(
     parsers.re(
-        r'the buyer holds a live media buy booked at the ad server as order "(?P<order_id>[^"]+)" with package '
-        r'"(?P<package_id>[^"]+)"(?:, and package "(?P<gone_package_id>[^"]+)" on product "(?P<gone_product_id>'
+        r'the buyer holds a live media buy booked at the ad server as order "(?P<order_id>[^"]+)" with packages? '
+        r'"(?P<package_ids>[^"]+)"(?:, and package "(?P<gone_package_id>[^"]+)" on product "(?P<gone_product_id>'
         r'[^"]+)", which the seller no longer has)?$'
     )
 )
 def given_live_booked_buy(
-    ctx: dict, order_id: str, package_id: str, gone_package_id: str | None, gone_product_id: str | None
+    ctx: dict, order_id: str, package_ids: str, gone_package_id: str | None, gone_product_id: str | None
 ) -> None:
-    """An active buy, already booked at the ad server, as create leaves it.
+    """An active buy, already booked at the ad server, as create leaves it, each package on its own line item.
 
-    Its first package is on the default product. The second, when stated, was booked on a
-    product the seller has since removed: its stored ``product_id`` names no product row.
+    The named packages are on the default product. The one after them, when stated, was booked
+    on a product the seller has since removed: its stored ``product_id`` names no product row.
     """
-    line_items = {package_id: "line-item-live"}
+    line_items = {package_id: f"line-item-{package_id}" for package_id in comma_list(package_ids)}
     package_products: dict[str, str] = {}
     if gone_package_id is not None and gone_product_id is not None:
-        line_items[gone_package_id] = "line-item-gone"
+        line_items[gone_package_id] = f"line-item-{gone_package_id}"
         package_products[gone_package_id] = gone_product_id
     ctx["live_media_buy"] = ctx["env"].book_at_ad_server(
         line_items=line_items,
@@ -383,7 +384,7 @@ def given_creative_assigned_to_buy(
     env = ctx["env"]
     if package_ids is not None:
         media_buy = ctx["live_media_buy"]
-        packages = [package_id.strip() for package_id in package_ids.split(",")]
+        packages = comma_list(package_ids)
     else:
         (media_buy,) = env.media_buys_awaiting_approval()
         packages = [package.package_id for package in media_buy.packages]
@@ -452,16 +453,39 @@ def given_inline_html_creative_in_hosted_format(ctx: dict, format_id: str, creat
 # ── Thens ──────────────────────────────────────────────────────────────
 
 
+_CREATIVE_MANAGER = "the ad server's creative manager"
+
+
+def _handed(ctx: dict, receiver: str) -> list[dict[str, Any]]:
+    """Every asset dict *receiver* was handed, in order."""
+    env = ctx["env"]
+    return env.uploaded_adapter_assets() if receiver == "the ad server" else env.creative_manager_assets()
+
+
 def _received_asset(ctx: dict, receiver: str, creative_id: str) -> dict[str, Any]:
     """The newest asset dict *receiver* was handed for *creative_id*; fails when it was handed none."""
-    env = ctx["env"]
-    handed = env.uploaded_adapter_assets() if receiver == "the ad server" else env.creative_manager_assets()
+    handed = _handed(ctx, receiver)
     mine = [asset for asset in handed if asset.get("creative_id") == creative_id]
     assert mine, (
         f"{receiver} was never handed creative {creative_id!r}; it was handed "
         f"{[asset.get('creative_id') for asset in handed]!r}"
     )
     return mine[-1]
+
+
+def _received_once(ctx: dict, creative_id: str) -> dict[str, Any]:
+    """The one asset dict the creative manager was handed for *creative_id*; fails on none or several.
+
+    A creative on several packages of a buy is one creative at the ad server, associated with
+    each package's line item, so a push hands it over once, with every package.
+    """
+    handed = _handed(ctx, _CREATIVE_MANAGER)
+    mine = [asset for asset in handed if asset.get("creative_id") == creative_id]
+    assert len(mine) == 1, (
+        f"{_CREATIVE_MANAGER} was handed creative {creative_id!r} {len(mine)} times, not once; it was handed "
+        f"{[asset.get('creative_id') for asset in handed]!r}"
+    )
+    return mine[0]
 
 
 def _received_creative(ctx: dict, receiver: str, creative_id: str, kind: str | None = None) -> dict[str, Any]:
@@ -565,21 +589,42 @@ def then_receives_size_range(
     )
 
 
-@then(parsers.parse('the ad server\'s creative manager is handed creative "{handed}" and not creative "{withheld}"'))
+@then(
+    parsers.parse('the ad server\'s creative manager is handed creative "{handed}" once and not creative "{withheld}"')
+)
 def then_creative_manager_handed_one_not_other(ctx: dict, handed: str, withheld: str) -> None:
-    """The operator path pushed *handed*, which proves it reached the upload, and withheld *withheld*.
+    """The operator path pushed *handed* once, which proves it reached the upload, and withheld *withheld*.
 
     Read by ``creative_id``, a key the asset carries today, so the verdict is about which
     creative was pushed and not about the typed creative.
     """
-    received = [asset.get("creative_id") for asset in ctx["env"].creative_manager_assets()]
-    assert handed in received, (
-        f"the ad server's creative manager was never handed {handed!r} (it was handed {received!r}), so this "
-        f"scenario cannot tell whether {withheld!r} was withheld or the path never reached the upload"
-    )
+    _received_once(ctx, handed)
+    received = [asset.get("creative_id") for asset in _handed(ctx, _CREATIVE_MANAGER)]
     assert withheld not in received, (
         f"the ad server's creative manager was handed {withheld!r}, a creative its product's option refuses: "
         f"{received!r}"
+    )
+
+
+@then(
+    parsers.parse(
+        'the ad server\'s creative manager is handed creative "{creative_id}" once, assigned to packages '
+        '"{package_ids}", sized "{sizes}" on each'
+    )
+)
+def then_creative_manager_handed_once_per_buy(ctx: dict, creative_id: str, package_ids: str, sizes: str) -> None:
+    """One asset for *creative_id*, carrying an assignment per package, each with that package's creative at *sizes*.
+
+    A creative on two packages of a buy is one creative at the ad server, associated with
+    each package's line item: handing it over once per package creates it twice.
+    """
+    assignments = _received_once(ctx, creative_id).get("package_assignments") or []
+    # Sorted by package: the assignment rows come back in no stated order.
+    observed = sorted((a.get("package_id"), (a.get("creative") or {}).get("sizes")) for a in assignments)
+    expected = sorted((package_id, parse_sizes(sizes)) for package_id in comma_list(package_ids))
+    assert observed == expected, (
+        f"{_CREATIVE_MANAGER} was handed creative {creative_id!r} assigned as (package, sizes) {observed!r}, "
+        f"not {expected!r}"
     )
 
 
@@ -605,14 +650,14 @@ def then_seller_told_creative_withheld(ctx: dict, withheld: str, code: str, push
 @then("the ad server's creative manager is handed no creative")
 def then_creative_manager_handed_no_creative(ctx: dict) -> None:
     """Neither operator path's upload ran."""
-    handed = ctx["env"].creative_manager_assets()
+    handed = _handed(ctx, _CREATIVE_MANAGER)
     assert handed == [], f"the ad server's creative manager was handed {[a.get('creative_id') for a in handed]!r}"
 
 
 @then("the ad server is handed no creative")
 def then_ad_server_handed_no_creative(ctx: dict) -> None:
     """The synchronous create uploaded nothing to the ad server."""
-    uploaded = ctx["env"].uploaded_adapter_assets()
+    uploaded = _handed(ctx, "the ad server")
     assert uploaded == [], f"the ad server was handed {[a.get('creative_id') for a in uploaded]!r}"
 
 

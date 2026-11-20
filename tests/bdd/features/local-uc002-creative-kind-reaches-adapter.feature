@@ -373,16 +373,16 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     And the buyer's creative "cr-misfit-late", under review, a 300x250 image showing "https://cdn.example.com/misfit-late.png", is assigned to package "pkg-live" of the live media buy
     When the seller approves creative "cr-fits-late"
     And the seller approves creative "cr-misfit-late"
-    Then the ad server's creative manager is handed creative "cr-fits-late" and not creative "cr-misfit-late"
+    Then the ad server's creative manager is handed creative "cr-fits-late" once and not creative "cr-misfit-late"
     And the seller's approval of creative "cr-misfit-late" tells the seller it was not pushed to the live media buy, with code "CREATIVE_SIZE_MISMATCH", and the approval of creative "cr-fits-late" reports nothing
 
   # F1 (PR #2582 review): a canonical creative states its size only through its product's
   # declaration, so on a package whose product resolves none it has no size to be trafficked
-  # at; the create gate refuses it ("no product declaration resolved"), answered
-  # VALIDATION_ERROR. The retroactive push reads the creative a second way, keeps the packages
-  # whose products do resolve and drops the other, and pushes it. Here the second package was
-  # booked on a product the seller has since removed. The push is per creative, so it withholds
-  # this one and pushes the fitting one, which proves the path reached the upload.
+  # at; it is refused on every path that pushes it ("no product declaration resolved"),
+  # answered VALIDATION_ERROR, even when another of its packages resolves. Here the second
+  # package was booked on a product the seller has since removed. The push is per creative, so
+  # it withholds this one and pushes the fitting one, once, which proves the path reached the
+  # upload; the refused creative's approval reports one refusal, not one per package.
   @T-UC-002-local-creative-kind-unresolved-product-retroactive-push @extension @creative
   Scenario: Approving a canonical creative assigned to a package whose product resolves no declaration does not push it to the live buy
     Given the product publishes a display_tag format option for tag_url delivery accepting sizes "300x250"
@@ -391,5 +391,16 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     And the buyer's creative "cr-unresolved-late", under review, a display_tag carrying the tag URL "https://ads.example-adserver.com/tag?slot=15", is assigned to packages "pkg-live, pkg-gone" of the live media buy
     When the seller approves creative "cr-fits-late"
     And the seller approves creative "cr-unresolved-late"
-    Then the ad server's creative manager is handed creative "cr-fits-late" and not creative "cr-unresolved-late"
+    Then the ad server's creative manager is handed creative "cr-fits-late" once and not creative "cr-unresolved-late"
     And the seller's approval of creative "cr-unresolved-late" tells the seller it was not pushed to the live media buy, with code "VALIDATION_ERROR", and the approval of creative "cr-fits-late" reports nothing
+
+  # A creative on two packages of one buy is one creative at the ad server, associated with
+  # each package's line item. The seller's approval of it pushes it to that buy once, carrying
+  # both packages, each with the creative as its own package's product reads it.
+  @T-UC-002-local-creative-kind-retroactive-push-two-packages @extension @creative
+  Scenario: Approving a creative assigned to two packages of a live buy pushes it once, with both packages
+    Given the product publishes a display_tag format option for tag_url delivery accepting sizes "300x250"
+    And the buyer holds a live media buy booked at the ad server as order "order-live" with packages "pkg-live, pkg-live-2"
+    And the buyer's creative "cr-two-packages", under review, a display_tag carrying the tag URL "https://ads.example-adserver.com/tag?slot=16", is assigned to packages "pkg-live, pkg-live-2" of the live media buy
+    When the seller approves creative "cr-two-packages"
+    Then the ad server's creative manager is handed creative "cr-two-packages" once, assigned to packages "pkg-live, pkg-live-2", sized "300x250" on each
