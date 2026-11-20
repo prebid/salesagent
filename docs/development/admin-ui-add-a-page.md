@@ -277,6 +277,7 @@ Run the following commands before you commit.
 
 ```bash
 # Regenerate the route reference after you add, move, or remove a route.
+# make quality fails while the reference is stale.
 uv run python scripts/generate_admin_route_reference.py
 
 # Format, lint, type-check, and run the unit tests and the guards.

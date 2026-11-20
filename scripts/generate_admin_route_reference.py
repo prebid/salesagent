@@ -8,6 +8,9 @@ code: the URL map of `create_app()`, and the decorators on each view function.
 Usage:
     uv run python scripts/generate_admin_route_reference.py           # rewrite the page
     uv run python scripts/generate_admin_route_reference.py --check   # exit 1 when the page is stale
+
+`make quality` runs the same comparison through
+tests/unit/test_admin_route_reference_current.py, which reports and never writes.
 """
 
 from __future__ import annotations
@@ -44,6 +47,8 @@ the page after you add, move, or remove a route, run the following command:
 ```bash
 uv run python scripts/generate_admin_route_reference.py
 ```
+
+`make quality` fails while this page is stale, and names each route row that differs.
 
 The paths are relative to the admin application. A deployment serves the application under
 `/admin` and at the root, as [Admin UI architecture](admin-ui-architecture.md) explains.
@@ -138,6 +143,26 @@ def render() -> str:
     return "\n".join(lines)
 
 
+def _table_rows(page: str) -> set[str]:
+    return {line for line in page.splitlines() if line.startswith("| `")}
+
+
+def stale_report(page: str, expected: str) -> str:
+    """How the committed page differs from the generated one, or "" when they match.
+
+    A changed route shows twice: its new row as not in the page, its old row as not in the app.
+    """
+    if page == expected:
+        return ""
+    have, want = _table_rows(page), _table_rows(expected)
+    lines = [f"{PAGE.relative_to(ROOT)} is stale. Run: uv run python {Path(__file__).relative_to(ROOT)}"]
+    lines += [f"  not in the page: {row}" for row in sorted(want - have)]
+    lines += [f"  not in the app:  {row}" for row in sorted(have - want)]
+    if have == want:
+        lines.append("  The route rows match; the text around them differs.")
+    return "\n".join(lines)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="exit 1 when the page is stale")
@@ -145,8 +170,9 @@ def main() -> int:
 
     page = render()
     if args.check:
-        if not PAGE.exists() or PAGE.read_text() != page:
-            print(f"{PAGE.relative_to(ROOT)} is stale. Run: uv run python {Path(__file__).relative_to(ROOT)}")
+        report = stale_report(PAGE.read_text() if PAGE.exists() else "", page)
+        if report:
+            print(report)
             return 1
         return 0
     PAGE.write_text(page)

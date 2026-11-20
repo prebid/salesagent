@@ -10,6 +10,8 @@ the page after you add, move, or remove a route, run the following command:
 uv run python scripts/generate_admin_route_reference.py
 ```
 
+`make quality` fails while this page is stale, and names each route row that differs.
+
 The paths are relative to the admin application. A deployment serves the application under
 `/admin` and at the root, as [Admin UI architecture](admin-ui-architecture.md) explains.
 

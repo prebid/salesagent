@@ -69,3 +69,4 @@ pattern.
 
 Run `uv run python scripts/generate_admin_route_reference.py`. It rewrites the route
 reference from the URL map of `create_app()`. Commit the result with your change.
+`make quality` fails while the reference is stale, and names each route row that differs.
