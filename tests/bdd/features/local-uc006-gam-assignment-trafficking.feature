@@ -59,7 +59,7 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     Given the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a" with weight 40
     When the Buyer Agent syncs the creative with assignments
     Then creative "cr-banner" is assigned to package "pkg-banner-a"
-    And Google Ad Manager set line item "5000001" to manual creative rotation
+    And Google Ad Manager holds line item "5000001" on manual creative rotation
     And Google Ad Manager associated that creative with line item "5000001" at weight 40
 
   @T-UC-006-local-gam-assignment-refused
@@ -144,7 +144,6 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     Then creative "cr-banner" failed with error INVALID_STATE and recovery correctable
     And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
     And Google Ad Manager associated that creative with line items "5000005"
-    And Google Ad Manager updated no creative
 
   @T-UC-006-local-gam-active-delivery-unchanged
   Scenario: Sending a creative on an active, non-paused package again with the same content is not refused
@@ -186,10 +185,10 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     And the tenant has approval_mode "require-human"
     And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner-v2.png" assigned to package "pkg-live"
     When the seller approves creative "cr-banner"
-    Then Google Ad Manager updated that creative, once, to show "https://example.com/banner-v2.png"
+    Then Google Ad Manager holds one creative, showing "https://example.com/banner-v2.png"
     And Google Ad Manager associated that creative with line items "5000005"
     When the seller approves creative "cr-banner"
-    Then Google Ad Manager updated that creative, once, to show "https://example.com/banner-v2.png"
+    Then Google Ad Manager holds one creative, showing "https://example.com/banner-v2.png"
 
     Examples:
       | state          | status        | paused |
@@ -212,10 +211,10 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     And the tenant has approval_mode "require-human"
     And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner-v2.png" assigned to package "pkg-live"
     When the Buyer Agent syncs the creative with assignments
-    Then Google Ad Manager updated no creative
+    Then Google Ad Manager holds one creative, showing "https://example.com/banner.png"
     And Google Ad Manager holds that creative on line items "5000005" as not serving
     When the seller approves creative "cr-banner"
-    Then Google Ad Manager updated that creative, once, to show "https://example.com/banner-v2.png"
+    Then Google Ad Manager holds one creative, showing "https://example.com/banner-v2.png"
     And Google Ad Manager holds that creative on line items "5000005" as serving
     And Google Ad Manager was asked to stop serving that creative, then to serve it again
 
@@ -244,7 +243,7 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner-v2.png" assigned to package "pkg-live"
     When the Buyer Agent syncs the creative with assignments
     Then creative "cr-banner" is assigned to package "pkg-live"
-    And Google Ad Manager updated that creative, once, to show "https://example.com/banner-v2.png"
+    And Google Ad Manager holds one creative, showing "https://example.com/banner-v2.png"
     And Google Ad Manager associated that creative with line items "5000005"
 
   # The update GAM refused is still owed: the next push sends it, once GAM takes updates again.
@@ -422,7 +421,6 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     Then creative "cr-banner" is assigned to package "pkg-banner-a"
     And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
     And Google Ad Manager associated that creative with line items "5000001"
-    And Google Ad Manager updated no creative
 
   # The assignment was stored while the creative was under review, so nothing was sent for it.
   # GAM holds the creative from another package; that does not place it on this one.

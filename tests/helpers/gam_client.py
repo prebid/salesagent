@@ -168,7 +168,8 @@ def stub_gam_client(
     * ``LineItemService.performLineItemAction`` sets ``status`` PAUSED (PauseLineItems) or
       READY (ResumeLineItems) on the line items it holds whose ``id`` or ``orderId`` the
       statement binds (``lineItemId`` / ``orderId``), and answers ``numChanges``.
-      ``updateLineItems`` records what it was sent and changes no status:
+      ``updateLineItems`` replaces each sent line item's fields on the one it holds by ``id``
+      (an id it does not hold raises ``gam_fault``), except ``status``:
       ``LineItemSummary.status`` is "readonly" (Ad Manager API v202602).
     * ``OrderService.performOrderAction`` answers ``numChanges: 1``, so the adapter's
       in-request approval takes its success branch (``approve_order``). An approval action
@@ -238,6 +239,17 @@ def stub_gam_client(
             item["status"] = _line_item_status[action["xsi_type"]]
         return SoapObject(numChanges=len(acted))
 
+    def _update_line_items(objects: list[Any], *_args: Any, **_kwargs: Any) -> list[SoapObject]:
+        held = {str(item["id"]): item for item in _held_line_items()}
+        answered = []
+        for obj in objects:
+            item = held.get(str(obj["id"]))
+            if item is None:
+                raise gam_fault("CommonError.NOT_FOUND")
+            item.update({key: value for key, value in obj.items() if key != "status"})
+            answered.append(SoapObject(item))
+        return answered
+
     def _order_action(action: Mapping[str, Any], statement: Mapping[str, Any], *_a: Any, **_k: Any) -> SoapObject:
         if action["xsi_type"] in ("ApproveOrders", "ApproveAndOverbookOrders"):
             bound = {v["key"]: str(v["value"]["value"]) for v in statement.get("values") or []}
@@ -269,6 +281,7 @@ def stub_gam_client(
                 )
             ),
             performLineItemAction=MagicMock(side_effect=_line_item_action),
+            updateLineItems=MagicMock(side_effect=_update_line_items),
         ),
         "OrderService": MagicMock(performOrderAction=MagicMock(side_effect=_order_action)),
         "NetworkService": MagicMock(

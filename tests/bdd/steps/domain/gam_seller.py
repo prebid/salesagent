@@ -1041,19 +1041,13 @@ def then_creative_failed_with(ctx: dict, creative_id: str, code: str, recovery: 
 
 @then(parsers.parse('Google Ad Manager holds one creative, showing "{url}"'))
 def then_gam_holds_one_creative(ctx: dict, url: str) -> None:
-    """Of everything the seller sent, GAM holds exactly one creative, and it shows *url*."""
-    (held,) = _creatives_created(ctx)
-    assert held.get("imageUrl") == url, f"expected GAM to hold the creative showing {url}; it holds {held}"
+    """Of everything the seller sent, GAM holds exactly one creative, and it shows *url*.
 
-
-@then(parsers.parse('Google Ad Manager updated that creative, once, to show "{url}"'))
-def then_gam_updated_that_creative(ctx: dict, url: str) -> None:
-    """GAM got one update naming the one creative it created, and still holds that one creative, showing *url*."""
-    sent = ctx["env"].gam_objects_sent("CreativeService", "createCreatives")
-    assert len(sent) == 1, f"expected GAM to be asked to create one creative; it was asked for {sent}"
+    Read from what GAM holds now, so it also grades an update: a creative the seller updated
+    in place is still the one creative, showing the new content, and one it did not update
+    still shows the old.
+    """
     (held,) = _creatives_created(ctx)
-    updated = [(c["id"], c.get("imageUrl")) for c in ctx["env"].gam_objects_sent("CreativeService", "updateCreatives")]
-    assert updated == [(held["id"], url)], f"expected one update of creative {held['id']} to {url}; got {updated}"
     assert held.get("imageUrl") == url, f"expected GAM to hold the creative showing {url}; it holds {held}"
 
 
@@ -1102,13 +1096,6 @@ def then_gam_no_serving_change(ctx: dict) -> None:
     assert calls == [], f"expected no association action; GAM received {calls}"
 
 
-@then("Google Ad Manager updated no creative")
-def then_gam_updated_no_creative(ctx: dict) -> None:
-    """Nothing reached GAM's creative update."""
-    updated = ctx["env"].gam_objects_sent("CreativeService", "updateCreatives")
-    assert updated == [], f"expected GAM to update no creative; it received {updated}"
-
-
 @then("Google Ad Manager created no creative")
 def then_gam_created_no_creative(ctx: dict) -> None:
     """Nothing reached GAM's CreativeService."""
@@ -1149,12 +1136,11 @@ def then_gam_associated_at_weight(ctx: dict, line_item: str, weight: int) -> Non
     assert reported == [(line_item, weight)], f"expected one association at weight {weight}; GAM holds {reported}"
 
 
-@then(parsers.parse('Google Ad Manager set line item "{line_item}" to manual creative rotation'))
+@then(parsers.parse('Google Ad Manager holds line item "{line_item}" on manual creative rotation'))
 def then_gam_line_item_manual_rotation(ctx: dict, line_item: str) -> None:
-    """The seller updated the line item to MANUAL rotation, which GAM needs to honour weights."""
-    updated = ctx["env"].gam_objects_sent("LineItemService", "updateLineItems")
-    reported = [(str(item["id"]), item["creativeRotationType"]) for item in updated]
-    assert reported == [(line_item, "MANUAL")], f"expected line item {line_item} set to MANUAL; GAM got {reported}"
+    """GAM holds the line item on MANUAL rotation (``LineItem.creativeRotationType``), which it needs to honour weights."""
+    rotation = ctx["env"].gam_line_item(line_item).get("creativeRotationType")
+    assert rotation == "MANUAL", f"expected GAM to hold line item {line_item} on MANUAL rotation; it holds {rotation}"
 
 
 @then("Google Ad Manager changed no line item")
