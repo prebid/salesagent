@@ -91,6 +91,30 @@ Note your service URL from the output (e.g., `https://adcp-sales-agent-abc123-uc
 
 ## Step 4: Initial Setup
 
+The first sign-in uses the deployment's own OAuth client, with an address listed in
+`SUPER_ADMIN_EMAILS`. Set both on the service with the command for your provider.
+
+**Google OAuth:**
+```bash
+gcloud run services update adcp-sales-agent \
+  --region us-central1 \
+  --update-env-vars "GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com" \
+  --update-env-vars "GOOGLE_CLIENT_SECRET=your-client-secret" \
+  --update-env-vars "SUPER_ADMIN_EMAILS=you@example.com"
+```
+
+**Other OIDC Providers (Okta, Auth0, Azure AD):**
+```bash
+gcloud run services update adcp-sales-agent \
+  --region us-central1 \
+  --update-env-vars "OAUTH_CLIENT_ID=your-client-id" \
+  --update-env-vars "OAUTH_CLIENT_SECRET=your-client-secret" \
+  --update-env-vars "OAUTH_DISCOVERY_URL=https://your-provider/.well-known/openid-configuration" \
+  --update-env-vars "SUPER_ADMIN_EMAILS=you@example.com"
+```
+
+Then sign in with the following steps:
+
 1. Open `https://YOUR-SERVICE-URL.run.app/admin`
 2. Log in with the deployment's own OAuth account (the address you put in
    `SUPER_ADMIN_EMAILS`). Setup Mode, enabled by default for new tenants, lets you verify
@@ -108,27 +132,6 @@ Configure SSO via the Admin UI for production use.
 5. Disable Setup Mode once SSO is working
 
 See [SSO Setup Guide](../../user-guide/sso-setup.md) for detailed provider-specific instructions.
-
-### Legacy: Environment Variable OAuth (Optional)
-
-For backward compatibility, you can also configure OAuth via environment variables:
-
-**Google OAuth:**
-```bash
-gcloud run services update adcp-sales-agent \
-  --region us-central1 \
-  --update-env-vars "GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com" \
-  --update-env-vars "GOOGLE_CLIENT_SECRET=your-client-secret"
-```
-
-**Other OIDC Providers (Okta, Auth0, Azure AD):**
-```bash
-gcloud run services update adcp-sales-agent \
-  --region us-central1 \
-  --update-env-vars "OAUTH_CLIENT_ID=your-client-id" \
-  --update-env-vars "OAUTH_CLIENT_SECRET=your-client-secret" \
-  --update-env-vars "OAUTH_DISCOVERY_URL=https://your-provider/.well-known/openid-configuration"
-```
 
 ## Step 6: Custom Domain (Optional)
 
@@ -148,10 +151,10 @@ If using a custom domain, add it as an additional redirect URI in your OAuth cre
 | `DATABASE_URL` | Yes | Cloud SQL connection string |
 | `GEMINI_API_KEY` | No | Platform-level AI key (tenants can configure their own) |
 | `SUPER_ADMIN_EMAILS` | No | Comma-separated super admin emails |
-| `GOOGLE_CLIENT_ID` | No | Legacy: Google OAuth client ID (use per-tenant SSO instead) |
-| `GOOGLE_CLIENT_SECRET` | No | Legacy: Google OAuth client secret |
+| `GOOGLE_CLIENT_ID` | No | Google OAuth client ID of the deployment's own sign-in |
+| `GOOGLE_CLIENT_SECRET` | No | Google OAuth client secret, read with `GOOGLE_CLIENT_ID` |
 
-Authentication is configured **per-tenant** via the Admin UI. See [SSO Setup Guide](../../user-guide/sso-setup.md).
+Each tenant configures its own SSO in the Admin UI. Until a tenant enables SSO, its users sign in through the deployment's OAuth client. See [SSO Setup Guide](../../user-guide/sso-setup.md).
 
 ## Troubleshooting
 

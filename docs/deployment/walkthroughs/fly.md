@@ -80,7 +80,31 @@ fly secrets set ENCRYPTION_KEY="$(openssl rand -base64 32)"
 
 ## Step 5: Authentication
 
-Authentication is configured **per-tenant** via the Admin UI. No OAuth environment variables are required for initial deployment.
+Each tenant configures its own SSO in the Admin UI. The first sign-in uses the deployment's own OAuth client, with an address listed in `SUPER_ADMIN_EMAILS`, so set both before you deploy.
+
+### Deployment OAuth and super admins
+
+Set the client's credentials and your address with the command for your provider:
+
+```bash
+# Google OAuth
+fly secrets set GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com" \
+  GOOGLE_CLIENT_SECRET="your-client-secret" \
+  SUPER_ADMIN_EMAILS="you@example.com"
+
+# Other OIDC providers
+fly secrets set OAUTH_CLIENT_ID="your-client-id" \
+  OAUTH_CLIENT_SECRET="your-client-secret" \
+  OAUTH_DISCOVERY_URL="https://your-provider/.well-known/openid-configuration" \
+  SUPER_ADMIN_EMAILS="you@example.com"
+
+# Optional: make every user in a domain a super admin
+fly secrets set SUPER_ADMIN_DOMAINS="example.com"
+```
+
+**Format:**
+- `SUPER_ADMIN_EMAILS`: Comma-separated: `user1@example.com,user2@example.com`
+- `SUPER_ADMIN_DOMAINS`: Comma-separated domains: `example.com,company.org`
 
 ### Initial Setup Flow
 
@@ -98,22 +122,6 @@ Authentication is configured **per-tenant** via the Admin UI. No OAuth environme
 > **Important**: You must add yourself as a user or add your email domain BEFORE testing. Otherwise you'll see "Access denied" after authenticating.
 
 See [SSO Setup Guide](../../user-guide/sso-setup.md) for detailed provider-specific instructions.
-
-### Legacy: Global Super Admin (Optional)
-
-For backward compatibility or multi-tenant deployments where you need global admin access:
-
-```bash
-# Optional: Global super admin access
-fly secrets set SUPER_ADMIN_EMAILS="admin@example.com,admin2@example.com"
-
-# Optional: Grant admin to all users in a domain
-fly secrets set SUPER_ADMIN_DOMAINS="example.com"
-```
-
-**Format:**
-- `SUPER_ADMIN_EMAILS`: Comma-separated, no spaces: `user1@example.com,user2@example.com`
-- `SUPER_ADMIN_DOMAINS`: Comma-separated domains: `example.com,company.org`
 
 ## Step 6: Deploy
 

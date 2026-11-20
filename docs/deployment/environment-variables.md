@@ -29,11 +29,19 @@ For a minimal working deployment:
 # Required
 DATABASE_URL=postgresql://user:password@host:5432/adcp
 
+# Required to store secrets, such as a tenant's SSO client secret
+ENCRYPTION_KEY=your-fernet-key
+
+# Required for the first sign-in: the deployment's OAuth client and a super admin
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
+SUPER_ADMIN_EMAILS=you@example.com
+
 # Optional - AI features
 GEMINI_API_KEY=your-key
 ```
 
-Authentication is configured **per-tenant** in the Admin UI. No OAuth environment variables are required.
+After the first sign-in, each tenant configures its own SSO in the Admin UI. See [Authentication](#authentication).
 
 ## Authentication
 
@@ -61,24 +69,28 @@ deployment's own OAuth (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` or the gener
 
 Once SSO is configured and tested, disable Setup Mode from the Users & Access page. After that, only SSO authentication works for that tenant.
 
-### Legacy: global test mode
+### Deployment OAuth
+
+These variables configure the deployment's own OAuth client. The Admin UI signs people in through it unless a tenant's own SSO handles the sign-in. The first administrator of a tenant in Setup Mode signs in through it, and per-tenant SSO doesn't replace it.
+
+The following variables configure the client:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `OAUTH_DISCOVERY_URL` | - | OIDC discovery URL of the provider |
+| `OAUTH_CLIENT_ID` | - | OAuth client ID |
+| `OAUTH_CLIENT_SECRET` | - | OAuth client secret |
+| `OAUTH_SCOPES` | `openid email profile` | Scopes to request with the `OAUTH_*` credentials |
+| `OAUTH_PROVIDER` | `google` | Provider name. Without `OAUTH_DISCOVERY_URL`, `google` or `microsoft` selects that provider's discovery URL |
+| `GOOGLE_CLIENT_ID` | - | Google OAuth client ID, read when the `OAUTH_*` credentials don't form a complete configuration |
+| `GOOGLE_CLIENT_SECRET` | - | Google OAuth client secret, read with `GOOGLE_CLIENT_ID` |
 
-### Legacy: environment variable OAuth
+The Admin UI uses the first complete configuration in the following order:
 
-These variables configure a **global** OAuth provider shared by all tenants. For new deployments, use per-tenant SSO configuration instead.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GOOGLE_CLIENT_ID` | - | Google OAuth client ID (legacy) |
-| `GOOGLE_CLIENT_SECRET` | - | Google OAuth client secret (legacy) |
-| `OAUTH_DISCOVERY_URL` | - | OIDC discovery URL (legacy) |
-| `OAUTH_CLIENT_ID` | - | OAuth client ID (legacy) |
-| `OAUTH_CLIENT_SECRET` | - | OAuth client secret (legacy) |
-| `OAUTH_SCOPES` | `openid email profile` | OAuth scopes to request |
-| `OAUTH_PROVIDER` | `google` | Provider name for display |
+1. `OAUTH_DISCOVERY_URL`, `OAUTH_CLIENT_ID`, and `OAUTH_CLIENT_SECRET`
+2. `OAUTH_CLIENT_ID` and `OAUTH_CLIENT_SECRET`, with `OAUTH_PROVIDER` set to `google` or `microsoft`
+3. `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, the older Google-only spelling
+4. A `client_secret.json` file of Google OAuth credentials in the application's root directory
 
 ### Super admin access control
 
@@ -263,11 +275,12 @@ Set these through your platform's secret store (for example, `fly secrets set`) 
 - `ENCRYPTION_KEY`
 - `GAM_OAUTH_CLIENT_ID`, `GAM_OAUTH_CLIENT_SECRET` (for GAM integration)
 - `GOOGLE_APPLICATION_CREDENTIALS_JSON` (for GAM service accounts)
+- `OAUTH_CLIENT_SECRET` or `GOOGLE_CLIENT_SECRET` (for the deployment's own sign-in)
 - `APPROXIMATED_API_KEY`
 - `WEBHOOK_SECRET`
 - `FLASK_SECRET_KEY`
 
-> **Note**: Admin OAuth credentials (`GOOGLE_CLIENT_ID` and the other legacy OAuth variables) are configured per-tenant in the Admin UI instead of environment variables.
+> **Note**: Each tenant's own SSO credentials live in the database, encrypted with `ENCRYPTION_KEY`. You enter them on the Users & Access page.
 
 ### Non-sensitive configuration
 
