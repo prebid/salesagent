@@ -5,21 +5,25 @@ from __future__ import annotations
 import json
 import logging
 from functools import wraps
-from typing import TYPE_CHECKING, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, NamedTuple, NoReturn, TypeVar
 
-from flask import abort, g, jsonify, redirect, session, url_for
+from flask import abort, g, jsonify, make_response, redirect, request, session, url_for
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
+from werkzeug.exceptions import Forbidden
 
+from src.admin.csrf import SAFE_METHODS
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant, TenantManagementConfig, User
+from src.core.database.models import Tenant, TenantManagementConfig, User, UserRole
 from src.core.logging_config import log_safe
 
 T = TypeVar("T")
 
 if TYPE_CHECKING:
+    from flask import Response
+
     from src.core.tools.media_buy_create import ApprovalResult
 
 logger = logging.getLogger(__name__)
@@ -316,8 +320,65 @@ def _setup_session_reaches(tenant_id: str) -> bool:
     return session.get("test_tenant_id") == tenant_id or session.get("test_user_role") == "super_admin"
 
 
-def require_tenant_access(api_mode=False):
-    """Decorator to require tenant access for routes."""
+def role_permits(role: str, method: str, *, minimum: UserRole = UserRole.VIEWER) -> bool:
+    """Whether a tenant user with *role* may make a *method* request to a route that needs *minimum*.
+
+    Any write (a method outside ``SAFE_METHODS``) needs at least ``manager``; a route
+    can ask for more with *minimum* (``admin`` for managing users, sign-in and the tenant
+    itself). A role this code does not know ranks as ``viewer``, so it is read-only.
+    """
+    ranks = list(UserRole)
+    held = UserRole(role) if role in UserRole else UserRole.VIEWER
+    needed = (
+        ranks.index(minimum) if method in SAFE_METHODS else max(ranks.index(minimum), ranks.index(UserRole.MANAGER))
+    )
+    return ranks.index(held) >= needed
+
+
+#: ``Sec-Fetch-Mode`` values a browser sends on a script's ``fetch``/XHR; a page load or
+#: form submit is ``navigate``.
+_SCRIPT_FETCH_MODES = frozenset({"cors", "same-origin"})
+
+
+def caller_reads_json() -> bool:
+    """Whether the current request's caller reads a JSON answer rather than an HTML page.
+
+    True for a JSON request body, a script's ``fetch`` or XHR (``Sec-Fetch-Mode`` of
+    ``cors``/``same-origin``, which every current browser sends, or
+    ``X-Requested-With: XMLHttpRequest``), or an ``Accept`` that prefers
+    ``application/json`` to ``text/html``. ``Accept: */*`` on its own (curl, most HTTP
+    libraries) ties, and a tie is HTML, as it was before this predicate existed. The one
+    answer to this question for the admin UI: the refusals in
+    :func:`require_tenant_access` and the inventory-profile form refusals both ask it.
+    """
+    if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return True
+    if request.headers.get("Sec-Fetch-Mode") in _SCRIPT_FETCH_MODES:
+        return True
+    return request.accept_mimetypes.best_match(["text/html", "application/json"]) == "application/json"
+
+
+def _json_refusal(status: int, message: str, *, api_mode: bool) -> Response | None:
+    """A JSON ``{"error": message}`` answer with *status* if the caller reads JSON, else ``None``.
+
+    The one decision for every refusal in :func:`require_tenant_access`; each refusal
+    keeps its own answer for a caller that reads HTML.
+    """
+    return make_response(jsonify({"error": message}), status) if api_mode or caller_reads_json() else None
+
+
+def _forbid(message: str, *, api_mode: bool) -> NoReturn:
+    """Refuse the request with a 403: a JSON ``{"error": message}`` if the caller reads JSON, else the HTML page."""
+    raise Forbidden(response=_json_refusal(403, message, api_mode=api_mode))
+
+
+def require_tenant_access(api_mode: bool = False, role: UserRole = UserRole.VIEWER):
+    """Decorator to require tenant access for routes.
+
+    A tenant user must also hold a role that permits the request (:func:`role_permits`);
+    *role* is the least role the route needs, so ``role=UserRole.ADMIN`` limits it to
+    tenant admins. Super admins pass regardless.
+    """
 
     def decorator(f):
         @wraps(f)
@@ -355,8 +416,8 @@ def require_tenant_access(api_mode=False):
                 return f(tenant_id, *args, **kwargs)
 
             if "user" not in session:
-                if api_mode:
-                    return jsonify({"error": "Authentication required"}), 401
+                if (refusal := _json_refusal(401, "Authentication required", api_mode=api_mode)) is not None:
+                    return refusal
                 # Redirect to tenant-specific login (preserves tenant context)
                 return redirect(url_for("auth.tenant_login", tenant_id=tenant_id, next=request.url))
 
@@ -375,10 +436,16 @@ def require_tenant_access(api_mode=False):
                     user = db_session.scalars(stmt).first()
 
                     if not user:
-                        if api_mode:
-                            return jsonify({"error": "Access denied"}), 403
-                        abort(403)
-
+                        _forbid("Access denied", api_mode=api_mode)
+                    if not role_permits(user.role, request.method, minimum=role):
+                        logger.warning(
+                            "Refused %s %s for tenant %s: role %s",
+                            log_safe(request.method),
+                            log_safe(request.path),
+                            log_safe(tenant_id),
+                            log_safe(user.role),
+                        )
+                        _forbid("Your role does not allow this", api_mode=api_mode)
                     return f(tenant_id, *args, **kwargs)
 
             except Exception as e:
@@ -387,8 +454,8 @@ def require_tenant_access(api_mode=False):
                     raise
 
                 logger.error(f"Error checking tenant access: {e}")
-                if api_mode:
-                    return jsonify({"error": "Internal server error"}), 500
+                if (refusal := _json_refusal(500, "Internal server error", api_mode=api_mode)) is not None:
+                    return refusal
                 abort(500)
 
         return decorated_function
