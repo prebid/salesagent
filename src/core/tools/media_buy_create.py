@@ -72,10 +72,6 @@ from src.core.idempotency_replay import raise_on_payload_conflict
 from src.core.traffic_carrier import (
     AdapterCreativeAsset,
     CreativeToTraffic,
-    Html5BundleRepresentation,
-    HtmlRepresentation,
-    LegacyContentKeys,
-    MediaRepresentation,
     PackageAssignmentDict,
 )
 
@@ -1293,13 +1289,11 @@ def _build_adapter_asset_from_creative(
     :func:`_read_for_packages` read it for that package, and the adapter traffics each
     package's carrier on that package's line item.
 
-    ``asset["creative"]`` is the first assignment's carrier, and the keys the adapters that do
-    not read a carrier yet (Broadstreet, the mock, Kevel, Triton) read are derived from it; the
-    kinds that had no ``url`` there are given none.
+    ``asset["creative"]`` is the first assignment's carrier. An adapter derives what it serves
+    from the carrier; nothing here projects it onto a ``url`` or a ``snippet``.
     """
     creative_data = creative.data or {}
     carrier = package_assignments[0]["creative"]
-    first_size = carrier.sizes[0] if carrier.sizes else None
     asset: AdapterCreativeAsset = {
         "creative_id": creative.creative_id,
         "creative": carrier,
@@ -1308,34 +1302,12 @@ def _build_adapter_asset_from_creative(
         # ...unless its content changed since: the ad server's copy is updated, keeping its id
         "platform_creative_outdated": bool(creative_data.get("ad_server_creative_outdated")),
         "package_assignments": package_assignments,
-        "width": first_size.width if first_size else None,
-        "height": first_size.height if first_size else None,
         "click_url": carrier.clickthrough_url,
         "name": creative.name or f"Creative {creative.creative_id}",
-        **_legacy_content_keys(carrier),
     }
     if carrier.impression_tracker_urls:
         asset["delivery_settings"] = {"tracking_urls": {"impression": list(carrier.impression_tracker_urls)}}
     return asset
-
-
-def _legacy_content_keys(carrier: CreativeToTraffic) -> LegacyContentKeys:
-    """The content keys an adapter that does not read ``asset["creative"]`` reads, as it read them before.
-
-    A kind those adapters were handed no ``url`` for gets none: a third-party tag, inline or
-    by URL, is carried only under ``creative``.
-    """
-    representation = carrier.representation
-    if isinstance(representation, HtmlRepresentation):
-        # An html asset is delivered as its markup (AdCP 3.2.7 core/assets/html-asset.json,
-        # ``content``), never as the URL of a page that renders it.
-        return {"snippet": representation.content, "snippet_type": "html"}
-    if isinstance(representation, MediaRepresentation):
-        return {"url": representation.url}
-    if isinstance(representation, Html5BundleRepresentation) and representation.backup_image_url:
-        # What those adapters were handed for an html5 creative before: its backup image.
-        return {"url": representation.backup_image_url}
-    return {}
 
 
 class ApprovalOutcome(StrEnum):

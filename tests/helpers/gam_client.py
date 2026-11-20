@@ -83,8 +83,6 @@ def gam_tag_asset(
         ],
         platform_creative_id=None,
         platform_creative_outdated=False,
-        width=width,
-        height=height,
         click_url=None,
     )
 

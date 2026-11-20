@@ -161,19 +161,7 @@ class PackageAssignmentDict(TypedDict):
     creative: CreativeToTraffic
 
 
-class LegacyContentKeys(TypedDict, total=False):
-    """The content keys the builder derives from the carrier for the adapters that do not read it yet.
-
-    ``url`` for a media file or an html5 bundle's backup image, ``snippet`` and
-    ``snippet_type`` for inline html; a third-party tag gets none.
-    """
-
-    url: str
-    snippet: str
-    snippet_type: str
-
-
-class AdapterCreativeAsset(LegacyContentKeys):
+class AdapterCreativeAsset(TypedDict):
     """One creative as ``add_creative_assets`` is handed it.
 
     Each of ``package_assignments`` carries the creative as it is trafficked on that package.
@@ -188,9 +176,6 @@ class AdapterCreativeAsset(LegacyContentKeys):
     # unless its content changed since, when the ad server's copy is updated keeping its id.
     platform_creative_id: str | None
     platform_creative_outdated: bool
-    # Also derived from the carrier for the adapters that do not read it yet: its first size
-    # and its click URL.
-    width: int | None
-    height: int | None
+    # The carrier's click URL, for the adapters that do not read the carrier yet.
     click_url: str | None
     delivery_settings: NotRequired[dict[str, Any]]
