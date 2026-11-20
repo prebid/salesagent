@@ -582,9 +582,9 @@ def test_ai_connection(tenant_id):
 
     from pydantic import BaseModel
     from pydantic_ai import Agent
-    from pydantic_ai.exceptions import ModelAPIError
 
     from src.services.ai import AIServiceFactory
+    from src.services.ai.factory import AIProviderError, run_agent
 
     data = request.get_json() or {}
     provider = data.get("provider", "gemini")
@@ -627,7 +627,7 @@ def test_ai_connection(tenant_id):
         try:
 
             async def run_test():
-                result = await agent.run("Say hello")
+                result = await run_agent(agent, "Say hello")
                 # pydantic-ai 1.x uses .output for structured data
                 return result.output
 
@@ -640,9 +640,9 @@ def test_ai_connection(tenant_id):
         future = executor.submit(run_in_thread)
         try:
             response = future.result(timeout=30)
-        except ModelAPIError as e:
-            # pydantic-ai turns every provider's API failure into ModelAPIError; a cause
-            # the operator can fix gets its own text, anything else goes to the app's handler.
+        except AIProviderError as e:
+            # The provider failed the call (run_agent classifies it); a cause the operator
+            # can fix gets its own text, anything else goes to the app's handler.
             error_msg = _ai_connection_error_message(e, model)
             if error_msg is None:
                 raise

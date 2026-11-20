@@ -21,7 +21,7 @@ from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import run_async_in_sync_context
 from src.core.webhooks.delivery import WebhookTaskContext
 from src.core.webhooks.registration import accept_push_notification_config, stored_registration_fields
-from src.services.ai.factory import tenant_ai_enabled
+from src.services.ai.factory import AIProviderError, tenant_ai_enabled
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 # TODO: Missing module - these functions need to be implemented
@@ -1027,8 +1027,6 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
     """
     import time
 
-    from pydantic_ai.exceptions import AgentRunError
-
     from src.core.metrics import (
         active_ai_reviews,
         ai_review_duration,
@@ -1045,10 +1043,10 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
             db_session=db_session,
             promoted_offering=promoted_offering,
         )
-    except (AgentRunError, TimeoutError) as e:
-        # The model call failed (pydantic-ai raises AgentRunError for every provider's API
-        # failure and for an unusable answer) or did not answer within the review's timeout:
-        # the creative waits for a human. Anything else is a fault and reaches the caller.
+    except (AIProviderError, TimeoutError) as e:
+        # The provider failed the call (run_agent classifies it: unreachable, refused, or an
+        # unusable answer) or did not answer within the review's timeout: the creative waits
+        # for a human. Anything else is a fault and reaches the caller.
         # Record error metrics (error_type bounded to a fixed enum)
         record_ai_review_error(tenant_id=tenant_id, error=e)
         return {
