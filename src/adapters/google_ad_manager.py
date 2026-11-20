@@ -213,7 +213,7 @@ class GoogleAdManager(AdServerAdapter):
         # Only initialize creative manager if we have advertiser_id (required for creative operations)
         # Note: trafficker_id is NOT required for creative operations - only for order creation
         if self.advertiser_id:
-            self.creatives_manager = GAMCreativesManager(self.client_manager, self.advertiser_id, self.log, self)
+            self.creatives_manager = GAMCreativesManager(self.client_manager, self.advertiser_id)
         else:
             self.creatives_manager = None  # type: ignore[assignment]
 
@@ -225,11 +225,6 @@ class GoogleAdManager(AdServerAdapter):
             self.client_manager, self.inventory_manager, self.orders_manager, self.tenant_id
         )
         self.workflow_manager = GAMWorkflowManager(self.tenant_id, principal, audit_logger, self.log)
-
-        # Initialize legacy validator for backward compatibility
-        from .gam.utils.validation import GAMValidator
-
-        self.validator = GAMValidator()
 
     # Legacy methods for backward compatibility - delegated to managers
     def _init_client(self):
@@ -287,18 +282,6 @@ class GoogleAdManager(AdServerAdapter):
         if not manager:
             raise AdCPConfigurationError(field="orders_manager")
         return manager
-
-    def _validate_creative_for_gam(self, asset):
-        """Validate creative asset for GAM requirements (delegated to creatives manager)."""
-        return self._require_creatives_manager()._validate_creative_for_gam(asset)
-
-    def _get_creative_type(self, asset):
-        """Determine creative type from asset (delegated to creatives manager)."""
-        return self._require_creatives_manager()._get_creative_type(asset)
-
-    def _create_gam_creative(self, asset, creative_type, asset_placeholders):
-        """Create a GAM creative (delegated to creatives manager)."""
-        return self._require_creatives_manager()._create_gam_creative(asset, creative_type, asset_placeholders)
 
     def _check_order_has_guaranteed_items(self, order_id):
         """Check if order has guaranteed line items (delegated to orders manager)."""

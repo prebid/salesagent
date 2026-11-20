@@ -33,7 +33,7 @@ import pytest
 from src.adapters.base import AdapterCreateResult
 from src.core.database.database_session import get_db_session, get_engine
 from src.core.database.models import MediaPackage as DBMediaPackage
-from tests.helpers.gam_client import build_gam_adapter, gam_line_item, stub_gam_client_manager
+from tests.helpers.gam_client import build_gam_adapter, gam_line_item, gam_tag_asset, stub_gam_client_manager
 from tests.helpers.media_buy_approval import run_approval
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -463,20 +463,12 @@ class TestExecuteApprovedEnrichesSellerConcept:
             stub_gam_client_manager(line_items=[gam_line_item("test_package", sizes=((970, 250),))]),
             tenant_id=tenant_id,
         )
-        # The order's line item accepts the asset's 970x250 (read off its format), so the
-        # producer's size-vs-placeholder check passes. This asset only drives the producer
-        # to emit the concept-bearing status — it is independent of the DB package the
-        # writeback (step 2) uses.
-        gam_asset = {
-            "creative_id": creative_id,
-            "name": "HTML5 Banner",
-            "format": "display_970x250",
-            "media_url": "https://example.com/creative.html",
-            "click_url": "https://example.com/landing",
-            "package_assignments": [{"package_id": "test_package", "weight": 100, "platform_line_item_id": "1001"}],
-        }
-        with patch.object(gam, "_validate_creative_for_gam", return_value=[]):
-            statuses = gam.add_creative_assets(gam_order_id, [gam_asset], datetime.now(UTC))
+        # The order's line item accepts the carrier's 970x250, so the producer plans it. This
+        # asset only drives the producer to emit the concept-bearing status -- it is
+        # independent of the DB package the writeback (step 2) uses.
+        statuses = gam.add_creative_assets(
+            gam_order_id, [gam_tag_asset(creative_id, size=(970, 250))], datetime.now(UTC)
+        )
         assert statuses[0].status == "approved"
         assert statuses[0].concept_id == f"gam-order-{gam_order_id}"  # pins the produced key/value
         return statuses
