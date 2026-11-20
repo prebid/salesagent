@@ -147,7 +147,8 @@ patches to the agent source (the Fly size check, the MCP rate limit, and the dep
 updates), so changing a patch publishes a new tag instead of reusing an image built without it.
 The dependency-update patch moves the agent's vulnerable npm packages, the base image's
 bundled npm and its Debian packages to fixed versions without bumping `ADCP_PIN`; the
-Trivy scan after publish shows what is left.
+Trivy scan after publish shows what is left. It regenerates the lockfile as of a fixed
+date in the patch, so one tag always names one dependency tree.
 If the tag already exists, publish is a no-op. Publish failures fail the
 workflow loudly (unlike the test shard, which degrades gracefully).
 

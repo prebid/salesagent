@@ -187,10 +187,12 @@ _raise_mcp_rate_limit() {
 #   - the runtime stage upgrades its Debian packages from bookworm-security and replaces the
 #     bundled npm with npm_version, after running that bundled version through the same
 #     check as the entries below (as an "npm" entry).
-# Each version is the lowest release that fixes every alert open on that package, pinned so a
-# rebuild resolves the same tree; @modelcontextprotocol/core follows client and server so one
-# copy is installed. The Debian upgrade is not pinned: the security archive keeps only the
-# latest build of a package, so a pinned one would stop building at the next update. The build
+# Each version is the lowest release that fixes every alert open on that package;
+# @modelcontextprotocol/core follows client and server so one copy is installed. The lockfile is
+# resolved as of resolve_before, so a package a listed version newly requires gets the same
+# version on every build; the date is part of IMAGE_TAG's checksum. The Debian upgrade is not
+# pinned: the security archive keeps only the latest build of a package, so a pinned one would
+# stop building at the next update. The build
 # fails when the Dockerfile no longer has its two `COPY package*.json ./` lines. It also fails,
 # naming the entry, when the pin's package-lock.json locks every copy of an entry's package at
 # that version or newer, or any copy (or a direct dependency's declared range) above it: the
@@ -202,6 +204,7 @@ _dockerfile_with_dependency_updates() {
     local src_dockerfile="$(_dockerfile_without_fly_size_check)"
     local out="${SRC}/Dockerfile.salesagent-deps"
     local npm_version="11.21.3"
+    local resolve_before="2026-11-19T23:59:59Z"
     local last_from
     last_from="$(grep -n '^FROM ' "$src_dockerfile" | tail -n 1 | cut -d: -f1)"
     {
@@ -278,7 +281,7 @@ MERGE
 STAGE
         echo "RUN npm install -g npm@${npm_version} \\"
         echo " && node /tmp/salesagent-dependency-updates.cjs /tmp/salesagent-dependency-updates.json \\"
-        echo " && npm install --package-lock-only --ignore-scripts --no-audit --no-fund"
+        echo " && npm install --package-lock-only --ignore-scripts --no-audit --no-fund --before=\"${resolve_before}\""
         echo
     } > "$out"
     # The runtime stage's npm goes through the same merge script, as an "npm" entry whose
