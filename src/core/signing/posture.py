@@ -602,10 +602,23 @@ class KeyBacking(NamedTuple):
     ``signs`` additionally requires that this deployment can OPEN the row's private
     half; ``publishes`` does not, because a JWKS needs only the public one. See
     :func:`_private_half_is_resolvable`.
+
+    ``active_kid`` is the key ``active_at`` selects, whether or not it opens. It
+    separates the two reasons ``publishes`` can hold while ``signs`` does not (#2288),
+    and they need opposite fixes: with no key in its active window (revoked, or
+    ``not_before`` still ahead) the fix is to provision a replacement; with an active
+    key nobody can open (the KEK was lost or changed) the fix is to restore the KEK,
+    and re-minting makes it worse (``docs/operations/signing-key-runbook.md``).
     """
 
     signs: bool
     publishes: bool
+    active_kid: str | None
+
+    @property
+    def active_key_unopenable(self) -> bool:
+        """An active key exists but this deployment cannot decrypt its private half."""
+        return self.active_kid is not None and not self.signs
 
 
 def _private_half_is_resolvable(repo: SigningKeyRepository, row: SigningKey, *, now: datetime) -> bool:
@@ -684,4 +697,5 @@ def signing_key_backed(repo: SigningKeyRepository, *, now: datetime) -> KeyBacki
     return KeyBacking(
         signs=active is not None and _private_half_is_resolvable(repo, active, now=now),
         publishes=bool(repo.publishable_at(now=now, grace_seconds=get_settings().signing.grace_seconds)),
+        active_kid=active.kid if active is not None else None,
     )

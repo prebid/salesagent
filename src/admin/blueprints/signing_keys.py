@@ -37,6 +37,7 @@ from src.core.exceptions import AdCPConfigurationError
 # value-set leaf and the provisioning functions are named where they are defined.
 from src.core.signing.algorithms import SIGNING_ALG_VALUES
 from src.core.signing.keys import provision_signing_key, revoke_signing_key
+from src.core.signing.posture import signing_key_backed
 
 logger = logging.getLogger(__name__)
 
@@ -52,18 +53,23 @@ def list_signing_keys(tenant_id: str) -> ResponseReturnValue:
     a rotation: ``publishable_at`` is what a counterparty fetching
     ``/.well-known/jwks.json`` sees (window-blind, revoked keys linger for the
     grace period), ``active_at`` is the single key this agent signs with now.
+
+    The active key's badge comes from ``signing_key_backed`` — the derivation the
+    signer and the setup checklist read — so a key in its active window that this
+    deployment cannot decrypt is shown as not signing (#2288).
     """
     now = datetime.now(UTC)
     with SigningKeyUoW(tenant_id) as uow:
         assert uow.signing_keys is not None
         published = uow.signing_keys.publishable_at(now=now, grace_seconds=get_settings().signing.grace_seconds)
-        active = uow.signing_keys.active_at(now=now)
+        backing = signing_key_backed(uow.signing_keys, now=now)
         # Rendered inside the session context to avoid DetachedInstanceError.
         return render_template(
             "signing_keys_list.html",
             tenant_id=tenant_id,
             keys=published,
-            active_kid=active.kid if active else None,
+            active_kid=backing.active_kid,
+            active_key_unopenable=backing.active_key_unopenable,
             algorithms=SIGNING_ALG_VALUES,
         )
 
