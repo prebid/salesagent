@@ -1,8 +1,8 @@
 """The asset dict production builds is the asset dict an adapter reads.
 
-WHY THIS EXISTS. ``AdServerAdapter.add_creative_assets`` declares
+WHY THIS EXISTS. ``AdServerAdapter.add_creative_assets`` declared
 ``assets: list[dict[str, Any]]`` (``src/adapters/base.py``), so the producer of that dict
-and its consumers cannot disagree at the type level — and they disagreed for a year. The
+and its consumers could not disagree at the type level — and they disagreed for a year. The
 one producer, ``_build_adapter_asset_from_creative``, writes ``creative_id``; GAM's
 creatives manager reads ``creative_id``; the mock ad server read ``id``, a key no producer
 writes. Every create_media_buy that uploaded a creative through the real mock adapter
