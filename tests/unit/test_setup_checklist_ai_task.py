@@ -7,7 +7,7 @@ platform fallback: the seller's own configuration, resolved through
 ``TenantAIConfig.from_tenant``.
 
 ``_ai_features_task`` is the one builder both enumeration paths (per-tenant and bulk) call.
-``TenantFactory.build()`` makes a real ORM ``Tenant`` without touching the database, so
+The ``tenant_row`` fixture builds a real ORM ``Tenant`` without touching the database, so
 ``ai_config`` and ``gemini_api_key`` are read through the attributes production reads.
 """
 
@@ -16,7 +16,6 @@ from __future__ import annotations
 import pytest
 
 from src.services.setup_checklist_service import _ai_features_task
-from tests.factories import TenantFactory
 from tests.helpers.settings_injection import PlatformAICredential
 
 _ANTHROPIC_AI_CONFIG = {"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "sk-ant-tenant"}
@@ -25,22 +24,14 @@ _ANTHROPIC_AI_CONFIG = {"provider": "anthropic", "model": "claude-sonnet-4-20250
 _KEYLESS_AI_CONFIG = {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}
 
 
-@pytest.fixture(autouse=True)
-def _encryption_key(monkeypatch):
-    """``Tenant.gemini_api_key`` encrypts on write and decrypts on read."""
-    from cryptography.fernet import Fernet
-
-    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
-
-
-def _task(platform_key: str | None = None, **tenant_fields):
-    tenant = TenantFactory.build(**tenant_fields)
+def _task(tenant_row, platform_key: str | None = None, **tenant_fields):
+    tenant = tenant_row(**tenant_fields)
     with PlatformAICredential(platform_key):
         return _ai_features_task(tenant.tenant_id, tenant)
 
 
-def test_ai_config_only_tenant_completes_the_task():
-    task = _task(ai_config=_ANTHROPIC_AI_CONFIG)
+def test_ai_config_only_tenant_completes_the_task(tenant_row):
+    task = _task(tenant_row, ai_config=_ANTHROPIC_AI_CONFIG)
 
     assert task.is_complete
     assert task.key == "ai_provider_key"
@@ -48,8 +39,8 @@ def test_ai_config_only_tenant_completes_the_task():
     assert task.details == "AI features enabled"
 
 
-def test_legacy_gemini_column_still_completes_the_task():
-    assert _task(ai_config=None, gemini_api_key="legacy-tenant-key").is_complete
+def test_legacy_gemini_column_still_completes_the_task(tenant_row):
+    assert _task(tenant_row, ai_config=None, gemini_api_key="legacy-tenant-key").is_complete
 
 
 @pytest.mark.parametrize(
@@ -67,8 +58,8 @@ def test_legacy_gemini_column_still_completes_the_task():
         "keyless-row-platform-key-is-not-the-sellers",
     ],
 )
-def test_task_is_incomplete_without_a_usable_seller_configuration(ai_config, platform_key):
-    task = _task(platform_key, ai_config=ai_config)
+def test_task_is_incomplete_without_a_usable_seller_configuration(tenant_row, ai_config, platform_key):
+    task = _task(tenant_row, platform_key, ai_config=ai_config)
 
     assert not task.is_complete
     assert task.details == "Optional: Configure an AI provider API key for AI features"
