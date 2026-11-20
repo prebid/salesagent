@@ -130,7 +130,8 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         _mb_repo = self._uow_instance.media_buys
 
         # Both stubs mirror the real helpers EXACTLY (src/core/database/repositories/
-        # media_buy.py:77, :199): positional ids only, and the typed details model. They
+        # media_buy.py:77, :199): positional ids, the package helper's ``field`` keyword,
+        # and the typed details model. They
         # used to take a ``context=`` keyword and forward it to the exception; a context is
         # written by the boundary alone now, the constructor takes no such argument, and a
         # stub that accepts one can only produce a call production would refuse.
@@ -142,13 +143,14 @@ class MediaBuyUpdateEnv(BaseTestEnv):
                 raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
             return media_buy
 
-        def _get_package_or_raise(media_buy_id: str, package_id: str) -> Any:
+        def _get_package_or_raise(media_buy_id: str, package_id: str, *, field: str | None = None) -> Any:
             package = _mb_repo.get_package(media_buy_id, package_id)
             if package is None:
                 from src.core.exceptions import AdCPPackageNotFoundError
 
                 raise AdCPPackageNotFoundError(
                     details=EntityRefDetails(package_id=package_id, media_buy_id=media_buy_id),
+                    field=field,
                 )
             return package
 

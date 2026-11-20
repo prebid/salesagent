@@ -149,10 +149,7 @@ class TestCreativeGateIsTenantScoped:
             creative_id=shared_creative_id,
             status="approved",
         )
-        # Assigned to the buy's own package, as every production writer assigns one: the
-        # approval reads each assigned creative for the package it is assigned to.
-        (package,) = seeded.media_buy.packages
-        CreativeAssignmentFactory(creative=mine, media_buy=seeded.media_buy, package_id=package.package_id)
+        CreativeAssignmentFactory(creative=mine, media_buy=seeded.media_buy)
 
         # Another tenant's creative, same buyer-supplied id, NOT approved.
         foreign_tenant = TenantFactory(tenant_id=f"t_other_{uuid.uuid4().hex[:8]}")
