@@ -29,7 +29,6 @@ absent from the other.
 """
 
 import json
-import os
 import shutil
 import stat
 import subprocess
@@ -40,7 +39,8 @@ import pytest
 from scripts import check_truncated_reports
 from scripts.check_truncated_reports import truncation_report
 from scripts.ci.shard_split import SHARD_COUNTS
-from tests.unit._run_all_tests_helpers import BASH, REPO_ROOT, RUNNER
+from tests.helpers.bash_stubs import run_bash_with_stubs
+from tests.unit._run_all_tests_helpers import REPO_ROOT, RUNNER
 
 _DOCKER_STUB = """#!/usr/bin/env bash
 # Records every invocation of this fake `docker` (argv, space-joined) to
@@ -260,32 +260,21 @@ def _run_with_stubbed_docker(tmp_path: Path, **extra_env: str) -> tuple[subproce
     workdir.mkdir(parents=True)
     _provision_runner_dependencies(workdir)
 
-    stub_bin = tmp_path / "stub_bin"
-    stub_bin.mkdir()
-    docker_stub = stub_bin / "docker"
-    docker_stub.write_text(_DOCKER_STUB, encoding="utf-8")
-    _make_executable(docker_stub)
-
     docker_log = tmp_path / "docker_calls.log"
     docker_log.touch()
 
-    env = {
-        **os.environ,
-        "PATH": f"{stub_bin}:{os.environ.get('PATH', '')}",
-        "DOCKER_STUB_LOG": str(docker_log),
-        # The dedicated CI security-audit check already owns this scan; skip it
-        # here so a missing/real uvx on the test box can't affect this test.
-        "RUN_ALL_SKIP_AUDIT": "1",
-        **extra_env,
-    }
-
-    proc = subprocess.run(
-        [BASH, "run_all_tests.sh"],
+    proc = run_bash_with_stubs(
+        ["run_all_tests.sh"],
+        stub_dir=tmp_path / "stub_bin",
+        stubs={"docker": _DOCKER_STUB},
+        env={
+            "DOCKER_STUB_LOG": str(docker_log),
+            # The dedicated CI security-audit check already owns this scan; skip it
+            # here so a missing/real uvx on the test box can't affect this test.
+            "RUN_ALL_SKIP_AUDIT": "1",
+            **extra_env,
+        },
         cwd=workdir,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=60,
     )
 
     # The rot guard. run_all_tests.sh gaining another host helper is the failure

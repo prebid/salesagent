@@ -17,13 +17,12 @@ arithmetic honours would still ship the gap.
 
 from __future__ import annotations
 
-import os
 import re
-import subprocess
 
 import pytest
 
-from tests.unit._run_all_tests_helpers import BASH, REPO_ROOT, RUNNER
+from tests.helpers.bash_stubs import run_bash_with_stubs
+from tests.unit._run_all_tests_helpers import REPO_ROOT, RUNNER
 
 #: `_CI_BOX_FLOOR_GB=86`
 _FLOOR_RE = re.compile(r"^_CI_BOX_FLOOR_GB=(\d+)\s*$", re.MULTILINE)
@@ -74,45 +73,31 @@ def _resolve_at(tmp_path, *, mem_gb: int, cores: int) -> dict[str, int]:
     The Parallelism line is emitted before the RUN_ALL_TESTS_RESOLVE_ONLY exit,
     so this costs no Docker stack and no suite.
     """
-    stub_bin = tmp_path / f"stub_{mem_gb}_{cores}"
-    stub_bin.mkdir(parents=True)
-
-    docker = stub_bin / "docker"
-    docker.write_text(
-        '#!/usr/bin/env bash\ncase "$*" in\n  *info*MemTotal*) echo "$DOCKER_STUB_MEMTOTAL_BYTES" ;;\nesac\nexit 0\n',
-        encoding="utf-8",
-    )
-    docker.chmod(0o755)
-
-    nproc = stub_bin / "nproc"
-    nproc.write_text('#!/usr/bin/env bash\necho "$STUB_CORES"\n', encoding="utf-8")
-    nproc.chmod(0o755)
-
-    env = {
-        **os.environ,
-        "PATH": f"{stub_bin}:{os.environ.get('PATH', '')}",
-        "DOCKER_STUB_MEMTOTAL_BYTES": str(mem_gb * 1024**3),
-        "STUB_CORES": str(cores),
-        "RUN_ALL_TESTS_RESOLVE_ONLY": "1",
-    }
-    # The script reads these as overrides, so a value inherited from the caller's
-    # shell would be reported instead of the tier's own choice.
-    for inherited in (
-        "UNIT_XDIST_N",
-        "INTEGRATION_XDIST_N",
-        "E2E_WORKERS",
-        "BDD_XDIST_N",
-        "PYTEST_XDIST_AUTO_NUM_WORKERS",
-    ):
-        env.pop(inherited, None)
-
-    proc = subprocess.run(
-        [BASH, str(RUNNER)],
+    proc = run_bash_with_stubs(
+        [str(RUNNER)],
+        stub_dir=tmp_path / f"stub_{mem_gb}_{cores}",
+        stubs={
+            "docker": (
+                '#!/usr/bin/env bash\ncase "$*" in\n  *info*MemTotal*) echo "$DOCKER_STUB_MEMTOTAL_BYTES" ;;\n'
+                "esac\nexit 0\n"
+            ),
+            "nproc": '#!/usr/bin/env bash\necho "$STUB_CORES"\n',
+        },
+        env={
+            "DOCKER_STUB_MEMTOTAL_BYTES": str(mem_gb * 1024**3),
+            "STUB_CORES": str(cores),
+            "RUN_ALL_TESTS_RESOLVE_ONLY": "1",
+        },
+        # The script reads these as overrides, so a value inherited from the caller's
+        # shell would be reported instead of the tier's own choice.
+        unset=(
+            "UNIT_XDIST_N",
+            "INTEGRATION_XDIST_N",
+            "E2E_WORKERS",
+            "BDD_XDIST_N",
+            "PYTEST_XDIST_AUTO_NUM_WORKERS",
+        ),
         cwd=REPO_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=60,
     )
     line = next(
         (ln for ln in proc.stderr.splitlines() if ln.startswith("Parallelism:")),
