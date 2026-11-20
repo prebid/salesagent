@@ -3,7 +3,8 @@
 # For local development with hot-reload.
 #
 # Usage:
-#   docker compose up
+#   docker compose up                   # empty database: no tenant until you create one
+#   docker compose --profile demo up    # also creates a demo tenant on an empty database
 #
 # Endpoints (default port 8000):
 #   http://localhost:8000/       - Admin UI (login here)
@@ -11,14 +12,14 @@
 #   http://localhost:8000/mcp    - MCP Server (for AI agents)
 #   http://localhost:8000/a2a    - A2A Server (agent-to-agent)
 #
-# First-time setup:
-#   1. Log in with Google as a SUPER_ADMIN_EMAILS address (there is no password login)
-#   2. Configure SSO in Users & Access
-#   3. Disable Setup Mode once SSO is working
+# First-time setup (the server itself creates no tenant):
+#   1. Create a tenant: `--profile demo` above, the Admin UI as a super admin, or
+#      docker compose exec adcp-server python -m scripts.setup.setup_tenant "Name" --virtual-host <host>
+#   2. Log in with Google as a SUPER_ADMIN_EMAILS address (there is no password login)
+#   3. Configure SSO in Users & Access, then disable Setup Mode once SSO is working
 #
 # Environment variables (optional, via .env file):
 #   CONDUCTOR_PORT: Change proxy port (default: 8000, useful for multiple worktrees)
-#   CREATE_DEMO_TENANT=true: Create demo tenant with mock adapter
 
 services:
   postgres:
@@ -54,6 +55,29 @@ services:
     volumes:
       - .:/app
     command: ["python", "scripts/ops/migrate.py"]
+
+  # One-shot: creates the demo tenant (mock adapter, sample catalogue, a fresh principal token
+  # printed to this service's log) when the database holds no tenant, and does nothing when it
+  # holds one. Only runs with `docker compose --profile demo up`; read the token with
+  # `docker compose logs demo-setup`.
+  demo-setup:
+    profiles: ["demo"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: []
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
+      PYTHONPATH: "/app"
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    volumes:
+      - .:/app
+    command: ["python", "-m", "scripts.setup.demo_tenant", "--virtual-host", "localhost:${CONDUCTOR_PORT:-8000}"]
 
   proxy:
     image: nginx:stable

@@ -123,7 +123,7 @@ Or use individual variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SKIP_MIGRATIONS` | `false` | Skip automatic migrations on startup |
+| `SKIP_MIGRATIONS` | `false` | Skip automatic migrations on startup; run `python scripts/ops/migrate.py` as its own step before starting the new version |
 
 ---
 
@@ -195,10 +195,9 @@ in every deployment: properties come only from it.
 
 ### Demo data
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CREATE_DEMO_TENANT` | `false` | **Local testing only.** Creates a "Demo Sales Agent" tenant with the mock adapter. Do NOT use in production. |
-| `CREATE_SAMPLE_DATA` | `false` | Create sample products, media buys, and related records (requires the demo tenant) |
+No variable creates a tenant: the server provisions nothing when it starts. For a local demo,
+`docker compose --profile demo up` runs `scripts/setup/demo_tenant.py`, which creates a demo
+tenant on an empty database. See [Single-tenant deployment](single-tenant.md#first-time-setup).
 
 ### Security
 
@@ -270,7 +269,6 @@ These can live in `fly.toml`, `docker-compose.yml`, or similar config files:
 - `ENVIRONMENT`, `PRODUCTION`
 - `ADCP_MULTI_TENANT`, `SALES_AGENT_DOMAIN`, `ADMIN_DOMAIN`
 - `ADMIN_UI_URL`
-- `CREATE_DEMO_TENANT`
 - `SKIP_NGINX`, `SKIP_CRON`
 
 ### Variables with sensible defaults

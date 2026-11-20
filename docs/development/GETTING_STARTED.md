@@ -188,9 +188,12 @@ The `.env` file is created from `.env.template` during setup. Key variables:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `CREATE_DEMO_TENANT` | `false` | Creates sample data on first startup |
 | `ENVIRONMENT` | `development` | `development` = strict validation, `production` = lenient |
 | `CONDUCTOR_PORT` | `8000` | Nginx proxy port |
+
+The server creates no tenant when it starts. `docker compose --profile demo up` adds a demo
+tenant (mock adapter, sample products) to an empty database and prints its token in
+`docker compose logs demo-setup`; `python -m scripts.setup.setup_tenant` creates any other.
 
 For OAuth, GAM integration, and other production settings, see the comments in `.env.template` or [Environment Variables](../deployment/environment-variables.md).
 

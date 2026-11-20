@@ -56,21 +56,23 @@ def _ensure_test_auth_enabled():
 
     from sqlalchemy import create_engine, text
 
-    # Own the precondition instead of assuming it: the 'default' tenant is
-    # boot-seeded by the server, but the bdd suite's e2e scenarios TRUNCATE the
-    # server DB, so by the time ui runs it may be gone (suite-order dependent).
-    # Re-run the idempotent production seed (single source of truth, race-safe)
-    # and fail loud if the tenant still doesn't exist. (#1418)
-    from src.core.database.database import init_db
+    # Own the precondition instead of assuming it: the server creates no tenant at start
+    # (#2260), and the bdd suite's e2e scenarios TRUNCATE the server DB, so the 'default'
+    # tenant is created here through the operator's own setup command when it is absent,
+    # and its absence afterwards fails loud. (#1418)
+    from scripts.setup.setup_tenant import TenantAlreadyExistsError, TenantSetup, create_tenant
 
-    init_db()
+    try:
+        create_tenant(TenantSetup(name="UI Default", tenant_id="default", virtual_host="ui-default.adcp.test"))
+    except TenantAlreadyExistsError:
+        pass  # a previous session created it; the check below still runs
 
     engine = create_engine(db_url)
     with engine.connect() as conn:
         missing = conn.execute(text("SELECT 1 FROM tenants WHERE tenant_id = 'default'")).first() is None
         if missing:
             raise RuntimeError(
-                "ui precondition failed: tenant 'default' absent after init_db() — "
+                "ui precondition failed: tenant 'default' absent after setup_tenant — "
                 f"seed targets DATABASE_URL while this fixture configures {db_url}; check the env split"
             )
         conn.execute(text("UPDATE tenants SET auth_setup_mode = true WHERE tenant_id = 'default'"))

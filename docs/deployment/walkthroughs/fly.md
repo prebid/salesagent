@@ -84,16 +84,21 @@ Authentication is configured **per-tenant** via the Admin UI. No OAuth environme
 
 ### Initial Setup Flow
 
-1. Deploy the application (Step 6 below)
-2. Access the Admin UI at `https://your-app-name.fly.dev/admin`
-3. Log in with the deployment's own OAuth account (the address you put in
+1. Deploy the application (Step 6 below). The app applies migrations at start and creates no
+   tenant.
+2. Create the first tenant, once:
+   `fly ssh console -C "python -m scripts.setup.setup_tenant 'My Publisher' --virtual-host your-app-name.fly.dev"`.
+   It prints the first advertiser's token once; store it. (A super admin can also create
+   tenants in the Admin UI.)
+3. Access the Admin UI at `https://your-app-name.fly.dev/admin`
+4. Log in with the deployment's own OAuth account (the address you put in
    `SUPER_ADMIN_EMAILS`). Setup Mode, enabled by default for new tenants, lets you verify
    a tenant's OIDC login before you enable it.
-4. Go to **Users & Access** and configure your SSO provider (Google, Microsoft, Okta, Auth0, Keycloak, or any OIDC provider)
-5. Copy the **Redirect URI** shown and add it to your provider: `https://your-app-name.fly.dev/auth/oidc/callback`
-6. **Add yourself**: Add your email as a user OR add your domain to Allowed Domains
-7. Click **Save Configuration**, then **Test Connection** - SSO is automatically enabled on success
-8. Click **Disable Setup Mode** to require SSO for all logins
+5. Go to **Users & Access** and configure your SSO provider (Google, Microsoft, Okta, Auth0, Keycloak, or any OIDC provider)
+6. Copy the **Redirect URI** shown and add it to your provider: `https://your-app-name.fly.dev/auth/oidc/callback`
+7. **Add yourself**: Add your email as a user OR add your domain to Allowed Domains
+8. Click **Save Configuration**, then **Test Connection** - SSO is automatically enabled on success
+9. Click **Disable Setup Mode** to require SSO for all logins
 
 > **Important**: You must add yourself as a user or add your email domain BEFORE testing. Otherwise you'll see "Access denied" after authenticating.
 
