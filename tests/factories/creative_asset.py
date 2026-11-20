@@ -6,6 +6,7 @@ Used by creative sync tests instead of hand-crafted dicts.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -214,6 +215,68 @@ def asset_spec(role: str, asset_type: str, *, multiple: bool = False, **fields: 
     return AssetSpec(role, asset_type, dict(fields), multiple)
 
 
+#: The slot an option accepting inline or paired delivery replaces the display_tag kind's
+#: slots with (formats/canonical/display_tag.json: "Format options accepting inline or paired
+#: delivery override `slots` with a `display_tag` asset"), under the name display.mdx gives it.
+DISPLAY_TAG_SLOT = "serving_tag"
+
+
+def display_tag_spec(delivery_type: str, *, role: str = DISPLAY_TAG_SLOT, **fields: object) -> AssetSpec:
+    """A ``display_tag`` asset of *delivery_type* (core/assets/display-tag-asset.json).
+
+    ``tag_url`` takes ``url``; ``inline_markup`` takes ``markup`` and ``markup_type``;
+    ``paired_redirect`` takes ``ad_request_url`` and ``clickthrough_url``. A tag URL creative is
+    this asset with ``delivery_type="tag_url"``; the kind's legacy ``tag_url`` url slot is
+    :func:`legacy_tag_url_spec`.
+    """
+    return asset_spec(role, "display_tag", delivery_type=delivery_type, **fields)
+
+
+def legacy_tag_url_spec(url: str, *, url_type: str | None = None) -> AssetSpec:
+    """The display_tag kind's backward-compatible default slot: a url asset under ``tag_url``.
+
+    formats/canonical/display_tag.json: "The backward-compatible default slot remains
+    `tag_url` (`url_type: ad_request`)". *url_type* is the asset's own mechanism, or none.
+    """
+    return url_spec("tag_url", url=url, url_type=url_type)
+
+
+def html_spec(role: str, *, content: str) -> AssetSpec:
+    """An inline ``html`` asset (core/assets/html-asset.json: ``content`` is its one required member)."""
+    return asset_spec(role, "html", content=content)
+
+
+def html5_bundle_specs(
+    bundle_url: str | None, *, backup_url: str, backup_width: int = 300, backup_height: int = 250
+) -> tuple[AssetSpec, AssetSpec]:
+    """The html5 kind's two slots (formats/canonical/html5.json): ``html5_bundle`` (zip) and ``backup_image``.
+
+    *bundle_url* ``None`` stores a zip asset carrying no ``url``, the member
+    core/assets/zip-asset.json requires.
+    """
+    bundle = asset_spec("html5_bundle", "zip", **({} if bundle_url is None else {"url": bundle_url}))
+    return bundle, image_spec("backup_image", url=backup_url, width=backup_width, height=backup_height)
+
+
+def html5_zip_bundle() -> bytes:
+    """A one-file HTML5 bundle, as a zip archive with a fixed timestamp so its bytes are stable."""
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as bundle:
+        bundle.writestr(
+            zipfile.ZipInfo("index.html", date_time=(2026, 1, 1, 0, 0, 0)),
+            '<html><body><a href="javascript:window.open(clickTag)">Example ad</a></body></html>',
+        )
+    return buffer.getvalue()
+
+
+def parse_sizes(text: str) -> list[dict[str, int]]:
+    """``"300x250, 728x90"`` as ``{width, height}`` objects, in order: a format option's ``sizes``."""
+    return [{"width": int(w), "height": int(h)} for w, h in re.findall(r"(\d+)x(\d+)", text)]
+
+
 def build_assets(*specs: AssetSpec) -> dict:
     """Merge specs into one ``assets`` slot map for a creative payload.
 
@@ -306,7 +369,7 @@ def format_manifest(fmt: Any, *, media_url: str | None = None, prompt: str | Non
         "text": lambda asset_id: text_spec(asset_id, content=prompt or "Test copy"),
         "video": lambda asset_id: video_spec(asset_id, **media),
         "audio": lambda asset_id: asset_spec(asset_id, "audio", url=media_url or "https://example.com/spot.mp3"),
-        "html": lambda asset_id: asset_spec(asset_id, "html", content="<div>ad</div>"),
+        "html": lambda asset_id: html_spec(asset_id, content="<div>ad</div>"),
         "vast": lambda asset_id: asset_spec(asset_id, "vast", delivery_type="url", url="https://example.com/vast.xml"),
         "daast": lambda asset_id: asset_spec(
             asset_id, "daast", delivery_type="url", url="https://example.com/daast.xml"

@@ -42,9 +42,24 @@ from tests.bdd.steps._outcome_helpers import (
 )
 from tests.bdd.steps.domain.uc006_sync_creatives import _ask_assignment_terms, when_sync_creative_with_assignments
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
+from tests.bdd.steps.generic._creative_seeding import store_creative, store_package_creative
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import rows as table_rows
+from tests.factories.creative_asset import (
+    build_assets,
+    display_tag_spec,
+    html5_bundle_specs,
+    html5_zip_bundle,
+    html_spec,
+    image_spec,
+    parse_sizes,
+    text_spec,
+    url_spec,
+)
 from tests.helpers.gam_client import gam_delivery_row
+
+#: The reference-catalog format a GAM seller's default product sells.
+_LIBRARY_IMAGE_FORMAT = "display_300x250_image"
 
 
 @given(
@@ -215,12 +230,10 @@ def given_package_references_ready_and_held_creatives(
     ctx: dict, ready_id: str, ready_url: str, held_id: str, held_url: str
 ) -> None:
     """Two library creatives in the format the GAM product sells, both named in the package's creative_ids."""
-    from tests.bdd.steps.generic.given_media_buy import _add_creative_ids_to_package
-
-    _library_image_creative(ctx, ready_id, ready_url)
-    _library_image_creative(ctx, held_id, held_url, status="pending_review")
-    ctx["env"]._commit_factory_data()
-    _add_creative_ids_to_package(ctx, [ready_id, held_id])
+    store_package_creative(ctx, ready_id, _library_image_assets(ready_url), fmt=_LIBRARY_IMAGE_FORMAT)
+    store_package_creative(
+        ctx, held_id, _library_image_assets(held_url), fmt=_LIBRARY_IMAGE_FORMAT, status="pending_review"
+    )
 
 
 @given(
@@ -315,62 +328,19 @@ def given_package_references_creative_gam_holds(
     ctx: dict, creative_id: str, url: str, status: str, gam_id: str
 ) -> None:
     """A library creative whose record holds GAM's id for it, named in the package's creative_ids."""
-    from tests.bdd.steps.generic.given_media_buy import _add_creative_ids_to_package
-
-    _library_image_creative(
+    store_package_creative(
         ctx,
         creative_id,
-        url,
+        _library_image_assets(url),
+        fmt=_LIBRARY_IMAGE_FORMAT,
         status="approved" if status == "approved" else "pending_review",
         ad_server_creative_id=gam_id,
     )
-    ctx["env"]._commit_factory_data()
-    _add_creative_ids_to_package(ctx, [creative_id])
 
 
-def _library_image_creative(
-    ctx: dict, creative_id: str, url: str, *, status: str = "approved", principal: Any = None, **data: Any
-) -> None:
-    """A 300x250 image creative stored in the library, in the reference format the GAM product sells.
-
-    The buyer's own unless *principal* names another; *data* adds keys to its stored record.
-    """
-    from tests.factories.creative_asset import image_spec
-
-    _library_creative(
-        ctx,
-        creative_id,
-        "display_300x250_image",
-        image_spec("banner_image", url=url),
-        status=status,
-        principal=principal,
-        **data,
-    )
-
-
-def _library_creative(
-    ctx: dict,
-    creative_id: str,
-    format_id: str | None,
-    *assets: Any,
-    status: str = "approved",
-    principal: Any = None,
-    canonical_kind: str | None = None,
-    **data: Any,
-) -> None:
-    """A creative stored in the library with *assets*: in reference-catalog format *format_id*, or of *canonical_kind*."""
-    from tests.factories.creative import CreativeFactory
-    from tests.factories.creative_asset import build_assets
-
-    identity = {"canonical_kind": canonical_kind} if canonical_kind is not None else {"format": format_id}
-    CreativeFactory(
-        creative_id=creative_id,
-        tenant=ctx["tenant"],
-        principal=principal or ctx["principal"],
-        status=status,
-        data={"assets": build_assets(*assets), **data},
-        **identity,
-    )
+def _library_image_assets(url: str) -> dict[str, Any]:
+    """A 300x250 image creative's assets in the reference format the GAM product sells: its ``banner_image``."""
+    return build_assets(image_spec("banner_image", url=url))
 
 
 @given(
@@ -393,8 +363,13 @@ def given_another_buyer_holds_creative(ctx: dict, creative_id: str, url: str) ->
     """A second principal of the tenant, with a creative under an id the buyer also uses."""
     from tests.factories import PrincipalFactory
 
-    _library_image_creative(ctx, creative_id, url, principal=PrincipalFactory(tenant=ctx["tenant"]))
-    ctx["env"]._commit_factory_data()
+    store_creative(
+        ctx,
+        creative_id,
+        _library_image_assets(url),
+        fmt=_LIBRARY_IMAGE_FORMAT,
+        principal=PrincipalFactory(tenant=ctx["tenant"]),
+    )
 
 
 @given(
@@ -427,8 +402,9 @@ def given_gam_fails_report_job(ctx: dict, advertiser_id: str) -> None:
 )
 def given_buyer_holds_creative_recorded_with_own_id(ctx: dict, creative_id: str, url: str) -> None:
     """A library creative whose record holds the buyer's id under ``platform_creative_id``, as #2247 wrote it."""
-    _library_image_creative(ctx, creative_id, url, platform_creative_id=creative_id)
-    ctx["env"]._commit_factory_data()
+    store_creative(
+        ctx, creative_id, _library_image_assets(url), fmt=_LIBRARY_IMAGE_FORMAT, platform_creative_id=creative_id
+    )
 
 
 @given(
@@ -445,29 +421,15 @@ def given_buyer_holds_html_creative(ctx: dict, creative_id: str, markup: str, pr
     as the creative's root ``url``, ``width`` and ``height``
     (src/core/tools/creatives/_processing.py).
     """
-    from tests.factories.creative_asset import asset_spec
-
-    _library_creative(
+    store_creative(
         ctx,
         creative_id,
-        "display_300x250_html",
-        asset_spec("html_creative", "html", content=markup),
+        build_assets(html_spec("html_creative", content=markup)),
+        fmt="display_300x250_html",
         url=preview_url,
         width=300,
         height=250,
     )
-    ctx["env"]._commit_factory_data()
-
-
-def _package_references_library_creative(
-    ctx: dict, creative_id: str, format_id: str | None, *assets: Any, canonical_kind: str | None = None
-) -> None:
-    """An approved library creative with *assets*, named in the package's creative_ids."""
-    from tests.bdd.steps.generic.given_media_buy import _add_creative_ids_to_package
-
-    _library_creative(ctx, creative_id, format_id, *assets, canonical_kind=canonical_kind)
-    ctx["env"]._commit_factory_data()
-    _add_creative_ids_to_package(ctx, [creative_id])
 
 
 @given(
@@ -475,7 +437,9 @@ def _package_references_library_creative(
         r'the package references the buyer\'s approved display_tag creative "(?P<creative_id>[^"]+)" carrying '
         r'(?:the inline markup "(?P<markup>[^"]+)" of type "(?P<markup_type>[^"]+)"'
         r'|the tag URL "(?P<tag_url>[^"]+)"'
-        r'|the paired redirect "(?P<ad_request_url>[^"]+)" with click-through "(?P<clickthrough_url>[^"]+)")$'
+        r'|the paired redirect "(?P<ad_request_url>[^"]+)" with click-through "(?P<clickthrough_url>[^"]+)")'
+        r"(?:, recorded with the creative agent's preview page \"(?P<preview_url>[^\"]+)\" as its url at "
+        r"(?P<width>\d+)x(?P<height>\d+))?$"
     )
 )
 def given_package_references_display_tag_creative(
@@ -486,73 +450,51 @@ def given_package_references_display_tag_creative(
     tag_url: str | None,
     ad_request_url: str | None,
     clickthrough_url: str | None,
+    preview_url: str | None,
+    width: str | None,
+    height: str | None,
 ) -> None:
-    """A canonical ``display_tag`` creative carrying one of the kind's three representations.
+    """A canonical ``display_tag`` creative carrying one ``display_tag`` asset of the kind's three delivery types.
 
-    AdCP 3.2.7 formats/canonical/display_tag.json: the default slot is ``tag_url``, a url
-    asset with ``url_type: ad_request``; an option accepting inline or paired delivery
-    replaces the slots with a ``display_tag`` asset, here under ``serving_tag``
-    (core/assets/display-tag-asset.json: ``delivery_type`` ``inline_markup`` with
-    ``markup`` and ``markup_type``, or ``paired_redirect`` with ``ad_request_url`` and
-    ``clickthrough_url``).
+    AdCP 3.2.7 core/assets/display-tag-asset.json: ``delivery_type`` ``tag_url`` with ``url``,
+    ``inline_markup`` with ``markup`` and ``markup_type``, or ``paired_redirect`` with
+    ``ad_request_url`` and ``clickthrough_url``, under the slot an option accepting it
+    declares (``serving_tag``). The product's format options are the seller Given's.
+
+    The recorded clause is a row synced before sync stopped copying the creative agent's
+    preview onto the creative: its root ``url`` is the preview page and its root size the
+    preview's.
     """
-    from tests.factories.creative_asset import asset_spec, url_spec
-
     if tag_url is not None:
-        asset = url_spec("tag_url", url=tag_url, url_type="ad_request")
+        asset = display_tag_spec("tag_url", url=tag_url)
     elif markup is not None:
-        asset = asset_spec(
-            "serving_tag", "display_tag", delivery_type="inline_markup", markup=markup, markup_type=markup_type
-        )
+        asset = display_tag_spec("inline_markup", markup=markup, markup_type=markup_type)
     else:
-        asset = asset_spec(
-            "serving_tag",
-            "display_tag",
-            delivery_type="paired_redirect",
-            ad_request_url=ad_request_url,
-            clickthrough_url=clickthrough_url,
-        )
-    _package_references_library_creative(ctx, creative_id, None, asset, canonical_kind="display_tag")
-
-
-def _html5_zip_bundle() -> bytes:
-    """A one-file HTML5 bundle, as a zip archive with a fixed timestamp so its bytes are stable."""
-    import io
-    import zipfile
-
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as bundle:
-        bundle.writestr(
-            zipfile.ZipInfo("index.html", date_time=(2026, 1, 1, 0, 0, 0)),
-            '<html><body><a href="javascript:window.open(clickTag)">Example ad</a></body></html>',
-        )
-    return buffer.getvalue()
+        asset = display_tag_spec("paired_redirect", ad_request_url=ad_request_url, clickthrough_url=clickthrough_url)
+    recorded = {} if preview_url is None else {"url": preview_url, "width": int(str(width)), "height": int(str(height))}
+    store_package_creative(ctx, creative_id, build_assets(asset), kind="display_tag", **recorded)
 
 
 @given(
     parsers.re(
         r'the package references the buyer\'s approved html5 creative "(?P<creative_id>[^"]+)" carrying a zip '
-        r'bundle from the buyer\'s bundle host and the backup image "(?P<backup_url>[^"]+)"$'
+        r'bundle from the buyer\'s bundle host and the backup image "(?P<backup_url>[^"]+)"'
+        r"(?:, sized (?P<width>\d+)x(?P<height>\d+))?$"
     )
 )
-def given_package_references_html5_creative(ctx: dict, creative_id: str, backup_url: str) -> None:
-    """A canonical ``html5`` creative: a zip bundle the buyer's host serves, and a 300x250 backup image.
+def given_package_references_html5_creative(
+    ctx: dict, creative_id: str, backup_url: str, width: str | None, height: str | None
+) -> None:
+    """A canonical ``html5`` creative: a zip bundle the buyer's host serves, and a backup image, 300x250 unless sized.
 
     AdCP 3.2.7 formats/canonical/html5.json: slot ``html5_bundle`` (zip asset) and the
     optional ``backup_image``. The bundle's bytes are kept to compare with what GAM receives.
     """
-    from tests.factories.creative_asset import asset_spec, image_spec
-
-    ctx["html5_bundle"] = _html5_zip_bundle()
+    ctx["html5_bundle"] = html5_zip_bundle()
     bundle_url = ctx["env"].serve_html5_bundle(ctx["html5_bundle"])
-    _package_references_library_creative(
-        ctx,
-        creative_id,
-        None,
-        asset_spec("html5_bundle", "zip", url=bundle_url),
-        image_spec("backup_image", url=backup_url),
-        canonical_kind="html5",
-    )
+    size = {} if width is None else {"backup_width": int(width), "backup_height": int(str(height))}
+    assets = build_assets(*html5_bundle_specs(bundle_url, backup_url=backup_url, **size))
+    store_package_creative(ctx, creative_id, assets, kind="html5")
 
 
 @given(
@@ -563,11 +505,8 @@ def given_package_references_html5_creative(ctx: dict, creative_id: str, backup_
 )
 def given_package_references_html_creative(ctx: dict, creative_id: str, markup: str) -> None:
     """A library creative in the reference HTML format whose one asset is its markup, and no root URL or size."""
-    from tests.factories.creative_asset import asset_spec
-
-    _package_references_library_creative(
-        ctx, creative_id, "display_300x250_html", asset_spec("html_creative", "html", content=markup)
-    )
+    assets = build_assets(html_spec("html_creative", content=markup))
+    store_package_creative(ctx, creative_id, assets, fmt="display_300x250_html")
 
 
 @given(
@@ -584,17 +523,37 @@ def given_package_references_native_creative(
     AdCP 3.2.7 formats/canonical/native_in_feed.json requires ``title``,
     ``advertiser_name`` and ``landing_page_url``; ``main_image`` is optional.
     """
-    from tests.factories.creative_asset import image_spec, text_spec, url_spec
-
-    _package_references_library_creative(
-        ctx,
-        creative_id,
-        None,
+    assets = build_assets(
         text_spec("title", content=title),
         text_spec("advertiser_name", content=advertiser),
         url_spec("landing_page_url", url=landing_url),
         image_spec("main_image", url=image_url),
-        canonical_kind="native_in_feed",
+    )
+    store_package_creative(ctx, creative_id, assets, kind="native_in_feed")
+
+
+@given(
+    parsers.re(
+        r'Google Ad Manager sells product "(?P<product_id>[^"]+)" with product formats \'(?P<product_formats>[^\']*)\''
+        r"(?:, with product settings '(?P<product_settings>[^']*)')?$"
+    )
+)
+def given_gam_sells_product_with_formats(
+    ctx: dict, product_id: str, product_formats: str, product_settings: str | None
+) -> None:
+    """One product of the GAM seller sells its own format arms, over its own configuration keys.
+
+    The seller Given sells every product with one set of formats; this re-sells *product_id*
+    with *product_formats* (``core/product.json``'s ``format_ids``/``format_options``) and the
+    ``implementation_config`` keys in *product_settings*, as the Admin UI's product form
+    writes them.
+    """
+    from tests.bdd.steps.generic.given_media_buy import seeded_product
+
+    ctx["env"].sell_product_through_gam(
+        seeded_product(ctx, product_id),
+        product_formats=json.loads(product_formats),
+        implementation_config=json.loads(product_settings) if product_settings is not None else {},
     )
 
 
@@ -746,7 +705,7 @@ def given_buyer_holds_booked_buy(ctx: dict, owner: str, order_id: str, status: s
         principal = PrincipalFactory(
             tenant=ctx["tenant"], platform_mappings={"google_ad_manager": {"advertiser_id": "3000002"}}
         )
-    ctx["env"].book_in_gam(
+    media_buy = ctx["env"].book_in_gam(
         principal=principal,
         line_items=[
             (package, line_item, (int(width), int(height)))
@@ -756,6 +715,9 @@ def given_buyer_holds_booked_buy(ctx: dict, owner: str, order_id: str, status: s
         product=ctx["default_product"],
         status=status or "pending_creatives",
     )
+    if principal is None:
+        # The buyer's own booked buy: the one the seller's approval of a creative pushes to.
+        ctx["live_media_buy"] = media_buy
 
 
 @given(parsers.re(r'the buyer has (?P<state>paused|left) package "(?P<package>[^"]+)" of the buy$'))
@@ -1021,13 +983,36 @@ def then_gam_associated_with_size_override(ctx: dict, sizes: str | None) -> None
     not be compatible for its actual size." "At its own size" is an association stating none.
     """
     (creative,) = _creatives_created(ctx)
-    expected_sizes = [
-        {"width": int(width), "height": int(height)}
-        for width, height in (size.strip().split("x") for size in (sizes.split(",") if sizes else ()))
-    ]
+    expected_sizes = parse_sizes(sizes or "")
     held = [(str(a["creativeId"]), str(a["lineItemId"]), list(a.get("sizes") or [])) for a in _licas_created(ctx)]
     expected = [(str(creative["id"]), str(_line_item_created(ctx)["id"]), expected_sizes)]
     assert held == expected, f"expected GAM to hold {expected}; it holds {held}"
+
+
+@then(
+    parsers.parse(
+        'Google Ad Manager serves that creative on the "{product_id}" package\'s line item at sizes "{sizes}" only'
+    )
+)
+def then_gam_serves_creative_on_package_line_item_at(ctx: dict, product_id: str, sizes: str) -> None:
+    """On the line item of the package on *product_id*, the one creative GAM created serves at exactly *sizes*.
+
+    Ad Manager API v202602 ``LineItemCreativeAssociation.sizes``: "Overrides the value set for
+    Creative.size". So the sizes a creative serves at on a line item are its association's
+    ``sizes``, or the creative's own ``size`` when the association states none. One
+    association of the creative on that line item.
+    """
+    (creative,) = _creatives_created(ctx)
+    line_item_id = str(_line_item_for(ctx, product_id)["id"])
+    served = [
+        list(a.get("sizes") or [creative["size"]])
+        for a in _licas_created(ctx)
+        if (str(a["creativeId"]), str(a["lineItemId"])) == (str(creative["id"]), line_item_id)
+    ]
+    assert served == [parse_sizes(sizes)], (
+        f"expected creative {creative['id']} to serve at {sizes} on the {product_id!r} package's line item "
+        f"{line_item_id}; GAM serves it at {served}"
+    )
 
 
 @then(parsers.parse('creative "{creative_id}" failed with error {code} and recovery {recovery}'))

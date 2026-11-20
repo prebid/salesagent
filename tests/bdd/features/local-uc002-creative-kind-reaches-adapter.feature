@@ -56,6 +56,10 @@
 # @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/media-buy/package-request.json pointer=/properties/format_option_refs
 # @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/creative/sync-creatives-response.json
 # @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/sync_creatives.mdx
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/url-asset.json
+# @source repo=adcp ref=v3.2.7 path=docs/creative/asset-types.mdx
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/display_tag.json pointer=/properties/supported_delivery_types
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/representation-rejection.json
 Feature: The ad server receives each creative as its canonical kind and the representation the buyer sent (local)
 
   @T-UC-002-local-creative-kind-inline-markup @extension @creative
@@ -77,22 +81,58 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     Then the response should succeed
     And the ad server receives creative "cr-tag" of kind "display_tag" as the ad tag "https://ads.example-adserver.com/tag?slot=42&cb=%%CACHEBUSTER%%"
 
-  # The backward-compatible default: the kind's `tag_url` slot, a url asset. With its own
-  # url_type, and without one, where the format's slot states the mechanism
-  # (formats/canonical/display_tag.json: "`tag_url` MUST use `url_type: ad_request`").
+  # The backward-compatible default: the kind's `tag_url` slot, a url asset carrying its own
+  # url_type (formats/canonical/display_tag.json: "The backward-compatible default slot remains
+  # `tag_url` (`url_type: ad_request`)").
   @T-UC-002-local-creative-kind-legacy-tag-url @extension @creative
-  Scenario Outline: A url asset in the display_tag kind's tag_url slot reaches the ad server as an ad request, not an image - <signal>
+  Scenario: A url asset in the display_tag kind's tag_url slot, declaring url_type ad_request, reaches the ad server as an ad request, not an image
     Given a valid create_media_buy request
     And the account exists and is active
-    And the package references the buyer's approved display_tag creative "cr-legacy-tag" whose tag_url slot carries "https://ads.example-adserver.com/legacy?cb=%%CACHEBUSTER%%" <signal>
+    And the package references the buyer's approved display_tag creative "cr-legacy-tag" whose tag_url slot carries "https://ads.example-adserver.com/legacy?cb=%%CACHEBUSTER%%" with url_type "ad_request"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And the ad server receives creative "cr-legacy-tag" of kind "display_tag" as the ad tag "https://ads.example-adserver.com/legacy?cb=%%CACHEBUSTER%%"
 
-    Examples:
-      | signal                     |
-      | with url_type "ad_request" |
-      | with no url_type           |
+  # F8(b) (PR #2582 review): the same url asset with no url_type is invoked as an ad request
+  # today, because it sits in the kind's tag_url slot. The pin rules that fallback out. AdCP
+  # 3.2.7 core/assets/url-asset.json: "third_party_tracker and display ad requests have no safe
+  # fallback. When neither `url_type` nor a format-side role is available, receivers MUST NOT
+  # silently pick a mechanism." docs/creative/asset-types.mdx:203: "Display ad-request URLs also
+  # have no role-based fallback. Declare `url_type: "ad_request"` explicitly." The display_tag
+  # slot's "MUST use `url_type: ad_request`" obliges the sender. So the creative carries nothing
+  # this seller can serve, which the create gate answers VALIDATION_ERROR before the ad server
+  # is handed the buy, as it does for @T-UC-002-local-creative-kind-generative-unbuilt.
+  @T-UC-002-local-creative-kind-legacy-tag-url-no-url-type @extension @creative
+  Scenario: A url asset in the display_tag kind's tag_url slot with no url_type is refused before the ad server is handed the buy
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package references the buyer's approved display_tag creative "cr-legacy-tag" whose tag_url slot carries "https://ads.example-adserver.com/legacy?cb=%%CACHEBUSTER%%" with no url_type
+    When the Buyer Agent sends the create_media_buy request
+    Then the operation should fail with error code "VALIDATION_ERROR"
+    And the ad server is handed no creative
+    And the ad server adapter should never be invoked
+
+  # F8(a) (PR #2582 review): nothing grades an option's delivery types, so inline markup is
+  # trafficked on an option that traffics only paired redirects. AdCP 3.2.7
+  # formats/canonical/display_tag.json `supported_delivery_types`: "Closed set of delivery types
+  # this format option can traffic." The pin's one structured code for this,
+  # core/representation-rejection.json `unsupported_delivery_type`, is a "Structured
+  # incompatibility reason for one candidate in a failed CreativeRepresentationSet
+  # resolution", and this creative is one manifest, not a representation set. So it is a
+  # manifest shortfall graded where the option's params are, and with no more specific code it
+  # takes enums/error-code.json CREATIVE_VALIDATION_FAILED_GENERIC: "The creative failed
+  # buyer-correctable validation, but the producer cannot classify the failure with a more
+  # specific standard code."
+  @T-UC-002-local-creative-kind-unsupported-delivery-type @extension @creative
+  Scenario: Inline markup on an option whose only delivery type is paired_redirect is refused before the ad server is handed the buy
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package references the buyer's approved display_tag creative "cr-inline-misfit" carrying inline iframe_javascript markup, for a format option whose only delivery type is paired_redirect
+    When the Buyer Agent sends the create_media_buy request
+    Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC
+    And the refusal names "assets.serving_tag.delivery_type" stating "inline_markup" where "paired_redirect" is accepted
+    And the ad server is handed no creative
+    And the ad server adapter should never be invoked
 
   @T-UC-002-local-creative-kind-paired-redirect @extension @creative
   Scenario: A paired redirect reaches the ad server as one pair, both URLs intact
@@ -125,6 +165,23 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     Then the response should succeed
     And the ad server receives creative "cr-bundle" of kind "html5" as the html5 bundle "https://cdn.example.com/banner-300x250.zip" with backup image "https://cdn.example.com/banner-backup.png"
 
+  # F7 (PR #2582 review): the reader indexes the stored asset by key, so a zip asset missing its
+  # `url` raises inside the gate and the buyer is answered an internal error. AdCP 3.2.7
+  # core/assets/zip-asset.json requires `url`; a creative whose bundle names none carries
+  # nothing an ad server can serve, which the create gate answers VALIDATION_ERROR (enums/
+  # error-code.json: "Request contains invalid field values or violates business rules beyond
+  # schema validation. Recovery: correctable"), as for
+  # @T-UC-002-local-creative-kind-generative-unbuilt.
+  @T-UC-002-local-creative-kind-html5-bundle-no-url @extension @creative
+  Scenario: An html5 creative whose zip bundle names no url is refused before the ad server is handed the buy
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package references the buyer's approved html5 creative "cr-bundle-no-url" whose zip bundle names no url with backup image "https://cdn.example.com/banner-backup.png"
+    When the Buyer Agent sends the create_media_buy request
+    Then the operation should fail with error code "VALIDATION_ERROR"
+    And the ad server is handed no creative
+    And the ad server adapter should never be invoked
+
   @T-UC-002-local-creative-kind-multi-size @extension @creative
   Scenario: A display_tag creative for a multi-size option reaches the ad server with every size the option declares
     Given a valid create_media_buy request
@@ -147,15 +204,37 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     And the ad server receives creative "cr-responsive" of kind "display_tag" as the ad tag "https://ads.example-adserver.com/tag?slot=9"
     And the ad server receives creative "cr-responsive" with no fixed size, sized within widths 300 to 970 and heights 90 to 250
 
-  # The build output is what build_creative produced to serve, not a preview.
+  # The build output is what build_creative produced to serve, not a preview. The stored row's
+  # root url is the creative agent's preview page (F10, PR #2582 review): a reader that fell
+  # back to it would hand the ad server the preview.
   @T-UC-002-local-creative-kind-generative-built @extension @creative
-  Scenario: A generative creative reaches the ad server as the file its build produced
+  Scenario: A generative creative reaches the ad server as the file its build produced, and the creative agent's preview page does not
     Given a valid create_media_buy request
     And the account exists and is active
     And the package references the buyer's approved generative creative "cr-built" in "display_300x250_generative", built to "https://cdn.example.com/generated/cr-built.png"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And the ad server receives creative "cr-built" of kind "image" as image media "https://cdn.example.com/generated/cr-built.png"
+    And the creative agent's preview page appears nowhere in what the ad server receives for creative "cr-built"
+
+  # F10 (PR #2582 review): the change that stopped sync copying a preview onto the creative
+  # (#2390) was graded only in process. Here the creative arrives through sync: create_media_buy
+  # syncs a package's `creatives` through the creative-sync service before it books, against
+  # the tenant's own creative agent, which previews it as a page with a size.
+  # preview_creative.mdx: "Every render's `preview_url` returns an untrusted HTML page for
+  # cross-origin iframe embedding"; core/assets/html-asset.json: the markup is `content`.
+  @T-UC-002-local-creative-kind-synced-preview-kept-out @extension @creative
+  Scenario: An html creative synced against a previewing creative agent reaches the ad server as its markup, and the preview page does not
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the tenant has approval_mode "auto-approve"
+    And the tenant's own creative agent publishes "display_300x250_html" and previews every creative as its page "https://creative.adcontextprotocol.org/preview/cr-synced/desktop.html", sized 300x250
+    And the request's package carries the buyer's "display_300x250_html" creative "cr-synced" whose only asset is html "<div>Synced ad</div>", in that agent's format
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And the tenant's own creative agent was asked to preview the html "<div>Synced ad</div>"
+    And the ad server receives creative "cr-synced" of kind "html5" as inline html "<div>Synced ad</div>"
+    And the creative agent's preview page "https://creative.adcontextprotocol.org/preview/cr-synced/desktop.html" appears nowhere in what the ad server receives for creative "cr-synced"
 
   @T-UC-002-local-creative-kind-generative-unbuilt @extension @creative
   Scenario: A generative creative with no build output is refused before the ad server is handed the buy
@@ -232,6 +311,29 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     And the ad server is handed no creative
     And the ad server adapter should never be invoked
 
+  # Multi-error (PR #2582 review, epic invariant): the create gate raises on the first creative
+  # its option refuses, so a buy with two misfits names one and the buyer fixes, resends and
+  # learns of the second. One refusal carries every refused creative in details.problems, each
+  # an ErrorProblem (src/core/errors/details.py) naming its creative, its code from the code
+  # table and the manifest path it is about, the shape the gate already gives the first
+  # creative's problems; the error's field names the first creative's request position.
+  # enums/error-code.json CREATIVE_SIZE_MISMATCH: "Sellers SHOULD identify the offending
+  # creative in error.field and MAY include the submitted and accepted dimensions in
+  # buyer-safe error.details".
+  @T-UC-002-local-creative-kind-size-refused-every-creative @extension @creative
+  Scenario: Two images an option's sizes refuse are both named in one refusal at create, before the ad server
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the package references the buyer's approved 300x250 image creative "cr-misfit-a" showing "https://cdn.example.com/misfit-a.png", for a format option accepting sizes "728x90"
+    And the package references the buyer's approved 160x600 image creative "cr-misfit-b" showing "https://cdn.example.com/misfit-b.png"
+    When the Buyer Agent sends the create_media_buy request
+    Then the request is refused on the wire with code "CREATIVE_SIZE_MISMATCH" recovery "correctable" naming field "packages[0].creative_ids[0]"
+    And the CREATIVE_SIZE_MISMATCH refusal's problems name exactly the creatives "cr-misfit-a, cr-misfit-b"
+    And the CREATIVE_SIZE_MISMATCH refusal names creative "cr-misfit-a" at "assets.image_main.width" with problem code "CREATIVE_SIZE_MISMATCH"
+    And the CREATIVE_SIZE_MISMATCH refusal names creative "cr-misfit-b" at "assets.image_main.width" with problem code "CREATIVE_SIZE_MISMATCH"
+    And the ad server is handed no creative
+    And the ad server adapter should never be invoked
+
   @T-UC-002-local-creative-kind-size-refused-approval-replay @extension @creative
   Scenario: The seller's approval of a held buy holding a creative its option's sizes refuse is refused before the ad server
     Given a valid create_media_buy request
@@ -243,7 +345,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     Then the response status should be "submitted"
     Given the buyer's creative "cr-misfit", approved, a 300x250 image showing "https://cdn.example.com/misfit.png", is assigned to the media buy awaiting approval
     When the seller approves the media buy
-    Then the seller's approval is refused, and the media buy still awaits approval
+    Then the seller's approval fails with error code "CREATIVE_SIZE_MISMATCH"
+    And the media buy still awaits approval
     And the ad server's creative manager is handed no creative
 
   @T-UC-002-local-creative-kind-size-refused-retroactive-push @extension @creative
@@ -256,3 +359,21 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     And the seller approves creative "cr-misfit-late"
     Then the ad server's creative manager is handed creative "cr-fits-late" and not creative "cr-misfit-late"
     And the seller's approval of creative "cr-misfit-late" tells the seller it was not pushed to the live media buy, with code "CREATIVE_SIZE_MISMATCH", and the approval of creative "cr-fits-late" reports nothing
+
+  # F1 (PR #2582 review): a canonical creative states its size only through its product's
+  # declaration, so on a package whose product resolves none it has no size to be trafficked
+  # at; the create gate refuses it ("no product declaration resolved"), answered
+  # VALIDATION_ERROR. The retroactive push reads the creative a second way, keeps the packages
+  # whose products do resolve and drops the other, and pushes it. Here the second package was
+  # booked on a product the seller has since removed. The push is per creative, so it withholds
+  # this one and pushes the fitting one, which proves the path reached the upload.
+  @T-UC-002-local-creative-kind-unresolved-product-retroactive-push @extension @creative
+  Scenario: Approving a canonical creative assigned to a package whose product resolves no declaration does not push it to the live buy
+    Given the product publishes a display_tag format option accepting sizes "300x250"
+    And the buyer holds a live media buy booked at the ad server as order "order-live" with package "pkg-live", and package "pkg-gone" on product "prod-retired", which the seller no longer has
+    And the buyer's creative "cr-fits-late", under review, a display_tag requesting ad tag "https://ads.example-adserver.com/tag?slot=14", is assigned to package "pkg-live" of the live media buy
+    And the buyer's creative "cr-unresolved-late", under review, a display_tag requesting ad tag "https://ads.example-adserver.com/tag?slot=15", is assigned to packages "pkg-live, pkg-gone" of the live media buy
+    When the seller approves creative "cr-fits-late"
+    And the seller approves creative "cr-unresolved-late"
+    Then the ad server's creative manager is handed creative "cr-fits-late" and not creative "cr-unresolved-late"
+    And the seller's approval of creative "cr-unresolved-late" tells the seller it was not pushed to the live media buy, with code "VALIDATION_ERROR", and the approval of creative "cr-fits-late" reports nothing

@@ -55,6 +55,9 @@ class GamSellerMixin:
     ``AdManagerClient``.
     """
 
+    #: The ad unit :meth:`sell_through_gam` sold the scenario's products on, once it has.
+    _gam_ad_unit_id: str | None = None
+
     if TYPE_CHECKING:
         # Declared, not implemented: this mixin is only ever composed with IntegrationEnv,
         # which owns the patches, the seed and the session (the same statement
@@ -169,10 +172,25 @@ class GamSellerMixin:
             "google_ad_manager": {"advertiser_id": advertiser_id},
         }
         GAMInventoryFactory(tenant=tenant, inventory_id=ad_unit_id)
+        self._gam_ad_unit_id = ad_unit_id
         for product in products:
             self._sell_product_through_gam(product, ad_unit_id, implementation_config or {}, product_formats)
         self._commit_factory_data()
         self.sell_through_tenant_adapter()
+
+    def sell_product_through_gam(
+        self, product: Any, *, product_formats: Mapping[str, Any], implementation_config: Mapping[str, Any]
+    ) -> None:
+        """Re-sell *product*, already sold through GAM by :meth:`sell_through_gam`, with its own formats and settings.
+
+        For a scenario whose products differ in what they sell: the same configuration
+        ``sell_through_gam`` writes for every product, on the ad unit it sold them on, with
+        this product's *product_formats* and the keys the seller wrote over its generated
+        configuration (*implementation_config*).
+        """
+        assert self._gam_ad_unit_id is not None, "sell_through_gam() must make the tenant a GAM seller first"
+        self._sell_product_through_gam(product, self._gam_ad_unit_id, implementation_config, product_formats)
+        self._commit_factory_data()
 
     def book_in_gam(
         self,
@@ -205,13 +223,21 @@ class GamSellerMixin:
         return media_buy
 
     def book_at_ad_server(
-        self, *, line_items: Mapping[str, str], order_id: str, product: Any, status: str, principal: Any = None
+        self,
+        *,
+        line_items: Mapping[str, str],
+        order_id: str,
+        product: Any,
+        status: str,
+        principal: Any = None,
+        package_products: Mapping[str, str] | None = None,
     ) -> Any:
         """A buy the seller already booked at its ad server as order *order_id*, whatever the ad server.
 
-        The rows the create path leaves: one package on *product* per package id of
-        *line_items*, whose ``package_config`` carries the order id and that package's line
-        item id. The env's buyer's buy, unless *principal* names another.
+        The rows the create path leaves: one package per package id of *line_items*, whose
+        ``package_config`` carries the order id and that package's line item id. Each package
+        is on *product*, unless *package_products* names another product id for it (one the
+        seller may since have removed). The env's buyer's buy, unless *principal* names another.
         """
         from datetime import UTC, datetime
 
@@ -221,6 +247,7 @@ class GamSellerMixin:
             principal=principal,
             status=status,
             confirmed_at=datetime.now(UTC),
+            package_products=package_products,
         )
         for package in media_buy.packages:
             package.package_config = {
@@ -249,8 +276,19 @@ class GamSellerMixin:
         self._commit_factory_data()
         return media_buy
 
-    def _seed_buy(self, *, package_ids: Sequence[str], product: Any, principal: Any = None, **buy: Any) -> Any:
-        """The rows a create stores for a buy with those packages on *product*, the env's buyer's or *principal*'s."""
+    def _seed_buy(
+        self,
+        *,
+        package_ids: Sequence[str],
+        product: Any,
+        principal: Any = None,
+        package_products: Mapping[str, str] | None = None,
+        **buy: Any,
+    ) -> Any:
+        """The rows a create stores for a buy with those packages, the env's buyer's or *principal*'s.
+
+        Each package is on *product*, or on the product id *package_products* names for it.
+        """
         from datetime import UTC, date, datetime
 
         from tests.factories import MediaBuyFactory
@@ -268,7 +306,10 @@ class GamSellerMixin:
             end_time=datetime(2099, 12, 31, 23, 59, 59, tzinfo=UTC),
             raw_request={
                 "packages": [
-                    request_package(product_id=product.product_id, package_id=package_id) for package_id in package_ids
+                    request_package(
+                        product_id=(package_products or {}).get(package_id, product.product_id), package_id=package_id
+                    )
+                    for package_id in package_ids
                 ],
                 "account": {"account_id": DEFAULT_TEST_ACCOUNT_ID},
             },
