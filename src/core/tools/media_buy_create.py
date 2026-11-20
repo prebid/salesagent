@@ -95,7 +95,7 @@ def _package_assignments_by_creative(
             {
                 "package_id": a.package_id,
                 "weight": a.weight,
-                "platform_line_item_id": line_items.get(a.package_id),
+                "platform_line_item_id": line_items[a.package_id],
                 "creative": carriers[(a.package_id, a.creative_id)],
             }
         )
@@ -612,7 +612,7 @@ def _assigned_packages(
 ) -> list[_AssignedPackage]:
     """One package per assignment, each with the product its stored row was booked on and the assigned creative."""
     product_ids = {package.package_id: (package.package_config or {}).get("product_id") for package in packages}
-    return [_AssignedPackage(a.package_id, product_ids.get(a.package_id), [a.creative_id]) for a in assignments]
+    return [_AssignedPackage(a.package_id, product_ids[a.package_id], [a.creative_id]) for a in assignments]
 
 
 def _validate_creatives_before_adapter_call(

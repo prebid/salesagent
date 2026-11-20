@@ -64,7 +64,7 @@ BEHAVIORAL_MOCK_CONSTRUCTION_CAP: dict[str, int] = {
     # ``stub_package_row``, which derives the attribute set from
     # ``MediaPackage.__table__.columns`` instead of setting the two attributes each site
     # happened to need.
-    "tests/unit/test_update_media_buy_behavioral.py": 75,
+    "tests/unit/test_update_media_buy_behavioral.py": 64,
 }
 
 # unittest.mock construction callables counted as hand-rolled mocking.

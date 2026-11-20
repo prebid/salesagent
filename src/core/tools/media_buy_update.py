@@ -26,7 +26,6 @@ from src.core.tools.media_buy_list import _compute_status
 if TYPE_CHECKING:
     from src.core.database.models import MediaBuy
 
-from sqlalchemy import select
 
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -1425,36 +1424,20 @@ def _update_media_buy_impl(
                             if ca.placement_ids:
                                 all_requested_placement_ids.update(ca.placement_ids)
 
-                        if all_requested_placement_ids:
-                            # Get package to find product_id
-                            pkg_record = uow.media_buys.get_package_or_raise(actual_media_buy_id, pkg_update.package_id)
-
-                            product_id = (
-                                pkg_record.package_config.get("product_id") if pkg_record.package_config else None
-                            )
-
-                            if product_id:
-                                # Get product's placements
-                                prod_stmt = select(DBProduct).where(
-                                    DBProduct.tenant_id == tenant.tenant_id,
-                                    DBProduct.product_id == product_id,
+                        # Judged against the package's product, read once above (ca_product).
+                        if all_requested_placement_ids and ca_product is not None:
+                            if ca_product.placements:
+                                available_placement_ids: set[str] = {
+                                    str(p.get("placement_id")) for p in ca_product.placements if p.get("placement_id")
+                                }
+                                invalid_ids = all_requested_placement_ids - available_placement_ids
+                                if invalid_ids:
+                                    raise AdCPValidationError(field="creative_assignments[].placement_ids")
+                            else:
+                                # Product doesn't define placements, so placement targeting not supported
+                                raise AdCPCapabilityNotSupportedError(
+                                    details=CapabilityRefusalDetails(product_id=ca_product.product_id),
                                 )
-                                product_obj = session.scalars(prod_stmt).first()
-
-                                if product_obj and product_obj.placements:
-                                    available_placement_ids: set[str] = {
-                                        str(p.get("placement_id"))
-                                        for p in product_obj.placements
-                                        if p.get("placement_id")
-                                    }
-                                    invalid_ids = all_requested_placement_ids - available_placement_ids
-                                    if invalid_ids:
-                                        raise AdCPValidationError(field="creative_assignments[].placement_ids")
-                                elif product_obj and not product_obj.placements:
-                                    # Product doesn't define placements, so placement targeting not supported
-                                    raise AdCPCapabilityNotSupportedError(
-                                        details=CapabilityRefusalDetails(product_id=product_id),
-                                    )
 
                         updated_assignments = []
                         new_assignments_created = []
