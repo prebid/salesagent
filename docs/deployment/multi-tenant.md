@@ -68,9 +68,11 @@ SALES_AGENT_DOMAIN=sales-agent.yourdomain.com
 # Where the admin UI is accessible
 ADMIN_DOMAIN=admin.sales-agent.yourdomain.com
 
-# Domain for super admin emails (users from this domain get super admin access)
-SUPER_ADMIN_DOMAIN=yourdomain.com
+# Super admins: every user in this domain reaches every tenant
+SUPER_ADMIN_DOMAINS=yourdomain.com
 ```
+
+> **`SUPER_ADMIN_DOMAIN` is a different variable.** Sign-in treats its domain as super admin, but the access checks ignore it, so it alone does not let a user open a tenant. Set `SUPER_ADMIN_DOMAINS` to grant super admin access. See [Super admin access control](environment-variables.md#super-admin-access-control).
 
 > **Session cookies in multi-tenant mode**: When `ADCP_MULTI_TENANT=true`, session cookies are automatically scoped to `.SALES_AGENT_DOMAIN` so they work across all tenant subdomains. This lets users authenticate at `admin.sales-agent.yourdomain.com` and access tenant dashboards at `tenant.sales-agent.yourdomain.com`. In single-tenant mode (default), cookies use the actual request domain instead.
 
