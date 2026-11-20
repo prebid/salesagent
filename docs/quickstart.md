@@ -142,9 +142,20 @@ still missing.
 
 To get an agent to the point of seeing products:
 
-1. **Products**: **Settings > Products > Create Product**. `get_products` returns an empty list
-   until the tenant has at least one product. See the [products guide](user-guide/products.md).
-2. **An advertiser and its token**: **Settings > Advertisers > Add Advertiser**. The API
+1. **A currency**: **Settings > Policies & Workflows > Add Currency** (for example USD).
+2. **A publisher**: **Settings > Publishers**. A product sells the inventory of a publisher
+   that authorizes this agent: the application fetches
+   `https://<domain>/.well-known/adagents.json` and accepts the publisher only if that file
+   lists this tenant's agent URL. The agent URL is the tenant's `virtual_host` with a scheme;
+   for `default` on this stack it is `http://localhost:8080`. The product form refuses to
+   save without an authorized publisher, even with the Mock adapter, and nothing on a fresh
+   stack seeds one. So this step needs a domain where you can publish an `adagents.json`.
+   There is no local shortcut yet; [#2624](https://github.com/prebid/salesagent/issues/2624)
+   proposes one.
+3. **Products**: **Settings > Products > Create Product**, selecting the publisher's
+   properties. `get_products` returns an empty list until the tenant has at least one
+   product. See the [products guide](user-guide/products.md).
+4. **An advertiser and its token**: **Settings > Advertisers > Add Advertiser**. The API
    token is shown once, in the confirmation message after you create the advertiser. The
    server keeps only a hash, so copy it then. If you lose it, use the rotate button next to
    the advertiser in the list; that issues a new token, shown once, and the old one stops
