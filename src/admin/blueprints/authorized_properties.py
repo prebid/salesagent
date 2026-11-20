@@ -164,7 +164,7 @@ def create_property_tag(tenant_id: str) -> Response:
 
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties/api/list")
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def list_authorized_properties_api(tenant_id: str):
     """The properties the publishers authorize this agent for now, as JSON for the inventory profile editor.
 

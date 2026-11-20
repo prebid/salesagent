@@ -9,6 +9,7 @@ from adcp.types import AuthenticationScheme
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import func, select
 
+from src.admin.form_validation import form_number, json_object_body
 from src.admin.services import DashboardService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
@@ -153,17 +154,7 @@ def create_principal(tenant_id):
     # GAM advertiser mapping
     gam_advertiser_id = request.form.get("gam_advertiser_id", "").strip()
     if gam_advertiser_id:
-        # Validate it's numeric (GAM expects integer company IDs)
-        try:
-            int(gam_advertiser_id)
-        except (ValueError, TypeError):
-            flash(
-                f"GAM Advertiser ID must be numeric (got: '{gam_advertiser_id}'). "
-                "Please select a valid advertiser from the dropdown.",
-                "error",
-            )
-            return redirect(url_for("principals.create_principal", tenant_id=tenant_id))
-
+        form_number(int, "gam_advertiser_id", gam_advertiser_id)  # GAM company ids are integers
         platform_mappings["google_ad_manager"] = {
             "advertiser_id": gam_advertiser_id,
             "enabled": True,
@@ -260,12 +251,7 @@ def edit_principal(tenant_id, principal_id):
         # GAM advertiser mapping
         gam_advertiser_id = request.form.get("gam_advertiser_id", "").strip()
         if gam_advertiser_id:
-            try:
-                int(gam_advertiser_id)
-            except (ValueError, TypeError):
-                flash("GAM Advertiser ID must be numeric", "error")
-                return redirect(url_for("principals.edit_principal", tenant_id=tenant_id, principal_id=principal_id))
-
+            form_number(int, "gam_advertiser_id", gam_advertiser_id)  # GAM company ids are integers
             platform_mappings["google_ad_manager"] = {
                 "advertiser_id": gam_advertiser_id,
                 "enabled": True,
@@ -344,7 +330,7 @@ def rotate_token(tenant_id, principal_id):
 @require_tenant_access()
 def update_mappings(tenant_id, principal_id):
     """Update principal platform mappings."""
-    data = request.get_json()
+    data = json_object_body()
     if not data:
         return jsonify({"error": "Invalid request"}), 400
 
@@ -356,19 +342,7 @@ def update_mappings(tenant_id, principal_id):
         advertiser_id = gam_config.get("advertiser_id") or gam_config.get("company_id")
 
         if advertiser_id:
-            # Validate it's numeric (GAM expects integer company IDs)
-            try:
-                int(advertiser_id)
-            except (ValueError, TypeError):
-                return (
-                    jsonify(
-                        {
-                            "error": f"GAM Advertiser ID must be numeric (got: '{advertiser_id}'). "
-                            "Please select a valid advertiser from the dropdown."
-                        }
-                    ),
-                    400,
-                )
+            form_number(int, "advertiser_id", advertiser_id)  # GAM company ids are integers
 
     with get_db_session() as db_session:
         principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
@@ -408,7 +382,7 @@ def get_gam_advertisers(tenant_id):
     from src.adapters.google_ad_manager import GoogleAdManager
 
     # Get request parameters
-    data = request.get_json() or {}
+    data = json_object_body()
     search_query = data.get("search")
     limit = data.get("limit", 500)
     fetch_all = data.get("fetch_all", False)

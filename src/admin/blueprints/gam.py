@@ -12,7 +12,8 @@ from sqlalchemy import select
 from src.adapters.gam.utils.error_handler import GAM_CALL_ERRORS
 from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
 from src.adapters.gam_reporting_service import GAMReportingService
-from src.admin.form_validation import parse_json_field
+from src.admin.form_validation import json_object_body, parse_json_field
+from src.admin.gam_utils import GAMOAuthNotConfigured
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
@@ -206,7 +207,7 @@ def detect_gam_network(tenant_id):
     # Get OAuth credentials from validated configuration
     gam_auth = get_settings().auth
     if not gam_auth.gam_oauth_configured:
-        raise ValueError("GAM OAuth credentials not configured")
+        raise GAMOAuthNotConfigured(f"GAM network detection for tenant {tenant_id}")
     client_id = gam_auth.gam_oauth_client_id
     client_secret = gam_auth.gam_oauth_client_secret
 
@@ -587,7 +588,7 @@ def view_gam_line_item(tenant_id, line_item_id):
 
 # API endpoints for GAM
 @gam_bp.route("/api/custom-targeting-keys", methods=["GET"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def get_gam_custom_targeting_keys(tenant_id):
     """Get GAM custom targeting keys."""
     with get_db_session() as db_session:
@@ -765,19 +766,16 @@ def create_service_account(tenant_id):
 
 
 @gam_bp.route("/get-service-account-email", methods=["GET"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def get_service_account_email(tenant_id):
     """Get the service account email for a tenant.
 
     Returns the service account email if one has been created for this tenant.
     """
-    gcp_project_id = get_settings().auth.gcp_project_id
-    if not gcp_project_id:
-        return jsonify({"error": "GCP_PROJECT_ID not configured"}), 500
-
     from src.services.gcp_service_account_service import GCPServiceAccountService
 
-    service = GCPServiceAccountService(gcp_project_id=gcp_project_id)
+    # Reads the tenant's adapter config only, so it needs no GCP project.
+    service = GCPServiceAccountService(gcp_project_id=get_settings().auth.gcp_project_id)
     email = service.get_service_account_email(tenant_id)
 
     if email:
@@ -833,8 +831,7 @@ def test_gam_connection(tenant_id):
     if session.get("role") == "viewer":
         return jsonify({"success": False, "error": "Access denied"}), 403
 
-    # Use force=True and silent=True to handle empty/malformed requests gracefully
-    data = request.get_json(force=True, silent=True) or {}
+    data = json_object_body()
     auth_method = data.get("auth_method")
     refresh_token = (
         None
@@ -861,15 +858,8 @@ def test_gam_connection(tenant_id):
         if not refresh_token:
             return jsonify({"error": "Refresh token is required for OAuth authentication"}), 400
 
-        if not client_id or not client_secret:
-            return (
-                jsonify(
-                    {
-                        "error": "GAM OAuth credentials not configured. Please set GAM_OAUTH_CLIENT_ID and GAM_OAUTH_CLIENT_SECRET environment variables."
-                    }
-                ),
-                400,
-            )
+        if not gam_auth.gam_oauth_configured:
+            raise GAMOAuthNotConfigured(f"GAM connection test for tenant {tenant_id}")
 
         # Test by creating credentials and making a simple API call
         # Create GoogleAds OAuth2 client with refresh token
@@ -1040,7 +1030,7 @@ def test_gam_connection(tenant_id):
 
 
 @gam_bp.route("/api/line-item/<line_item_id>", methods=["GET"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def get_gam_line_item_api(tenant_id, line_item_id):
     """API endpoint to get GAM line item details."""
     with get_db_session() as db_session:

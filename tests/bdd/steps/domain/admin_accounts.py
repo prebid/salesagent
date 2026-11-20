@@ -65,6 +65,11 @@ def _answer_text(ctx: dict) -> str:
     return unescape(_require_admin_page(ctx).data.decode())
 
 
+def _json_error(ctx: dict) -> object:
+    """The ``error`` of the last admin answer's JSON body."""
+    return _require_admin_page(ctx).get_json().get("error")
+
+
 @given(parsers.parse('an admin user is authenticated for tenant "{tenant_id}"'))
 def given_admin_authenticated(ctx: dict, tenant_id: str) -> None:
     """Authenticate the admin user for the given tenant.
@@ -220,6 +225,7 @@ _FORM_MARKERS = {
     "create account": 'name="brand_domain"',
     "create tenant": 'name="virtual_host"',
     "add product": "Add New Product",
+    "edit product": "<h2>Edit Product</h2>",
 }
 
 

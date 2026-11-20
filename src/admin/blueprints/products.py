@@ -18,6 +18,7 @@ from sqlalchemy.orm import joinedload
 from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.admin.form_validation import (
     FORMAT_OPTIONS,
+    form_number,
     format_options_refusal,
     parse_json_field,
     refuse_a_stale_selection,
@@ -480,15 +481,8 @@ def parse_pricing_options_from_form(form_data: dict) -> list[PricingOption]:
         currency = form_data.get(f"currency_{index}", "USD")
 
         # Parse rate (for fixed pricing)
-        rate = None
         rate_str = form_data.get(f"rate_{index}", "").strip()
-        if rate_str:
-            try:
-                rate = float(rate_str)
-            except ValueError:
-                raise InvalidFormInput(
-                    FormIssue(f"rate_{index}", f"Invalid rate value for pricing option {index}")
-                ) from None
+        rate = form_number(float, f"rate_{index}", rate_str) if rate_str else None
 
         # Validate rate is required for fixed pricing
         if is_fixed and rate is None:
@@ -505,22 +499,16 @@ def parse_pricing_options_from_form(form_data: dict) -> list[PricingOption]:
                 raise InvalidFormInput(
                     FormIssue(f"floor_{index}", f"Floor price is required for auction pricing (pricing option {index})")
                 )
-            try:
-                floor = float(floor_str)
-                price_guidance = {"floor": floor}
+            price_guidance = {"floor": form_number(float, f"floor_{index}", floor_str)}
 
-                # Optional percentiles
-                for percentile in ["p25", "p50", "p75", "p90"]:
-                    value_str = form_data.get(f"{percentile}_{index}", "").strip()
-                    if value_str:
-                        try:
-                            price_guidance[percentile] = float(value_str)
-                        except ValueError:
-                            pass
-            except ValueError:
-                raise InvalidFormInput(
-                    FormIssue(f"floor_{index}", f"Invalid floor price value for pricing option {index}")
-                ) from None
+            # Optional percentiles
+            for percentile in ["p25", "p50", "p75", "p90"]:
+                value_str = form_data.get(f"{percentile}_{index}", "").strip()
+                if value_str:
+                    try:
+                        price_guidance[percentile] = float(value_str)
+                    except ValueError:
+                        pass
 
         # Parse min_spend_per_package
         min_spend = None
@@ -927,11 +915,7 @@ def add_product(tenant_id):
                 profile = None
                 inventory_profile_id = form_data.get("inventory_profile_id", "").strip()
                 if inventory_profile_id:
-                    try:
-                        profile_id = int(inventory_profile_id)
-                    except (ValueError, TypeError):
-                        flash("Invalid inventory profile ID", "error")
-                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                    profile_id = form_number(int, "inventory_profile_id", inventory_profile_id)
                     # SECURITY: Verify profile belongs to this tenant
                     from src.core.database.models import InventoryProfile
 
@@ -1248,11 +1232,7 @@ def add_product(tenant_id):
                     # Get variant TTL days (optional)
                     variant_ttl_days = form_data.get("variant_ttl_days", "").strip()
                     if variant_ttl_days:
-                        try:
-                            product_kwargs["variant_ttl_days"] = int(variant_ttl_days)
-                        except ValueError:
-                            flash(f"Invalid variant TTL days: '{variant_ttl_days}' is not a number", "error")
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                        product_kwargs["variant_ttl_days"] = form_number(int, "variant_ttl_days", variant_ttl_days)
 
                 # Create product with correct fields matching the Product model
                 product = Product(**product_kwargs)
@@ -1397,26 +1377,22 @@ def edit_product(tenant_id, product_id):
             # Check for inventory_profile_id directly (no need for inventory_mode radio button)
             inventory_profile_id = form_data.get("inventory_profile_id", "").strip()
             if inventory_profile_id:
-                try:
-                    profile_id = int(inventory_profile_id)
-                    # SECURITY: Verify profile belongs to this tenant
-                    from src.core.database.models import InventoryProfile
+                profile_id = form_number(int, "inventory_profile_id", inventory_profile_id)
+                # SECURITY: Verify profile belongs to this tenant
+                from src.core.database.models import InventoryProfile
 
-                    profile_stmt = select(InventoryProfile).filter_by(id=profile_id)
-                    profile = db_session.scalars(profile_stmt).first()
-                    if not profile or profile.tenant_id != tenant_id:
-                        flash(
-                            "Invalid inventory profile - profile not found or does not belong to this tenant",
-                            "error",
-                        )
-                        return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
-                    # The relationship too, so ``Product.format_contract`` reads the new link
-                    # before the row is flushed.
-                    product.inventory_profile_id = profile_id
-                    product.inventory_profile = profile
-                except (ValueError, TypeError):
-                    flash("Invalid inventory profile ID", "error")
+                profile_stmt = select(InventoryProfile).filter_by(id=profile_id)
+                profile = db_session.scalars(profile_stmt).first()
+                if not profile or profile.tenant_id != tenant_id:
+                    flash(
+                        "Invalid inventory profile - profile not found or does not belong to this tenant",
+                        "error",
+                    )
                     return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+                # The relationship too, so ``Product.format_contract`` reads the new link
+                # before the row is flushed.
+                product.inventory_profile_id = profile_id
+                product.inventory_profile = profile
             else:
                 # No profile selected - clear inventory profile association
                 product.inventory_profile_id = None
@@ -2036,7 +2012,7 @@ def delete_product(tenant_id, product_id):
 
 @products_bp.route("/<product_id>/inventory", methods=["POST"])
 @log_admin_action("assign_inventory_to_product")
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def assign_inventory_to_product(tenant_id, product_id):
     """Assign inventory items to a product.
 
@@ -2160,7 +2136,7 @@ def assign_inventory_to_product(tenant_id, product_id):
 
 
 @products_bp.route("/<product_id>/inventory", methods=["GET"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def get_product_inventory(tenant_id, product_id):
     """Get all inventory items assigned to a product."""
     from src.core.database.models import GAMInventory, ProductInventoryMapping
@@ -2204,7 +2180,7 @@ def get_product_inventory(tenant_id, product_id):
 
 @products_bp.route("/<product_id>/inventory/<int:mapping_id>", methods=["DELETE"])
 @log_admin_action("unassign_inventory_from_product")
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def unassign_inventory_from_product(tenant_id, product_id, mapping_id):
     """Remove an inventory assignment from a product (API endpoint)."""
     from src.core.database.models import ProductInventoryMapping

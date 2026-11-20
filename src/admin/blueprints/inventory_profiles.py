@@ -507,7 +507,7 @@ def delete_inventory_profile(tenant_id: str, profile_id: int):
 
 
 @inventory_profiles_bp.route("/<int:profile_id>/api")
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def get_inventory_profile_api(tenant_id: str, profile_id: int):
     """Get full inventory profile data for editing (API endpoint)."""
     with get_db_session() as session:
@@ -536,7 +536,7 @@ def get_inventory_profile_api(tenant_id: str, profile_id: int):
 
 
 @inventory_profiles_bp.route("/<int:profile_id>/preview")
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def preview_inventory_profile(tenant_id: str, profile_id: int):
     """Get inventory profile preview for product form (API endpoint)."""
     with get_db_session() as session:
@@ -561,7 +561,7 @@ def preview_inventory_profile(tenant_id: str, profile_id: int):
 
 
 @inventory_profiles_bp.route("/api/list")
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def list_inventory_profiles_api(tenant_id: str):
     """Get all inventory profiles for this tenant as JSON (API endpoint for unified page)."""
     with get_db_session() as session:

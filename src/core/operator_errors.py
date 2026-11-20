@@ -20,9 +20,11 @@ of these types is ``src.admin.utils.operator_errors.handle_unexpected_error``.
 
 import json
 import logging
+import re
 import secrets
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import ClassVar, NamedTuple
 
 from pydantic import ValidationError
@@ -139,6 +141,22 @@ class InvalidFormInput(OperatorRefusal):
         return tuple(issue.text for issue in self.issues)
 
 
+#: Bytes of randomness in a log reference; it is written as twice as many hex digits.
+_REFERENCE_BYTES = 4
+
+
+def _logged_failure_text(context: str, reference: str) -> str:
+    """The one sentence :func:`safe_error_message` answers with: *context*, then where its details are."""
+    return f"{context}. The details have been logged (reference {reference})."
+
+
+def logged_failure_pattern(context: str) -> re.Pattern[str]:
+    """What :func:`safe_error_message` returns for *context*, with any reference, for a reader that checks it."""
+    placeholder = "\0"
+    sentence = re.escape(_logged_failure_text(context, placeholder))
+    return re.compile(sentence.replace(placeholder, f"[0-9a-f]{{{2 * _REFERENCE_BYTES}}}"))
+
+
 def safe_error_message(e: BaseException, context: str | None = None) -> str:
     """Log ``e`` with its traceback and return operator-facing text that carries none of it.
 
@@ -146,27 +164,36 @@ def safe_error_message(e: BaseException, context: str | None = None) -> str:
     the log line and the returned text. The returned text ends with a reference
     that also appears in the log line, so an operator can find the details.
     """
-    reference = secrets.token_hex(4)
+    reference = secrets.token_hex(_REFERENCE_BYTES)
     if context is None:
         context = DB_ERROR_OPERATOR_MESSAGE if isinstance(e, SQLAlchemyError) else GENERIC_OPERATOR_MESSAGE
     logger.error("%s (reference %s)", context, reference, exc_info=e)
-    return f"{context}. The details have been logged (reference {reference})."
+    return _logged_failure_text(context, reference)
+
+
+@dataclass
+class BestEffortOutcome:
+    """How a :func:`best_effort` step ended: ``operator_message`` is :func:`safe_error_message`'s text when it raised."""
+
+    operator_message: str | None = None
 
 
 @contextmanager
-def best_effort(context: str) -> Iterator[None]:
+def best_effort(context: str) -> Iterator[BestEffortOutcome]:
     """Run a step whose failure must not fail its caller, and log the failure once under a reference.
 
     The one catch-all the admin app has: a side effect (a Slack notice, an audit row, a
     dashboard tile) or a fallback that keeps a page rendering. A caller that needs a value
-    uses :func:`best_effort_call`. Anything a caller expects to fail in a known way is
-    caught by its type instead, and anything that should fail the request is left to the
-    admin app's error handler.
+    uses :func:`best_effort_call`; one that records the failure reads the outcome's
+    ``operator_message``. Anything a caller expects to fail in a known way is caught by its
+    type instead, and anything that should fail the request is left to the admin app's
+    error handler.
     """
+    outcome = BestEffortOutcome()
     try:
-        yield
+        yield outcome
     except Exception as e:  # noqa: BLE001 - the one sanctioned catch-all; logged with its traceback
-        safe_error_message(e, context)
+        outcome.operator_message = safe_error_message(e, context)
 
 
 def best_effort_call[T](context: str, fn: Callable[[], T]) -> T | None:

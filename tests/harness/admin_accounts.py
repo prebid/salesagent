@@ -13,11 +13,13 @@ fixture supplies the address; both arrive as arguments.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import delete
+from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Account, Tenant
@@ -95,6 +97,10 @@ class AdminAccountEnv:
         self._created_account_ids: list[str] = []
         #: (trigger name, table) of every fault :meth:`fail_writes_of` installed.
         self._database_faults: list[tuple[str, str]] = []
+        #: The in-process scripted model origin (:meth:`script_ai_connection_test`), once started.
+        self._llm_origin: str | None = None
+        #: What ``__exit__`` closes besides the client: the in-process origin and its variable.
+        self._cleanups = ExitStack()
 
     @property
     def mode(self) -> str:
@@ -115,6 +121,8 @@ class AdminAccountEnv:
         return self
 
     def __exit__(self, *exc: object) -> None:
+        self._cleanups.close()
+        self._llm_origin = None
         self._drop_database_faults()
         self._cleanup_accounts()
         if self._client is not None:
@@ -148,9 +156,9 @@ class AdminAccountEnv:
         from src.core.database.models import User
         from tests.factories import UserFactory
 
-        with get_db_session() as session, bind_factories_to_session(session):
+        with self._seeding() as (session, tenant):
             if session.scalars(select(User).filter_by(tenant_id=self._tenant_id, email=email)).first() is None:
-                UserFactory(tenant=session.get(Tenant, self._tenant_id), email=email, role="admin")
+                UserFactory(tenant=tenant, email=email, role="admin")
         self.client.authenticate(self._tenant_id, tenant_user=email)
 
     def clear_auth(self) -> None:
@@ -205,12 +213,20 @@ class AdminAccountEnv:
     #: The create-tenant form's page, which is also where the form posts.
     CREATE_TENANT_PAGE = "/create_tenant"
 
-    def submit_create_tenant(self, form_data: dict[str, str], *, from_page: str | None) -> AdminResponse:
+    def submit_create_tenant(
+        self,
+        form_data: dict[str, str],
+        *,
+        from_page: str | None,
+        browser_headers: dict[str, str | None] | None = None,
+    ) -> AdminResponse:
         """POST the create-tenant form as a browser does from *from_page*, or from nowhere.
 
-        *from_page* is as :meth:`AdminClient.submit` takes it: a path on this server, or another site's URL.
+        *from_page* and *browser_headers* are as :meth:`AdminClient.submit` takes them.
         """
-        return self.client.submit(self.CREATE_TENANT_PAGE, form_data, from_page=from_page)
+        return self.client.submit(
+            self.CREATE_TENANT_PAGE, form_data, from_page=from_page, browser_headers=browser_headers
+        )
 
     def submit_create_account(self, form_data: dict[str, str], *, from_create_page: bool) -> AdminResponse:
         """POST the create-account form as a browser does, recording any row it created for cleanup."""
@@ -222,6 +238,11 @@ class AdminAccountEnv:
     def submit_create_product(self, form_data: dict[str, Any]) -> AdminResponse:
         """POST the add-product form as a browser does from its page."""
         path = self.products_path("add")
+        return self.client.submit(path, form_data, from_page=path)
+
+    def submit_product_edit(self, tenant_id: str, product_id: str, form_data: dict[str, Any]) -> AdminResponse:
+        """POST *tenant_id*'s product *product_id* edit form as a browser does from its page."""
+        path = f"/tenant/{tenant_id}/products/{product_id}/edit"
         return self.client.submit(path, form_data, from_page=path)
 
     def submit_inventory_profile_add(self, form_data: dict[str, Any]) -> AdminResponse:
@@ -254,13 +275,31 @@ class AdminAccountEnv:
             "post", f"/api/tenant/{self._tenant_id}/inventory/sync", json={"mode": "incremental"}
         )
 
-    def create_gam_service_account(self) -> AdminResponse:
-        """POST a GAM service account for this tenant, as the settings page's button does with fetch()."""
+    def start_inventory_sync_as_script(self, tenant_id: str, accept: str | None) -> AdminResponse:
+        """POST an inventory sync of *tenant_id* as a script does: no body, and *accept* (``None``: no ``Accept``)."""
+        return self.client.request("post", f"/api/tenant/{tenant_id}/inventory/sync", headers={"Accept": accept})
+
+    def save_adapter_config_as_script(self, accept: str | None) -> AdminResponse:
+        """POST this tenant's adapter config as a script does: no body, and *accept* (``None``: no ``Accept``)."""
+        return self.client.request("post", f"/api/tenant/{self._tenant_id}/adapter-config", headers={"Accept": accept})
+
+    def create_gam_service_account(self, tenant_id: str | None = None) -> AdminResponse:
+        """POST a GAM service account for *tenant_id* (this env's by default), as the settings page does with fetch()."""
         return self.client.request(
             "post",
-            f"/tenant/{self._tenant_id}/gam/create-service-account",
+            f"/tenant/{tenant_id or self._tenant_id}/gam/create-service-account",
             headers={"Content-Type": "application/json"},
         )
+
+    def detect_gam_network(self, tenant_id: str, refresh_token: str) -> AdminResponse:
+        """POST *refresh_token* to *tenant_id*'s GAM network detection, as the settings page does with fetch()."""
+        return self.client.request(
+            "post", f"/tenant/{tenant_id}/gam/detect-network", json={"refresh_token": refresh_token}
+        )
+
+    def post_adapter_update(self, tenant_id: str, body: dict[str, Any]) -> AdminResponse:
+        """POST *body* to *tenant_id*'s adapter choice, as the settings page does with fetch()."""
+        return self.client.request("post", f"/tenant/{tenant_id}/settings/adapter", json=body)
 
     def post_adapter_config(self, body: dict[str, Any]) -> AdminResponse:
         """POST this tenant's adapter connection config, as the adapter settings page does with fetch()."""
@@ -456,26 +495,34 @@ class AdminAccountEnv:
         from tests.factories import ProductFactory
 
         row_id = self.inventory_profile_row_id(profile_id)
-        with get_db_session() as session, bind_factories_to_session(session):
-            ProductFactory(
-                tenant=session.get(Tenant, self._tenant_id), product_id=product_id, inventory_profile_id=row_id
-            )
+        with self._seeding() as (_, tenant):
+            ProductFactory(tenant=tenant, product_id=product_id, inventory_profile_id=row_id)
 
-    def onboard_gam(self, *, service_account_email: str | None = None) -> None:
-        """Leave this tenant with the rows GAM onboarding writes, and the service account email if given."""
+    def seed_product(self, product_id: str, *, tenant_id: str) -> None:
+        """Store a product *product_id* of *tenant_id* with one fixed CPM pricing option, as its edit form shows it."""
+        from tests.factories import PricingOptionFactory, ProductFactory
+
+        with self._seeding(tenant_id) as (_, tenant):
+            product = ProductFactory(tenant=tenant, product_id=product_id)
+            PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
+
+    def onboard_gam(self, *, tenant_id: str | None = None, service_account_email: str | None = None) -> None:
+        """Leave *tenant_id* (this env's tenant by default) with the rows GAM onboarding writes.
+
+        The service account email is stored if given; GAM onboarding stores none.
+        """
         from tests.utils.tenant_setup import onboard_gam
 
-        with get_db_session() as session, bind_factories_to_session(session):
-            config = onboard_gam(session.get(Tenant, self._tenant_id), trafficker_id="bdd_trafficker")
+        with self._seeding(tenant_id) as (_, tenant):
+            config = onboard_gam(tenant, trafficker_id="bdd_trafficker")
             config.gam_service_account_email = service_account_email
-            session.commit()
 
-    def seed_running_inventory_sync(self, sync_id: str) -> None:
-        """Store an inventory sync *sync_id* of this tenant that started a moment ago and is still running."""
+    def seed_running_inventory_sync(self, sync_id: str, *, tenant_id: str | None = None) -> None:
+        """Store an inventory sync *sync_id* of *tenant_id* (this env's by default), started a moment ago, still running."""
         from tests.factories import SyncJobFactory
 
-        with get_db_session() as session, bind_factories_to_session(session):
-            SyncJobFactory(tenant=session.get(Tenant, self._tenant_id), sync_id=sync_id)
+        with self._seeding(tenant_id) as (_, tenant):
+            SyncJobFactory(tenant=tenant, sync_id=sync_id)
 
     def products_path(self, path: str = "") -> str:
         """The product routes of this tenant, which the product forms post to."""
@@ -552,6 +599,21 @@ class AdminAccountEnv:
 
     # ── Internal ──────────────────────────────────────────────────────────
 
+    @contextmanager
+    def _factory_session(self) -> Iterator[Session]:
+        """A session the factories write through, committed when the block exits."""
+        with get_db_session() as session, bind_factories_to_session(session):
+            yield session
+            session.commit()
+
+    @contextmanager
+    def _seeding(self, tenant_id: str | None = None) -> Iterator[tuple[Session, Tenant]]:
+        """:meth:`_factory_session`, with the tenant *tenant_id* (this env's by default) read in it."""
+        with self._factory_session() as session:
+            tenant = session.get(Tenant, tenant_id or self._tenant_id)
+            assert tenant is not None, f"no tenant {tenant_id or self._tenant_id!r}"
+            yield session, tenant
+
     def _ensure_tenant(self) -> None:
         """Ensure the default test tenant exists."""
         self._ensure_tenant_for_id(self._tenant_id)
@@ -615,23 +677,24 @@ class AdminAccountEnv:
 
     # ── API callers, the business-rules fetch, sync jobs (BR-ADMIN-UNEXPECTED-ERRORS) ──
 
-    def seed_tenant(self, *, gam: bool = False) -> str:
+    def seed_tenant(self, *, gam: bool = False, ad_server: str | None = "mock") -> str:
         """Store a tenant of its own, for a scenario whose fault or write must not reach the shared one.
 
-        With *gam*, the tenant is onboarded to Google Ad Manager (``onboard_gam``), so the sync
-        API builds its adapter without calling Google. Returns the tenant id.
+        With *gam*, the tenant is onboarded to Google Ad Manager (:meth:`onboard_gam`), so the
+        sync API builds its adapter without calling Google. *ad_server* is the tenant's adapter;
+        ``None`` is a tenant that has chosen none. Returns the tenant id.
         """
         import uuid
 
         from tests.factories import TenantFactory
-        from tests.utils.tenant_setup import onboard_gam
 
         tenant_id = f"bdd_admin_{uuid.uuid4().hex[:10]}"
-        with get_db_session() as session, bind_factories_to_session(session):
-            tenant = TenantFactory(tenant_id=tenant_id, virtual_host=f"{tenant_id.replace('_', '-')}.example.com")
-            if gam:
-                onboard_gam(tenant, trafficker_id="bdd_trafficker")
-            session.commit()
+        with self._factory_session():
+            TenantFactory(
+                tenant_id=tenant_id, virtual_host=f"{tenant_id.replace('_', '-')}.example.com", ad_server=ad_server
+            )
+        if gam:
+            self.onboard_gam(tenant_id=tenant_id)
         return tenant_id
 
     def delete_tenant_by_management_api(self, tenant_id: str) -> AdminResponse:
@@ -654,13 +717,10 @@ class AdminAccountEnv:
             headers={"Accept": "*/*", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Site": "same-origin"},
         )
 
-    def trigger_inventory_sync_by_api(self, tenant_id: str) -> AdminResponse:
-        """POST a forced inventory sync of *tenant_id* to the sync API, as its scripted callers do."""
+    def trigger_sync_by_api(self, tenant_id: str, body: dict[str, Any]) -> AdminResponse:
+        """POST *body* to the sync API's trigger for *tenant_id*, as its scripted callers do."""
         return self.client.request(
-            "post",
-            f"/api/sync/trigger/{tenant_id}",
-            json={"sync_type": "inventory", "force": True},
-            headers={"X-API-Key": self._stored_api_key("api_key")},
+            "post", f"/api/sync/trigger/{tenant_id}", json=body, headers={"X-API-Key": self._stored_api_key("api_key")}
         )
 
     def sync_status_by_api(self, sync_id: str) -> AdminResponse:
@@ -672,3 +732,33 @@ class AdminAccountEnv:
     def post_ai_connection_test(self, body: Any) -> AdminResponse:
         """POST *body* as JSON to this tenant's AI connection test, as the settings page does with fetch()."""
         return self.client.request("post", f"/tenant/{self._tenant_id}/settings/ai/test", json=body)
+
+    def script_ai_connection_test(self, entry: dict[str, Any]) -> str:
+        """A fresh Gemini API key whose connection-test call the scripted model answers with *entry*.
+
+        *entry* is a script entry of ``tests/e2e/scripted_llm_origin_service.py``, such as
+        ``{"fail_status": 429}``. Production builds its real Gemini model and calls the origin
+        the server's ``GOOGLE_GEMINI_BASE_URL`` names: over e2e the compose ``scripted-llm``
+        service; in this process an origin of this env's own, which the variable is pointed at
+        until ``__exit__``. Nothing in ``src/`` is replaced.
+        """
+        import uuid
+
+        from tests.e2e._scripted_llm import install_script, scripted_llm_origin
+
+        origin = scripted_llm_origin() if self._mode == "e2e" else self._in_process_llm_origin()
+        api_key = f"bdd-admin-ai-{uuid.uuid4().hex[:12]}"
+        install_script(api_key, origin=origin, connection_test=entry)
+        return api_key
+
+    def _in_process_llm_origin(self) -> str:
+        """This env's scripted model origin, started on first use, with ``GOOGLE_GEMINI_BASE_URL`` naming it."""
+        if self._llm_origin is None:
+            import os
+            from unittest.mock import patch
+
+            from tests.e2e.scripted_llm_origin_service import run_scripted_llm_origin
+
+            self._llm_origin = self._cleanups.enter_context(run_scripted_llm_origin(host="127.0.0.1", port=0))
+            self._cleanups.enter_context(patch.dict(os.environ, {"GOOGLE_GEMINI_BASE_URL": self._llm_origin}))
+        return self._llm_origin

@@ -12,9 +12,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 from babel import numbers as babel_numbers
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
 
+from src.admin.form_validation import form_number, json_object_body
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import caller_reads_json
@@ -229,7 +230,7 @@ def update_general(tenant_id):
                 return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
         # Update currency limits
-        from decimal import Decimal, InvalidOperation
+        from decimal import Decimal
 
         from src.core.database.models import CurrencyLimit
 
@@ -274,12 +275,8 @@ def update_general(tenant_id):
             min_value_str = request.form.get(min_key, "").strip()
             max_value_str = request.form.get(max_key, "").strip()
 
-            try:
-                min_value = Decimal(min_value_str) if min_value_str else None
-                max_value = Decimal(max_value_str) if max_value_str else None
-            except (ValueError, InvalidOperation):
-                flash(f"Invalid currency limit values for {currency_code}", "error")
-                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
+            min_value = form_number(Decimal, min_key, min_value_str) if min_value_str else None
+            max_value = form_number(Decimal, max_key, max_value_str) if max_value_str else None
 
             # Update or create
             if currency_code in existing_limits:
@@ -306,6 +303,12 @@ def update_general(tenant_id):
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
 
+class NoAdapterConfigured(OperatorRefusal):
+    """An adapter update that names no adapter, for a tenant that has not chosen one."""
+
+    MESSAGE = "No adapter configured. Choose an ad server adapter first."
+
+
 @settings_bp.route("/adapter", methods=["POST"])
 @require_tenant_access()
 @log_admin_action(
@@ -317,28 +320,18 @@ def update_general(tenant_id):
 def update_adapter(tenant_id):
     """Update the active adapter for a tenant."""
     # Support both JSON (from our frontend) and form data (from tests)
-    if request.is_json:
-        new_adapter = request.json.get("adapter")
-        logger.info(f"update_adapter received JSON payload: {request.json}")
-    else:
-        new_adapter = request.form.get("adapter")
+    new_adapter = json_object_body().get("adapter") if request.is_json else request.form.get("adapter")
 
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
-            if caller_reads_json():
-                return jsonify({"success": False, "error": "Tenant not found"}), 404
-            flash("Tenant not found", "error")
-            return redirect(url_for("core.index"))
+            abort(404)
 
         # If no adapter specified, use current adapter (for updating config only)
         if not new_adapter:
             new_adapter = tenant.ad_server
             if not new_adapter:
-                if caller_reads_json():
-                    return jsonify({"success": False, "error": "No adapter configured"}), 400
-                flash("No adapter configured", "error")
-                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="adapter"))
+                raise NoAdapterConfigured(f"Adapter update for tenant {tenant_id} names no adapter, and it has none")
 
         # Update or create adapter config
         adapter_config_obj = tenant.adapter_config
@@ -576,7 +569,7 @@ def update_ai(tenant_id):
 
 
 @settings_bp.route("/ai/test", methods=["POST"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def test_ai_connection(tenant_id):
     """Test AI connection with current configuration."""
     import asyncio
@@ -588,7 +581,7 @@ def test_ai_connection(tenant_id):
     from src.services.ai import AIServiceFactory
     from src.services.ai.factory import AIProviderError, run_agent
 
-    data = request.get_json() or {}
+    data = json_object_body()
     provider = data.get("provider", "gemini")
     model = data.get("model", DEFAULT_GOOGLE_MODEL)
     api_key = data.get("api_key", "").strip()
@@ -702,18 +695,12 @@ def ai_refusal_for(status_code: int | None) -> type[OperatorRefusal] | None:
     return _AI_REFUSAL_BY_STATUS.get(status_code, AIProviderRefusedRequest)
 
 
-class LogfireConfigurationRefused(OperatorRefusal):
-    """``logfire.configure`` refused the configuration the test built from the operator's token."""
-
-    MESSAGE = "Invalid Logfire token. Please check your credentials."
-
-
 @settings_bp.route("/ai/test-logfire", methods=["POST"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def test_logfire_connection(tenant_id):
     """Test Logfire connection with provided token."""
     try:
-        data = request.get_json() or {}
+        data = json_object_body()
         logfire_token = data.get("logfire_token", "").strip()
 
         if not logfire_token:
@@ -721,19 +708,15 @@ def test_logfire_connection(tenant_id):
 
         # Try to configure logfire with the token
         import logfire
-        from logfire.exceptions import LogfireConfigError
 
-        # Create a test configuration
-        try:
-            # Use send_to_logfire=False for validation, then test with actual send
-            logfire.configure(
-                token=logfire_token,
-                service_name="adcp-sales-agent-test",
-            )
-        except LogfireConfigError as config_error:
-            # The one type logfire.configure refuses a configuration with; it carries no
-            # status (logfire checks the token on a background thread and only warns).
-            raise LogfireConfigurationRefused(f"Logfire connection test for tenant {tenant_id}") from config_error
+        # No token is refused here: logfire.configure accepts any string and checks the token
+        # on a background thread, where it only warns. What it does raise
+        # (LogfireConfigError) is about this deployment's own Logfire settings, not the
+        # operator's token, so the admin error handler answers it as an unexpected failure.
+        logfire.configure(
+            token=logfire_token,
+            service_name="adcp-sales-agent-test",
+        )
 
         # Send a test span to verify the token works
         with logfire.span("test_connection", _level="info") as span:
@@ -752,7 +735,7 @@ def test_logfire_connection(tenant_id):
 
 
 @settings_bp.route("/ai/models", methods=["GET"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def get_ai_models(tenant_id):
     """Get available AI models from Pydantic AI.
 

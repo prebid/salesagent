@@ -9,6 +9,7 @@ import logging
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
+from src.admin.form_validation import json_object_body
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import require_tenant_access
 from src.core.billing_policy import BILLING_PARTY_VALUES
@@ -190,7 +191,7 @@ def edit_account(tenant_id, account_id):
 @log_admin_action("change_account_status")
 def change_status(tenant_id, account_id):
     """Change account status (JSON API for AJAX calls)."""
-    data = request.get_json(silent=True) or {}
+    data = json_object_body()
     new_status = data.get("status")
 
     if not new_status:

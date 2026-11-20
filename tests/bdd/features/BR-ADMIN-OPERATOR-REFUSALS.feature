@@ -103,6 +103,56 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the JSON error is the "SyncAlreadyRunning" refusal
     And the JSON response has "sync_id" as "sync_bdd_already_running"
 
+  # The answer's format is decided from the caller, never the route
+  # (src/admin/utils/helpers.py caller_reads_json): only a browser asking for a page gets
+  # HTML, so a script that sends curl's "Accept: */*", or no Accept at all, gets JSON.
+  @T-ADMIN-REFUSAL-016 @json @inventory-sync
+  Scenario Outline: A script that does not ask for a page gets a refusal as JSON
+    Given another tenant of this seller, onboarded to Google Ad Manager
+    And that tenant's inventory sync is running
+    When a script starts that tenant's inventory sync with no body, sending Accept "<accept>"
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "SyncAlreadyRunning" refusal
+    And the JSON response names that tenant's running sync
+
+    Examples:
+      | accept |
+      | */*    |
+      | (none) |
+
+  # A route under /api whose handler reads a JSON body: a script that posts none is refused by
+  # Flask (415), and that refusal is JSON too.
+  @T-ADMIN-REFUSAL-024 @json @adapter-config
+  Scenario Outline: A script that does not ask for a page gets an HTTP error as JSON
+    When a script saves the adapter config with no body, sending Accept "<accept>"
+    Then the page returns status 415
+    And the JSON response has "success" as false
+    And the JSON response has "error" as "Unsupported Media Type"
+
+    Examples:
+      | accept |
+      | */*    |
+      | (none) |
+
+  # A browser asks for a page in one of two ways, and either is enough for HTML: a current
+  # browser sends Sec-Fetch-Mode: navigate, and an older one an Accept that prefers text/html.
+  @T-ADMIN-REFUSAL-025 @browser @create-tenant @virtual-host
+  Scenario Outline: A browser's form post gets the refusal as a flash on its page
+    When <browser> submits the create tenant form from the create tenant page with:
+      | field        | value                               |
+      | name         | Refused Host Seller                 |
+      | subdomain    | refused_host_seller                 |
+      | virtual_host | https://refused-host.example/agent  |
+    Then the page returns status 200
+    And the page is the create tenant form
+    And the page shows the "InvalidVirtualHost" refusal
+
+    Examples:
+      | browser                                   |
+      | a browser that sends only Sec-Fetch-Mode  |
+      | a browser that sends only Accept          |
+
   @T-ADMIN-REFUSAL-010 @json @service-account
   Scenario: A service account for a tenant with no ad server configuration is refused
     When the settings page creates a GAM service account
@@ -117,6 +167,74 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     Then the page returns status 400
     And the JSON response has "success" as false
     And the JSON error is the "ServiceAccountAlreadyExists" refusal
+
+  # Neither test deployment sets GCP_PROJECT_ID. The tenant's own state permits a service
+  # account, so what refuses it is the deployment, before any GCP call.
+  @T-ADMIN-REFUSAL-017 @json @service-account
+  Scenario: A service account on a deployment with no GCP project is refused
+    Given another tenant of this seller, onboarded to Google Ad Manager
+    When the settings page creates a GAM service account for that tenant
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "GCPProjectNotConfigured" refusal
+
+  # Neither test deployment sets GAM_OAUTH_CLIENT_ID, so the refusal comes before any call to Google.
+  @T-ADMIN-REFUSAL-018 @json @gam-oauth
+  Scenario: Detecting a GAM network on a deployment with no GAM OAuth client is refused
+    Given another tenant of this seller
+    When the settings page detects that tenant's GAM network with the refresh token "bdd-refresh-token"
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "GAMOAuthNotConfigured" refusal
+
+  @T-ADMIN-REFUSAL-019 @json @adapter
+  Scenario: An adapter update that names no adapter, for a tenant that has chosen none, is refused
+    Given another tenant of this seller, with no ad server chosen
+    When the settings page saves that tenant's adapter without naming one
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "NoAdapterConfigured" refusal
+
+  # The connection test runs the tenant's real Gemini model against the scripted model origin
+  # (tests/e2e/scripted_llm_origin_service.py), which answers with the row's status. A status
+  # the operator can act on is answered with the refusal chosen on it (settings.ai_refusal_for).
+  @T-ADMIN-REFUSAL-020 @json @ai-test
+  Scenario Outline: An AI provider that refuses the connection test is answered by its status
+    Given the AI provider answers the connection test with HTTP <status>
+    When the settings page tests the AI connection with that key
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "<refusal>" refusal
+
+    Examples:
+      | status | refusal                  |
+      | 401    | AIProviderKeyRefused     |
+      | 403    | AIProviderKeyRefused     |
+      | 404    | AIModelNotFound          |
+      | 429    | AIProviderRateLimited    |
+      | 400    | AIProviderRefusedRequest |
+
+  @T-ADMIN-REFUSAL-022 @json @sync-api
+  Scenario: A sync type the sync API does not run is refused for that field
+    Given another tenant of this seller, onboarded to Google Ad Manager
+    When the sync API is asked for a "bogus" sync of that tenant
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "InvalidFormInput" refusal
+    And the JSON issues are:
+      | field     | text                                                      |
+      | sync_type | sync_type must be one of full, inventory, targeting, selective |
+
+  @T-ADMIN-REFUSAL-023 @json @sync-api
+  Scenario: A selective sync that names no inventory types is refused for that field
+    Given another tenant of this seller, onboarded to Google Ad Manager
+    When the sync API is asked for a "selective" sync of that tenant
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "InvalidFormInput" refusal
+    And the JSON issues are:
+      | field      | text                                        |
+      | sync_types | sync_types is required for a selective sync |
 
   @T-ADMIN-REFUSAL-012 @json @inventory-profile-form
   Scenario: A profile a product is built from is not deleted from the list page
@@ -185,6 +303,20 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
       | rate_0          |                       |
     Then the page returns status 200
     And the page is the add product form
+    And the page shows the "InvalidFormInput" refusal
+    And the page contains "Rate is required for fixed pricing (pricing option 0)"
+
+  @T-ADMIN-REFUSAL-021 @product-form @pricing
+  Scenario: A pricing option the product edit form refuses is named on the edit form
+    # The edit form is answered by the error handler: back to the page it came from.
+    Given another tenant of this seller
+    And that tenant has a product
+    When the operator submits that product's edit form from its page with:
+      | field           | value     |
+      | pricing_model_0 | cpm_fixed |
+      | rate_0          |           |
+    Then the page returns status 200
+    And the page is the edit product form
     And the page shows the "InvalidFormInput" refusal
     And the page contains "Rate is required for fixed pricing (pricing option 0)"
 

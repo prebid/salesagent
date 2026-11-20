@@ -10,9 +10,17 @@ import json
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps.domain.admin_accounts import _answer_text, _datatable_to_form, _env, _require_admin_page
+from tests.bdd.steps.domain.admin_accounts import (
+    _answer_text,
+    _datatable_to_form,
+    _env,
+    _json_error,
+    _require_admin_page,
+)
 from tests.bdd.steps.domain.admin_inventory_profiles import IMAGE_300X250, _modal_form
-from tests.helpers.admin_product_form import minimal_product_create_form
+from tests.bdd.steps.domain.admin_unexpected_errors import _other_tenant_id, script_accept
+from tests.harness.admin_client import BROWSER_PAGE_HEADERS
+from tests.helpers.admin_product_form import minimal_product_create_form, minimal_product_edit_form
 from tests.helpers.operator_refusals import operator_refusal_classes
 
 
@@ -38,6 +46,31 @@ def when_submit_create_tenant_without_page(ctx: dict, datatable: list) -> None:
     ctx["admin_page"] = _env(ctx).submit_create_tenant(_submitted(ctx, datatable), from_page=None)
 
 
+#: How a browser that asks for a page in only one of the two ways sends its form post.
+_ONE_WAY_BROWSERS: dict[str, dict[str, str | None]] = {
+    "a browser that sends only Sec-Fetch-Mode": {"Sec-Fetch-Mode": "navigate", "Accept": None},
+    "a browser that sends only Accept": {"Accept": BROWSER_PAGE_HEADERS["Accept"]},
+}
+
+
+@when(
+    parsers.re(
+        r"(?P<browser>a browser that sends only (?:Sec-Fetch-Mode|Accept)) submits the create tenant form "
+        r"from the create tenant page with:"
+    )
+)
+def when_one_way_browser_submits_create_tenant(ctx: dict, browser: str, datatable: list) -> None:
+    env = _env(ctx)
+    ctx["admin_page"] = env.submit_create_tenant(
+        _submitted(ctx, datatable), from_page=env.CREATE_TENANT_PAGE, browser_headers=_ONE_WAY_BROWSERS[browser]
+    )
+
+
+@when(parsers.parse('a script saves the adapter config with no body, sending Accept "{accept}"'))
+def when_script_saves_adapter_config(ctx: dict, accept: str) -> None:
+    ctx["admin_page"] = _env(ctx).save_adapter_config_as_script(script_accept(accept))
+
+
 @when(parsers.parse('the operator submits the create tenant form from the page "{page}" with:'))
 def when_submit_create_tenant_from_named_page(ctx: dict, page: str, datatable: list) -> None:
     ctx["admin_page"] = _env(ctx).submit_create_tenant(_submitted(ctx, datatable), from_page=page)
@@ -61,6 +94,52 @@ def given_inventory_sync_running(ctx: dict, sync_id: str) -> None:
 @given(parsers.parse('a product "{product_id}" built from the profile "{profile_id}"'))
 def given_product_built_from_profile(ctx: dict, product_id: str, profile_id: str) -> None:
     _env(ctx).link_product_to_inventory_profile(product_id, profile_id)
+
+
+@given("that tenant's inventory sync is running")
+def given_other_tenant_sync_running(ctx: dict) -> None:
+    tenant_id = _other_tenant_id(ctx)
+    ctx["admin_running_sync_id"] = f"sync_running_{tenant_id}"
+    _env(ctx).seed_running_inventory_sync(ctx["admin_running_sync_id"], tenant_id=tenant_id)
+
+
+@then("the JSON response names that tenant's running sync")
+def then_json_names_running_sync(ctx: dict) -> None:
+    sync_id = _require_admin_page(ctx).get_json().get("sync_id")
+    assert sync_id == ctx["admin_running_sync_id"], f"Expected the running sync's id, got {sync_id!r}"
+
+
+@given("that tenant has a product")
+def given_other_tenant_has_product(ctx: dict) -> None:
+    tenant_id = _other_tenant_id(ctx)
+    ctx["admin_product_id"] = f"edit_probe_{tenant_id}"
+    _env(ctx).seed_product(ctx["admin_product_id"], tenant_id=tenant_id)
+
+
+@when("the operator submits that product's edit form from its page with:")
+def when_submit_product_edit_from_page(ctx: dict, datatable: list) -> None:
+    form = minimal_product_edit_form(**_submitted(ctx, datatable))
+    ctx["admin_page"] = _env(ctx).submit_product_edit(_other_tenant_id(ctx), ctx["admin_product_id"], form)
+
+
+@when("the settings page creates a GAM service account for that tenant")
+def when_create_gam_service_account_for_other_tenant(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).create_gam_service_account(_other_tenant_id(ctx))
+
+
+@when(parsers.parse('the settings page detects that tenant\'s GAM network with the refresh token "{token}"'))
+def when_detect_gam_network(ctx: dict, token: str) -> None:
+    ctx["admin_page"] = _env(ctx).detect_gam_network(_other_tenant_id(ctx), token)
+
+
+@when("the settings page saves that tenant's adapter without naming one")
+def when_save_adapter_without_naming_one(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).post_adapter_update(_other_tenant_id(ctx), {})
+
+
+@when(parsers.parse('the sync API is asked for a "{sync_type}" sync of that tenant'))
+def when_sync_api_asked_for_sync_type(ctx: dict, sync_type: str) -> None:
+    ctx["admin_page"] = _env(ctx).trigger_sync_by_api(_other_tenant_id(ctx), {"sync_type": sync_type})
 
 
 @when("the settings page starts an inventory sync")
@@ -150,7 +229,7 @@ def then_page_shows_refusal(ctx: dict, refusal: str) -> None:
 
 @then(parsers.parse('the JSON error is the "{refusal}" refusal'))
 def then_json_error_is_refusal(ctx: dict, refusal: str) -> None:
-    error = _require_admin_page(ctx).get_json().get("error")
+    error = _json_error(ctx)
     assert error == operator_refusal_classes()[refusal].MESSAGE, f"Expected {refusal}.MESSAGE, got {error!r}"
 
 

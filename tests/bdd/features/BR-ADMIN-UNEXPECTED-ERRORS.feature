@@ -118,9 +118,44 @@ Feature: BR-ADMIN-UNEXPECTED-ERRORS Unexpected failures in the admin app
     And the database refused the write once
     And the sync API reports the answered sync job as failed, with the answered error
 
+  # A body that is JSON but not an object is the caller's to fix: refused for "body"
+  # (src/admin/form_validation.py json_object_body), never a crash in the route's ".get".
   @T-ADMIN-FAULT-008 @json
-  Scenario: An AI connection test whose body is not a JSON object is answered with a reference
+  Scenario: An AI connection test whose body is not a JSON object is refused for its body
     When the settings page tests the AI connection with the JSON body "[1]"
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "InvalidFormInput" refusal
+    And the JSON issues are:
+      | field | text                       |
+      | body  | body must be a JSON object |
+
+  # The answer's format is decided from the caller, never the route
+  # (src/admin/utils/helpers.py caller_reads_json): only a browser asking for a page gets
+  # HTML, so a script that sends curl's "Accept: */*", or no Accept at all, gets JSON.
+  @T-ADMIN-FAULT-009 @json
+  Scenario Outline: A script that does not ask for a page gets a failure as JSON
+    Given another tenant of this seller, onboarded to Google Ad Manager
+    And the database refuses to mark that tenant's sync jobs running
+    When a script starts that tenant's inventory sync with no body, sending Accept "<accept>"
+    Then the page returns status 500
+    And the JSON response has "success" as false
+    And the JSON error is a database error with a reference
+    And the answer does not carry the database fault's text
+    And the database refused the write once
+
+    Examples:
+      | accept |
+      | */*    |
+      | (none) |
+
+  # The connection test runs the tenant's real Gemini model against the scripted model origin
+  # (tests/e2e/scripted_llm_origin_service.py). A provider that fails the call itself, rather
+  # than refusing the operator's key or model, is not the operator's to fix.
+  @T-ADMIN-FAULT-010 @json @ai-test
+  Scenario: An AI provider that fails the connection test is answered with a reference
+    Given the AI provider answers the connection test with HTTP 503
+    When the settings page tests the AI connection with that key
     Then the page returns status 500
     And the JSON response has "success" as false
     And the JSON error is an unexpected error with a reference

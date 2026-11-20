@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from flask import Blueprint, jsonify, request
 from sqlalchemy import select, text
 
+from src.admin.gam_utils import GAMOAuthNotConfigured
 from src.admin.utils import require_auth
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
@@ -76,7 +77,7 @@ def oauth_status():
     # Check for GAM OAuth credentials using validated configuration
     gam_auth = get_settings().auth
     if not gam_auth.gam_oauth_configured:
-        not_configured = "GAM OAuth credentials not configured"
+        not_configured = GAMOAuthNotConfigured.MESSAGE
         oauth_structured_logger.log_gam_oauth_config_load(success=False, error=not_configured)
         return jsonify(
             {

@@ -41,6 +41,7 @@ def discover_creative_formats_from_url(url):
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
+from src.admin.form_validation import json_object_body
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
@@ -519,7 +520,7 @@ def _send_post_commit_side_effects(
 @require_tenant_access()
 def approve_creative(tenant_id, creative_id, **kwargs):
     """Approve a creative."""
-    data = request.get_json() or {}
+    data = json_object_body()
     approved_by = data.get("approved_by", "admin")
 
     # Collect data needed for post-commit side effects
@@ -694,7 +695,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 @require_tenant_access()
 def reject_creative(tenant_id, creative_id, **kwargs):
     """Reject a creative with comments."""
-    data = request.get_json() or {}
+    data = json_object_body()
     rejected_by = data.get("rejected_by", "admin")
     rejection_reason = data.get("rejection_reason", "")
 
@@ -819,8 +820,7 @@ def _ai_review_creative(
     # vanish: best_effort logs it, and the creative is then marked as failed review below.
     # Only the verdict's own unit of work is inside, so a failure after the verdict is
     # committed cannot revert it (#1972).
-    reviewed = False
-    with best_effort(f"[AI Review Async] Error reviewing creative {creative_id}"):
+    with best_effort(f"AI review failed for creative {creative_id}") as review:
         with AdminCreativeUoW(tenant_id) as uow:
             assert uow.creatives is not None
 
@@ -875,10 +875,9 @@ def _ai_review_creative(
                 logger.error(f"[AI Review Async] Creative not found: {creative_id}")
 
             # UoW auto-commits here
-        reviewed = True
 
-    if not reviewed:
-        _record_ai_review_failure(tenant_id, creative_id)
+    if review.operator_message is not None:
+        _record_ai_review_failure(tenant_id, creative_id, review.operator_message)
         return
 
     logger.info(f"[AI Review Async] Database updated for {creative_id}: status={ai_result['status']}")
@@ -913,11 +912,12 @@ def _ai_review_creative(
         logger.info(f"[AI Review Async] Webhook called for {creative_id}")
 
 
-def _record_ai_review_failure(tenant_id: str, creative_id: str) -> None:
+def _record_ai_review_failure(tenant_id: str, creative_id: str, operator_message: str) -> None:
     """Park a creative whose AI review raised at ``pending_review``, with ``ai_review_error`` saying so.
 
-    The review's failure is already logged with its reference; this writes the marker in a
-    unit of work of its own, and a failure here is logged too rather than raised.
+    The review's failure is already logged; *operator_message* is the text it was answered
+    with, reference included. This writes it in a unit of work of its own, and a failure
+    here is logged too rather than raised.
     """
     with best_effort(f"[AI Review Async] Failed to mark creative {creative_id} as pending"):
         with AdminCreativeUoW(tenant_id) as uow:
@@ -930,7 +930,7 @@ def _record_ai_review_failure(tenant_id: str, creative_id: str) -> None:
                 if not isinstance(creative.data, dict):
                     creative.data = {}
                 creative.data["ai_review_error"] = {
-                    "error": "AI review failed. The details have been logged.",
+                    "error": operator_message,
                     "timestamp": datetime.now(UTC).isoformat(),
                 }
                 uow.creatives.update_data(creative, creative.data)

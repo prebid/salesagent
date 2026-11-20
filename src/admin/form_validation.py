@@ -16,7 +16,11 @@ error handler answers; the refusals every admin form shares live here.
 
 import json
 import logging
+import math
+from decimal import Decimal
 from typing import Any
+
+from flask import request
 
 from src.core.helpers.publisher_property_helpers import STALE_SELECTION_MESSAGE
 from src.core.operator_errors import FormIssue, InvalidFormInput
@@ -41,13 +45,33 @@ def parse_json_field(field: str, raw: str | None, *, blank: Any = None) -> Any:
         raise InvalidFormInput(FormIssue.invalid_json(field, e)) from e
 
 
-def form_number[N: (int, float)](
+def json_object_body(field: str = "body") -> dict[str, Any]:
+    """The request's body parsed as a JSON object, whatever its content type; ``{}`` when it is empty.
+
+    A body that is not JSON is refused as :func:`parse_json_field` refuses a field, and JSON
+    that is not an object (``[1]``, ``"x"``) is refused for *field*, rather than reaching a
+    route's ``.get`` as an ``AttributeError``.
+    """
+    body = parse_json_field(field, request.get_data(as_text=True), blank={})
+    if not isinstance(body, dict):
+        raise InvalidFormInput(FormIssue(field, f"{field} must be a JSON object"))
+    return body
+
+
+def form_number[N: (int, float, Decimal)](
     cast: type[N], field: str, raw: str | N, min_val: N | None = None, max_val: N | None = None
 ) -> N:
-    """*raw*, the value of the form field *field*, as *cast* within the bounds, or refused for *field*."""
+    """*raw*, the value of the form field *field*, as *cast* within the bounds, or refused for *field*.
+
+    NaN and infinity are refused like text that is not a number: no operator means either as
+    an amount, a rate or an id, and PostgreSQL refuses both in a JSON column.
+    """
     try:
         value = cast(raw)
-    except (ValueError, TypeError):
+        finite = value.is_finite() if isinstance(value, Decimal) else isinstance(value, int) or math.isfinite(value)
+    except (ValueError, TypeError, ArithmeticError):  # Decimal's InvalidOperation is an ArithmeticError
+        finite = False
+    if not finite:
         raise InvalidFormInput(FormIssue(field, f"{field} must be a number")) from None
     if min_val is not None and value < min_val:
         raise InvalidFormInput(FormIssue(field, f"{field} must be at least {min_val}"))

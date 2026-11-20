@@ -211,7 +211,7 @@ def _error_event(message: str) -> str:
 
 
 @activity_stream_bp.route("/tenant/<tenant_id>/activity", methods=["GET"])
-@require_tenant_access(api_mode=False)  # Use normal redirect auth for polling
+@require_tenant_access()  # Use normal redirect auth for polling
 def activity_feed(tenant_id, **kwargs):
     """JSON endpoint for polling recent activities."""
 
@@ -229,7 +229,7 @@ def activity_feed(tenant_id, **kwargs):
 
 
 @activity_stream_bp.route("/tenant/<tenant_id>/events", methods=["GET", "HEAD"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def activity_events(tenant_id, **kwargs):
     """Server-Sent Events endpoint for real-time activity updates."""
 

@@ -3,9 +3,10 @@
 import json
 import logging
 
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, session, url_for
 from sqlalchemy import select
 
+from src.admin.form_validation import json_object_body
 from src.admin.utils import approve_media_buy_through_writer, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
@@ -213,7 +214,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
 @log_admin_action("reject_workflow_step")
 def reject_workflow_step(tenant_id, workflow_id, step_id):
     """Reject a workflow step with a reason."""
-    data = request.get_json() or {}
+    data = json_object_body()
     reason = data.get("reason", "No reason provided")
 
     with get_db_session() as db:

@@ -536,8 +536,8 @@ class PublisherUoW(BaseUoW):
 class SyncJobUoW(BaseUoW):
     """Unit of Work for a tenant's sync jobs.
 
-    A job's failure is written in a unit of its own, never on the session the failed work
-    used: that session may hold a transaction the database has already aborted.
+    For a caller that records a job's failure with no session of its own open
+    (``src.services.sync_jobs.record_sync_failure``).
 
     Args:
         tenant_id: Tenant scope for all repository queries.

@@ -23,6 +23,7 @@ from werkzeug.wrappers import Response
 
 from src.admin.auth_utils import OAUTH_CALLBACK_ERRORS, extract_user_info
 from src.admin.blueprints.core import get_tenant_from_hostname
+from src.admin.gam_utils import GAMOAuthNotConfigured
 from src.admin.utils import is_super_admin, require_tenant_access
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -726,8 +727,7 @@ def gam_authorize(tenant_id):
     # Get GAM OAuth configuration
     gam_auth = get_settings().auth
     if not gam_auth.gam_oauth_configured:
-        flash("GAM OAuth is not properly configured", "error")
-        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+        raise GAMOAuthNotConfigured(f"GAM OAuth authorization for tenant {tenant_id}")
 
     # Store tenant context for callback. The Host is the operator's own domain, so it
     # is what the callback sends them back to.

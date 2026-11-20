@@ -6,6 +6,7 @@ import logging
 from flask import Blueprint, jsonify, render_template, request, session
 from sqlalchemy import String, func, or_, select
 
+from src.admin.form_validation import json_object_body
 from src.admin.utils import execute_limited, get_tenant_config_from_db, require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
@@ -56,7 +57,7 @@ def targeting_browser(tenant_id):
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/targeting/all", methods=["GET"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def get_targeting_data(tenant_id):
     """Get all targeting data (custom targeting keys, audience segments, labels) from database."""
     logger.info(f"Targeting data request for tenant: {tenant_id}")
@@ -159,7 +160,7 @@ def get_targeting_data(tenant_id):
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/targeting/values/<key_id>", methods=["GET"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def get_targeting_values(tenant_id, key_id):
     """Get custom targeting values for a specific key by querying GAM in real-time.
 
@@ -373,7 +374,7 @@ def orders_browser(tenant_id):
 
 @inventory_bp.route("/api/tenant/<tenant_id>/sync/orders", methods=["POST"])
 @log_admin_action("sync_orders")
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def sync_orders(tenant_id):
     """Sync GAM orders for a tenant."""
     with get_db_session() as db_session:
@@ -403,7 +404,7 @@ def sync_orders(tenant_id):
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/orders", methods=["GET"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def get_orders(tenant_id):
     """Get orders for a tenant."""
     with get_db_session() as db_session:
@@ -450,7 +451,7 @@ def get_orders(tenant_id):
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/orders/<order_id>", methods=["GET"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def get_order_details(tenant_id, order_id):
     """Get details for a specific order."""
     with get_db_session() as db_session:
@@ -627,7 +628,7 @@ def analyze_ad_server_inventory(tenant_id):
 
 @inventory_bp.route("/api/tenant/<tenant_id>/inventory/sync", methods=["POST"])
 @log_admin_action("sync_inventory")
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def sync_inventory(tenant_id):
     """Start inventory sync in background (non-blocking).
 
@@ -683,7 +684,7 @@ def sync_inventory(tenant_id):
             )
 
     # Parse request body
-    data = request.get_json() or {}
+    data = json_object_body()
     sync_mode = data.get("mode", "incremental")  # Default to incremental (safer)
     sync_types = data.get("types", None)
     custom_targeting_limit = data.get("custom_targeting_limit")
@@ -713,7 +714,7 @@ def sync_inventory(tenant_id):
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/inventory-stats", methods=["GET"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def get_inventory_stats(tenant_id):
     """Get inventory statistics by type and status for debugging.
 
@@ -740,7 +741,7 @@ def get_inventory_stats(tenant_id):
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/sync-status", methods=["GET"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def get_sync_status(tenant_id):
     """Get detailed sync status for each inventory type.
 
@@ -929,7 +930,7 @@ _LIST_LIMIT = 500
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/inventory/tree", methods=["GET"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def get_inventory_tree(tenant_id):
     """Get ad unit hierarchy tree structure with lazy-loading support.
 
@@ -1096,7 +1097,7 @@ def get_inventory_tree(tenant_id):
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/inventory-list", methods=["GET"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def get_inventory_list(tenant_id):
     """Get list of ad units and placements for picker UI.
 
@@ -1236,7 +1237,7 @@ def get_inventory_list(tenant_id):
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/inventory/sizes", methods=["GET"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def get_inventory_sizes(tenant_id):
     """Get unique creative sizes from selected inventory items.
 

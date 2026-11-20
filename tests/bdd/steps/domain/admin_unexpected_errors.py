@@ -9,12 +9,17 @@ graded on the response itself; the trigger's own counter shows it was this fault
 from __future__ import annotations
 
 import json
-import re
 
 from pytest_bdd import given, parsers, then, when
 
-from src.core.operator_errors import DB_ERROR_OPERATOR_MESSAGE, GENERIC_OPERATOR_MESSAGE
-from tests.bdd.steps.domain.admin_accounts import _answer_text, _datatable_to_form, _env, _require_admin_page
+from src.core.operator_errors import DB_ERROR_OPERATOR_MESSAGE, GENERIC_OPERATOR_MESSAGE, logged_failure_pattern
+from tests.bdd.steps.domain.admin_accounts import (
+    _answer_text,
+    _datatable_to_form,
+    _env,
+    _json_error,
+    _require_admin_page,
+)
 
 # What the database says when it refuses the write: plainly internal, so its appearance
 # anywhere in an answer is a leak. str() of the driver's error carries it, with the driver's
@@ -22,9 +27,13 @@ from tests.bdd.steps.domain.admin_accounts import _answer_text, _datatable_to_fo
 _FAULT_TEXT = "BDD admin fault: postgres://admin:s3cr3t-admin-fault@10.0.0.9:5432/prod_shadow"
 _DRIVER_TEXT = "psycopg2"
 
-_DATABASE_ERROR_WITH_REFERENCE = re.compile(
-    re.escape(DB_ERROR_OPERATOR_MESSAGE) + r"\. The details have been logged \(reference [0-9a-f]{8}\)\."
-)
+
+def _assert_json_error_is_logged_failure(ctx: dict, context: str) -> None:
+    """The JSON ``error`` is exactly what ``safe_error_message`` answers for *context*, with a reference."""
+    error = _json_error(ctx)
+    assert isinstance(error, str) and logged_failure_pattern(context).fullmatch(error), (
+        f"Expected {context!r} with a reference, got {error!r}"
+    )
 
 
 @given(parsers.parse('the database refuses to store an account named "{name}"'))
@@ -59,17 +68,14 @@ def then_page_is_error_page(ctx: dict) -> None:
 @then("the page shows a database error with a reference")
 def then_page_shows_database_error(ctx: dict) -> None:
     page = _answer_text(ctx)
-    assert _DATABASE_ERROR_WITH_REFERENCE.search(page), (
+    assert logged_failure_pattern(DB_ERROR_OPERATOR_MESSAGE).search(page), (
         f"The page does not show {DB_ERROR_OPERATOR_MESSAGE!r} with a reference: {page[:2000]!r}"
     )
 
 
 @then("the JSON error is a database error with a reference")
 def then_json_error_is_database_error(ctx: dict) -> None:
-    error = _require_admin_page(ctx).get_json().get("error")
-    assert isinstance(error, str) and _DATABASE_ERROR_WITH_REFERENCE.fullmatch(error), (
-        f"Expected {DB_ERROR_OPERATOR_MESSAGE!r} with a reference, got {error!r}"
-    )
+    _assert_json_error_is_logged_failure(ctx, DB_ERROR_OPERATOR_MESSAGE)
 
 
 @then("the answer does not carry the database fault's text")
@@ -107,6 +113,32 @@ def given_another_gam_tenant(ctx: dict) -> None:
     ctx["admin_other_tenant_id"] = _env(ctx).seed_tenant(gam=True)
 
 
+@given("another tenant of this seller, with no ad server chosen")
+def given_another_tenant_without_ad_server(ctx: dict) -> None:
+    ctx["admin_other_tenant_id"] = _env(ctx).seed_tenant(ad_server=None)
+
+
+def script_accept(accept: str) -> str | None:
+    """The ``Accept`` a scenario's "sending Accept" names: ``(none)`` sends no ``Accept`` at all."""
+    return None if accept == "(none)" else accept
+
+
+@when(parsers.parse('a script starts that tenant\'s inventory sync with no body, sending Accept "{accept}"'))
+def when_script_starts_inventory_sync(ctx: dict, accept: str) -> None:
+    ctx["admin_page"] = _env(ctx).start_inventory_sync_as_script(_other_tenant_id(ctx), script_accept(accept))
+
+
+@given(parsers.parse("the AI provider answers the connection test with HTTP {status:d}"))
+def given_ai_provider_answers_with_status(ctx: dict, status: int) -> None:
+    ctx["admin_ai_api_key"] = _env(ctx).script_ai_connection_test({"fail_status": status})
+
+
+@when("the settings page tests the AI connection with that key")
+def when_test_ai_connection_with_scripted_key(ctx: dict) -> None:
+    body = {"provider": "gemini", "api_key": ctx["admin_ai_api_key"]}
+    ctx["admin_page"] = _env(ctx).post_ai_connection_test(body)
+
+
 @given("the database refuses to change that tenant")
 def given_database_refuses_tenant_change(ctx: dict) -> None:
     _env(ctx).fail_writes_of("tenants", column="tenant_id", value=_other_tenant_id(ctx), message=_FAULT_TEXT)
@@ -135,18 +167,14 @@ def when_settings_page_posts_business_rules(ctx: dict, datatable: list) -> None:
 
 @when("the sync API is asked to sync that tenant's inventory")
 def when_sync_api_syncs_inventory(ctx: dict) -> None:
-    ctx["admin_page"] = _env(ctx).trigger_inventory_sync_by_api(_other_tenant_id(ctx))
+    body = {"sync_type": "inventory", "force": True}
+    ctx["admin_page"] = _env(ctx).trigger_sync_by_api(_other_tenant_id(ctx), body)
 
 
 @then("the JSON error is that tenant's inventory sync failure with a reference")
 def then_json_error_is_sync_failure(ctx: dict) -> None:
-    error = _require_admin_page(ctx).get_json().get("error")
     # The context recording_failure's caller names (GAMSyncManager.sync_inventory).
-    expected = re.compile(
-        re.escape(f"Inventory sync failed for tenant {_other_tenant_id(ctx)}")
-        + r"\. The details have been logged \(reference [0-9a-f]{8}\)\."
-    )
-    assert isinstance(error, str) and expected.fullmatch(error), f"Expected the sync failure text, got {error!r}"
+    _assert_json_error_is_logged_failure(ctx, f"Inventory sync failed for tenant {_other_tenant_id(ctx)}")
 
 
 @then("the sync API reports the answered sync job as failed, with the answered error")
@@ -166,10 +194,4 @@ def when_test_ai_connection_with_body(ctx: dict, body: str) -> None:
 
 @then("the JSON error is an unexpected error with a reference")
 def then_json_error_is_unexpected_error(ctx: dict) -> None:
-    error = _require_admin_page(ctx).get_json().get("error")
-    expected = re.compile(
-        re.escape(GENERIC_OPERATOR_MESSAGE) + r"\. The details have been logged \(reference [0-9a-f]{8}\)\."
-    )
-    assert isinstance(error, str) and expected.fullmatch(error), (
-        f"Expected {GENERIC_OPERATOR_MESSAGE!r} with a reference, got {error!r}"
-    )
+    _assert_json_error_is_logged_failure(ctx, GENERIC_OPERATOR_MESSAGE)

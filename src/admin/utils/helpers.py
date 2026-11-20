@@ -320,37 +320,23 @@ def role_permits(role: str, method: str, *, minimum: UserRole = UserRole.VIEWER)
     return ranks.index(held) >= needed
 
 
-#: ``Sec-Fetch-Mode`` values a browser sends on a script's ``fetch``/XHR; a page load or
-#: form submit is ``navigate``.
-_SCRIPT_FETCH_MODES = frozenset({"cors", "same-origin"})
-
-#: The blueprints whose every route answers JSON: the programmatic APIs (``/api/...``) and
-#: the schema service. Their failures are JSON too, whatever the request's headers say.
-JSON_API_BLUEPRINTS = frozenset(
-    {"api", "format_search", "gam_reporting_api", "schemas", "sync_api", "tenant_management_api"}
-)
-
-
 def caller_reads_json() -> bool:
     """Whether the current request's caller reads a JSON answer rather than an HTML page.
 
-    True for a route of a JSON API blueprint (:data:`JSON_API_BLUEPRINTS`), whose format
-    is the endpoint's, not the caller's: curl and most HTTP libraries send ``Accept: */*``.
-    Elsewhere, true for a JSON request body, a script's ``fetch`` or XHR
-    (``Sec-Fetch-Mode`` of ``cors``/``same-origin``, which every current browser sends, or
-    ``X-Requested-With: XMLHttpRequest``), or an ``Accept`` that prefers
-    ``application/json`` to ``text/html``; ``Accept: */*`` on its own ties, and a tie is
-    HTML. The one answer to this question for the admin UI: the refusals in
-    :func:`require_tenant_access`, the admin error handler and the routes that answer both
-    a form and a script all ask it.
+    Decided from the caller, never the route: a browser asking for a page gets HTML, and
+    every other caller gets JSON. A page is asked for by a navigation (``Sec-Fetch-Mode:
+    navigate``, which every current browser sends on a page load and a form submit) or by an
+    ``Accept`` that ranks ``text/html`` strictly above ``application/json``, as a form post
+    and an older browser's page load do. Everything else is JSON: a script's ``fetch`` or
+    XHR, ``Accept: */*`` (curl, ``requests``), no ``Accept`` at all, a JSON body. A tie is
+    JSON. The one answer to this question for the admin UI: the refusals in
+    :func:`require_tenant_access`, the admin error handler and the routes that answer both a
+    form and a script all ask it.
     """
-    if not JSON_API_BLUEPRINTS.isdisjoint(request.blueprints):
-        return True
-    if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return True
-    if request.headers.get("Sec-Fetch-Mode") in _SCRIPT_FETCH_MODES:
-        return True
-    return request.accept_mimetypes.best_match(["text/html", "application/json"]) == "application/json"
+    if request.headers.get("Sec-Fetch-Mode") == "navigate":
+        return False
+    accept = request.accept_mimetypes
+    return not accept["text/html"] > accept["application/json"]
 
 
 def json_failure(message: str, status: int, fields: Mapping[str, object] | None = None) -> Response:
@@ -358,26 +344,28 @@ def json_failure(message: str, status: int, fields: Mapping[str, object] | None 
     return make_response(jsonify({**(fields or {}), "success": False, "error": message}), status)
 
 
-def _json_refusal(status: int, message: str, *, api_mode: bool) -> Response | None:
+def _json_refusal(status: int, message: str) -> Response | None:
     """A :func:`json_failure` answer with *status* if the caller reads JSON, else ``None``.
 
     The one decision for every refusal in :func:`require_tenant_access`; each refusal
     keeps its own answer for a caller that reads HTML.
     """
-    return json_failure(message, status) if api_mode or caller_reads_json() else None
+    return json_failure(message, status) if caller_reads_json() else None
 
 
-def _forbid(message: str, *, api_mode: bool) -> NoReturn:
+def _forbid(message: str) -> NoReturn:
     """Refuse the request with a 403: a :func:`json_failure` if the caller reads JSON, else the HTML page."""
-    raise Forbidden(response=_json_refusal(403, message, api_mode=api_mode))
+    raise Forbidden(response=_json_refusal(403, message))
 
 
-def require_tenant_access(api_mode: bool = False, role: UserRole = UserRole.VIEWER):
+def require_tenant_access(*, role: UserRole = UserRole.VIEWER):
     """Decorator to require tenant access for routes.
 
     A tenant user must also hold a role that permits the request (:func:`role_permits`);
     *role* is the least role the route needs, so ``role=UserRole.ADMIN`` limits it to
-    tenant admins. Super admins pass regardless.
+    tenant admins. Super admins pass regardless. Each refusal is answered in the form the
+    caller reads (:func:`caller_reads_json`): JSON, or for a browser the login redirect or
+    the HTML page.
     """
 
     def decorator(f):
@@ -416,7 +404,7 @@ def require_tenant_access(api_mode: bool = False, role: UserRole = UserRole.VIEW
                 return f(tenant_id, *args, **kwargs)
 
             if "user" not in session:
-                if (refusal := _json_refusal(401, "Authentication required", api_mode=api_mode)) is not None:
+                if (refusal := _json_refusal(401, "Authentication required")) is not None:
                     return refusal
                 # Redirect to tenant-specific login (preserves tenant context)
                 return redirect(url_for("auth.tenant_login", tenant_id=tenant_id, next=request.url))
@@ -439,7 +427,7 @@ def require_tenant_access(api_mode: bool = False, role: UserRole = UserRole.VIEW
                 user_role = user.role if user else None
 
             if user_role is None:
-                _forbid("Access denied", api_mode=api_mode)
+                _forbid("Access denied")
             if not role_permits(user_role, request.method, minimum=role):
                 logger.warning(
                     "Refused %s %s for tenant %s: role %s",
@@ -448,7 +436,7 @@ def require_tenant_access(api_mode: bool = False, role: UserRole = UserRole.VIEW
                     log_safe(tenant_id),
                     log_safe(user_role),
                 )
-                _forbid("Your role does not allow this", api_mode=api_mode)
+                _forbid("Your role does not allow this")
             return f(tenant_id, *args, **kwargs)
 
         return decorated_function

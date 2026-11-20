@@ -8,6 +8,7 @@ from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import delete, func, select
 
 from src.admin.auth_helpers import require_api_key_auth
+from src.admin.form_validation import json_object_body
 from src.admin.utils.url_policy import json_error_if_url_blocked
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -507,7 +508,7 @@ def delete_tenant(tenant_id):
         hard_delete = request.args.get("hard_delete", "false").lower() == "true"
 
         # Check request body for hard_delete flag (not query params)
-        data = request.get_json(force=True, silent=True) or {}
+        data = json_object_body()
         hard_delete = data.get("hard_delete", False)
 
         if hard_delete:

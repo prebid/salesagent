@@ -11,8 +11,9 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, jsonify
 
+from src.admin.form_validation import json_object_body
 from src.core.database.models import Publisher
 from src.core.database.repositories.uow import PublisherUoW
 from src.core.http_utils import canonical_publisher_domain
@@ -69,7 +70,7 @@ def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["POST"])
 def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
     """Add a publisher by its domain, and ingest its adagents.json."""
-    data = request.get_json(silent=True) or {}
+    data = json_object_body()
     domain = canonical_publisher_domain(str(data.get("publisher_domain") or ""))
     if not domain:
         return jsonify({"error": "Publisher domain is required"}), 400

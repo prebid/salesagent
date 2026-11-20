@@ -38,21 +38,21 @@ def mock_config(tenant_id, product_id, **kwargs):
             # answers on this page; the session closes without a commit, so nothing is stored.
             config = product.implementation_config or {}
 
-            def parse_int(field_name, default, min_val=None, max_val=None):
-                return form_number(int, field_name, request.form.get(field_name, default), min_val, max_val)
-
-            def parse_float(field_name, default, min_val=None, max_val=None):
-                return form_number(float, field_name, request.form.get(field_name, default), min_val, max_val)
+            form = request.form
 
             # Traffic simulation (with validation)
-            config["daily_impressions"] = parse_int("daily_impressions", 100000, min_val=0)
-            config["fill_rate"] = parse_float("fill_rate", 85, min_val=0, max_val=100)
-            config["ctr"] = parse_float("ctr", 0.5, min_val=0, max_val=100)
-            config["viewability_rate"] = parse_float("viewability_rate", 70, min_val=0, max_val=100)
+            config["daily_impressions"] = form_number(
+                int, "daily_impressions", form.get("daily_impressions", 100000), 0
+            )
+            config["fill_rate"] = form_number(float, "fill_rate", form.get("fill_rate", 85.0), 0.0, 100.0)
+            config["ctr"] = form_number(float, "ctr", form.get("ctr", 0.5), 0.0, 100.0)
+            config["viewability_rate"] = form_number(
+                float, "viewability_rate", form.get("viewability_rate", 70.0), 0.0, 100.0
+            )
 
             # Performance simulation (with validation)
-            config["latency_ms"] = parse_int("latency_ms", 50, min_val=0, max_val=60000)
-            config["error_rate"] = parse_float("error_rate", 0.1, min_val=0, max_val=100)
+            config["latency_ms"] = form_number(int, "latency_ms", form.get("latency_ms", 50), 0, 60000)
+            config["error_rate"] = form_number(float, "error_rate", form.get("error_rate", 0.1), 0.0, 100.0)
 
             # Test scenarios (validated choices)
             test_mode = request.form.get("test_mode", "normal")
@@ -60,14 +60,22 @@ def mock_config(tenant_id, product_id, **kwargs):
             if test_mode not in valid_modes:
                 raise InvalidFormInput(FormIssue("test_mode", f"test_mode must be one of {', '.join(valid_modes)}"))
             config["test_mode"] = test_mode
-            config["price_variance"] = parse_float("price_variance", 10, min_val=0, max_val=100)
-            config["seasonal_factor"] = parse_float("seasonal_factor", 1.0, min_val=0.1, max_val=10.0)
+            config["price_variance"] = form_number(
+                float, "price_variance", form.get("price_variance", 10.0), 0.0, 100.0
+            )
+            config["seasonal_factor"] = form_number(
+                float, "seasonal_factor", form.get("seasonal_factor", 1.0), 0.1, 10.0
+            )
 
             # Delivery simulation (with validation)
             config["delivery_simulation"] = {
-                "enabled": "delivery_simulation_enabled" in request.form,
-                "time_acceleration": parse_int("time_acceleration", 3600, min_val=1, max_val=86400),
-                "update_interval_seconds": parse_float("update_interval_seconds", 1.0, min_val=0.1, max_val=60),
+                "enabled": "delivery_simulation_enabled" in form,
+                "time_acceleration": form_number(
+                    int, "time_acceleration", form.get("time_acceleration", 3600), 1, 86400
+                ),
+                "update_interval_seconds": form_number(
+                    float, "update_interval_seconds", form.get("update_interval_seconds", 1.0), 0.1, 60.0
+                ),
             }
 
             # Note: Creative formats are managed in product.format_ids (via add/edit product page)

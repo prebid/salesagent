@@ -17,7 +17,9 @@ from sqlalchemy import func, select
 
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.admin.auth_helpers import api_key_prefix, mint_stored_api_key, require_api_key_auth
+from src.admin.form_validation import json_object_body
 from src.core.database.models import AdapterConfig, SyncJob, Tenant
+from src.core.operator_errors import FormIssue, InvalidFormInput
 from src.services.gam_inventory_service import db_session as gam_db_session
 from src.services.sync_jobs import recording_failure
 
@@ -32,6 +34,9 @@ db_session = gam_db_session
 #: The ``superadmin_config`` row holding this API key's digest. Named once: the
 #: decorator below and the mint/prefix helpers at the bottom must agree on it.
 SYNC_API_CONFIG_KEY = "api_key"
+
+#: The ``sync_type`` values the trigger route runs.
+SYNC_TYPES = ("full", "inventory", "targeting", "selective")
 
 require_sync_api_key = require_api_key_auth(
     setting="sync_api_key",
@@ -74,17 +79,17 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
             return jsonify({"error": "Adapter not configured"}), 400
 
         # Get request parameters
-        data = request.get_json() or {}
+        data = json_object_body()
         sync_type = data.get("sync_type", "full")
         force = data.get("force", False)
         custom_targeting_limit = data.get("custom_targeting_limit", 1000)
         audience_segment_limit = data.get("audience_segment_limit")
         sync_types = data.get("sync_types", [])
 
-        if sync_type not in ("full", "inventory", "targeting", "selective"):
-            return jsonify({"error": "Unsupported sync type"}), 400
+        if sync_type not in SYNC_TYPES:
+            raise InvalidFormInput(FormIssue("sync_type", f"sync_type must be one of {', '.join(SYNC_TYPES)}"))
         if sync_type == "selective" and not sync_types:
-            return jsonify({"error": "sync_types required for selective sync"}), 400
+            raise InvalidFormInput(FormIssue("sync_types", "sync_types is required for a selective sync"))
 
         # Check for recent sync if not forcing
         if not force:
