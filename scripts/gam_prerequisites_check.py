@@ -72,6 +72,8 @@ def check_test_network(*, skip: bool) -> int:
             print(f"  FAIL settings present: {name}")
         return 1
     print("  PASS settings present")
+    # The one fact about the credential that may be shown: that this process has it, and its size.
+    print(f"  credential: present, {len(network.service_account_json)} characters")
     # A record of which network this run used, compared with nothing.
     print(f"  network code (configured): {network.network_code}")
 

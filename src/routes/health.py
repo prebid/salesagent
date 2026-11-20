@@ -155,6 +155,18 @@ async def debug_db_state(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@debug_router.get("/debug/encryption-key-fingerprint")
+async def debug_encryption_key_fingerprint() -> JSONResponse:
+    """The fingerprint of this server's ``ENCRYPTION_KEY`` (``encryption_key_fingerprint``), never the key.
+
+    A test process that writes encrypted columns for this server to read compares it with its
+    own before it writes, so a key mismatch fails as that and not as a refused credential.
+    """
+    from src.core.utils.encryption import encryption_key_fingerprint
+
+    return JSONResponse({"fingerprint": encryption_key_fingerprint()})
+
+
 @debug_router.get("/debug/tenant")
 async def debug_tenant(request: Request):
     """Debug endpoint to check tenant detection from headers."""

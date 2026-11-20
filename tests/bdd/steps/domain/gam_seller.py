@@ -330,7 +330,7 @@ def given_package_references_creative_gam_holds(
         library_image_assets(url),
         fmt=LIBRARY_IMAGE_FORMAT,
         status="approved" if status == "approved" else "pending_review",
-        ad_server_creative_id=gam_id,
+        ad_server_creative_id=ctx["env"].hold_gam_creative(gam_id, url),
     )
 
 
@@ -581,10 +581,7 @@ _FLIGHT_KEYS = ("startDateTimeType", "startDateTime", "endDateTime")
 
 def _flights(ctx: dict, service: str, method: str) -> list[dict[str, Any]]:
     """For each object the stand-in GAM network created through ``service.method``, its flight keys that are present."""
-    return [
-        {key: created[key] for key in _FLIGHT_KEYS if key in created}
-        for created in ctx["env"].gam_objects_created(service, method)
-    ]
+    return ctx["env"].gam_flights(service, method, _FLIGHT_KEYS)
 
 
 def _gam_datetime(literal: str, time_zone: str) -> dict[str, Any]:
@@ -991,10 +988,11 @@ def then_gam_association_serving(ctx: dict, line_items: str, status: str) -> Non
 def then_gam_serving_actions(ctx: dict) -> None:
     """GAM received exactly a deactivate and then an activate of the associations of the one creative it created."""
     (creative,) = _creatives_created(ctx)
-    lica = ctx["env"].mock["gam_client"].return_value.GetService("LineItemCreativeAssociationService")
     sent = [
-        (call.args[0]["xsi_type"], [v["value"]["value"] for v in call.args[1]["values"] if v["key"] == "creativeId"])
-        for call in lica.performLineItemCreativeAssociationAction.call_args_list
+        (action["xsi_type"], [v["value"]["value"] for v in statement["values"] if v["key"] == "creativeId"])
+        for action, statement in ctx["env"].gam_actions_performed(
+            "LineItemCreativeAssociationService", "performLineItemCreativeAssociationAction"
+        )
     ]
     expected = [
         ("DeactivateLineItemCreativeAssociations", [int(creative["id"])]),
@@ -1006,8 +1004,9 @@ def then_gam_serving_actions(ctx: dict) -> None:
 @then("Google Ad Manager was asked to change no association's serving")
 def then_gam_no_serving_change(ctx: dict) -> None:
     """Nothing reached GAM's association activate or deactivate action."""
-    lica = ctx["env"].mock["gam_client"].return_value.GetService("LineItemCreativeAssociationService")
-    calls = lica.performLineItemCreativeAssociationAction.call_args_list
+    calls = ctx["env"].gam_actions_performed(
+        "LineItemCreativeAssociationService", "performLineItemCreativeAssociationAction"
+    )
     assert calls == [], f"expected no association action; GAM received {calls}"
 
 
@@ -1216,10 +1215,9 @@ def then_gam_associated_each_creative_with_created_line_item(ctx: dict) -> None:
 def then_gam_approved_created_order_twice(ctx: dict) -> None:
     """Both approvals the seller sent GAM name the one order GAM created."""
     (order,) = _orders_created(ctx)
-    order_actions = ctx["env"].mock["gam_client"].return_value.GetService("OrderService").performOrderAction
     approvals = [
         str(bound["value"]["value"])
-        for action, statement in (call.args for call in order_actions.call_args_list)
+        for action, statement in ctx["env"].gam_actions_performed("OrderService", "performOrderAction")
         if action["xsi_type"].startswith("Approve")
         for bound in statement["values"]
         if bound["key"] == "orderId"
