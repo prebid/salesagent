@@ -44,6 +44,7 @@ from tests.bdd.steps.domain.uc006_sync_creatives import _ask_assignment_terms, w
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._creative_seeding import store_creative, store_package_creative
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import comma_list
 from tests.bdd.steps.generic._table import rows as table_rows
 from tests.factories.creative_asset import (
     LIBRARY_IMAGE_FORMAT,
@@ -847,7 +848,24 @@ def then_gam_created_one_third_party_creative(
 
     The snippet is quoted with whichever quote it does not contain, and compared byte for byte.
     """
+    # Byte equality, macro tokens included: core/assets/display-tag-asset.json:17 at
+    # adcp@8d1d3244b, "Tokens remain byte-preserved until the resolver named by each
+    # declaration substitutes them."
     _assert_creatives_created(ctx, [("ThirdPartyCreative", advertiser_id, None, double_quoted or single_quoted)])
+
+
+@then(parsers.parse('Google Ad Manager tracks that creative\'s impressions at exactly "{urls}"'))
+def then_gam_tracks_impressions_at(ctx: dict, urls: str) -> None:
+    """The one creative GAM created fires exactly these impression trackers, in order, in GAM's macro spelling."""
+    (creative,) = _creatives_created(ctx)
+    trackers = list(creative.get("thirdPartyImpressionTrackingUrls") or [])
+    # docs/creative/universal-macros.mdx:694 at adcp@8d1d3244b: the sales agent "Translates
+    # platform macros to their ad server's syntax", ``{CACHEBUSTER}`` -> ``%%CACHEBUSTER%%`` (GAM).
+    assert trackers == comma_list(urls), f"expected GAM to fire {comma_list(urls)}; the creative fires {trackers}"
+    # Equality already rules it out; stated because a tracker still carrying an AdCP token is
+    # the failure this grades, and GAM would fire it with the braces in it.
+    leftover = [url for url in trackers if re.search(r"\{[A-Z_]+\}", url)]
+    assert not leftover, f"GAM fires trackers still in AdCP macro spelling: {leftover}"
 
 
 @then(
@@ -858,6 +876,10 @@ def then_gam_created_one_third_party_creative(
 )
 def then_gam_created_one_image_redirect(ctx: dict, advertiser_id: str, image_url: str, destination_url: str) -> None:
     """GAM holds exactly one creative from this scenario: an image redirect over exactly this pair of URLs."""
+    # Byte equality on both URLs. A display_tag pair keeps its macro tokens:
+    # core/assets/display-tag-asset.json:119 at adcp@8d1d3244b, "The pair MUST NOT be split,
+    # mixed, or revised independently." An image's landing page arrives in GAM's macro
+    # spelling, docs/creative/universal-macros.mdx:694, so its expected value is GAM's.
     created = [
         (c["xsi_type"], str(c["advertiserId"]), c.get("imageUrl"), c.get("destinationUrl"))
         for c in _creatives_created(ctx)

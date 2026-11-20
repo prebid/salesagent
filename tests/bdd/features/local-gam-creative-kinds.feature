@@ -78,6 +78,32 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     And Google Ad Manager created that creative at size 300x250
     And Google Ad Manager associated that creative with the line item it created, at its own size
 
+  # AdCP macros (docs/creative/universal-macros.mdx at adcp@8d1d3244b, :241 "| `{CACHEBUSTER}` |
+  # Random number to prevent caching |" and :243 "| `{CLICK_URL}` | Publisher's click tracking
+  # URL |") reach GAM two ways, and both are graded on exact bytes:
+  # - translated, in a tracking URL or a landing page: :694, the sales agent "Translates platform
+  #   macros to their ad server's syntax: `{CACHEBUSTER}` → `%%CACHEBUSTER%%` (GAM)". GAM's
+  #   spelling is src/adapters/gam/utils/macros.py:34 (`%%CACHEBUSTER%%`) and :36
+  #   (`%%CLICK_URL_ESC%%`). The impression tracker of every row, and the image's landing page.
+  # - preserved, inside a display_tag representation: core/assets/display-tag-asset.json:17
+  #   "Tokens remain byte-preserved until the resolver named by each declaration substitutes
+  #   them", and :119 for the pair, "The pair MUST NOT be split, mixed, or revised independently".
+  #   The tag URL's snippet and the paired redirect's two URLs.
+  @T-UC-002-local-gam-creative-macros @extension
+  Scenario Outline: A creative's AdCP macros reach GAM in GAM's spelling in its tracker and landing page, and byte for byte inside a display tag
+    Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '<product_formats>'
+    And the package references the buyer's approved <creative>, with impression tracker "https://track.example.com/imp?cb={CACHEBUSTER}"
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And Google Ad Manager created one <gam_creative>
+    And Google Ad Manager tracks that creative's impressions at exactly "https://track.example.com/imp?cb=%%CACHEBUSTER%%"
+
+    Examples:
+      | representation  | product_formats | creative | gam_creative |
+      | tag_url         | {"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_300x250", "params": {"width": 300, "height": 250, "supported_delivery_types": ["tag_url"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}]} | display_tag creative "cr-macro-tag" carrying the tag URL "https://ads.example.com/tag/{CACHEBUSTER}.js?click={CLICK_URL}" | third-party creative for advertiser "3000001" whose snippet is '<script src="https://ads.example.com/tag/{CACHEBUSTER}.js?click={CLICK_URL}"></script>' and which names no image URL |
+      | paired_redirect | {"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_paired_300x250", "params": {"width": 300, "height": 250, "supported_delivery_types": ["paired_redirect"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}]} | display_tag creative "cr-macro-paired" carrying the paired redirect "https://ads.example.com/ad?cb={CACHEBUSTER}" with click-through "https://click.example.com/redirect?c={CLICK_URL}" | image redirect creative for advertiser "3000001" showing "https://ads.example.com/ad?cb={CACHEBUSTER}" and clicking through to "https://click.example.com/redirect?c={CLICK_URL}" |
+      | image           | {"format_options": [{"format_kind": "image", "format_option_id": "image_300x250", "params": {"width": 300, "height": 250}}]} | 300x250 image creative "cr-macro-image" showing "https://cdn.example.com/banner-300x250.png", with click-through "https://brand.example.com/landing?c={CLICK_URL}" | image redirect creative for advertiser "3000001" showing "https://cdn.example.com/banner-300x250.png" and clicking through to "https://brand.example.com/landing?c=%%CLICK_URL_ESC%%" |
+
   # The creative is stored as the buyer sent it: its markup, with no URL and no size of its own.
   # The size comes from the format.
   @T-UC-002-local-gam-creative-html @extension

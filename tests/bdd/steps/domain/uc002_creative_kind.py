@@ -30,6 +30,7 @@ from tests.e2e.webhook_capture_service import PEER_PREVIEW_TOOL
 from tests.factories.creative import CreativeAssignmentFactory
 from tests.factories.creative_asset import (
     DISPLAY_TAG_SLOT,
+    AssetSpec,
     build_assets,
     display_tag_spec,
     html5_bundle_specs,
@@ -40,6 +41,7 @@ from tests.factories.creative_asset import (
     named_format_assets,
     parse_sizes,
     prompt_assets,
+    url_spec,
 )
 from tests.factories.request import CreativeAssetRequestFactory
 
@@ -106,6 +108,19 @@ _RECORDED_PREVIEW = (
 )
 
 
+#: An optional clause on a creative Given: the manifest also carries an impression tracker
+#: pixel, a url asset under the registry's canonical ``impression_tracker`` slot with
+#: ``url_type: "tracker_pixel"`` (core/assets/url-asset.json).
+_TRACKER = r'(?:, with impression tracker "(?P<tracker_url>[^"]+)")?'
+
+
+def _tracker_specs(tracker_url: str | None) -> list[AssetSpec]:
+    """The url asset :data:`_TRACKER` states: none, or the impression tracker pixel."""
+    if tracker_url is None:
+        return []
+    return [url_spec("impression_tracker", url=tracker_url, url_type="tracker_pixel")]
+
+
 def _recorded_preview(preview_url: str | None, width: str | None, height: str | None) -> dict[str, Any]:
     """The root keys :data:`_RECORDED_PREVIEW` states: none, or the preview page and size."""
     if preview_url is None:
@@ -120,6 +135,7 @@ def _recorded_preview(preview_url: str | None, width: str | None, height: str | 
         r"|its byte-sensitive inline (?P<sensitive_type>\w+) markup"
         r'|the tag URL "(?P<tag_url>[^"]+)"'
         r'|the paired redirect "(?P<ad_request_url>[^"]+)" with click-through "(?P<clickthrough_url>[^"]+)")'
+        + _TRACKER
         + _RECORDED_PREVIEW
         + "$"
     )
@@ -133,6 +149,7 @@ def given_display_tag_creative(
     tag_url: str | None,
     ad_request_url: str | None,
     clickthrough_url: str | None,
+    tracker_url: str | None,
     preview_url: str | None,
     preview_width: str | None,
     preview_height: str | None,
@@ -154,7 +171,9 @@ def given_display_tag_creative(
     else:
         asset = display_tag_spec("inline_markup", markup=markup, markup_type=markup_type)
     recorded = _recorded_preview(preview_url, preview_width, preview_height)
-    store_package_creative(ctx, creative_id, build_assets(asset), kind="display_tag", **recorded)
+    store_package_creative(
+        ctx, creative_id, build_assets(asset, *_tracker_specs(tracker_url)), kind="display_tag", **recorded
+    )
 
 
 @given(
@@ -203,12 +222,21 @@ def given_legacy_tag_url_creative(ctx: dict, creative_id: str, url: str, url_typ
 @given(
     parsers.re(
         r'the package references the buyer\'s approved (?P<width>\d+)x(?P<height>\d+) image creative "(?P<creative_id>'
-        r'[^"]+)" showing "(?P<url>[^"]+)"$'
+        r'[^"]+)" showing "(?P<url>[^"]+)"(?:, with click-through "(?P<click_url>[^"]+)")?' + _TRACKER + "$"
     )
 )
-def given_sized_image_creative(ctx: dict, width: str, height: str, creative_id: str, url: str) -> None:
-    """A canonical image creative whose ``image_main`` file is *width* by *height*."""
-    store_package_creative(ctx, creative_id, _image_assets(int(width), int(height), url), kind="image")
+def given_sized_image_creative(
+    ctx: dict, width: str, height: str, creative_id: str, url: str, click_url: str | None, tracker_url: str | None
+) -> None:
+    """A canonical image creative whose ``image_main`` file is *width* by *height*.
+
+    With a click-through, the manifest carries it as a url asset under the registry's canonical
+    ``landing_page_url`` slot with ``url_type: "clickthrough"`` (core/assets/url-asset.json).
+    """
+    extra = _tracker_specs(tracker_url)
+    if click_url is not None:
+        extra.append(url_spec("landing_page_url", url=click_url, url_type="clickthrough"))
+    store_package_creative(ctx, creative_id, _image_assets(int(width), int(height), url, *extra), kind="image")
 
 
 @given(
@@ -319,9 +347,9 @@ def given_generative_creative(ctx: dict, creative_id: str, format_id: str, built
     accept_on_default_product(ctx, format_id)
 
 
-def _image_assets(width: int, height: int, url: str) -> dict[str, Any]:
-    """A canonical image creative's ``image_main`` slot, the file *width* by *height*."""
-    return build_assets(image_spec("image_main", url=url, width=width, height=height))
+def _image_assets(width: int, height: int, url: str, *extra: AssetSpec) -> dict[str, Any]:
+    """A canonical image creative's ``image_main`` slot, the file *width* by *height*, and any *extra* assets."""
+    return build_assets(image_spec("image_main", url=url, width=width, height=height), *extra)
 
 
 @given(
