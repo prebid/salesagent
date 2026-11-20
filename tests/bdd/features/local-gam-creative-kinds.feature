@@ -270,6 +270,24 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     And Google Ad Manager received no order and no line item
     And Google Ad Manager created no creative
 
+  # A GAM image creative needs a click-through: the configured test network refused, on
+  # 2026-11-20, every 300x250 image creative sent without one (destinationUrlType NONE, no
+  # destinationUrl, CLICK_TO_WEB with no URL, an empty destinationUrl). AdCP 3.2.7
+  # formats/canonical/image.json makes `landing_page_url` optional (`"required": false`), so the
+  # requirement is this seller's, and enums/error-code.json names it: CREATIVE_MISSING_CLICK_URL
+  # "A submitted creative that requires a destination URL does not provide one ... Recovery:
+  # correctable (add the required destination URL and resubmit the creative)". The refusal comes
+  # before GAM is written to, pointing at the creative where the request named it.
+  @T-UC-002-local-gam-creative-image-no-clickthrough @extension
+  Scenario: An image creative with no click-through is refused as one GAM cannot serve, and nothing is created in GAM
+    Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "image", "format_option_id": "image_300x250", "params": {"width": 300, "height": 250}}]}'
+    And the package references the buyer's approved 300x250 image creative "cr-no-click" showing "https://cdn.example.com/banner-300x250.png"
+    When the Buyer Agent sends the create_media_buy request
+    Then the request is refused on the wire with code "CREATIVE_MISSING_CLICK_URL" recovery "correctable" naming field "packages[0].creative_ids[0]"
+    And no media buy is persisted for the tenant
+    And Google Ad Manager received no order and no line item
+    And Google Ad Manager created no creative
+
   # F1 (PR #2582 review): the seller's approval reads the creative once for the union of its
   # packages, so GAM plans it against every line item's placeholders together; the "prod_a"
   # line item then takes the creative at 728x90 too, a size only prod_b's option accepts.

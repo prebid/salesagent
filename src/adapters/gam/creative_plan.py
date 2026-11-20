@@ -16,8 +16,14 @@ GAM facts are Ad Manager API v202602 (googleads 49.0.0 defaults to it):
 * ``Html5Creative`` requires ``advertiserId``, ``name``, ``size`` and ``html5Asset``; the
   asset's ``assetByteArray`` "must be a zip bundle" and its ``fileName`` "must have a zip
   extension". It is not a ``HasDestinationUrlCreative``, so it has no ``destinationUrl``.
-* ``HasDestinationUrlCreative.destinationUrl`` "is required unless the destinationUrlType is
-  set to DestinationUrlType.NONE".
+* An ``ImageRedirectCreative`` needs a ``destinationUrl``. The v202602 reference says
+  ``HasDestinationUrlCreative.destinationUrl`` "is required unless the destinationUrlType is set
+  to DestinationUrlType.NONE", but the configured test network, probed on 2026-11-20 with one
+  300x250 image and no click-through per call, refused every variant: ``destinationUrlType``
+  NONE with ``CreativeError.DESTINATION_URL_TYPE_NOT_SUPPORTED @ [0].destinationUrlType``;
+  neither field, CLICK_TO_WEB with no URL, and an empty ``destinationUrl`` each with
+  ``RequiredError.REQUIRED @ [0].destinationUrl``. So an image with no click-through is refused
+  at plan time (``GamRefusalReason.NO_CLICKTHROUGH``).
 
 The plan leaves out ``advertiserId`` and ``name``: the creatives manager owns both, as it does
 today. It also leaves out the html5 bundle's bytes: the manager fetches ``html5_bundle_url``
@@ -85,6 +91,9 @@ class GamRefusalReason(StrEnum):
     NO_OPTION_SIZE_PLACED = "no_option_size_placed"
     """No size its option accepts is a size its line items take."""
 
+    NO_CLICKTHROUGH = "no_clickthrough"
+    """It is an image with no click-through, which a GAM image creative requires."""
+
     @property
     def code(self) -> ErrorCodeT:
         """The adapter-independent code the refusal is, from the one code table (enums/error-code.json).
@@ -98,9 +107,14 @@ class GamRefusalReason(StrEnum):
           reporting to the seller's operator is the only remediation" -- a line item stating no
           size, or one taking no size the option accepts, which no creative the buyer may send
           can serve.
+        * ``CREATIVE_MISSING_CLICK_URL``: "A submitted creative that requires a destination URL
+          does not provide one ... Recovery: correctable (add the required destination URL and
+          resubmit the creative)" -- an image, whose GAM creative needs a click-through.
         """
         if self is GamRefusalReason.NOT_TRAFFICKED:
             return ErrorCode.UNSUPPORTED_FEATURE
+        if self is GamRefusalReason.NO_CLICKTHROUGH:
+            return ErrorCode.CREATIVE_MISSING_CLICK_URL
         if self is GamRefusalReason.NO_MATCHING_SIZE:
             return ErrorCode.CREATIVE_SIZE_MISMATCH
         return ErrorCode.CONFIGURATION_ERROR
@@ -201,8 +215,14 @@ def plan_gam_creative(
     elif isinstance(representation, Html5BundleRepresentation):
         creative.update(xsi_type="Html5Creative", html5Asset={"fileName": f"{ctt.creative_id}.zip"})
         bundle_url = representation.url
+    elif not ctt.clickthrough_url:
+        return GamCreativeRefusal(ctt.creative_id, GamRefusalReason.NO_CLICKTHROUGH)
     else:
-        creative.update(xsi_type="ImageRedirectCreative", imageUrl=representation.url, **_destination(ctt))
+        creative.update(
+            xsi_type="ImageRedirectCreative",
+            imageUrl=representation.url,
+            destinationUrl=substitute_macros(ctt.clickthrough_url),
+        )
 
     if ctt.impression_tracker_urls:
         creative["thirdPartyImpressionTrackingUrls"] = substitute_tracking_urls(list(ctt.impression_tracker_urls))
@@ -228,13 +248,6 @@ def placed_sizes(creatives: Iterable[CreativeToTraffic], sizes: Sequence[Traffic
     """Those of *sizes* some creative in *creatives* would be planned at, by the plan's own matching."""
     candidates = tuple(dict.fromkeys(sizes))
     return {size for ctt in creatives for size in _placed(ctt.sizes, ctt.size_ranges, candidates)}
-
-
-def _destination(ctt: CreativeToTraffic) -> dict[str, str]:
-    """An image's click-through, with AdCP macros in GAM's spelling; none states ``NONE``."""
-    if ctt.clickthrough_url:
-        return {"destinationUrl": substitute_macros(ctt.clickthrough_url)}
-    return {"destinationUrlType": "NONE"}
 
 
 def _candidate_sizes(

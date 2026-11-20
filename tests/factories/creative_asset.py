@@ -284,8 +284,13 @@ LIBRARY_IMAGE_FORMAT = "display_300x250_image"
 
 
 def library_image_assets(url: str = "https://example.com/banner.png") -> dict:
-    """A :data:`LIBRARY_IMAGE_FORMAT` creative's assets: its 300x250 ``banner_image`` showing *url*."""
-    return build_assets(image_spec("banner_image", url=url))
+    """A :data:`LIBRARY_IMAGE_FORMAT` creative's assets: its 300x250 ``banner_image`` showing *url*, and its click-through.
+
+    The format's manifest (:func:`named_format_assets`), so the creative carries every asset
+    the format requires: the ``click_url`` is :data:`CLICKTHROUGH_URL`, which an ad server that
+    requires a click-through (Google Ad Manager's image creatives) accepts.
+    """
+    return named_format_assets(LIBRARY_IMAGE_FORMAT, media_url=url)
 
 
 def parse_sizes(text: str) -> list[dict[str, int]]:
