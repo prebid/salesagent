@@ -41,9 +41,11 @@ def run_uvicorn_asgi(app, port: int):
         import uvicorn
         from asgiref.wsgi import WsgiToAsgi
 
+        from src.core.logging_config import uvicorn_logging_kwargs
+
         asgi_app = WsgiToAsgi(app)
         logger.info(f"Starting Admin UI with Uvicorn on port {port}")
-        uvicorn.run(asgi_app, host="0.0.0.0", port=port, log_level="info")
+        uvicorn.run(asgi_app, host="0.0.0.0", port=port, **uvicorn_logging_kwargs())
     except ImportError as e:
         logger.error(f"Required packages not installed: {e}")
         logger.error("Install with: pip install uvicorn asgiref")

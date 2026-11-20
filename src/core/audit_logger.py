@@ -124,13 +124,7 @@ audit_logger = logging.getLogger("adcp.audit")
 audit_logger.setLevel(logging.INFO)
 audit_logger.addHandler(audit_handler)
 audit_logger.addHandler(error_handler)
-
-# In development, also log to console for debugging
-# In production, the root logger already handles console output with JSON formatting
-if not _runtime.structured_logging:
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(LineSafeFormatter(LOG_FORMAT, DATE_FORMAT))
-    audit_logger.addHandler(console_handler)
+# No console handler: records propagate to the root handler, which writes them once.
 
 
 # Budget above (strictly greater than) this value triggers a high-value Slack alert

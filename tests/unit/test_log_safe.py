@@ -121,38 +121,45 @@ class TestCallSites:
         assert len(message.splitlines()) == 1, f"a non-str __repr__ forged a line: {message!r}"
 
 
-_PROPAGATING_LOGGERS = ("adcp.audit", "adcp.oauth")
-_LIBRARY_LOGGERS = ("uvicorn", "uvicorn.access", "uvicorn.error", "fastmcp", "starlette")
+def _all_loggers() -> list[logging.Logger]:
+    manager = logging.root.manager
+    return [logging.root, *(lg for lg in manager.loggerDict.values() if isinstance(lg, logging.Logger))]
 
 
 @pytest.fixture
 def configured_logging(monkeypatch):
-    """Run the real logging setup in one mode, and put the global logging state back after."""
+    """Run the real logging setup in one mode, and put every logger back after.
+
+    The setup includes uvicorn's own logging step, run with the arguments both server
+    entry points pass. Every logger's handlers, filters, level and propagation are
+    restored; a logger created during the test is reset to a fresh one's state.
+    """
     from unittest.mock import PropertyMock
 
-    from src.core.config import get_settings
-    from src.core.logging_config import setup_oauth_logging, setup_structured_logging
+    import fastmcp  # noqa: F401 - imported by the setup; its import-time handlers belong to the snapshot
+    import uvicorn
 
-    root = logging.getLogger()
-    saved = {
-        name: (lg.handlers[:], lg.propagate, lg.level)
-        for name, lg in ((n, logging.getLogger(n)) for n in ("", *_LIBRARY_LOGGERS))
-    }
+    import src.core.audit_logger  # noqa: F401 - attaches the adcp.audit file handlers
+    from src.core.config import get_settings
+    from src.core.logging_config import setup_oauth_logging, setup_structured_logging, uvicorn_logging_kwargs
+
+    saved = {lg: (lg.handlers[:], lg.filters[:], lg.propagate, lg.level, lg.disabled) for lg in _all_loggers()}
 
     def configure(structured: bool) -> None:
-        import src.core.audit_logger  # noqa: F401 - attaches the adcp.audit handlers
-
         monkeypatch.setattr(type(get_settings()), "structured_logging", PropertyMock(return_value=structured))
         setup_structured_logging()
         setup_oauth_logging()
+        uvicorn.Config("src.app:app", **uvicorn_logging_kwargs())  # runs uvicorn's logging step
 
     yield configure
 
-    for name, (handlers, propagate, level) in saved.items():
-        lg = root if name == "" else logging.getLogger(name)
+    for lg in _all_loggers():
+        handlers, filters, propagate, level, disabled = saved.get(lg, ([], [], True, logging.NOTSET, False))
         lg.handlers = handlers
+        lg.filters = filters
         lg.propagate = propagate
         lg.setLevel(level)
+        lg.disabled = disabled
 
 
 def _record(name: str) -> logging.LogRecord:
@@ -170,34 +177,37 @@ def _record(name: str) -> logging.LogRecord:
         )
 
 
-class TestEveryHandlerWritesOneLinePerRecord:
-    """A record is one line in every handler it reaches, following propagation to root.
+def _writes_to_console(handler: logging.Handler) -> bool:
+    return not isinstance(handler, logging.FileHandler | logging.NullHandler)
 
-    The record goes through ``Logger.handle`` after the real setup, in both modes, so
-    the check covers whatever handlers that setup attaches: the root handler (JSON in
-    production, text in development) and each logger's own handlers.
+
+@pytest.mark.parametrize("structured", [True, False], ids=["production", "development"])
+class TestEveryHandlerWritesOneLinePerRecord:
+    """After the real setup, in both modes, every handler on every logger writes one line.
+
+    The population is every logger the process has, not a list kept here, so a handler
+    a library or a later change attaches is checked without editing this file.
     """
 
-    @pytest.mark.parametrize("structured", [True, False], ids=["production", "development"])
-    @pytest.mark.parametrize("logger_name", _PROPAGATING_LOGGERS)
-    def test_a_record_with_every_line_break_renders_as_one_line(
-        self, configured_logging, monkeypatch, structured, logger_name
-    ):
+    def test_a_record_with_every_line_break_renders_as_one_line(self, configured_logging, structured):
         configured_logging(structured)
-        reached: list[logging.Handler] = []
-        logger: logging.Logger | None = logging.getLogger(logger_name)
-        while logger is not None:
-            reached += logger.handlers
-            logger = logger.parent if logger.propagate else None
-        assert reached, "nothing to check"
+        handlers = [
+            (lg.name, h) for lg in _all_loggers() for h in lg.handlers if not isinstance(h, logging.NullHandler)
+        ]
+        assert any(name == "root" for name, _ in handlers), "the root handler is in the population"
 
-        written: list[tuple[logging.Handler, str]] = []
-        for handler in reached:
-            monkeypatch.setattr(handler, "emit", lambda r, h=handler: written.append((h, h.format(r))))
-
-        logging.getLogger(logger_name).handle(_record(logger_name))
-
-        assert {h for h, _ in written} == set(reached), "every handler on the path wrote the record"
-        for handler, rendered in written:
-            assert len(rendered.splitlines()) == 1, (handler, rendered)
+        for name, handler in handlers:
+            rendered = handler.format(_record(name))
+            assert len(rendered.splitlines()) == 1, (name, handler, rendered)
             assert "FORGED" in rendered, "escaped, not dropped"
+
+    def test_no_logger_reaches_two_console_handlers(self, configured_logging, structured):
+        """The root handler owns the console; a second one on the path prints each record twice."""
+        configured_logging(structured)
+        for logger in _all_loggers():
+            console: list[logging.Handler] = []
+            current: logging.Logger | None = logger
+            while current is not None:
+                console += [h for h in current.handlers if _writes_to_console(h)]
+                current = current.parent if current.propagate else None
+            assert len(console) <= 1, (logger.name, console)

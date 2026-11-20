@@ -91,10 +91,10 @@ class JSONFormatter(logging.Formatter):
 
 
 def setup_structured_logging() -> None:
-    """Setup structured JSON logging for production environments.
+    """Give the root logger the one console handler, and route every logger to it.
 
-    In production (Fly.io), configures all loggers to output single-line JSON.
-    This prevents multiline log messages from appearing as separate log entries.
+    In production (Fly.io), the handler writes single-line JSON; in development, one
+    line of escaped text. Either way no record spans more than one line.
     """
     if get_settings().structured_logging:
         # Configure root logger with JSON formatter
@@ -109,13 +109,6 @@ def setup_structured_logging() -> None:
         handler = logging.StreamHandler()
         handler.setFormatter(JSONFormatter())
         root_logger.addHandler(handler)
-
-        # Also configure common library loggers that might have their own handlers
-        for logger_name in ["uvicorn", "uvicorn.access", "uvicorn.error", "fastmcp", "starlette"]:
-            lib_logger = logging.getLogger(logger_name)
-            lib_logger.handlers = []
-            lib_logger.addHandler(handler)
-            lib_logger.propagate = False
 
         # Suppress noisy MCP library loggers
         # ClientDisconnect is a normal event when clients disconnect mid-request
@@ -134,12 +127,34 @@ def setup_structured_logging() -> None:
         logging.info("JSON structured logging enabled for production")
     else:
         # Development mode - human-readable text, one line per record like the JSON
-        # above: adcp.audit and adcp.oauth propagate here, so a plain formatter would
-        # undo the escaping their own handlers do. A traceback renders on one line.
+        # above: this is the console handler for every logger, so a plain formatter
+        # would let any record forge a line. A traceback renders on one line.
         # force=True ensures configuration is applied even if logging was already configured
         handler = logging.StreamHandler()
         handler.setFormatter(LineSafeFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
         logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
+
+    # Root owns the console in both modes: library loggers that attach their own
+    # handlers write through it instead. fastmcp replaces its logger's handlers when
+    # first imported, which in the server is after this runs, so import it first.
+    # cohere ("fern", imported lazily) adds a handler only to a logger that has none,
+    # so a NullHandler keeps it off.
+    import fastmcp  # noqa: F401
+
+    for logger_name in ["uvicorn", "uvicorn.access", "uvicorn.error", "fastmcp", "starlette", "fern"]:
+        lib_logger = logging.getLogger(logger_name)
+        lib_logger.handlers = [logging.NullHandler()]
+        lib_logger.propagate = True
+
+
+def uvicorn_logging_kwargs() -> dict[str, Any]:
+    """The logging arguments of every ``uvicorn.run`` call.
+
+    ``log_config=None`` stops uvicorn from running its own ``dictConfig``, which would
+    put text formatters on ``uvicorn`` and ``uvicorn.access`` after
+    ``setup_structured_logging`` ran. Their records then go through the root handler.
+    """
+    return {"log_config": None, "log_level": "info"}
 
 
 # Create custom logger for OAuth operations
@@ -213,16 +228,11 @@ oauth_structured_logger = StructuredLogger()
 
 
 def setup_oauth_logging() -> None:
-    """Setup structured logging for OAuth operations."""
-    # Configure OAuth logger
+    """Setup structured logging for OAuth operations.
+
+    No handler of its own: records propagate to the root handler, which writes them once.
+    """
     oauth_logger.setLevel(logging.INFO)
-
-    # Add handler if not already present
-    if not oauth_logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(LineSafeFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-        oauth_logger.addHandler(handler)
-
     oauth_logger.info("OAuth structured logging initialized")
 
 
@@ -260,7 +270,7 @@ class LineSafeFormatter(logging.Formatter):
     """A text formatter whose every record renders as one line.
 
     For the handlers that write text without going through ``JSONFormatter`` (the
-    ``adcp.audit`` files and the ``adcp.oauth`` stream). ``log_safe`` runs over the
+    development root handler and the ``adcp.audit`` files). ``log_safe`` runs over the
     whole rendered record, so a line break in the message, an argument or the
     attached exception text comes out escaped, whatever the call site passed in.
     A traceback becomes one line with ``\\n`` between its frames.
