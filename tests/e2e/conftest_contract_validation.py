@@ -38,7 +38,7 @@ def extract_tool_calls_from_test_file(test_file: Path) -> dict[str, set[str]]:
     Returns:
         Dict mapping test function names to sets of tool names they call
     """
-    with open(test_file) as f:
+    with open(test_file, encoding="utf-8") as f:
         content = f.read()
 
     # Parse the Python file

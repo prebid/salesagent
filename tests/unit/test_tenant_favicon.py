@@ -1,6 +1,7 @@
 """Test tenant favicon configuration functionality."""
 
 import os
+from pathlib import Path
 
 
 class TestFaviconUpload:
@@ -34,7 +35,7 @@ class TestFaviconUpload:
         from src.admin.blueprints.tenants import _get_favicon_upload_dir
 
         upload_dir = _get_favicon_upload_dir()
-        assert upload_dir.endswith("static/favicons")
+        assert Path(upload_dir).as_posix().endswith("static/favicons")
         assert os.path.isabs(upload_dir)
 
     def test_safe_favicon_path_valid(self):
@@ -110,7 +111,7 @@ class TestFaviconTemplateLogic:
             "templates",
             "base.html",
         )
-        with open(template_path) as f:
+        with open(template_path, encoding="utf-8") as f:
             content = f.read()
 
         # Check for favicon link
@@ -129,7 +130,7 @@ class TestFaviconTemplateLogic:
             "templates",
             "tenant_settings.html",
         )
-        with open(template_path) as f:
+        with open(template_path, encoding="utf-8") as f:
             content = f.read()
 
         # Check for favicon upload form

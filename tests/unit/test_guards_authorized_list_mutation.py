@@ -24,6 +24,8 @@ import ast
 import re
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GUARDED_ATTRS = {"authorized_domains", "authorized_emails"}
 # Marker must carry a justification after the dash.
@@ -44,9 +46,9 @@ def _find_attr_assignments(tree: ast.AST, source_lines: list[str] | None = None)
 def _scan_src() -> list[str]:
     violations = []
     for path in (REPO_ROOT / "src").rglob("*.py"):
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         for attr, lineno in _find_attr_assignments(ast.parse(text), text.splitlines()):
-            violations.append(f"{path.relative_to(REPO_ROOT)}:{lineno} assigns .{attr}")
+            violations.append(f"{rel(path, REPO_ROOT)}:{lineno} assigns .{attr}")
     return violations
 
 

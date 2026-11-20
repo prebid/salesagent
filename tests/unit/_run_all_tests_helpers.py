@@ -13,6 +13,7 @@ The leading underscore keeps pytest from collecting this as a test module.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 #: Project root, computed once from this module's path.
@@ -20,3 +21,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: The in-network test runner both modules exercise.
 RUNNER = REPO_ROOT / "run_all_tests.sh"
+
+#: The bash that runs RUNNER, found on PATH as a shell would find it. A bare
+#: ``"bash"`` handed to CreateProcess on Windows is searched for in System32 before
+#: PATH, and the System32 one is the WSL launcher. On Linux both name the same binary.
+BASH = shutil.which("bash") or "bash"

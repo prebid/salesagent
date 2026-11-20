@@ -52,6 +52,7 @@ from tests.unit._architecture_helpers import (
     REPO_ROOT,
     assert_violations_match_allowlist,
     parse_module,
+    rel,
     structural_guard_marker_re,
 )
 
@@ -221,7 +222,7 @@ class _EffectBoundaryTracker(ast.NodeVisitor):
 
 def _scan(path: Path) -> list[tuple[str, str, str]]:
     tree = parse_module(path)
-    tracker = _EffectBoundaryTracker(str(path.relative_to(REPO_ROOT)), path.read_text().splitlines())
+    tracker = _EffectBoundaryTracker(rel(path), path.read_text(encoding="utf-8").splitlines())
     tracker._deferred_names = _names_handed_to_the_boundary(tree)
     tracker.visit(tree)
     return tracker.violations

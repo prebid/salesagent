@@ -26,6 +26,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AUDIT_DIR = REPO_ROOT / "scripts" / "audit"
 
@@ -51,7 +53,7 @@ def _required_path_arguments(module: Path) -> list[str]:
 def test_no_audit_script_requires_an_input_the_repository_does_not_carry() -> None:
     """Every audit CLI's subject is the repo plus the pinned bundle, and both default."""
     offenders = sorted(
-        f"{module.relative_to(REPO_ROOT)}: {', '.join(args)}"
+        f"{rel(module, REPO_ROOT)}: {', '.join(args)}"
         for module in sorted(AUDIT_DIR.glob("*.py"))
         if (args := _required_path_arguments(module))
     )

@@ -9,6 +9,7 @@ stubs write.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
@@ -42,8 +43,10 @@ def run_bash_with_stubs(
         run_env.pop(name, None)
     run_env["PATH"] = f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}"
 
+    # The bash on PATH, by full path: on Windows a bare "bash" can resolve to WSL's
+    # System32ash.exe ahead of Git Bash.
     return subprocess.run(
-        ["bash", *args],
+        [shutil.which("bash") or "bash", *args],
         cwd=cwd,
         env=run_env,
         capture_output=True,

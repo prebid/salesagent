@@ -73,49 +73,49 @@ class TestLoadEnvFile:
 
     def test_basic_parsing(self, tmp_path: Path):
         env_file = tmp_path / ".env"
-        env_file.write_text("FOO=bar\nBAZ=qux\n")
+        env_file.write_text("FOO=bar\nBAZ=qux\n", encoding="utf-8")
         result = setup_dev.load_env_file(env_file)
         assert result == {"FOO": "bar", "BAZ": "qux"}
 
     def test_skips_comments_and_blanks(self, tmp_path: Path):
         env_file = tmp_path / ".env"
-        env_file.write_text("# comment\n\nKEY=value\n\n# another\n")
+        env_file.write_text("# comment\n\nKEY=value\n\n# another\n", encoding="utf-8")
         result = setup_dev.load_env_file(env_file)
         assert result == {"KEY": "value"}
 
     def test_preserves_equals_in_value(self, tmp_path: Path):
         env_file = tmp_path / ".env"
-        env_file.write_text("URL=postgres://user:pass@host:5432/db?sslmode=disable\n")
+        env_file.write_text("URL=postgres://user:pass@host:5432/db?sslmode=disable\n", encoding="utf-8")
         result = setup_dev.load_env_file(env_file)
         assert result == {"URL": "postgres://user:pass@host:5432/db?sslmode=disable"}
 
     def test_skips_lines_without_equals(self, tmp_path: Path):
         env_file = tmp_path / ".env"
-        env_file.write_text("VALID=yes\nINVALID_LINE\n")
+        env_file.write_text("VALID=yes\nINVALID_LINE\n", encoding="utf-8")
         result = setup_dev.load_env_file(env_file)
         assert result == {"VALID": "yes"}
 
     def test_strips_double_quotes(self, tmp_path: Path):
         env_file = tmp_path / ".env"
-        env_file.write_text('FOO="bar"\n')
+        env_file.write_text('FOO="bar"\n', encoding="utf-8")
         result = setup_dev.load_env_file(env_file)
         assert result == {"FOO": "bar"}
 
     def test_strips_single_quotes(self, tmp_path: Path):
         env_file = tmp_path / ".env"
-        env_file.write_text("FOO='bar'\n")
+        env_file.write_text("FOO='bar'\n", encoding="utf-8")
         result = setup_dev.load_env_file(env_file)
         assert result == {"FOO": "bar"}
 
     def test_preserves_mismatched_quotes(self, tmp_path: Path):
         env_file = tmp_path / ".env"
-        env_file.write_text("FOO=\"bar'\n")
+        env_file.write_text("FOO=\"bar'\n", encoding="utf-8")
         result = setup_dev.load_env_file(env_file)
         assert result == {"FOO": "\"bar'"}
 
     def test_preserves_inner_quotes(self, tmp_path: Path):
         env_file = tmp_path / ".env"
-        env_file.write_text('FOO=bar"baz\n')
+        env_file.write_text('FOO=bar"baz\n', encoding="utf-8")
         result = setup_dev.load_env_file(env_file)
         assert result == {"FOO": 'bar"baz'}
 
@@ -220,7 +220,7 @@ class TestBuildEnvFromTemplate:
 
     def test_extracts_uncommented_values(self, tmp_path: Path):
         template = tmp_path / ".env.template"
-        template.write_text("# Comment line\n# KEY=commented\nACTIVE=yes\n")
+        template.write_text("# Comment line\n# KEY=commented\nACTIVE=yes\n", encoding="utf-8")
         result = setup_dev.build_env_from_template(template)
         assert result == {"ACTIVE": "yes"}
 
@@ -233,7 +233,9 @@ class TestBuildEnvFromTemplate:
 class TestRenderEnvFromTemplate:
     def test_preserves_comments_and_sections(self, tmp_path: Path):
         template = tmp_path / ".env.template"
-        template.write_text("# Section Header\n# COMMENTED_KEY=default\n\n# Another section\n# OTHER_KEY=other\n")
+        template.write_text(
+            "# Section Header\n# COMMENTED_KEY=default\n\n# Another section\n# OTHER_KEY=other\n", encoding="utf-8"
+        )
         result = setup_dev.render_env_from_template(template, {"COMMENTED_KEY": "myvalue"})
         assert "# Section Header" in result
         assert "COMMENTED_KEY=myvalue" in result
@@ -243,7 +245,7 @@ class TestRenderEnvFromTemplate:
 
     def test_uncomments_matching_keys(self, tmp_path: Path):
         template = tmp_path / ".env.template"
-        template.write_text("# FOO=bar\n# BAZ=qux\n")
+        template.write_text("# FOO=bar\n# BAZ=qux\n", encoding="utf-8")
         result = setup_dev.render_env_from_template(template, {"FOO": "new_value"})
         lines = result.strip().splitlines()
         assert "FOO=new_value" in lines
@@ -251,7 +253,7 @@ class TestRenderEnvFromTemplate:
 
     def test_appends_extra_keys(self, tmp_path: Path):
         template = tmp_path / ".env.template"
-        template.write_text("# KNOWN=val\n")
+        template.write_text("# KNOWN=val\n", encoding="utf-8")
         result = setup_dev.render_env_from_template(template, {"KNOWN": "x", "EXTRA": "y"})
         assert "KNOWN=x" in result
         assert "EXTRA=y" in result
@@ -259,7 +261,7 @@ class TestRenderEnvFromTemplate:
 
     def test_preserves_key_ordering(self, tmp_path: Path):
         template = tmp_path / ".env.template"
-        template.write_text("# Z_KEY=1\n# A_KEY=2\n")
+        template.write_text("# Z_KEY=1\n# A_KEY=2\n", encoding="utf-8")
         result = setup_dev.render_env_from_template(template, {"Z_KEY": "z", "A_KEY": "a"})
         lines = [l for l in result.splitlines() if "=" in l and not l.startswith("#")]
         assert lines == ["Z_KEY=z", "A_KEY=a"]  # template order, not alphabetical
@@ -270,7 +272,7 @@ class TestRenderEnvFromTemplate:
 
     def test_handles_uncommented_keys_in_template(self, tmp_path: Path):
         template = tmp_path / ".env.template"
-        template.write_text("ACTIVE=default\n")
+        template.write_text("ACTIVE=default\n", encoding="utf-8")
         result = setup_dev.render_env_from_template(template, {"ACTIVE": "override"})
         assert "ACTIVE=override" in result
         assert "ACTIVE=default" not in result
@@ -287,7 +289,8 @@ class TestRenderEnvFromTemplate:
             "# ============================================\n"
             "# [OPTIONAL] Advanced Settings\n"
             "# ============================================\n"
-            "# ENVIRONMENT=production\n"
+            "# ENVIRONMENT=production\n",
+            encoding="utf-8",
         )
         result = setup_dev.render_env_from_template(template, {"FLASK_SECRET_KEY": "abc", "ENCRYPTION_KEY": "xyz"})
         # Section headers preserved
@@ -373,7 +376,7 @@ class TestAssertPrerequisites:
 class TestEnsureEnv:
     def test_creates_env_from_template(self, tmp_path: Path):
         template = tmp_path / ".env.template"
-        template.write_text("CREATE_DEMO_TENANT=true\n")
+        template.write_text("CREATE_DEMO_TENANT=true\n", encoding="utf-8")
         env_path = tmp_path / ".env"
 
         with (
@@ -384,15 +387,15 @@ class TestEnsureEnv:
 
         assert result.ok is True
         assert "Created" in result.message
-        content = env_path.read_text()
+        content = env_path.read_text(encoding="utf-8")
         assert "CREATE_DEMO_TENANT=true" in content
         assert "FLASK_SECRET_KEY=" in content
 
     def test_preserves_existing_values(self, tmp_path: Path):
         template = tmp_path / ".env.template"
-        template.write_text("KEY=default\n")
+        template.write_text("KEY=default\n", encoding="utf-8")
         env_path = tmp_path / ".env"
-        env_path.write_text("KEY=custom\n")
+        env_path.write_text("KEY=custom\n", encoding="utf-8")
 
         with (
             patch.object(setup_dev, "ENV_FILE", env_path),
@@ -408,7 +411,8 @@ class TestEnsureEnv:
         """Real .env.template has all lines commented — ensure_env still works."""
         template = tmp_path / ".env.template"
         template.write_text(
-            "# Comment line\n# OAUTH_CLIENT_ID=your-id\n# OAUTH_CLIENT_SECRET=your-secret\n# ENCRYPTION_KEY=\n"
+            "# Comment line\n# OAUTH_CLIENT_ID=your-id\n# OAUTH_CLIENT_SECRET=your-secret\n# ENCRYPTION_KEY=\n",
+            encoding="utf-8",
         )
         env_path = tmp_path / ".env"
 
@@ -425,9 +429,9 @@ class TestEnsureEnv:
 
     def test_idempotent_when_no_changes(self, tmp_path: Path):
         template = tmp_path / ".env.template"
-        template.write_text("")
+        template.write_text("", encoding="utf-8")
         env_path = tmp_path / ".env"
-        env_path.write_text("ENCRYPTION_KEY=existing-key\nFLASK_SECRET_KEY=existing\n")
+        env_path.write_text("ENCRYPTION_KEY=existing-key\nFLASK_SECRET_KEY=existing\n", encoding="utf-8")
 
         with (
             patch.object(setup_dev, "ENV_FILE", env_path),
@@ -437,6 +441,18 @@ class TestEnsureEnv:
 
         assert result.ok is True
         assert result.skipped is True
+
+    def test_second_run_reads_the_env_the_first_run_wrote(self, tmp_path: Path):
+        """The real template carries non-ASCII comments; the write must use the encoding the read uses."""
+        env_path = tmp_path / ".env"
+
+        with patch.object(setup_dev, "ENV_FILE", env_path):
+            first = setup_dev.ensure_env()
+            second = setup_dev.ensure_env()
+
+        assert first.ok is True
+        assert "Created" in first.message
+        assert second.skipped is True
 
 
 # ---------------------------------------------------------------------------
@@ -448,7 +464,7 @@ class TestEnsurePreCommit:
     def test_skips_when_already_installed(self, tmp_path: Path):
         hook_dir = tmp_path / ".git" / "hooks"
         hook_dir.mkdir(parents=True)
-        (hook_dir / "pre-commit").write_text("#!/bin/sh\n")
+        (hook_dir / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
 
         with patch.object(setup_dev, "ROOT_DIR", tmp_path):
             result = setup_dev.ensure_pre_commit()

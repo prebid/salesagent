@@ -6,8 +6,7 @@ These tests verify that the OAuth configuration system correctly handles:
 - User info extraction from different providers
 """
 
-import os
-from unittest.mock import patch
+from tests.helpers.environ import isolated_environ
 
 
 class TestGetOAuthConfig:
@@ -25,7 +24,7 @@ class TestGetOAuthConfig:
             "GOOGLE_CLIENT_SECRET": "google-client-secret",
         }
 
-        with patch.dict(os.environ, env, clear=True):
+        with isolated_environ(env):
             client_id, client_secret, discovery_url, scopes = get_oauth_config()
 
         assert client_id == "okta-client-id"
@@ -42,7 +41,7 @@ class TestGetOAuthConfig:
             "GOOGLE_CLIENT_SECRET": "google-client-secret",
         }
 
-        with patch.dict(os.environ, env, clear=True):
+        with isolated_environ(env):
             client_id, client_secret, discovery_url, scopes = get_oauth_config()
 
         assert client_id == "google-client-id"
@@ -61,7 +60,7 @@ class TestGetOAuthConfig:
             "OAUTH_SCOPES": "openid email custom_scope",
         }
 
-        with patch.dict(os.environ, env, clear=True):
+        with isolated_environ(env):
             _, _, _, scopes = get_oauth_config()
 
         assert scopes == "openid email custom_scope"
@@ -76,7 +75,7 @@ class TestGetOAuthConfig:
             "OAUTH_CLIENT_SECRET": "generic-client-secret",
         }
 
-        with patch.dict(os.environ, env, clear=True):
+        with isolated_environ(env):
             client_id, client_secret, discovery_url, _ = get_oauth_config()
 
         assert client_id == "generic-client-id"
@@ -92,7 +91,7 @@ class TestGetOAuthConfig:
             "OAUTH_CLIENT_SECRET": "ms-client-secret",
         }
 
-        with patch.dict(os.environ, env, clear=True):
+        with isolated_environ(env):
             _, _, discovery_url, _ = get_oauth_config()
 
         assert "login.microsoftonline.com" in discovery_url
@@ -101,7 +100,7 @@ class TestGetOAuthConfig:
         """Returns None when no OAuth is configured."""
         from src.admin.blueprints.auth import get_oauth_config
 
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             result = get_oauth_config()
 
         assert result == (None, None, None, None)
@@ -117,7 +116,7 @@ class TestGetOAuthConfig:
             "GOOGLE_CLIENT_SECRET": "google-client-secret",
         }
 
-        with patch.dict(os.environ, env, clear=True):
+        with isolated_environ(env):
             client_id, _, discovery_url, _ = get_oauth_config()
 
         # Should fall through to Google
@@ -324,7 +323,7 @@ class TestOAuthProviderName:
         """Default provider is google when not set."""
         from src.admin.blueprints.auth import get_oauth_provider_name
 
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             provider = get_oauth_provider_name()
 
         assert provider == "google"
@@ -333,7 +332,7 @@ class TestOAuthProviderName:
         """Provider read from environment variable."""
         from src.admin.blueprints.auth import get_oauth_provider_name
 
-        with patch.dict(os.environ, {"OAUTH_PROVIDER": "Okta"}, clear=True):
+        with isolated_environ({"OAUTH_PROVIDER": "Okta"}):
             provider = get_oauth_provider_name()
 
         assert provider == "okta"  # Normalized to lowercase
@@ -357,7 +356,7 @@ class TestInitOAuth:
         app = MagicMock()
         app.config = {}
 
-        with patch.dict(os.environ, env, clear=True):
+        with isolated_environ(env):
             result = init_oauth(app)
 
         assert result is not None
@@ -373,7 +372,7 @@ class TestInitOAuth:
         app = MagicMock()
         app.config = {}
 
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             result = init_oauth(app)
 
         assert result is None

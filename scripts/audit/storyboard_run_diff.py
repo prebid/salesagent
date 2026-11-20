@@ -77,7 +77,7 @@ def _walk(record: Path) -> tuple[dict[str, bool], dict[str, str]]:
     this tool's interpretation of it. A graded verdict overwrites a skip for the same
     identity; a skip never overwrites a graded verdict.
     """
-    data = json.loads(record.read_text())
+    data = json.loads(record.read_text(encoding="utf-8"))
     graded: dict[str, bool] = {}
     disposition: dict[str, str] = {}
     for track in data.get("tracks") or []:
@@ -153,7 +153,7 @@ def runner_score(record: Path) -> dict[str, Any]:
     last one needed and none of them reproduces ``steps_passed``. So this tool reports the
     runner's number and compares step IDENTITIES; it never offers a score of its own.
     """
-    summary = json.loads(record.read_text()).get("summary") or {}
+    summary = json.loads(record.read_text(encoding="utf-8")).get("summary") or {}
     return {k: summary.get(f"steps_{k}") for k in ("passed", "failed", "skipped", "not_selected")}
 
 

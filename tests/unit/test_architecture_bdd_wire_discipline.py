@@ -66,7 +66,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, rel
 
 _STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 _TESTS_ROOT = _STEPS_DIR.parent.parent
@@ -193,8 +193,8 @@ def _iter_step_modules() -> list[tuple[str, ast.Module]]:
     for py_file in sorted(_STEPS_DIR.rglob("*.py")):
         if py_file.name.startswith("__"):
             continue
-        rel = str(py_file.relative_to(_TESTS_ROOT))
-        out.append((rel, ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))))
+        rel_path = rel(py_file, _TESTS_ROOT)
+        out.append((rel_path, ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))))
     return out
 
 
@@ -289,7 +289,7 @@ def _func_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
 def _find_error_construction() -> set[str]:
     """Find ``ctx["error"] = <X>Error(...)`` assignments in any step function."""
     found: set[str] = set()
-    for rel, tree in _iter_step_modules():
+    for rel_path, tree in _iter_step_modules():
         for func in _enclosing_functions(tree):
             for node in _own_nodes(func):
                 if not isinstance(node, ast.Assign):
@@ -305,14 +305,14 @@ def _find_error_construction() -> set[str]:
                 ):
                     continue
                 if isinstance(node.value, ast.Call) and (cls := _error_class_name(node.value)):
-                    found.add(f"{rel} {func.name} {cls}")
+                    found.add(f"{rel_path} {func.name} {cls}")
     return found
 
 
 def _find_reconstructed_only_assertions() -> set[str]:
     """Find error @then steps using _get_error_code/_get_error_dict without a wire reference."""
     found: set[str] = set()
-    for rel, tree in _iter_step_modules():
+    for rel_path, tree in _iter_step_modules():
         # then_error.py DEFINES the helpers — its wire-first steps reference _wire_code; skip
         # the helper-definition file's own _get_* definitions by requiring a @then decorator.
         for func in _enclosing_functions(tree):
@@ -321,7 +321,7 @@ def _find_reconstructed_only_assertions() -> set[str]:
             names = _func_names(func)
             uses_reconstructed = bool({"_get_error_code", "_get_error_dict"} & names)
             if uses_reconstructed and not _uses_wire(func):
-                found.add(f"{rel} {func.name}")
+                found.add(f"{rel_path} {func.name}")
     return found
 
 
@@ -539,9 +539,9 @@ def _find_hand_rolled_envelope_parsing() -> set[str]:
     one-level walk).
     """
     found: set[str] = set()
-    for rel, tree in _iter_step_modules():
+    for rel_path, tree in _iter_step_modules():
         for func in _enclosing_functions(tree):
-            entry = f"{rel} {func.name}"
+            entry = f"{rel_path} {func.name}"
             if entry in _PRIMITIVE_FUNCTIONS:
                 continue
             if _hand_rolled_calls_in_func(func):
@@ -592,8 +592,8 @@ def test_exemption_is_function_scoped_not_module_scoped(monkeypatch: pytest.Monk
     function in the step tree's most-imported helper module hand-rolls, a module-wide
     exemption swallows it silently.
     """
-    rel = "bdd/steps/domain/uc999_mutation_fixture.py"
-    monkeypatch.setattr(sys.modules[__name__], "_PRIMITIVE_FUNCTIONS", frozenset({f"{rel} _sanctioned_reader"}))
+    rel_path = "bdd/steps/domain/uc999_mutation_fixture.py"
+    monkeypatch.setattr(sys.modules[__name__], "_PRIMITIVE_FUNCTIONS", frozenset({f"{rel_path} _sanctioned_reader"}))
     reported = _scan_mutated_tree(monkeypatch, tmp_path, _TWO_HELPER_MUTATION_MODULE)
 
     names = {entry.split()[-1] for entry in reported}
@@ -900,9 +900,9 @@ def _private_breaker_hits(tree: ast.Module) -> dict[str, list[int]]:
 def _find_private_breaker_access() -> set[str]:
     """Find every step-side read/write of a service's private ``_circuit_breakers`` dict."""
     found: set[str] = set()
-    for rel, tree in _iter_step_modules():
+    for rel_path, tree in _iter_step_modules():
         for func_name, lines in _private_breaker_hits(tree).items():
-            found.add(f"{rel} {func_name}:{','.join(str(n) for n in lines)}")
+            found.add(f"{rel_path} {func_name}:{','.join(str(n) for n in lines)}")
     return found
 
 
@@ -1100,11 +1100,11 @@ def _find_ctx_response_access() -> set[str]:
     found: set[str] = set()
     steps_root = _STEPS_DIR
     for path in sorted(steps_root.rglob("*.py")):
-        rel = path.relative_to(steps_root).as_posix()
-        if rel == "_outcome_helpers.py":
+        rel_path = rel(path, steps_root)
+        if rel_path == "_outcome_helpers.py":
             continue  # the accessors themselves; they are the sanctioned readers
-        if _ctx_response_hits(ast.parse(path.read_text())):
-            found.add(rel)
+        if _ctx_response_hits(ast.parse(path.read_text(encoding="utf-8"))):
+            found.add(rel_path)
     return found
 
 
@@ -1148,13 +1148,13 @@ def _find_hand_rolled_wire_envelope_access() -> set[str]:
     ``@then``-decorated steps.
     """
     found: set[str] = set()
-    for rel, tree in _iter_step_modules():
-        if rel in _ACCESS_PATTERN_EXEMPT_MODULES:
+    for rel_path, tree in _iter_step_modules():
+        if rel_path in _ACCESS_PATTERN_EXEMPT_MODULES:
             continue
         for func in _enclosing_functions(tree):
             for node in _own_nodes(func):
                 if _is_wire_envelope_attr(node) or _is_wire_envelope_getattr(node):
-                    found.add(f"{rel} {func.name}")
+                    found.add(f"{rel_path} {func.name}")
     return found
 
 

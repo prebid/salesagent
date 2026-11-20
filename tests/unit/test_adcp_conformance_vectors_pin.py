@@ -39,6 +39,7 @@ from tests.helpers.signing_vectors import (
     load_vector_manifest,
     vectors_with_expected_signature_base,
 )
+from tests.unit._architecture_helpers import rel
 
 #: The vector files that ship ``expected_signature_base``, measured from the re-vendored set.
 #:
@@ -91,9 +92,7 @@ def test_vendored_file_set_matches_the_manifest() -> None:
     """No file added, dropped or renamed under the vendored tree."""
     manifest = load_vector_manifest()
     on_disk = {
-        str(path.relative_to(VECTORS_DIR))
-        for path in VECTORS_DIR.rglob("*")
-        if path.is_file() and path.name != "MANIFEST.json"
+        rel(path, VECTORS_DIR) for path in VECTORS_DIR.rglob("*") if path.is_file() and path.name != "MANIFEST.json"
     }
     assert on_disk == set(manifest["files"]), (
         f"Vendored vector file set drifted from MANIFEST.json.\n"
@@ -145,7 +144,7 @@ def test_canonicalization_internal_version_is_not_the_spec_pin() -> None:
     """
     import json
 
-    raw = json.loads((VECTORS_DIR / "canonicalization.json").read_text())
+    raw = json.loads((VECTORS_DIR / "canonicalization.json").read_text(encoding="utf-8"))
     # ``"3.2"`` at the 3.2.1 pin, ``"3.0"`` at 3.1.1 -- the field tracks the MAJOR.MINOR
     # of its own format, never the spec pin, which is the whole point of pinning it here.
     assert raw["version"] == "3.2" != adcp.get_adcp_spec_version()

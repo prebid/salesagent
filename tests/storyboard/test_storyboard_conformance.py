@@ -492,7 +492,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
             f"storyboard runner ({protocol}) did not produce a summary (exit={result.returncode}): "
             f"stdout={result.stdout[-2000:]!r} stderr={result.stderr[-2000:]!r}"
         )
-    return json.loads(summary_path.read_text())
+    return json.loads(summary_path.read_text(encoding="utf-8"))
 
 
 def _graded_total(summary: dict[str, Any]) -> int:
@@ -635,9 +635,9 @@ def _publish_runner_record(protocol: str, result: subprocess.CompletedProcess[st
     """
     out = _REPO_ROOT / "test-results"
     out.mkdir(parents=True, exist_ok=True)
-    (out / f"storyboard_run_{protocol}.json").write_text(result.stdout)
+    (out / f"storyboard_run_{protocol}.json").write_text(result.stdout, encoding="utf-8")
     if result.stderr:
-        (out / f"storyboard_run_{protocol}.stderr.log").write_text(result.stderr)
+        (out / f"storyboard_run_{protocol}.stderr.log").write_text(result.stderr, encoding="utf-8")
 
 
 def _publish_summary(protocol: str, summary: dict[str, Any]) -> None:
@@ -652,7 +652,7 @@ def _publish_summary(protocol: str, summary: dict[str, Any]) -> None:
     """
     dest = _REPO_ROOT / "test-results" / f"storyboard_summary_{protocol}.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(summary, indent=2, sort_keys=True))
+    dest.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _scoreboard(protocol: str, summary: dict[str, Any]) -> str:

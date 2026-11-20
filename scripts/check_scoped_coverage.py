@@ -35,7 +35,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 def load_scopes(scope_filter: str | None = None) -> dict:
     config_path = PROJECT_ROOT / "tests" / "coverage_scopes.yaml"
-    with open(config_path) as f:
+    with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     scopes = config.get("scopes", {})
@@ -81,7 +81,7 @@ def run_coverage(scope_name: str, sources: list[str], tests: list[str]) -> dict:
         return _parse_term_output(scope_name, existing_tests, existing_sources)
 
     try:
-        with open(cov_json_path) as f:
+        with open(cov_json_path, encoding="utf-8") as f:
             cov_data = json.load(f)
     finally:
         cov_json_path.unlink(missing_ok=True)

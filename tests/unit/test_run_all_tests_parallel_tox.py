@@ -213,6 +213,14 @@ exit 0
 }
 
 
+# run_all_tests.sh is the Docker-stack orchestrator for Linux and macOS hosts. Beyond
+# bash it asserts POSIX permission bits on the bind-mounted logs/ directory and calls a
+# host python3, none of which a Windows checkout has.
+_RUNS_THE_BASH_RUNNER = pytest.mark.posix_only(
+    "runs run_all_tests.sh, which checks POSIX permission bits on bind-mounted dirs and calls a host python3"
+)
+
+
 def _make_executable(path: Path) -> None:
     path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
@@ -238,7 +246,7 @@ def _provision_runner_dependencies(workdir: Path) -> None:
     for relative, body in _HOST_SCRIPT_STUBS.items():
         destination = workdir / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(body)
+        destination.write_text(body, encoding="utf-8")
         _make_executable(destination)
 
 
@@ -293,13 +301,14 @@ def _tox_invocation_tokens(docker_log: Path) -> list[str]:
     tests container, from the recorded `docker compose ... run ... tox ...`
     call (the only stubbed `docker` invocation that names `tox`).
     """
-    tox_lines = [line for line in docker_log.read_text().splitlines() if " tox " in f" {line} "]
+    tox_lines = [line for line in docker_log.read_text(encoding="utf-8").splitlines() if " tox " in f" {line} "]
     assert len(tox_lines) == 1, f"expected exactly one docker invocation naming tox, got: {tox_lines!r}"
     tokens = tox_lines[0].split()
     tox_index = tokens.index("tox")
     return tokens[tox_index + 1 :]
 
 
+@_RUNS_THE_BASH_RUNNER
 @pytest.mark.slow
 def test_default_run_invokes_tox_with_parallel_flag(tmp_path):
     """The default (no-flag) invocation must run `tox -p`.
@@ -327,6 +336,7 @@ def _published_run(tmp_path: Path) -> Path:
     return runs[0]
 
 
+@_RUNS_THE_BASH_RUNNER
 @pytest.mark.slow
 def test_the_fast_path_publishes_its_shards_as_one_bdd_inprocess(tmp_path):
     """Every reader keys on one report per suite, and `.suites` must name what is published."""
@@ -337,17 +347,18 @@ def test_the_fast_path_publishes_its_shards_as_one_bdd_inprocess(tmp_path):
     assert ",".join(shard_envs) in " ".join(_tox_invocation_tokens(docker_log))
 
     run = _published_run(tmp_path)
-    report = json.loads((run / "bdd_inprocess.json").read_text())
+    report = json.loads((run / "bdd_inprocess.json").read_text(encoding="utf-8"))
     assert report["summary"]["total"] == len(shard_envs)
-    payloads = json.loads((run / "payloads" / "bdd_inprocess.json").read_text())
+    payloads = json.loads((run / "payloads" / "bdd_inprocess.json").read_text(encoding="utf-8"))
     assert sorted(payloads["nodes"]) == shard_envs
     assert not list(run.rglob("bdd-inprocess-s*.json"))
 
-    suites = (run / ".suites").read_text().strip().split(",")
+    suites = (run / ".suites").read_text(encoding="utf-8").strip().split(",")
     assert "bdd_inprocess" in suites
     assert not [suite for suite in suites if suite.startswith("bdd-inprocess-s")]
 
 
+@_RUNS_THE_BASH_RUNNER
 @pytest.mark.slow
 @pytest.mark.parametrize(
     ("bdd_xdist_n", "per_shard"),
@@ -361,6 +372,7 @@ def test_the_shards_divide_the_callers_worker_budget(tmp_path, bdd_xdist_n, per_
     assert f"BDD_SHARD_XDIST_N={per_shard} " in proc.stdout, proc.stdout
 
 
+@_RUNS_THE_BASH_RUNNER
 @pytest.mark.slow
 def test_a_dead_shard_fails_the_run_and_publishes_no_merged_suite(tmp_path):
     """A survivor published alone would be internally consistent and go green."""

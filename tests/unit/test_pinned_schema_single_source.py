@@ -50,7 +50,7 @@ class TestPinnedSchemaTracksSDKVersion:
         fixture never had (cache_scope) — proves resolution reads the SDK's
         current tree, not the frozen 04f59d2d5 snapshot."""
         schema_path = _resolve_filename("get-products-response.json")
-        data = json.loads(schema_path.read_text())
+        data = json.loads(schema_path.read_text(encoding="utf-8"))
 
         # Flatten oneOf/allOf branches into one property set for this check.
         all_props: set[str] = set(data.get("properties", {}) or {})
@@ -69,7 +69,7 @@ class TestPinnedSchemaTracksSDKVersion:
         """enums/error-code.json must have the SDK's current 92 codes, not the
         old vendored fixture's 64 — a direct, quantified version-drift check."""
         schema_path = _resolve_filename("error-code.json")
-        data = json.loads(schema_path.read_text())
+        data = json.loads(schema_path.read_text(encoding="utf-8"))
         codes = data.get("enum", [])
         assert len(codes) >= 90, (
             f"error-code.json resolved by pinned_schema.py has only {len(codes)} codes "
@@ -91,7 +91,7 @@ class TestPinnedSchemaTracksSDKVersion:
         installed adcp SDK is pinned to"), not just a shape that happens to
         still satisfy today.
         """
-        index = json.loads((schema_root() / "index.json").read_text())
+        index = json.loads((schema_root() / "index.json").read_text(encoding="utf-8"))
         assert index["adcp_version"] == adcp.get_adcp_spec_version(), (
             f"schema_root()'s resolved tree carries adcp_version={index['adcp_version']!r}, "
             f"but the installed SDK is pinned to {adcp.get_adcp_spec_version()!r} — the "
