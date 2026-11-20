@@ -51,12 +51,17 @@ class MyPlatformAdapter(AdServerAdapter):
 `AdServerAdapter` declares six abstract methods. An adapter must implement all
 of them:
 
-- `create_media_buy(request, packages, start_time, end_time, package_pricing_info)`
+- `create_media_buy(request, packages, start_time, end_time, package_pricing_info, *, creatives_by_package=None)`
   — creates orders or campaigns on the ad server from the selected packages.
   It takes an `AdapterCreateRequest` (the buy to place, never the buyer's
-  request DTO) and returns an `AdapterCreateResult`.
+  request DTO) and returns an `AdapterCreateResult`. `creatives_by_package` is
+  the value `validate_media_buy_request` was handed: each package's creatives as
+  core read them (`CreativesByPackage`).
 - `add_creative_assets(media_buy_id, assets, today)` — uploads creative
-  assets to an existing media buy, returning `list[AssetStatus]`.
+  assets to an existing media buy, returning `list[AssetStatus]`. Each asset
+  carries the creative core read for it under `creative` (`CreativeToTraffic`,
+  `src/core/traffic_carrier.py`); an adapter derives what it serves from that
+  carrier.
 - `associate_creatives(line_item_ids, platform_creative_ids)` — associates
   already-uploaded creatives with line items, used when the buyer supplies
   `creative_ids` in a create request.
