@@ -91,7 +91,7 @@ application, forwarding `Host` verbatim because tenant routing is an exact
 `Host` match:
 
 - **Compose and local development** (`config/nginx/nginx-development.conf:38-83`):
-  one server on `:8000`, `proxy_pass` to `adcp-server:8080` with
+  one server on port 8000, `proxy_pass` to `adcp-server:8080` with
   `$request_uri`, forwarding `Host`, `X-Real-IP`, `X-Forwarded-For`,
   `X-Forwarded-Proto`, and `Authorization`. It sets no tenant header, so the
   resolver identifies the tenant from `Host` (or from an `x-adcp-tenant` the
@@ -110,7 +110,7 @@ the `proxy` service mounts `nginx-development.conf`, and the stack reaches it by
 service name at `http://proxy:8000`, the value of `E2E_BASE_URL`
 (`docker-compose.e2e.yml:290-303`, `:476`).
 
-Beside it, `tls-proxy` adds a second listener on `:8443` for the origins the
+Beside it, `tls-proxy` adds a second listener on port 8443 for the origins the
 stack dials over HTTPS. It routes by the TLS ClientHello's SNI name through a
 `map $ssl_server_name` — `proxy.adcp.test` to `adcp-server:8080`,
 `creative-agent.adcp.test` to `creative-agent:8080`, `webhooks.adcp.test` to
