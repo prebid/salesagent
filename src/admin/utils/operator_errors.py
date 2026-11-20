@@ -16,6 +16,7 @@ from flask import Flask, Response, flash, jsonify, redirect, render_template, re
 from flask.typing import ResponseReturnValue
 from werkzeug.exceptions import HTTPException
 
+from src.admin.utils.helpers import caller_reads_json
 from src.core.operator_errors import OperatorRefusal, safe_error_message
 
 __all__ = ["json_error", "register_error_handler", "safe_error_message"]
@@ -32,13 +33,6 @@ def json_error(
     ``sync_id=...``) so the admin JavaScript reading it keeps working.
     """
     return jsonify({**fields, "error": safe_error_message(e, context)}), status_code
-
-
-def _wants_html() -> bool:
-    """A browser navigation or form post; fetch() calls send ``*/*`` and get JSON."""
-    if request.is_json:
-        return False
-    return request.accept_mimetypes.best_match(["application/json", "text/html"]) == "text/html"
 
 
 def _same_site_referrer() -> str | None:
@@ -73,7 +67,7 @@ def _answer(message: str, status: int, fields: Mapping[str, object]) -> Response
     With no same-site page to go back to, the browser gets the error page. *fields* are the
     JSON body's keys beside ``success`` and ``error``.
     """
-    if not _wants_html():
+    if caller_reads_json():
         return jsonify({"success": False, "error": message, **fields}), status
     back = _same_site_referrer()
     if back is None:
