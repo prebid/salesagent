@@ -72,7 +72,7 @@ def network_client_manager(network: GamSuiteNetwork) -> "GAMClientManager":
     from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
     row = AdapterConfig(tenant_id="gam-suite-network", **adapter_config_columns(network))
-    return GAMClientManager(AdapterConfigRepository.get_gam_config(row), row.gam_network_code)
+    return GAMClientManager(AdapterConfigRepository.get_gam_config(row), network.network_code)
 
 
 def check_suite_network(*, skip: bool) -> int:

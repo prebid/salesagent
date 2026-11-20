@@ -298,13 +298,18 @@ def read(run: pathlib.Path) -> Identity | None:
     )
 
 
+def _short(commit: str | None) -> str:
+    """*commit*'s first 12 characters, the way every message here names a tree; a record with none says so."""
+    return commit[:12] if commit else "(no commit recorded)"
+
+
 def describe(identity: Identity | None) -> str:
     """One line naming the tree, for a header. Never a claim the record cannot support."""
     if identity is None or not identity.identified:
         return "IDENTITY UNKNOWN"
     where = identity.branch or ("detached" if identity.detached else "branch unrecorded")
     pin = (identity.adcp or {}).get("distribution") or "adcp unrecorded"
-    return f"{identity.commit[:12]} ({where}, {identity.tree or 'tree unrecorded'}, {pin})"
+    return f"{_short(identity.commit)} ({where}, {identity.tree or 'tree unrecorded'}, {pin})"
 
 
 def unidentified(label: str, run: pathlib.Path, identity: Identity | None) -> str | None:
@@ -323,7 +328,7 @@ def unidentified(label: str, run: pathlib.Path, identity: Identity | None) -> st
 def dirty(label: str, identity: Identity) -> str | None:
     """Why *label*'s tree is not identified by its commit, or ``None``."""
     if identity.tree == "dirty":
-        return f"{label} ran on a DIRTY tree at {identity.commit[:12]}: its commit does not identify what was graded"
+        return f"{label} ran on a DIRTY tree at {_short(identity.commit)}: its commit does not identify what was graded"
     return None
 
 
@@ -360,7 +365,7 @@ def ancestry(
     if baseline.commit == new.commit:
         return None
     unknown = [
-        f"{label} commit {identity.commit[:12]} is not in this repository (fetch it, or run from a checkout that has it)"
+        f"{label} commit {_short(identity.commit)} is not in this repository (fetch it, or run from a checkout that has it)"
         for label, identity in ((base_label, baseline), (new_label, new))
         if not _known_commit(root, identity.commit or "")
     ]
@@ -372,8 +377,8 @@ def ancestry(
     base = _git(root, "merge-base", baseline.commit or "", new.commit or "")
     where = f" Their merge-base is {base[:12]}; a baseline run on that tree is the comparable one." if base else ""
     return (
-        f"{base_label} {baseline.commit[:12]} ({baseline.branch or 'detached'}) and "
-        f"{new_label} {new.commit[:12]} ({new.branch or 'detached'}) have NO ancestry relationship — "
+        f"{base_label} {_short(baseline.commit)} ({baseline.branch or 'detached'}) and "
+        f"{new_label} {_short(new.commit)} ({new.branch or 'detached'}) have NO ancestry relationship — "
         f"neither tree contains the other, so a per-nodeid delta between them attributes "
         f"every difference between two divergent branches to the subject.{where}"
     )
