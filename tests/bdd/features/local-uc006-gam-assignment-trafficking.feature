@@ -69,9 +69,12 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     And Google Ad Manager created no creative
 
   # GAM is asked again when the assignment is sent again: that it holds the creative from
-  # another package does not place the creative on this one. The size refusal carries its own
-  # code, enums/error-code.json CREATIVE_SIZE_MISMATCH: "The submitted creative dimensions do
-  # not match any size accepted by the selected packages ... Recovery: correctable".
+  # another package does not place the creative on this one. The product takes 300x250 only
+  # (display_300x250_image) and the line item 728x90 only, so no creative the product accepts
+  # can serve on it: the buyer has no lever, the refusal of
+  # @T-UC-002-local-gam-creative-size-mismatch (F2, PR #2582 review). AdCP 3.2.7
+  # enums/error-code.json CONFIGURATION_ERROR: "the buyer cannot fix it, retrying will not
+  # help, and reporting to the seller's operator is the only remediation ... Recovery: terminal".
   @T-UC-006-local-gam-refused-assignment-resent
   Scenario: A refused assignment of a creative GAM already holds is refused again when re-sent
     Given the buyer holds a buy booked in Google Ad Manager as order "6000003" whose package "pkg-leader" is line item "5000003" accepting 728x90
@@ -80,14 +83,14 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
     When the Buyer Agent references library creative "cr-banner", without resending it, assigned to package "pkg-leader"
     Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
-    And creative "cr-banner" failed with error CREATIVE_SIZE_MISMATCH and recovery correctable
+    And creative "cr-banner" failed with error CONFIGURATION_ERROR and recovery terminal
     And Google Ad Manager associated that creative with line items "5000001"
 
   # A fault in GAM is not fixed by changing the request. core/error.json: correctable is "fix
   # the request and resend (invalid field, budget too low, creative rejected)", and transient is
-  # "retry after delay (rate limit, service unavailable, timeout)". The size refusal above is the
-  # buyer's to fix, so it stays correctable. The refused package's row stays, and GAM keeps the
-  # association it made: a re-send pushes the same assignment again, and GAM is asked which it holds.
+  # "retry after delay (rate limit, service unavailable, timeout)". The refused package's row
+  # stays, and GAM keeps the association it made: a re-send pushes the same assignment again,
+  # and GAM is asked which it holds.
   @T-UC-006-local-gam-refusal-keeps-its-code
   Scenario Outline: GAM refusing one association answers its fault's own code, not a request error - <reason>
     Given the buyer holds a buy booked in Google Ad Manager as order "6000007" whose package "pkg-two-a" is line item "5000007" accepting 300x250 and package "pkg-two-b" is line item "5000008" accepting 300x250
