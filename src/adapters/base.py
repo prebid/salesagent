@@ -523,12 +523,20 @@ class AdServerAdapter(ABC):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: Mapping[str, Sequence[CreativeToTraffic]],
     ) -> list[ErrorProblem]:
-        """Pre-validate a media buy request without creating anything.
+        """Pre-validate a media buy request without creating anything: the one pre-booking seam.
 
-        Called before adapter execution to catch
-        adapter-specific constraint violations early. Override in
+        Called once, before the adapter books anything, on the direct create and on the
+        approval replay alike (``_execute_adapter_media_buy_creation``). Override in
         subclasses to add adapter-specific validation.
+
+        *creatives_by_package* maps a package id to the creatives the buy names on it, each as
+        core's gate read it for that package. An adapter refuses here a creative it cannot
+        traffic on its package, as a problem whose subject is the creative and whose
+        ``package_id`` is the package; core builds the error and points it at the request
+        (``exceptions.problems_refusal``). An adapter constructs no error for it.
 
         Default implementation validates pricing model compatibility.
         Subclasses can override to add adapter-specific checks (e.g., impressions limits).
@@ -570,19 +578,6 @@ class AdServerAdapter(ABC):
                     )
 
         return problems
-
-    def check_creatives_before_booking(
-        self,
-        packages: Sequence[MediaPackage],
-        creatives_by_package: Mapping[str, Sequence[CreativeToTraffic]],
-    ) -> None:
-        """Refuse, before any ad-server write, a creative this adapter cannot traffic on its package.
-
-        Interim seam; RFC #2529 folds it into plan(buy).
-
-        *creatives_by_package* maps a package id to the creatives the buy names on it. Raises
-        the refusal's typed ``AdCPSalesAgentError``. The default accepts everything.
-        """
 
     @abstractmethod
     def create_media_buy(

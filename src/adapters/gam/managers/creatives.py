@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from src.core.errors.details import CreativeRejectionDetails
-from src.core.exceptions import AdCPCreativeRejectedError, AdCPInternalError, AdCPSalesAgentError
+from src.core.exceptions import AdCPCreativeRejectedError, AdCPInternalError, AdCPSalesAgentError, problems_refusal
 from src.core.schemas import AssetStatus
 from src.core.security.outbound_http import CounterpartyUrl, send
 from src.core.traffic_carrier import AdapterCreativeAsset, CreativeToTraffic, PackageAssignmentDict
@@ -288,10 +288,14 @@ class GAMCreativesManager:
 
     @staticmethod
     def _plan(ctt: CreativeToTraffic, placeholders: list[Any]) -> GamCreativePlan:
-        """The GAM creative *ctt* becomes on line items with these *placeholders*; raises the refusal."""
+        """The GAM creative *ctt* becomes on line items with these *placeholders*; raises the refusal.
+
+        The error is core's (``problems_refusal``) from the refusal's problem, as at the
+        pre-booking check: this manager classifies, it picks no error class.
+        """
         plan = plan_gam_creative(ctt, placeholder_sizes(placeholders))
         if isinstance(plan, GamCreativeRefusal):
-            raise plan.error()
+            raise problems_refusal([plan.problem()])
         return plan
 
     @classmethod
@@ -309,7 +313,9 @@ class GAMCreativesManager:
         }
         if not plans:
             # No assigned package has a line item, so no line item states a size.
-            raise GamCreativeRefusal(asset["creative_id"], GamRefusalReason.NO_PLACEHOLDER).error()
+            raise problems_refusal(
+                [GamCreativeRefusal(asset["creative_id"], GamRefusalReason.NO_PLACEHOLDER).problem()]
+            )
         return plans
 
     def _planned_creative(self, asset: AdapterCreativeAsset, plan: GamCreativePlan) -> dict[str, Any]:

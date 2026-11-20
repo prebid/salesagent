@@ -693,7 +693,7 @@ class GAMOrdersManager:
         """The ``creativePlaceholders`` the line item for *package* is created with.
 
         The one computation: ``create_line_items`` writes them, and
-        ``GoogleAdManager.check_creatives_before_booking`` plans each creative against them
+        ``GoogleAdManager.validate_media_buy_request`` plans each creative against them
         before anything is written, so the size a creative is refused or created at is the
         size its line item takes.
         """

@@ -3871,7 +3871,7 @@ def assert_approval_executed(ctx: dict) -> None:
     approval = ctx.get("approval_result")
     assert approval is not None, "no approval was run — the When must dispatch it before this Then"
     assert approval.outcome is ApprovalOutcome.EXECUTED, (
-        f"the approval did not execute the order: outcome={approval.outcome!r}, error={approval.error_msg!r}"
+        f"the approval did not execute the order: outcome={approval.outcome!r}, error={approval.error!r}"
     )
 
 

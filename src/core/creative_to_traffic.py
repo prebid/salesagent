@@ -105,7 +105,8 @@ def read_creative_to_traffic(
     """
     data = dict(creative_data)
     assets = _assets(data)
-    sizes, size_ranges = _declared_sizes(declarations, format_spec)
+    option_sizes, option_size_ranges = _declared_sizes(declarations, format_spec)
+    sizes, size_ranges = option_sizes, option_size_ranges
     try:
         representation = _representation(data, assets, kind, format_spec, declarations)
     except ValidationError:
@@ -129,6 +130,8 @@ def read_creative_to_traffic(
         representation=representation,
         sizes=sizes,
         size_ranges=size_ranges,
+        option_sizes=option_sizes,
+        option_size_ranges=option_size_ranges,
         clickthrough_url=(
             None
             if isinstance(representation, PairedRedirectRepresentation)

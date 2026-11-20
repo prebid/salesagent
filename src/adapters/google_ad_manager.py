@@ -358,24 +358,37 @@ class GoogleAdManager(AdServerAdapter):
     def SUPPORTED_MEDIA_TYPES(self):
         return self.targeting_manager.SUPPORTED_MEDIA_TYPES
 
-    def check_creatives_before_booking(
+    def validate_media_buy_request(
         self,
-        packages: Sequence[MediaPackage],
+        request: AdapterCreateRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
+        *,
         creatives_by_package: Mapping[str, Sequence[CreativeToTraffic]],
-    ) -> None:
-        """Refuse a creative GAM has no creative for on its package's line item, before the order exists.
+    ) -> list[ErrorProblem]:
+        """The base checks, plus each creative GAM has no creative for on its package's line item.
 
-        Interim seam; RFC #2529 folds it into plan(buy).
+        Interim; RFC #2529 folds it into plan(buy).
 
         Each creative is planned (``plan_gam_creative``) against the placeholders the
         package's line item will be created with (``GAMOrdersManager.line_item_placeholders``,
         the computation ``create_line_items`` writes), so a size or kind refused here is one
-        the creatives manager would refuse after the order and line items were written.
-        Raises the first refusal's typed error.
+        the creatives manager would refuse after the order and line items were written. Every
+        refusal is a problem naming its creative and package; core raises the error.
         """
+        problems = super().validate_media_buy_request(
+            request,
+            packages,
+            start_time,
+            end_time,
+            package_pricing_info,
+            creatives_by_package=creatives_by_package,
+        )
         planned = [package for package in packages if creatives_by_package.get(package.package_id)]
         if not planned:
-            return
+            return problems
         from src.core.database.repositories.uow import ProductUoW
 
         # Read and closed before the placeholders are computed: the computation opens a
@@ -395,7 +408,8 @@ class GoogleAdManager(AdServerAdapter):
             for creative in creatives_by_package[package.package_id]:
                 plan = plan_gam_creative(creative, sizes)
                 if isinstance(plan, GamCreativeRefusal):
-                    raise plan.error()
+                    problems.append(plan.problem(package.package_id))
+        return problems
 
     def create_media_buy(
         self,

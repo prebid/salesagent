@@ -34,13 +34,8 @@ from enum import StrEnum
 from typing import Any
 
 from src.adapters.gam.utils.macros import substitute_macros, substitute_tracking_urls
-from src.core.errors.details import CapabilityRefusalDetails, ConfigurationDetails, CreativeManifestDetails
-from src.core.exceptions import (
-    AdCPCapabilityNotSupportedError,
-    AdCPConfigurationError,
-    AdCPCreativeSizeMismatchError,
-    AdCPSalesAgentError,
-)
+from src.core.errors.codes import ErrorCode, ErrorCodeT
+from src.core.errors.details import ErrorProblem
 from src.core.traffic_carrier import (
     CreativeToTraffic,
     Html5BundleRepresentation,
@@ -88,42 +83,57 @@ class GamRefusalReason(StrEnum):
     """Its line items state no creative size at all."""
 
     NO_MATCHING_SIZE = "no_matching_size"
-    """None of the sizes it accepts is a size its line items take."""
+    """None of the sizes it accepts is a size its line items take, and another size its option accepts is."""
+
+    NO_OPTION_SIZE_PLACED = "no_option_size_placed"
+    """No size its option accepts is a size its line items take."""
+
+    @property
+    def code(self) -> ErrorCodeT:
+        """The adapter-independent code the refusal is, from the one code table (enums/error-code.json).
+
+        * ``UNSUPPORTED_FEATURE``: "A requested feature or field is not supported by this seller".
+        * ``CREATIVE_SIZE_MISMATCH``: "The submitted creative dimensions do not match any size
+          accepted by the selected packages ... Recovery: correctable (resize or replace the
+          creative with a size accepted by every selected package that may serve it)" -- which
+          another size the option accepts would satisfy.
+        * ``CONFIGURATION_ERROR``: "the buyer cannot fix it, retrying will not help, and
+          reporting to the seller's operator is the only remediation" -- a line item stating no
+          size, or one taking no size the option accepts, which no creative the buyer may send
+          can serve.
+        """
+        if self is GamRefusalReason.NOT_TRAFFICKED:
+            return ErrorCode.UNSUPPORTED_FEATURE
+        if self is GamRefusalReason.NO_MATCHING_SIZE:
+            return ErrorCode.CREATIVE_SIZE_MISMATCH
+        return ErrorCode.CONFIGURATION_ERROR
 
 
 @dataclass(frozen=True)
 class GamCreativeRefusal:
-    """A creative GAM is not handed, and why. Raise :meth:`error` to refuse it."""
+    """A creative GAM is not handed, and why. :meth:`problem` classifies it; core raises the refusal."""
 
     creative_id: str
     reason: GamRefusalReason
     #: What was refused: the kind, or the sizes and bounds the creative accepts.
     rejected_value: str | list[str] | None = None
-    #: The sizes the line items take, for a size refusal.
+    #: The sizes the option accepts that the line items take, for a size refusal.
     accepted_values: tuple[str, ...] = ()
 
-    def error(self) -> AdCPSalesAgentError[Any]:
-        """The typed refusal: the code each reason is, with that code's declared details."""
-        if self.reason is GamRefusalReason.NO_MATCHING_SIZE:
-            # enums/error-code.json: "The submitted creative dimensions do not match any size
-            # accepted by the selected packages."
-            return AdCPCreativeSizeMismatchError(
-                details=CreativeManifestDetails(
-                    creative_id=self.creative_id,
-                    rejected_value=self.rejected_value,
-                    accepted_values=list(self.accepted_values),
-                )
-            )
-        if self.reason is GamRefusalReason.NO_PLACEHOLDER:
-            # A line item with no creative size is the seller's configuration; the buyer has
-            # no lever.
-            return AdCPConfigurationError(
-                details=ConfigurationDetails(creative_id=self.creative_id, capability="creative_placeholders")
-            )
-        return AdCPCapabilityNotSupportedError(
-            details=CapabilityRefusalDetails(
-                creative_id=self.creative_id, capability="format", rejected_value=self.rejected_value
-            )
+    def problem(self, package_id: str | None = None) -> ErrorProblem:
+        """The refusal as the problem it is: its creative, the package it is refused on, and its code.
+
+        ``CONFIGURATION_ERROR`` names no values: the pin defines no details for it, and the
+        line items' sizes are not sizes the buyer could send.
+        """
+        configuration = self.reason.code == ErrorCode.CONFIGURATION_ERROR
+        return ErrorProblem(
+            code=self.reason.code,
+            subject_type="creative",
+            subject_id=self.creative_id,
+            package_id=package_id,
+            rejected_value=None if configuration else self.rejected_value,
+            accepted_values=list(self.accepted_values) or None,
         )
 
 
@@ -201,23 +211,38 @@ def _destination(ctt: CreativeToTraffic) -> dict[str, str]:
 def _candidate_sizes(
     ctt: CreativeToTraffic, placeholder_sizes: Sequence[TrafficSize]
 ) -> tuple[TrafficSize, ...] | GamCreativeRefusal:
-    """The sizes *ctt* may be trafficked at on these placeholders, in order, or the refusal."""
+    """The sizes *ctt* may be trafficked at on these placeholders, in order, or the refusal.
+
+    With none, the refusal says whether the buyer can fix it: a size the creative's OPTION
+    accepts that a placeholder takes is one a resized creative would serve at; with no such
+    size, no creative the option accepts can serve on these line items.
+    """
     placeholders = tuple(dict.fromkeys(placeholder_sizes))
     if not placeholders:
         return GamCreativeRefusal(ctt.creative_id, GamRefusalReason.NO_PLACEHOLDER)
-    if not ctt.sizes and not ctt.size_ranges:
+    candidates = _placed(ctt.sizes, ctt.size_ranges, placeholders)
+    if candidates:
+        return candidates
+    placed_by_option = _placed(ctt.option_sizes, ctt.option_size_ranges, placeholders)
+    if not placed_by_option:
+        return GamCreativeRefusal(ctt.creative_id, GamRefusalReason.NO_OPTION_SIZE_PLACED)
+    return GamCreativeRefusal(
+        ctt.creative_id,
+        GamRefusalReason.NO_MATCHING_SIZE,
+        _spelled(ctt.sizes) + [_spelled_range(bounds) for bounds in ctt.size_ranges],
+        tuple(_spelled(placed_by_option)),
+    )
+
+
+def _placed(
+    sizes: Sequence[TrafficSize], size_ranges: Sequence[TrafficSizeRange], placeholders: tuple[TrafficSize, ...]
+) -> tuple[TrafficSize, ...]:
+    """The placeholders these sizes and bounds take, declared sizes first; with neither stated, every placeholder."""
+    if not sizes and not size_ranges:
         return placeholders
-    declared = [size for size in ctt.sizes if size in placeholders]
-    in_range = [size for size in placeholders if any(_within(size, bounds) for bounds in ctt.size_ranges)]
-    candidates = tuple(dict.fromkeys([*declared, *in_range]))
-    if not candidates:
-        return GamCreativeRefusal(
-            ctt.creative_id,
-            GamRefusalReason.NO_MATCHING_SIZE,
-            _spelled(ctt.sizes) + [_spelled_range(bounds) for bounds in ctt.size_ranges],
-            tuple(_spelled(placeholders)),
-        )
-    return candidates
+    declared = [size for size in sizes if size in placeholders]
+    in_range = [size for size in placeholders if any(_within(size, bounds) for bounds in size_ranges)]
+    return tuple(dict.fromkeys([*declared, *in_range]))
 
 
 def _within(size: TrafficSize, bounds: TrafficSizeRange) -> bool:

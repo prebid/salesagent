@@ -119,8 +119,6 @@ from pydantic import BaseModel, RootModel, TypeAdapter, ValidationError
 
 from src.core.errors.details import (
     CapabilityRefusalDetails,
-    CreativeManifestDetails,
-    CreativeValueNotAllowedDetails,
     ErrorProblem,
     SelectorConflictDetails,
     SelectorRouteSummary,
@@ -128,10 +126,8 @@ from src.core.errors.details import (
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPConflictingSelectorsError,
-    AdCPCreativeMissingClickUrlError,
-    AdCPCreativeSizeMismatchError,
-    AdCPCreativeValidationFailedError,
-    AdCPCreativeValueNotAllowedError,
+    AdCPSalesAgentError,
+    problems_refusal,
 )
 from src.core.schemas import Format, FormatOptionIdentity, FormatSelector
 
@@ -3505,13 +3501,7 @@ def creative_refusal(
     field: str | None = None,
     creative_id: str | None = None,
     **entity: Any,
-) -> (
-    AdCPCapabilityNotSupportedError
-    | AdCPCreativeMissingClickUrlError
-    | AdCPCreativeSizeMismatchError
-    | AdCPCreativeValidationFailedError
-    | AdCPCreativeValueNotAllowedError
-):
+) -> AdCPSalesAgentError[Any]:
     """The error to raise for a refused CREATIVE verdict. Every creative gate raises this.
 
     A selection outside the product's closed set, or an option ref it does not publish, is
@@ -3542,20 +3532,16 @@ def creative_refusal(
     The generic code's own text says producers "SHOULD prefer a specific creative code
     whenever one applies", so the error takes a specific code when every shortfall shares
     it. A refusal mixing kinds takes the generic code, and each ``problems[]`` entry still
-    carries the specific code of its own shortfall.
+    carries the specific code of its own shortfall. That selection is
+    ``exceptions.problems_refusal``, the one an ad server's pre-booking refusals take too.
 
     ``problems[]`` carries each shortfall as values -- the manifest path, what the asset
     states, what the declaration accepts -- under the code it is an instance of.
     """
     if verdict.refusal not in _CREATIVE_REFUSALS and not verdict.shortfalls:
         return canonical_refusal(verdict, field=field, creative_id=creative_id, **entity)
-    codes = {shortfall.code for shortfall in verdict.shortfalls}
-    common = next(iter(codes)) if len(codes) == 1 else None
-    values: dict[str, Any] = {
-        "creative_id": creative_id,
-        "rejected_value": verdict.rejected_value,
-        "accepted_values": list(verdict.accepted_values),
-        "problems": [
+    return problems_refusal(
+        [
             ErrorProblem(
                 code=shortfall.code,
                 subject_type="creative",
@@ -3565,22 +3551,13 @@ def creative_refusal(
                 accepted_values=list(shortfall.accepted_values),
             )
             for shortfall in verdict.shortfalls
-        ]
-        or None,
+        ],
+        field=field,
+        creative_id=creative_id,
+        rejected_value=verdict.rejected_value,
+        accepted_values=list(verdict.accepted_values),
         **entity,
-    }
-    if common is ErrorCode.CREATIVE_VALUE_NOT_ALLOWED:
-        offending = verdict.shortfalls[0]
-        return AdCPCreativeValueNotAllowedError(
-            details=CreativeValueNotAllowedDetails(**values, allowed_values=list(offending.accepted_values)),
-            field=offending.field,
-        )
-    details = CreativeManifestDetails(**values)
-    if common is ErrorCode.CREATIVE_SIZE_MISMATCH:
-        return AdCPCreativeSizeMismatchError(details=details, field=field)
-    if common is ErrorCode.CREATIVE_MISSING_CLICK_URL:
-        return AdCPCreativeMissingClickUrlError(details=details, field=field)
-    return AdCPCreativeValidationFailedError(details=details, field=field)
+    )
 
 
 def require_covered(

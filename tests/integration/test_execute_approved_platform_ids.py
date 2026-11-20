@@ -273,7 +273,7 @@ class TestExecuteApprovedPlatformIds:
         ):
             result = run_approval(media_buy_id, tenant_id)
 
-        assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
+        assert result.ok, f"execute_approved_media_buy failed: {result.error!r}"
 
         # THE KEY ASSERTION: platform_line_item_id must be in package_config
         from sqlalchemy import select
@@ -311,7 +311,7 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         )
 
         result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
-        assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
+        assert result.ok, f"execute_approved_media_buy failed: {result.error!r}"
 
         from sqlalchemy import select
 
@@ -338,7 +338,7 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         )
 
         result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
-        assert result.ok, f"Should succeed even if package not found: {result.error_msg}"
+        assert result.ok, f"Should succeed even if package not found: {result.error!r}"
 
     def test_empty_platform_line_item_ids_dict(self, pending_media_buy_with_package):
         """Empty _platform_line_item_ids dict — no writes, no crash."""
@@ -353,7 +353,7 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         )
 
         result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
-        assert result.ok, f"Should succeed with empty dict: {result.error_msg}"
+        assert result.ok, f"Should succeed with empty dict: {result.error!r}"
 
         # Package config should be unchanged (no platform_line_item_id added)
         from sqlalchemy import select
@@ -385,7 +385,7 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         )
 
         result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
-        assert result.ok, f"Should succeed with no mapping: {result.error_msg}"
+        assert result.ok, f"Should succeed with no mapping: {result.error!r}"
 
         from sqlalchemy import select
 
@@ -531,7 +531,7 @@ class TestExecuteApprovedEnrichesSellerConcept:
         ):
             result = run_approval(media_buy_id, tenant_id)
 
-        assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
+        assert result.ok, f"execute_approved_media_buy failed: {result.error!r}"
         mock_adapter.creatives_manager.add_creative_assets.assert_called_once_with(gam_order_id, ANY, ANY)
 
         # (3) The concept is PERSISTED to the creative's data blob (the Finding 1 fix —

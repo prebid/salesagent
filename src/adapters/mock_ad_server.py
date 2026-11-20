@@ -1,5 +1,6 @@
 import logging
 import random
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -50,7 +51,7 @@ from src.core.schemas import (
     Snapshot,
 )
 from src.core.security.webhook_egress import deliver_webhook
-from src.core.traffic_carrier import AdapterCreativeAsset
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativeToTraffic
 from src.core.validation_helpers import package_field_path
 from src.services.ai.config import SellerAIConfig
 
@@ -218,6 +219,8 @@ class MockAdServer(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: Mapping[str, Sequence[CreativeToTraffic]],
     ) -> list[ErrorProblem]:
         """Validate media buy request with GAM-like validation rules.
 
@@ -227,7 +230,9 @@ class MockAdServer(AdServerAdapter):
         (salesagent-rys3u.4): the same facts, in fields a machine can read, with the
         sentence coming from CODE_TABLE.
         """
-        problems = super().validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
+        problems = super().validate_media_buy_request(
+            request, packages, start_time, end_time, package_pricing_info, creatives_by_package=creatives_by_package
+        )
 
         # Date validation (like GAM)
         if start_time >= end_time:
@@ -774,7 +779,7 @@ class MockAdServer(AdServerAdapter):
 
         # GAM-like validation (based on real GAM behavior)
         validation_errors = self.validate_media_buy_request(
-            request, packages, start_time, end_time, package_pricing_info
+            request, packages, start_time, end_time, package_pricing_info, creatives_by_package={}
         )
         if validation_errors:
             raise AdCPValidationError(details=ValidationDetails(reasons=validation_errors))

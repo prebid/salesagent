@@ -99,6 +99,7 @@ class TestInventoryAdapterRestrictions:
             packages=[package],
             start_time=start_time,
             end_time=end_time,
+            creatives_by_package={},
         )
         assert errors == [], f"Expected no validation errors, got: {errors}"
 

@@ -1201,6 +1201,8 @@ class TestCreateMediaBuyAdapterInteraction:
         from src.core.tools.media_buy_create import _execute_adapter_media_buy_creation
 
         mock_adapter = MagicMock()
+        # The pre-booking check runs in this function first; it finds nothing to refuse.
+        mock_adapter.validate_media_buy_request.return_value = []
         mock_adapter.create_media_buy.side_effect = RuntimeError("GAM API timeout")
 
         # Two signature changes, both from the adapter-contract split (ecfdd7771 and
@@ -1217,7 +1219,8 @@ class TestCreateMediaBuyAdapterInteraction:
                     end_time=datetime.now(UTC) + timedelta(days=7),
                     package_pricing_info={},
                     identity=_make_identity(),
-                    creatives_by_package={},
+                    carriers={},
+                    named_packages=[],
                 )
 
     # test_dry_run_skips_adapter (UC-002-AD03 / UC-002-MAIN-19) is REMOVED. It drove

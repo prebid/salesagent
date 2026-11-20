@@ -1176,13 +1176,13 @@ def assert_media_buy_still_awaits_approval(ctx: dict) -> None:
 
 @then("the seller's approval fails on the package's missing pricing_info, and the media buy still awaits approval")
 def then_approval_fails_on_missing_pricing_info(ctx: dict) -> None:
-    """The approval failed naming the missing ``pricing_info``, and left the buy awaiting approval."""
-    from src.core.tools.media_buy_create import ApprovalOutcome
+    """The approval failed naming the stored package's missing ``pricing_info``, and left the buy awaiting approval.
 
-    result = ctx["approval_result"]
-    assert result.outcome is ApprovalOutcome.FAILED and "missing pricing_info" in (result.error_msg or ""), (
-        f"expected the approval to fail on the package's missing pricing_info; it returned {result}"
-    )
+    A store defect the buyer cannot correct: CONFIGURATION_ERROR, its ``field`` the stored
+    field at fault, as ``media_buy_delivery`` refuses the same missing terms.
+    """
+    error = failed_approval_error(ctx, "CONFIGURATION_ERROR")
+    assert error.field == "pricing_info", f"expected the refusal to name pricing_info; it names {error.field!r}"
     assert_media_buy_still_awaits_approval(ctx)
 
 
@@ -1192,17 +1192,33 @@ def then_media_buy_still_awaits_approval(ctx: dict) -> None:
     assert_media_buy_still_awaits_approval(ctx)
 
 
-@then(parsers.parse('the seller\'s approval fails with error code "{code}"'))
-def then_approval_fails_with_code(ctx: dict, code: str) -> None:
-    """The approval failed, and its error names the code's message from the one code table."""
-    from src.core.errors.codes import CODE_TABLE, ErrorCode
+def failed_approval_error(ctx: dict, code: str) -> Any:
+    """The typed error the seller's approval failed with (``ApprovalResult.error``), asserted to carry *code*."""
     from src.core.tools.media_buy_create import ApprovalOutcome
 
     result = ctx["approval_result"]
-    message = CODE_TABLE[ErrorCode(code)].message
-    assert result.outcome is ApprovalOutcome.FAILED and message in (result.error_msg or ""), (
-        f"expected the seller's approval to fail with {code} ({message!r}); it returned {result}"
+    error = result.error
+    assert result.outcome is ApprovalOutcome.FAILED and error is not None and str(error.error_code) == code, (
+        f"expected the seller's approval to fail with {code}; it returned {result}"
     )
+    return error
+
+
+@then(parsers.parse('the seller\'s approval fails with error code "{code}"'))
+def then_approval_fails_with_code(ctx: dict, code: str) -> None:
+    """The approval failed, and its typed error carries the code."""
+    failed_approval_error(ctx, code)
+
+
+@then(parsers.parse('the seller\'s approval fails with error code "{code}" naming field "{field}"'))
+def then_approval_fails_with_code_naming_field(ctx: dict, code: str, field: str) -> None:
+    """The approval failed with the code, its ``error.field`` pointing where the stored buy names the subject.
+
+    The same pointer a create answers with: the approval's refusal is the one object a
+    pre-booking refusal is built as (``_execute_adapter_media_buy_creation``).
+    """
+    error = failed_approval_error(ctx, code)
+    assert error.field == field, f"expected the seller's approval to name field {field!r}; it names {error.field!r}"
 
 
 @then("Google Ad Manager received no order and no line item")

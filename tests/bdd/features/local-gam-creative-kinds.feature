@@ -227,9 +227,9 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
   # that failed, and the seller can retry once the creative is fixed.
   #
   # F2 (PR #2582 review): the same non-overlap as @T-UC-002-local-gam-creative-size-mismatch,
-  # so the same code, CONFIGURATION_ERROR, quoted there; today the approval fails
-  # CREATIVE_SIZE_MISMATCH. The seller's approval answers a message and no error.field
-  # (ApprovalResult), so the creative's pointer is graded on create only.
+  # so the same code, CONFIGURATION_ERROR, quoted there. The seller's approval carries the
+  # typed error a create answers with (ApprovalResult.error), so it names the creative where
+  # the held buy names it, packages[0].creative_ids[0], as the create scenario does.
   @T-UC-002-local-gam-creative-size-mismatch-on-approval @extension
   Scenario: A held buy whose creative's option sizes overlap no line item placeholder is refused at the seller's approval as the seller's configuration, and nothing is created in GAM
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_300x250", "params": {"width": 300, "height": 250, "supported_delivery_types": ["tag_url"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}]}', with product settings '{"creative_placeholders": [{"width": 728, "height": 90}]}'
@@ -238,7 +238,7 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     When the Buyer Agent sends the create_media_buy request
     Then the response status should be "submitted"
     When the seller approves the media buy
-    Then the seller's approval fails with error code "CONFIGURATION_ERROR"
+    Then the seller's approval fails with error code "CONFIGURATION_ERROR" naming field "packages[0].creative_ids[0]"
     And the media buy still awaits approval
     And Google Ad Manager received no order and no line item
     And Google Ad Manager created no creative

@@ -120,7 +120,14 @@ Representation = Annotated[
 
 
 class CreativeToTraffic(BaseModel):
-    """One creative as an adapter traffics it: its kind, the representation the buyer sent, its sizes."""
+    """One creative as an adapter traffics it: its kind, the representation the buyer sent, its sizes.
+
+    ``sizes`` and ``size_ranges`` are what the creative may be trafficked at. ``option_sizes``
+    and ``option_size_ranges`` are what its format option accepts, which for a media file is
+    more than the file's own size: an adapter refusing that size tells from them whether
+    another size the option accepts would serve. Both pairs empty means "any size". Required,
+    so a carrier built without its option cannot read as one accepting any size.
+    """
 
     model_config = _FROZEN
 
@@ -129,6 +136,8 @@ class CreativeToTraffic(BaseModel):
     representation: Representation
     sizes: tuple[TrafficSize, ...] = ()
     size_ranges: tuple[TrafficSizeRange, ...] = ()
+    option_sizes: tuple[TrafficSize, ...]
+    option_size_ranges: tuple[TrafficSizeRange, ...]
     clickthrough_url: str | None = None
     impression_tracker_urls: tuple[str, ...] = ()
 

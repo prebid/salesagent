@@ -41,7 +41,7 @@ def discover_creative_formats_from_url(url):
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
-from src.admin.utils import require_tenant_access
+from src.admin.utils import describe_approval_error, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
 from src.core.tools.media_buy_create import execute_approved_media_buy, push_creative_to_existing_buy
@@ -669,7 +669,8 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 )
             else:
                 logger.error(
-                    f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: {approval.error_msg}"
+                    f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: "
+                    f"{describe_approval_error(approval.error)}"
                 )
 
         # Retroactive push for already-live buys (#1038):
