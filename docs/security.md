@@ -16,7 +16,7 @@ This document is the reference for the security architecture of the sales agent:
 
 ## Admin authentication architecture
 
-Two functions in `src/admin/utils/helpers.py` decide admin access. `is_super_admin()` decides whether a user is a super admin. `require_tenant_access()` decides whether a signed-in user reaches a tenant.
+Three functions in `src/admin/utils/helpers.py` decide admin access. `is_super_admin()` decides whether a user is a super admin. `require_tenant_access()` decides whether a signed-in user reaches a tenant. `require_auth()` checks that a user is signed in and, with `admin_only=True`, that the user is a super admin.
 
 ### Super admin check
 
@@ -25,7 +25,7 @@ Two functions in `src/admin/utils/helpers.py` decide admin access. `is_super_adm
 1. The session cache, when it holds a positive result for the same email.
 2. The `SUPER_ADMIN_EMAILS` list from the environment.
 3. The `SUPER_ADMIN_DOMAINS` list from the environment, compared with the domain of the email.
-4. The `super_admin_emails` row of the `TenantManagementConfig` table.
+4. The `super_admin_emails` row of the `superadmin_config` table, which the `TenantManagementConfig` model maps.
 5. The `super_admin_domains` row of the same table.
 
 The environment comes before the database, so the check works before database initialization runs. The function logs a database error and treats it as no match.
@@ -57,26 +57,28 @@ Behind a reverse proxy, the `Origin` fallback compares against the request's own
 
 ### Subdomain assignment
 
-To prevent subdomain squatting and brand impersonation, the system generates tenant subdomains automatically from random universally unique identifiers (UUIDs):
+To prevent subdomain squatting and brand impersonation, self-service signup generates each tenant subdomain from a random universally unique identifier (UUID):
 
 - Subdomains are 8-character hexadecimal strings, for example `a7f3d92b`.
 - The system takes the first 8 characters of a UUID4 value.
 - Users cannot choose custom subdomains during signup.
 - This approach eliminates the risk of a user claiming a subdomain like `nytimes` or `cnn`.
 
+The super admin's tenant form uses its subdomain field or derives a subdomain from the tenant name when the field is empty. The Tenant Management API requires the subdomain in the request.
+
 ### Branded URLs
 
-Publishers who want branded URLs can use virtual hosts (custom domains). Configure a custom domain, for example `sales.publisher.com`, in the tenant settings. The Approximated proxy service verifies domain ownership. This approach provides branding without security risks.
+Publishers who want branded URLs can use virtual hosts (custom domains). Configure a custom domain, for example `sales.publisher.com`, in the tenant settings. From the tenant settings, you can register the virtual host with the Approximated proxy service for Transport Layer Security (TLS) and routing. The registration accepts only the tenant's own virtual host.
 
 ### Ad server configuration check
 
-Tenants without a configured ad server show a "Pending Configuration" page instead of active agent endpoints. This prevents incomplete registrations from appearing operational.
+The landing page of a tenant without a configured ad server shows a "Pending Configuration" page instead of the agent endpoint URLs. This prevents incomplete registrations from appearing operational.
 
 ## Access control patterns
 
 ### Super admins
 
-Super admins have full access to all tenants and can create, modify, and delete tenants and users. You configure super admins through environment variables or the database.
+Super admins pass `require_tenant_access` for every tenant, and they pass `require_auth(admin_only=True)`. In the Admin UI, they create, deactivate, and reactivate tenants, and they add users, change user roles, and deactivate users. No Admin UI route deletes a tenant or a user; the Tenant Management API deletes tenants. You configure super admins through environment variables or the database.
 
 ### Tenant users
 
@@ -88,7 +90,7 @@ Tenant users have access to specific tenants through the `User` model. On admin 
 | `manager` | Change everything except the admin-only routes |
 | `admin` | Everything, including the admin-only routes: managing users and roles, authorized domains and emails, setup mode, SSO configuration, and deactivating the tenant |
 
-A route is admin-only when it is decorated `require_tenant_access(role=UserRole.ADMIN)` (the least role the route needs). A refusal is a 403, with a JSON `{"error": ...}` body when the caller reads JSON (an API-mode route, a JSON request, or a `fetch`). The Users page adds people as viewers by default; admins choose a role when adding someone and can change it later. People who sign in from an authorized domain or email without an invitation are created as admins, which is why changing those lists is admin-only. The Users page refuses to demote or deactivate a tenant's last active admin. Super admins pass every check.
+A route is admin-only when it is decorated `require_tenant_access(role=UserRole.ADMIN)` (the least role the route needs). A refusal is a 403, with a JSON `{"error": ...}` body when the caller reads JSON (an API-mode route, a JSON request, or a `fetch`). The Users page adds people as viewers by default; admins choose a role when adding someone and can change it later. A person who signs in from an authorized domain without an invitation becomes an admin. So does a person on the authorized email list who signs in through the deployment's OAuth client. That is why changing those lists is admin-only. The Users page refuses to demote or deactivate a tenant's last active admin. Super admins pass every check.
 
 Some admin routes do not use `require_tenant_access` and so do not get these checks; #2203, #2233 and #2496 track them.
 
@@ -173,20 +175,19 @@ For the full architecture, including how to add a new outbound call, see
 
 All authentication changes must include tests for the following:
 
-- Revalidation logic
 - Environment versus database precedence
 - Audit logging completeness
-- Session security headers
+- The session cookie attributes that `create_app` sets
 - The cross-site request check in `src/admin/csrf.py`
 - The OAuth `state` check
 
-The Admin UI sets no session lifetime. Besides the origin check that [Cross-site request forgery](#cross-site-request-forgery) describes, the OAuth `state` parameter protects the sign-in flows and the Google Ad Manager authorization flow.
+The Admin UI sets no session lifetime, so the session cookie has no expiry date. Flask still rejects a session cookie signed more than 31 days earlier, which is its default `PERMANENT_SESSION_LIFETIME`. Unless you set `FLASK_SECRET_KEY`, each process signs sessions with its own random key, so a restart ends every session. Besides the origin check that [Cross-site request forgery](#cross-site-request-forgery) describes, the OAuth `state` parameter protects the sign-in flows and the Google Ad Manager authorization flow.
 
-**Test location**: `tests/integration/test_product_deletion.py` contains comprehensive authentication tests, including validation of the environment-first approach.
+**Test locations**: `TestEnvironmentFirstAuthentication` in `tests/integration/test_product_deletion.py` tests the source order of `is_super_admin()` and its session cache. `tests/unit/test_admin_csrf_protection.py` tests the cross-site request check and the production session cookie attributes.
 
 ## OAuth cross-domain authentication
 
-OAuth authentication works within the `sales-agent.example.com` domain and its subdomains. OAuth authentication from external domains, such as `test-agent.adcontextprotocol.org`, is limited by browser cookie security restrictions.
+In this section, `sales-agent.example.com` stands for the deployment's own domain, `SALES_AGENT_DOMAIN`. In production multi-tenant mode, the session cookie covers that domain and its subdomains, so OAuth authentication works across them. OAuth authentication from external domains, such as `test-agent.adcontextprotocol.org`, is limited by browser cookie security restrictions.
 
 ### How OAuth works
 
@@ -196,7 +197,7 @@ Same-domain OAuth is fully functional:
 
 1. The user visits `https://tenant.sales-agent.example.com/admin/`.
 2. The OAuth flow completes with session cookies.
-3. The system redirects the user back to the tenant subdomain after authentication.
+3. After authentication, the callback redirects the user within the host that received the callback. For a tenant sign-in in production, that host comes from `GOOGLE_OAUTH_REDIRECT_URI`, or from `SALES_AGENT_DOMAIN` when that variable is unset.
 
 #### Cross-domain OAuth
 
@@ -205,7 +206,7 @@ Cross-domain OAuth is limited:
 1. The user visits an external domain, for example `https://test-agent.adcontextprotocol.org/admin/`.
 2. OAuth initiation works and stores the originating host and the tenant in the session.
 3. The OAuth callback cannot retrieve the session data because of cookie domain restrictions.
-4. The system redirects the user to the login page instead of back to the external domain.
+4. The callback redirects the user to the login page.
 
 ### Technical details
 
@@ -217,7 +218,7 @@ SESSION_COOKIE_SECURE = True                        # HTTPS only
 SESSION_COOKIE_HTTPONLY = True                      # No script reads the session cookie
 SESSION_COOKIE_SAMESITE = "Lax"                     # Sent on top-level navigations (OAuth callbacks), not on cross-site posts
 SESSION_COOKIE_PATH = "/"                           # Covers /admin/* and /auth/* (OAuth callbacks)
-SESSION_COOKIE_DOMAIN = ".sales-agent.example.com"  # Multi-tenant mode only: scoped to the internal domain
+SESSION_COOKIE_DOMAIN = ".sales-agent.example.com"  # Multi-tenant mode only: "." + SALES_AGENT_DOMAIN, if set
 ```
 
 Outside production, the app sets `SESSION_COOKIE_SECURE = False` and no cookie domain. The other values match production.
@@ -239,20 +240,11 @@ The limitation comes from fundamental browser security: browsers cannot share co
 
 ### Workaround
 
-Direct users to `https://tenant.sales-agent.example.com/admin/` for OAuth authentication rather than to external domain URLs.
+Direct users to sign in on the deployment's own domain or one of its subdomains rather than on an external domain. A host names a tenant only when it is the virtual host that the tenant declares.
 
 ### Test coverage
 
-The tests cover the following behaviors:
-
-- OAuth session handling within the same domain
-- Approximated header detection and processing
-- Session cookie configuration
-- Redirect URI integrity (no modifications)
-- CSRF protection preservation (Authlib state management)
-- Documentation of the cross-domain limitation
-
-**Key test file**: `tests/integration/test_oauth_session_handling.py`
+`tests/integration/test_oauth_session_handling.py` records the cross-domain limitation as data, and its tests do not call the sign-in code. `test_oauth_callback_redirects_to_onboarding_for_signup_flow` in `tests/integration/test_self_service_signup.py` calls `google_callback` for a signup. `tests/unit/test_admin_csrf_protection.py` checks the production session cookie attributes.
 
 ## Generic OIDC provider support
 
