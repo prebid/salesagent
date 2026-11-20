@@ -604,7 +604,7 @@ def google_callback():
 
     if is_single_tenant_mode() and len(session["available_tenants"]) == 1:
         # Auto-select the only tenant
-        return _enter_tenant(email, session["available_tenants"][0], f"Welcome {user.get('name', email)}!")
+        return _enter_tenant(session["available_tenants"][0], f"Welcome {user.get('name', email)}!")
 
     # Multi-tenant mode or multiple tenants: show tenant selector
     flash(f"Welcome {user.get('name', email)}!", "success")
@@ -619,13 +619,14 @@ def google_callback():
     return response
 
 
-def _enter_tenant(email: str, membership: dict, welcome: str) -> Response:
-    """Sign *email* into the tenant of one ``available_tenants`` entry and send them on.
+def _enter_tenant(membership: dict, welcome: str) -> Response:
+    """Sign the session's user into the tenant of one ``available_tenants`` entry and send them on.
 
     The User row is written first: ``require_tenant_access`` reads it on the next page.
     """
     from src.admin.domain_access import ensure_user_in_tenant
 
+    email = session["user"]
     tenant_id = membership["tenant_id"]
     role = UserRole.ADMIN if membership["is_admin"] else UserRole.VIEWER
     ensure_user_in_tenant(email, tenant_id, role=role, name=session.get("user_name", email.split("@")[0].title()))
@@ -657,7 +658,7 @@ def select_tenant():
         # Verify user has access to selected tenant
         for membership in session["available_tenants"]:
             if membership["tenant_id"] == tenant_id:
-                return _enter_tenant(session["user"], membership, f"Welcome to {membership['name']}!")
+                return _enter_tenant(membership, f"Welcome to {membership['name']}!")
 
         flash("Invalid tenant selection", "error")
         return redirect(url_for("auth.select_tenant"))

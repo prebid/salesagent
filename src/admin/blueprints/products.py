@@ -13,7 +13,6 @@ from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from pydantic import ValidationError
 from sqlalchemy import func, inspect, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
 from src.adapters.gam_implementation_config_schema import CustomTargeting
@@ -2053,16 +2052,10 @@ def delete_product(tenant_id, product_id):
                     400,
                 )
 
-        # Delete the product and related pricing options
-        # Foreign key CASCADE automatically handles pricing_options deletion
+        # Every foreign key that references products (pricing options, inventory mappings,
+        # publisher selections, variants) is ON DELETE CASCADE.
         db_session.delete(product)
-        try:
-            db_session.commit()
-        except IntegrityError:
-            # A row with no cascade (an inventory mapping, a package) still references the
-            # product. The failed transaction is discarded when the session closes.
-            logger.info(f"Product {product_id} not deleted: other records still reference it")
-            return jsonify({"error": "Cannot delete product - it is referenced by other records"}), 400
+        db_session.commit()
 
         logger.info(f"Product {product_id} ({product_name}) deleted by tenant {tenant_id}")
 

@@ -81,7 +81,11 @@ def test_service_account_refusal_says_which_one(client, refusal):
         patch("src.services.gcp_service_account_service.GCPServiceAccountService") as service,
     ):
         service.return_value.create_service_account_for_tenant.side_effect = refusal
-        response = client.post("/tenant/default/gam/create-service-account")
+        # What tenant_settings.js's fetch() sends: its declared Content-Type, and the browser's Sec-Fetch-Mode.
+        response = client.post(
+            "/tenant/default/gam/create-service-account",
+            headers={"Content-Type": "application/json", "Sec-Fetch-Mode": "cors"},
+        )
 
     assert response.status_code == 400
     assert response.get_json() == {"success": False, "error": type(refusal).MESSAGE}
@@ -138,7 +142,8 @@ def failing_client():
 
 
 def test_unhandled_error_answers_json_with_a_reference(failing_client):
-    response = failing_client.get("/_test/boom", headers={"Accept": "*/*"})
+    # A browser fetch(): its default Accept, and the Sec-Fetch-Mode every current browser sends.
+    response = failing_client.get("/_test/boom", headers={"Accept": "*/*", "Sec-Fetch-Mode": "cors"})
 
     assert response.status_code == 500
     body = response.get_json()
