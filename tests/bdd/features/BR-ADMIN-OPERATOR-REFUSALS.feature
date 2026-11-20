@@ -82,6 +82,15 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the JSON response has "success" as false
     And the JSON error is the "DiscoveryUrlRequired" refusal
 
+  @T-ADMIN-REFUSAL-008 @json @inventory-profile-form
+  Scenario: A fetch() caller asking for a missing record gets the status as JSON
+    # abort(404) and the other HTTP errors pass through the error handler, and a caller
+    # that reads JSON gets them as JSON, so the page's script can show the error.
+    When the inventory page deletes a profile that does not exist
+    Then the page returns status 404
+    And the JSON response has "success" as false
+    And the JSON response has "error" as "Not Found"
+
   # A form the seller cannot save is refused with InvalidFormInput: its MESSAGE says the
   # form was refused, and each issue names a refused field in text the validator wrote,
   # never another exception's text. A browser is shown MESSAGE and every issue.

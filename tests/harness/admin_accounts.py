@@ -232,6 +232,14 @@ class AdminAccountEnv:
         path = self.inventory_profiles_path(f"{self.inventory_profile_row_id(profile_id)}/edit")
         return self._submit_as_browser(path, form_data, from_page=True)
 
+    def delete_inventory_profile_row(self, row_id: int) -> AdminResponse:
+        """DELETE the profile stored under *row_id*, as the list page's delete button does with fetch()."""
+        return self.client.request(
+            "delete",
+            self.inventory_profiles_path(f"{row_id}/delete"),
+            headers={"Content-Type": "application/json"},
+        )
+
     def post_oidc_config(self, body: dict[str, str]) -> AdminResponse:
         """POST this tenant's OIDC configuration, as the users page does with fetch()."""
         return self.client.request("post", f"/auth/oidc/tenant/{self._tenant_id}/config", json=body)

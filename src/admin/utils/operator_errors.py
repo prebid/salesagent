@@ -97,13 +97,17 @@ def _answer(
 def handle_unexpected_error(e: Exception) -> ResponseReturnValue:
     """The admin app's answer to any exception a route lets escape.
 
-    ``HTTPException`` (``abort(404)`` and friends) passes through unchanged. An
+    ``HTTPException`` (``abort(404)`` and friends) passes through unchanged, except that
+    an error status sent to a caller that reads JSON is answered as JSON, with
+    Werkzeug's status name as its text. An
     :class:`OperatorRefusal` is expected, so it is answered 400 with its class's
     ``MESSAGE`` (for a browser, beside its details) and logged at info. Anything else is
     logged with its traceback under a reference by :func:`safe_error_message`, and the
     operator gets fixed text plus that reference with 500.
     """
     if isinstance(e, HTTPException):
+        if e.code is not None and e.code >= 400 and caller_reads_json():
+            return jsonify({"success": False, "error": e.name}), e.code
         return e
     if isinstance(e, OperatorRefusal):
         logger.info("Operator refusal: %s", e)

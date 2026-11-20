@@ -75,6 +75,15 @@ def when_save_profile_edit_with_raw_format_options(ctx: dict, profile_id: str, r
     ctx["admin_page"] = env.submit_inventory_profile_edit(profile_id, form)
 
 
+#: A row id no profile is stored under: ids come from a sequence that no scenario runs this far.
+_ABSENT_PROFILE_ROW = 2_000_000_000
+
+
+@when("the inventory page deletes a profile that does not exist")
+def when_delete_absent_profile(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).delete_inventory_profile_row(_ABSENT_PROFILE_ROW)
+
+
 @then("the page is the add product form")
 def then_page_is_add_product_form(ctx: dict) -> None:
     page = _require_admin_page(ctx).data.decode()
