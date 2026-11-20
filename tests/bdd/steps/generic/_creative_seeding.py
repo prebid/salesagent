@@ -27,6 +27,7 @@ def store_creative(
     option_ref: Mapping[str, str] | None = None,
     status: str = "approved",
     principal: Any = None,
+    format_spec: Any = None,
     **data: Any,
 ) -> Any:
     """Store a creative carrying *assets*, of canonical *kind* or in reference-catalog format *fmt*; return the row.
@@ -34,9 +35,11 @@ def store_creative(
     *creative_id* ``None`` takes the factory's own id. *assets* ``None`` stores a record with no
     ``assets`` member at all, a creative missing its required assets. *option_ref* narrows a
     canonical *kind* to one product option (core/format-option-ref.json). *status* is its review
-    status. The buyer's own unless *principal* names another; *data* adds root keys to its
-    stored record (a sync's preview back-fill, a build's ``output_format``, the ad server's id).
-    Committed, so every transport's request reads it.
+    status. The buyer's own unless *principal* names another. *format_spec* is the declaration
+    *fmt* resolved to when the creative was stored, for a format no catalog carries now (the
+    factory's ``format_spec``). *data* adds root keys to its stored record (a sync's preview
+    back-fill, a build's ``output_format``, the ad server's id). Committed, so every
+    transport's request reads it.
 
     It becomes the scenario's manifest creative, the one the format-satisfaction refusal
     Thens read a refusal's ``details.creative_id`` and ``problems[]`` against.
@@ -51,6 +54,7 @@ def store_creative(
         status=status,
         data={**record, **data},
         **identity,
+        **({} if format_spec is None else {"format_spec": format_spec}),
         **({} if creative_id is None else {"creative_id": creative_id}),
     )
     ctx["env"]._commit_factory_data()

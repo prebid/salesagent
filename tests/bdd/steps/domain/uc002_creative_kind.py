@@ -17,6 +17,8 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then
 
+from src.core.format_resolver import registry_projects
+from src.core.schemas import FormatId
 from tests.bdd.steps.generic._creative_seeding import store_creative, store_package_creative
 from tests.bdd.steps.generic._table import comma_list
 from tests.bdd.steps.generic._table import rows as table_rows
@@ -27,7 +29,12 @@ from tests.bdd.steps.generic.given_media_buy import (
     accept_on_default_product,
 )
 from tests.e2e.webhook_capture_service import PEER_PREVIEW_TOOL
-from tests.factories.creative import CreativeAssignmentFactory
+from tests.factories.creative import (
+    DEFAULT_CREATIVE_AGENT_URL,
+    CreativeAssignmentFactory,
+    declared_format_spec,
+    served_format_spec,
+)
 from tests.factories.creative_asset import (
     DISPLAY_TAG_SLOT,
     AssetSpec,
@@ -386,6 +393,7 @@ def given_live_booked_buy(
         r"the buyer's creative \"(?P<creative_id>[^\"]+)\", (?P<status>approved|under review), "
         r'(?:a display_tag carrying the tag URL "(?P<tag_url>[^"]+)"'
         r'|a (?P<width>\d+)x(?P<height>\d+) image showing "(?P<image_url>[^"]+)"'
+        r'(?: in the reference format "(?P<unserved_format>[^"]+)", which the creative agent does not serve)?'
         r'|an html5 creative bundled by the buyer\'s bundle host, with backup image "(?P<backup_url>[^"]+)"), '
         r'is assigned to (?:packages? "(?P<package_ids>[^"]+)" of the live media buy|the media buy awaiting approval)$'
     )
@@ -398,6 +406,7 @@ def given_creative_assigned_to_buy(
     width: str | None,
     height: str | None,
     image_url: str | None,
+    unserved_format: str | None,
     backup_url: str | None,
     package_ids: str | None,
 ) -> None:
@@ -408,6 +417,11 @@ def given_creative_assigned_to_buy(
     the seller's approval of the creative, or of the buy, is what pushes it. An html5 bundle's
     zip is served by the buyer's bundle host (``serve_html5_bundle``), and its bytes are kept
     to compare with what the ad server receives.
+
+    An image in a reference format the creative agent does not serve was stored when the agent
+    still declared it as an image format, and the product still lists that reference. Neither
+    the agent's catalog nor the canonical mapping registry knows the id now, which the step
+    checks, so the scenario cannot pass on a format the seller can still resolve.
     """
     env = ctx["env"]
     if package_ids is not None:
@@ -424,8 +438,18 @@ def given_creative_assigned_to_buy(
         kind, assets = "html5", build_assets(*html5_bundle_specs(bundle_url, backup_url=backup_url))
     else:
         kind, assets = "image", _image_assets(int(str(width)), int(str(height)), str(image_url))
+    identity: dict[str, Any] = {"kind": kind}
+    if unserved_format is not None:
+        reference = FormatId(agent_url=DEFAULT_CREATIVE_AGENT_URL, id=unserved_format)
+        assert served_format_spec(DEFAULT_CREATIVE_AGENT_URL, unserved_format) is None, unserved_format
+        assert not registry_projects(reference), unserved_format
+        identity = {
+            "fmt": unserved_format,
+            "format_spec": declared_format_spec(DEFAULT_CREATIVE_AGENT_URL, unserved_format),
+        }
+        accept_on_default_product(ctx, unserved_format)
     creative = store_creative(
-        ctx, creative_id, assets, kind=kind, status="approved" if status == "approved" else "pending_review"
+        ctx, creative_id, assets, status="approved" if status == "approved" else "pending_review", **identity
     )
     for package_id in packages:
         CreativeAssignmentFactory(creative=creative, media_buy=media_buy, package_id=package_id)

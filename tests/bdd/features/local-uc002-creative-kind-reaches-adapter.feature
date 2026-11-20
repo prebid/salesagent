@@ -394,6 +394,29 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     Then the ad server's creative manager is handed creative "cr-fits-late" once and not creative "cr-unresolved-late"
     And the seller's approval of creative "cr-unresolved-late" tells the seller it was not pushed to the live media buy, with code "VALIDATION_ERROR", and the approval of creative "cr-fits-late" reports nothing
 
+  # One format resolution on every path (PR #2582): the retroactive push resolves a creative's
+  # legacy reference the way the create gate does, by one fetch from the agent the reference
+  # names. A reference that agent does not serve, and the canonical mapping registry does not
+  # project, has no canonical declaration to normalize to, so the push withholds the creative
+  # with VALIDATION_ERROR, the code the create gate answers the same problem with. The push
+  # used to look the reference up a second time and, when that missed too, traffic the
+  # creative from its raw data. The fitting creative is pushed once, which proves the path
+  # reached the upload. docs/creative/template-format-ids.mdx § Compatibility: "Normalize them
+  # to canonical declarations immediately and do all matching on the canonical shape. Do not
+  # author new template IDs or treat a deprecated `list_creative_formats` response as a source
+  # of truth."
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/template-format-ids.mdx
+  @T-UC-002-local-creative-kind-unserved-format-retroactive-push @extension @creative
+  Scenario: Approving a creative in a reference format its creative agent does not serve does not push it to the live buy
+    Given the product publishes an image format option accepting sizes "300x250"
+    And the buyer holds a live media buy booked at the ad server as order "order-live" with package "pkg-live"
+    And the buyer's creative "cr-fits-late", under review, a 300x250 image showing "https://cdn.example.com/fits-late.png", is assigned to package "pkg-live" of the live media buy
+    And the buyer's creative "cr-unserved-late", under review, a 300x250 image showing "https://cdn.example.com/unserved-late.png" in the reference format "retired_banner_v1", which the creative agent does not serve, is assigned to package "pkg-live" of the live media buy
+    When the seller approves creative "cr-fits-late"
+    And the seller approves creative "cr-unserved-late"
+    Then the ad server's creative manager is handed creative "cr-fits-late" once and not creative "cr-unserved-late"
+    And the seller's approval of creative "cr-unserved-late" tells the seller it was not pushed to the live media buy, with code "VALIDATION_ERROR", and the approval of creative "cr-fits-late" reports nothing
+
   # A creative on two packages of one buy is one creative at the ad server, associated with
   # each package's line item. The seller's approval of it pushes it to that buy once, carrying
   # both packages, each with the creative as its own package's product reads it.
