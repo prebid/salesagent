@@ -500,21 +500,24 @@ class GamSellerMixin:
 
         Each package is on *product*, or on the product id *package_products* names for it.
         """
-        from datetime import UTC, date, datetime
+        from datetime import UTC, date, datetime, timedelta
 
         from tests.factories import MediaBuyFactory
         from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
         from tests.factories.media_buy import request_package
 
         tenant, buyer = self.setup_default_data()
+        # A flight that has started and ends 30 days from this run: a buy in a serving status is
+        # delivering. Relative, not a far-future literal: GAM refuses a line item ending too far out
+        # (LineItemFlightDateError.END_DATE_TIME_TOO_LATE), and the seller books this flight there.
+        ends = datetime.now(UTC).replace(hour=23, minute=59, second=59, microsecond=0) + timedelta(days=30)
         return MediaBuyFactory(
             tenant=tenant,
             principal=principal or buyer,
-            # A flight that has started and does not end: a buy in a serving status is delivering.
             start_date=date(2025, 1, 1),
-            end_date=date(2099, 12, 31),
+            end_date=ends.date(),
             start_time=datetime(2025, 1, 1, tzinfo=UTC),
-            end_time=datetime(2099, 12, 31, 23, 59, 59, tzinfo=UTC),
+            end_time=ends,
             raw_request={
                 "packages": [
                     request_package(
