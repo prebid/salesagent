@@ -1917,12 +1917,21 @@ def problems_refusal(
 
     Every problem rides one error. ``core/error.json``'s rule for a mix -- "sellers MUST emit
     separate error objects or omit buyer_reason rather than select a misleading single class"
-    -- is about ``buyer_reason``, which this seller does not emit.
+    -- is about ``buyer_reason``, which this seller does not emit, and the pin states no rule
+    for the enclosing code. So a TERMINAL problem decides it: when any problem's code is
+    terminal in the code table (``CONFIGURATION_ERROR``), the class is chosen from the terminal
+    problems alone, since a correctable code would tell the buyer a fix to the request gets it
+    through, which that problem rules out. Ceiling: two different terminal codes among them
+    share no class here and fall to the generic one; no check classifies two today.
     """
     listed = list(problems) or None
-    codes = {problem.code for problem in problems}
+    terminal = [
+        problem for problem in problems if problem.code and CODE_TABLE[problem.code].recovery is Recovery.TERMINAL
+    ]
+    deciding = terminal or list(problems)
+    codes = {problem.code for problem in deciding}
     common = next(iter(codes)) if len(codes) == 1 else None
-    if not all(problem.subject_type == "creative" for problem in problems):
+    if not all(problem.subject_type == "creative" for problem in deciding):
         return AdCPValidationError(details=ValidationDetails(problems=listed, **values), field=field)
     if common == ErrorCode.CREATIVE_VALUE_NOT_ALLOWED:
         offending = problems[0]
