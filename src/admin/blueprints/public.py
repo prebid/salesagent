@@ -11,7 +11,7 @@ from src.admin.blueprints.core import get_tenant_from_hostname
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User
+from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User, UserRole
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.operator_errors import safe_error_message
@@ -261,7 +261,7 @@ def provision_tenant():
                 tenant_id=tenant_id,
                 email=user_email.lower(),
                 name=user_name,
-                role="admin",
+                role=UserRole.ADMIN,
                 is_active=True,
                 created_at=now,
                 last_login=now,

@@ -45,8 +45,6 @@ from src.core.domain_config import (
     get_session_cookie_domain,
 )
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

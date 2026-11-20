@@ -15,7 +15,7 @@ from src.admin.utils.operator_errors import refusal_error, safe_error_message
 from src.admin.utils.url_policy import json_error_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import Tenant, User
+from src.core.database.models import Tenant, User, UserRole
 from src.services.auth_config_service import (
     DiscoveryUrlRequired,
     disable_oidc,
@@ -71,7 +71,7 @@ def get_config(tenant_id: str):
 
 
 @oidc_bp.route("/tenant/<tenant_id>/config", methods=["POST"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=UserRole.ADMIN)
 def save_config(tenant_id: str):
     """Save OIDC configuration for a tenant.
 
@@ -137,7 +137,7 @@ def save_config(tenant_id: str):
 
 
 @oidc_bp.route("/tenant/<tenant_id>/enable", methods=["POST"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=UserRole.ADMIN)
 def enable(tenant_id: str):
     """Enable OIDC authentication for a tenant."""
     if enable_oidc(tenant_id):
@@ -161,7 +161,7 @@ def enable(tenant_id: str):
 
 
 @oidc_bp.route("/tenant/<tenant_id>/disable", methods=["POST"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access(api_mode=True, role=UserRole.ADMIN)
 def disable(tenant_id: str):
     """Disable OIDC authentication for a tenant."""
     disable_oidc(tenant_id)
@@ -266,7 +266,6 @@ def callback():
             token = oauth_client.authorize_access_token()
             logger.info("OAuth callback: token exchange successful")
         except Exception as e:
-            logger.error(f"OAuth token exchange failed: {e}", exc_info=True)
             flash(safe_error_message(e, "OAuth authentication failed"), "error")
             if is_test:
                 return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
@@ -338,7 +337,9 @@ def callback():
                     tenant_id=tenant_id,
                     email=email.lower(),
                     name=user_info.get("name", email),
-                    role="admin",  # RBAC not yet implemented
+                    # Anyone on an authorized domain is a tenant admin; invite users
+                    # individually (Users page) to give them a narrower role.
+                    role=UserRole.ADMIN,
                     is_active=True,
                     created_at=datetime.now(UTC),
                 )
