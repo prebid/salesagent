@@ -413,6 +413,7 @@ def pending_media_buy_with_approved_creative(pending_media_buy_with_package):
     from src.core.database.models import Principal as DBPrincipal
     from src.core.database.models import Tenant as DBTenant
     from tests.factories import CreativeAssignmentFactory, CreativeFactory, MediaBuyFactory
+    from tests.factories.creative_asset import make_legacy_image_assets
 
     data = pending_media_buy_with_package
     # The parent fixture bound every factory to its (committed) session; reuse it so the
@@ -433,7 +434,7 @@ def pending_media_buy_with_approved_creative(pending_media_buy_with_package):
         creative_id="cre_concept_enrichment",
         status="approved",
         format="display_300x250",
-        data={"assets": {"banner": {"url": "https://example.com/ad.jpg", "width": 300, "height": 250}}},
+        data={"assets": make_legacy_image_assets(url="https://example.com/ad.jpg")},
     )
     CreativeAssignmentFactory(creative=creative, media_buy=mb, package_id=data["package_id"])
 
