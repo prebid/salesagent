@@ -25,6 +25,10 @@ The [Quickstart guide](quickstart.md) gets the agent running locally in 5 minute
 - **[Products](user-guide/products.md)** — set up your product catalog
 - **[Advertisers](user-guide/advertisers.md)** — manage principals and API access
 - **[Creatives](user-guide/creatives.md)** — the creative approval workflow
+- **[Publishers and authorized properties](user-guide/publishers.md)** — add the publishers you sell for
+- **[Inventory and inventory profiles](user-guide/inventory.md)** — sync and browse ad server inventory
+- **[Media buys, approvals, and workflows](user-guide/media-buys.md)** — review, approve, and reject media buys
+- **[Tenant settings](user-guide/settings.md)** — the settings page, section by section
 
 ## Adapters
 
@@ -36,6 +40,7 @@ The [Quickstart guide](quickstart.md) gets the agent running locally in 5 minute
 
 - **[Security](security.md)** — authentication and security best practices
 - **[Encryption](encryption.md)** — API key encryption with Fernet
+- **[Tenant Management API and Inventory Sync API](operations/admin-apis.md)** — for operators: the two key-authenticated HTTP APIs of the Admin UI
 
 ## Message signing (RFC 9421)
 
@@ -49,6 +54,10 @@ The [Quickstart guide](quickstart.md) gets the agent running locally in 5 minute
 - **[Architecture](development/architecture.md)** — system design
 - **[Request lifecycle](development/request-lifecycle.md)** — how a request reaches business logic
 - **[Building a tool](development/building-tools.md)** — add or change an AdCP tool
+- **[Admin UI architecture](development/admin-ui-architecture.md)** — how the Admin UI is mounted, built, and laid out
+- **[Admin UI authentication and permissions](development/admin-ui-authentication.md)** — sign-in flows, session keys, and access checks
+- **[Add an Admin UI page](development/admin-ui-add-a-page.md)** — the view, the template, the test, and the checks
+- **[Admin UI route reference](development/admin-ui-routes.md)** — every route with its access check, generated from the code
 - **[Engineering standards](development/engineering-standards.md)** — the standards every change is held to
 - **[Troubleshooting](development/troubleshooting.md)** — common issues
 
@@ -84,14 +93,22 @@ docs/
 │   ├── sso-setup.md            # SSO configuration guide
 │   ├── products.md             # Product management
 │   ├── advertisers.md          # Principal management
-│   └── creatives.md            # Creative workflow
+│   ├── creatives.md            # Creative workflow
+│   ├── publishers.md           # Publishers and authorized properties
+│   ├── inventory.md            # Inventory sync and inventory profiles
+│   ├── media-buys.md           # Media buys, approvals, workflows
+│   └── settings.md             # Tenant settings
 ├── adapters/
 │   ├── README.md               # Adapter overview
 │   ├── mock/                   # Mock adapter docs
 │   └── gam/                    # GAM adapter docs
+├── operations/
+│   ├── admin-apis.md           # Tenant Management API and Inventory Sync API
+│   └── signing-key-runbook.md  # Signing key operations
 └── development/
     ├── README.md               # Development overview
     ├── architecture.md         # System design
+    ├── admin-ui-*.md           # Admin UI architecture, authentication, how-to, routes
     └── troubleshooting.md      # Common issues
 ```
 

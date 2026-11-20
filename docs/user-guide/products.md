@@ -69,8 +69,8 @@ Every product names the publisher properties it covers. You select them by tag o
 property ID.
 
 The form offers only the properties that your publishers authorize in their
-`adagents.json` files. When the list is empty, add the publisher under
-**Settings > Publishers** first.
+`adagents.json` files. When the list is empty, add the publisher first, as
+[Publishers and authorized properties](publishers.md) describes.
 
 ### Inventory on Google Ad Manager
 
@@ -121,7 +121,8 @@ refuses it.
 
 The sales agent uses a publisher's `adagents.json` for 24 hours after the last successful
 fetch. A scheduled job fetches every publisher's file again every 6 hours. To fetch the
-files immediately, click **Verify All** under **Settings > Publishers**.
+files immediately, click **Sync All Publishers** on the **Publishers & Properties** tab that
+[Publishers and authorized properties](publishers.md) describes.
 
 ## Sample products
 
