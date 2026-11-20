@@ -16,6 +16,7 @@ from typing import Any
 
 from flask import g, request, session
 
+from src.core.exceptions import AdCPSalesAgentError
 from src.core.operator_errors import best_effort
 
 #: What the audit row of an action that raised records. The exception itself is logged
@@ -145,8 +146,12 @@ def _get_or_create_audit_logger(tenant_id: str):
 _HANDLED_FAILURE_KEY = "_admin_action_failure"
 
 
-def record_admin_action_failure(error: object) -> None:
+def record_admin_action_failure(error: AdCPSalesAgentError | str) -> None:
     """Mark the current admin action as FAILED even though the handler returns normally.
+
+    The audit row (shown in the admin UI) records ``str(error)``: a typed error's text is
+    its code's ``CODE_TABLE`` sentence, and a ``str`` is the handler's own sentence. No
+    other exception is accepted, because its text is not ours to show.
 
     A handler that catches its own domain refusal, flashes it, and returns a
     redirect never raises — so :func:`log_admin_action` sees it return

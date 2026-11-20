@@ -7,6 +7,7 @@ from sqlalchemy import select
 from src.admin.utils.audit_decorator import _RAISED_MESSAGE, log_admin_action, record_admin_action_failure
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog, Tenant
+from src.core.exceptions import AdCPValidationError
 
 
 @pytest.mark.requires_db
@@ -362,10 +363,10 @@ def test_decorator_records_failure_when_the_handler_catches_and_returns(integrat
     @app.route("/test/<tenant_id>", methods=["POST"])
     @log_admin_action("handled_refusal")
     def test_route(tenant_id):
-        # Exactly the shape register_webhook uses: catch, signal, flash, return.
+        # Exactly the shape register_webhook uses: catch the gate's typed refusal, signal, flash, return.
         try:
-            raise ValueError("URL resolves to a restricted range.")
-        except ValueError as exc:
+            raise AdCPValidationError(internal_detail=ValueError("URL resolves to a restricted range."))
+        except AdCPValidationError as exc:
             record_admin_action_failure(exc)
             return "refused"
 
@@ -386,6 +387,8 @@ def test_decorator_records_failure_when_the_handler_catches_and_returns(integrat
         "a refused admin action was audited as SUCCESSFUL — the handler returned "
         "normally, so the decorator never saw an exception"
     )
-    assert "restricted range" in (audit_log.error_message or ""), (
-        f"the audit row must carry the refusal reason, got error_message={audit_log.error_message!r}"
+    # The row is shown in the admin UI: it carries the code's sentence, never the internal detail.
+    assert audit_log.error_message == AdCPValidationError().message, (
+        f"the audit row must carry the refusal's code sentence, got error_message={audit_log.error_message!r}"
     )
+    assert "restricted range" not in audit_log.error_message
