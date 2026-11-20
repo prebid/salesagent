@@ -30,6 +30,16 @@ def _step_uses(step: dict[str, Any]) -> str:
     return str(step.get("uses", ""))
 
 
+def _steps_using(job: dict[str, Any], prefix: str) -> list[dict[str, Any]]:
+    """Steps of *job* whose ``uses:`` starts with *prefix* (``owner/action@``)."""
+    return [step for step in _job_steps(job) if _step_uses(step).startswith(prefix)]
+
+
+def _step_inputs(job: dict[str, Any], prefix: str, key: str) -> list[Any]:
+    """The ``with: <key>`` input of each step of *job* using *prefix*, as written; ``""`` where it is absent."""
+    return [step.get("with", {}).get(key, "") for step in _steps_using(job, prefix)]
+
+
 def _job_uses_docker(job: dict[str, Any]) -> bool:
     if job.get("container") or job.get("services"):
         return True
@@ -57,7 +67,7 @@ def _job_uses_docker(job: dict[str, Any]) -> bool:
 
 
 def _harden_runner_steps(job: dict[str, Any]) -> list[dict[str, Any]]:
-    return [step for step in _job_steps(job) if _step_uses(step).startswith("step-security/harden-runner@")]
+    return _steps_using(job, "step-security/harden-runner@")
 
 
 def _assert_harden_runner_job(wf_name: str, job_name: str, job: dict[str, Any]) -> None:
@@ -76,16 +86,7 @@ def _assert_harden_runner_job(wf_name: str, job_name: str, job: dict[str, Any]) 
 
 
 _ATTEST = "actions/attest-build-provenance@"
-
-
-def _steps_using(job: dict[str, Any], prefix: str) -> list[dict[str, Any]]:
-    """Steps of *job* whose ``uses:`` starts with *prefix* (``owner/action@``)."""
-    return [step for step in _job_steps(job) if _step_uses(step).startswith(prefix)]
-
-
-def _attest_subjects(job: dict[str, Any]) -> list[str]:
-    """``subject-name`` of each attest-build-provenance step, as written in the workflow."""
-    return [str(step.get("with", {}).get("subject-name", "")) for step in _steps_using(job, _ATTEST)]
+_TRIVY = "aquasecurity/trivy-action@"
 
 
 def _resolve_env(env: dict[str, Any], value: str) -> str:
@@ -120,7 +121,7 @@ def _assert_sign_and_attest_job(job: dict[str, Any], workflow_env: dict[str, Any
         "sign-and-attest must guard empty image_digest before cosign sign"
     )
     env = {**(workflow_env or {}), **job.get("env", {})}
-    subjects = [_resolve_env(env, subject) for subject in _attest_subjects(job)]
+    subjects = [_resolve_env(env, subject) for subject in _step_inputs(job, _ATTEST, "subject-name")]
     assert len(subjects) >= 2, "sign-and-attest must attest ghcr.io and Docker Hub images"
     ghcr_attest = [subject for subject in subjects if "ghcr.io/" in subject]
     dockerhub_attest = [subject for subject in subjects if subject.startswith("docker.io/")]
@@ -144,22 +145,17 @@ def _assert_build_and_push_job(job: dict[str, Any]) -> None:
     assert sum("pre-push" in name.lower() for name in names) >= 2, (
         "build-and-push must Trivy-gate amd64 and arm64 before push"
     )
-    gate_steps = [
-        step
-        for step in steps
-        if _step_uses(step).startswith("aquasecurity/trivy-action@") and "pre-push" in (step.get("name") or "").lower()
-    ]
+    gate_steps = [step for step in _steps_using(job, _TRIVY) if "pre-push" in (step.get("name") or "").lower()]
     assert len(gate_steps) >= 2, "build-and-push missing per-arch pre-push Trivy steps"
-    for step in gate_steps:
-        assert step.get("with", {}).get("exit-code") == 1, f"pre-push Trivy step {step.get('name')} must exit-code: 1"
+    assert set(_step_inputs(job, _TRIVY, "exit-code")) == {1}, "every Trivy step in build-and-push must exit-code: 1"
     arm64_gate = [step for step in gate_steps if "arm64" in (step.get("name") or "").lower()]
     assert arm64_gate, "build-and-push missing arm64 pre-push Trivy gate"
     assert arm64_gate[0].get("env", {}).get("TRIVY_PLATFORM") == "linux/arm64", (
         "arm64 pre-push Trivy must set TRIVY_PLATFORM=linux/arm64"
     )
-    push_steps = _steps_using(job, "docker/build-push-action@")
-    assert len(push_steps) >= 3, "build-and-push must gate amd64, gate arm64, then push multi-arch"
-    assert push_steps[-1].get("with", {}).get("push") is True, "final build step must push to registry"
+    pushes = _step_inputs(job, "docker/build-push-action@", "push")
+    assert len(pushes) >= 3, "build-and-push must gate amd64, gate arm64, then push multi-arch"
+    assert pushes[-1] is True, "final build step must push to registry"
 
     d47_runs = [step.get("run") or "" for step in steps if "D47 gate" in (step.get("name") or "")]
     assert d47_runs, "build-and-push missing D47 gate step"
@@ -189,8 +185,7 @@ def test_image_publishing_workflows_harden_runner_per_job() -> None:
 @pytest.mark.arch_guard
 def test_release_workflow_supply_chain_wiring() -> None:
     """release-please.yml must gate before push, then sign/attest with registry auth."""
-    wf_path = repo_root() / _RELEASE_WORKFLOW
-    workflow = _load_workflow(wf_path)
+    workflow = _release_workflow()
     jobs = workflow.get("jobs", {})
     assert "build-and-push" in jobs
     assert _SIGN_ATTEST_JOB in jobs
@@ -203,7 +198,7 @@ def test_release_workflow_supply_chain_wiring() -> None:
     assert "image_tags" not in build_outputs, "build-and-push must not export image_tags (dropped as secret-bearing)"
     assert "image_digest" in build_outputs
 
-    text = wf_path.read_text(encoding="utf-8")
+    text = _release_workflow_text()
     assert "ghcr_image:" not in text
     assert "concurrency:" in text
     assert "provenance: mode=max" in text
@@ -211,6 +206,10 @@ def test_release_workflow_supply_chain_wiring() -> None:
 
 
 _RELEASE_WORKFLOW = ".github/workflows/release-please.yml"
+
+
+def _release_workflow_text() -> str:
+    return (repo_root() / _RELEASE_WORKFLOW).read_text(encoding="utf-8")
 
 
 def _release_workflow() -> dict[str, Any]:
@@ -314,8 +313,8 @@ exit 1
 """
 
 
-def _run_resolve_step(tmp_path: Path, **env: str) -> tuple[int, list[str], list[str]]:
-    """Run the digest step with stub gh and curl; return its exit code, its outputs, and the curl calls."""
+def _run_resolve_step(tmp_path: Path, **env: str) -> tuple[int, list[str], list[str], list[str]]:
+    """Run the digest step with stub gh and curl; return its exit code, its outputs, the curl calls, and its ERROR lines."""
     output, curl_log = tmp_path / "github_output", tmp_path / "curl.log"
     result = _run_release_step(
         tmp_path,
@@ -339,13 +338,14 @@ def _run_resolve_step(tmp_path: Path, **env: str) -> tuple[int, list[str], list[
             **env,
         },
     )
-    return result.returncode, _read_lines(output), _read_lines(curl_log)
+    errors = [line for line in (result.stdout + result.stderr).splitlines() if line.startswith("ERROR:")]
+    return result.returncode, _read_lines(output), _read_lines(curl_log), errors
 
 
 @pytest.mark.arch_guard
 def test_release_digest_on_push_is_the_built_digest(tmp_path: Path) -> None:
     """After a release build, the job signs the digest build-and-push pushed, without asking a registry."""
-    returncode, outputs, curl_calls = _run_resolve_step(tmp_path, EVENT_NAME="push", BUILD_DIGEST=_DIGEST)
+    returncode, outputs, curl_calls, _ = _run_resolve_step(tmp_path, EVENT_NAME="push", BUILD_DIGEST=_DIGEST)
     assert returncode == 0
     assert outputs == [f"digest={_DIGEST}"]
     assert curl_calls == []
@@ -354,7 +354,7 @@ def test_release_digest_on_push_is_the_built_digest(tmp_path: Path) -> None:
 @pytest.mark.arch_guard
 def test_release_digest_on_dispatch_is_the_released_tag_in_both_registries(tmp_path: Path) -> None:
     """A recovery run signs the digest that <image>:<version> names in both registries."""
-    returncode, outputs, curl_calls = _run_resolve_step(tmp_path, EVENT_NAME="workflow_dispatch", VERSION="3.0.1")
+    returncode, outputs, curl_calls, _ = _run_resolve_step(tmp_path, EVENT_NAME="workflow_dispatch", VERSION="3.0.1")
     assert returncode == 0
     assert outputs == [f"digest={_DIGEST}"]
     manifests = [call.split()[-1] for call in curl_calls if "/manifests/" in call]
@@ -366,12 +366,19 @@ def test_release_digest_on_dispatch_is_the_released_tag_in_both_registries(tmp_p
 
 @pytest.mark.arch_guard
 @pytest.mark.parametrize(
-    "env",
+    ("env", "error"),
     [
-        pytest.param({"EVENT_NAME": "push", "BUILD_DIGEST": ""}, id="push-without-digest"),
-        pytest.param({"EVENT_NAME": "workflow_dispatch", "VERSION": "3.0.2"}, id="no-such-release"),
+        pytest.param(
+            {"EVENT_NAME": "push", "BUILD_DIGEST": ""}, "ERROR: not an image digest: ''", id="push-without-digest"
+        ),
+        pytest.param(
+            {"EVENT_NAME": "workflow_dispatch", "VERSION": "3.0.2"},
+            "ERROR: no v3.0.2 release in org/repo",
+            id="no-such-release",
+        ),
         pytest.param(
             {"EVENT_NAME": "workflow_dispatch", "VERSION": "3.0.1", "STUB_DOCKERHUB_DIGEST": _OTHER_DIGEST},
+            f"ERROR: 3.0.1 is '{_DIGEST}' on ghcr.io and '{_OTHER_DIGEST}' on Docker Hub",
             id="registries-disagree",
         ),
         pytest.param(
@@ -381,16 +388,23 @@ def test_release_digest_on_dispatch_is_the_released_tag_in_both_registries(tmp_p
                 "STUB_GHCR_DIGEST": "",
                 "STUB_DOCKERHUB_DIGEST": "",
             },
+            "ERROR: 3.0.1 is '' on ghcr.io and '' on Docker Hub",
             id="tag-not-found",
         ),
-        pytest.param({"EVENT_NAME": "workflow_dispatch", "VERSION": "latest"}, id="not-a-version"),
+        # A release named `vlatest` exists, so only the format check refuses this input.
+        pytest.param(
+            {"EVENT_NAME": "workflow_dispatch", "VERSION": "latest", "STUB_RELEASE": "latest"},
+            "ERROR: not a release version: latest",
+            id="not-a-version",
+        ),
     ],
 )
-def test_release_digest_refuses_anything_but_a_release(tmp_path: Path, env: dict[str, str]) -> None:
+def test_release_digest_refuses_anything_but_a_release(tmp_path: Path, env: dict[str, str], error: str) -> None:
     """No digest is produced for a missing release, a tag the registries disagree on, or a malformed input."""
-    returncode, outputs, _ = _run_resolve_step(tmp_path, **env)
+    returncode, outputs, _, errors = _run_resolve_step(tmp_path, **env)
     assert returncode != 0
     assert outputs == []
+    assert errors == [error]
 
 
 @pytest.mark.arch_guard
@@ -401,16 +415,15 @@ def test_release_image_names_have_one_source() -> None:
     assert workflow.get("env", {}).get("DOCKERHUB_IMAGE") == "docker.io/${{ secrets.DOCKERHUB_USER }}/salesagent"
     names = ["${{ env.GHCR_IMAGE }}", "${{ env.DOCKERHUB_IMAGE }}"]
 
-    meta = _steps_using(workflow["jobs"]["build-and-push"], "docker/metadata-action@")
-    assert len(meta) == 1
-    assert str(meta[0].get("with", {}).get("images")).strip().splitlines() == names
+    meta_images = _step_inputs(workflow["jobs"]["build-and-push"], "docker/metadata-action@", "images")
+    assert len(meta_images) == 1
+    assert str(meta_images[0]).strip().splitlines() == names
     job = _release_sign_job()
     assert _release_step("sign").get("env", {}).get("IMAGES") == " ".join(names)
-    assert sorted(_attest_subjects(job)) == sorted(names)
-    scan_refs = [str(step.get("with", {}).get("image-ref")) for step in _steps_using(job, "aquasecurity/trivy-action@")]
-    assert scan_refs == ["${{ env.GHCR_IMAGE }}@${{ steps.digest.outputs.digest }}"]
+    assert sorted(_step_inputs(job, _ATTEST, "subject-name")) == sorted(names)
+    assert _step_inputs(job, _TRIVY, "image-ref") == ["${{ env.GHCR_IMAGE }}@${{ steps.digest.outputs.digest }}"]
 
-    text = (repo_root() / _RELEASE_WORKFLOW).read_text(encoding="utf-8")
+    text = _release_workflow_text()
     assert text.count("ghcr.io/${{ github.repository }}") == 1
     assert text.count("${{ secrets.DOCKERHUB_USER }}/salesagent") == 1
 
@@ -421,8 +434,7 @@ def test_release_sign_and_attest_signs_the_resolved_digest() -> None:
     job = _release_sign_job()
     resolved = "${{ steps.digest.outputs.digest }}"
     assert _release_step("sign").get("env", {}).get("DIGEST") == resolved
-    attest_digests = [step.get("with", {}).get("subject-digest") for step in _steps_using(job, _ATTEST)]
-    assert attest_digests == [resolved, resolved]
+    assert _step_inputs(job, _ATTEST, "subject-digest") == [resolved, resolved]
 
 
 @pytest.mark.arch_guard
@@ -579,12 +591,9 @@ def test_creative_agent_scan_uses_publish_output_ref() -> None:
     wf_path = repo_root() / ".github/workflows/publish-creative-agent.yml"
     jobs = _load_workflow(wf_path).get("jobs", {})
     publish_job = jobs.get("publish", {})
-    trivy_steps = [
-        step for step in _job_steps(publish_job) if _step_uses(step).startswith("aquasecurity/trivy-action@")
-    ]
-    assert trivy_steps, "publish-creative-agent missing Trivy scan"
-    image_ref = trivy_steps[0].get("with", {}).get("image-ref", "")
-    assert image_ref == "${{ steps.publish.outputs.ref }}", "Trivy must reference steps.publish.outputs.ref"
+    image_refs = _step_inputs(publish_job, _TRIVY, "image-ref")
+    assert image_refs, "publish-creative-agent missing Trivy scan"
+    assert image_refs[0] == "${{ steps.publish.outputs.ref }}", "Trivy must reference steps.publish.outputs.ref"
     assert "ca70dd1e2a6c" not in wf_path.read_text(encoding="utf-8"), (
         "publish-creative-agent must not hardcode ADCP pin in workflow"
     )
