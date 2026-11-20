@@ -156,14 +156,14 @@ def plan_gam_creative(
     """The GAM creative for *ctt* on line items taking *placeholder_sizes*, or why there is none.
 
     Size: the candidates are the declared ``sizes`` a placeholder takes, in the order declared,
-    plus the placeholders inside a declared ``size_ranges`` entry (every stated bound
+    or the placeholders inside a declared ``size_ranges`` entry (every stated bound
     inclusive); with neither declared, every placeholder. Placeholders are taken in the order
     given, which in production is :func:`placeholder_sizes`' canonical one. The first candidate
     is the creative's size. With more than
     one, ``lica_sizes`` is every candidate, the creative's own first: the association's sizes
     "override" ``Creative.size``, and listing its own keeps it served at that size whether GAM
-    adds them or replaces it. With one, the association states none. No candidate, or no
-    placeholder, is a refusal: there is no default size.
+    adds them or replaces it. With one, the association states none. No candidate is a
+    refusal: there is no default size.
     """
     representation = ctt.representation
     if gam_format_family(ctt.format_kind) != "display" or (
@@ -247,8 +247,6 @@ def _candidate_sizes(
     size, no creative the option accepts can serve on these line items.
     """
     placeholders = tuple(dict.fromkeys(placeholder_sizes))
-    if not placeholders:
-        return GamCreativeRefusal(ctt.creative_id, GamRefusalReason.NO_PLACEHOLDER)
     candidates = _placed(ctt.sizes, ctt.size_ranges, placeholders)
     if candidates:
         return candidates
@@ -266,12 +264,19 @@ def _candidate_sizes(
 def _placed(
     sizes: Sequence[TrafficSize], size_ranges: Sequence[TrafficSizeRange], placeholders: tuple[TrafficSize, ...]
 ) -> tuple[TrafficSize, ...]:
-    """The placeholders these sizes and bounds take, declared sizes first; with neither stated, every placeholder."""
-    if not sizes and not size_ranges:
-        return placeholders
-    declared = [size for size in sizes if size in placeholders]
-    in_range = [size for size in placeholders if any(_within(size, bounds) for bounds in size_ranges)]
-    return tuple(dict.fromkeys([*declared, *in_range]))
+    """The placeholders one size mode takes: the declared sizes a placeholder takes, in declared order;
+    else the placeholders inside the bounds; with neither stated, every placeholder.
+
+    One mode, never both: ``formats/canonical/display_tag.json``, ``image.json`` and ``html5.json``
+    reject a declaration combining them ("Exactly one of: (a) fixed ... (b) multi-size ... (c)
+    responsive ... (d) none"), and the reader takes a carrier's sizes from one declaration or from
+    the file's own size.
+    """
+    if sizes:
+        return tuple(size for size in sizes if size in placeholders)
+    if size_ranges:
+        return tuple(size for size in placeholders if any(_within(size, bounds) for bounds in size_ranges))
+    return placeholders
 
 
 def _within(size: TrafficSize, bounds: TrafficSizeRange) -> bool:
