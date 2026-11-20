@@ -15,9 +15,9 @@ converting a programming error into a plausible-looking answer is one defect wit
 surfaces.
 
 WHY ``KeyError`` IS THE INJECTED FAULT: it is the exception class of that recorded instance,
-and it is injected at ``parse_pricing_options_from_form``, whose call site guards only
-``ValueError`` -- so it reaches the outer handler the way a real programming error would,
-rather than being routed by a local ``except``.
+and it is injected at ``parse_pricing_options_from_form``, whose call site catches nothing
+-- so it reaches the admin error handler the way a real programming error would, rather than
+being routed by a local ``except``.
 
 WHY AN ADMIN TEST. The contract under test is the HTTP answer a Flask handler gives, which
 only a request can observe. No registry tool edits a product, so no BDD transport reaches it.
@@ -31,6 +31,7 @@ from unittest.mock import patch
 import pytest
 from werkzeug.exceptions import NotFound
 
+from src.core.operator_errors import FormIssue, InvalidFormInput
 from tests.factories import (
     PricingOptionFactory,
     ProductFactory,
@@ -74,10 +75,12 @@ def operator(editable_product):
         yield client
 
 
-def _post_edit(client, tenant_id):
-    return client.post(
-        f"/tenant/{tenant_id}/products/edit_me/edit", data=minimal_product_edit_form(), follow_redirects=False
-    )
+def _edit_path(tenant_id):
+    return f"/tenant/{tenant_id}/products/edit_me/edit"
+
+
+def _post_edit(client, tenant_id, headers=None):
+    return client.post(_edit_path(tenant_id), data=minimal_product_edit_form(), headers=headers, follow_redirects=False)
 
 
 def test_a_programming_error_is_not_answered_as_an_operator_mistake(operator, editable_product):
@@ -146,19 +149,25 @@ def test_the_create_handler_does_not_answer_a_programming_error_either(operator,
 
 
 def test_an_operator_input_error_still_flashes_and_redirects(operator, editable_product):
-    """The path that WAS correct stays correct: a ValueError is the operator's to fix.
+    """The path that WAS correct stays correct: a refused value is the operator's to fix.
 
-    ``parse_pricing_options_from_form`` raises ``ValueError`` for a malformed pricing block,
-    and its call site catches exactly that, flashes the message and redirects. Without this
-    assertion, narrowing the outer handler could turn every input mistake into a 500 and the
-    two tests above would still pass.
+    ``parse_pricing_options_from_form`` raises ``InvalidFormInput`` for a malformed pricing
+    block, and the admin error handler answers it: the edit page it came from, with the
+    refusal's ``MESSAGE`` and the issue's own text flashed. Without this assertion, narrowing
+    the outer handler could turn every input mistake into a 500 and the two tests above
+    would still pass.
     """
+    issue = FormIssue("rate_0", "rate must be a positive number")
+    edit_page = f"http://localhost{_edit_path(editable_product.tenant_id)}"
     with patch(
         "src.admin.blueprints.products.parse_pricing_options_from_form",
-        side_effect=ValueError("rate must be a positive number"),
+        side_effect=InvalidFormInput(issue),
     ):
-        response = _post_edit(operator, editable_product.tenant_id)
+        response = _post_edit(operator, editable_product.tenant_id, headers={"Referer": edit_page})
 
     assert response.status_code in (302, 303), (
         f"an operator input error answered {response.status_code} instead of redirecting with a message"
     )
+    with operator.session_transaction() as session:
+        flashed = [message for category, message in session.get("_flashes", []) if category == "error"]
+    assert flashed == [InvalidFormInput.MESSAGE, issue.text], f"the operator was shown {flashed}"

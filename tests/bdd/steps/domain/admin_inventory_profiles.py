@@ -512,7 +512,10 @@ def then_modal_answer_redirect_to_page(ctx: dict) -> None:
 def then_modal_answered_400(ctx: dict) -> None:
     response = ctx["admin_response"]
     assert response.status_code == 400, f"{response.status_code}: {response.data[:200]!r}"
-    assert "format_options" in response.get_json()["error"], response.get_json()
+    # The reason is the error itself, or, for a refused form (InvalidFormInput), its issues.
+    body = response.get_json()
+    reasons = [body["error"], *(issue["text"] for issue in body.get("issues", []))]
+    assert any("format_options" in reason for reason in reasons), body
 
 
 @then("the form is redirected")

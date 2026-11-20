@@ -18,13 +18,17 @@ services use it without loading the admin package. The Flask ``json_error``
 wrapper lives in ``src.admin.utils.operator_errors``.
 """
 
+import json
 import logging
 import secrets
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import ClassVar
+from typing import ClassVar, NamedTuple
 
+from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
+
+from src.core.errors.issues import issue_from_pydantic_error, pointer_for_pydantic_error
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +56,70 @@ class OperatorRefusal(Exception):
     def response_fields(self) -> dict[str, object]:
         """Keys a JSON answer carries beside ``error``, for a refusal whose caller reads one."""
         return {}
+
+    def details(self) -> tuple[str, ...]:
+        """Lines a browser is shown beside ``MESSAGE``; each is text this seller wrote."""
+        return ()
+
+
+class FormIssue(NamedTuple):
+    """One refused form field and what is wrong with it.
+
+    *text* is written by the validator that refused the field: a constant, or a template
+    filled with the operator's own submitted values and ids this seller owns. Never another
+    exception's text, which for a library error echoes input and internals.
+    """
+
+    field: str
+    text: str
+
+    @classmethod
+    def invalid_json(cls, field: str, error: json.JSONDecodeError) -> "FormIssue":
+        """*field* is not JSON: where the parser stopped, never the parser's own text."""
+        return cls(field, f"{field} is not valid JSON at line {error.lineno}, column {error.colno}")
+
+    @classmethod
+    def from_validation_error(cls, field: str, error: ValidationError, document: object) -> tuple["FormIssue", ...]:
+        """One issue per error pydantic found in *document*, the value submitted as *field*.
+
+        The location is the error's path through *document*; the sentence is the fixed one
+        ``issues[]`` derives from the JSON Schema keyword (:mod:`src.core.errors.issues`),
+        never pydantic's ``msg`` or ``input``. An error no keyword can name gets
+        ``UNNAMED_ERROR_SENTENCE``.
+        """
+        issues = []
+        for entry in error.errors():
+            path = pointer_for_pydantic_error(entry, document).field
+            location = field + (path if path.startswith("[") or not path else f".{path}")
+            named = issue_from_pydantic_error(entry, document)
+            issues.append(cls(field, f"{location}: {named.message if named else UNNAMED_ERROR_SENTENCE}"))
+        return tuple(issues)
+
+
+#: The sentence for a pydantic error that maps to no JSON Schema keyword (``value_error``
+#: and the like): the field is named, and the cause is not guessed at.
+UNNAMED_ERROR_SENTENCE = "This field is not accepted."
+
+
+class InvalidFormInput(OperatorRefusal):
+    """A form whose submitted values cannot be saved, with one :class:`FormIssue` per refused field.
+
+    Answered like any refusal: 400, ``MESSAGE``, and, for a JSON caller, ``issues``. A
+    browser is also shown each issue's text, because ``MESSAGE`` alone does not say which
+    value to change.
+    """
+
+    MESSAGE = "The form has values that cannot be saved"
+
+    def __init__(self, *issues: FormIssue) -> None:
+        self.issues = issues
+        super().__init__("; ".join(f"{issue.field}: {issue.text}" for issue in issues))
+
+    def response_fields(self) -> dict[str, object]:
+        return {"issues": [issue._asdict() for issue in self.issues]}
+
+    def details(self) -> tuple[str, ...]:
+        return tuple(issue.text for issue in self.issues)
 
 
 def safe_error_message(e: BaseException, context: str | None = None) -> str:

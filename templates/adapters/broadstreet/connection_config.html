@@ -105,7 +105,9 @@ function saveBroadstreetConfig() {
         if (data.success) {
             showNotification('Configuration saved successfully', 'success');
         } else {
-            showNotification('Failed to save: ' + (data.error || 'Unknown error'), 'error');
+            // A refused config names each refused field in `issues`.
+            const issues = (data.issues || []).map(issue => issue.text);
+            showNotification('Failed to save: ' + [data.error || 'Unknown error', ...issues].join(' '), 'error');
         }
     })
     .catch(error => {

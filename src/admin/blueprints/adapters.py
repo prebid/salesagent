@@ -12,6 +12,7 @@ from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Product
+from src.core.operator_errors import FormIssue, InvalidFormInput
 
 logger = logging.getLogger(__name__)
 
@@ -169,13 +170,9 @@ def save_adapter_config(tenant_id, **kwargs):
         try:
             validated_config = schemas.connection_config(**config_data)
         except ValidationError as e:
-            # Locations and messages only: pydantic's own text and the error dicts' "input"
-            # echo the submitted values, which can be credentials.
-            problems = [
-                {"loc": list(err["loc"]), "msg": err["msg"]}
-                for err in e.errors(include_url=False, include_input=False, include_context=False)
-            ]
-            return jsonify({"success": False, "error": "Validation error", "errors": problems}), 400
+            # Locations and fixed sentences only: pydantic's own text echoes the submitted
+            # values, which can be credentials.
+            raise InvalidFormInput(*FormIssue.from_validation_error("config", e, config_data)) from e
 
     # Use the validated model for DB write (JSONType + engine json_serializer
     # handle BaseModel serialization). Fall back to raw dict if no schema.

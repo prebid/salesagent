@@ -13,12 +13,14 @@ import json
 import logging
 import re
 from collections.abc import Sequence
+from typing import Any
 
 from flask import Blueprint, Flask, Response, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import func, select
 
 from src.admin.blueprints.products import (
     _format_labels,
+    _format_options_refusal,
     _parse_authored_format_options,
     _publisher_catalog,
     _refuse_unresolved_format_options,
@@ -48,6 +50,7 @@ from src.core.helpers.publisher_property_helpers import (
     selector_selection,
     tag_selection,
 )
+from src.core.operator_errors import FormIssue, InvalidFormInput
 from src.core.publisher_format_catalog import options_by_key, resolve_declarations
 
 logger = logging.getLogger(__name__)
@@ -78,9 +81,15 @@ def _generate_profile_id(name: str) -> str:
 _JSON_MODES = frozenset({"full", "all", "specific"})
 
 
-def _invalid_json_message(field: str, e: json.JSONDecodeError) -> str:
-    """Operator text for a form field that is not JSON: where it broke, not the parser's text."""
-    return f"Invalid {field} JSON (line {e.lineno}, column {e.colno})"
+def _parse_targeting_template(form_data: dict[str, str]) -> Any:
+    """The form's optional targeting template, parsed; ``None`` when the field is blank."""
+    raw = form_data.get("targeting_template", "").strip()
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise InvalidFormInput(FormIssue.invalid_json("targeting_template", e)) from e
 
 
 def _selectors_from_form(
@@ -108,7 +117,7 @@ def _selectors_from_form(
         try:
             return selector_selection(json.loads(raw) if raw else [], authorized, stored or [])
         except json.JSONDecodeError as e:
-            return [], _invalid_json_message("publisher properties", e)
+            return [], FormIssue.invalid_json("publisher_properties", e).text
     return id_selection(request.form.getlist("selected_property_ids"), authorized)
 
 
@@ -293,11 +302,7 @@ def add_inventory_profile(tenant_id: str):
             # author a new product from format_ids alone"); a legacy projection comes from
             # the declarations' v1_format_ref.
             catalog = _publisher_catalog(prop_session, tenant_id)
-            try:
-                format_options = _parse_authored_format_options(form_data.get("format_options"))
-            except ValueError as e:
-                flash(str(e), "error")
-                return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+            format_options = _parse_authored_format_options(form_data.get("format_options"))
             if not format_options:
                 flash("At least one canonical format declaration (format_options) is required", "error")
                 return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
@@ -307,21 +312,10 @@ def add_inventory_profile(tenant_id: str):
                 if error:
                     flash(error, "error")
                     return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-            try:
-                _refuse_unresolved_format_options(format_options, publisher_properties, catalog)
-            except ValueError as e:
-                flash(str(e), "error")
-                return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+            _refuse_unresolved_format_options(format_options, publisher_properties, catalog)
 
         # Parse targeting template (optional)
-        targeting_template = None
-        targeting_json = form_data.get("targeting_template", "").strip()
-        if targeting_json:
-            try:
-                targeting_template = json.loads(targeting_json)
-            except json.JSONDecodeError as e:
-                flash(_invalid_json_message("targeting template", e), "error")
-                return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+        targeting_template = _parse_targeting_template(form_data)
 
         # Create inventory profile
         with get_db_session() as session:
@@ -442,16 +436,9 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             # The canonical arm. An empty editor leaves the stored arms alone, so a
             # legacy-only profile stays editable; authoring declarations retires its
             # stored format_ids, which its linked products no longer read once the
-            # profile carries a canonical arm (``Product.format_contract``).
-            # Refused like the add form refuses it: flash and return to the form. Left to the
-            # handler's catch-all, the rolled-back profile rendered detached and answered 500.
-            try:
-                authored_format_options = _parse_authored_format_options(form_data.get("format_options"))
-            except ValueError as e:
-                flash(str(e), "error")
-                return redirect(
-                    url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
-                )
+            # profile carries a canonical arm (``Product.format_contract``). A refusal is
+            # answered by the admin error handler, and the session closes without a commit.
+            authored_format_options = _parse_authored_format_options(form_data.get("format_options"))
             if authored_format_options:
                 profile.format_options = authored_format_options
                 profile.format_ids = None
@@ -474,40 +461,14 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 )
 
             # A publisher-backed format option must resolve for the profile as saved.
-            try:
-                _refuse_unresolved_format_options(profile.format_options, profile.stored_publisher_properties, catalog)
-            except ValueError as e:
-                flash(str(e), "error")
-                return redirect(
-                    url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
-                )
+            _refuse_unresolved_format_options(profile.format_options, profile.stored_publisher_properties, catalog)
 
-            # Update targeting template
-            targeting_json = form_data.get("targeting_template", "").strip()
-            if targeting_json:
-                try:
-                    targeting_template = json.loads(targeting_json)
-                    profile.targeting_template = targeting_template
-                except json.JSONDecodeError as e:
-                    flash(_invalid_json_message("targeting template", e), "error")
-                    return redirect(
-                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
-                    )
-            else:
-                profile.targeting_template = None
+            profile.targeting_template = _parse_targeting_template(form_data)
 
             # The profile supplies its linked products' contract and publisher properties,
             # so each of them is held to the common-intersection rule as its own save is.
-            # Refused like the product form refuses it: flash and return to the form
-            # without committing, so nothing renders from a rolled-back row.
-            try:
-                for linked in profile.products:
-                    refuse_outside_common_intersection(linked)
-            except ValueError as e:
-                flash(str(e), "error")
-                return redirect(
-                    url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
-                )
+            for linked in profile.products:
+                refuse_outside_common_intersection(linked, _format_options_refusal)
 
             # Count products using this profile before commit
             product_count = (

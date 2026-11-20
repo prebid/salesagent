@@ -379,6 +379,9 @@ Then call: window.inventoryProfileEditor.open(profileData)
                     if (contentType.includes('application/json')) {
                         const error = await response.json();
                         message = error.error || error.message || message;
+                        // A refused form names each refused field in `issues`.
+                        const issues = (error.issues || []).map(issue => issue.text);
+                        if (issues.length) message = [message, ...issues].join('\n');
                     } else {
                         const text = await response.text();
                         if (text) {

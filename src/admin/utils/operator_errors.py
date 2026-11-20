@@ -9,7 +9,7 @@ for the few places that answer a caught failure themselves.
 """
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from urllib.parse import urlsplit
 
 from flask import Flask, Response, flash, jsonify, redirect, render_template, request
@@ -19,7 +19,7 @@ from werkzeug.exceptions import HTTPException
 from src.admin.utils.helpers import caller_reads_json
 from src.core.operator_errors import OperatorRefusal, safe_error_message
 
-__all__ = ["json_error", "register_error_handler", "safe_error_message"]
+__all__ = ["flash_refusal", "json_error", "register_error_handler", "safe_error_message"]
 
 logger = logging.getLogger(__name__)
 
@@ -61,18 +61,36 @@ def _same_site_referrer() -> str | None:
     return target
 
 
-def _answer(message: str, status: int, fields: Mapping[str, object]) -> ResponseReturnValue:
+def _flash_errors(lines: Iterable[str]) -> None:
+    for line in lines:
+        flash(line, "error")
+
+
+def flash_refusal(refusal: OperatorRefusal) -> None:
+    """Flash *refusal*'s ``MESSAGE`` and its details, for a route that redisplays its own form.
+
+    A route that can keep the operator's input by rendering the form again catches the
+    refusal for that alone; everything else is the error handler's answer.
+    """
+    _flash_errors((refusal.MESSAGE, *refusal.details()))
+
+
+def _answer(
+    message: str, status: int, fields: Mapping[str, object], details: Sequence[str] = ()
+) -> ResponseReturnValue:
     """*message* as JSON for API and fetch callers; for a browser, a flash on the page it came from.
 
     With no same-site page to go back to, the browser gets the error page. *fields* are the
-    JSON body's keys beside ``success`` and ``error``.
+    JSON body's keys beside ``success`` and ``error``; *details* are the lines a browser is
+    shown beside *message*.
     """
     if caller_reads_json():
         return jsonify({"success": False, "error": message, **fields}), status
     back = _same_site_referrer()
     if back is None:
+        _flash_errors(details)
         return render_template("error.html", error_message=message), status
-    flash(message, "error")
+    _flash_errors((message, *details))
     return redirect(back)
 
 
@@ -81,15 +99,15 @@ def handle_unexpected_error(e: Exception) -> ResponseReturnValue:
 
     ``HTTPException`` (``abort(404)`` and friends) passes through unchanged. An
     :class:`OperatorRefusal` is expected, so it is answered 400 with its class's
-    ``MESSAGE`` and logged at info. Anything else is logged with its traceback under a
-    reference by :func:`safe_error_message`, and the operator gets fixed text plus that
-    reference with 500.
+    ``MESSAGE`` (for a browser, beside its details) and logged at info. Anything else is
+    logged with its traceback under a reference by :func:`safe_error_message`, and the
+    operator gets fixed text plus that reference with 500.
     """
     if isinstance(e, HTTPException):
         return e
     if isinstance(e, OperatorRefusal):
         logger.info("Operator refusal: %s", e)
-        return _answer(e.MESSAGE, 400, e.response_fields())
+        return _answer(e.MESSAGE, 400, e.response_fields(), e.details())
     return _answer(safe_error_message(e), 500, {})
 
 

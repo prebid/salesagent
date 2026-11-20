@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.core.config import get_settings
+from src.core.operator_errors import InvalidFormInput
 from src.services.auth_config_service import DiscoveryUrlRequired
 from src.services.background_sync_service import SyncAlreadyRunning
 from src.services.gcp_service_account_service import ServiceAccountAlreadyExists, TenantAdapterConfigMissing
@@ -210,6 +211,8 @@ def test_adapter_config_validation_answers_locations_not_input(client):
 
     assert response.status_code == 400
     body = response.get_json()
-    assert body["error"] == "Validation error"
-    assert [e["loc"] for e in body["errors"]] == [["manual_approval_required"]]
+    assert body["error"] == InvalidFormInput.MESSAGE
+    assert body["issues"] == [
+        {"field": "config", "text": "config.manual_approval_required: This field is the wrong type."}
+    ]
     assert secret not in response.get_data(as_text=True)
