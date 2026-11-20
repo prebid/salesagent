@@ -333,7 +333,7 @@ def caller_reads_json() -> bool:
     ``application/json`` to ``text/html``. ``Accept: */*`` on its own (curl, most HTTP
     libraries) ties, and a tie is HTML, as it was before this predicate existed. The one
     answer to this question for the admin UI: the refusals in
-    :func:`require_tenant_access` and the inventory-profile form refusals both ask it.
+    :func:`require_tenant_access` and the admin error handler both ask it.
     """
     if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return True

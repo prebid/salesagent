@@ -15,7 +15,7 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
-from flask import Blueprint, Flask, Response, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, Flask, abort, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import func, select
 
 from src.admin.blueprints.products import (
@@ -24,10 +24,11 @@ from src.admin.blueprints.products import (
     _parse_authored_format_options,
     _publisher_catalog,
     _refuse_unresolved_format_options,
+    refuse_a_stale_selection,
+    selectors_or_refusal,
 )
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.helpers import caller_reads_json
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import (
@@ -40,7 +41,6 @@ from src.core.database.models import (
 from src.core.format_resolver import format_contract
 from src.core.format_satisfaction import refuse_outside_common_intersection
 from src.core.helpers.publisher_property_helpers import (
-    STALE_SELECTION_MESSAGE,
     RenderedSelection,
     SelectableProperty,
     id_selection,
@@ -50,7 +50,7 @@ from src.core.helpers.publisher_property_helpers import (
     selector_selection,
     tag_selection,
 )
-from src.core.operator_errors import FormIssue, InvalidFormInput
+from src.core.operator_errors import FormIssue, InvalidFormInput, OperatorRefusal
 from src.core.publisher_format_catalog import options_by_key, resolve_declarations
 
 logger = logging.getLogger(__name__)
@@ -94,7 +94,7 @@ def _parse_targeting_template(form_data: dict[str, str]) -> Any:
 
 def _selectors_from_form(
     authorized: Sequence[SelectableProperty], property_mode: str, stored: list | None = None
-) -> tuple[list[dict], str | None]:
+) -> list[dict]:
     """The form's property selection as selectors, one per publisher, in any of its modes.
 
     Each selector names the publisher whose *authorized* properties it matches, never the
@@ -107,18 +107,21 @@ def _selectors_from_form(
     (``selector_selection``), so every mode offers what it accepts; a selector the profile
     already *stored* is carried as it is.
 
-    Returns ``(selectors, None)``, or ``([], message)`` when the selection is unusable.
+    An unusable selection raises :class:`InvalidFormInput` naming the field it came from.
     """
     if property_mode == "tags":
         tags = [tag for tag in (t.strip().lower() for t in request.form.get("property_tags", "").split(",")) if tag]
-        return tag_selection(tags, authorized)
+        return selectors_or_refusal("property_tags", tag_selection(tags, authorized))
     if property_mode in _JSON_MODES:
         raw = request.form.get("publisher_properties", "").strip()
         try:
-            return selector_selection(json.loads(raw) if raw else [], authorized, stored or [])
+            document = json.loads(raw) if raw else []
         except json.JSONDecodeError as e:
-            return [], FormIssue.invalid_json("publisher_properties", e).text
-    return id_selection(request.form.getlist("selected_property_ids"), authorized)
+            raise InvalidFormInput(FormIssue.invalid_json("publisher_properties", e)) from e
+        return selectors_or_refusal("publisher_properties", selector_selection(document, authorized, stored or []))
+    return selectors_or_refusal(
+        "selected_property_ids", id_selection(request.form.getlist("selected_property_ids"), authorized)
+    )
 
 
 def _get_inventory_summary(inventory_config: dict) -> str:
@@ -193,24 +196,10 @@ def _get_property_summary(publisher_properties: list[dict]) -> str:
     return ", ".join(parts)
 
 
-@inventory_profiles_bp.after_request
-def _answer_a_fetch_refusal_as_json(response: Response) -> Response:
-    """A POST refused with a flash and a redirect is a 400 with the reason, to a fetch that asks.
+class InventoryProfileInUse(OperatorRefusal):
+    """A profile that products link cannot be deleted; the exception's text carries the count for the log."""
 
-    ``fetch`` follows the redirect to a 200 and reads it as success, and the redirected GET
-    consumes the flash, so the inventory page's modal reported a profile it had not created.
-    A browser form still gets the flash and the redirect.
-    """
-    refused = response.status_code in (301, 302, 303) and request.method == "POST"
-    if not refused or not caller_reads_json():
-        return response
-    errors = [message for category, message in session.get("_flashes", []) if category == "error"]
-    if not errors:
-        return response
-    session.pop("_flashes")
-    refusal = jsonify({"error": errors[0]})
-    refusal.status_code = 400
-    return refusal
+    MESSAGE = "Cannot delete an inventory profile that products use"
 
 
 @inventory_profiles_bp.route("/")
@@ -271,8 +260,7 @@ def add_inventory_profile(tenant_id: str):
         # Basic fields
         name = form_data.get("name", "").strip()
         if not name:
-            flash("Profile name is required", "error")
-            return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+            raise InvalidFormInput(FormIssue("name", "Profile name is required"))
 
         profile_id = form_data.get("profile_id", "").strip() or _generate_profile_id(name)
         description = form_data.get("description", "").strip()
@@ -292,10 +280,8 @@ def add_inventory_profile(tenant_id: str):
         property_mode = form_data.get("property_mode", "tags")
 
         with get_db_session() as prop_session:
-            tenant = prop_session.get(Tenant, tenant_id)
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+            if prop_session.get(Tenant, tenant_id) is None:
+                abort(404)
 
             # The profile's canonical format declarations: what every linked product is
             # announced from. format_ids is not authored here (core/product.json: "Do not
@@ -304,14 +290,10 @@ def add_inventory_profile(tenant_id: str):
             catalog = _publisher_catalog(prop_session, tenant_id)
             format_options = _parse_authored_format_options(form_data.get("format_options"))
             if not format_options:
-                flash("At least one canonical format declaration (format_options) is required", "error")
-                return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+                raise _format_options_refusal("At least one canonical format declaration (format_options) is required")
 
             if property_mode in {"tags", "property_ids"} | _JSON_MODES:
-                publisher_properties, error = _selectors_from_form(catalog.refs, property_mode)
-                if error:
-                    flash(error, "error")
-                    return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+                publisher_properties = _selectors_from_form(catalog.refs, property_mode)
             _refuse_unresolved_format_options(format_options, publisher_properties, catalog)
 
         # Parse targeting template (optional)
@@ -326,13 +308,6 @@ def add_inventory_profile(tenant_id: str):
                 InventoryProfile.tenant_id == tenant_id, InventoryProfile.profile_id == profile_id
             )
 
-            def already_exists():
-                existing = session.scalar(existing_profile_stmt)
-                if existing:
-                    flash(f"Inventory profile with ID '{profile_id}' already exists", "error")
-                    return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-                return None
-
             profile = InventoryProfile(
                 tenant_id=tenant_id,
                 profile_id=profile_id,
@@ -346,12 +321,14 @@ def add_inventory_profile(tenant_id: str):
 
             conflict = resolve_or_write(
                 session,
-                conflict=already_exists,
+                conflict=lambda: session.scalar(existing_profile_stmt),
                 write=lambda: session.add(profile),
                 constraint="uq_inventory_profile",
             )
             if conflict is not None:
-                return conflict
+                raise InvalidFormInput(
+                    FormIssue("profile_id", f"Inventory profile with ID '{profile_id}' already exists")
+                )
             session.commit()
 
             flash(f"Inventory profile '{name}' created successfully!", "success")
@@ -390,8 +367,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
         profile = session.get(InventoryProfile, profile_id)
 
         if not profile or profile.tenant_id != tenant_id:
-            flash("Inventory profile not found", "error")
-            return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
+            abort(404)
         catalog = _publisher_catalog(session, tenant_id)
 
         if request.method == "POST":
@@ -401,11 +377,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 request.form.getlist,
                 selection_digest(profile.stored_publisher_properties),
             )
-            if selection_save == "stale":
-                flash(STALE_SELECTION_MESSAGE.format(subject="profile"), "error")
-                return redirect(
-                    url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
-                )
+            refuse_a_stale_selection(selection_save, "profile")
 
             # Parse form data (same as add)
             form_data = request.form.to_dict()
@@ -426,12 +398,8 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             }
             profile.inventory_config = inventory_config
 
-            tenant_obj = session.get(Tenant, tenant_id)
-            if not tenant_obj:
-                flash("Tenant not found", "error")
-                return redirect(
-                    url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
-                )
+            if session.get(Tenant, tenant_id) is None:
+                abort(404)
 
             # The canonical arm. An empty editor leaves the stored arms alone, so a
             # legacy-only profile stays editable; authoring declarations retires its
@@ -448,14 +416,9 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
 
             # A save posting what the page rendered leaves the stored selection as it is.
             if property_mode in {"tags", "property_ids"} | _JSON_MODES and selection_save == "changed":
-                publisher_properties, error = _selectors_from_form(
+                publisher_properties = _selectors_from_form(
                     catalog.refs, property_mode, profile.stored_publisher_properties
                 )
-                if error:
-                    flash(error, "error")
-                    return redirect(
-                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
-                    )
                 profile.publisher_selections = InventoryProfilePublisherSelection.from_selectors(
                     tenant_id, publisher_properties
                 )
@@ -528,10 +491,7 @@ def delete_inventory_profile(tenant_id: str, profile_id: int):
         profile = session.get(InventoryProfile, profile_id)
 
         if not profile or profile.tenant_id != tenant_id:
-            if request.method == "DELETE":
-                return jsonify({"error": "Inventory profile not found"}), 404
-            flash("Inventory profile not found", "error")
-            return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
+            abort(404)
 
         # Check if any products use this profile
         product_count = (
@@ -540,11 +500,7 @@ def delete_inventory_profile(tenant_id: str, profile_id: int):
         )
 
         if product_count > 0:
-            error_msg = f"Cannot delete inventory profile - used by {product_count} product(s)"
-            if request.method == "DELETE":
-                return jsonify({"error": error_msg}), 400
-            flash(error_msg, "error")
-            return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
+            raise InventoryProfileInUse(f"Inventory profile {profile_id} is used by {product_count} product(s)")
 
         profile_name = profile.name
         session.delete(profile)

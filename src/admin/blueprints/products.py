@@ -782,19 +782,41 @@ _SELECTION_FIELDS = {
 }
 
 
+def selectors_or_refusal(field: str, selection: tuple[list[dict], str | None]) -> list[dict]:
+    """The selectors of a ``(selectors, refusal)`` validator answer, or :class:`InvalidFormInput` for *field*.
+
+    The selection validators (``publisher_property_helpers``) answer with their own refusal
+    text; the product and inventory-profile forms refuse with it here, in one place.
+    """
+    selectors, refusal = selection
+    if refusal:
+        raise InvalidFormInput(FormIssue(field, refusal))
+    return selectors
+
+
+def refuse_a_stale_selection(selection_save: str, subject: str) -> None:
+    """:class:`InvalidFormInput` when the selection the page rendered is no longer the stored one."""
+    if selection_save == "stale":
+        raise InvalidFormInput(FormIssue("rendered_selection", STALE_SELECTION_MESSAGE.format(subject=subject)))
+
+
 def _selectors_from_product_form(
     authorized: list[SelectableProperty] | tuple[SelectableProperty, ...], property_mode: str
-) -> tuple[list[dict], str | None]:
-    """The product form's ``tags`` (``domain:tag``) or ``property_ids`` choices as selectors, or why not.
+) -> list[dict]:
+    """The product form's ``tags`` (``domain:tag``) or ``property_ids`` choices as selectors.
 
     Checked against the *authorized* properties by the validators the inventory-profile form
     uses (``publisher_property_helpers.tag_selection`` / ``id_selection``), because a
-    selection no authorized property backs is one ``get_products`` would not sell.
+    selection no authorized property backs is one ``get_products`` would not sell; such a
+    selection raises :class:`InvalidFormInput`.
     """
-    choices = request.form.getlist(_SELECTION_FIELDS[property_mode])
+    if property_mode not in _SELECTION_FIELDS:
+        raise InvalidFormInput(FormIssue("property_mode", f"Unknown property selection mode: {property_mode}"))
+    field = _SELECTION_FIELDS[property_mode]
+    choices = request.form.getlist(field)
     if property_mode == "tags":
-        return publisher_tag_selection(choices, authorized)
-    return id_selection(choices, authorized)
+        return selectors_or_refusal(field, publisher_tag_selection(choices, authorized))
+    return selectors_or_refusal(field, id_selection(choices, authorized))
 
 
 def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data=None):
@@ -1198,14 +1220,7 @@ def add_product(tenant_id):
                             product_kwargs["product_card"]["manifest"]["pricing_currency"] = first_option.currency
 
                 # The publishers the product sells (AdCP requirement): every mode builds selectors.
-                property_mode = form_data.get("property_mode", "tags")
-                if property_mode not in _SELECTION_FIELDS:
-                    flash(f"Unknown property selection mode: {property_mode}", "error")
-                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-                selectors, refusal = _selectors_from_product_form(catalog.refs, property_mode)
-                if refusal:
-                    flash(refusal, "error")
-                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                selectors = _selectors_from_product_form(catalog.refs, form_data.get("property_mode", "tags"))
                 product_kwargs["publisher_selections"] = ProductPublisherSelection.from_selectors(tenant_id, selectors)
                 _refuse_unresolved_format_options(
                     (profile.format_options if profile else None) or format_options,
@@ -1402,9 +1417,7 @@ def edit_product(tenant_id, product_id):
             selection_save = judge_selection_save(
                 request.form.get("rendered_selection"), request.form.getlist, _selection_digest(product)
             )
-            if selection_save == "stale":
-                flash(STALE_SELECTION_MESSAGE.format(subject="product"), "error")
-                return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+            refuse_a_stale_selection(selection_save, "product")
 
             # Handle inventory profile association (optional)
 
@@ -1502,10 +1515,7 @@ def edit_product(tenant_id, product_id):
                 # what the page rendered: the boxes cannot express every stored selection, so
                 # writing them back would rewrite what the save never touched.
                 if request.form.getlist(_SELECTION_FIELDS[property_mode]):
-                    selectors, refusal = _selectors_from_product_form(catalog.refs, property_mode)
-                    if refusal:
-                        flash(refusal, "error")
-                        return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+                    selectors = _selectors_from_product_form(catalog.refs, property_mode)
                     # A stored choice this section shows no box for is kept (kept_choices).
                     kept = kept_choices(_own_selectors(product), catalog.refs, property_mode)
                     product.publisher_selections = ProductPublisherSelection.from_selectors(

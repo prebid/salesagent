@@ -409,8 +409,10 @@ def when_modal_creates_without_formats(ctx: dict, profile_id: str) -> None:
 
 @when(parsers.parse('a browser form submits a new profile "{profile_id}" declaring no format options'))
 def when_form_creates_without_formats(ctx: dict, profile_id: str) -> None:
+    """Posted as a browser posts it from the inventory page: the refusal goes back to that page."""
     env = ctx["env"]
-    _post(ctx, env.inventory_profiles_path("add"), _modal_form(env, profile_id, None), {"Accept": "text/html"})
+    headers = {"Accept": "text/html", "Referer": f"{env.client.origin}/tenant/{env.tenant_id}/inventory"}
+    _post(ctx, env.inventory_profiles_path("add"), _modal_form(env, profile_id, None), headers)
 
 
 @given(parsers.parse('the seller holds a verified property of publisher "{domain}"'))
