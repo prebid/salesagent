@@ -442,6 +442,18 @@ class TestEnsureEnv:
         assert result.ok is True
         assert result.skipped is True
 
+    def test_second_run_reads_the_env_the_first_run_wrote(self, tmp_path: Path):
+        """The real template carries non-ASCII comments; the write must use the encoding the read uses."""
+        env_path = tmp_path / ".env"
+
+        with patch.object(setup_dev, "ENV_FILE", env_path):
+            first = setup_dev.ensure_env()
+            second = setup_dev.ensure_env()
+
+        assert first.ok is True
+        assert "Created" in first.message
+        assert second.skipped is True
+
 
 # ---------------------------------------------------------------------------
 # ensure_pre_commit

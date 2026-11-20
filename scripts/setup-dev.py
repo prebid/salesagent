@@ -298,7 +298,7 @@ def ensure_env() -> StepResult:
     if existing == merged:
         return StepResult(name="env", ok=True, message=".env already up to date", skipped=True)
 
-    ENV_FILE.write_text(render_env_from_template(ENV_TEMPLATE, merged))
+    ENV_FILE.write_text(render_env_from_template(ENV_TEMPLATE, merged), encoding="utf-8")
     verb = "Updated" if existing else "Created"
     return StepResult(name="env", ok=True, message=f"{verb} .env ({len(merged)} keys)")
 
