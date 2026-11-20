@@ -71,22 +71,32 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     And Google Ad Manager created no creative
 
   # GAM is asked again when the assignment is sent again: that it holds the creative from
-  # another package does not place the creative on this one. The product takes 300x250 only
-  # (display_300x250_image) and the line item 728x90 only, so no creative the product accepts
-  # can serve on it: the buyer has no lever, the refusal of
-  # @T-UC-002-local-gam-creative-size-mismatch (F2, PR #2582 review). AdCP 3.2.7
-  # enums/error-code.json CONFIGURATION_ERROR: "the buyer cannot fix it, retrying will not
-  # help, and reporting to the seller's operator is the only remediation ... Recovery: terminal".
+  # another package does not place the creative on this one. The line item takes 728x90 only,
+  # and what the refusal is depends on what the package's product accepts (AdCP 3.2.7
+  # enums/error-code.json):
+  # - 300x250 only (display_300x250_image): no creative the product accepts can serve on the
+  #   line item, so the buyer has no lever, the refusal of
+  #   @T-UC-002-local-gam-creative-size-mismatch (F2, PR #2582 review). CONFIGURATION_ERROR:
+  #   "the buyer cannot fix it, retrying will not help, and reporting to the seller's operator
+  #   is the only remediation ... Recovery: terminal".
+  # - one image option accepting 300x250 and 728x90: a 728x90 image would serve, so the size
+  #   refusal carries its own code, CREATIVE_SIZE_MISMATCH: "The submitted creative dimensions
+  #   do not match any size accepted by the selected packages ... Recovery: correctable".
   @T-UC-006-local-gam-refused-assignment-resent
-  Scenario: A refused assignment of a creative GAM already holds is refused again when re-sent
-    Given the buyer holds a buy booked in Google Ad Manager as order "6000003" whose package "pkg-leader" is line item "5000003" accepting 728x90
+  Scenario Outline: A refused assignment of a creative GAM already holds is refused again when re-sent - <product accepts>
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000003" whose package "pkg-leader" is line item "5000003" accepting 728x90, on a product selling '<product formats>'
     And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
     When the Buyer Agent references library creative "cr-banner", without resending it, assigned to package "pkg-leader"
     Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
     When the Buyer Agent references library creative "cr-banner", without resending it, assigned to package "pkg-leader"
     Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
-    And creative "cr-banner" failed with error CONFIGURATION_ERROR and recovery terminal
+    And creative "cr-banner" failed with error <code> and recovery <recovery>
     And Google Ad Manager associated that creative with line items "5000001"
+
+    Examples:
+      | product accepts    | product formats                                                                                                                                                         | code                   | recovery    |
+      | 300x250 only       | {"format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]}                                                               | CONFIGURATION_ERROR    | terminal    |
+      | 300x250 and 728x90 | {"format_options": [{"format_kind": "image", "format_option_id": "image_multi", "params": {"sizes": [{"width": 300, "height": 250}, {"width": 728, "height": 90}]}}]} | CREATIVE_SIZE_MISMATCH | correctable |
 
   # A fault in GAM is not fixed by changing the request. core/error.json: correctable is "fix
   # the request and resend (invalid field, budget too low, creative rejected)", and transient is

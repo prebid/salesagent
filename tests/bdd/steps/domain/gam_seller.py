@@ -100,11 +100,8 @@ def given_seller_sells_through_gam(
     from tests.bdd.steps.generic.given_media_buy import scenario_products
 
     if "default_product" not in ctx:
-        from tests.factories import PricingOptionFactory, ProductFactory
-
         ensure_tenant_principal(ctx, ctx["env"])
-        ctx["default_product"] = ProductFactory(tenant=ctx["tenant"])
-        PricingOptionFactory(product=ctx["default_product"])
+        ctx["default_product"] = _priced_product(ctx)
     ctx["env"].sell_through_gam(
         trafficker_id=trafficker_id,
         advertiser_id=advertiser_id,
@@ -646,6 +643,15 @@ def given_creative_agent_serves_reference_formats(ctx: dict) -> None:
     ctx["env"].serve_reference_formats()
 
 
+def _priced_product(ctx: dict) -> Any:
+    """A product of the scenario's tenant with the default pricing option, as the route's seed builds one."""
+    from tests.factories import PricingOptionFactory, ProductFactory
+
+    product = ProductFactory(tenant=ctx["tenant"])
+    PricingOptionFactory(product=product)
+    return product
+
+
 _BOOKED_PACKAGE = r'package "([^"]+)" is line item "(\d+)" accepting (\d+)x(\d+)'
 
 
@@ -653,11 +659,20 @@ _BOOKED_PACKAGE = r'package "([^"]+)" is line item "(\d+)" accepting (\d+)x(\d+)
     parsers.re(
         r"(?P<owner>the buyer|another buyer of the seller) holds a buy booked in Google Ad Manager as "
         r'order "(?P<order_id>\d+)"'
-        rf'(?: in status "(?P<status>[^"]+)")? whose (?P<packages>{_BOOKED_PACKAGE}(?: and {_BOOKED_PACKAGE})*)$'
+        rf'(?: in status "(?P<status>[^"]+)")? whose (?P<packages>{_BOOKED_PACKAGE}(?: and {_BOOKED_PACKAGE})*)'
+        r"(?:, on a product selling '(?P<product_formats>[^']*)')?$"
     )
 )
-def given_buyer_holds_booked_buy(ctx: dict, owner: str, order_id: str, status: str | None, packages: str) -> None:
-    """A buy booked in GAM, the buyer's or a second GAM advertiser's: each package is its stated line item of the order."""
+def given_buyer_holds_booked_buy(
+    ctx: dict, owner: str, order_id: str, status: str | None, packages: str, product_formats: str | None
+) -> None:
+    """A buy booked in GAM, the buyer's or a second GAM advertiser's: each package is its stated line item of the order.
+
+    The buy is on the scenario's default product. The optional product clause books it on a
+    product of its own instead, which the seller sells through GAM with *product_formats*
+    (the seller Given's grammar: ``core/product.json``'s ``format_ids``/``format_options``),
+    so a scenario can state what the booked package's product accepts.
+    """
     from tests.factories import PrincipalFactory
 
     principal = None
@@ -666,6 +681,12 @@ def given_buyer_holds_booked_buy(ctx: dict, owner: str, order_id: str, status: s
         principal = PrincipalFactory(
             tenant=ctx["tenant"], platform_mappings={"google_ad_manager": {"advertiser_id": "3000002"}}
         )
+    product = ctx["default_product"]
+    if product_formats is not None:
+        product = _priced_product(ctx)
+        ctx["env"].sell_product_through_gam(
+            product, product_formats=json.loads(product_formats), implementation_config={}
+        )
     media_buy = ctx["env"].book_in_gam(
         principal=principal,
         line_items=[
@@ -673,7 +694,7 @@ def given_buyer_holds_booked_buy(ctx: dict, owner: str, order_id: str, status: s
             for package, line_item, width, height in re.findall(_BOOKED_PACKAGE, packages)
         ],
         order_id=order_id,
-        product=ctx["default_product"],
+        product=product,
         status=status or "pending_creatives",
     )
     if principal is None:
