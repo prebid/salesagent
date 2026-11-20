@@ -47,7 +47,6 @@ from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
     AdCPCreativeNotFoundError,
-    AdCPCreativeSizeMismatchError,
     AdCPGoneError,
     AdCPIdempotencyExpiredError,
     AdCPIdempotencyInFlightError,
@@ -773,14 +772,14 @@ def _validate_creatives_before_adapter_call(
         # or CREATIVE_VALIDATION_FAILED_GENERIC. Refused ahead of ``reasons`` because the
         # code differs: folding it into ``reasons`` would answer the buyer
         # VALIDATION_ERROR for a condition with its own recovery.
-        refusal = creative_refusal(verdict, field=PACKAGES_FIELD, creative_id=cid, product_id=product.product_id)
-        if isinstance(refusal, AdCPCreativeSizeMismatchError):
-            # enums/error-code.json CREATIVE_SIZE_MISMATCH: "Sellers SHOULD identify the
-            # offending creative in error.field", so its pointer names the creative where the
-            # request named it. The other creative codes carry no such clause and keep the
-            # packages pointer, with the creative in details.
-            creative_path = _creative_path(packages, index, cid)
-            refusal = creative_refusal(verdict, field=creative_path, creative_id=cid, product_id=product.product_id)
+        # One pointer for every creative refusal, the gate's and the adapter's pre-booking
+        # check's (_adapter_refusal): the creative where the request named it. core/error.json
+        # ``field`` is the "Field path associated with the error", and enums/error-code.json asks
+        # for this one where it says anything (CREATIVE_SIZE_MISMATCH "Sellers SHOULD identify
+        # the offending creative in error.field").
+        refusal = creative_refusal(
+            verdict, field=_creative_path(packages, index, cid), creative_id=cid, product_id=product.product_id
+        )
         refusals.append((cid, refusal))
     if refusals:
         # EVERY refused creative, in one error: a buy with two misfits names both, rather than
