@@ -1,82 +1,221 @@
 # Quickstart Guide
 
-Get the Prebid Sales Agent running locally in under 5 minutes.
+Run the Prebid Sales Agent locally, sign in to the Admin UI, and make a first call from an
+AI agent. Follow the steps in order: the Admin UI has no password login, so Google OAuth has
+to be configured before the first start.
 
 ## Prerequisites
 
-- Docker installed
-- (Optional) OAuth credentials from your identity provider for SSO
+- Docker with Docker Compose v2 (`docker compose version`)
+- Git
+- A Google account, and access to the [Google Cloud Console](https://console.cloud.google.com/)
+  to create an OAuth client. This is required: sign-in to the Admin UI is OAuth only.
 
-## Option 1: Docker Run (Quickest)
-
-If you have an existing PostgreSQL database:
-
-```bash
-# Generate an encryption key (run once, save the output)
-docker run --rm ghcr.io/prebid/salesagent:latest \
-  python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
-
-# Run the sales agent (replace YOUR_KEY with the generated key)
-docker run -p 8000:8000 \
-  -e DATABASE_URL=postgresql://user:pass@host:5432/dbname \
-  -e ENCRYPTION_KEY=YOUR_KEY \
-  ghcr.io/prebid/salesagent:latest
-
-# Verify it's running
-curl http://localhost:8000/health
-```
-
-## Option 2: Clone and Run (Recommended for Development)
+## 1. Clone the repository and create `.env`
 
 ```bash
-# Clone the repository
 git clone https://github.com/prebid/salesagent.git
 cd salesagent
+cp .env.template .env
+```
 
-# Start all services (includes PostgreSQL)
+`docker compose` reads `.env` from the repository root (the directory holding
+`docker-compose.yml`). Both the `db-init` and `adcp-server` services load it with
+`env_file`, so every setting below goes in `.env`.
+
+`docker-compose.yml` does not read `.env.secrets`. Only `docker-compose.multi-tenant.yml`
+loads that file, so with the default compose file, values written to `.env.secrets` never
+reach the application. `.env` is listed in `.gitignore`.
+
+## 2. Create a Google OAuth client
+
+In the Google Cloud Console:
+
+1. Select a project, or create one.
+2. Open **Google Auth Platform** (also listed as **APIs & Services > OAuth consent screen**)
+   and complete the setup if the project has none: an app name, a support email, and an
+   audience. With **Internal**, any account in your Google Workspace can sign in. With
+   **External** in the "Testing" publishing status, only accounts listed under
+   **Audience > Test users** can sign in, so add your own address there.
+3. Open **Clients** (also listed as **APIs & Services > Credentials**) and choose
+   **Create client** (or **Create credentials > OAuth client ID**).
+4. Set **Application type** to **Web application**.
+5. Under **Authorized redirect URIs**, add both of these:
+
+   ```
+   http://localhost:8000/auth/google/callback
+   http://localhost:8000/admin/auth/google/callback
+   ```
+
+   The application builds the redirect URI from the path the browser came in on. A sign-in
+   that starts under `http://localhost:8000/admin/` asks Google to return to
+   `/admin/auth/google/callback`; one that starts anywhere else asks for
+   `/auth/google/callback`. Registering both covers either entry point. If you change the
+   published port with `CONDUCTOR_PORT`, use that port in both URIs. No authorized
+   JavaScript origins are needed.
+6. Choose **Create**, then copy the **Client ID** and **Client secret**.
+
+The application requests the `openid email profile` scopes, which need no Google
+verification.
+
+## 3. Configure `.env`
+
+Add these lines to `.env`:
+
+```bash
+# The OAuth client from step 2
+GOOGLE_CLIENT_ID=1234567890-abc.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-...
+
+# The Google account(s) that may sign in as super admin (comma-separated)
+SUPER_ADMIN_EMAILS=you@example.com
+
+# Fernet key for secrets the application stores encrypted (SSO client secrets,
+# GAM credentials). Generate once and keep it: changing it makes stored secrets unreadable.
+ENCRYPTION_KEY=
+```
+
+Generate the `ENCRYPTION_KEY` value with either command:
+
+```bash
+# With OpenSSL (a Fernet key is 32 random bytes in URL-safe base64)
+openssl rand -base64 32 | tr '+/' '-_'
+
+# With Python and the cryptography package
+python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+```
+
+`.env.template` already sets `ADCP_SIGNING_KEY_PASSPHRASE_ENV` and `ADCP_SIGNING_DEV_KEK`,
+the development-only key encryption key for request-signing keys. Leave them for local use.
+
+Every variable is documented in
+[Environment variables](deployment/environment-variables.md#authentication). Instead of the
+Google variables you can use any OIDC provider with `OAUTH_DISCOVERY_URL`,
+`OAUTH_CLIENT_ID` and `OAUTH_CLIENT_SECRET`; the callback paths are the same.
+
+## 4. Start the stack
+
+```bash
 docker compose up -d
 
 # Verify it's running
 curl http://localhost:8000/health
 ```
 
-## First-Time Setup
+The first run builds the image, which takes several minutes. The `db-init` service runs the
+database migrations and then creates the `default` tenant; `adcp-server` starts after it
+finishes. If you edit `.env` later, run `docker compose up -d --force-recreate` so the
+containers pick up the change.
 
-1. Configure Google OAuth before you start: set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
-   and `SUPER_ADMIN_EMAILS` in `.env.secrets` (see
-   [Environment variables](deployment/environment-variables.md#authentication)). The login
-   page says so too, and offers nothing else.
-2. Open http://localhost:8000/admin
-3. Log in with Google as one of the `SUPER_ADMIN_EMAILS` addresses
-4. Configure per-tenant SSO in **Users & Access** (see [SSO Setup Guide](user-guide/sso-setup.md))
+## 5. Sign in
+
+1. Open http://localhost:8000/admin
+2. You are sent to Google. Sign in with an address listed in `SUPER_ADMIN_EMAILS`.
+3. You land on the dashboard of the `default` tenant.
+
+If the login page says "Authentication not configured" instead of sending you to Google,
+the OAuth variables did not reach the container; see
+[Troubleshooting](#the-login-page-offers-no-way-to-sign-in).
 
 There is no password login. A route that accepted a fixed password existed for local use and
 is gone: it was composed only when a test-mode flag was set, which made the app under test a
 different app from the deployed one, and it minted an operator session from a default
 password.
 
-## Local Testing with Demo Data
+## 6. Use the `default` tenant, or create one
 
-For local testing without a real ad server, you can create a demo tenant with mock data:
+The stack runs in single-tenant mode (`ADCP_MULTI_TENANT` unset), and `db-init` creates one
+tenant on first start:
+
+| Field | Value |
+|---|---|
+| Tenant id | `default` |
+| Name | Default Publisher |
+| Adapter | Mock (`ad_server=mock`), which simulates an ad server |
+| `virtual_host` | `localhost:8080` (the application's internal port) |
+| Authorized emails | the `SUPER_ADMIN_EMAILS` addresses at the time of creation |
+
+It starts with no currencies, products or advertisers. The tenant id is the path segment
+after `/tenant/` in the Admin UI address bar: the dashboard of this tenant is
+http://localhost:8000/tenant/default. The **Setup Checklist** on the dashboard lists what is
+still missing.
+
+To get an agent to the point of seeing products:
+
+1. **Products**: **Settings > Products > Create Product**. `get_products` returns an empty list
+   until the tenant has at least one product. See the [products guide](user-guide/products.md).
+2. **An advertiser and its token**: **Settings > Advertisers > Add Advertiser**. The API
+   token is shown once, in the confirmation message after you create the advertiser. The
+   server keeps only a hash, so copy it then. If you lose it, use the rotate button next to
+   the advertiser in the list; that issues a new token, shown once, and the old one stops
+   working. See the [advertisers guide](user-guide/advertisers.md).
+
+To configure SSO for the tenant (so that sign-in no longer depends on the deployment-wide
+OAuth client), use **Users & Access**; see the [SSO Setup Guide](user-guide/sso-setup.md).
+
+### Creating a tenant from the command line
+
+`scripts/setup/setup_tenant.py` creates a tenant with the mock adapter, USD/EUR/GBP
+currency limits and one advertiser, and prints that advertiser's token:
 
 ```bash
-# Add to .env for local testing only
-CREATE_DEMO_TENANT=true
+docker compose exec adcp-server python -m scripts.setup.setup_tenant "Demo Publisher" \
+  --tenant-id demo --virtual-host demo.localhost:8000
 ```
 
-With `CREATE_DEMO_TENANT=true`, the system creates:
-- A "Default Publisher" tenant with the **Mock adapter** (simulates an ad server)
-- Sample currencies (USD, EUR, GBP)
-- A test principal/advertiser for API access
-- Sample products
+`--virtual-host` is required and must be unique across tenants. An agent addresses this
+tenant with `x-adcp-tenant: demo`. The script creates no products; add them in the Admin UI
+as above. A super admin can open the new tenant at http://localhost:8000/tenant/demo.
 
-This demo data lets you explore features without configuring Google Ad Manager or another ad server.
+### About `CREATE_DEMO_TENANT`
 
-> **Production deployments**: Do NOT set `CREATE_DEMO_TENANT=true`. Start with the default empty tenant, configure your real ad server adapter, set up SSO, and create users through the Admin UI.
+`CREATE_DEMO_TENANT=true` has no effect on this stack. It is read only by `init_db()`, which
+the image's own entrypoint (`scripts/deploy/run_all_services.py`) runs and
+`docker-compose.yml` does not, and `init_db()` only builds the demo tenant when no `default`
+tenant exists yet. In single-tenant mode the migration step creates `default` first, so the
+demo tenant, its `ci-test-token` advertiser and the `CREATE_SAMPLE_DATA` products are never
+created.
+
+## 7. Connect an AI agent
+
+A request has to say which seller it is for. A tenant is served at the host it declares in
+`virtual_host`, but the `Host` a local agent sends is `localhost:8000`, which no tenant
+declares. So a local call names the tenant explicitly with the `x-adcp-tenant` header,
+carrying the tenant id. This is the same header the test suites use. A request naming no
+tenant is refused (see [Troubleshooting](#no-seller-is-served-at-the-address-this-request-named)).
+
+```python
+import asyncio
+
+from fastmcp.client import Client, StreamableHttpTransport
+
+transport = StreamableHttpTransport(
+    url="http://localhost:8000/mcp/",
+    headers={
+        # The advertiser token from step 6 (Settings > Advertisers)
+        "Authorization": "Bearer <advertiser-token>",
+        # The tenant id from the Admin UI address bar: /tenant/<tenant_id>
+        "x-adcp-tenant": "default",
+    },
+)
+
+
+async def main():
+    async with Client(transport=transport) as client:
+        result = await client.call_tool("get_products", {"brief": "video ads"})
+        print(result)
+
+
+asyncio.run(main())
+```
+
+The token is needed even for `get_products`: a tenant's **Brand Context Requirement**
+(**Settings > Policies & Workflows**) defaults to "Require Authentication". A2A clients send
+the same two headers to http://localhost:8000/a2a.
 
 ## Endpoints
 
-All services are accessible through port 8000:
+All services are reached through the nginx proxy on port 8000:
 
 | Service | URL | Names a tenant how |
 |---------|-----|---|
@@ -86,42 +225,34 @@ All services are accessible through port 8000:
 | A2A Server | http://localhost:8000/a2a | `x-adcp-tenant` header |
 | Health Check | http://localhost:8000/health | no tenant needed |
 
-## Connecting an AI Agent
+## Running the published image without compose
 
-Once running, AI agents can connect via MCP:
+If you already run PostgreSQL, the published image runs the whole application in one
+container. Put the same variables from step 3 in a file (or reuse `.env`) and add the
+database URL. From inside a container, `localhost` is the container itself, so a database on
+your machine is `host.docker.internal`:
 
-A request has to say WHICH seller it is for. Normally the `Host` does that — a tenant is
-served at the host it declares in `virtual_host` — but `localhost` declares no tenant, so a
-local call names the tenant explicitly with `x-adcp-tenant`. That is the same header the
-test suites use, so the local stack exercises the resolution path a deployment uses rather
-than a fourth one nothing else runs. A request naming no tenant is refused with
-`CONFIGURATION_ERROR`: the deployment cannot tell which seller it is for, and guessing one
-is how a caller ends up served another tenant's catalogue.
+```bash
+# In the env file, alongside the variables from step 3:
+# DATABASE_URL=postgresql://user:pass@host.docker.internal:5432/dbname
 
-```python
-from fastmcp.client import Client, StreamableHttpTransport
+docker run -p 8000:8000 --env-file .env --add-host host.docker.internal:host-gateway \
+  ghcr.io/prebid/salesagent:latest
 
-# Get your token from Admin UI > Advertisers > View Token
-transport = StreamableHttpTransport(
-    url="http://localhost:8000/mcp/",
-    headers={
-        "Authorization": "Bearer your-principal-token",
-        "x-adcp-tenant": "default",  # which seller; over loopback the Host names none
-    },
-)
-
-async with Client(transport=transport) as client:
-    # List available products
-    products = await client.call_tool("get_products", {"brief": "video ads"})
-
-    # Create a media buy
-    result = await client.call_tool("create_media_buy", {
-        "product_ids": ["prod_123"],
-        "budget": {"amount": 10000, "currency": "USD"},
-        "flight_start": "2024-02-01",
-        "flight_end": "2024-02-28"
-    })
+curl http://localhost:8000/health
 ```
+
+The image's entrypoint refuses to start without `DATABASE_URL` and `ENCRYPTION_KEY`. To
+generate the key with the image itself, override the entrypoint, because arguments after
+the image name are passed to the entrypoint script rather than run as a command:
+
+```bash
+docker run --rm --entrypoint python ghcr.io/prebid/salesagent:latest \
+  -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+```
+
+Register the same two redirect URIs; sign-in, the `default` tenant and the agent call work
+as described above.
 
 ## Common Commands
 
@@ -141,6 +272,47 @@ docker compose build && docker compose up -d
 
 ## Troubleshooting
 
+### The login page offers no way to sign in
+The page says "Authentication not configured" when the application has no OAuth client.
+Check that `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are in `.env` (not `.env.secrets`,
+which `docker-compose.yml` does not read), then recreate the containers and check that the
+value arrived:
+
+```bash
+docker compose up -d --force-recreate
+docker compose exec adcp-server printenv GOOGLE_CLIENT_ID
+```
+
+### Google shows "Error 400: redirect_uri_mismatch"
+The redirect URI the application sent is not registered on the OAuth client. The error
+details page shows the URI that was sent (for example
+`http://localhost:8000/auth/google/callback`). Add it to **Authorized redirect URIs** on the
+client exactly as shown, including the port, with `http` rather than `https`. Register both
+URIs from [step 2](#2-create-a-google-oauth-client). Changes in the console can take a few
+minutes to apply.
+
+### Google says the app is restricted to test users, or access is blocked
+The OAuth consent screen is External and in "Testing". Add your Google account under
+**Google Auth Platform > Audience > Test users**.
+
+### Signed in, but no tenant or "access denied"
+The address you signed in with is not in `SUPER_ADMIN_EMAILS`. Add it to `.env`, run
+`docker compose up -d --force-recreate`, and sign in again.
+
+### "No seller is served at the address this request named"
+The agent's request named no tenant. The error code is `TENANT_UNDEFINED` (HTTP 421);
+older releases returned `CONFIGURATION_ERROR` "no tenant context" for the same condition.
+
+- Send `x-adcp-tenant` with the tenant id (`default` unless you created another), or send a
+  `Host` matching the tenant's `virtual_host`.
+- Check that the tenant exists: `docker compose logs db-init` should show the migrations
+  completing and "Default tenant ready".
+
+### Agent calls are refused with `AUTH_MISSING`
+The call had no `Authorization: Bearer <token>` header. `get_products` needs one too unless
+the tenant's **Brand Context Requirement** is set to "Public". Create an advertiser to get a
+token (step 6).
+
 ### Container won't start on first run
 If containers don't start properly on the first attempt, this is usually a timing issue:
 ```bash
@@ -157,22 +329,13 @@ docker volume prune     # Clean up orphan volumes
 docker compose up -d
 ```
 
-### "No tenant context" error
-- Ensure the request names a tenant: either a `Host` header matching the tenant's
-  `virtual_host`, or an `x-adcp-tenant` header carrying the tenant id
-- Check that migrations ran: `docker compose logs db-init`
-
 ### Port 8000 already in use
+Set `CONDUCTOR_PORT` in `.env` to publish the proxy on another port (for example
+`CONDUCTOR_PORT=8010`), and use that port in the redirect URIs and agent URLs. To find what
+holds port 8000:
 ```bash
-lsof -i :8000
-kill -9 $(lsof -t -i:8000)
-```
-
-### "Authentication required by tenant policy" error
-This can happen if the default tenant wasn't created with public discovery enabled:
-```bash
-docker compose down -v  # Reset database
-docker compose up -d    # Recreate demo tenant
+lsof -i :8000                    # macOS / Linux
+netstat -ano | findstr :8000     # Windows
 ```
 
 ## Next Steps

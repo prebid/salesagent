@@ -28,12 +28,21 @@ For a minimal working deployment:
 ```bash
 # Required
 DATABASE_URL=postgresql://user:password@host:5432/adcp
+ENCRYPTION_KEY=your-fernet-key   # the image entrypoint refuses to start without it; see Security
+
+# Required for the first sign-in to the Admin UI (there is no password login)
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
+SUPER_ADMIN_EMAILS=you@example.com
 
 # Optional - AI features
 GEMINI_API_KEY=your-key
 ```
 
-Authentication is configured **per-tenant** in the Admin UI. No OAuth environment variables are required.
+Each tenant can then configure its own SSO in the Admin UI, but the first administrator
+signs in through the deployment's OAuth client (`GOOGLE_*`, or the generic `OAUTH_*`
+variables) and `SUPER_ADMIN_EMAILS`. The [quickstart](../quickstart.md) has the Google
+Cloud Console steps and the redirect URIs to register.
 
 ## Authentication
 
@@ -60,11 +69,6 @@ deployment's own OAuth (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` or the gener
 `OAUTH_*` variables) plus `SUPER_ADMIN_EMAILS`.
 
 Once SSO is configured and tested, disable Setup Mode from the Users & Access page. After that, only SSO authentication works for that tenant.
-
-### Legacy: global test mode
-
-| Variable | Default | Description |
-|----------|---------|-------------|
 
 ### Legacy: environment variable OAuth
 
