@@ -8,8 +8,8 @@ mutually exclusive, so the reader never produces both).
 """
 
 from src.adapters.gam.creative_plan import GamCreativePlan, GamCreativeRefusal, GamRefusalReason, plan_gam_creative
-from src.core.creative_to_traffic import CreativeToTraffic, TagUrlRepresentation, TrafficSize, TrafficSizeRange
 from src.core.exceptions import AdCPConfigurationError
+from src.core.traffic_carrier import CreativeToTraffic, TagUrlRepresentation, TrafficSize, TrafficSizeRange
 
 
 def _tag(**sizing: object) -> CreativeToTraffic:

@@ -34,12 +34,13 @@ from typing import Any
 
 import pytest
 
-from src.core.creative_to_traffic import MediaRepresentation, TrafficRefusal, TrafficSize, read_creative_to_traffic
+from src.core.creative_to_traffic import TrafficRefusal, read_creative_to_traffic
 from src.core.helpers.creative_helpers import (
     declared_slots,
     extract_click_url,
     extract_impression_tracker_url,
 )
+from src.core.traffic_carrier import MediaRepresentation, TrafficSize
 from tests.factories.format import _ASSET_CLASS_MAP, FormatFactory, make_asset
 
 #: Deliberately named by nothing but the format under test: no entry or alias of

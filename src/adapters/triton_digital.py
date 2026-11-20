@@ -22,6 +22,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas import *
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError, send
+from src.core.traffic_carrier import AdapterCreativeAsset
 
 
 class TritonDigital(AdServerAdapter):
@@ -223,11 +224,14 @@ class TritonDigital(AdServerAdapter):
         return self._build_create_success(media_buy_id, packages)
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Uploads creatives and associates them with flights in a campaign."""
         self.log(f"TritonDigital.add_creative_assets for media buy '{media_buy_id}'")
         created_asset_statuses = []
+        # FIXME(#2416): this adapter reads keys the core never sets (format, media_url), so
+        # it reads each asset as a plain dict until it reads the carrier.
+        unread_assets: list[dict[str, Any]] = [dict(asset) for asset in assets]
 
         try:
             # Extract campaign ID from media_buy_id (format: triton_{campaign_id})
@@ -240,7 +244,7 @@ class TritonDigital(AdServerAdapter):
             flights = flights_response.json()
             flight_map = {flight["name"]: flight["id"] for flight in flights}
 
-            for asset in assets:
+            for asset in unread_assets:
                 if asset["format"] != "audio":
                     self.log(
                         f"Skipping asset {asset['creative_id']} with unsupported format for Triton: {asset['format']}"
@@ -271,7 +275,7 @@ class TritonDigital(AdServerAdapter):
 
         except OutboundError as e:
             self.log(f"Error creating Triton Creative: {e}")
-            for asset in assets:
+            for asset in unread_assets:
                 if not any(s.creative_id == asset["creative_id"] for s in created_asset_statuses):
                     created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
 

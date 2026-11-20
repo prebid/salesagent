@@ -8,7 +8,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 if TYPE_CHECKING:
-    from src.core.creative_to_traffic import CreativeToTraffic
     from src.core.schemas import Snapshot, Targeting
 
 from adcp.types import BrandReference
@@ -39,6 +38,7 @@ from src.core.schemas import (
     PushNotificationConfig,
     ReportingPeriod,
 )
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativeToTraffic
 from src.core.validation_helpers import package_field_path
 
 # Return type of AdServerAdapter._require_config — preserves the caller's value type.
@@ -611,7 +611,7 @@ class AdServerAdapter(ABC):
 
     @abstractmethod
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Adds creative assets to an existing media buy."""
         pass

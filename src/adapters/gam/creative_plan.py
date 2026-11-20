@@ -34,7 +34,14 @@ from enum import StrEnum
 from typing import Any
 
 from src.adapters.gam.utils.macros import substitute_macros, substitute_tracking_urls
-from src.core.creative_to_traffic import (
+from src.core.errors.details import CapabilityRefusalDetails, ConfigurationDetails, CreativeManifestDetails
+from src.core.exceptions import (
+    AdCPCapabilityNotSupportedError,
+    AdCPConfigurationError,
+    AdCPCreativeSizeMismatchError,
+    AdCPSalesAgentError,
+)
+from src.core.traffic_carrier import (
     CreativeToTraffic,
     Html5BundleRepresentation,
     HtmlRepresentation,
@@ -44,13 +51,6 @@ from src.core.creative_to_traffic import (
     TagUrlRepresentation,
     TrafficSize,
     TrafficSizeRange,
-)
-from src.core.errors.details import CapabilityRefusalDetails, ConfigurationDetails, CreativeManifestDetails
-from src.core.exceptions import (
-    AdCPCapabilityNotSupportedError,
-    AdCPConfigurationError,
-    AdCPCreativeSizeMismatchError,
-    AdCPSalesAgentError,
 )
 
 #: Canonical kinds GAM is not handed through this plan. ``native_in_feed`` is a GAM native

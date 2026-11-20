@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -66,16 +66,15 @@ from src.core.helpers.brand_key import brand_key_parts
 from src.core.idempotency_canonical import canonical_request_hash
 from src.core.idempotency_policy import DEFAULT_REPLAY_TTL
 from src.core.idempotency_replay import raise_on_payload_conflict
-
-
-class PackageAssignmentDict(TypedDict):
-    """Internal dict format for passing package assignments to adapters."""
-
-    package_id: str
-    weight: int
-    # The package's line item in the ad server (package_config["platform_line_item_id"]),
-    # None for a package that has none.
-    platform_line_item_id: str | None
+from src.core.traffic_carrier import (
+    AdapterCreativeAsset,
+    CreativeToTraffic,
+    Html5BundleRepresentation,
+    HtmlRepresentation,
+    LegacyContentKeys,
+    MediaRepresentation,
+    PackageAssignmentDict,
+)
 
 
 def _package_assignments_by_creative(
@@ -104,14 +103,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from src.adapters.base import AdapterCreateRequest, AdapterCreateResult
 from src.core.audit_logger import get_audit_logger
 from src.core.context_manager import get_context_manager
-from src.core.creative_to_traffic import (
-    CreativeToTraffic,
-    Html5BundleRepresentation,
-    HtmlRepresentation,
-    MediaRepresentation,
-    TrafficRefusal,
-    read_creative_to_traffic,
-)
+from src.core.creative_to_traffic import TrafficRefusal, read_creative_to_traffic
 from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, PersistedMediaBuyStatus, Tenant
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import Product as ModelProduct
@@ -1251,8 +1243,8 @@ def _build_adapter_asset_from_creative(
     *,
     tenant_id: str,
     declarations: Sequence[Any],
-) -> tuple[dict[str, Any] | None, str | None]:
-    """Build the asset dict an adapter's ``add_creative_assets`` is handed for one creative.
+) -> tuple[AdapterCreativeAsset | None, str | None]:
+    """Build the asset an adapter's ``add_creative_assets`` is handed for one creative.
 
     Returns (asset, None) on success, (None, error_message) when the creative carries
     nothing an ad server can serve. Shared by the create path, execute_approved_media_buy
@@ -1348,7 +1340,7 @@ def _build_adapter_asset_from_creative(
         logger.warning(log_safe(f"[ASSET] {unidentified}"))
 
     first_size = carrier.sizes[0] if carrier.sizes else None
-    asset: dict[str, Any] = {
+    asset: AdapterCreativeAsset = {
         "creative_id": creative.creative_id,
         # The creative itself, as its one reader read it: an adapter reading this key
         # traffics the representation the buyer sent, at the sizes its format declares.
@@ -1371,7 +1363,7 @@ def _build_adapter_asset_from_creative(
     return asset, None
 
 
-def _legacy_content_keys(carrier: CreativeToTraffic) -> dict[str, Any]:
+def _legacy_content_keys(carrier: CreativeToTraffic) -> LegacyContentKeys:
     """The content keys an adapter that does not read ``asset["creative"]`` reads, as it read them before.
 
     A kind those adapters were handed no ``url`` for gets none: a third-party tag, inline or

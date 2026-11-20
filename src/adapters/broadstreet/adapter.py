@@ -73,6 +73,7 @@ from src.core.schemas import (
     Principal,
     ReportingPeriod,
 )
+from src.core.traffic_carrier import AdapterCreativeAsset
 
 logger = logging.getLogger(__name__)
 
@@ -462,7 +463,7 @@ class BroadstreetAdapter(AdServerAdapter):
         )
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets to a media buy.
 
@@ -480,8 +481,11 @@ class BroadstreetAdapter(AdServerAdapter):
 
         results: list[AssetStatus] = []
 
-        # Use advertisement manager to create ads
-        ad_infos = self.advertisement_manager.create_advertisements(media_buy_id, assets)
+        # Use advertisement manager to create ads.
+        # FIXME(#2416): the manager reads keys the core never sets (format, html, media_url), so
+        # it reads each asset as a plain dict until it reads the carrier.
+        unread_assets: list[dict[str, Any]] = [dict(asset) for asset in assets]
+        ad_infos = self.advertisement_manager.create_advertisements(media_buy_id, unread_assets)
 
         for info in ad_infos:
             if info.status == "failed":

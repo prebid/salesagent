@@ -7,15 +7,16 @@ for Google Ad Manager campaigns.
 
 import base64
 import logging
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
-from src.core.creative_to_traffic import CreativeToTraffic
 from src.core.errors.details import CreativeRejectionDetails
 from src.core.exceptions import AdCPCreativeRejectedError, AdCPInternalError, AdCPSalesAgentError
 from src.core.schemas import AssetStatus
 from src.core.security.outbound_http import CounterpartyUrl, send
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativeToTraffic, PackageAssignmentDict
 
 from ..creative_plan import GamCreativePlan, GamCreativeRefusal, placeholder_sizes, plan_gam_creative
 from ..utils.error_handler import map_gam_exception
@@ -24,7 +25,7 @@ from ..utils.validation import GAMValidator
 logger = logging.getLogger(__name__)
 
 
-def _line_item_weights(package_assignments: list[dict[str, Any]]) -> list[tuple[str, int]]:
+def _line_item_weights(package_assignments: Sequence[PackageAssignmentDict]) -> list[tuple[str, int]]:
     """(GAM line item id, weight) for each of an asset's package assignments.
 
     The line item id is the seller's own package -> line item mapping: the adapter
@@ -46,7 +47,7 @@ def _line_item_weights(package_assignments: list[dict[str, Any]]) -> list[tuple[
 
 
 def _placement_targeting_name(
-    asset: dict[str, Any], placement_targeting_map: dict[str, str] | None
+    asset: Mapping[str, Any], placement_targeting_map: dict[str, str] | None
 ) -> tuple[str | None, str | None]:
     """(targetingName, the placement id it is for) of an asset's creative-level placement targeting (adcp#208)."""
     assignment_placement_ids = asset.get("placement_ids", [])
@@ -85,7 +86,7 @@ class GAMCreativesManager:
     def add_creative_assets(
         self,
         media_buy_id: str,
-        assets: list[dict[str, Any]],
+        assets: list[AdapterCreativeAsset],
         today: datetime,
         placement_targeting_map: dict[str, str] | None = None,
     ) -> list[AssetStatus]:
@@ -158,16 +159,19 @@ class GAMCreativesManager:
             # sniffing, no 1x1 wildcard, no size default.
             ctt: CreativeToTraffic | None = asset.get("creative")
             creative_type = "planned"
+            # An asset with no carrier, which AdapterCreativeAsset rules out, reaches the legacy
+            # helpers as the plain dict they read.
+            legacy_asset: dict[str, Any] = dict(asset)
             if ctt is None:
-                validation_status = self._legacy_validation_failure(asset, creative_placeholders)
+                validation_status = self._legacy_validation_failure(legacy_asset, creative_placeholders)
                 if validation_status is not None:
                     created_asset_statuses.append(validation_status)
                     continue
-                creative_type = self._legacy_creative_type(asset)
+                creative_type = self._legacy_creative_type(legacy_asset)
                 if creative_type == "vast":
                     # VAST is handled at line item level, not creative level
                     logger.info(f"VAST creative {asset['creative_id']} - configuring at line item level")
-                    self._configure_vast_for_line_items(media_buy_id, asset)
+                    self._configure_vast_for_line_items(media_buy_id, legacy_asset)
                     created_asset_statuses.append(_approved(asset["creative_id"]))
                     continue
 
@@ -183,7 +187,7 @@ class GAMCreativesManager:
                     creative = (
                         self._planned_creative(asset, plan)
                         if plan is not None
-                        else self._create_gam_creative(asset, creative_type, asset_placeholders)
+                        else self._create_gam_creative(legacy_asset, creative_type, asset_placeholders)
                     )
                     if not creative:
                         logger.warning(
@@ -270,7 +274,7 @@ class GAMCreativesManager:
             raise plan.error()
         return plan
 
-    def _planned_creative(self, asset: dict[str, Any], plan: GamCreativePlan) -> dict[str, Any]:
+    def _planned_creative(self, asset: AdapterCreativeAsset, plan: GamCreativePlan) -> dict[str, Any]:
         """The planned GAM creative, with the advertiser and name this manager owns, and an html5 bundle's bytes.
 
         The bundle is fetched from the buyer's host through the egress seam. The URL is the
@@ -379,7 +383,9 @@ class GAMCreativesManager:
         line_items = getattr(response, "results", [])
         return {str(item["id"]): getattr(item, "creativePlaceholders", []) for item in line_items}
 
-    def _update_line_items_for_weighted_creatives(self, assets: list[dict[str, Any]], line_item_service) -> None:
+    def _update_line_items_for_weighted_creatives(
+        self, assets: Sequence[AdapterCreativeAsset], line_item_service
+    ) -> None:
         """Update line items to use MANUAL rotation if creatives have non-default weights.
 
         The spec supports creative rotation weights. When weights differ from the default (100),
@@ -971,7 +977,7 @@ class GAMCreativesManager:
     def _associate_creative_with_line_items(
         self,
         gam_creative_id: str,
-        asset: dict[str, Any],
+        asset: AdapterCreativeAsset,
         lica_service,
         placement_targeting_map: dict[str, str] | None = None,
         lica_sizes: dict[str, list[dict[str, int]]] | None = None,

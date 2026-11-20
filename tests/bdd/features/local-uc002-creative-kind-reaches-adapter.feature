@@ -93,8 +93,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     Then the response should succeed
     And the ad server receives creative "cr-legacy-tag" of kind "display_tag" as the ad tag "https://ads.example-adserver.com/legacy?cb=%%CACHEBUSTER%%"
 
-  # F8(b) (PR #2582 review): the same url asset with no url_type is invoked as an ad request
-  # today, because it sits in the kind's tag_url slot. The pin rules that fallback out. AdCP
+  # F8(b) (PR #2582 review): the same url asset with no url_type is not invoked as an ad request
+  # for sitting in the kind's tag_url slot. The pin rules that fallback out. AdCP
   # 3.2.7 core/assets/url-asset.json: "third_party_tracker and display ad requests have no safe
   # fallback. When neither `url_type` nor a format-side role is available, receivers MUST NOT
   # silently pick a mechanism." docs/creative/asset-types.mdx:203: "Display ad-request URLs also
@@ -165,8 +165,8 @@ Feature: The ad server receives each creative as its canonical kind and the repr
     Then the response should succeed
     And the ad server receives creative "cr-bundle" of kind "html5" as the html5 bundle "https://cdn.example.com/banner-300x250.zip" with backup image "https://cdn.example.com/banner-backup.png"
 
-  # F7 (PR #2582 review): the reader indexes the stored asset by key, so a zip asset missing its
-  # `url` raises inside the gate and the buyer is answered an internal error. AdCP 3.2.7
+  # F7 (PR #2582 review): a zip asset missing its `url` must not raise inside the gate and
+  # answer the buyer an internal error. AdCP 3.2.7
   # core/assets/zip-asset.json requires `url`; a creative whose bundle names none carries
   # nothing an ad server can serve, which the create gate answers VALIDATION_ERROR (enums/
   # error-code.json: "Request contains invalid field values or violates business rules beyond

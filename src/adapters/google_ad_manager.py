@@ -54,7 +54,6 @@ from src.adapters.gam.pricing_compatibility import PricingCompatibility
 from src.adapters.gam_data_freshness import GAMDataFreshnessValidator
 from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.core.audit_logger import AuditLogger
-from src.core.creative_to_traffic import CreativeToTraffic
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.details import (
     AdapterFailureDetails,
@@ -88,6 +87,7 @@ from src.core.schemas import (
     MediaPackage,
     ReportingPeriod,
 )
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativeToTraffic
 from src.services.ai.config import SellerAIConfig
 
 # Set up logger
@@ -842,7 +842,7 @@ class GoogleAdManager(AdServerAdapter):
         return self.orders_manager.get_advertisers(search_query=search_query, limit=limit, fetch_all=fetch_all)
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Create and associate creatives with line items (delegated to creatives manager)."""
 

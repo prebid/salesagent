@@ -24,16 +24,10 @@ from typing import Any
 
 import pytest
 
-from src.core.creative_to_traffic import (
-    CreativeToTraffic,
-    MediaRepresentation,
-    TrafficRefusal,
-    TrafficRefusalReason,
-    TrafficSize,
-    read_creative_to_traffic,
-)
+from src.core.creative_to_traffic import TrafficRefusal, TrafficRefusalReason, read_creative_to_traffic
 from src.core.format_satisfaction import canonical_slot_asset_ids
 from src.core.helpers.creative_helpers import SIZED_ASSET_TYPES
+from src.core.traffic_carrier import CreativeToTraffic, MediaRepresentation, TrafficSize
 
 AUDIO_URL = "https://cdn.example.com/spot.mp3"
 IMAGE_URL = "https://cdn.example.com/banner.png"

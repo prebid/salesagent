@@ -1,19 +1,10 @@
-"""What core hands an ad server adapter to traffic one creative, read once from the stored row.
+"""The one reader of a stored creative for trafficking: ``Creative.data`` in, the carrier out.
 
-RFC #2529 section 3: "``CreativeToTraffic`` carries the canonical kind and its representation as
-the pinned spec defines it ... Core never infers a kind from a URL or defaults one, and never
-treats a preview page as serving content." The advertiser is not carried yet: it still comes
-from the principal (#2555).
-
-The representation is the asset the buyer sent, named in the spec's own words (AdCP 3.2.7):
-
-* ``core/assets/display-tag-asset.json``: "``delivery_type`` distinguishes a single ad-request
-  URL, byte-preserved inline markup, and a paired redirect whose ad-request and click-through
-  URLs MUST travel together." Its inline ``markup``: "Receivers MUST preserve its bytes".
-* ``docs/creative/channels/display.mdx``: a ``tag_url`` is "One ``url`` asset with
-  ``url_type: "ad_request"``, or a ``display_tag`` asset with ``delivery_type: "tag_url"``".
-* ``core/assets/zip-asset.json``: an HTML5 bundle, which "Receivers unpack ... and serve".
-* ``core/assets/html-asset.json``: "Inline HTML content asset", required ``content`` only.
+The carrier, its representations and its sizes live in the leaf ``src/core/traffic_carrier.py``,
+which the adapters import too. Each asset the reader serves from is parsed through the pinned
+asset union (``adcp.types.AssetVariant``) first, so an asset missing a member its schema
+requires, such as a zip with no ``url`` (``core/assets/zip-asset.json`` requires
+``["asset_type", "url"]``), carries nothing an adapter can serve.
 
 Which one a creative carries is read off the asset's own ``asset_type`` (and, for a URL, the
 url-asset ladder), never off the kind alone: the reference creative agent declares its
@@ -31,13 +22,16 @@ any size its inventory takes.
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Annotated, Any, Literal
+from typing import Any
 
-from adcp.types.domains.core.assets.display_tag_asset import MarkupType as LibraryMarkupType
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from adcp.types import AssetVariant as LibraryAssetVariant
+from adcp.types.domains.core.assets.asset_union import DisplayTagAsset as LibraryDisplayTagAsset
+from adcp.types.domains.core.assets.asset_union import HtmlAsset as LibraryHtmlAsset
+from adcp.types.domains.core.assets.asset_union import UrlAsset as LibraryUrlAsset
+from adcp.types.domains.core.assets.asset_union import ZipAsset as LibraryZipAsset
+from pydantic import TypeAdapter, ValidationError
 
 from src.core.format_satisfaction import (
-    canonical_slot_asset_ids,
     declaration_slot_asset_ids,
     declared_params,
     declared_slots_by_kind,
@@ -48,116 +42,26 @@ from src.core.helpers.creative_helpers import (
     extract_impression_tracker_url,
     url_asset_identification,
 )
-
-_FROZEN = ConfigDict(frozen=True, extra="forbid")
-
-MediaType = Literal["image", "video", "audio"]
+from src.core.traffic_carrier import (
+    CreativeToTraffic,
+    Html5BundleRepresentation,
+    HtmlRepresentation,
+    InlineMarkupRepresentation,
+    MediaRepresentation,
+    MediaType,
+    PairedRedirectRepresentation,
+    Representation,
+    TagUrlRepresentation,
+    TrafficSize,
+    TrafficSizeRange,
+)
 
 #: The media types, in the order an option's declared slots are asked for one.
 _MEDIA_TYPES: dict[str, MediaType] = {"image": "image", "video": "video", "audio": "audio"}
 
-
-class TrafficSize(BaseModel):
-    """One width and height, in pixels, the creative may be trafficked at."""
-
-    model_config = _FROZEN
-
-    width: int
-    height: int
-
-
-class TrafficSizeRange(BaseModel):
-    """A responsive option's accepted bounds, in pixels. An absent bound does not constrain."""
-
-    model_config = _FROZEN
-
-    min_width: int | None = None
-    max_width: int | None = None
-    min_height: int | None = None
-    max_height: int | None = None
-
-
-class MediaRepresentation(BaseModel):
-    """A hosted image, video or audio file, served as the file."""
-
-    model_config = _FROZEN
-
-    type: Literal["media"] = "media"
-    asset_type: MediaType
-    url: str
-
-
-class HtmlRepresentation(BaseModel):
-    """Inline HTML (``core/assets/html-asset.json``), served as its ``content``."""
-
-    model_config = _FROZEN
-
-    type: Literal["html"] = "html"
-    content: str
-
-
-class Html5BundleRepresentation(BaseModel):
-    """A seller-hosted HTML5 zip bundle (``core/assets/zip-asset.json``) and its optional backup image."""
-
-    model_config = _FROZEN
-
-    type: Literal["html5_bundle"] = "html5_bundle"
-    url: str
-    backup_image_url: str | None = None
-
-
-class TagUrlRepresentation(BaseModel):
-    """A third-party ad-request URL the ad server invokes at impression time."""
-
-    model_config = _FROZEN
-
-    type: Literal["tag_url"] = "tag_url"
-    url: str
-
-
-class InlineMarkupRepresentation(BaseModel):
-    """Third-party tag markup, preserved byte for byte, with its markup type."""
-
-    model_config = _FROZEN
-
-    type: Literal["inline_markup"] = "inline_markup"
-    markup: str
-    markup_type: LibraryMarkupType
-
-
-class PairedRedirectRepresentation(BaseModel):
-    """An ad-request URL and its click-through URL, one value: "The pair MUST NOT be split"."""
-
-    model_config = _FROZEN
-
-    type: Literal["paired_redirect"] = "paired_redirect"
-    ad_request_url: str
-    clickthrough_url: str
-
-
-Representation = Annotated[
-    MediaRepresentation
-    | HtmlRepresentation
-    | Html5BundleRepresentation
-    | TagUrlRepresentation
-    | InlineMarkupRepresentation
-    | PairedRedirectRepresentation,
-    Field(discriminator="type"),
-]
-
-
-class CreativeToTraffic(BaseModel):
-    """One creative as an adapter traffics it: its kind, the representation the buyer sent, its sizes."""
-
-    model_config = _FROZEN
-
-    creative_id: str
-    format_kind: str
-    representation: Representation
-    sizes: tuple[TrafficSize, ...] = ()
-    size_ranges: tuple[TrafficSizeRange, ...] = ()
-    clickthrough_url: str | None = None
-    impression_tracker_urls: tuple[str, ...] = ()
+#: The pinned union of every asset type, discriminated by ``asset_type`` (a display tag by its
+#: ``delivery_type`` too). An asset is served only as the typed value this parses it to.
+_ASSET: TypeAdapter[LibraryAssetVariant] = TypeAdapter(LibraryAssetVariant)
 
 
 class TrafficRefusalReason(StrEnum):
@@ -205,7 +109,7 @@ def read_creative_to_traffic(
     try:
         representation = _representation(data, assets, kind, format_spec, declarations)
     except ValidationError:
-        # A stored asset of a recognized type whose members do not fit it, for example a
+        # A stored asset that does not fit its pinned schema, a member missing or a
         # markup_type outside the pinned enum, carries nothing an adapter can serve.
         representation = None
     if representation is None:
@@ -245,13 +149,13 @@ def _representation(
     if format_spec is not None and getattr(format_spec, "output_format_ids", None):
         return _generated(data, kind, declarations)
 
-    if tag := _first_of_type(assets, "display_tag"):
+    if isinstance(tag := _parsed_first(assets, "display_tag"), LibraryDisplayTagAsset):
         return _display_tag(tag)
-    if bundle := _first_of_type(assets, "zip"):
-        return Html5BundleRepresentation(url=bundle["url"], backup_image_url=_backup_image_url(assets, bundle))
-    if html := _first_of_type(assets, "html"):
-        return HtmlRepresentation(content=html["content"]) if html.get("content") else None
-    if ad_request_url := _ad_request_url(data, assets, kind, format_spec, declarations):
+    if isinstance(bundle := _parsed_first(assets, "zip"), LibraryZipAsset):
+        return Html5BundleRepresentation(url=str(bundle.url), backup_image_url=_backup_image_url(assets, bundle))
+    if isinstance(html := _parsed_first(assets, "html"), LibraryHtmlAsset):
+        return HtmlRepresentation(content=html.content) if html.content else None
+    if ad_request_url := _ad_request_url(data, assets, format_spec):
         return TagUrlRepresentation(url=ad_request_url)
     if kind in _NON_MEDIA_KINDS:
         # The kind is served as markup, a bundle or a tag, and the creative carries none of
@@ -269,44 +173,37 @@ def _representation(
 _NON_MEDIA_KINDS = frozenset({"display_tag", "html5"})
 
 
-def _display_tag(asset: Mapping[str, Any]) -> Representation | None:
-    """One ``display_tag`` asset as its delivery type's arm."""
-    delivery_type = asset.get("delivery_type")
-    if delivery_type == "tag_url":
-        return TagUrlRepresentation(url=asset["url"])
-    if delivery_type == "inline_markup":
-        return InlineMarkupRepresentation(markup=asset["markup"], markup_type=asset["markup_type"])
-    if delivery_type == "paired_redirect":
-        return PairedRedirectRepresentation(
-            ad_request_url=asset["ad_request_url"], clickthrough_url=asset["clickthrough_url"]
-        )
-    return None
+def _display_tag(tag: LibraryDisplayTagAsset) -> Representation:
+    """One parsed ``display_tag`` asset as its delivery type's arm."""
+    asset = tag.root
+    if asset.delivery_type == "tag_url":
+        return TagUrlRepresentation(url=str(asset.url))
+    if asset.delivery_type == "inline_markup":
+        return InlineMarkupRepresentation(markup=asset.markup, markup_type=asset.markup_type)
+    return PairedRedirectRepresentation(
+        ad_request_url=str(asset.ad_request_url), clickthrough_url=str(asset.clickthrough_url)
+    )
 
 
 def _ad_request_url(
-    data: dict[str, Any],
-    assets: Mapping[str, Mapping[str, Any]],
-    kind: str,
-    format_spec: Any | None,
-    declarations: Sequence[Any],
+    data: dict[str, Any], assets: Mapping[str, Mapping[str, Any]], format_spec: Any | None
 ) -> str | None:
-    """A legacy ``tag_url``: a url asset invoked as an ad request.
+    """A legacy ``tag_url``: a url asset the url-asset ladder identifies as an ``ad_request``.
 
-    By its own ``url_type`` (the url-asset ladder), or, for a ``display_tag`` creative, by
-    sitting in the kind's url slot: ``formats/canonical/display_tag.json`` says "``tag_url``
-    MUST use ``url_type: ad_request``", so the format states the mechanism the asset omits.
+    Nothing else reads as one, not even a url asset in the display_tag kind's ``tag_url`` slot
+    that states no ``url_type``. AdCP 3.2.7 ``core/assets/url-asset.json``: "third_party_tracker
+    and display ad requests have no safe fallback. When neither ``url_type`` nor a format-side
+    role is available, receivers MUST NOT silently pick a mechanism." ``docs/creative/
+    asset-types.mdx``: "Display ad-request URLs also have no role-based fallback. Declare
+    ``url_type: "ad_request"`` explicitly." The slot's "MUST use ``url_type: ad_request``"
+    (``formats/canonical/display_tag.json``) obliges the sender, not the receiver.
     """
     mechanisms, _unidentified = url_asset_identification(data, format_spec)
-    slot_ids: frozenset[str] = frozenset()
-    if kind == "display_tag":
-        slot_ids = canonical_slot_asset_ids(kind, {"url"}).union(
-            *(declaration_slot_asset_ids(declaration, {"url"}) for declaration in declarations)
-        )
     for asset_id, asset in assets.items():
-        if asset.get("asset_type") != "url" or not asset.get("url"):
+        if asset.get("asset_type") != "url" or mechanisms.get(asset_id) != "ad_request":
             continue
-        if mechanisms.get(asset_id) == "ad_request" or (asset_id in slot_ids and "url_type" not in asset):
-            return str(asset["url"])
+        if isinstance(url_asset := _ASSET.validate_python(asset), LibraryUrlAsset):
+            return str(url_asset.url)
     return None
 
 
@@ -361,19 +258,28 @@ def _media_asset_type(assets: Mapping[str, Mapping[str, Any]], kind: str, declar
     return "image"
 
 
-def _backup_image_url(assets: Mapping[str, Mapping[str, Any]], bundle: Mapping[str, Any]) -> str | None:
-    """The html5 kind's ``backup_image`` slot, else the zip asset's own ``backup_image_url``."""
-    backup = assets.get("backup_image")
-    if backup and backup.get("asset_type") == "image" and backup.get("url"):
-        return str(backup["url"])
-    return str(bundle["backup_image_url"]) if bundle.get("backup_image_url") else None
+def _backup_image_url(assets: Mapping[str, Mapping[str, Any]], bundle: LibraryZipAsset) -> str | None:
+    """The html5 kind's ``backup_image`` slot, else the zip asset's own ``backup_image_url``.
+
+    The slot is not parsed as an image asset: ``core/assets/image-asset.json`` requires a
+    width and height, which a backup image the adapter sizes from the option need not state.
+    """
+    backup = assets.get("backup_image") or {}
+    if backup.get("asset_type") == "image" and (url := backup.get("url")):
+        return str(url)
+    return str(bundle.backup_image_url) if bundle.backup_image_url else None
 
 
-def _first_of_type(assets: Mapping[str, Mapping[str, Any]], asset_type: str) -> Mapping[str, Any] | None:
-    """The first asset of *asset_type*, in asset-id order so two reads of one creative agree."""
+def _parsed_first(assets: Mapping[str, Mapping[str, Any]], asset_type: str) -> LibraryAssetVariant | None:
+    """The first asset of *asset_type*, in asset-id order so two reads of one creative agree, parsed.
+
+    Raises:
+        ValidationError: the asset does not fit its pinned schema, for example a zip with no
+            ``url`` or a display tag with no ``delivery_type``.
+    """
     for asset_id in sorted(assets):
         if assets[asset_id].get("asset_type") == asset_type:
-            return assets[asset_id]
+            return _ASSET.validate_python(assets[asset_id])
     return None
 
 

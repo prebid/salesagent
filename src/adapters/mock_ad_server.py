@@ -50,6 +50,7 @@ from src.core.schemas import (
     Snapshot,
 )
 from src.core.security.webhook_egress import deliver_webhook
+from src.core.traffic_carrier import AdapterCreativeAsset
 from src.core.validation_helpers import package_field_path
 from src.services.ai.config import SellerAIConfig
 
@@ -972,7 +973,7 @@ class MockAdServer(AdServerAdapter):
         return self._build_create_success(media_buy_id, packages)
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Simulates adding creatives with HITL support."""
 
@@ -991,7 +992,7 @@ class MockAdServer(AdServerAdapter):
         return self._add_creative_assets_immediate(media_buy_id, assets, today)
 
     def _add_creative_assets_async(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets in async HITL mode."""
         self.log("🤖 Processing add_creative_assets in ASYNC mode")
@@ -1042,7 +1043,7 @@ class MockAdServer(AdServerAdapter):
         return results
 
     def _add_creative_assets_sync_with_delay(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets in sync HITL mode with configurable delay."""
         self.log(f"🤖 Processing add_creative_assets in SYNC mode ({self.sync_delay_ms}ms delay)")
@@ -1093,7 +1094,7 @@ class MockAdServer(AdServerAdapter):
         return self._add_creative_assets_immediate(media_buy_id, approved_assets, today)
 
     def _add_creative_assets_immediate(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets immediately (original behavior)."""
         from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
