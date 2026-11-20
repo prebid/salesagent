@@ -135,12 +135,19 @@ class GamCreativeRefusal:
 
 
 def placeholder_sizes(placeholders: Iterable[Any]) -> tuple[TrafficSize, ...]:
-    """The sizes of GAM ``CreativePlaceholder`` objects (dicts or Zeep objects), in order, each once."""
-    sizes = (
+    """The sizes of GAM ``CreativePlaceholder`` objects (dicts or Zeep objects), each once, in canonical order.
+
+    Canonical is ascending ``(width, height)``, never the order the placeholders arrive in. The
+    pre-booking check reads the placeholders a line item will be written with, and the upload
+    the ones GAM answers for it, and GAM does not answer them in the order written (R9's e2e
+    run 025d613f wrote [300x600, 728x90] and read [728x90, 300x600]), so a plan reading arrival
+    order could approve one size and create another. Both plan through this order.
+    """
+    sizes = {
         TrafficSize(width=int(placeholder["size"]["width"]), height=int(placeholder["size"]["height"]))
         for placeholder in placeholders
-    )
-    return tuple(dict.fromkeys(sizes))
+    }
+    return tuple(sorted(sizes, key=lambda size: (size.width, size.height)))
 
 
 def plan_gam_creative(
@@ -148,9 +155,11 @@ def plan_gam_creative(
 ) -> GamCreativePlan | GamCreativeRefusal:
     """The GAM creative for *ctt* on line items taking *placeholder_sizes*, or why there is none.
 
-    Size: the candidates are the declared ``sizes`` a placeholder takes, plus the placeholders
-    inside a declared ``size_ranges`` entry (every stated bound inclusive); with neither
-    declared, every placeholder. The first candidate is the creative's size. With more than
+    Size: the candidates are the declared ``sizes`` a placeholder takes, in the order declared,
+    plus the placeholders inside a declared ``size_ranges`` entry (every stated bound
+    inclusive); with neither declared, every placeholder. Placeholders are taken in the order
+    given, which in production is :func:`placeholder_sizes`' canonical one. The first candidate
+    is the creative's size. With more than
     one, ``lica_sizes`` is every candidate, the creative's own first: the association's sizes
     "override" ``Creative.size``, and listing its own keeps it served at that size whether GAM
     adds them or replaces it. With one, the association states none. No candidate, or no

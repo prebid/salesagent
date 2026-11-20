@@ -214,11 +214,26 @@ def stub_gam_client(
 
         return _answer
 
+    def _read_back(line_item: SoapObject) -> SoapObject:
+        """A created line item as GAM answers for it: its placeholders in another order than written.
+
+        One observed sample, not a known GAM sort rule: R9's e2e run 025d613f wrote a line item's
+        placeholders [300x600, 728x90] and read its association back [728x90, 300x600]. Reversed
+        here, so nothing graded may depend on which order comes back.
+        """
+        placeholders = line_item.get("creativePlaceholders")
+        if not placeholders:
+            return line_item
+        return SoapObject(line_item, creativePlaceholders=list(reversed(placeholders)))
+
     services: dict[str, MagicMock] = {
         "LineItemService": MagicMock(
             getLineItemsByStatement=MagicMock(
                 side_effect=lambda *_args: SoapObject(
-                    results=[*client.line_items, *created.get(("LineItemService", "createLineItems"), [])]
+                    results=[
+                        *client.line_items,
+                        *(_read_back(item) for item in created.get(("LineItemService", "createLineItems"), [])),
+                    ]
                 )
             )
         ),
