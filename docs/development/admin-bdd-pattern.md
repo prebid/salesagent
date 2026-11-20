@@ -81,8 +81,8 @@ Follow these conventions:
   `tests/bdd/conftest.py` routes the scenario to the admin transports and the
   admin marker, so the prefix is the wiring, not a label.
 - Authenticate the admin and ensure the tenant in the `Background`.
-- Name the transports the feature runs on in a header comment, as
-  `BR-ADMIN-ACCOUNTS.feature:13-15` does.
+- Name the transports the feature runs on in a header comment, as the
+  `# Transports:` block at the top of `BR-ADMIN-ACCOUNTS.feature` does.
 - Add traceability entries to `docs/test-obligations/bdd-traceability.yaml`.
 
 ### 2. Write the step definitions
@@ -118,7 +118,7 @@ def then_status(ctx, code):
 ```
 
 **Do not write `ctx["response"]`.** Check E of
-`tests/unit/test_architecture_bdd_wire_discipline.py` (`:992` onward) bans that
+`tests/unit/test_architecture_bdd_wire_discipline.py` bans that
 key outright with a permanently empty allowlist, because a provenance-stripped
 copy of a payload cannot tell a Then whether it holds a wire fact or an
 in-process reconstruction. An admin page is not an AdCP payload either. Sharing
@@ -243,5 +243,5 @@ fixture by way of `_build_admin_env`.
    that falls dormant still fails, since `tests/bdd/dormant_scenarios.txt` is a
    shrink-only baseline enforced per test. Declare an intent the live stack
    cannot serve at the env method with `e2e_unsupported(...)` instead
-   (`tests/harness/_realize.py:94-105`); it arrives as a non-strict xfail
+   (defined in `tests/harness/_realize.py`); it arrives as a non-strict xfail
    carrying its reason, set by the same hook.
