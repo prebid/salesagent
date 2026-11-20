@@ -5,8 +5,11 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+import zeep.exceptions
 from flask import Blueprint, jsonify, render_template, request, session
+from google.auth.exceptions import GoogleAuthError
 from googleads import ad_manager, oauth2
+from googleads.errors import GoogleAdsError
 from sqlalchemy import select
 
 from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
@@ -19,11 +22,20 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, GAMLineItem, GAMOrder, Tenant
 from src.core.database.repositories.adapter_config import AdapterConfigRepository, read_adapter_config
+from src.core.exceptions import AdCPSalesAgentError
 
 logger = logging.getLogger(__name__)
 
 # Create blueprint
 gam_bp = Blueprint("gam", __name__, url_prefix="/tenant/<tenant_id>/gam")
+
+#: What a googleads SOAP service call raises when GAM, or the way to it, fails: the
+#: client turns a SOAP fault into ``GoogleAdsServerFault`` (a ``GoogleAdsError``), zeep
+#: raises its own ``Error`` for a reply that is not SOAP, google-auth raises
+#: ``GoogleAuthError`` when the credentials cannot be refreshed, and the transport's
+#: ``requests.RequestException`` is an ``OSError`` (``requests`` itself is banned in
+#: ``src/`` by ruff-egress.toml, so it is not named here).
+GAM_CALL_ERRORS: tuple[type[Exception], ...] = (GoogleAdsError, zeep.exceptions.Error, GoogleAuthError, OSError)
 
 
 @dataclass(frozen=True)
@@ -314,8 +326,9 @@ def detect_gam_network(tenant_id):
                         logger.info(f"Detected current user ID: {trafficker_id}")
                     else:
                         logger.warning(f"Invalid user response: {error_msg}")
-            except Exception as e:
-                logger.warning(f"Could not get current user: {e}")
+            except GAM_CALL_ERRORS:
+                # The trafficker id is optional here: the operator can enter it.
+                logger.warning("Could not get the current GAM user; trafficker id left unset", exc_info=True)
 
             return jsonify(
                 {
@@ -650,7 +663,7 @@ def get_sync_status(tenant_id, sync_id):
         if sync_job.summary:
             try:
                 response["summary"] = json.loads(sync_job.summary)
-            except Exception:
+            except json.JSONDecodeError:
                 response["summary"] = sync_job.summary
 
         if sync_job.error_message:
@@ -796,6 +809,38 @@ def get_service_account_email(tenant_id):
         return jsonify({"success": True, "service_account_email": None, "message": "No service account created"})
 
 
+def _network_summary(network) -> dict:
+    """The fields of a GAM ``Network`` the connection test reports (GAM's camelCase names)."""
+    return {
+        "id": network["id"],
+        "displayName": network["displayName"],
+        "networkCode": network["networkCode"],
+        "currencyCode": safe_get(network, "currencyCode", "USD"),
+        "secondaryCurrencyCodes": safe_get(network, "secondaryCurrencyCodes") or [],
+        "timeZone": safe_get(network, "timeZone"),
+    }
+
+
+def _accessible_networks(network_service, auth_method: str) -> list[dict]:
+    """The networks the credentials reach; raises one of :data:`GAM_CALL_ERRORS` when GAM fails.
+
+    A service account has its network code set already, so it asks for the current network.
+    OAuth asks for all networks, and falls back to the current one when this API version
+    has no ``getAllNetworks``.
+    """
+    if auth_method != "service_account":
+        try:
+            all_networks = network_service.getAllNetworks()
+        except AttributeError:
+            logger.info("getAllNetworks not available, falling back to getCurrentNetwork")
+        else:
+            logger.info(f"getAllNetworks() returned {len(all_networks or [])} networks")
+            return [_network_summary(network) for network in all_networks or []]
+    current_network = network_service.getCurrentNetwork()
+    logger.info(f"getCurrentNetwork() returned: {current_network}")
+    return [_network_summary(current_network)]
+
+
 @gam_bp.route("/test-connection", methods=["POST"])
 @log_admin_action("test_gam_connection")
 @require_tenant_access()
@@ -921,71 +966,14 @@ def test_gam_connection(tenant_id):
     # Get network service
     network_service = client.GetService("NetworkService")
 
-    # Get all networks user has access to
-    networks = []
+    # Get all networks user has access to. A failed lookup is reported below with the
+    # reference it was logged under.
+    networks: list[dict] = []
     network_error = None
     try:
-        # Service account auth with network_code already set - use getCurrentNetwork
-        if auth_method == "service_account":
-            logger.info("Using service account auth - calling getCurrentNetwork()")
-            current_network = network_service.getCurrentNetwork()
-            logger.info(f"getCurrentNetwork() returned: {current_network}")
-            networks = [
-                {
-                    "id": current_network["id"],
-                    "displayName": current_network["displayName"],
-                    "networkCode": current_network["networkCode"],
-                    "currencyCode": safe_get(current_network, "currencyCode", "USD"),
-                    "secondaryCurrencyCodes": safe_get(current_network, "secondaryCurrencyCodes") or [],
-                    "timeZone": safe_get(current_network, "timeZone"),
-                }
-            ]
-        else:
-            # OAuth - try getAllNetworks first
-            logger.info("Using OAuth - attempting to call getAllNetworks()")
-            all_networks = network_service.getAllNetworks()
-            logger.info(f"getAllNetworks() returned: {all_networks}")
-            if all_networks:
-                logger.info(f"Processing {len(all_networks)} networks")
-                for network in all_networks:
-                    logger.info(f"Network data: {network}")
-                    networks.append(
-                        {
-                            "id": network["id"],
-                            "displayName": network["displayName"],
-                            "networkCode": network["networkCode"],
-                            "currencyCode": safe_get(network, "currencyCode", "USD"),
-                            "secondaryCurrencyCodes": safe_get(network, "secondaryCurrencyCodes") or [],
-                            "timeZone": safe_get(network, "timeZone"),
-                        }
-                    )
-            else:
-                logger.info("getAllNetworks() returned empty/None")
-    except AttributeError as e:
-        # getAllNetworks might not be available, fall back to getCurrentNetwork
-        logger.info(f"getAllNetworks not available (AttributeError: {e}), falling back to getCurrentNetwork")
-        try:
-            current_network = network_service.getCurrentNetwork()
-            logger.info(f"getCurrentNetwork() returned: {current_network}")
-            networks = [
-                {
-                    "id": current_network["id"],
-                    "displayName": current_network["displayName"],
-                    "networkCode": current_network["networkCode"],
-                    "currencyCode": safe_get(current_network, "currencyCode", "USD"),
-                    "secondaryCurrencyCodes": safe_get(current_network, "secondaryCurrencyCodes") or [],
-                    "timeZone": safe_get(current_network, "timeZone"),
-                }
-            ]
-        except Exception as e:
-            logger.error(f"Failed to get network info: {e}")
-            network_error = safe_error_message(e, "Network lookup failed")
-            networks = []
-    except Exception as e:
-        logger.error(f"Failed to get networks: {e}")
-        logger.exception("Full exception details:")
-        network_error = safe_error_message(e, "Network lookup failed")
-        networks = []
+        networks = _accessible_networks(network_service, auth_method)
+    except GAM_CALL_ERRORS as e:
+        network_error = safe_error_message(e, f"Network lookup failed for tenant {tenant_id}")
 
     # If no network is accessible, the connection test must fail.
     # The OAuth / service-account handshake can succeed while the
@@ -1079,8 +1067,9 @@ def test_gam_connection(tenant_id):
                 "email": current_user.email,
             }
 
-        except Exception as e:
-            # It's okay if we can't fetch companies/users
+        except (*GAM_CALL_ERRORS, AdCPSalesAgentError) as e:
+            # It's okay if we can't fetch companies/users. The adapter refuses its
+            # configuration with an AdCPSalesAgentError; GAM itself fails as GAM_CALL_ERRORS.
             result["warning"] = safe_error_message(e, "Connected but couldn't fetch all resources")
 
     return jsonify(result)

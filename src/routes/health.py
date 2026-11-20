@@ -93,7 +93,6 @@ async def reset_db_pool(request: Request):
             }
         )
     except Exception as e:
-        logger.error(f"Failed to reset database state: {e}")
         return JSONResponse({"error": safe_error_message(e, "Failed to reset")}, status_code=500)
 
 
@@ -152,7 +151,6 @@ async def debug_db_state(request: Request):
                 }
             )
     except Exception as e:
-        logger.error(f"Debug endpoint error: {e}", exc_info=True)
         return JSONResponse({"error": safe_error_message(e)}, status_code=500)
 
 

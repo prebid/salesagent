@@ -8,8 +8,9 @@ import logging
 from authlib.integrations.flask_client import OAuth
 from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
+from werkzeug.wrappers import Response
 
-from src.admin.auth_utils import extract_user_info
+from src.admin.auth_utils import OAUTH_CALLBACK_ERRORS, extract_user_info
 from src.admin.utils import require_tenant_access
 from src.admin.utils.operator_errors import safe_error_message
 from src.admin.utils.url_policy import json_error_if_url_blocked
@@ -211,6 +212,18 @@ def test_initiate(tenant_id: str):
         return oauth.test_oidc.authorize_redirect(redirect_uri)
 
 
+def _back_from_callback(message: str, tenant_id: str, is_test: bool) -> Response:
+    """Flash *message* and return to where the failed flow started.
+
+    A test flow started from the tenant's SSO settings and goes back there; a login goes
+    back to the login page.
+    """
+    flash(message, "error")
+    if is_test:
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+    return redirect(url_for("auth.login"))
+
+
 @oidc_bp.route("/callback")
 def callback():
     """Handle OAuth callback for both test and production flows."""
@@ -260,26 +273,16 @@ def callback():
             oauth_client = getattr(oauth, client_name)
             token = oauth_client.authorize_access_token()
             logger.info("OAuth callback: token exchange successful")
-        except Exception as e:
-            logger.error(f"OAuth token exchange failed: {e}", exc_info=True)
-            flash(safe_error_message(e, "OAuth authentication failed"), "error")
-            if is_test:
-                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
-            return redirect(url_for("auth.login"))
+        except OAUTH_CALLBACK_ERRORS as e:
+            return _back_from_callback(safe_error_message(e, "OAuth authentication failed"), tenant_id, is_test)
 
     if not token:
-        flash("OAuth token exchange failed", "error")
-        if is_test:
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
-        return redirect(url_for("auth.login"))
+        return _back_from_callback("OAuth token exchange failed", tenant_id, is_test)
 
     # Extract user info
     user_info = extract_user_info(token)
     if not user_info or not user_info.get("email"):
-        flash("Could not get user email from OAuth provider", "error")
-        if is_test:
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
-        return redirect(url_for("auth.login"))
+        return _back_from_callback("Could not get user email from OAuth provider", tenant_id, is_test)
 
     email = user_info["email"]
 

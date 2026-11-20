@@ -99,32 +99,28 @@ def index(tenant_id):
         from src.core.database.models import Context as DBContext
 
         pending_reviews = []
-        try:
-            stmt = (
-                select(WorkflowStep)
-                .join(DBContext)
-                .where(
-                    DBContext.tenant_id == tenant_id,
-                    WorkflowStep.step_type == "policy_review",
-                    WorkflowStep.status == "pending",
-                )
-                .order_by(WorkflowStep.created_at.desc())
+        stmt = (
+            select(WorkflowStep)
+            .join(DBContext)
+            .where(
+                DBContext.tenant_id == tenant_id,
+                WorkflowStep.step_type == "policy_review",
+                WorkflowStep.status == "pending",
             )
-            workflow_steps = db_session.scalars(stmt).all()
+            .order_by(WorkflowStep.created_at.desc())
+        )
+        workflow_steps = db_session.scalars(stmt).all()
 
-            for step in workflow_steps:
-                request_data = step.request_data or {}
-                pending_reviews.append(
-                    {
-                        "task_id": step.step_id,
-                        "created_at": step.created_at,
-                        "brief": request_data.get("brief", ""),
-                        "advertiser": request_data.get("promoted_offering", ""),
-                    }
-                )
-        except Exception:
-            # WorkflowStep table might not exist in fresh databases
-            logger.debug("Could not load workflow steps (table may not exist)", exc_info=True)
+        for step in workflow_steps:
+            request_data = step.request_data or {}
+            pending_reviews.append(
+                {
+                    "task_id": step.step_id,
+                    "created_at": step.created_at,
+                    "brief": request_data.get("brief", ""),
+                    "advertiser": request_data.get("promoted_offering", ""),
+                }
+            )
 
     return render_template(
         "policy_settings_comprehensive.html",

@@ -17,7 +17,6 @@ from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import safe_error_message
 from src.admin.utils.url_policy import redirect_if_url_blocked
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -48,14 +47,11 @@ def is_valid_currency_code(currency_code: str) -> bool:
     Returns:
         bool: True if valid currency code, False otherwise
     """
-    try:
-        # Get the currency name - if Babel returns the code itself, it's not a real currency
-        # Real currencies have proper names (e.g., "US Dollar" for USD)
-        # Unknown currencies just return the code (e.g., "XYZ" for XYZ)
-        name = babel_numbers.get_currency_name(currency_code, locale="en")
-        return name != currency_code
-    except Exception:
-        return False
+    # Get the currency name - if Babel returns the code itself, it's not a real currency
+    # Real currencies have proper names (e.g., "US Dollar" for USD)
+    # Unknown currencies just return the code (e.g., "XYZ" for XYZ)
+    name = babel_numbers.get_currency_name(currency_code, locale="en")
+    return name != currency_code
 
 
 # Create blueprints - separate for tenant management and tenant settings
@@ -481,43 +477,38 @@ def update_adapter(tenant_id):
 @require_tenant_access()
 def update_slack(tenant_id):
     """Update Slack integration settings."""
-    try:
-        webhook_url = request.form.get("slack_webhook_url", "").strip()
-        audit_webhook_url = request.form.get("slack_audit_webhook_url", "").strip()
+    webhook_url = request.form.get("slack_webhook_url", "").strip()
+    audit_webhook_url = request.form.get("slack_audit_webhook_url", "").strip()
 
-        # Both are stored now and posted to later, so both are graded by
-        # ingest-time egress policy. An empty value clears the webhook.
-        integrations_page = url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations")
-        if webhook_url and (blocked := redirect_if_url_blocked(webhook_url, "Slack webhook URL", integrations_page)):
-            return blocked
+    # Both are stored now and posted to later, so both are graded by
+    # ingest-time egress policy. An empty value clears the webhook.
+    integrations_page = url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations")
+    if webhook_url and (blocked := redirect_if_url_blocked(webhook_url, "Slack webhook URL", integrations_page)):
+        return blocked
 
-        if audit_webhook_url and (
-            blocked := redirect_if_url_blocked(audit_webhook_url, "Slack audit webhook URL", integrations_page)
-        ):
-            return blocked
+    if audit_webhook_url and (
+        blocked := redirect_if_url_blocked(audit_webhook_url, "Slack audit webhook URL", integrations_page)
+    ):
+        return blocked
 
-        with get_db_session() as db_session:
-            repository = TenantConfigRepository(db_session, tenant_id)
-            updated = repository.update_tenant(
-                slack_webhook_url=webhook_url or None,
-                slack_audit_webhook_url=audit_webhook_url or None,
-            )
-            if not updated:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+    with get_db_session() as db_session:
+        repository = TenantConfigRepository(db_session, tenant_id)
+        updated = repository.update_tenant(
+            slack_webhook_url=webhook_url or None,
+            slack_audit_webhook_url=audit_webhook_url or None,
+        )
+        if not updated:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
 
-            db_session.commit()
+        db_session.commit()
 
-            if webhook_url or audit_webhook_url:
-                flash("Slack integration updated successfully", "success")
-            else:
-                flash("Slack integration disabled", "info")
+        if webhook_url or audit_webhook_url:
+            flash("Slack integration updated successfully", "success")
+        else:
+            flash("Slack integration disabled", "info")
 
-    except Exception as e:
-        logger.error(f"Error updating Slack settings: {e}", exc_info=True)
-        flash(f"Error updating Slack settings: {safe_error_message(e)}", "error")
-
-    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations"))
+    return redirect(integrations_page)
 
 
 @settings_bp.route("/ai", methods=["POST"])
@@ -525,64 +516,59 @@ def update_slack(tenant_id):
 @require_tenant_access()
 def update_ai(tenant_id):
     """Update AI services settings (multi-provider configuration)."""
-    try:
-        provider = request.form.get("ai_provider", "gemini").strip()
-        model = request.form.get("ai_model", "").strip()
-        api_key = request.form.get("ai_api_key", "").strip()
-        logfire_token = request.form.get("logfire_token", "").strip()
+    provider = request.form.get("ai_provider", "gemini").strip()
+    model = request.form.get("ai_model", "").strip()
+    api_key = request.form.get("ai_api_key", "").strip()
+    logfire_token = request.form.get("logfire_token", "").strip()
 
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
 
-            # Build ai_config from existing config (if any) merged with form data
-            existing_config = tenant.ai_config or {}
+        # Build ai_config from existing config (if any) merged with form data
+        existing_config = tenant.ai_config or {}
 
-            # Start with existing config to preserve any fields not in form
-            new_config = {
-                "provider": provider,
-                "model": model,
-            }
+        # Start with existing config to preserve any fields not in form
+        new_config = {
+            "provider": provider,
+            "model": model,
+        }
 
-            # Handle API key: use new one if provided, otherwise keep existing
-            if api_key:
-                new_config["api_key"] = api_key
-            elif existing_config.get("api_key"):
-                new_config["api_key"] = existing_config["api_key"]
-            elif tenant.gemini_api_key and uses_legacy_gemini_api_key(provider):
-                # Migrate legacy gemini_api_key to new ai_config
-                new_config["api_key"] = tenant.gemini_api_key
+        # Handle API key: use new one if provided, otherwise keep existing
+        if api_key:
+            new_config["api_key"] = api_key
+        elif existing_config.get("api_key"):
+            new_config["api_key"] = existing_config["api_key"]
+        elif tenant.gemini_api_key and uses_legacy_gemini_api_key(provider):
+            # Migrate legacy gemini_api_key to new ai_config
+            new_config["api_key"] = tenant.gemini_api_key
 
-            # Preserve settings if they exist
-            if existing_config.get("settings"):
-                new_config["settings"] = existing_config["settings"]
+        # Preserve settings if they exist
+        if existing_config.get("settings"):
+            new_config["settings"] = existing_config["settings"]
 
-            # Handle Logfire token: use new one if provided, otherwise keep existing
-            # Skip placeholder value that indicates existing token
-            if logfire_token and logfire_token != "••••••••":
-                new_config["logfire_token"] = logfire_token
-            elif existing_config.get("logfire_token"):
-                new_config["logfire_token"] = existing_config["logfire_token"]
+        # Handle Logfire token: use new one if provided, otherwise keep existing
+        # Skip placeholder value that indicates existing token
+        if logfire_token and logfire_token != "••••••••":
+            new_config["logfire_token"] = logfire_token
+        elif existing_config.get("logfire_token"):
+            new_config["logfire_token"] = existing_config["logfire_token"]
 
-            # Update the tenant
-            tenant.ai_config = new_config
-            tenant.updated_at = datetime.now(UTC)
-            db_session.commit()
+        # Update the tenant
+        tenant.ai_config = new_config
+        tenant.updated_at = datetime.now(UTC)
+        db_session.commit()
 
-            provider_name = provider.title()
-            if new_config.get("api_key"):
-                flash(f"AI settings saved. {provider_name} ({model}) is now configured.", "success")
-            else:
-                flash(
-                    f"AI provider set to {provider_name}, but no API key configured. AI features will be disabled.",
-                    "warning",
-                )
-
-    except Exception as e:
-        logger.error(f"Error updating AI settings: {e}", exc_info=True)
-        flash(f"Error updating AI settings: {safe_error_message(e)}", "error")
+        provider_name = provider.title()
+        if new_config.get("api_key"):
+            flash(f"AI settings saved. {provider_name} ({model}) is now configured.", "success")
+        else:
+            flash(
+                f"AI provider set to {provider_name}, but no API key configured. AI features will be disabled.",
+                "warning",
+            )
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations"))
 
@@ -596,82 +582,85 @@ def test_ai_connection(tenant_id):
 
     from pydantic import BaseModel
     from pydantic_ai import Agent
+    from pydantic_ai.exceptions import ModelAPIError
 
     from src.services.ai import AIServiceFactory
 
-    model = None  # read before the request body parses, so the error classifier can be called
-    try:
-        data = request.get_json() or {}
-        provider = data.get("provider", "gemini")
-        model = data.get("model", DEFAULT_GOOGLE_MODEL)
-        api_key = data.get("api_key", "").strip()
+    data = request.get_json() or {}
+    provider = data.get("provider", "gemini")
+    model = data.get("model", DEFAULT_GOOGLE_MODEL)
+    api_key = data.get("api_key", "").strip()
 
-        # Build config for testing
-        test_config = {"provider": provider, "model": model}
+    # Build config for testing
+    test_config = {"provider": provider, "model": model}
 
-        # Use provided API key, or fall back to saved config
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                return jsonify({"success": False, "error": "Tenant not found"}), 404
+    # Use provided API key, or fall back to saved config
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return jsonify({"success": False, "error": "Tenant not found"}), 404
 
-            if api_key:
-                test_config["api_key"] = api_key
-            elif tenant.ai_config and tenant.ai_config.get("api_key"):
-                test_config["api_key"] = tenant.ai_config["api_key"]
-            elif tenant.gemini_api_key and uses_legacy_gemini_api_key(provider):
-                test_config["api_key"] = tenant.gemini_api_key
+        if api_key:
+            test_config["api_key"] = api_key
+        elif tenant.ai_config and tenant.ai_config.get("api_key"):
+            test_config["api_key"] = tenant.ai_config["api_key"]
+        elif tenant.gemini_api_key and uses_legacy_gemini_api_key(provider):
+            test_config["api_key"] = tenant.gemini_api_key
 
-        if not test_config.get("api_key"):
-            return jsonify({"success": False, "error": "No API key provided"}), 400
+    if not test_config.get("api_key"):
+        return jsonify({"success": False, "error": "No API key provided"}), 400
 
-        model_string = AIServiceFactory().build(TenantAIConfig.model_validate(test_config))
-        if model_string is None:
-            return jsonify({"success": False, "error": f"Cannot build a model for provider {provider!r}"}), 400
+    model_string = AIServiceFactory().build(TenantAIConfig.model_validate(test_config))
+    if model_string is None:
+        return jsonify({"success": False, "error": f"Cannot build a model for provider {provider!r}"}), 400
 
-        # Simple test: ask the model to respond with a single word
-        class TestResponse(BaseModel):
-            word: str
+    # Simple test: ask the model to respond with a single word
+    class TestResponse(BaseModel):
+        word: str
 
-        agent = Agent(model=model_string, output_type=TestResponse, system_prompt="Respond with exactly one word.")
+    agent = Agent(model=model_string, output_type=TestResponse, system_prompt="Respond with exactly one word.")
 
-        def run_in_thread():
-            """Run async code in a new thread with its own event loop."""
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
+    def run_in_thread():
+        """Run async code in a new thread with its own event loop."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
 
-                async def run_test():
-                    result = await agent.run("Say hello")
-                    # pydantic-ai 1.x uses .output for structured data
-                    return result.output
+            async def run_test():
+                result = await agent.run("Say hello")
+                # pydantic-ai 1.x uses .output for structured data
+                return result.output
 
-                return loop.run_until_complete(run_test())
-            finally:
-                loop.close()
+            return loop.run_until_complete(run_test())
+        finally:
+            loop.close()
 
-        # Run in a separate thread to avoid event loop conflicts
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(run_in_thread)
+    # Run in a separate thread to avoid event loop conflicts
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(run_in_thread)
+        try:
             response = future.result(timeout=30)
+        except ModelAPIError as e:
+            # pydantic-ai turns every provider's API failure into ModelAPIError; a cause
+            # the operator can fix gets its own text, anything else goes to the app's handler.
+            error_msg = _ai_connection_error_message(e, model)
+            if error_msg is None:
+                raise
+            logger.warning("AI connection test failed: %s", error_msg, exc_info=e)
+            return jsonify({"success": False, "error": error_msg}), 400
 
-        return jsonify(
-            {
-                "success": True,
-                "message": f"Connection successful! Model responded: {response.word}",
-                "provider": provider,
-                "model": model,
-            }
-        )
-
-    except Exception as e:
-        error_msg = _ai_connection_error_message(e, model)
-        logger.error(f"AI test connection failed: {e}", exc_info=True)
-        return jsonify({"success": False, "error": error_msg}), 400
+    return jsonify(
+        {
+            "success": True,
+            "message": f"Connection successful! Model responded: {response.word}",
+            "provider": provider,
+            "model": model,
+        }
+    )
 
 
-def _ai_connection_error_message(e: Exception, model: str | None) -> str:
-    """Operator text for a failed AI connection test: a known cause, or a logged reference."""
+def _ai_connection_error_message(e: Exception, model: str) -> str | None:
+    """Operator text for a provider failure whose cause the operator can fix, or None."""
     error_text = str(e).lower()
     if "expired" in error_text:
         return "API key expired. Please renew your API key."
@@ -681,7 +670,7 @@ def _ai_connection_error_message(e: Exception, model: str | None) -> str:
         return f"Model '{model}' not found. Please check the model name."
     if "rate" in error_text or "quota" in error_text:
         return "Rate limit exceeded. Please try again later."
-    return safe_error_message(e, "AI connection test failed")
+    return None
 
 
 @settings_bp.route("/ai/test-logfire", methods=["POST"])
@@ -697,6 +686,7 @@ def test_logfire_connection(tenant_id):
 
         # Try to configure logfire with the token
         import logfire
+        from logfire.exceptions import LogfireConfigError
 
         # Create a test configuration
         try:
@@ -705,29 +695,28 @@ def test_logfire_connection(tenant_id):
                 token=logfire_token,
                 service_name="adcp-sales-agent-test",
             )
-
-            # Send a test span to verify the token works
-            with logfire.span("test_connection", _level="info") as span:
-                span.set_attribute("test", True)
-                span.set_attribute("tenant_id", tenant_id)
-
-            return jsonify(
-                {
-                    "success": True,
-                    "message": "Logfire connection successful! Check your Logfire dashboard for the test span.",
-                }
-            )
-
-        except Exception as config_error:
-            error_text = str(config_error)
-            if "401" in error_text or "unauthorized" in error_text.lower() or "invalid" in error_text.lower():
+        except LogfireConfigError as config_error:
+            error_text = str(config_error).lower()
+            if "401" in error_text or "unauthorized" in error_text or "invalid" in error_text:
                 error_msg = "Invalid Logfire token. Please check your credentials."
-            elif "403" in error_text or "forbidden" in error_text.lower():
+            elif "403" in error_text or "forbidden" in error_text:
                 error_msg = "Token does not have permission to send data."
             else:
-                error_msg = safe_error_message(config_error, "Logfire connection test failed")
-
+                raise
+            logger.warning("Logfire connection test failed: %s", error_msg, exc_info=config_error)
             return jsonify({"success": False, "error": error_msg}), 400
+
+        # Send a test span to verify the token works
+        with logfire.span("test_connection", _level="info") as span:
+            span.set_attribute("test", True)
+            span.set_attribute("tenant_id", tenant_id)
+
+        return jsonify(
+            {
+                "success": True,
+                "message": "Logfire connection successful! Check your Logfire dashboard for the test span.",
+            }
+        )
 
     except ImportError:
         return jsonify({"success": False, "error": "Logfire package not installed"}), 400
@@ -819,26 +808,21 @@ def add_authorized_domain(tenant_id):
     """Add domain to tenant's authorized domains list."""
     from src.admin.domain_access import add_authorized_domain as add_domain
 
-    try:
-        domain = request.form.get("domain", "").strip().lower()
+    domain = request.form.get("domain", "").strip().lower()
 
-        if not domain:
-            flash("Domain is required", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+    if not domain:
+        flash("Domain is required", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
 
-        # Basic domain validation
-        if not domain or "." not in domain or "@" in domain:
-            flash("Please enter a valid domain (e.g., company.com)", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+    # Basic domain validation
+    if not domain or "." not in domain or "@" in domain:
+        flash("Please enter a valid domain (e.g., company.com)", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
 
-        if add_domain(tenant_id, domain):
-            flash(f"Domain '{domain}' added successfully", "success")
-        else:
-            flash(f"Failed to add domain '{domain}'. It may already exist or be restricted.", "error")
-
-    except Exception as e:
-        logger.error(f"Error adding domain: {e}", exc_info=True)
-        flash("Error adding domain", "error")
+    if add_domain(tenant_id, domain):
+        flash(f"Domain '{domain}' added successfully", "success")
+    else:
+        flash(f"Failed to add domain '{domain}'. It may already exist or be restricted.", "error")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
 
@@ -850,21 +834,16 @@ def remove_authorized_domain(tenant_id):
     """Remove domain from tenant's authorized domains list."""
     from src.admin.domain_access import remove_authorized_domain as remove_domain
 
-    try:
-        domain = request.form.get("domain", "").strip().lower()
+    domain = request.form.get("domain", "").strip().lower()
 
-        if not domain:
-            flash("Domain is required", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+    if not domain:
+        flash("Domain is required", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
 
-        if remove_domain(tenant_id, domain):
-            flash(f"Domain '{domain}' removed successfully", "success")
-        else:
-            flash(f"Failed to remove domain '{domain}'", "error")
-
-    except Exception as e:
-        logger.error(f"Error removing domain: {e}", exc_info=True)
-        flash("Error removing domain", "error")
+    if remove_domain(tenant_id, domain):
+        flash(f"Domain '{domain}' removed successfully", "success")
+    else:
+        flash(f"Failed to remove domain '{domain}'", "error")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
 
@@ -876,26 +855,21 @@ def add_authorized_email(tenant_id):
     """Add email to tenant's authorized emails list."""
     from src.admin.domain_access import add_authorized_email as add_email
 
-    try:
-        email = request.form.get("email", "").strip().lower()
+    email = request.form.get("email", "").strip().lower()
 
-        if not email:
-            flash("Email is required", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+    if not email:
+        flash("Email is required", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
 
-        # Basic email validation
-        if not email or "@" not in email or "." not in email.split("@")[1]:
-            flash("Please enter a valid email address", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+    # Basic email validation
+    if not email or "@" not in email or "." not in email.split("@")[1]:
+        flash("Please enter a valid email address", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
 
-        if add_email(tenant_id, email):
-            flash(f"Email '{email}' added successfully", "success")
-        else:
-            flash(f"Failed to add email '{email}'. It may already exist or be restricted.", "error")
-
-    except Exception as e:
-        logger.error(f"Error adding email: {e}", exc_info=True)
-        flash("Error adding email", "error")
+    if add_email(tenant_id, email):
+        flash(f"Email '{email}' added successfully", "success")
+    else:
+        flash(f"Failed to add email '{email}'. It may already exist or be restricted.", "error")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
 
@@ -907,21 +881,16 @@ def remove_authorized_email(tenant_id):
     """Remove email from tenant's authorized emails list."""
     from src.admin.domain_access import remove_authorized_email as remove_email
 
-    try:
-        email = request.form.get("email", "").strip().lower()
+    email = request.form.get("email", "").strip().lower()
 
-        if not email:
-            flash("Email is required", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+    if not email:
+        flash("Email is required", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
 
-        if remove_email(tenant_id, email):
-            flash(f"Email '{email}' removed successfully", "success")
-        else:
-            flash(f"Failed to remove email '{email}'", "error")
-
-    except Exception as e:
-        logger.error(f"Error removing email: {e}", exc_info=True)
-        flash("Error removing email", "error")
+    if remove_email(tenant_id, email):
+        flash(f"Email '{email}' removed successfully", "success")
+    else:
+        flash(f"Failed to remove email '{email}'", "error")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
 
@@ -934,38 +903,33 @@ def test_domain_access(tenant_id):
     """Test email access for this tenant."""
     from src.admin.domain_access import get_user_tenant_access
 
-    try:
-        test_email = request.form.get("test_email", "").strip().lower()
+    test_email = request.form.get("test_email", "").strip().lower()
 
-        if not test_email:
-            flash("Email is required for testing", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
+    if not test_email:
+        flash("Email is required for testing", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
 
-        # Test access for this email
-        tenant_access = get_user_tenant_access(test_email)
+    # Test access for this email
+    tenant_access = get_user_tenant_access(test_email)
 
-        # Check if this tenant is in the results
-        has_access = False
-        access_type = None
+    # Check if this tenant is in the results
+    has_access = False
+    access_type = None
 
-        if tenant_access["domain_tenant"] and tenant_access["domain_tenant"].tenant_id == tenant_id:
+    if tenant_access["domain_tenant"] and tenant_access["domain_tenant"].tenant_id == tenant_id:
+        has_access = True
+        access_type = "domain"
+
+    for tenant in tenant_access["email_tenants"]:
+        if tenant.tenant_id == tenant_id:
             has_access = True
-            access_type = "domain"
+            access_type = "email"
+            break
 
-        for tenant in tenant_access["email_tenants"]:
-            if tenant.tenant_id == tenant_id:
-                has_access = True
-                access_type = "email"
-                break
-
-        if has_access:
-            flash(f"✅ Email '{test_email}' would have {access_type} access to this tenant", "success")
-        else:
-            flash(f"❌ Email '{test_email}' would NOT have access to this tenant", "warning")
-
-    except Exception as e:
-        logger.error(f"Error testing domain access: {e}", exc_info=True)
-        flash("Error testing email access", "error")
+    if has_access:
+        flash(f"✅ Email '{test_email}' would have {access_type} access to this tenant", "success")
+    else:
+        flash(f"❌ Email '{test_email}' would NOT have access to this tenant", "warning")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
 

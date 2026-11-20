@@ -10,17 +10,16 @@ from decimal import Decimal
 from typing import Any
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
-from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from pydantic import ValidationError
 from sqlalchemy import func, inspect, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
-from werkzeug.exceptions import HTTPException
 
 from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.admin.form_validation import sanitize_form_data
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import json_error
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import (
@@ -888,462 +887,446 @@ def add_product(tenant_id):
             currencies = ["USD"]
 
     if request.method == "POST":
-        try:
-            # Sanitize form data
-            form_data = sanitize_form_data(request.form.to_dict())
+        # Sanitize form data
+        form_data = sanitize_form_data(request.form.to_dict())
 
-            # Validate required fields
-            if not form_data.get("name"):
-                flash("Product name is required", "error")
+        # Validate required fields
+        if not form_data.get("name"):
+            flash("Product name is required", "error")
+            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+
+        with get_db_session() as db_session:
+            # format_ids IS NOT AUTHORED HERE. The pin deprecates it in AdCP 3.2,
+            # removes it in 4.0, and says outright "Do not author a new product from
+            # format_ids alone"; this epic's charter keeps format_id an INPUT only. So
+            # a product created here carries NO legacy arm and must author the
+            # canonical one, which `_refuse_a_product_with_no_format_arm` now enforces
+            # by reducing to exactly that. The column still EXISTS and existing rows
+            # keep their value -- not authored is not the same as dropped, and
+            # dropping it would be a migration this stage does not imply.
+
+            # The inventory profile, resolved FIRST because it decides the product's
+            # format contract: a linked profile supplies the declarations
+            # (``Product.format_contract``), so whether this product still has to author
+            # its own cannot be answered without it.
+            profile = None
+            inventory_profile_id = form_data.get("inventory_profile_id", "").strip()
+            if inventory_profile_id:
+                try:
+                    profile_id = int(inventory_profile_id)
+                except (ValueError, TypeError):
+                    flash("Invalid inventory profile ID", "error")
+                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                # SECURITY: Verify profile belongs to this tenant
+                from src.core.database.models import InventoryProfile
+
+                profile = db_session.scalars(select(InventoryProfile).filter_by(id=profile_id)).first()
+                if not profile or profile.tenant_id != tenant_id:
+                    flash(
+                        "Invalid inventory profile - profile not found or does not belong to this tenant",
+                        "error",
+                    )
+                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+
+            # Parse the CANONICAL arm the pin tells new products to author, and refuse
+            # only the state the anyOf actually refuses: neither arm -- read off the
+            # contract the product will be SERVED, so a product linked to a profile
+            # that declares formats is not made to author declarations its profile
+            # then overrides.
+            catalog = _publisher_catalog(db_session, tenant_id)
+            try:
+                format_options = _parse_authored_format_options(form_data.get("format_options"))
+                # ``None`` for the legacy arm, literally: a product created here HAS no
+                # legacy arm, and its canonical declarations come from the product or
+                # its profile, never from a legacy-only profile's ``format_ids``.
+                contract = linked_format_contract(
+                    profile=profile,
+                    format_options=format_options,
+                    format_ids=None,
+                    publisher_options=catalog.options,
+                )
+                # The arm as AUTHORED: a publisher-backed option that does not resolve is
+                # an authored option, refused with its own reason once the selection is
+                # known (``_refuse_unresolved_format_options``).
+                _refuse_a_product_with_no_format_arm(
+                    None, (profile.format_options if profile else None) or format_options
+                )
+            except ValueError as e:
+                flash(str(e), "error")
                 return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
-            with get_db_session() as db_session:
-                # format_ids IS NOT AUTHORED HERE. The pin deprecates it in AdCP 3.2,
-                # removes it in 4.0, and says outright "Do not author a new product from
-                # format_ids alone"; this epic's charter keeps format_id an INPUT only. So
-                # a product created here carries NO legacy arm and must author the
-                # canonical one, which `_refuse_a_product_with_no_format_arm` now enforces
-                # by reducing to exactly that. The column still EXISTS and existing rows
-                # keep their value -- not authored is not the same as dropped, and
-                # dropping it would be a migration this stage does not imply.
+            # Parse countries - from multi-select
+            countries_list = request.form.getlist("countries")
+            # Only set countries if some were selected; None means all countries
+            countries = countries_list if countries_list and "ALL" not in countries_list else None
 
-                # The inventory profile, resolved FIRST because it decides the product's
-                # format contract: a linked profile supplies the declarations
-                # (``Product.format_contract``), so whether this product still has to author
-                # its own cannot be answered without it.
-                profile = None
-                inventory_profile_id = form_data.get("inventory_profile_id", "").strip()
-                if inventory_profile_id:
-                    try:
-                        profile_id = int(inventory_profile_id)
-                    except (ValueError, TypeError):
-                        flash("Invalid inventory profile ID", "error")
-                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-                    # SECURITY: Verify profile belongs to this tenant
-                    from src.core.database.models import InventoryProfile
+            # Parse and create pricing options (AdCP PR #88)
+            try:
+                pricing_options_data = parse_pricing_options_from_form(form_data)
+            except ValueError as e:
+                flash(str(e), "error")
+                return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
-                    profile = db_session.scalars(select(InventoryProfile).filter_by(id=profile_id)).first()
-                    if not profile or profile.tenant_id != tenant_id:
+            # CRITICAL: Products MUST have at least one pricing option
+            if not pricing_options_data or len(pricing_options_data) == 0:
+                flash("Product must have at least one pricing option", "error")
+                return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+
+            # Derive delivery_type from first pricing option for implementation_config
+            delivery_type = "guaranteed"  # Default
+
+            if pricing_options_data and len(pricing_options_data) > 0:
+                first_option = pricing_options_data[0]
+                # Determine delivery_type based on is_fixed
+                if first_option.is_fixed:
+                    delivery_type = "guaranteed"
+                else:
+                    delivery_type = "non_guaranteed"
+
+            # Build implementation config based on adapter type
+            implementation_config = {}
+            if adapter_type == "google_ad_manager":
+                # Parse GAM-specific fields from unified form
+                gam_config_service = GAMProductConfigService()
+                # ``None`` for the legacy arm: a product created here has none. The
+                # seeder takes ``format_options`` so it can derive its placeholder from
+                # the canonical declarations (cd0d9921f) the product will be served --
+                # its profile's when it links one.
+                base_config = gam_config_service.generate_default_config(
+                    delivery_type, None, format_options=contract.format_options
+                )
+
+                # Add ad unit/placement targeting if provided
+                ad_unit_ids = form_data.get("targeted_ad_unit_ids", "").strip()
+                validated_ad_unit_ids = []
+                if ad_unit_ids:
+                    # Parse comma-separated IDs
+                    id_list = [id.strip() for id in ad_unit_ids.split(",") if id.strip()]
+
+                    # Validate that all IDs are numeric (GAM requires numeric IDs)
+                    invalid_ids = [id for id in id_list if not id.isdigit()]
+                    if invalid_ids:
                         flash(
-                            "Invalid inventory profile - profile not found or does not belong to this tenant",
+                            f"Invalid ad unit IDs: {', '.join(invalid_ids)}. "
+                            f"Ad unit IDs must be numeric (e.g., '23312403859'). "
+                            f"Use 'Browse Ad Units' to select valid ad units.",
                             "error",
                         )
+                        # Redirect to form instead of re-rendering to avoid missing context
                         return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
-                # Parse the CANONICAL arm the pin tells new products to author, and refuse
-                # only the state the anyOf actually refuses: neither arm -- read off the
-                # contract the product will be SERVED, so a product linked to a profile
-                # that declares formats is not made to author declarations its profile
-                # then overrides.
-                catalog = _publisher_catalog(db_session, tenant_id)
-                try:
-                    format_options = _parse_authored_format_options(form_data.get("format_options"))
-                    # ``None`` for the legacy arm, literally: a product created here HAS no
-                    # legacy arm, and its canonical declarations come from the product or
-                    # its profile, never from a legacy-only profile's ``format_ids``.
-                    contract = linked_format_contract(
-                        profile=profile,
-                        format_options=format_options,
-                        format_ids=None,
-                        publisher_options=catalog.options,
-                    )
-                    # The arm as AUTHORED: a publisher-backed option that does not resolve is
-                    # an authored option, refused with its own reason once the selection is
-                    # known (``_refuse_unresolved_format_options``).
-                    _refuse_a_product_with_no_format_arm(
-                        None, (profile.format_options if profile else None) or format_options
-                    )
-                except ValueError as e:
-                    flash(str(e), "error")
-                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                    # Validate ad unit IDs exist in inventory
+                    from src.core.database.models import GAMInventory
 
-                # Parse countries - from multi-select
-                countries_list = request.form.getlist("countries")
-                # Only set countries if some were selected; None means all countries
-                countries = countries_list if countries_list and "ALL" not in countries_list else None
+                    existing_ad_units = db_session.scalars(
+                        select(GAMInventory).filter(
+                            GAMInventory.tenant_id == tenant_id,
+                            GAMInventory.inventory_type == "ad_unit",
+                            GAMInventory.inventory_id.in_(id_list),
+                        )
+                    ).all()
 
-                # Parse and create pricing options (AdCP PR #88)
-                try:
-                    pricing_options_data = parse_pricing_options_from_form(form_data)
-                except ValueError as e:
-                    flash(str(e), "error")
-                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                    existing_ids = {unit.inventory_id for unit in existing_ad_units}
+                    missing_ids = set(id_list) - existing_ids
 
-                # CRITICAL: Products MUST have at least one pricing option
-                if not pricing_options_data or len(pricing_options_data) == 0:
-                    flash("Product must have at least one pricing option", "error")
-                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                    if missing_ids:
+                        flash(
+                            f"Ad unit IDs not found in synced inventory: {', '.join(missing_ids)}. "
+                            f"Please sync inventory first or use existing ad unit IDs.",
+                            "warning",
+                        )
+                        # Continue anyway - they might be valid in GAM but not synced yet
 
-                # Derive delivery_type from first pricing option for implementation_config
-                delivery_type = "guaranteed"  # Default
+                    validated_ad_unit_ids = id_list
+                    base_config["targeted_ad_unit_ids"] = id_list
 
+                placement_ids = form_data.get("targeted_placement_ids", "").strip()
+                validated_placement_ids = []
+                if placement_ids:
+                    id_list = [id.strip() for id in placement_ids.split(",") if id.strip()]
+
+                    # Validate placement IDs exist in inventory
+                    from src.core.database.models import GAMInventory
+
+                    existing_placements = db_session.scalars(
+                        select(GAMInventory).filter(
+                            GAMInventory.tenant_id == tenant_id,
+                            GAMInventory.inventory_type == "placement",
+                            GAMInventory.inventory_id.in_(id_list),
+                        )
+                    ).all()
+
+                    existing_ids = {p.inventory_id for p in existing_placements}
+                    missing_ids = set(id_list) - existing_ids
+
+                    if missing_ids:
+                        flash(
+                            f"Placement IDs not found in synced inventory: {', '.join(missing_ids)}. "
+                            f"Please sync inventory first or use existing placement IDs.",
+                            "warning",
+                        )
+                        # Continue anyway - they might be valid in GAM but not synced yet
+
+                    validated_placement_ids = id_list
+                    base_config["targeted_placement_ids"] = id_list
+
+                base_config["include_descendants"] = form_data.get("include_descendants") == "on"
+
+                # Add GAM-specific settings
+                if form_data.get("line_item_type"):
+                    base_config["line_item_type"] = form_data["line_item_type"]
+                if form_data.get("priority"):
+                    base_config["priority"] = int(form_data["priority"])
+
+                implementation_config = base_config
+            else:
+                # For other adapters, use simple config
+                gam_config_service = GAMProductConfigService()
+                # ``None`` for the legacy arm, because a product created here has no
+                # legacy arm to hand over. ``generate_default_config`` declares
+                # ``formats`` optional and takes ``format_options`` precisely so the
+                # seeder can derive its sizes from the canonical declarations
+                # (cd0d9921f) the product will be served -- its profile's when it links one.
+                implementation_config = gam_config_service.generate_default_config(
+                    delivery_type, None, format_options=contract.format_options
+                )
+
+            # Parse targeting template from form (includes custom targeting key-value pairs)
+            targeting_template_json = form_data.get("targeting_template", "{}")
+            try:
+                targeting_template = json.loads(targeting_template_json) if targeting_template_json else {}
+            except json.JSONDecodeError:
+                targeting_template = {}
+
+            # The widget sends the product's whole custom targeting; GAM reads it from
+            # implementation_config, stored as the model writes it
+            custom_targeting = CustomTargeting()
+            if targeting_template.get("key_value_pairs"):
+                implementation_config["custom_targeting_keys"] = targeting_template["key_value_pairs"]
+                if adapter_type == "google_ad_manager":
+                    read = _read_gam_custom_targeting(implementation_config["custom_targeting_keys"])
+                    if read is None:
+                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                    custom_targeting = read
+                    implementation_config["custom_targeting_keys"] = custom_targeting.to_stored()
+
+            # Build product kwargs, excluding None values for JSON fields that have database constraints
+            product_kwargs = {
+                "product_id": form_data.get("product_id") or f"prod_{uuid.uuid4().hex[:8]}",
+                "tenant_id": tenant_id,
+                "name": form_data["name"],
+                "description": form_data.get("description", ""),
+                # The two arms of core/product.json's root anyOf, each recorded as
+                # authored. NULL rather than [] for an arm the operator did not
+                # author: the column is nullable precisely so an unauthored arm is
+                # absent rather than present-and-empty.
+                "format_options": format_options,
+                "delivery_type": delivery_type,
+                "targeting_template": targeting_template,
+                "implementation_config": implementation_config,
+            }
+
+            # Inventory profile association (optional), resolved and checked above. The
+            # relationship too, so ``Product.format_contract`` reads the profile before the
+            # row is flushed.
+            if profile is not None:
+                product_kwargs["inventory_profile_id"] = profile.id
+                product_kwargs["inventory_profile"] = profile
+
+            # Only add countries if explicitly set
+            if countries is not None:
+                product_kwargs["countries"] = countries
+
+            # Handle channels field (advertising channels)
+            channels = request.form.getlist("channels")
+            if channels:
+                product_kwargs["channels"] = channels
+
+            # Handle principal access control (allowed_principal_ids)
+            # Empty list or no selection means visible to all (default)
+            allowed_principals = request.form.getlist("allowed_principal_ids")
+            if allowed_principals:
+                product_kwargs["allowed_principal_ids"] = allowed_principals
+
+            # Handle product detail fields (AdCP compliance)
+            # Delivery measurement (REQUIRED per AdCP spec)
+            delivery_measurement_provider = form_data.get("delivery_measurement_provider", "").strip()
+            delivery_measurement_notes = form_data.get("delivery_measurement_notes", "").strip()
+            if delivery_measurement_provider:
+                product_kwargs["delivery_measurement"] = {
+                    "provider": delivery_measurement_provider,
+                }
+                if delivery_measurement_notes:
+                    product_kwargs["delivery_measurement"]["notes"] = delivery_measurement_notes
+
+            # Product image for card generation (optional)
+            product_image_url = form_data.get("product_image_url", "").strip()
+            if product_image_url:
+                # Auto-generate product card from image and product data
+                product_kwargs["product_card"] = {
+                    "format_id": {
+                        "agent_url": "https://creative.adcontextprotocol.org/",
+                        "id": "product_card_standard",
+                    },
+                    "manifest": {
+                        "product_image": product_image_url,
+                        "product_name": form_data["name"],
+                        "product_description": form_data.get("description", ""),
+                        "delivery_type": delivery_type,
+                    },
+                }
+                # Add pricing info to manifest if available
                 if pricing_options_data and len(pricing_options_data) > 0:
                     first_option = pricing_options_data[0]
-                    # Determine delivery_type based on is_fixed
-                    if first_option.is_fixed:
-                        delivery_type = "guaranteed"
+                    product_kwargs["product_card"]["manifest"]["pricing_model"] = first_option.pricing_model
+                    # ``fixed_price`` is what this branch used to read, and the form
+                    # parser has never produced that key — so a created product's card
+                    # never carried an amount. The column is ``rate``, as the edit path
+                    # below already read.
+                    if first_option.is_fixed and first_option.rate:
+                        product_kwargs["product_card"]["manifest"]["pricing_amount"] = str(first_option.rate)
+                        product_kwargs["product_card"]["manifest"]["pricing_currency"] = first_option.currency
+
+            # The publishers the product sells (AdCP requirement): every mode builds selectors.
+            property_mode = form_data.get("property_mode", "tags")
+            if property_mode not in _SELECTION_FIELDS:
+                flash(f"Unknown property selection mode: {property_mode}", "error")
+                return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+            selectors, refusal = _selectors_from_product_form(catalog.refs, property_mode)
+            if refusal:
+                flash(refusal, "error")
+                return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+            product_kwargs["publisher_selections"] = ProductPublisherSelection.from_selectors(tenant_id, selectors)
+            try:
+                _refuse_unresolved_format_options(
+                    (profile.format_options if profile else None) or format_options,
+                    profile.stored_publisher_properties if profile else selectors,
+                    catalog,
+                )
+            except ValueError as e:
+                flash(str(e), "error")
+                return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+
+            # Handle dynamic product fields
+            is_dynamic = form_data.get("is_dynamic") in [True, "true", "on", 1, "1"]
+            if is_dynamic:
+                product_kwargs["is_dynamic"] = True
+
+                # Handle signals agent selection (radio buttons: "all" vs "specific")
+                signals_agent_selection = form_data.get("signals_agent_selection", "all")
+                if signals_agent_selection == "specific":
+                    # Get specific signals agent IDs (multi-select)
+                    signals_agent_ids = request.form.getlist("signals_agent_ids")
+                    if signals_agent_ids:
+                        product_kwargs["signals_agent_ids"] = signals_agent_ids
                     else:
-                        delivery_type = "non_guaranteed"
-
-                # Build implementation config based on adapter type
-                implementation_config = {}
-                if adapter_type == "google_ad_manager":
-                    # Parse GAM-specific fields from unified form
-                    gam_config_service = GAMProductConfigService()
-                    # ``None`` for the legacy arm: a product created here has none. The
-                    # seeder takes ``format_options`` so it can derive its placeholder from
-                    # the canonical declarations (cd0d9921f) the product will be served --
-                    # its profile's when it links one.
-                    base_config = gam_config_service.generate_default_config(
-                        delivery_type, None, format_options=contract.format_options
-                    )
-
-                    # Add ad unit/placement targeting if provided
-                    ad_unit_ids = form_data.get("targeted_ad_unit_ids", "").strip()
-                    validated_ad_unit_ids = []
-                    if ad_unit_ids:
-                        # Parse comma-separated IDs
-                        id_list = [id.strip() for id in ad_unit_ids.split(",") if id.strip()]
-
-                        # Validate that all IDs are numeric (GAM requires numeric IDs)
-                        invalid_ids = [id for id in id_list if not id.isdigit()]
-                        if invalid_ids:
-                            flash(
-                                f"Invalid ad unit IDs: {', '.join(invalid_ids)}. "
-                                f"Ad unit IDs must be numeric (e.g., '23312403859'). "
-                                f"Use 'Browse Ad Units' to select valid ad units.",
-                                "error",
-                            )
-                            # Redirect to form instead of re-rendering to avoid missing context
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                        # Validate ad unit IDs exist in inventory
-                        from src.core.database.models import GAMInventory
-
-                        existing_ad_units = db_session.scalars(
-                            select(GAMInventory).filter(
-                                GAMInventory.tenant_id == tenant_id,
-                                GAMInventory.inventory_type == "ad_unit",
-                                GAMInventory.inventory_id.in_(id_list),
-                            )
-                        ).all()
-
-                        existing_ids = {unit.inventory_id for unit in existing_ad_units}
-                        missing_ids = set(id_list) - existing_ids
-
-                        if missing_ids:
-                            flash(
-                                f"Ad unit IDs not found in synced inventory: {', '.join(missing_ids)}. "
-                                f"Please sync inventory first or use existing ad unit IDs.",
-                                "warning",
-                            )
-                            # Continue anyway - they might be valid in GAM but not synced yet
-
-                        validated_ad_unit_ids = id_list
-                        base_config["targeted_ad_unit_ids"] = id_list
-
-                    placement_ids = form_data.get("targeted_placement_ids", "").strip()
-                    validated_placement_ids = []
-                    if placement_ids:
-                        id_list = [id.strip() for id in placement_ids.split(",") if id.strip()]
-
-                        # Validate placement IDs exist in inventory
-                        from src.core.database.models import GAMInventory
-
-                        existing_placements = db_session.scalars(
-                            select(GAMInventory).filter(
-                                GAMInventory.tenant_id == tenant_id,
-                                GAMInventory.inventory_type == "placement",
-                                GAMInventory.inventory_id.in_(id_list),
-                            )
-                        ).all()
-
-                        existing_ids = {p.inventory_id for p in existing_placements}
-                        missing_ids = set(id_list) - existing_ids
-
-                        if missing_ids:
-                            flash(
-                                f"Placement IDs not found in synced inventory: {', '.join(missing_ids)}. "
-                                f"Please sync inventory first or use existing placement IDs.",
-                                "warning",
-                            )
-                            # Continue anyway - they might be valid in GAM but not synced yet
-
-                        validated_placement_ids = id_list
-                        base_config["targeted_placement_ids"] = id_list
-
-                    base_config["include_descendants"] = form_data.get("include_descendants") == "on"
-
-                    # Add GAM-specific settings
-                    if form_data.get("line_item_type"):
-                        base_config["line_item_type"] = form_data["line_item_type"]
-                    if form_data.get("priority"):
-                        base_config["priority"] = int(form_data["priority"])
-
-                    implementation_config = base_config
+                        # User selected "specific" but didn't choose any agents - error
+                        flash("Please select at least one signals agent", "error")
+                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
                 else:
-                    # For other adapters, use simple config
-                    gam_config_service = GAMProductConfigService()
-                    # ``None`` for the legacy arm, because a product created here has no
-                    # legacy arm to hand over. ``generate_default_config`` declares
-                    # ``formats`` optional and takes ``format_options`` precisely so the
-                    # seeder can derive its sizes from the canonical declarations
-                    # (cd0d9921f) the product will be served -- its profile's when it links one.
-                    implementation_config = gam_config_service.generate_default_config(
-                        delivery_type, None, format_options=contract.format_options
-                    )
+                    # "all" selected - set signals_agent_ids to None or empty list to indicate "use all"
+                    product_kwargs["signals_agent_ids"] = None
 
-                # Parse targeting template from form (includes custom targeting key-value pairs)
-                targeting_template_json = form_data.get("targeting_template", "{}")
+                # Handle variant naming pattern (radio buttons)
+                variant_name_pattern = form_data.get("variant_name_pattern", "default")
+                if variant_name_pattern == "signal_only":
+                    product_kwargs["variant_name_template"] = "{{signal.name}}"
+                elif variant_name_pattern == "custom":
+                    variant_name_template = form_data.get("variant_name_template", "").strip()
+                    if variant_name_template:
+                        product_kwargs["variant_name_template"] = variant_name_template
+                # else: default pattern (None) - uses "Product Name - Signal Name"
+
+                # Handle append signal description checkbox
+                append_signal_description = form_data.get("append_signal_description") == "on"
+                if not append_signal_description:
+                    # User unchecked - don't append signal description (empty template means no auto-append)
+                    product_kwargs["variant_description_template"] = ""
+                # else: None (default behavior - auto-append signal description)
+
+                # Get max signals
+                max_signals = form_data.get("max_signals", "5")
                 try:
-                    targeting_template = json.loads(targeting_template_json) if targeting_template_json else {}
-                except json.JSONDecodeError:
-                    targeting_template = {}
+                    product_kwargs["max_signals"] = int(max_signals)
+                except ValueError:
+                    product_kwargs["max_signals"] = 5
 
-                # The widget sends the product's whole custom targeting; GAM reads it from
-                # implementation_config, stored as the model writes it
-                custom_targeting = CustomTargeting()
-                if targeting_template.get("key_value_pairs"):
-                    implementation_config["custom_targeting_keys"] = targeting_template["key_value_pairs"]
-                    if adapter_type == "google_ad_manager":
-                        read = _read_gam_custom_targeting(implementation_config["custom_targeting_keys"])
-                        if read is None:
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-                        custom_targeting = read
-                        implementation_config["custom_targeting_keys"] = custom_targeting.to_stored()
-
-                # Build product kwargs, excluding None values for JSON fields that have database constraints
-                product_kwargs = {
-                    "product_id": form_data.get("product_id") or f"prod_{uuid.uuid4().hex[:8]}",
-                    "tenant_id": tenant_id,
-                    "name": form_data["name"],
-                    "description": form_data.get("description", ""),
-                    # The two arms of core/product.json's root anyOf, each recorded as
-                    # authored. NULL rather than [] for an arm the operator did not
-                    # author: the column is nullable precisely so an unauthored arm is
-                    # absent rather than present-and-empty.
-                    "format_options": format_options,
-                    "delivery_type": delivery_type,
-                    "targeting_template": targeting_template,
-                    "implementation_config": implementation_config,
-                }
-
-                # Inventory profile association (optional), resolved and checked above. The
-                # relationship too, so ``Product.format_contract`` reads the profile before the
-                # row is flushed.
-                if profile is not None:
-                    product_kwargs["inventory_profile_id"] = profile.id
-                    product_kwargs["inventory_profile"] = profile
-
-                # Only add countries if explicitly set
-                if countries is not None:
-                    product_kwargs["countries"] = countries
-
-                # Handle channels field (advertising channels)
-                channels = request.form.getlist("channels")
-                if channels:
-                    product_kwargs["channels"] = channels
-
-                # Handle principal access control (allowed_principal_ids)
-                # Empty list or no selection means visible to all (default)
-                allowed_principals = request.form.getlist("allowed_principal_ids")
-                if allowed_principals:
-                    product_kwargs["allowed_principal_ids"] = allowed_principals
-
-                # Handle product detail fields (AdCP compliance)
-                # Delivery measurement (REQUIRED per AdCP spec)
-                delivery_measurement_provider = form_data.get("delivery_measurement_provider", "").strip()
-                delivery_measurement_notes = form_data.get("delivery_measurement_notes", "").strip()
-                if delivery_measurement_provider:
-                    product_kwargs["delivery_measurement"] = {
-                        "provider": delivery_measurement_provider,
-                    }
-                    if delivery_measurement_notes:
-                        product_kwargs["delivery_measurement"]["notes"] = delivery_measurement_notes
-
-                # Product image for card generation (optional)
-                product_image_url = form_data.get("product_image_url", "").strip()
-                if product_image_url:
-                    # Auto-generate product card from image and product data
-                    product_kwargs["product_card"] = {
-                        "format_id": {
-                            "agent_url": "https://creative.adcontextprotocol.org/",
-                            "id": "product_card_standard",
-                        },
-                        "manifest": {
-                            "product_image": product_image_url,
-                            "product_name": form_data["name"],
-                            "product_description": form_data.get("description", ""),
-                            "delivery_type": delivery_type,
-                        },
-                    }
-                    # Add pricing info to manifest if available
-                    if pricing_options_data and len(pricing_options_data) > 0:
-                        first_option = pricing_options_data[0]
-                        product_kwargs["product_card"]["manifest"]["pricing_model"] = first_option.pricing_model
-                        # ``fixed_price`` is what this branch used to read, and the form
-                        # parser has never produced that key — so a created product's card
-                        # never carried an amount. The column is ``rate``, as the edit path
-                        # below already read.
-                        if first_option.is_fixed and first_option.rate:
-                            product_kwargs["product_card"]["manifest"]["pricing_amount"] = str(first_option.rate)
-                            product_kwargs["product_card"]["manifest"]["pricing_currency"] = first_option.currency
-
-                # The publishers the product sells (AdCP requirement): every mode builds selectors.
-                property_mode = form_data.get("property_mode", "tags")
-                if property_mode not in _SELECTION_FIELDS:
-                    flash(f"Unknown property selection mode: {property_mode}", "error")
-                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-                selectors, refusal = _selectors_from_product_form(catalog.refs, property_mode)
-                if refusal:
-                    flash(refusal, "error")
-                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-                product_kwargs["publisher_selections"] = ProductPublisherSelection.from_selectors(tenant_id, selectors)
-                try:
-                    _refuse_unresolved_format_options(
-                        (profile.format_options if profile else None) or format_options,
-                        profile.stored_publisher_properties if profile else selectors,
-                        catalog,
-                    )
-                except ValueError as e:
-                    flash(str(e), "error")
-                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                # Handle dynamic product fields
-                is_dynamic = form_data.get("is_dynamic") in [True, "true", "on", 1, "1"]
-                if is_dynamic:
-                    product_kwargs["is_dynamic"] = True
-
-                    # Handle signals agent selection (radio buttons: "all" vs "specific")
-                    signals_agent_selection = form_data.get("signals_agent_selection", "all")
-                    if signals_agent_selection == "specific":
-                        # Get specific signals agent IDs (multi-select)
-                        signals_agent_ids = request.form.getlist("signals_agent_ids")
-                        if signals_agent_ids:
-                            product_kwargs["signals_agent_ids"] = signals_agent_ids
-                        else:
-                            # User selected "specific" but didn't choose any agents - error
-                            flash("Please select at least one signals agent", "error")
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-                    else:
-                        # "all" selected - set signals_agent_ids to None or empty list to indicate "use all"
-                        product_kwargs["signals_agent_ids"] = None
-
-                    # Handle variant naming pattern (radio buttons)
-                    variant_name_pattern = form_data.get("variant_name_pattern", "default")
-                    if variant_name_pattern == "signal_only":
-                        product_kwargs["variant_name_template"] = "{{signal.name}}"
-                    elif variant_name_pattern == "custom":
-                        variant_name_template = form_data.get("variant_name_template", "").strip()
-                        if variant_name_template:
-                            product_kwargs["variant_name_template"] = variant_name_template
-                    # else: default pattern (None) - uses "Product Name - Signal Name"
-
-                    # Handle append signal description checkbox
-                    append_signal_description = form_data.get("append_signal_description") == "on"
-                    if not append_signal_description:
-                        # User unchecked - don't append signal description (empty template means no auto-append)
-                        product_kwargs["variant_description_template"] = ""
-                    # else: None (default behavior - auto-append signal description)
-
-                    # Get max signals
-                    max_signals = form_data.get("max_signals", "5")
+                # Get variant TTL days (optional)
+                variant_ttl_days = form_data.get("variant_ttl_days", "").strip()
+                if variant_ttl_days:
                     try:
-                        product_kwargs["max_signals"] = int(max_signals)
+                        product_kwargs["variant_ttl_days"] = int(variant_ttl_days)
                     except ValueError:
-                        product_kwargs["max_signals"] = 5
+                        flash(f"Invalid variant TTL days: '{variant_ttl_days}' is not a number", "error")
+                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
-                    # Get variant TTL days (optional)
-                    variant_ttl_days = form_data.get("variant_ttl_days", "").strip()
-                    if variant_ttl_days:
-                        try:
-                            product_kwargs["variant_ttl_days"] = int(variant_ttl_days)
-                        except ValueError:
-                            flash(f"Invalid variant TTL days: '{variant_ttl_days}' is not a number", "error")
-                            return _render_add_product_form(tenant_id, form_data=form_data)
+            # Create product with correct fields matching the Product model
+            product = Product(**product_kwargs)
+            db_session.add(product)
+            # The contract the product is SERVED, whichever arm supplies it: a linked
+            # profile announces its declarations on the product's behalf.
+            try:
+                refuse_outside_common_intersection(product)
+            except ValueError as e:
+                db_session.rollback()
+                flash(str(e), "error")
+                return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+            db_session.flush()  # Flush to get product ID before creating pricing options
 
-                # Create product with correct fields matching the Product model
-                product = Product(**product_kwargs)
-                db_session.add(product)
-                # The contract the product is SERVED, whichever arm supplies it: a linked
-                # profile announces its declarations on the product's behalf.
-                try:
-                    refuse_outside_common_intersection(product)
-                except ValueError as e:
-                    db_session.rollback()
-                    flash(str(e), "error")
-                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-                db_session.flush()  # Flush to get product ID before creating pricing options
+            # Create pricing options (already parsed above)
+            if pricing_options_data:
+                logger.info(f"Creating {len(pricing_options_data)} pricing options for product {product.product_id}")
+                for pricing_option in pricing_options_data:
+                    pricing_option.tenant_id = tenant_id
+                    pricing_option.product_id = product.product_id
+                    db_session.add(pricing_option)
 
-                # Create pricing options (already parsed above)
-                if pricing_options_data:
+            # Create inventory mappings for GAM ad units and placements
+            if adapter_type == "google_ad_manager":
+                # Save ad unit mappings
+                if validated_ad_unit_ids:
                     logger.info(
-                        f"Creating {len(pricing_options_data)} pricing options for product {product.product_id}"
+                        f"Creating {len(validated_ad_unit_ids)} ad unit mappings for product {product.product_id}"
                     )
-                    for pricing_option in pricing_options_data:
-                        pricing_option.tenant_id = tenant_id
-                        pricing_option.product_id = product.product_id
-                        db_session.add(pricing_option)
-
-                # Create inventory mappings for GAM ad units and placements
-                if adapter_type == "google_ad_manager":
-                    # Save ad unit mappings
-                    if validated_ad_unit_ids:
-                        logger.info(
-                            f"Creating {len(validated_ad_unit_ids)} ad unit mappings for product {product.product_id}"
+                    for idx, ad_unit_id in enumerate(validated_ad_unit_ids):
+                        mapping = ProductInventoryMapping(
+                            tenant_id=tenant_id,
+                            product_id=product.product_id,
+                            inventory_type="ad_unit",
+                            inventory_id=ad_unit_id,
+                            is_primary=(idx == 0),  # First ad unit is primary
                         )
-                        for idx, ad_unit_id in enumerate(validated_ad_unit_ids):
-                            mapping = ProductInventoryMapping(
-                                tenant_id=tenant_id,
-                                product_id=product.product_id,
-                                inventory_type="ad_unit",
-                                inventory_id=ad_unit_id,
-                                is_primary=(idx == 0),  # First ad unit is primary
-                            )
-                            db_session.add(mapping)
+                        db_session.add(mapping)
 
-                    # Save placement mappings
-                    if validated_placement_ids:
-                        logger.info(
-                            f"Creating {len(validated_placement_ids)} placement mappings for product {product.product_id}"
+                # Save placement mappings
+                if validated_placement_ids:
+                    logger.info(
+                        f"Creating {len(validated_placement_ids)} placement mappings for product {product.product_id}"
+                    )
+                    for idx, placement_id in enumerate(validated_placement_ids):
+                        mapping = ProductInventoryMapping(
+                            tenant_id=tenant_id,
+                            product_id=product.product_id,
+                            inventory_type="placement",
+                            inventory_id=placement_id,
+                            is_primary=(idx == 0),  # First placement is primary
                         )
-                        for idx, placement_id in enumerate(validated_placement_ids):
-                            mapping = ProductInventoryMapping(
-                                tenant_id=tenant_id,
-                                product_id=product.product_id,
-                                inventory_type="placement",
-                                inventory_id=placement_id,
-                                is_primary=(idx == 0),  # First placement is primary
-                            )
-                            db_session.add(mapping)
+                        db_session.add(mapping)
 
-                    # Save custom targeting key mappings
-                    if custom_targeting.branches:
-                        mapping_count = create_custom_key_inventory_mappings(
-                            db_session, tenant_id, product.product_id, custom_targeting
-                        )
-                        logger.info(
-                            f"Created {mapping_count} custom targeting key mappings for product {product.product_id}"
-                        )
+                # Save custom targeting key mappings
+                if custom_targeting.branches:
+                    mapping_count = create_custom_key_inventory_mappings(
+                        db_session, tenant_id, product.product_id, custom_targeting
+                    )
+                    logger.info(
+                        f"Created {mapping_count} custom targeting key mappings for product {product.product_id}"
+                    )
 
-                db_session.commit()
+            db_session.commit()
 
-                flash(f"Product '{product.name}' created successfully!", "success")
-                # Redirect to products list
-                return redirect(url_for("products.list_products", tenant_id=tenant_id))
-
-        except HTTPException:
-            # Werkzeug's own control flow, not a failure to report -- see the twin handler at
-            # the end of ``edit_product`` for why this is re-raised rather than rendered.
-            raise
-        except Exception:
-            # Says nothing to the operator about their input, for the same reason as
-            # ``edit_product``'s handler: every failure this function CAN act on is caught by
-            # one of its eight typed handlers, which re-render the form with a message. An
-            # exception arriving here is a defect in this code or an outage beneath it, and
-            # flashing ``str(e)`` asserted that the operator caused it.
-            logger.error(f"Unhandled error creating product for tenant {tenant_id}", exc_info=True)
-            abort(500)
+            flash(f"Product '{product.name}' created successfully!", "success")
+            # Redirect to products list
+            return redirect(url_for("products.list_products", tenant_id=tenant_id))
 
     # GET request - show adapter-specific form (use helper with no form_data)
     return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data=None)
@@ -1394,752 +1377,696 @@ def edit_product(tenant_id, product_id):
         # here -- an edit that submits one arm leaves the other at its stored value -- so
         # the anyOf is checked below, once both arms carry their post-edit values.
 
-    try:
-        with get_db_session() as db_session:
-            product = db_session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
-            if not product:
-                flash("Product not found", "error")
-                return redirect(url_for("products.list_products", tenant_id=tenant_id))
-            catalog = _publisher_catalog(db_session, tenant_id)
+    with get_db_session() as db_session:
+        product = db_session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
+        if not product:
+            flash("Product not found", "error")
+            return redirect(url_for("products.list_products", tenant_id=tenant_id))
+        catalog = _publisher_catalog(db_session, tenant_id)
 
-            if request.method == "POST":
-                # Sanitize form data
-                form_data = sanitize_form_data(request.form.to_dict())
+        if request.method == "POST":
+            # Sanitize form data
+            form_data = sanitize_form_data(request.form.to_dict())
 
-                # Update basic fields
-                product.name = form_data.get("name", product.name)
-                product.description = form_data.get("description", product.description)
+            # Update basic fields
+            product.name = form_data.get("name", product.name)
+            product.description = form_data.get("description", product.description)
 
-                # The save is judged against the selection the page rendered, not one recomputed now.
-                selection_save = judge_selection_save(
-                    request.form.get("rendered_selection"), request.form.getlist, _selection_digest(product)
-                )
-                if selection_save == "stale":
-                    flash(STALE_SELECTION_MESSAGE.format(subject="product"), "error")
-                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+            # The save is judged against the selection the page rendered, not one recomputed now.
+            selection_save = judge_selection_save(
+                request.form.get("rendered_selection"), request.form.getlist, _selection_digest(product)
+            )
+            if selection_save == "stale":
+                flash(STALE_SELECTION_MESSAGE.format(subject="product"), "error")
+                return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
 
-                # Handle inventory profile association (optional)
+            # Handle inventory profile association (optional)
 
-                # Check for inventory_profile_id directly (no need for inventory_mode radio button)
-                inventory_profile_id = form_data.get("inventory_profile_id", "").strip()
-                if inventory_profile_id:
-                    try:
-                        profile_id = int(inventory_profile_id)
-                        # SECURITY: Verify profile belongs to this tenant
-                        from src.core.database.models import InventoryProfile
-
-                        profile_stmt = select(InventoryProfile).filter_by(id=profile_id)
-                        profile = db_session.scalars(profile_stmt).first()
-                        if not profile or profile.tenant_id != tenant_id:
-                            flash(
-                                "Invalid inventory profile - profile not found or does not belong to this tenant",
-                                "error",
-                            )
-                            return redirect(
-                                url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
-                            )
-                        # The relationship too, so ``Product.format_contract`` reads the new link
-                        # before the row is flushed.
-                        product.inventory_profile_id = profile_id
-                        product.inventory_profile = profile
-                    except (ValueError, TypeError):
-                        flash("Invalid inventory profile ID", "error")
-                        return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
-                else:
-                    # No profile selected - clear inventory profile association
-                    product.inventory_profile_id = None
-                    product.inventory_profile = None
-
-                # Apply the canonical arm (validated above, outside the session).
-                #
-                # format_ids is not authored here. A legacy-only product keeps it as stored, so
-                # an edit cannot drop its only format declaration; once the product authors
-                # canonical declarations the stored column is retired, because its legacy arm
-                # is then derived from them (`Product.format_contract`) and a column kept
-                # beside them would be the "second authored catalog" canonical-formats.mdx's
-                # producer rules forbid.
-                if format_options_submitted:
-                    product.format_options = authored_format_options
-                    if authored_format_options:
-                        product.format_ids = None
-                    from sqlalchemy.orm import attributes
-
-                    attributes.flag_modified(product, "format_options")
-
-                # The anyOf, now that both arms and the profile link carry their post-edit
-                # values: the contract the product will be served, so a linked profile's
-                # declarations count.
+            # Check for inventory_profile_id directly (no need for inventory_mode radio button)
+            inventory_profile_id = form_data.get("inventory_profile_id", "").strip()
+            if inventory_profile_id:
                 try:
-                    linked = product.inventory_profile if product.inventory_profile_id else None
-                    _refuse_a_product_with_no_format_arm(
-                        list(product.format_contract.format_ids),
-                        (linked.format_options if linked else None) or product.format_options,
-                    )
-                except ValueError as e:
-                    flash(str(e), "error")
-                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+                    profile_id = int(inventory_profile_id)
+                    # SECURITY: Verify profile belongs to this tenant
+                    from src.core.database.models import InventoryProfile
 
-                # Parse countries - from multi-select
-                countries_list = request.form.getlist("countries")
-                if countries_list and "ALL" not in countries_list:
-                    product.countries = countries_list
-                    from sqlalchemy.orm import attributes
-
-                    attributes.flag_modified(product, "countries")
-                else:
-                    product.countries = None
-                    from sqlalchemy.orm import attributes
-
-                    attributes.flag_modified(product, "countries")
-
-                # Handle channels field (advertising channels)
-                from sqlalchemy.orm import attributes
-
-                channels = request.form.getlist("channels")
-                if channels:
-                    product.channels = channels
-                else:
-                    product.channels = None
-                attributes.flag_modified(product, "channels")
-
-                # Handle principal access control (allowed_principal_ids)
-                # Empty list or no selection means visible to all (default)
-                from sqlalchemy.orm import attributes
-
-                allowed_principals = request.form.getlist("allowed_principal_ids")
-                if allowed_principals:
-                    product.allowed_principal_ids = allowed_principals
-                else:
-                    product.allowed_principal_ids = None
-                attributes.flag_modified(product, "allowed_principal_ids")
-
-                # Handle publisher properties (AdCP requirement)
-                property_mode = form_data.get("property_mode", "tags")
-                if property_mode in _SELECTION_FIELDS and selection_save == "changed":
-                    # An empty selection leaves the stored one as it is, and so does a save posting
-                    # what the page rendered: the boxes cannot express every stored selection, so
-                    # writing them back would rewrite what the save never touched.
-                    if request.form.getlist(_SELECTION_FIELDS[property_mode]):
-                        selectors, refusal = _selectors_from_product_form(catalog.refs, property_mode)
-                        if refusal:
-                            flash(refusal, "error")
-                            return redirect(
-                                url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
-                            )
-                        # A stored choice this section shows no box for is kept (kept_choices).
-                        kept = kept_choices(_own_selectors(product), catalog.refs, property_mode)
-                        product.publisher_selections = ProductPublisherSelection.from_selectors(
-                            tenant_id, kept_selectors(selectors, kept)
+                    profile_stmt = select(InventoryProfile).filter_by(id=profile_id)
+                    profile = db_session.scalars(profile_stmt).first()
+                    if not profile or profile.tenant_id != tenant_id:
+                        flash(
+                            "Invalid inventory profile - profile not found or does not belong to this tenant",
+                            "error",
                         )
+                        return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+                    # The relationship too, so ``Product.format_contract`` reads the new link
+                    # before the row is flushed.
+                    product.inventory_profile_id = profile_id
+                    product.inventory_profile = profile
+                except (ValueError, TypeError):
+                    flash("Invalid inventory profile ID", "error")
+                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+            else:
+                # No profile selected - clear inventory profile association
+                product.inventory_profile_id = None
+                product.inventory_profile = None
 
-                # A publisher-backed format option must resolve for the product as saved: its
-                # declarations and its selection (its profile's, when it links one).
-                try:
-                    profile = product.inventory_profile if product.inventory_profile_id else None
-                    _refuse_unresolved_format_options(
-                        (profile.format_options if profile else None) or product.format_options,
-                        product.stored_publisher_properties,
-                        catalog,
+            # Apply the canonical arm (validated above, outside the session).
+            #
+            # format_ids is not authored here. A legacy-only product keeps it as stored, so
+            # an edit cannot drop its only format declaration; once the product authors
+            # canonical declarations the stored column is retired, because its legacy arm
+            # is then derived from them (`Product.format_contract`) and a column kept
+            # beside them would be the "second authored catalog" canonical-formats.mdx's
+            # producer rules forbid.
+            if format_options_submitted:
+                product.format_options = authored_format_options
+                if authored_format_options:
+                    product.format_ids = None
+                from sqlalchemy.orm import attributes
+
+                attributes.flag_modified(product, "format_options")
+
+            # The anyOf, now that both arms and the profile link carry their post-edit
+            # values: the contract the product will be served, so a linked profile's
+            # declarations count.
+            try:
+                linked = product.inventory_profile if product.inventory_profile_id else None
+                _refuse_a_product_with_no_format_arm(
+                    list(product.format_contract.format_ids),
+                    (linked.format_options if linked else None) or product.format_options,
+                )
+            except ValueError as e:
+                flash(str(e), "error")
+                return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
+            # Parse countries - from multi-select
+            countries_list = request.form.getlist("countries")
+            if countries_list and "ALL" not in countries_list:
+                product.countries = countries_list
+                from sqlalchemy.orm import attributes
+
+                attributes.flag_modified(product, "countries")
+            else:
+                product.countries = None
+                from sqlalchemy.orm import attributes
+
+                attributes.flag_modified(product, "countries")
+
+            # Handle channels field (advertising channels)
+            from sqlalchemy.orm import attributes
+
+            channels = request.form.getlist("channels")
+            if channels:
+                product.channels = channels
+            else:
+                product.channels = None
+            attributes.flag_modified(product, "channels")
+
+            # Handle principal access control (allowed_principal_ids)
+            # Empty list or no selection means visible to all (default)
+            from sqlalchemy.orm import attributes
+
+            allowed_principals = request.form.getlist("allowed_principal_ids")
+            if allowed_principals:
+                product.allowed_principal_ids = allowed_principals
+            else:
+                product.allowed_principal_ids = None
+            attributes.flag_modified(product, "allowed_principal_ids")
+
+            # Handle publisher properties (AdCP requirement)
+            property_mode = form_data.get("property_mode", "tags")
+            if property_mode in _SELECTION_FIELDS and selection_save == "changed":
+                # An empty selection leaves the stored one as it is, and so does a save posting
+                # what the page rendered: the boxes cannot express every stored selection, so
+                # writing them back would rewrite what the save never touched.
+                if request.form.getlist(_SELECTION_FIELDS[property_mode]):
+                    selectors, refusal = _selectors_from_product_form(catalog.refs, property_mode)
+                    if refusal:
+                        flash(refusal, "error")
+                        return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+                    # A stored choice this section shows no box for is kept (kept_choices).
+                    kept = kept_choices(_own_selectors(product), catalog.refs, property_mode)
+                    product.publisher_selections = ProductPublisherSelection.from_selectors(
+                        tenant_id, kept_selectors(selectors, kept)
                     )
-                except ValueError as e:
-                    flash(str(e), "error")
-                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
 
-                # No ``line_item_type`` is read here. The GAM form does not submit one -- no
-                # template in this repository declares a field by that name -- so the branches
-                # that used to hang off it could not execute, and one of them had carried a
-                # NameError for its whole life behind that unsatisfiable guard.
-                #
-                # Two gaps the deletion makes visible are tracked rather than papered over, and
-                # both predate it: this path never recomputes ``product.delivery_type`` from the
-                # pricing options it replaces below, and an edit that changes the product's
-                # format declarations leaves the seeded ``creative_placeholders`` stale. A
-                # reseed must key on the declarations having changed, never on a GAM form field.
-                if adapter_type == "google_ad_manager":
-                    # Start with existing config to preserve fields not in the form
-                    base_config = product.implementation_config.copy() if product.implementation_config else {}
-
-                    # Add ad unit/placement targeting if provided
-                    ad_unit_ids = form_data.get("targeted_ad_unit_ids", "").strip()
-                    if ad_unit_ids:
-                        # Parse comma-separated IDs
-                        id_list = [id.strip() for id in ad_unit_ids.split(",") if id.strip()]
-
-                        # Validate that all IDs are numeric (GAM requires numeric IDs)
-                        invalid_ids = [id for id in id_list if not id.isdigit()]
-                        if invalid_ids:
-                            flash(
-                                f"Invalid ad unit IDs: {', '.join(invalid_ids)}. "
-                                f"Ad unit IDs must be numeric (e.g., '23312403859'). "
-                                f"Use 'Browse Ad Units' to select valid ad units.",
-                                "error",
-                            )
-                            return redirect(
-                                url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
-                            )
-
-                        base_config["targeted_ad_unit_ids"] = id_list
-
-                    placement_ids = form_data.get("targeted_placement_ids", "").strip()
-                    if placement_ids:
-                        base_config["targeted_placement_ids"] = [
-                            id.strip() for id in placement_ids.split(",") if id.strip()
-                        ]
-
-                    base_config["include_descendants"] = form_data.get("include_descendants") == "on"
-
-                    # ``line_item_type`` and ``priority`` were written here from the form. They
-                    # were the only fields this handler read that no template submits, so
-                    # neither could ever be set. No other surface sets them either: the form
-                    # parser that reads both, ``GAMProductConfigService.parse_form_config``, has
-                    # no callers at all. An operator who needs to change them edits the stored
-                    # config directly.
-
-                    # Parse targeting template from form (includes custom targeting key-value pairs)
-                    targeting_template_json = form_data.get("targeting_template", "{}")
-                    try:
-                        targeting_template = json.loads(targeting_template_json) if targeting_template_json else {}
-                    except json.JSONDecodeError:
-                        targeting_template = {}
-
-                    # The widget sends the product's whole custom targeting, stored as the model
-                    # writes it. An empty one keeps a stored config GAM cannot take: the edit page
-                    # could not show that config, so the seller has not cleared it.
-                    stored = _stored_custom_targeting(base_config.get("custom_targeting_keys") or {})
-                    submitted = targeting_template.get("key_value_pairs")
-                    custom_targeting = stored or CustomTargeting()
-                    if submitted is not None:
-                        read = _read_gam_custom_targeting(submitted)
-                        if read is None:
-                            return redirect(
-                                url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
-                            )
-                        if read.branches or stored is not None:
-                            custom_targeting = read
-                            base_config["custom_targeting_keys"] = read.to_stored()
-
-                    # Store targeting_template in product
-                    product.targeting_template = targeting_template
-
-                    product.implementation_config = base_config
-                    from sqlalchemy.orm import attributes
-
-                    attributes.flag_modified(product, "implementation_config")
-                    attributes.flag_modified(product, "targeting_template")
-
-                    # Sync inventory mappings based on implementation_config
-                    # Delete all existing mappings first
-                    from src.core.database.models import ProductInventoryMapping
-
-                    existing_mappings = db_session.scalars(
-                        select(ProductInventoryMapping).filter_by(tenant_id=tenant_id, product_id=product_id)
-                    ).all()
-                    for mapping in existing_mappings:
-                        db_session.delete(mapping)
-
-                    # Flush deletes to avoid unique constraint violations
-                    db_session.flush()
-
-                    # Recreate mappings from implementation_config — ad units and
-                    # placements are the same mapping, only the inventory type differs
-                    for config_key, inventory_type in (
-                        ("targeted_ad_unit_ids", "ad_unit"),
-                        ("targeted_placement_ids", "placement"),
-                    ):
-                        for idx, inventory_id in enumerate(base_config.get(config_key) or []):
-                            mapping_stmt = select(ProductInventoryMapping).filter_by(
-                                tenant_id=tenant_id,
-                                product_id=product_id,
-                                inventory_type=inventory_type,
-                                inventory_id=inventory_id,
-                            )
-                            mapping = ProductInventoryMapping(
-                                tenant_id=tenant_id,
-                                product_id=product_id,
-                                inventory_type=inventory_type,
-                                inventory_id=inventory_id,
-                                is_primary=(idx == 0),
-                            )
-
-                            # A mapping's identity IS uq_product_inventory, so a lost race
-                            # means the row is already there; the caller's is_primary still
-                            # applies. Both callables run before this iteration ends, so the
-                            # late binding B023 warns about cannot happen.
-                            already_mapped = resolve_or_write(
-                                db_session,
-                                conflict=lambda: db_session.scalars(mapping_stmt).first(),  # noqa: B023
-                                write=lambda: db_session.add(mapping),  # noqa: B023
-                                constraint="uq_product_inventory",
-                            )
-                            if already_mapped is not None:
-                                already_mapped.is_primary = idx == 0
-
-                    # Custom targeting keys
-                    create_custom_key_inventory_mappings(db_session, tenant_id, product_id, custom_targeting)
-
-                # Update pricing options (AdCP PR #88)
-                # Note: min_spend is now stored in pricing_options[].min_spend_per_package
-                # Parse pricing options from form FIRST
-                try:
-                    pricing_options_data = parse_pricing_options_from_form(form_data)
-                except ValueError as e:
-                    flash(str(e), "error")
-                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
-
-                logger.info(f"Parsed {len(pricing_options_data) if pricing_options_data else 0} pricing options")
-
-                # CRITICAL: Products MUST have at least one pricing option
-                if not pricing_options_data or len(pricing_options_data) == 0:
-                    flash("Product must have at least one pricing option", "error")
-                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
-
-                # Fetch existing pricing options
-                existing_options = list(
-                    db_session.scalars(
-                        select(PricingOption).filter_by(tenant_id=tenant_id, product_id=product_id)
-                    ).all()
+            # A publisher-backed format option must resolve for the product as saved: its
+            # declarations and its selection (its profile's, when it links one).
+            try:
+                profile = product.inventory_profile if product.inventory_profile_id else None
+                _refuse_unresolved_format_options(
+                    (profile.format_options if profile else None) or product.format_options,
+                    product.stored_publisher_properties,
+                    catalog,
                 )
+            except ValueError as e:
+                flash(str(e), "error")
+                return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
 
-                logger.info(
-                    f"Updating pricing options for product {product.product_id}: "
-                    f"{len(existing_options)} existing, {len(pricing_options_data)} new"
-                )
-
-                # Update existing options or create new ones
-                for idx, parsed in enumerate(pricing_options_data):
-                    if idx < len(existing_options):
-                        # Copy the TERMS onto the existing row and keep its identity.
-                        po = existing_options[idx]
-                        for column in _FORM_OWNED_COLUMNS:
-                            setattr(po, column, getattr(parsed, column))
-                    else:
-                        parsed.tenant_id = tenant_id
-                        parsed.product_id = product.product_id
-                        db_session.add(parsed)
-
-                # Delete excess existing options (if new list is shorter)
-                if len(existing_options) > len(pricing_options_data):
-                    for po in existing_options[len(pricing_options_data) :]:
-                        db_session.delete(po)
-
-                # Handle product detail fields (AdCP compliance)
-                # Delivery measurement (REQUIRED per AdCP spec)
-                delivery_measurement_provider = form_data.get("delivery_measurement_provider", "").strip()
-                delivery_measurement_notes = form_data.get("delivery_measurement_notes", "").strip()
-                if delivery_measurement_provider:
-                    product.delivery_measurement = {
-                        "provider": delivery_measurement_provider,
-                    }
-                    if delivery_measurement_notes:
-                        product.delivery_measurement["notes"] = delivery_measurement_notes
-                    from sqlalchemy.orm import attributes
-
-                    attributes.flag_modified(product, "delivery_measurement")
-                elif product.delivery_measurement:
-                    # Clear if provider was removed
-                    product.delivery_measurement = None
-                    from sqlalchemy.orm import attributes
-
-                    attributes.flag_modified(product, "delivery_measurement")
-
-                # Product image for card generation (optional)
-                product_image_url = form_data.get("product_image_url", "").strip()
-                if product_image_url:
-                    # Update or create product card
-                    if not product.product_card:
-                        product.product_card = {
-                            "format_id": {
-                                "agent_url": "https://creative.adcontextprotocol.org/",
-                                "id": "product_card_standard",
-                            },
-                            "manifest": {},
-                        }
-
-                    # Update manifest
-                    product.product_card["manifest"]["product_image"] = product_image_url
-                    product.product_card["manifest"]["product_name"] = product.name
-                    product.product_card["manifest"]["product_description"] = product.description or ""
-                    product.product_card["manifest"]["delivery_type"] = product.delivery_type
-
-                    # Add pricing info to manifest if available
-                    if pricing_options_data and len(pricing_options_data) > 0:
-                        first_option = pricing_options_data[0]
-                        product.product_card["manifest"]["pricing_model"] = first_option.pricing_model
-                        if first_option.is_fixed and first_option.rate:
-                            product.product_card["manifest"]["pricing_amount"] = str(first_option.rate)
-                            product.product_card["manifest"]["pricing_currency"] = first_option.currency
-
-                    from sqlalchemy.orm import attributes
-
-                    attributes.flag_modified(product, "product_card")
-                elif product.product_card and product.product_card.get("manifest", {}).get("product_image"):
-                    # If image URL was removed, clear the card
-                    product.product_card = None
-                    from sqlalchemy.orm import attributes
-
-                    attributes.flag_modified(product, "product_card")
-
-                # Debug: Log final state before commit
-                from sqlalchemy import inspect as sa_inspect
-
-                logger.info(f"[DEBUG] About to commit product {product_id}")
-                logger.info(f"[DEBUG] product.format_ids = {product.format_ids}")
-                logger.info(f"[DEBUG] product.format_ids type = {type(product.format_ids)}")
-                logger.info(f"[DEBUG] SQLAlchemy dirty objects: {db_session.dirty}")
-
-                # Check if product is in dirty set and formats was modified
-                if product in db_session.dirty:
-                    insp = sa_inspect(product)
-                    if insp.attrs.format_ids.history.has_changes():
-                        logger.info("[DEBUG] format_ids attribute was modified")
-                    else:
-                        logger.info("[DEBUG] format_ids attribute NOT modified (flag_modified may be needed)")
-
-                # Asked here, not with the anyOf above: the publisher properties it reads are
-                # written after that check.
-                try:
-                    refuse_outside_common_intersection(product)
-                except ValueError as e:
-                    flash(str(e), "error")
-                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
-
-                db_session.commit()
-
-                # Debug: Verify formats after commit by re-querying
-                db_session.refresh(product)
-                logger.info(f"[DEBUG] After commit - product.format_ids from DB: {product.format_ids}")
-
-                flash(f"Product '{product.name}' updated successfully", "success")
-                return redirect(url_for("products.list_products", tenant_id=tenant_id))
-
-            # GET request - show form
-            # Load existing pricing options (AdCP PR #88)
-            pricing_options = db_session.scalars(
-                select(PricingOption).filter_by(tenant_id=tenant_id, product_id=product_id)
-            ).all()
-
-            pricing_options_list = []
-            for po in pricing_options:
-                pricing_options_list.append(
-                    {
-                        "pricing_model": po.pricing_model,
-                        "rate": float(po.rate) if po.rate else None,
-                        "currency": po.currency,
-                        "is_fixed": po.is_fixed,
-                        "price_guidance": po.price_guidance,
-                        "parameters": po.parameters,
-                        "min_spend_per_package": float(po.min_spend_per_package) if po.min_spend_per_package else None,
-                    }
-                )
-
-            # Derive display values from pricing_options
-            delivery_type = product.delivery_type
-            cpm = None
-            price_guidance = None
-
-            if pricing_options_list:
-                first_pricing = pricing_options_list[0]
-                delivery_type = "guaranteed" if first_pricing["is_fixed"] else "non_guaranteed"
-                cpm = first_pricing["rate"]
-                price_guidance = first_pricing["price_guidance"]
-
-            # Parse implementation_config
-            implementation_config = (
-                product.implementation_config
-                if isinstance(product.implementation_config, dict)
-                else json.loads(product.implementation_config)
-                if product.implementation_config
-                else {}
-            )
-
-            # Parse targeting_template - build from implementation_config if not set
-            targeting_template = (
-                product.targeting_template
-                if isinstance(product.targeting_template, dict)
-                else json.loads(product.targeting_template)
-                if product.targeting_template
-                else {}
-            )
-
-            # If targeting_template doesn't have key_value_pairs but implementation_config has custom_targeting_keys,
-            # populate targeting_template from implementation_config for backwards compatibility
-            if not targeting_template.get("key_value_pairs") and implementation_config.get("custom_targeting_keys"):
-                targeting_template["key_value_pairs"] = implementation_config["custom_targeting_keys"]
-
-            # The widget edits only the groups format, written by the model, so it never decides
-            # for itself whether a stored value is an ID or a name
-            if adapter_type == "google_ad_manager" and targeting_template.get("key_value_pairs"):
-                shown = _read_gam_custom_targeting(targeting_template["key_value_pairs"])
-                if shown is None:
-                    flash(
-                        "The product's stored custom targeting is not shown below. Saving keeps it as it is "
-                        "until you set new custom targeting.",
-                        "error",
-                    )
-                targeting_template["key_value_pairs"] = (shown or CustomTargeting()).to_stored()
-
-            product_dict = {
-                "product_id": product.product_id,
-                "name": product.name,
-                "description": product.description,
-                "inventory_profile_id": product.inventory_profile_id,
-                "delivery_type": delivery_type,
-                "cpm": cpm,
-                "price_guidance": price_guidance,
-                "formats": (
-                    product.format_ids
-                    if isinstance(product.format_ids, list)
-                    else json.loads(product.format_ids)
-                    if product.format_ids
-                    else []
-                ),
-                # The canonical arm, read back as the stored document so the editor shows
-                # what the row actually declares rather than a rendering of it.
-                "format_options": product.format_options,
-                "countries": (
-                    product.countries
-                    if isinstance(product.countries, list)
-                    else json.loads(product.countries)
-                    if product.countries
-                    else []
-                ),
-                "implementation_config": implementation_config,
-                "targeting_template": targeting_template,
-                # Product detail fields (AdCP compliance)
-                "delivery_measurement": product.delivery_measurement,
-                "product_card": product.product_card,
-                "product_card_detailed": product.product_card_detailed,
-                "placements": product.placements,
-                "reporting_capabilities": product.reporting_capabilities,
-                # Advertising channels
-                "channels": product.channels or [],
-                # Principal access control
-                "allowed_principal_ids": product.allowed_principal_ids or [],
-            }
-
-            product_dict["pricing_options"] = pricing_options_list
-
-            # Get all principals for this tenant (for access control dropdown)
-            principals = PrincipalRepository(db_session, tenant_id).list_all()
-            principals_list = [{"principal_id": p.principal_id, "name": p.name} for p in principals]
-
-            # Offer the authorized properties and pre-select what the product sells: its
-            # selectors resolved against them, as list_products and get_products resolve them.
-            authorized_properties_list = catalog.refs
-            rendered_selection = RenderedSelection(
-                product_form_fields(
-                    product.resolve_publisher_properties(authorized_properties_list), list(authorized_properties_list)
-                ),
-                _selection_digest(product),
-            )
-            # What each section shows disabled: the stored choices it has no box for.
-            kept_by_mode = {
-                mode: kept_choices(_own_selectors(product), authorized_properties_list, mode)
-                for mode in ("tags", "property_ids")
-            }
-
-            # Show adapter-specific form
+            # No ``line_item_type`` is read here. The GAM form does not submit one -- no
+            # template in this repository declares a field by that name -- so the branches
+            # that used to hang off it could not execute, and one of them had carried a
+            # NameError for its whole life behind that unsatisfiable guard.
+            #
+            # Two gaps the deletion makes visible are tracked rather than papered over, and
+            # both predate it: this path never recomputes ``product.delivery_type`` from the
+            # pricing options it replaces below, and an edit that changes the product's
+            # format declarations leaves the seeded ``creative_placeholders`` stale. A
+            # reseed must key on the declarations having changed, never on a GAM form field.
             if adapter_type == "google_ad_manager":
-                from src.core.database.models import GAMInventory
+                # Start with existing config to preserve fields not in the form
+                base_config = product.implementation_config.copy() if product.implementation_config else {}
 
-                inventory_count = db_session.scalar(
-                    select(func.count()).select_from(GAMInventory).filter_by(tenant_id=tenant_id)
-                )
-                inventory_synced = inventory_count > 0
+                # Add ad unit/placement targeting if provided
+                ad_unit_ids = form_data.get("targeted_ad_unit_ids", "").strip()
+                if ad_unit_ids:
+                    # Parse comma-separated IDs
+                    id_list = [id.strip() for id in ad_unit_ids.split(",") if id.strip()]
 
-                # Fetch assigned inventory for this product
+                    # Validate that all IDs are numeric (GAM requires numeric IDs)
+                    invalid_ids = [id for id in id_list if not id.isdigit()]
+                    if invalid_ids:
+                        flash(
+                            f"Invalid ad unit IDs: {', '.join(invalid_ids)}. "
+                            f"Ad unit IDs must be numeric (e.g., '23312403859'). "
+                            f"Use 'Browse Ad Units' to select valid ad units.",
+                            "error",
+                        )
+                        return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
+                    base_config["targeted_ad_unit_ids"] = id_list
+
+                placement_ids = form_data.get("targeted_placement_ids", "").strip()
+                if placement_ids:
+                    base_config["targeted_placement_ids"] = [
+                        id.strip() for id in placement_ids.split(",") if id.strip()
+                    ]
+
+                base_config["include_descendants"] = form_data.get("include_descendants") == "on"
+
+                # ``line_item_type`` and ``priority`` were written here from the form. They
+                # were the only fields this handler read that no template submits, so
+                # neither could ever be set. No other surface sets them either: the form
+                # parser that reads both, ``GAMProductConfigService.parse_form_config``, has
+                # no callers at all. An operator who needs to change them edits the stored
+                # config directly.
+
+                # Parse targeting template from form (includes custom targeting key-value pairs)
+                targeting_template_json = form_data.get("targeting_template", "{}")
+                try:
+                    targeting_template = json.loads(targeting_template_json) if targeting_template_json else {}
+                except json.JSONDecodeError:
+                    targeting_template = {}
+
+                # The widget sends the product's whole custom targeting, stored as the model
+                # writes it. An empty one keeps a stored config GAM cannot take: the edit page
+                # could not show that config, so the seller has not cleared it.
+                stored = _stored_custom_targeting(base_config.get("custom_targeting_keys") or {})
+                submitted = targeting_template.get("key_value_pairs")
+                custom_targeting = stored or CustomTargeting()
+                if submitted is not None:
+                    read = _read_gam_custom_targeting(submitted)
+                    if read is None:
+                        return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+                    if read.branches or stored is not None:
+                        custom_targeting = read
+                        base_config["custom_targeting_keys"] = read.to_stored()
+
+                # Store targeting_template in product
+                product.targeting_template = targeting_template
+
+                product.implementation_config = base_config
+                from sqlalchemy.orm import attributes
+
+                attributes.flag_modified(product, "implementation_config")
+                attributes.flag_modified(product, "targeting_template")
+
+                # Sync inventory mappings based on implementation_config
+                # Delete all existing mappings first
                 from src.core.database.models import ProductInventoryMapping
 
-                assigned_inventory_query = (
-                    select(ProductInventoryMapping, GAMInventory)
-                    .join(
-                        GAMInventory,
-                        (ProductInventoryMapping.tenant_id == GAMInventory.tenant_id)
-                        & (ProductInventoryMapping.inventory_type == GAMInventory.inventory_type)
-                        & (ProductInventoryMapping.inventory_id == GAMInventory.inventory_id),
-                    )
-                    .where(
-                        ProductInventoryMapping.tenant_id == tenant_id,
-                        ProductInventoryMapping.product_id == product_id,
-                    )
-                )
-                assigned_inventory_results = db_session.execute(assigned_inventory_query).all()
-                assigned_inventory = [
-                    {
-                        "mapping_id": mapping.id,
-                        "inventory_id": inventory.inventory_id,
-                        "inventory_type": inventory.inventory_type,
-                        "name": inventory.name,
-                        "path": inventory.path,
-                        "is_primary": mapping.is_primary,
+                existing_mappings = db_session.scalars(
+                    select(ProductInventoryMapping).filter_by(tenant_id=tenant_id, product_id=product_id)
+                ).all()
+                for mapping in existing_mappings:
+                    db_session.delete(mapping)
+
+                # Flush deletes to avoid unique constraint violations
+                db_session.flush()
+
+                # Recreate mappings from implementation_config — ad units and
+                # placements are the same mapping, only the inventory type differs
+                for config_key, inventory_type in (
+                    ("targeted_ad_unit_ids", "ad_unit"),
+                    ("targeted_placement_ids", "placement"),
+                ):
+                    for idx, inventory_id in enumerate(base_config.get(config_key) or []):
+                        mapping_stmt = select(ProductInventoryMapping).filter_by(
+                            tenant_id=tenant_id,
+                            product_id=product_id,
+                            inventory_type=inventory_type,
+                            inventory_id=inventory_id,
+                        )
+                        mapping = ProductInventoryMapping(
+                            tenant_id=tenant_id,
+                            product_id=product_id,
+                            inventory_type=inventory_type,
+                            inventory_id=inventory_id,
+                            is_primary=(idx == 0),
+                        )
+
+                        # A mapping's identity IS uq_product_inventory, so a lost race
+                        # means the row is already there; the caller's is_primary still
+                        # applies. Both callables run before this iteration ends, so the
+                        # late binding B023 warns about cannot happen.
+                        already_mapped = resolve_or_write(
+                            db_session,
+                            conflict=lambda: db_session.scalars(mapping_stmt).first(),  # noqa: B023
+                            write=lambda: db_session.add(mapping),  # noqa: B023
+                            constraint="uq_product_inventory",
+                        )
+                        if already_mapped is not None:
+                            already_mapped.is_primary = idx == 0
+
+                # Custom targeting keys
+                create_custom_key_inventory_mappings(db_session, tenant_id, product_id, custom_targeting)
+
+            # Update pricing options (AdCP PR #88)
+            # Note: min_spend is now stored in pricing_options[].min_spend_per_package
+            # Parse pricing options from form FIRST
+            try:
+                pricing_options_data = parse_pricing_options_from_form(form_data)
+            except ValueError as e:
+                flash(str(e), "error")
+                return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
+            logger.info(f"Parsed {len(pricing_options_data) if pricing_options_data else 0} pricing options")
+
+            # CRITICAL: Products MUST have at least one pricing option
+            if not pricing_options_data or len(pricing_options_data) == 0:
+                flash("Product must have at least one pricing option", "error")
+                return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
+            # Fetch existing pricing options
+            existing_options = list(
+                db_session.scalars(select(PricingOption).filter_by(tenant_id=tenant_id, product_id=product_id)).all()
+            )
+
+            logger.info(
+                f"Updating pricing options for product {product.product_id}: "
+                f"{len(existing_options)} existing, {len(pricing_options_data)} new"
+            )
+
+            # Update existing options or create new ones
+            for idx, parsed in enumerate(pricing_options_data):
+                if idx < len(existing_options):
+                    # Copy the TERMS onto the existing row and keep its identity.
+                    po = existing_options[idx]
+                    for column in _FORM_OWNED_COLUMNS:
+                        setattr(po, column, getattr(parsed, column))
+                else:
+                    parsed.tenant_id = tenant_id
+                    parsed.product_id = product.product_id
+                    db_session.add(parsed)
+
+            # Delete excess existing options (if new list is shorter)
+            if len(existing_options) > len(pricing_options_data):
+                for po in existing_options[len(pricing_options_data) :]:
+                    db_session.delete(po)
+
+            # Handle product detail fields (AdCP compliance)
+            # Delivery measurement (REQUIRED per AdCP spec)
+            delivery_measurement_provider = form_data.get("delivery_measurement_provider", "").strip()
+            delivery_measurement_notes = form_data.get("delivery_measurement_notes", "").strip()
+            if delivery_measurement_provider:
+                product.delivery_measurement = {
+                    "provider": delivery_measurement_provider,
+                }
+                if delivery_measurement_notes:
+                    product.delivery_measurement["notes"] = delivery_measurement_notes
+                from sqlalchemy.orm import attributes
+
+                attributes.flag_modified(product, "delivery_measurement")
+            elif product.delivery_measurement:
+                # Clear if provider was removed
+                product.delivery_measurement = None
+                from sqlalchemy.orm import attributes
+
+                attributes.flag_modified(product, "delivery_measurement")
+
+            # Product image for card generation (optional)
+            product_image_url = form_data.get("product_image_url", "").strip()
+            if product_image_url:
+                # Update or create product card
+                if not product.product_card:
+                    product.product_card = {
+                        "format_id": {
+                            "agent_url": "https://creative.adcontextprotocol.org/",
+                            "id": "product_card_standard",
+                        },
+                        "manifest": {},
                     }
-                    for mapping, inventory in assigned_inventory_results
-                ]
 
-                # Get inventory profiles for this tenant
-                from src.core.database.models import InventoryProfile
+                # Update manifest
+                product.product_card["manifest"]["product_image"] = product_image_url
+                product.product_card["manifest"]["product_name"] = product.name
+                product.product_card["manifest"]["product_description"] = product.description or ""
+                product.product_card["manifest"]["delivery_type"] = product.delivery_type
 
-                stmt_profiles = select(InventoryProfile).filter_by(tenant_id=tenant_id).order_by(InventoryProfile.name)
-                inventory_profiles = db_session.scalars(stmt_profiles).all()
+                # Add pricing info to manifest if available
+                if pricing_options_data and len(pricing_options_data) > 0:
+                    first_option = pricing_options_data[0]
+                    product.product_card["manifest"]["pricing_model"] = first_option.pricing_model
+                    if first_option.is_fixed and first_option.rate:
+                        product.product_card["manifest"]["pricing_amount"] = str(first_option.rate)
+                        product.product_card["manifest"]["pricing_currency"] = first_option.currency
 
-                return render_template(
-                    "add_product_gam.html",
-                    tenant_id=tenant_id,
-                    product=product_dict,
-                    inventory_synced=inventory_synced,
-                    formats=get_creative_formats(tenant_id=tenant_id),
-                    currencies=currencies,
-                    assigned_inventory=assigned_inventory,
-                    inventory_profiles=inventory_profiles,
-                    principals=principals_list,
-                    authorized_properties=authorized_properties_list,
-                    publisher_format_options=list(catalog.options.values()),
-                    rendered_selection=rendered_selection,
-                    kept_by_mode=kept_by_mode,
-                )
-            else:
-                # For non-GAM adapters - use unified edit template
-                # Reload tenant for template context (measurement_providers, etc.)
-                tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-                return render_template(
-                    "edit_product.html",
-                    tenant_id=tenant_id,
-                    tenant=tenant,
-                    adapter_type=adapter_type,
-                    product=product_dict,
-                    currencies=currencies,
-                    principals=principals_list,
-                    authorized_properties=authorized_properties_list,
-                    publisher_format_options=list(catalog.options.values()),
-                    rendered_selection=rendered_selection,
-                    kept_by_mode=kept_by_mode,
-                    **_legacy_format_facts(product),
-                )
+                from sqlalchemy.orm import attributes
 
-    except HTTPException:
-        # Werkzeug's own control flow, not a failure to report. An ``abort()`` reached from
-        # inside this handler used to be caught below and rendered as
-        # "Error editing product: 404 Not Found" behind a 302, losing both its status and its
-        # meaning. ``src/admin/utils/helpers.py`` guards the same way for 403/404.
-        raise
-    except Exception:
-        # NOTHING HERE IS SAID TO THE OPERATOR, and that is the point. This handler reaches
-        # here only for a failure it did not anticipate -- every failure it CAN act on is
-        # caught by one of the seven typed handlers above, which flash the operator a message
-        # about their input and redirect. So an exception arriving here is a defect in this
-        # code or an outage beneath it, and the previous answer -- flashing ``str(e)`` and
-        # redirecting -- made it look like neither: it asserted that the operator's input
-        # caused a NameError, discarded their edit, and returned a 302 that monitoring counts
-        # as a success. That is how the NameError behind the deleted ``line_item_type`` guard
-        # survived unnoticed for the life of that branch.
-        #
-        # The traceback goes to the log, where a diagnostic belongs, and the response is a 500,
-        # which is both honest to the operator and visible to whatever watches status codes.
-        logger.error(
-            f"Unhandled error editing product {product_id} for tenant {tenant_id}",
-            exc_info=True,
+                attributes.flag_modified(product, "product_card")
+            elif product.product_card and product.product_card.get("manifest", {}).get("product_image"):
+                # If image URL was removed, clear the card
+                product.product_card = None
+                from sqlalchemy.orm import attributes
+
+                attributes.flag_modified(product, "product_card")
+
+            # Debug: Log final state before commit
+            from sqlalchemy import inspect as sa_inspect
+
+            logger.info(f"[DEBUG] About to commit product {product_id}")
+            logger.info(f"[DEBUG] product.format_ids = {product.format_ids}")
+            logger.info(f"[DEBUG] product.format_ids type = {type(product.format_ids)}")
+            logger.info(f"[DEBUG] SQLAlchemy dirty objects: {db_session.dirty}")
+
+            # Check if product is in dirty set and formats was modified
+            if product in db_session.dirty:
+                insp = sa_inspect(product)
+                if insp.attrs.format_ids.history.has_changes():
+                    logger.info("[DEBUG] format_ids attribute was modified")
+                else:
+                    logger.info("[DEBUG] format_ids attribute NOT modified (flag_modified may be needed)")
+
+            # Asked here, not with the anyOf above: the publisher properties it reads are
+            # written after that check.
+            try:
+                refuse_outside_common_intersection(product)
+            except ValueError as e:
+                flash(str(e), "error")
+                return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
+            db_session.commit()
+
+            # Debug: Verify formats after commit by re-querying
+            db_session.refresh(product)
+            logger.info(f"[DEBUG] After commit - product.format_ids from DB: {product.format_ids}")
+
+            flash(f"Product '{product.name}' updated successfully", "success")
+            return redirect(url_for("products.list_products", tenant_id=tenant_id))
+
+        # GET request - show form
+        # Load existing pricing options (AdCP PR #88)
+        pricing_options = db_session.scalars(
+            select(PricingOption).filter_by(tenant_id=tenant_id, product_id=product_id)
+        ).all()
+
+        pricing_options_list = []
+        for po in pricing_options:
+            pricing_options_list.append(
+                {
+                    "pricing_model": po.pricing_model,
+                    "rate": float(po.rate) if po.rate else None,
+                    "currency": po.currency,
+                    "is_fixed": po.is_fixed,
+                    "price_guidance": po.price_guidance,
+                    "parameters": po.parameters,
+                    "min_spend_per_package": float(po.min_spend_per_package) if po.min_spend_per_package else None,
+                }
+            )
+
+        # Derive display values from pricing_options
+        delivery_type = product.delivery_type
+        cpm = None
+        price_guidance = None
+
+        if pricing_options_list:
+            first_pricing = pricing_options_list[0]
+            delivery_type = "guaranteed" if first_pricing["is_fixed"] else "non_guaranteed"
+            cpm = first_pricing["rate"]
+            price_guidance = first_pricing["price_guidance"]
+
+        # Parse implementation_config
+        implementation_config = (
+            product.implementation_config
+            if isinstance(product.implementation_config, dict)
+            else json.loads(product.implementation_config)
+            if product.implementation_config
+            else {}
         )
-        abort(500)
+
+        # Parse targeting_template - build from implementation_config if not set
+        targeting_template = (
+            product.targeting_template
+            if isinstance(product.targeting_template, dict)
+            else json.loads(product.targeting_template)
+            if product.targeting_template
+            else {}
+        )
+
+        # If targeting_template doesn't have key_value_pairs but implementation_config has custom_targeting_keys,
+        # populate targeting_template from implementation_config for backwards compatibility
+        if not targeting_template.get("key_value_pairs") and implementation_config.get("custom_targeting_keys"):
+            targeting_template["key_value_pairs"] = implementation_config["custom_targeting_keys"]
+
+        # The widget edits only the groups format, written by the model, so it never decides
+        # for itself whether a stored value is an ID or a name
+        if adapter_type == "google_ad_manager" and targeting_template.get("key_value_pairs"):
+            shown = _read_gam_custom_targeting(targeting_template["key_value_pairs"])
+            if shown is None:
+                flash(
+                    "The product's stored custom targeting is not shown below. Saving keeps it as it is "
+                    "until you set new custom targeting.",
+                    "error",
+                )
+            targeting_template["key_value_pairs"] = (shown or CustomTargeting()).to_stored()
+
+        product_dict = {
+            "product_id": product.product_id,
+            "name": product.name,
+            "description": product.description,
+            "inventory_profile_id": product.inventory_profile_id,
+            "delivery_type": delivery_type,
+            "cpm": cpm,
+            "price_guidance": price_guidance,
+            "formats": (
+                product.format_ids
+                if isinstance(product.format_ids, list)
+                else json.loads(product.format_ids)
+                if product.format_ids
+                else []
+            ),
+            # The canonical arm, read back as the stored document so the editor shows
+            # what the row actually declares rather than a rendering of it.
+            "format_options": product.format_options,
+            "countries": (
+                product.countries
+                if isinstance(product.countries, list)
+                else json.loads(product.countries)
+                if product.countries
+                else []
+            ),
+            "implementation_config": implementation_config,
+            "targeting_template": targeting_template,
+            # Product detail fields (AdCP compliance)
+            "delivery_measurement": product.delivery_measurement,
+            "product_card": product.product_card,
+            "product_card_detailed": product.product_card_detailed,
+            "placements": product.placements,
+            "reporting_capabilities": product.reporting_capabilities,
+            # Advertising channels
+            "channels": product.channels or [],
+            # Principal access control
+            "allowed_principal_ids": product.allowed_principal_ids or [],
+        }
+
+        product_dict["pricing_options"] = pricing_options_list
+
+        # Get all principals for this tenant (for access control dropdown)
+        principals = PrincipalRepository(db_session, tenant_id).list_all()
+        principals_list = [{"principal_id": p.principal_id, "name": p.name} for p in principals]
+
+        # Offer the authorized properties and pre-select what the product sells: its
+        # selectors resolved against them, as list_products and get_products resolve them.
+        authorized_properties_list = catalog.refs
+        rendered_selection = RenderedSelection(
+            product_form_fields(
+                product.resolve_publisher_properties(authorized_properties_list), list(authorized_properties_list)
+            ),
+            _selection_digest(product),
+        )
+        # What each section shows disabled: the stored choices it has no box for.
+        kept_by_mode = {
+            mode: kept_choices(_own_selectors(product), authorized_properties_list, mode)
+            for mode in ("tags", "property_ids")
+        }
+
+        # Show adapter-specific form
+        if adapter_type == "google_ad_manager":
+            from src.core.database.models import GAMInventory
+
+            inventory_count = db_session.scalar(
+                select(func.count()).select_from(GAMInventory).filter_by(tenant_id=tenant_id)
+            )
+            inventory_synced = inventory_count > 0
+
+            # Fetch assigned inventory for this product
+            from src.core.database.models import ProductInventoryMapping
+
+            assigned_inventory_query = (
+                select(ProductInventoryMapping, GAMInventory)
+                .join(
+                    GAMInventory,
+                    (ProductInventoryMapping.tenant_id == GAMInventory.tenant_id)
+                    & (ProductInventoryMapping.inventory_type == GAMInventory.inventory_type)
+                    & (ProductInventoryMapping.inventory_id == GAMInventory.inventory_id),
+                )
+                .where(
+                    ProductInventoryMapping.tenant_id == tenant_id,
+                    ProductInventoryMapping.product_id == product_id,
+                )
+            )
+            assigned_inventory_results = db_session.execute(assigned_inventory_query).all()
+            assigned_inventory = [
+                {
+                    "mapping_id": mapping.id,
+                    "inventory_id": inventory.inventory_id,
+                    "inventory_type": inventory.inventory_type,
+                    "name": inventory.name,
+                    "path": inventory.path,
+                    "is_primary": mapping.is_primary,
+                }
+                for mapping, inventory in assigned_inventory_results
+            ]
+
+            # Get inventory profiles for this tenant
+            from src.core.database.models import InventoryProfile
+
+            stmt_profiles = select(InventoryProfile).filter_by(tenant_id=tenant_id).order_by(InventoryProfile.name)
+            inventory_profiles = db_session.scalars(stmt_profiles).all()
+
+            return render_template(
+                "add_product_gam.html",
+                tenant_id=tenant_id,
+                product=product_dict,
+                inventory_synced=inventory_synced,
+                formats=get_creative_formats(tenant_id=tenant_id),
+                currencies=currencies,
+                assigned_inventory=assigned_inventory,
+                inventory_profiles=inventory_profiles,
+                principals=principals_list,
+                authorized_properties=authorized_properties_list,
+                publisher_format_options=list(catalog.options.values()),
+                rendered_selection=rendered_selection,
+                kept_by_mode=kept_by_mode,
+            )
+        else:
+            # For non-GAM adapters - use unified edit template
+            # Reload tenant for template context (measurement_providers, etc.)
+            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            return render_template(
+                "edit_product.html",
+                tenant_id=tenant_id,
+                tenant=tenant,
+                adapter_type=adapter_type,
+                product=product_dict,
+                currencies=currencies,
+                principals=principals_list,
+                authorized_properties=authorized_properties_list,
+                publisher_format_options=list(catalog.options.values()),
+                rendered_selection=rendered_selection,
+                kept_by_mode=kept_by_mode,
+                **_legacy_format_facts(product),
+            )
 
 
 @products_bp.route("/<product_id>/delete", methods=["DELETE"])
 @require_tenant_access()
 def delete_product(tenant_id, product_id):
     """Delete a product."""
-    try:
-        with get_db_session() as db_session:
-            # Find the product
-            product = db_session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
+    with get_db_session() as db_session:
+        # Find the product
+        product = db_session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
 
-            if not product:
-                return jsonify({"error": "Product not found"}), 404
+        if not product:
+            return jsonify({"error": "Product not found"}), 404
 
-            # Store product name for response
-            product_name = product.name
+        # Store product name for response
+        product_name = product.name
 
-            # Check if product is used in any active media buys
-            mb_repo = MediaBuyRepository(db_session, tenant_id)
-            # SCHEDULED is here because a buy whose flight window has not opened yet is
-            # still a live commitment: the seller has agreed to run it, and deleting the
-            # product underneath it breaks a buy that has not had its chance to deliver.
-            # It became reachable when the admin approval routes started writing the
-            # resolved flight-window status -- a pre-window buy used to land `active`
-            # (and so was protected by that member) and now lands `scheduled`.
-            #
-            # Listed explicitly rather than reusing models._SELLER_COMMITTED_STATUSES,
-            # although that set is a near-match and the resemblance is a trap: it also
-            # contains COMPLETED and CANCELED. A finished or cancelled buy must NOT
-            # block product deletion -- it has no future delivery to protect -- so
-            # adopting the set would silently make products undeletable forever.
-            # The correct membership rule for THIS guard is "could still deliver".
-            active_buys = mb_repo.list_by_statuses(
-                [
-                    PersistedMediaBuyStatus.PENDING,
-                    PersistedMediaBuyStatus.SCHEDULED,
-                    PersistedMediaBuyStatus.ACTIVE,
-                    PersistedMediaBuyStatus.PAUSED,
-                ]
-            )
+        # Check if product is used in any active media buys
+        mb_repo = MediaBuyRepository(db_session, tenant_id)
+        # SCHEDULED is here because a buy whose flight window has not opened yet is
+        # still a live commitment: the seller has agreed to run it, and deleting the
+        # product underneath it breaks a buy that has not had its chance to deliver.
+        # It became reachable when the admin approval routes started writing the
+        # resolved flight-window status -- a pre-window buy used to land `active`
+        # (and so was protected by that member) and now lands `scheduled`.
+        #
+        # Listed explicitly rather than reusing models._SELLER_COMMITTED_STATUSES,
+        # although that set is a near-match and the resemblance is a trap: it also
+        # contains COMPLETED and CANCELED. A finished or cancelled buy must NOT
+        # block product deletion -- it has no future delivery to protect -- so
+        # adopting the set would silently make products undeletable forever.
+        # The correct membership rule for THIS guard is "could still deliver".
+        active_buys = mb_repo.list_by_statuses(
+            [
+                PersistedMediaBuyStatus.PENDING,
+                PersistedMediaBuyStatus.SCHEDULED,
+                PersistedMediaBuyStatus.ACTIVE,
+                PersistedMediaBuyStatus.PAUSED,
+            ]
+        )
 
-            # Check if any active media buys reference this product
-            for buy in active_buys:
-                # Check both config (legacy) and raw_request (current) fields for backward compatibility
-                config_product_ids = []
-                try:
-                    # Legacy field: may not exist on older MediaBuy records
-                    config_data = getattr(buy, "config", None)
-                    if config_data:
-                        config_product_ids = config_data.get("product_ids", [])
-                except (AttributeError, TypeError):
-                    pass
+        # Check if any active media buys reference this product
+        for buy in active_buys:
+            # Check both config (legacy) and raw_request (current) fields for backward compatibility
+            config_product_ids = []
+            try:
+                # Legacy field: may not exist on older MediaBuy records
+                config_data = getattr(buy, "config", None)
+                if config_data:
+                    config_product_ids = config_data.get("product_ids", [])
+            except (AttributeError, TypeError):
+                pass
 
-                # Current field: should always exist
-                raw_request_product_ids = (buy.raw_request or {}).get("product_ids", [])
-                all_product_ids = config_product_ids + raw_request_product_ids
+            # Current field: should always exist
+            raw_request_product_ids = (buy.raw_request or {}).get("product_ids", [])
+            all_product_ids = config_product_ids + raw_request_product_ids
 
-                if product_id in all_product_ids:
-                    return (
-                        jsonify(
-                            {
-                                "error": f"Cannot delete product '{product_name}' - it is used in active media buy '{buy.media_buy_id}'"
-                            }
-                        ),
-                        400,
-                    )
+            if product_id in all_product_ids:
+                return (
+                    jsonify(
+                        {
+                            "error": f"Cannot delete product '{product_name}' - it is used in active media buy '{buy.media_buy_id}'"
+                        }
+                    ),
+                    400,
+                )
 
-            # Delete the product and related pricing options
-            # Foreign key CASCADE automatically handles pricing_options deletion
-            db_session.delete(product)
-            db_session.commit()
-
-            logger.info(f"Product {product_id} ({product_name}) deleted by tenant {tenant_id}")
-
-            return jsonify({"success": True, "message": f"Product '{product_name}' deleted successfully"})
-
-    except Exception as e:
-        logger.error(f"Error deleting product {product_id}: {e}", exc_info=True)
-
-        # Rollback on any error
+        # Delete the product and related pricing options
+        # Foreign key CASCADE automatically handles pricing_options deletion
+        db_session.delete(product)
         try:
-            db_session.rollback()
-        except Exception:
-            logger.debug("Rollback failed during error handling", exc_info=True)
-
-        # More specific error handling
-        error_message = str(e)
-
-        # Check for common error types
-        if "ForeignKeyViolation" in error_message or "foreign key constraint" in error_message.lower():
-            logger.error(f"Foreign key constraint violation when deleting product {product_id}")
+            db_session.commit()
+        except IntegrityError:
+            # A row with no cascade (an inventory mapping, a package) still references the
+            # product. The failed transaction is discarded when the session closes.
+            logger.info(f"Product {product_id} not deleted: other records still reference it")
             return jsonify({"error": "Cannot delete product - it is referenced by other records"}), 400
 
-        if "ValidationError" in error_message or "pattern" in error_message.lower():
-            logger.warning(f"Product validation error for {product_id}: {error_message}")
-            return jsonify({"error": "Product data validation failed"}), 400
+        logger.info(f"Product {product_id} ({product_name}) deleted by tenant {tenant_id}")
 
-        # Generic error
-        logger.error(f"Product deletion failed for {product_id}: {error_message}")
-        return json_error(e, "Failed to delete product")
+        return jsonify({"success": True, "message": f"Product '{product_name}' deleted successfully"})
 
 
 @products_bp.route("/<product_id>/inventory", methods=["POST"])

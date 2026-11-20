@@ -15,9 +15,9 @@ from typing import Any
 from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import func, select
 
+from src.adapters.gam.managers.sync import SyncFailed, recording_failure
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.admin.auth_helpers import api_key_prefix, mint_stored_api_key, require_api_key_auth
-from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.models import AdapterConfig, SyncJob, Tenant
 from src.services.gam_inventory_service import db_session as gam_db_session
 
@@ -81,6 +81,11 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
         audience_segment_limit = data.get("audience_segment_limit")
         sync_types = data.get("sync_types", [])
 
+        if sync_type not in ("full", "inventory", "targeting", "selective"):
+            return jsonify({"error": "Unsupported sync type"}), 400
+        if sync_type == "selective" and not sync_types:
+            return jsonify({"error": "sync_types required for selective sync"}), 400
+
         # Check for recent sync if not forcing
         if not force:
             sync_stmt = select(SyncJob).where(
@@ -105,92 +110,61 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
                         200,
                     )
 
-        # Create sync job
-        sync_id = f"sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"
-        sync_job = SyncJob(
-            sync_id=sync_id,
-            tenant_id=tenant_id,
-            adapter_type="google_ad_manager",
-            sync_type=sync_type,
-            status="pending",
-            started_at=datetime.now(UTC),
-            triggered_by="api",
-            triggered_by_id="tenant_management_api",
+        # Initialize GAM adapter with sync manager
+        from src.core.schemas import Principal
+
+        # Create dummy principal for sync (no advertiser needed for inventory sync)
+        principal = Principal(
+            principal_id="system",
+            name="System",
+            platform_mappings={},  # No advertiser_id needed for inventory sync
         )
 
-        db_session.add(sync_job)
-        db_session.commit()
+        # Build GAM config
+        from src.adapters.gam import build_gam_config_from_adapter
 
-        # Trigger sync using GAM adapter with sync manager
-        try:
-            # Initialize GAM adapter with sync manager
-            from src.core.schemas import Principal
+        gam_config = build_gam_config_from_adapter(adapter_config)
 
-            # Create dummy principal for sync (no advertiser needed for inventory sync)
-            principal = Principal(
-                principal_id="system",
-                name="System",
-                platform_mappings={},  # No advertiser_id needed for inventory sync
+        # Create GAM adapter with new modular architecture
+        # NOTE: advertiser_id=None is fine for inventory sync operations
+        adapter = GoogleAdManager(
+            config=gam_config,
+            principal=principal,
+            network_code=adapter_config.gam_network_code or "",
+            advertiser_id=None,  # Not needed for inventory sync
+            trafficker_id=adapter_config.gam_trafficker_id or None,
+            audit_logger=None,
+            tenant_id=tenant_id,
+            tenant_ai_config=None,  # names no order, so no AI configuration is read
+        )
+
+        # The sync manager creates and records the sync job; a failed sync raises
+        # SyncFailed, which answer_failed_sync turns into the response.
+        if sync_type == "full":
+            # Pass custom targeting limit to prevent timeouts
+            result = adapter.sync_full(db_session, force=force, custom_targeting_limit=custom_targeting_limit)
+        elif sync_type == "selective":
+            # Selective sync - only sync specified inventory types
+            result = adapter.sync_selective(
+                db_session,
+                sync_types=sync_types,
+                custom_targeting_limit=custom_targeting_limit,
+                audience_segment_limit=audience_segment_limit,
             )
+        else:
+            # "inventory", and "targeting", which maps to an inventory sync for now
+            result = adapter.sync_inventory(db_session, force=force, custom_targeting_limit=custom_targeting_limit)
 
-            # Build GAM config
-            from src.adapters.gam import build_gam_config_from_adapter
-
-            gam_config = build_gam_config_from_adapter(adapter_config)
-
-            # Create GAM adapter with new modular architecture
-            # NOTE: advertiser_id=None is fine for inventory sync operations
-            adapter = GoogleAdManager(
-                config=gam_config,
-                principal=principal,
-                network_code=adapter_config.gam_network_code or "",
-                advertiser_id=None,  # Not needed for inventory sync
-                trafficker_id=adapter_config.gam_trafficker_id or None,
-                audit_logger=None,
-                tenant_id=tenant_id,
-                tenant_ai_config=None,  # names no order, so no AI configuration is read
-            )
-
-            # Use the sync manager to perform the sync
-            if sync_type == "full":
-                # Pass custom targeting limit to prevent timeouts
-                result = adapter.sync_full(db_session, force=force, custom_targeting_limit=custom_targeting_limit)
-            elif sync_type == "inventory":
-                result = adapter.sync_inventory(db_session, force=force, custom_targeting_limit=custom_targeting_limit)
-            elif sync_type == "targeting":
-                # Targeting sync can be mapped to inventory sync for now
-                result = adapter.sync_inventory(db_session, force=force, custom_targeting_limit=custom_targeting_limit)
-            elif sync_type == "selective":
-                # Selective sync - only sync specified inventory types
-                if not sync_types:
-                    raise ValueError("sync_types required for selective sync")
-                result = adapter.sync_selective(
-                    db_session,
-                    sync_types=sync_types,
-                    custom_targeting_limit=custom_targeting_limit,
-                    audience_segment_limit=audience_segment_limit,
-                )
-            else:
-                raise ValueError(f"Unsupported sync type: {sync_type}")
-
-            return jsonify(result), 200
-
-        except Exception as e:
-            logger.error(f"Sync failed for tenant {tenant_id}: {e}", exc_info=True)
-
-            # The job keeps the text the response carries, so a later status
-            # request answers with the same reference and no exception text.
-            error_message = safe_error_message(e, "Sync failed")
-            try:
-                sync_job.mark_failed(error_message)
-                db_session.commit()
-            except Exception:
-                logger.warning("Failed to update sync_job error record", exc_info=True)
-
-            return jsonify({"sync_id": sync_id, "status": "failed", "error": error_message}), 500
+        return jsonify(result), 200
 
     finally:
         db_session.remove()
+
+
+@sync_api.errorhandler(SyncFailed)
+def answer_failed_sync(e: SyncFailed) -> tuple[Response, int]:
+    """A sync that failed: its job, its status and the text the job stores, under the job's one log reference."""
+    return jsonify({"sync_id": e.sync_id, "status": "failed", "error": e.operator_message}), 500
 
 
 @sync_api.route("/status/<sync_id>", methods=["GET"])
@@ -476,7 +450,9 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
         db_session.add(sync_job)
         db_session.commit()
 
-        try:
+        # A failure marks the job failed and raises SyncFailed, which answer_failed_sync
+        # answers with the text the job stores.
+        with recording_failure(db_session(), sync_job, f"Orders sync failed for tenant {tenant_id}"):
             # Initialize GAM client
             from src.adapters.google_ad_manager import GoogleAdManager
             from src.core.schemas import Principal
@@ -515,17 +491,7 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
             sync_job.summary = json.dumps(summary)
             db_session.commit()
 
-            return jsonify({"sync_id": sync_id, "status": "completed", "summary": summary}), 200
-
-        except Exception as e:
-            logger.error(f"Orders sync failed for tenant {tenant_id}: {e}", exc_info=True)
-
-            # The job keeps the text the response carries (see trigger_sync).
-            error_message = safe_error_message(e, "Orders sync failed")
-            sync_job.mark_failed(error_message)
-            db_session.commit()
-
-            return jsonify({"sync_id": sync_id, "status": "failed", "error": error_message}), 500
+        return jsonify({"sync_id": sync_id, "status": "completed", "summary": summary}), 200
 
     finally:
         db_session.remove()

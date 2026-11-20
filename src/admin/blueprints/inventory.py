@@ -256,7 +256,7 @@ def get_targeting_values(tenant_id, key_id):
 
                 try:
                     os_module.unlink(temp_key_path)
-                except Exception as e:
+                except OSError as e:
                     logger.warning(f"Failed to delete temp service account file: {e}")
         else:
             logger.debug(f"Using OAuth authentication for tenant {tenant_id}")

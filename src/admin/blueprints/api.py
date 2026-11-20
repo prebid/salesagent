@@ -8,7 +8,6 @@ from sqlalchemy import select, text
 
 from src.admin.utils import require_auth
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import safe_error_message
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product
@@ -72,39 +71,35 @@ def revenue_chart_api(tenant_id):
 @require_auth()
 def oauth_status():
     """Check if OAuth credentials are properly configured for GAM."""
+    from src.core.logging_config import oauth_structured_logger
+
     # Check for GAM OAuth credentials using validated configuration
-    try:
-        from src.core.logging_config import oauth_structured_logger
-
-        gam_auth = get_settings().auth
-        if not gam_auth.gam_oauth_configured:
-            raise ValueError("GAM OAuth credentials not configured")
-        client_id = gam_auth.gam_oauth_client_id
-
-        # Log configuration check
-        oauth_structured_logger.log_gam_oauth_config_load(
-            success=True, client_id_prefix=client_id[:20] + "..." if len(client_id) > 20 else client_id
-        )
-
-        # Credentials exist and are validated
-        return jsonify(
-            {
-                "configured": True,
-                "client_id_prefix": client_id[:20] + "..." if len(client_id) > 20 else client_id,
-                "has_secret": True,
-                "source": "validated_environment",
-            }
-        )
-    except Exception as config_error:
-        # Configuration validation failed
-        oauth_structured_logger.log_gam_oauth_config_load(success=False, error=str(config_error))
+    gam_auth = get_settings().auth
+    if not gam_auth.gam_oauth_configured:
+        not_configured = "GAM OAuth credentials not configured"
+        oauth_structured_logger.log_gam_oauth_config_load(success=False, error=not_configured)
         return jsonify(
             {
                 "configured": False,
-                "error": safe_error_message(config_error, "GAM OAuth configuration error"),
+                "error": not_configured,
                 "help": "Check GAM_OAUTH_CLIENT_ID and GAM_OAUTH_CLIENT_SECRET environment variables.",
             }
         )
+    client_id = gam_auth.gam_oauth_client_id
+    client_id_prefix = client_id[:20] + "..." if len(client_id) > 20 else client_id
+
+    # Log configuration check
+    oauth_structured_logger.log_gam_oauth_config_load(success=True, client_id_prefix=client_id_prefix)
+
+    # Credentials exist and are validated
+    return jsonify(
+        {
+            "configured": True,
+            "client_id_prefix": client_id_prefix,
+            "has_secret": True,
+            "source": "validated_environment",
+        }
+    )
 
 
 @api_bp.route("/tenant/<tenant_id>/products", methods=["GET"])
@@ -244,160 +239,3 @@ def gam_get_advertisers():
     GAM advertiser fetching - implement in phase 2."""
     # Placeholder implementation
     return jsonify({"error": "Not yet implemented"}), 501
-
-
-@api_bp.route("/gam/test-connection", methods=["POST"])
-@require_auth()
-@log_admin_action("test_gam_connection")
-def test_gam_connection():
-    """Test GAM connection with refresh token and fetch available resources."""
-    refresh_token = request.json.get("refresh_token")
-    if not refresh_token:
-        return jsonify({"error": "Refresh token is required"}), 400
-
-    # Get OAuth credentials from the settings
-    gam_auth = get_settings().auth
-    client_id = gam_auth.gam_oauth_client_id
-    client_secret = gam_auth.gam_oauth_client_secret
-
-    if not client_id or not client_secret:
-        return (
-            jsonify(
-                {
-                    "error": "GAM OAuth credentials not configured. Please set GAM_OAUTH_CLIENT_ID and GAM_OAUTH_CLIENT_SECRET environment variables."
-                }
-            ),
-            400,
-        )
-
-    # Test by creating credentials and making a simple API call
-    from googleads import ad_manager, oauth2
-
-    # Create GoogleAds OAuth2 client with refresh token
-    oauth2_client = oauth2.GoogleRefreshTokenClient(
-        client_id=client_id,
-        client_secret=client_secret,
-        refresh_token=refresh_token,
-    )
-
-    # Test if credentials are valid by trying to refresh
-    # This will attempt to refresh the token
-    oauth2_client.Refresh()
-
-    # Initialize GAM client to get network info
-    # Note: We don't need to specify network_code for getAllNetworks call
-    client = ad_manager.AdManagerClient(oauth2_client, "AdCP-Sales-Agent-Setup")
-
-    # Get network service
-    network_service = client.GetService("NetworkService")
-
-    # Get all networks user has access to
-    try:
-        # Try to get all networks first
-        logger.info("Attempting to call getAllNetworks()")
-        all_networks = network_service.getAllNetworks()
-        logger.info(f"getAllNetworks() returned: {all_networks}")
-        networks = []
-        if all_networks:
-            logger.info(f"Processing {len(all_networks)} networks")
-            for network in all_networks:
-                logger.info(f"Network data: {network}")
-                networks.append(
-                    {
-                        "id": network["id"],
-                        "displayName": network["displayName"],
-                        "networkCode": network["networkCode"],
-                    }
-                )
-        else:
-            logger.info("getAllNetworks() returned empty/None")
-    except AttributeError as e:
-        # getAllNetworks might not be available, fall back to getCurrentNetwork
-        logger.info(f"getAllNetworks not available (AttributeError: {e}), falling back to getCurrentNetwork")
-        try:
-            current_network = network_service.getCurrentNetwork()
-            logger.info(f"getCurrentNetwork() returned: {current_network}")
-            networks = [
-                {
-                    "id": current_network["id"],
-                    "displayName": current_network["displayName"],
-                    "networkCode": current_network["networkCode"],
-                }
-            ]
-        except Exception as e:
-            logger.error(f"Failed to get network info: {e}")
-            networks = []
-    except Exception as e:
-        logger.error(f"Failed to get networks: {e}")
-        logger.exception("Full exception details:")
-        networks = []
-
-    result = {
-        "success": True,
-        "message": "Successfully connected to Google Ad Manager",
-        "networks": networks,
-    }
-
-    # If we got a network, fetch companies and users
-    if networks:
-        try:
-            # Reinitialize client with network code for subsequent calls
-            network_code = networks[0]["networkCode"]
-            logger.info(f"Reinitializing client with network code: {network_code}")
-
-            client = ad_manager.AdManagerClient(oauth2_client, "AdCP-Sales-Agent-Setup", network_code=network_code)
-
-            # Use GoogleAdManager adapter to fetch advertisers (eliminates code duplication)
-            from src.adapters.google_ad_manager import GoogleAdManager
-            from src.core.schemas import Principal
-
-            # Create mock principal for adapter initialization (not used for get_advertisers)
-            mock_principal = Principal(
-                principal_id="system",
-                name="System",
-                platform_mappings={
-                    "google_ad_manager": {
-                        "advertiser_id": "system_temp",
-                        "advertiser_name": "System (temp)",
-                    }
-                },
-            )
-
-            # Build GAM config from OAuth credentials
-            gam_config = {
-                "oauth_credentials": {
-                    "client_id": oauth_client_id,
-                    "client_secret": oauth_client_secret,
-                    "refresh_token": refresh_token,
-                }
-            }
-
-            # Initialize adapter
-            adapter = GoogleAdManager(
-                config=gam_config,
-                principal=mock_principal,
-                network_code=network_code,
-                advertiser_id=None,
-                trafficker_id=None,
-                tenant_id=tenant_id,
-                tenant_ai_config=None,  # names no order, so no AI configuration is read
-            )
-
-            # Fetch ALL advertisers using shared implementation (with pagination)
-            companies = adapter.get_advertisers(fetch_all=True)
-            result["companies"] = companies
-
-            # Get current user info
-            user_service = client.GetService("UserService")
-            current_user = user_service.getCurrentUser()
-            result["current_user"] = {
-                "id": current_user.id,
-                "name": current_user.name,
-                "email": current_user.email,
-            }
-
-        except Exception as e:
-            # It's okay if we can't fetch companies/users
-            result["warning"] = safe_error_message(e, "Connected but couldn't fetch all resources")
-
-    return jsonify(result)

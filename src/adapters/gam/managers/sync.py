@@ -14,6 +14,8 @@ sync orchestration within the modular GAM architecture.
 
 import json
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -27,6 +29,36 @@ from src.core.database.models import SyncJob
 from src.core.operator_errors import safe_error_message
 
 logger = logging.getLogger(__name__)
+
+
+class SyncFailed(Exception):
+    """A sync job failed and its failure is recorded; raised in place of the cause, which it chains.
+
+    ``operator_message`` is the fixed text stored on the job, ending with the log reference
+    the cause was logged under. A caller that records the same failure on another job, or
+    answers it, reuses this text, so one failure keeps one log record and one reference.
+    """
+
+    def __init__(self, sync_id: str, operator_message: str):
+        super().__init__(f"Sync {sync_id} failed: {operator_message}")
+        self.sync_id = sync_id
+        self.operator_message = operator_message
+
+
+@contextmanager
+def recording_failure(db_session: Session, sync_job: SyncJob, context: str) -> Iterator[None]:
+    """Run a sync's work; if it raises, mark ``sync_job`` failed and raise :class:`SyncFailed`.
+
+    The cause is logged once, by ``safe_error_message(cause, context)``, unless it is a
+    nested sync's :class:`SyncFailed`, whose text (and reference) the job takes over.
+    """
+    try:
+        yield
+    except Exception as e:  # noqa: BLE001 - every failure of a sync is recorded on its job, then re-raised
+        operator_message = e.operator_message if isinstance(e, SyncFailed) else safe_error_message(e, context)
+        sync_job.mark_failed(operator_message)
+        db_session.commit()
+        raise SyncFailed(sync_job.sync_id, operator_message) from e
 
 
 class GAMSyncManager:
@@ -90,7 +122,7 @@ class GAMSyncManager:
         # Create sync job
         sync_job = self._create_sync_job(db_session, sync_type, "api")
 
-        try:
+        with recording_failure(db_session, sync_job, f"Inventory sync failed for tenant {self.tenant_id}"):
             # Update status to running
             sync_job.status = "running"
             db_session.commit()
@@ -116,20 +148,12 @@ class GAMSyncManager:
             sync_job.summary = json.dumps(summary)
             db_session.commit()
 
-            logger.info(f"Inventory sync completed for tenant {self.tenant_id}: {summary}")
-            return {
-                "sync_id": sync_job.sync_id,
-                "status": "completed",
-                "summary": summary,
-            }
-
-        except Exception as e:
-            logger.error(f"Inventory sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
-
-            sync_job.mark_failed(safe_error_message(e, "Inventory sync failed"))
-            db_session.commit()
-
-            raise
+        logger.info(f"Inventory sync completed for tenant {self.tenant_id}: {summary}")
+        return {
+            "sync_id": sync_job.sync_id,
+            "status": "completed",
+            "summary": summary,
+        }
 
     def sync_orders(self, db_session: Session, force: bool = False) -> dict[str, Any]:
         """Synchronize orders and line items from GAM to database.
@@ -154,7 +178,7 @@ class GAMSyncManager:
         # Create sync job
         sync_job = self._create_sync_job(db_session, sync_type, "api")
 
-        try:
+        with recording_failure(db_session, sync_job, f"Orders sync failed for tenant {self.tenant_id}"):
             # Update status to running
             sync_job.status = "running"
             db_session.commit()
@@ -177,20 +201,12 @@ class GAMSyncManager:
             sync_job.summary = json.dumps(summary)
             db_session.commit()
 
-            logger.info(f"Orders sync completed for tenant {self.tenant_id}: {summary}")
-            return {
-                "sync_id": sync_job.sync_id,
-                "status": "completed",
-                "summary": summary,
-            }
-
-        except Exception as e:
-            logger.error(f"Orders sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
-
-            sync_job.mark_failed(safe_error_message(e, "Orders sync failed"))
-            db_session.commit()
-
-            raise
+        logger.info(f"Orders sync completed for tenant {self.tenant_id}: {summary}")
+        return {
+            "sync_id": sync_job.sync_id,
+            "status": "completed",
+            "summary": summary,
+        }
 
     def sync_full(self, db_session: Session, force: bool = False, custom_targeting_limit: int = 1000) -> dict[str, Any]:
         """Perform full synchronization of both inventory and orders.
@@ -208,7 +224,8 @@ class GAMSyncManager:
         # Create sync job for full sync
         sync_job = self._create_sync_job(db_session, "full", "api")
 
-        try:
+        # A nested sync that fails has recorded its own job; this job takes over its text.
+        with recording_failure(db_session, sync_job, f"Full sync failed for tenant {self.tenant_id}"):
             # Update status to running
             sync_job.status = "running"
             db_session.commit()
@@ -240,20 +257,12 @@ class GAMSyncManager:
             sync_job.summary = json.dumps(combined_summary)
             db_session.commit()
 
-            logger.info(f"Full sync completed for tenant {self.tenant_id}: {combined_summary}")
-            return {
-                "sync_id": sync_job.sync_id,
-                "status": "completed",
-                "summary": combined_summary,
-            }
-
-        except Exception as e:
-            logger.error(f"Full sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
-
-            sync_job.mark_failed(safe_error_message(e, "Full sync failed"))
-            db_session.commit()
-
-            raise
+        logger.info(f"Full sync completed for tenant {self.tenant_id}: {combined_summary}")
+        return {
+            "sync_id": sync_job.sync_id,
+            "status": "completed",
+            "summary": combined_summary,
+        }
 
     def sync_selective(
         self,
@@ -278,12 +287,10 @@ class GAMSyncManager:
         # Create sync job
         sync_job = self._create_sync_job(db_session, "selective", "api")
 
-        try:
+        with recording_failure(db_session, sync_job, f"Selective sync failed for tenant {self.tenant_id}"):
             # Update status to running
             sync_job.status = "running"
             db_session.commit()
-
-            start_time = datetime.now(UTC)
 
             # Get discovery instance
             discovery = self.inventory_manager._get_discovery()
@@ -308,20 +315,12 @@ class GAMSyncManager:
             sync_job.summary = json.dumps(summary)
             db_session.commit()
 
-            logger.info(f"Selective sync completed for tenant {self.tenant_id}: {summary}")
-            return {
-                "sync_id": sync_job.sync_id,
-                "status": "completed",
-                "summary": summary,
-            }
-
-        except Exception as e:
-            logger.error(f"Selective sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
-
-            sync_job.mark_failed(safe_error_message(e, "Selective sync failed"))
-            db_session.commit()
-
-            raise
+        logger.info(f"Selective sync completed for tenant {self.tenant_id}: {summary}")
+        return {
+            "sync_id": sync_job.sync_id,
+            "status": "completed",
+            "summary": summary,
+        }
 
     def get_sync_status(self, db_session: Session, sync_id: str) -> dict[str, Any] | None:
         """Get status of a specific sync job.

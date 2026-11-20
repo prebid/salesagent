@@ -10,14 +10,17 @@ DECORATOR ORDER CONVENTION:
 This order ensures we only log actions by authorized users.
 """
 
-import logging
 from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
 from flask import g, request, session
 
-logger = logging.getLogger(__name__)
+from src.core.operator_errors import best_effort
+
+#: What the audit row of an action that raised records. The exception itself is logged
+#: under a reference by the admin error handler; its text never reaches the audit log.
+_RAISED_MESSAGE = "The action failed with an error; the server log has the details"
 
 # Sensitive field patterns to exclude from audit logs
 _SENSITIVE_PATTERNS = frozenset(
@@ -146,8 +149,8 @@ def record_admin_action_failure(error: object) -> None:
     """Mark the current admin action as FAILED even though the handler returns normally.
 
     A handler that catches its own domain refusal, flashes it, and returns a
-    redirect never raises — so :func:`log_admin_action`'s ``except`` never fires
-    and ``success`` stays ``True``. The refusal is then written to the audit log
+    redirect never raises — so :func:`log_admin_action` sees it return
+    and ``success`` becomes ``True``. The refusal is then written to the audit log
     as a successful admin action.
 
     That is not hypothetical: ``register_webhook`` refuses an SSRF-blocked URL
@@ -218,28 +221,25 @@ def log_admin_action(
             # did with them, so it is the reliable source.
             tenant_id: str | None = kwargs.get("tenant_id") or (request.view_args or {}).get("tenant_id")
 
-            # Call the actual route function
+            # Call the actual route function. It failed unless it returned: what it raised
+            # goes on to the admin error handler, which logs it, and the audit row (shown in
+            # the admin UI) records fixed text rather than the exception's.
             result: Any = None
-            success: bool = True
-            error_message: str | None = None
+            success: bool = False
+            error_message: str | None = _RAISED_MESSAGE
 
             try:
                 result = f(*args, **kwargs)
-            except Exception as e:
-                # Log failed actions too
-                success = False
-                error_message = str(e)
-                # Re-raise to let Flask handle it
-                raise
+                success, error_message = True, None
             finally:
-                # A handler that CAUGHT its own refusal and returned normally never
-                # reaches the except above. Without this, such a refusal audits as a
+                # A handler that CAUGHT its own refusal returned normally, so the block
+                # above marked it a success. Without this, such a refusal audits as a
                 # success — see record_admin_action_failure.
                 success, error_message = _apply_handled_failure(success, error_message)
 
-                # Log the admin action (even if it failed)
+                # Log the admin action (even if it failed). Auditing never fails the request.
                 if tenant_id:
-                    try:
+                    with best_effort(f"Could not write the admin audit log for {operation_name}"):
                         # Use cached audit logger to reduce DB connections
                         audit_logger = _get_or_create_audit_logger(tenant_id)
 
@@ -251,12 +251,10 @@ def log_admin_action(
                         }
 
                         if extract_details and callable(extract_details):
-                            try:
+                            with best_effort(f"Could not extract audit details for {operation_name}"):
                                 extracted = extract_details(result, **kwargs)
                                 if isinstance(extracted, dict):
                                     details.update(extracted)
-                            except Exception as e:
-                                logger.warning(f"Failed to extract details for {operation_name}: {e}")
 
                         # Add request data for POST requests (sanitized)
                         if request.method == "POST":
@@ -274,9 +272,6 @@ def log_admin_action(
                             error=error_message,
                             tenant_id=tenant_id,
                         )
-                    except Exception as e:
-                        # Don't fail the request if audit logging fails
-                        logger.warning(f"Failed to write admin audit log for {operation_name}: {e}")
 
             return result
 

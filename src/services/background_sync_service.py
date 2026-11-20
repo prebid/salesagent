@@ -489,8 +489,7 @@ def _run_sync_thread(
             logger.warning(f"[{sync_id}] Failed to invalidate cache: {cache_error}")
 
     except Exception as e:
-        logger.error(f"[{sync_id}] Sync failed: {e}", exc_info=True)
-        _mark_sync_failed(sync_id, safe_error_message(e, "Inventory sync failed"))
+        _mark_sync_failed(sync_id, safe_error_message(e, f"Inventory sync {sync_id} failed"))
 
     finally:
         # Remove from active syncs

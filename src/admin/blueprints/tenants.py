@@ -24,7 +24,7 @@ from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, UserRole
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.operator_errors import safe_error_message
+from src.core.operator_errors import best_effort
 from src.services.ai.factory import tenant_ai_enabled
 from src.services.setup_checklist_service import SetupChecklistService
 from src.services.slack_notifier import SlackNotifier
@@ -48,103 +48,90 @@ def get_available_currencies():
 
     currency_data = get_global("currency_names")
     for code in sorted(currency_data.keys()):
-        try:
-            name = babel_numbers.get_currency_name(code, locale="en")
-            if name:  # Skip if no English name available
-                currencies.append({"code": code, "name": name})
-        except Exception:
-            logger.debug("Could not resolve currency %s", code, exc_info=True)
-            continue
+        name = babel_numbers.get_currency_name(code, locale="en")
+        if name:  # Skip if no English name available
+            currencies.append({"code": code, "name": name})
 
     return currencies
+
+
+def _setup_status_tile(tenant_id: str) -> dict | None:
+    """The setup checklist widget's data, or None so the page still renders when it cannot be built."""
+    setup_status = None
+    with best_effort("Failed to load setup checklist"):
+        setup_status = SetupChecklistService(tenant_id).get_setup_status()
+    return setup_status
 
 
 @tenants_bp.route("/<tenant_id>")
 @require_tenant_access()
 def dashboard(tenant_id):
     """Show tenant dashboard using single data source pattern."""
-    try:
-        # Use DashboardService for all dashboard data (SINGLE DATA SOURCE PATTERN)
-        dashboard_service = DashboardService(tenant_id)
-        tenant = dashboard_service.get_tenant()
+    # Use DashboardService for all dashboard data (SINGLE DATA SOURCE PATTERN)
+    dashboard_service = DashboardService(tenant_id)
+    tenant = dashboard_service.get_tenant()
 
-        if not tenant:
-            flash("Tenant not found", "error")
-            return redirect(url_for("core.index"))
-
-        # Get all metrics from centralized service
-        metrics = dashboard_service.get_dashboard_metrics()
-
-        # Get recent media buys
-        recent_buys = dashboard_service.get_recent_media_buys(limit=10)
-
-        # Get chart data
-        chart_data_dict = dashboard_service.get_chart_data()
-
-        # Get tenant config for features
-        config = get_tenant_config_from_db(tenant_id)
-        features = config.get("features", {})
-
-        # Get setup checklist status
-        # Show widget always (users can access recommended tasks even after critical complete)
-        setup_status = None
-        try:
-            checklist_service = SetupChecklistService(tenant_id)
-            setup_status = checklist_service.get_setup_status()
-        except Exception as e:
-            logger.warning(f"Failed to load setup checklist: {e}")
-
-        return render_template(
-            "tenant_dashboard.html",
-            tenant=tenant,
-            tenant_id=tenant_id,
-            # Legacy template variables (calculated by service)
-            active_campaigns=metrics["live_buys"],
-            total_spend=metrics["total_revenue"],
-            principals_count=metrics["total_advertisers"],
-            products_count=metrics["products_count"],
-            recent_buys=recent_buys,
-            recent_media_buys=recent_buys,  # Same data, different name for template
-            features=features,
-            # Chart data
-            revenue_data=json.dumps(metrics["revenue_data"]),
-            chart_labels=chart_data_dict["labels"],
-            chart_data=chart_data_dict["data"],
-            # Metrics object (single source of truth)
-            metrics=metrics,
-            # Setup checklist
-            setup_status=setup_status,
-        )
-
-    except Exception as e:
-        flash(safe_error_message(e, "Dashboard error"), "error")
+    if not tenant:
+        flash("Tenant not found", "error")
         return redirect(url_for("core.index"))
+
+    # Get all metrics from centralized service
+    metrics = dashboard_service.get_dashboard_metrics()
+
+    # Get recent media buys
+    recent_buys = dashboard_service.get_recent_media_buys(limit=10)
+
+    # Get chart data
+    chart_data_dict = dashboard_service.get_chart_data()
+
+    # Get tenant config for features
+    config = get_tenant_config_from_db(tenant_id)
+    features = config.get("features", {})
+
+    # Get setup checklist status
+    # Show widget always (users can access recommended tasks even after critical complete)
+    setup_status = _setup_status_tile(tenant_id)
+
+    return render_template(
+        "tenant_dashboard.html",
+        tenant=tenant,
+        tenant_id=tenant_id,
+        # Legacy template variables (calculated by service)
+        active_campaigns=metrics["live_buys"],
+        total_spend=metrics["total_revenue"],
+        principals_count=metrics["total_advertisers"],
+        products_count=metrics["products_count"],
+        recent_buys=recent_buys,
+        recent_media_buys=recent_buys,  # Same data, different name for template
+        features=features,
+        # Chart data
+        revenue_data=json.dumps(metrics["revenue_data"]),
+        chart_labels=chart_data_dict["labels"],
+        chart_data=chart_data_dict["data"],
+        # Metrics object (single source of truth)
+        metrics=metrics,
+        # Setup checklist
+        setup_status=setup_status,
+    )
 
 
 @tenants_bp.route("/<tenant_id>/setup-checklist")
 @require_tenant_access()
 def setup_checklist(tenant_id):
     """Show full setup checklist page."""
-    try:
-        with get_db_session() as session:
-            stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-            tenant = session.scalars(stmt).first()
+    with get_db_session() as session:
+        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+        tenant = session.scalars(stmt).first()
 
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
 
-            # Get setup status
-            checklist_service = SetupChecklistService(tenant_id)
-            setup_status = checklist_service.get_setup_status()
+        # Get setup status
+        checklist_service = SetupChecklistService(tenant_id)
+        setup_status = checklist_service.get_setup_status()
 
-            return render_template(
-                "setup_checklist.html", tenant=tenant, tenant_id=tenant_id, setup_status=setup_status
-            )
-
-    except Exception as e:
-        flash(safe_error_message(e, "Error loading setup checklist"), "error")
-        return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+        return render_template("setup_checklist.html", tenant=tenant, tenant_id=tenant_id, setup_status=setup_status)
 
 
 @tenants_bp.route("/<tenant_id>/settings")
@@ -161,243 +148,214 @@ def tenant_settings(tenant_id, section=None):
     - GAM OAuth status
     - Template rendering with active_adapter variable
     """
-    try:
-        with get_db_session() as db_session:
-            from sqlalchemy import select
+    with get_db_session() as db_session:
+        from sqlalchemy import select
 
-            stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-            tenant = db_session.scalars(stmt).first()
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+        tenant = db_session.scalars(stmt).first()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
 
-            # Get adapter config
-            adapter_config_obj = tenant.adapter_config
+        # Get adapter config
+        adapter_config_obj = tenant.adapter_config
 
-            # Get active adapter - this was missing!
-            active_adapter = None
-            if tenant.ad_server:
-                active_adapter = tenant.ad_server
-            elif adapter_config_obj and adapter_config_obj.adapter_type:
-                active_adapter = adapter_config_obj.adapter_type
+        # Get active adapter - this was missing!
+        active_adapter = None
+        if tenant.ad_server:
+            active_adapter = tenant.ad_server
+        elif adapter_config_obj and adapter_config_obj.adapter_type:
+            active_adapter = adapter_config_obj.adapter_type
 
-            # Get OAuth status for GAM
-            oauth_configured = False
-            if adapter_config_obj and adapter_config_obj.adapter_type == "google_ad_manager":
-                oauth_configured = bool(adapter_config_obj._gam_refresh_token)
+        # Get OAuth status for GAM
+        oauth_configured = False
+        if adapter_config_obj and adapter_config_obj.adapter_type == "google_ad_manager":
+            oauth_configured = bool(adapter_config_obj._gam_refresh_token)
 
-            # Check if GAM OAuth credentials are configured
-            gam_oauth_configured = get_settings().auth.gam_oauth_configured
+        # Check if GAM OAuth credentials are configured
+        gam_oauth_configured = get_settings().auth.gam_oauth_configured
 
-            # Get advertiser data for the advertisers section
-            from src.core.database.models import GAMInventory
+        # Get advertiser data for the advertisers section
+        from src.core.database.models import GAMInventory
 
-            principals = PrincipalRepository(db_session, tenant_id).list_all()
-            advertiser_count = len(principals)
-            active_advertisers = len(principals)  # For now, assume all are active
+        principals = PrincipalRepository(db_session, tenant_id).list_all()
+        advertiser_count = len(principals)
+        active_advertisers = len(principals)  # For now, assume all are active
 
-            # Check for running sync jobs
-            from src.core.database.models import SyncJob
+        # Check for running sync jobs
+        from src.core.database.models import SyncJob
 
-            running_sync = None
-            if active_adapter == "google_ad_manager":
-                stmt = (
-                    select(SyncJob)
-                    .filter_by(tenant_id=tenant_id, status="running", sync_type="inventory")
-                    .order_by(SyncJob.started_at.desc())
-                )
-                running_sync = db_session.scalars(stmt).first()
-
-            # Get last sync time from most recently updated inventory item
-            last_sync_time = None
-            print(f"DEBUG: Checking last sync time - active_adapter: {active_adapter}")
-            if active_adapter == "google_ad_manager":
-                stmt = (
-                    select(GAMInventory.updated_at)
-                    .filter_by(tenant_id=tenant_id)
-                    .order_by(GAMInventory.updated_at.desc())
-                    .limit(1)
-                )
-                last_updated = db_session.scalar(stmt)
-                print(f"DEBUG: Last inventory update for tenant {tenant_id}: {last_updated}")
-                if last_updated:
-                    from datetime import datetime
-
-                    # Format as human-readable time
-                    now = datetime.now(UTC)
-                    diff = now - last_updated.replace(tzinfo=UTC)
-                    if diff.total_seconds() < 60:
-                        last_sync_time = "Just now"
-                    elif diff.total_seconds() < 3600:
-                        mins = int(diff.total_seconds() / 60)
-                        last_sync_time = f"{mins} minute{'s' if mins != 1 else ''} ago"
-                    elif diff.total_seconds() < 86400:
-                        hours = int(diff.total_seconds() / 3600)
-                        last_sync_time = f"{hours} hour{'s' if hours != 1 else ''} ago"
-                    else:
-                        last_sync_time = last_updated.strftime("%b %d, %Y at %I:%M %p")
-
-            # Convert adapter_config to dict format for template compatibility
-            adapter_config_dict = {}
-            if adapter_config_obj:
-                adapter_config_dict = {
-                    "network_code": adapter_config_obj.gam_network_code or "",
-                    # Whether one is stored, never the token: the page must not be able to render it
-                    "refresh_token": bool(adapter_config_obj._gam_refresh_token),
-                    "trafficker_id": adapter_config_obj.gam_trafficker_id or "",
-                    "application_name": getattr(adapter_config_obj, "gam_application_name", "") or "",
-                    "service_account_email": adapter_config_obj.gam_service_account_email or "",
-                    "network_currency": adapter_config_obj.gam_network_currency or "",
-                    "secondary_currencies": adapter_config_obj.gam_secondary_currencies or [],
-                    "network_timezone": adapter_config_obj.gam_network_timezone or "",
-                }
-
-            # Get environment info for URL generation
-            runtime = get_settings().runtime
-            is_production = runtime.is_production
-            mcp_port = runtime.adcp_sales_port if not is_production else None
-
-            # JSON fields are automatically deserialized by JSONType
-            # These are now guaranteed to be lists (or None) from the database
-            authorized_domains = tenant.authorized_domains or []
-            authorized_emails = tenant.authorized_emails or []
-
-            # Get product counts
-            from src.core.database.models import Product
-
-            stmt = select(Product).filter_by(tenant_id=tenant_id)
-            products = db_session.scalars(stmt).all()
-            product_count = len(products)
-            # Note: Product model doesn't have status field
-            active_products = product_count  # All products are considered active
-            draft_products = 0  # No draft status tracking
-
-            # No creative-format count: formats are fetched from creative agents over AdCP,
-            # not stored in this database, so the template has no section to fill.
-
-            # Get inventory counts
-            from src.core.database.models import GAMInventory
-
-            try:
-                stmt = select(func.count()).select_from(GAMInventory).filter_by(tenant_id=tenant_id)
-                inventory_count = db_session.scalar(stmt) or 0
-
-                stmt = (
-                    select(func.count())
-                    .select_from(GAMInventory)
-                    .filter_by(tenant_id=tenant_id, inventory_type="ad_unit")
-                )
-                ad_units_count = db_session.scalar(stmt) or 0
-
-                stmt = (
-                    select(func.count())
-                    .select_from(GAMInventory)
-                    .filter_by(tenant_id=tenant_id, inventory_type="placement")
-                )
-                placements_count = db_session.scalar(stmt) or 0
-
-                stmt = (
-                    select(func.count())
-                    .select_from(GAMInventory)
-                    .filter_by(tenant_id=tenant_id, inventory_type="custom_targeting_key")
-                )
-                custom_targeting_keys_count = db_session.scalar(stmt) or 0
-
-                stmt = (
-                    select(func.count())
-                    .select_from(GAMInventory)
-                    .filter_by(tenant_id=tenant_id, inventory_type="custom_targeting_value")
-                )
-                custom_targeting_values_count = db_session.scalar(stmt) or 0
-            except Exception as e:
-                # Table may not exist or query may fail - rollback and gracefully handle
-                logger.warning(f"Could not load inventory counts: {e}")
-                db_session.rollback()
-                inventory_count = 0
-                ad_units_count = 0
-                placements_count = 0
-                custom_targeting_keys_count = 0
-                custom_targeting_values_count = 0
-
-            # All services (MCP, A2A, Admin) run on the same unified port
-            admin_port = runtime.adcp_sales_port if not is_production else None
-            a2a_port = admin_port
-
-            # Get currency limits for this tenant
-            from src.core.database.models import CurrencyLimit
-
-            stmt = select(CurrencyLimit).filter_by(tenant_id=tenant_id).order_by(CurrencyLimit.currency_code)
-            currency_limits = db_session.scalars(stmt).all()
-
-            # Whether each AI feature can run for this seller, as the feature itself decides:
-            # policy checks only on the seller's own credential, ranking and review with the
-            # platform's as fallback (src/services/ai/factory.py).
-            ai_enabled = tenant_ai_enabled(tenant)
-            seller_ai_enabled = tenant_ai_enabled(tenant, platform_fallback=False)
-
-            # Get AI configuration for template
-            ai_config = tenant.ai_config or {}
-            current_provider = ai_config.get("provider", "")
-            current_model = ai_config.get("model", "")
-            has_logfire = bool(ai_config.get("logfire_token"))
-
-            # Get setup checklist status
-            setup_status = None
-            try:
-                checklist_service = SetupChecklistService(tenant_id)
-                setup_status = checklist_service.get_setup_status()
-            except Exception as e:
-                logger.warning(f"Failed to load setup checklist: {e}")
-
-            script_name = request.script_root or request.environ.get("SCRIPT_NAME", "")
-
-            # Get available currencies from Babel
-            available_currencies = get_available_currencies()
-
-            return render_template(
-                "tenant_settings.html",
-                tenant=tenant,
-                ai_enabled=ai_enabled,
-                seller_ai_enabled=seller_ai_enabled,
-                current_provider=current_provider,
-                current_model=current_model,
-                has_logfire=has_logfire,
-                tenant_id=tenant_id,
-                section=section or "general",
-                active_adapter=active_adapter,
-                adapter_config=adapter_config_dict,  # Use dict format
-                oauth_configured=oauth_configured,
-                gam_oauth_configured=gam_oauth_configured,  # Environment check for GAM OAuth
-                last_sync_time=last_sync_time,
-                running_sync=running_sync,  # Pass running sync info
-                principals=principals,
-                advertiser_count=advertiser_count,
-                active_advertisers=active_advertisers,
-                mcp_port=mcp_port,
-                a2a_port=a2a_port,
-                admin_port=admin_port,
-                is_production=is_production,
-                script_name=script_name,
-                authorized_domains=authorized_domains,
-                authorized_emails=authorized_emails,
-                product_count=product_count,
-                active_products=active_products,
-                draft_products=draft_products,
-                inventory_count=inventory_count,
-                ad_units_count=ad_units_count,
-                currency_limits=currency_limits,
-                placements_count=placements_count,
-                custom_targeting_keys_count=custom_targeting_keys_count,
-                custom_targeting_values_count=custom_targeting_values_count,
-                setup_status=setup_status,
-                available_currencies=available_currencies,  # Currency list from Babel
-                single_tenant_mode=is_single_tenant_mode(),
+        running_sync = None
+        if active_adapter == "google_ad_manager":
+            stmt = (
+                select(SyncJob)
+                .filter_by(tenant_id=tenant_id, status="running", sync_type="inventory")
+                .order_by(SyncJob.started_at.desc())
             )
+            running_sync = db_session.scalars(stmt).first()
 
-    except Exception as e:
-        logger.error(f"Error loading tenant settings: {e}", exc_info=True)
-        flash("Error loading settings", "error")
-        return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+        # Get last sync time from most recently updated inventory item
+        last_sync_time = None
+        print(f"DEBUG: Checking last sync time - active_adapter: {active_adapter}")
+        if active_adapter == "google_ad_manager":
+            stmt = (
+                select(GAMInventory.updated_at)
+                .filter_by(tenant_id=tenant_id)
+                .order_by(GAMInventory.updated_at.desc())
+                .limit(1)
+            )
+            last_updated = db_session.scalar(stmt)
+            print(f"DEBUG: Last inventory update for tenant {tenant_id}: {last_updated}")
+            if last_updated:
+                from datetime import datetime
+
+                # Format as human-readable time
+                now = datetime.now(UTC)
+                diff = now - last_updated.replace(tzinfo=UTC)
+                if diff.total_seconds() < 60:
+                    last_sync_time = "Just now"
+                elif diff.total_seconds() < 3600:
+                    mins = int(diff.total_seconds() / 60)
+                    last_sync_time = f"{mins} minute{'s' if mins != 1 else ''} ago"
+                elif diff.total_seconds() < 86400:
+                    hours = int(diff.total_seconds() / 3600)
+                    last_sync_time = f"{hours} hour{'s' if hours != 1 else ''} ago"
+                else:
+                    last_sync_time = last_updated.strftime("%b %d, %Y at %I:%M %p")
+
+        # Convert adapter_config to dict format for template compatibility
+        adapter_config_dict = {}
+        if adapter_config_obj:
+            adapter_config_dict = {
+                "network_code": adapter_config_obj.gam_network_code or "",
+                # Whether one is stored, never the token: the page must not be able to render it
+                "refresh_token": bool(adapter_config_obj._gam_refresh_token),
+                "trafficker_id": adapter_config_obj.gam_trafficker_id or "",
+                "application_name": getattr(adapter_config_obj, "gam_application_name", "") or "",
+                "service_account_email": adapter_config_obj.gam_service_account_email or "",
+                "network_currency": adapter_config_obj.gam_network_currency or "",
+                "secondary_currencies": adapter_config_obj.gam_secondary_currencies or [],
+                "network_timezone": adapter_config_obj.gam_network_timezone or "",
+            }
+
+        # Get environment info for URL generation
+        runtime = get_settings().runtime
+        is_production = runtime.is_production
+        mcp_port = runtime.adcp_sales_port if not is_production else None
+
+        # JSON fields are automatically deserialized by JSONType
+        # These are now guaranteed to be lists (or None) from the database
+        authorized_domains = tenant.authorized_domains or []
+        authorized_emails = tenant.authorized_emails or []
+
+        # Get product counts
+        from src.core.database.models import Product
+
+        stmt = select(Product).filter_by(tenant_id=tenant_id)
+        products = db_session.scalars(stmt).all()
+        product_count = len(products)
+        # Note: Product model doesn't have status field
+        active_products = product_count  # All products are considered active
+        draft_products = 0  # No draft status tracking
+
+        # No creative-format count: formats are fetched from creative agents over AdCP,
+        # not stored in this database, so the template has no section to fill.
+
+        # Get inventory counts
+        from src.core.database.models import GAMInventory
+
+        stmt = select(func.count()).select_from(GAMInventory).filter_by(tenant_id=tenant_id)
+        inventory_count = db_session.scalar(stmt) or 0
+
+        stmt = select(func.count()).select_from(GAMInventory).filter_by(tenant_id=tenant_id, inventory_type="ad_unit")
+        ad_units_count = db_session.scalar(stmt) or 0
+
+        stmt = select(func.count()).select_from(GAMInventory).filter_by(tenant_id=tenant_id, inventory_type="placement")
+        placements_count = db_session.scalar(stmt) or 0
+
+        stmt = (
+            select(func.count())
+            .select_from(GAMInventory)
+            .filter_by(tenant_id=tenant_id, inventory_type="custom_targeting_key")
+        )
+        custom_targeting_keys_count = db_session.scalar(stmt) or 0
+
+        stmt = (
+            select(func.count())
+            .select_from(GAMInventory)
+            .filter_by(tenant_id=tenant_id, inventory_type="custom_targeting_value")
+        )
+        custom_targeting_values_count = db_session.scalar(stmt) or 0
+
+        # All services (MCP, A2A, Admin) run on the same unified port
+        admin_port = runtime.adcp_sales_port if not is_production else None
+        a2a_port = admin_port
+
+        # Get currency limits for this tenant
+        from src.core.database.models import CurrencyLimit
+
+        stmt = select(CurrencyLimit).filter_by(tenant_id=tenant_id).order_by(CurrencyLimit.currency_code)
+        currency_limits = db_session.scalars(stmt).all()
+
+        # Whether each AI feature can run for this seller, as the feature itself decides:
+        # policy checks only on the seller's own credential, ranking and review with the
+        # platform's as fallback (src/services/ai/factory.py).
+        ai_enabled = tenant_ai_enabled(tenant)
+        seller_ai_enabled = tenant_ai_enabled(tenant, platform_fallback=False)
+
+        # Get AI configuration for template
+        ai_config = tenant.ai_config or {}
+        current_provider = ai_config.get("provider", "")
+        current_model = ai_config.get("model", "")
+        has_logfire = bool(ai_config.get("logfire_token"))
+
+        # Get setup checklist status
+        setup_status = _setup_status_tile(tenant_id)
+
+        script_name = request.script_root or request.environ.get("SCRIPT_NAME", "")
+
+        # Get available currencies from Babel
+        available_currencies = get_available_currencies()
+
+        return render_template(
+            "tenant_settings.html",
+            tenant=tenant,
+            ai_enabled=ai_enabled,
+            seller_ai_enabled=seller_ai_enabled,
+            current_provider=current_provider,
+            current_model=current_model,
+            has_logfire=has_logfire,
+            tenant_id=tenant_id,
+            section=section or "general",
+            active_adapter=active_adapter,
+            adapter_config=adapter_config_dict,  # Use dict format
+            oauth_configured=oauth_configured,
+            gam_oauth_configured=gam_oauth_configured,  # Environment check for GAM OAuth
+            last_sync_time=last_sync_time,
+            running_sync=running_sync,  # Pass running sync info
+            principals=principals,
+            advertiser_count=advertiser_count,
+            active_advertisers=active_advertisers,
+            mcp_port=mcp_port,
+            a2a_port=a2a_port,
+            admin_port=admin_port,
+            is_production=is_production,
+            script_name=script_name,
+            authorized_domains=authorized_domains,
+            authorized_emails=authorized_emails,
+            product_count=product_count,
+            active_products=active_products,
+            draft_products=draft_products,
+            inventory_count=inventory_count,
+            ad_units_count=ad_units_count,
+            currency_limits=currency_limits,
+            placements_count=placements_count,
+            custom_targeting_keys_count=custom_targeting_keys_count,
+            custom_targeting_values_count=custom_targeting_values_count,
+            setup_status=setup_status,
+            available_currencies=available_currencies,  # Currency list from Babel
+            single_tenant_mode=is_single_tenant_mode(),
+        )
 
 
 @tenants_bp.route("/<tenant_id>/update", methods=["POST"])
@@ -405,37 +363,32 @@ def tenant_settings(tenant_id, section=None):
 @require_tenant_access()
 def update(tenant_id):
     """Update tenant settings."""
-    try:
-        # Sanitize form data
-        form_data = sanitize_form_data(request.form.to_dict())
+    # Sanitize form data
+    form_data = sanitize_form_data(request.form.to_dict())
 
-        # Validate form data
-        is_valid, errors = validate_form_data(form_data, ["name", "subdomain"])
-        if not is_valid:
-            for error in errors:
-                flash(error, "error")
-            return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+    # Validate form data
+    is_valid, errors = validate_form_data(form_data, ["name", "subdomain"])
+    if not is_valid:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
 
-            # Update tenant
-            tenant.name = form_data.get("name", tenant.name)
-            tenant.subdomain = form_data.get("subdomain", tenant.subdomain)
-            tenant.billing_plan = form_data.get("billing_plan", tenant.billing_plan)
-            tenant.updated_at = datetime.now(UTC)
+        # Update tenant
+        tenant.name = form_data.get("name", tenant.name)
+        tenant.subdomain = form_data.get("subdomain", tenant.subdomain)
+        tenant.billing_plan = form_data.get("billing_plan", tenant.billing_plan)
+        tenant.updated_at = datetime.now(UTC)
 
-            db_session.commit()
-            flash("Tenant settings updated successfully", "success")
+        db_session.commit()
+        flash("Tenant settings updated successfully", "success")
 
-    except Exception as e:
-        logger.error(f"Error updating tenant: {e}", exc_info=True)
-        flash("Error updating tenant", "error")
-
-    return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
 
 @tenants_bp.route("/<tenant_id>/test_slack", methods=["POST"])
@@ -443,58 +396,53 @@ def update(tenant_id):
 @require_tenant_access()
 def test_slack(tenant_id):
     """Test Slack webhook."""
-    try:
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                return jsonify({"success": False, "error": "Tenant not found"}), 404
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            return jsonify({"success": False, "error": "Tenant not found"}), 404
 
-            if not tenant.slack_webhook_url:
-                return jsonify({"success": False, "error": "No Slack webhook configured"}), 400
+        if not tenant.slack_webhook_url:
+            return jsonify({"success": False, "error": "No Slack webhook configured"}), 400
 
-            # One Block Kit owner: the route does not assemble its own blocks or dial the
-            # egress seam itself, because that duplicates slack_notifier and skips its
-            # retry/record bookkeeping.
-            #
-            # max_retries=1 is deliberate: a test notification that silently sends three
-            # times is worse than one that fails visibly.
-            sent = SlackNotifier(webhook_url=tenant.slack_webhook_url).send_message(
-                text=f"🎉 Test message from Prebid Sales Agent for {tenant.name}",
-                blocks=[
-                    {
-                        "type": "section",
-                        "text": {
+        # One Block Kit owner: the route does not assemble its own blocks or dial the
+        # egress seam itself, because that duplicates slack_notifier and skips its
+        # retry/record bookkeeping.
+        #
+        # max_retries=1 is deliberate: a test notification that silently sends three
+        # times is worse than one that fails visibly.
+        sent = SlackNotifier(webhook_url=tenant.slack_webhook_url).send_message(
+            text=f"🎉 Test message from Prebid Sales Agent for {tenant.name}",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"*Test Notification*\nThis is a test message from the "
+                            f"Prebid Sales Agent for *{tenant.name}*."
+                        ),
+                    },
+                },
+                {
+                    "type": "context",
+                    "elements": [
+                        {
                             "type": "mrkdwn",
-                            "text": (
-                                f"*Test Notification*\nThis is a test message from the "
-                                f"Prebid Sales Agent for *{tenant.name}*."
-                            ),
-                        },
-                    },
-                    {
-                        "type": "context",
-                        "elements": [
-                            {
-                                "type": "mrkdwn",
-                                "text": f"Sent at {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}",
-                            }
-                        ],
-                    },
-                ],
-                tenant_id=tenant.tenant_id,
-                max_retries=1,
-            )
+                            "text": f"Sent at {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                        }
+                    ],
+                },
+            ],
+            tenant_id=tenant.tenant_id,
+            max_retries=1,
+        )
 
-            if not sent:
-                # 400 with an opaque message. Slack's own response body is a counterparty
-                # response and is never echoed back to the operator.
-                return jsonify({"success": False, "error": "Slack webhook delivery failed"}), 400
+        if not sent:
+            # 400 with an opaque message. Slack's own response body is a counterparty
+            # response and is never echoed back to the operator.
+            return jsonify({"success": False, "error": "Slack webhook delivery failed"}), 400
 
-            return jsonify({"success": True, "message": "Test message sent successfully"})
-
-    except Exception as e:
-        logger.error(f"Unexpected error testing Slack: {e}", exc_info=True)
-        return jsonify({"success": False, "error": "Internal server error"}), 500
+        return jsonify({"success": True, "message": "Test message sent successfully"})
 
 
 @tenants_bp.route("/<tenant_id>/deactivate", methods=["POST"])
@@ -502,66 +450,43 @@ def test_slack(tenant_id):
 @require_tenant_access(role=UserRole.ADMIN)
 def deactivate_tenant(tenant_id):
     """Deactivate (soft delete) a tenant."""
-    try:
-        # Get confirmation from form
-        confirm_name = request.form.get("confirm_name", "").strip()
+    # Get confirmation from form
+    confirm_name = request.form.get("confirm_name", "").strip()
 
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
 
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
 
-            # Verify name matches
-            if confirm_name != tenant.name:
-                flash("Confirmation name did not match. Deactivation cancelled.", "error")
-                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="danger-zone"))
+        # Verify name matches
+        if confirm_name != tenant.name:
+            flash("Confirmation name did not match. Deactivation cancelled.", "error")
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="danger-zone"))
 
-            # Already inactive?
-            if not tenant.is_active:
-                flash("This sales agent is already deactivated.", "warning")
-                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="danger-zone"))
+        # Already inactive?
+        if not tenant.is_active:
+            flash("This sales agent is already deactivated.", "warning")
+            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="danger-zone"))
 
-            # Deactivate tenant (soft delete)
-            tenant.is_active = False
-            tenant.updated_at = datetime.now(UTC)
-            db_session.commit()
+        # Deactivate tenant (soft delete)
+        tenant.is_active = False
+        tenant.updated_at = datetime.now(UTC)
+        db_session.commit()
 
-            # Log to application logs
-            logger.info(f"Tenant {tenant_id} ({tenant.name}) deactivated by user {session.get('user', 'unknown')}")
+        # Log to application logs
+        logger.info(f"Tenant {tenant_id} ({tenant.name}) deactivated by user {session.get('user', 'unknown')}")
 
-            # Create audit log entry for compliance
-            from src.core.audit_logger import AuditLogger
+        # The audit row is written by @log_admin_action("deactivate_tenant").
 
-            try:
-                audit_logger = AuditLogger(tenant_id)
-                audit_logger.log_security_event(
-                    event_type="tenant_deactivation",
-                    severity="critical",
-                    user_email=session.get("user", "unknown"),
-                    details={
-                        "tenant_name": tenant.name,
-                        "deactivated_at": datetime.now(UTC).isoformat(),
-                        "deactivated_by": session.get("user", "unknown"),
-                    },
-                )
-            except Exception as e:
-                # Don't fail deactivation if audit logging fails
-                logger.error(f"Failed to create audit log for deactivation: {e}")
-
-            # Clear session and redirect to login
-            session.clear()
-            flash(
-                f"Sales agent '{tenant.name}' has been deactivated. "
-                "All data is preserved. Contact support to reactivate.",
-                "success",
-            )
-            return redirect(url_for("auth.login"))
-
-    except Exception as e:
-        flash(safe_error_message(e, "Error deactivating sales agent"), "error")
-        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="danger-zone"))
+        # Clear session and redirect to login
+        session.clear()
+        flash(
+            f"Sales agent '{tenant.name}' has been deactivated. All data is preserved. Contact support to reactivate.",
+            "success",
+        )
+        return redirect(url_for("auth.login"))
 
 
 @tenants_bp.route("/<tenant_id>/media-buys", methods=["GET"])
@@ -572,72 +497,67 @@ def media_buys_list(tenant_id):
     from src.core.database.models import Product
     from src.core.database.repositories import MediaBuyRepository
 
-    try:
-        # Get status filter from query params
-        status_filter = request.args.get("status")
+    # Get status filter from query params
+    status_filter = request.args.get("status")
 
-        with get_db_session() as db_session:
-            # Get tenant
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+    with get_db_session() as db_session:
+        # Get tenant
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
 
-            # Get all media buys
-            repo = MediaBuyRepository(db_session, tenant_id)
-            all_media_buys = repo.list_all_ordered_by_created()
+        # Get all media buys
+        repo = MediaBuyRepository(db_session, tenant_id)
+        all_media_buys = repo.list_all_ordered_by_created()
 
-            # Calculate readiness state for each and filter
-            media_buys_with_state = []
-            for media_buy in all_media_buys:
-                readiness = MediaBuyReadinessService.get_readiness_state(
-                    media_buy.media_buy_id, tenant_id, session=db_session
-                )
-
-                # Apply status filter if specified
-                if status_filter and readiness["state"] != status_filter:
-                    continue
-
-                # Get principal name
-                principal = None
-                if media_buy.principal_id:
-                    principal = PrincipalRepository(db_session, tenant_id).get(media_buy.principal_id)
-
-                # Get product names from packages
-                product_names = []
-                if media_buy.raw_request and "packages" in media_buy.raw_request:
-                    for package in media_buy.raw_request["packages"]:
-                        product_id = package.get("product_id")
-                        if product_id:
-                            stmt = select(Product).filter_by(product_id=product_id)
-                            product = db_session.scalars(stmt).first()
-                            if product:
-                                product_names.append(product.name)
-
-                media_buys_with_state.append(
-                    {
-                        "media_buy": media_buy,
-                        "readiness_state": readiness["state"],
-                        "is_ready": readiness["is_ready_to_activate"],
-                        "principal_name": principal.name if principal else "Unknown",
-                        "product_names": product_names,
-                        "packages_ready": readiness["packages_with_creatives"],
-                        "packages_total": readiness["packages_total"],
-                        "blocking_issues": readiness.get("blocking_issues", []),
-                    }
-                )
-
-            return render_template(
-                "media_buys_list.html",
-                tenant=tenant,
-                tenant_id=tenant_id,
-                media_buys=media_buys_with_state,
-                status_filter=status_filter,
+        # Calculate readiness state for each and filter
+        media_buys_with_state = []
+        for media_buy in all_media_buys:
+            readiness = MediaBuyReadinessService.get_readiness_state(
+                media_buy.media_buy_id, tenant_id, session=db_session
             )
 
-    except Exception as e:
-        flash(safe_error_message(e, "Error loading media buys"), "error")
-        return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+            # Apply status filter if specified
+            if status_filter and readiness["state"] != status_filter:
+                continue
+
+            # Get principal name
+            principal = None
+            if media_buy.principal_id:
+                principal = PrincipalRepository(db_session, tenant_id).get(media_buy.principal_id)
+
+            # Get product names from packages
+            product_names = []
+            if media_buy.raw_request and "packages" in media_buy.raw_request:
+                for package in media_buy.raw_request["packages"]:
+                    product_id = package.get("product_id")
+                    if product_id:
+                        stmt = select(Product).filter_by(product_id=product_id)
+                        product = db_session.scalars(stmt).first()
+                        if product:
+                            product_names.append(product.name)
+
+            media_buys_with_state.append(
+                {
+                    "media_buy": media_buy,
+                    "readiness_state": readiness["state"],
+                    "is_ready": readiness["is_ready_to_activate"],
+                    "principal_name": principal.name if principal else "Unknown",
+                    "product_names": product_names,
+                    "packages_ready": readiness["packages_with_creatives"],
+                    "packages_total": readiness["packages_total"],
+                    "blocking_issues": readiness.get("blocking_issues", []),
+                }
+            )
+
+        return render_template(
+            "media_buys_list.html",
+            tenant=tenant,
+            tenant_id=tenant_id,
+            media_buys=media_buys_with_state,
+            status_filter=status_filter,
+        )
 
 
 @tenants_bp.route("/<tenant_id>/settings/auth")
@@ -693,67 +613,62 @@ def _is_valid_favicon_url(url: str) -> bool:
 @require_tenant_access()
 def upload_favicon(tenant_id):
     """Upload a custom favicon for the tenant."""
-    try:
-        if "favicon" not in request.files:
-            flash("No file selected", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
+    if "favicon" not in request.files:
+        flash("No file selected", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
 
-        file = request.files["favicon"]
-        if file.filename == "":
-            flash("No file selected", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
+    file = request.files["favicon"]
+    if file.filename == "":
+        flash("No file selected", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
 
-        if not file.filename or not _allowed_favicon_file(file.filename):
-            flash(f"Invalid file type. Allowed: {', '.join(ALLOWED_FAVICON_EXTENSIONS)}", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
+    if not file.filename or not _allowed_favicon_file(file.filename):
+        flash(f"Invalid file type. Allowed: {', '.join(ALLOWED_FAVICON_EXTENSIONS)}", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
 
-        # Check file size
-        file.seek(0, 2)  # Seek to end
-        file_size = file.tell()
-        file.seek(0)  # Reset to beginning
+    # Check file size
+    file.seek(0, 2)  # Seek to end
+    file_size = file.tell()
+    file.seek(0)  # Reset to beginning
 
-        if file_size > MAX_FAVICON_SIZE:
-            flash(f"File too large. Maximum size: {MAX_FAVICON_SIZE // 1024}KB", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
+    if file_size > MAX_FAVICON_SIZE:
+        flash(f"File too large. Maximum size: {MAX_FAVICON_SIZE // 1024}KB", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
 
-        # Create tenant-specific favicon directory
-        upload_dir = _get_favicon_upload_dir()
-        if not _is_safe_favicon_path(upload_dir, tenant_id):
-            logger.error(f"Path traversal attempt detected for tenant: {tenant_id}")
-            flash("Invalid tenant ID", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
-        tenant_favicon_dir = os.path.join(upload_dir, tenant_id)
-        os.makedirs(tenant_favicon_dir, exist_ok=True)
+    # Create tenant-specific favicon directory
+    upload_dir = _get_favicon_upload_dir()
+    if not _is_safe_favicon_path(upload_dir, tenant_id):
+        logger.error(f"Path traversal attempt detected for tenant: {tenant_id}")
+        flash("Invalid tenant ID", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
+    tenant_favicon_dir = os.path.join(upload_dir, tenant_id)
+    os.makedirs(tenant_favicon_dir, exist_ok=True)
 
-        # Get the file extension
-        ext = file.filename.rsplit(".", 1)[1].lower()
-        # Save as favicon.{ext} in the tenant's directory
-        filename = f"favicon.{ext}"
-        filepath = os.path.join(tenant_favicon_dir, filename)
+    # Get the file extension
+    ext = file.filename.rsplit(".", 1)[1].lower()
+    # Save as favicon.{ext} in the tenant's directory
+    filename = f"favicon.{ext}"
+    filepath = os.path.join(tenant_favicon_dir, filename)
 
-        # Remove any existing favicon files for this tenant
-        for old_ext in ALLOWED_FAVICON_EXTENSIONS:
-            old_file = os.path.join(tenant_favicon_dir, f"favicon.{old_ext}")
-            if os.path.exists(old_file):
-                os.remove(old_file)
+    # Remove any existing favicon files for this tenant
+    for old_ext in ALLOWED_FAVICON_EXTENSIONS:
+        old_file = os.path.join(tenant_favicon_dir, f"favicon.{old_ext}")
+        if os.path.exists(old_file):
+            os.remove(old_file)
 
-        # Save the new favicon
-        file.save(filepath)
+    # Save the new favicon
+    file.save(filepath)
 
-        # Update the tenant's favicon_url in the database
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if tenant:
-                # Store as a relative URL path
-                tenant.favicon_url = f"/static/favicons/{tenant_id}/{filename}"
-                tenant.updated_at = datetime.now(UTC)
-                db_session.commit()
+    # Update the tenant's favicon_url in the database
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if tenant:
+            # Store as a relative URL path
+            tenant.favicon_url = f"/static/favicons/{tenant_id}/{filename}"
+            tenant.updated_at = datetime.now(UTC)
+            db_session.commit()
 
-        flash("Favicon uploaded successfully", "success")
-
-    except Exception as e:
-        logger.error(f"Error uploading favicon for tenant {tenant_id}: {e}", exc_info=True)
-        flash("Error uploading favicon. Please try again.", "error")
+    flash("Favicon uploaded successfully", "success")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
 
@@ -763,34 +678,29 @@ def upload_favicon(tenant_id):
 @require_tenant_access()
 def update_favicon_url(tenant_id):
     """Update the tenant's favicon URL (for external URLs)."""
-    try:
-        form_data = sanitize_form_data(request.form.to_dict())
-        favicon_url = form_data.get("favicon_url", "").strip()
+    form_data = sanitize_form_data(request.form.to_dict())
+    favicon_url = form_data.get("favicon_url", "").strip()
 
-        # Validate URL is safe (HTTP/HTTPS only)
-        if favicon_url and not _is_valid_favicon_url(favicon_url):
-            flash("Invalid favicon URL. Only HTTP and HTTPS URLs are allowed.", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
+    # Validate URL is safe (HTTP/HTTPS only)
+    if favicon_url and not _is_valid_favicon_url(favicon_url):
+        flash("Invalid favicon URL. Only HTTP and HTTPS URLs are allowed.", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
 
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
 
-            # Clear or update the favicon URL
-            tenant.favicon_url = favicon_url if favicon_url else None
-            tenant.updated_at = datetime.now(UTC)
-            db_session.commit()
+        # Clear or update the favicon URL
+        tenant.favicon_url = favicon_url if favicon_url else None
+        tenant.updated_at = datetime.now(UTC)
+        db_session.commit()
 
-            if favicon_url:
-                flash("Favicon URL updated successfully", "success")
-            else:
-                flash("Favicon URL cleared - using default favicon", "success")
-
-    except Exception as e:
-        logger.error(f"Error updating favicon URL for tenant {tenant_id}: {e}", exc_info=True)
-        flash("Error updating favicon URL. Please try again.", "error")
+        if favicon_url:
+            flash("Favicon URL updated successfully", "success")
+        else:
+            flash("Favicon URL cleared - using default favicon", "success")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
 
@@ -800,34 +710,29 @@ def update_favicon_url(tenant_id):
 @require_tenant_access()
 def remove_favicon(tenant_id):
     """Remove the tenant's custom favicon."""
-    try:
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.index"))
 
-            # If it's an uploaded file, try to delete it
-            if tenant.favicon_url and tenant.favicon_url.startswith("/static/favicons/"):
-                upload_dir = _get_favicon_upload_dir()
-                if _is_safe_favicon_path(upload_dir, tenant_id):
-                    tenant_favicon_dir = os.path.join(upload_dir, tenant_id)
-                    for ext in ALLOWED_FAVICON_EXTENSIONS:
-                        filepath = os.path.join(tenant_favicon_dir, f"favicon.{ext}")
-                        if os.path.exists(filepath):
-                            os.remove(filepath)
-                else:
-                    logger.error(f"Path traversal attempt detected for tenant: {tenant_id}")
+        # If it's an uploaded file, try to delete it
+        if tenant.favicon_url and tenant.favicon_url.startswith("/static/favicons/"):
+            upload_dir = _get_favicon_upload_dir()
+            if _is_safe_favicon_path(upload_dir, tenant_id):
+                tenant_favicon_dir = os.path.join(upload_dir, tenant_id)
+                for ext in ALLOWED_FAVICON_EXTENSIONS:
+                    filepath = os.path.join(tenant_favicon_dir, f"favicon.{ext}")
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+            else:
+                logger.error(f"Path traversal attempt detected for tenant: {tenant_id}")
 
-            # Clear the favicon URL
-            tenant.favicon_url = None
-            tenant.updated_at = datetime.now(UTC)
-            db_session.commit()
+        # Clear the favicon URL
+        tenant.favicon_url = None
+        tenant.updated_at = datetime.now(UTC)
+        db_session.commit()
 
-        flash("Favicon removed - using default favicon", "success")
-
-    except Exception as e:
-        logger.error(f"Error removing favicon for tenant {tenant_id}: {e}", exc_info=True)
-        flash("Error removing favicon. Please try again.", "error")
+    flash("Favicon removed - using default favicon", "success")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))

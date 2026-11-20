@@ -32,24 +32,23 @@ def client():
     return test_client
 
 
-@pytest.mark.parametrize(
-    "body",
-    [{"data": "{not json"}, {"json": [1]}],
-    ids=["malformed-json", "json-array"],
-)
-def test_ai_connection_test_with_a_bad_body_answers_with_a_reference(client, body):
-    """A body that fails before the model is read still gets the generic 400 (dba3b3d6)."""
-    response = client.post(
-        "/tenant/default/settings/ai/test",
-        content_type="application/json",
-        **({"data": body["data"]} if "data" in body else {"json": body["json"]}),
-    )
+def test_ai_connection_test_with_malformed_json_is_a_bad_request(client):
+    """Flask refuses a body that does not parse before the route reads it (dba3b3d6)."""
+    response = client.post("/tenant/default/settings/ai/test", content_type="application/json", data="{not json")
 
     assert response.status_code == 400
+
+
+def test_ai_connection_test_with_a_non_object_body_answers_with_a_reference(client):
+    """A body that parses but is not an object fails before the model is read; the app's handler answers it."""
+    response = client.post("/tenant/default/settings/ai/test", json=[1])
+
+    assert response.status_code == 500
     payload = response.get_json()
     assert payload["success"] is False
-    assert payload["error"].startswith("AI connection test failed")
+    assert payload["error"].startswith("An unexpected error occurred")
     assert _REFERENCE_TAIL.search(payload["error"])
+    assert "attribute" not in payload["error"]
 
 
 def test_inventory_sync_already_running_names_the_running_sync(client):

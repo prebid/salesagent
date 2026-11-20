@@ -8,7 +8,6 @@ from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
-from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig, User, UserRole
@@ -135,66 +134,61 @@ def list_users(tenant_id):
 )
 def add_user(tenant_id):
     """Add a new user to the tenant."""
-    try:
-        email = request.form.get("email", "").strip().lower()
-        role = request.form.get("role", UserRole.VIEWER)
+    email = request.form.get("email", "").strip().lower()
+    role = request.form.get("role", UserRole.VIEWER)
 
-        if not email:
-            flash("Email is required", "error")
-            return redirect(url_for("users.list_users", tenant_id=tenant_id))
+    if not email:
+        flash("Email is required", "error")
+        return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
-        if role not in UserRole:
-            flash("Invalid role", "error")
-            return redirect(url_for("users.list_users", tenant_id=tenant_id))
+    if role not in UserRole:
+        flash("Invalid role", "error")
+        return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
-        # Validate email format
-        if not _is_valid_email(email):
-            flash("Invalid email format", "error")
-            return redirect(url_for("users.list_users", tenant_id=tenant_id))
+    # Validate email format
+    if not _is_valid_email(email):
+        flash("Invalid email format", "error")
+        return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
-        with get_db_session() as db_session:
-            # Check if user already exists. uq_users_tenant_email is the authority,
-            # so this same answer serves the loser of a concurrent add.
-            existing_user_stmt = select(User).filter_by(tenant_id=tenant_id, email=email)
+    with get_db_session() as db_session:
+        # Check if user already exists. uq_users_tenant_email is the authority,
+        # so this same answer serves the loser of a concurrent add.
+        existing_user_stmt = select(User).filter_by(tenant_id=tenant_id, email=email)
 
-            def already_exists():
-                existing = db_session.scalars(existing_user_stmt).first()
-                if existing:
-                    flash(f"User {email} already exists", "error")
-                    return redirect(url_for("users.list_users", tenant_id=tenant_id))
-                return None
+        def already_exists():
+            existing = db_session.scalars(existing_user_stmt).first()
+            if existing:
+                flash(f"User {email} already exists", "error")
+                return redirect(url_for("users.list_users", tenant_id=tenant_id))
+            return None
 
-            # Create new user
-            import uuid
+        # Create new user
+        import uuid
 
-            # Use provided name or default to email username
-            name = request.form.get("name", "").strip() or email.split("@")[0]
+        # Use provided name or default to email username
+        name = request.form.get("name", "").strip() or email.split("@")[0]
 
-            user = User(
-                tenant_id=tenant_id,
-                user_id=f"user_{uuid.uuid4().hex[:8]}",
-                email=email,
-                name=name,
-                role=role,
-                is_active=True,
-                created_at=datetime.now(UTC),
-            )
+        user = User(
+            tenant_id=tenant_id,
+            user_id=f"user_{uuid.uuid4().hex[:8]}",
+            email=email,
+            name=name,
+            role=role,
+            is_active=True,
+            created_at=datetime.now(UTC),
+        )
 
-            conflict = resolve_or_write(
-                db_session,
-                conflict=already_exists,
-                write=lambda: db_session.add(user),
-                constraint="uq_users_tenant_email",
-            )
-            if conflict is not None:
-                return conflict
-            db_session.commit()
+        conflict = resolve_or_write(
+            db_session,
+            conflict=already_exists,
+            write=lambda: db_session.add(user),
+            constraint="uq_users_tenant_email",
+        )
+        if conflict is not None:
+            return conflict
+        db_session.commit()
 
-            flash(f"User {email} added successfully", "success")
-
-    except Exception as e:
-        logger.error(f"Error adding user: {e}", exc_info=True)
-        flash(f"Error adding user: {safe_error_message(e)}", "error")
+        flash(f"User {email} added successfully", "success")
 
     return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
@@ -204,15 +198,10 @@ def add_user(tenant_id):
 @require_tenant_access(role=UserRole.ADMIN)
 def toggle_user(tenant_id, user_id):
     """Toggle user active status. Refuses to deactivate the tenant's last active admin."""
-    try:
-        with TenantConfigUoW(tenant_id) as uow:
-            assert uow.tenant_config is not None
-            change = uow.tenant_config.toggle_user_active(user_id)
-        _flash_user_change(change, f"User {change.email} {'activated' if change.is_active else 'deactivated'}")
-
-    except Exception as e:
-        logger.error(f"Error toggling user: {e}", exc_info=True)
-        flash(f"Error toggling user: {safe_error_message(e)}", "error")
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        change = uow.tenant_config.toggle_user_active(user_id)
+    _flash_user_change(change, f"User {change.email} {'activated' if change.is_active else 'deactivated'}")
 
     return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
@@ -222,20 +211,15 @@ def toggle_user(tenant_id, user_id):
 @require_tenant_access(role=UserRole.ADMIN)
 def update_role(tenant_id, user_id):
     """Update user role. Refuses to demote the tenant's last active admin."""
-    try:
-        new_role = request.form.get("role", "")
-        if new_role not in UserRole:
-            flash("Invalid role", "error")
-            return redirect(url_for("users.list_users", tenant_id=tenant_id))
+    new_role = request.form.get("role", "")
+    if new_role not in UserRole:
+        flash("Invalid role", "error")
+        return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
-        with TenantConfigUoW(tenant_id) as uow:
-            assert uow.tenant_config is not None
-            change = uow.tenant_config.set_user_role(user_id, UserRole(new_role))
-        _flash_user_change(change, f"User {change.email} role updated to {new_role}")
-
-    except Exception as e:
-        logger.error(f"Error updating user role: {e}", exc_info=True)
-        flash(f"Error updating role: {safe_error_message(e)}", "error")
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        change = uow.tenant_config.set_user_role(user_id, UserRole(new_role))
+    _flash_user_change(change, f"User {change.email} role updated to {new_role}")
 
     return redirect(url_for("users.list_users", tenant_id=tenant_id))
 

@@ -4,7 +4,7 @@ import pytest
 from flask import Flask
 from sqlalchemy import select
 
-from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
+from src.admin.utils.audit_decorator import _RAISED_MESSAGE, log_admin_action, record_admin_action_failure
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog, Tenant
 
@@ -187,7 +187,8 @@ def test_decorator_logs_failed_actions(integration_db):
 
         assert audit_log is not None
         assert audit_log.success is False
-        assert "Test error" in audit_log.error_message
+        # The audit log is shown in the admin UI, so it records fixed text, never the exception's.
+        assert audit_log.error_message == _RAISED_MESSAGE
 
 
 @pytest.mark.requires_db

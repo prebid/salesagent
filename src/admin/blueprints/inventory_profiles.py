@@ -26,7 +26,6 @@ from src.admin.blueprints.products import (
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import caller_reads_json
-from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import (
@@ -79,6 +78,11 @@ def _generate_profile_id(name: str) -> str:
 _JSON_MODES = frozenset({"full", "all", "specific"})
 
 
+def _invalid_json_message(field: str, e: json.JSONDecodeError) -> str:
+    """Operator text for a form field that is not JSON: where it broke, not the parser's text."""
+    return f"Invalid {field} JSON (line {e.lineno}, column {e.colno})"
+
+
 def _selectors_from_form(
     authorized: Sequence[SelectableProperty], property_mode: str, stored: list | None = None
 ) -> tuple[list[dict], str | None]:
@@ -104,7 +108,7 @@ def _selectors_from_form(
         try:
             return selector_selection(json.loads(raw) if raw else [], authorized, stored or [])
         except json.JSONDecodeError as e:
-            return [], f"Invalid publisher properties JSON: {e}"
+            return [], _invalid_json_message("publisher properties", e)
     return id_selection(request.form.getlist("selected_property_ids"), authorized)
 
 
@@ -252,120 +256,112 @@ def list_inventory_profiles(tenant_id: str):
 def add_inventory_profile(tenant_id: str):
     """Create new inventory profile."""
     if request.method == "POST":
-        try:
-            # Parse form data
-            form_data = request.form.to_dict()
+        # Parse form data
+        form_data = request.form.to_dict()
 
-            # Basic fields
-            name = form_data.get("name", "").strip()
-            if not name:
-                flash("Profile name is required", "error")
+        # Basic fields
+        name = form_data.get("name", "").strip()
+        if not name:
+            flash("Profile name is required", "error")
+            return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+
+        profile_id = form_data.get("profile_id", "").strip() or _generate_profile_id(name)
+        description = form_data.get("description", "").strip()
+
+        # Parse inventory config
+        inventory_config = {
+            "ad_units": json.loads(form_data.get("targeted_ad_unit_ids", "[]")),
+            "placements": json.loads(form_data.get("targeted_placement_ids", "[]")),
+            "include_descendants": form_data.get("include_descendants") == "on",
+        }
+
+        # Parse publisher properties based on property_mode
+        # NOTE: New unified inventory page sends either:
+        # - property_mode = "all" or "specific" with full publisher_properties JSON
+        # - or legacy modes: "tags", "property_ids", "full"
+        publisher_properties: list[dict] = []
+        property_mode = form_data.get("property_mode", "tags")
+
+        with get_db_session() as prop_session:
+            tenant = prop_session.get(Tenant, tenant_id)
+            if not tenant:
+                flash("Tenant not found", "error")
                 return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
-            profile_id = form_data.get("profile_id", "").strip() or _generate_profile_id(name)
-            description = form_data.get("description", "").strip()
+            # The profile's canonical format declarations: what every linked product is
+            # announced from. format_ids is not authored here (core/product.json: "Do not
+            # author a new product from format_ids alone"); a legacy projection comes from
+            # the declarations' v1_format_ref.
+            catalog = _publisher_catalog(prop_session, tenant_id)
+            try:
+                format_options = _parse_authored_format_options(form_data.get("format_options"))
+            except ValueError as e:
+                flash(str(e), "error")
+                return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+            if not format_options:
+                flash("At least one canonical format declaration (format_options) is required", "error")
+                return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
-            # Parse inventory config
-            inventory_config = {
-                "ad_units": json.loads(form_data.get("targeted_ad_unit_ids", "[]")),
-                "placements": json.loads(form_data.get("targeted_placement_ids", "[]")),
-                "include_descendants": form_data.get("include_descendants") == "on",
-            }
-
-            # Parse publisher properties based on property_mode
-            # NOTE: New unified inventory page sends either:
-            # - property_mode = "all" or "specific" with full publisher_properties JSON
-            # - or legacy modes: "tags", "property_ids", "full"
-            publisher_properties: list[dict] = []
-            property_mode = form_data.get("property_mode", "tags")
-
-            with get_db_session() as prop_session:
-                tenant = prop_session.get(Tenant, tenant_id)
-                if not tenant:
-                    flash("Tenant not found", "error")
+            if property_mode in {"tags", "property_ids"} | _JSON_MODES:
+                publisher_properties, error = _selectors_from_form(catalog.refs, property_mode)
+                if error:
+                    flash(error, "error")
                     return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+            try:
+                _refuse_unresolved_format_options(format_options, publisher_properties, catalog)
+            except ValueError as e:
+                flash(str(e), "error")
+                return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
-                # The profile's canonical format declarations: what every linked product is
-                # announced from. format_ids is not authored here (core/product.json: "Do not
-                # author a new product from format_ids alone"); a legacy projection comes from
-                # the declarations' v1_format_ref.
-                catalog = _publisher_catalog(prop_session, tenant_id)
-                try:
-                    format_options = _parse_authored_format_options(form_data.get("format_options"))
-                except ValueError as e:
-                    flash(str(e), "error")
+        # Parse targeting template (optional)
+        targeting_template = None
+        targeting_json = form_data.get("targeting_template", "").strip()
+        if targeting_json:
+            try:
+                targeting_template = json.loads(targeting_json)
+            except json.JSONDecodeError as e:
+                flash(_invalid_json_message("targeting template", e), "error")
+                return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+
+        # Create inventory profile
+        with get_db_session() as session:
+            # Check for duplicate profile_id. uq_inventory_profile is the
+            # authority, so this same answer serves the loser of a concurrent
+            # create rather than a flash carrying the driver's message.
+            existing_profile_stmt = select(InventoryProfile).where(
+                InventoryProfile.tenant_id == tenant_id, InventoryProfile.profile_id == profile_id
+            )
+
+            def already_exists():
+                existing = session.scalar(existing_profile_stmt)
+                if existing:
+                    flash(f"Inventory profile with ID '{profile_id}' already exists", "error")
                     return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-                if not format_options:
-                    flash("At least one canonical format declaration (format_options) is required", "error")
-                    return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+                return None
 
-                if property_mode in {"tags", "property_ids"} | _JSON_MODES:
-                    publisher_properties, error = _selectors_from_form(catalog.refs, property_mode)
-                    if error:
-                        flash(error, "error")
-                        return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-                try:
-                    _refuse_unresolved_format_options(format_options, publisher_properties, catalog)
-                except ValueError as e:
-                    flash(str(e), "error")
-                    return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+            profile = InventoryProfile(
+                tenant_id=tenant_id,
+                profile_id=profile_id,
+                name=name,
+                description=description if description else None,
+                inventory_config=inventory_config,
+                format_options=format_options,
+                publisher_selections=InventoryProfilePublisherSelection.from_selectors(tenant_id, publisher_properties),
+                targeting_template=targeting_template,
+            )
 
-            # Parse targeting template (optional)
-            targeting_template = None
-            targeting_json = form_data.get("targeting_template", "").strip()
-            if targeting_json:
-                try:
-                    targeting_template = json.loads(targeting_json)
-                except json.JSONDecodeError as e:
-                    flash(f"Invalid targeting template JSON: {e}", "error")
-                    return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+            conflict = resolve_or_write(
+                session,
+                conflict=already_exists,
+                write=lambda: session.add(profile),
+                constraint="uq_inventory_profile",
+            )
+            if conflict is not None:
+                return conflict
+            session.commit()
 
-            # Create inventory profile
-            with get_db_session() as session:
-                # Check for duplicate profile_id. uq_inventory_profile is the
-                # authority, so this same answer serves the loser of a concurrent
-                # create rather than a flash carrying the driver's message.
-                existing_profile_stmt = select(InventoryProfile).where(
-                    InventoryProfile.tenant_id == tenant_id, InventoryProfile.profile_id == profile_id
-                )
-
-                def already_exists():
-                    existing = session.scalar(existing_profile_stmt)
-                    if existing:
-                        flash(f"Inventory profile with ID '{profile_id}' already exists", "error")
-                        return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-                    return None
-
-                profile = InventoryProfile(
-                    tenant_id=tenant_id,
-                    profile_id=profile_id,
-                    name=name,
-                    description=description if description else None,
-                    inventory_config=inventory_config,
-                    format_options=format_options,
-                    publisher_selections=InventoryProfilePublisherSelection.from_selectors(
-                        tenant_id, publisher_properties
-                    ),
-                    targeting_template=targeting_template,
-                )
-
-                conflict = resolve_or_write(
-                    session,
-                    conflict=already_exists,
-                    write=lambda: session.add(profile),
-                    constraint="uq_inventory_profile",
-                )
-                if conflict is not None:
-                    return conflict
-                session.commit()
-
-                flash(f"Inventory profile '{name}' created successfully!", "success")
-                return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
-
-        except Exception as e:
-            logger.error(f"Error creating inventory profile: {e}", exc_info=True)
-            flash(f"Error creating inventory profile: {safe_error_message(e)}", "error")
-            return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+            flash(f"Inventory profile '{name}' created successfully!", "success")
+            return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
 
     # GET: Show form
     with get_db_session() as session:
@@ -405,146 +401,134 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
         catalog = _publisher_catalog(session, tenant_id)
 
         if request.method == "POST":
+            # The save is judged against the selection the page rendered, not one recomputed now.
+            selection_save = judge_selection_save(
+                request.form.get("rendered_selection"),
+                request.form.getlist,
+                selection_digest(profile.stored_publisher_properties),
+            )
+            if selection_save == "stale":
+                flash(STALE_SELECTION_MESSAGE.format(subject="profile"), "error")
+                return redirect(
+                    url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
+                )
+
+            # Parse form data (same as add)
+            form_data = request.form.to_dict()
+
+            # Update fields
+            name = form_data.get("name", "").strip()
+            if name:
+                profile.name = name
+
+            description = form_data.get("description", "").strip()
+            profile.description = description if description else None
+
+            # Update inventory config
+            inventory_config = {
+                "ad_units": json.loads(form_data.get("targeted_ad_unit_ids", "[]")),
+                "placements": json.loads(form_data.get("targeted_placement_ids", "[]")),
+                "include_descendants": form_data.get("include_descendants") == "on",
+            }
+            profile.inventory_config = inventory_config
+
+            tenant_obj = session.get(Tenant, tenant_id)
+            if not tenant_obj:
+                flash("Tenant not found", "error")
+                return redirect(
+                    url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
+                )
+
+            # The canonical arm. An empty editor leaves the stored arms alone, so a
+            # legacy-only profile stays editable; authoring declarations retires its
+            # stored format_ids, which its linked products no longer read once the
+            # profile carries a canonical arm (``Product.format_contract``).
+            # Refused like the add form refuses it: flash and return to the form. Left to the
+            # handler's catch-all, the rolled-back profile rendered detached and answered 500.
             try:
-                # The save is judged against the selection the page rendered, not one recomputed now.
-                selection_save = judge_selection_save(
-                    request.form.get("rendered_selection"),
-                    request.form.getlist,
-                    selection_digest(profile.stored_publisher_properties),
+                authored_format_options = _parse_authored_format_options(form_data.get("format_options"))
+            except ValueError as e:
+                flash(str(e), "error")
+                return redirect(
+                    url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
                 )
-                if selection_save == "stale":
-                    flash(STALE_SELECTION_MESSAGE.format(subject="profile"), "error")
+            if authored_format_options:
+                profile.format_options = authored_format_options
+                profile.format_ids = None
+
+            # Update publisher properties based on property_mode
+            property_mode = form_data.get("property_mode", "tags")
+
+            # A save posting what the page rendered leaves the stored selection as it is.
+            if property_mode in {"tags", "property_ids"} | _JSON_MODES and selection_save == "changed":
+                publisher_properties, error = _selectors_from_form(
+                    catalog.refs, property_mode, profile.stored_publisher_properties
+                )
+                if error:
+                    flash(error, "error")
                     return redirect(
                         url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
                     )
-
-                # Parse form data (same as add)
-                form_data = request.form.to_dict()
-
-                # Update fields
-                name = form_data.get("name", "").strip()
-                if name:
-                    profile.name = name
-
-                description = form_data.get("description", "").strip()
-                profile.description = description if description else None
-
-                # Update inventory config
-                inventory_config = {
-                    "ad_units": json.loads(form_data.get("targeted_ad_unit_ids", "[]")),
-                    "placements": json.loads(form_data.get("targeted_placement_ids", "[]")),
-                    "include_descendants": form_data.get("include_descendants") == "on",
-                }
-                profile.inventory_config = inventory_config
-
-                tenant_obj = session.get(Tenant, tenant_id)
-                if not tenant_obj:
-                    flash("Tenant not found", "error")
-                    return redirect(
-                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
-                    )
-
-                # The canonical arm. An empty editor leaves the stored arms alone, so a
-                # legacy-only profile stays editable; authoring declarations retires its
-                # stored format_ids, which its linked products no longer read once the
-                # profile carries a canonical arm (``Product.format_contract``).
-                # Refused like the add form refuses it: flash and return to the form. Left to the
-                # handler's catch-all, the rolled-back profile rendered detached and answered 500.
-                try:
-                    authored_format_options = _parse_authored_format_options(form_data.get("format_options"))
-                except ValueError as e:
-                    flash(str(e), "error")
-                    return redirect(
-                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
-                    )
-                if authored_format_options:
-                    profile.format_options = authored_format_options
-                    profile.format_ids = None
-
-                # Update publisher properties based on property_mode
-                property_mode = form_data.get("property_mode", "tags")
-
-                # A save posting what the page rendered leaves the stored selection as it is.
-                if property_mode in {"tags", "property_ids"} | _JSON_MODES and selection_save == "changed":
-                    publisher_properties, error = _selectors_from_form(
-                        catalog.refs, property_mode, profile.stored_publisher_properties
-                    )
-                    if error:
-                        flash(error, "error")
-                        return redirect(
-                            url_for(
-                                "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
-                            )
-                        )
-                    profile.publisher_selections = InventoryProfilePublisherSelection.from_selectors(
-                        tenant_id, publisher_properties
-                    )
-
-                # A publisher-backed format option must resolve for the profile as saved.
-                try:
-                    _refuse_unresolved_format_options(
-                        profile.format_options, profile.stored_publisher_properties, catalog
-                    )
-                except ValueError as e:
-                    flash(str(e), "error")
-                    return redirect(
-                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
-                    )
-
-                # Update targeting template
-                targeting_json = form_data.get("targeting_template", "").strip()
-                if targeting_json:
-                    try:
-                        targeting_template = json.loads(targeting_json)
-                        profile.targeting_template = targeting_template
-                    except json.JSONDecodeError as e:
-                        flash(f"Invalid targeting template JSON: {e}", "error")
-                        return redirect(
-                            url_for(
-                                "inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id
-                            )
-                        )
-                else:
-                    profile.targeting_template = None
-
-                # The profile supplies its linked products' contract and publisher properties,
-                # so each of them is held to the common-intersection rule as its own save is.
-                # Refused like the product form refuses it: flash and return to the form
-                # without committing, so nothing renders from a rolled-back row.
-                try:
-                    for linked in profile.products:
-                        refuse_outside_common_intersection(linked)
-                except ValueError as e:
-                    flash(str(e), "error")
-                    return redirect(
-                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
-                    )
-
-                # Count products using this profile before commit
-                product_count = (
-                    session.scalar(
-                        select(func.count()).select_from(Product).where(Product.inventory_profile_id == profile_id)
-                    )
-                    or 0
+                profile.publisher_selections = InventoryProfilePublisherSelection.from_selectors(
+                    tenant_id, publisher_properties
                 )
 
-                session.commit()
+            # A publisher-backed format option must resolve for the profile as saved.
+            try:
+                _refuse_unresolved_format_options(profile.format_options, profile.stored_publisher_properties, catalog)
+            except ValueError as e:
+                flash(str(e), "error")
+                return redirect(
+                    url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
+                )
 
-                # Success message with warning about future updates
-                flash(f"Inventory profile '{profile.name}' updated successfully!", "success")
-                if product_count > 0:
-                    flash(
-                        f"Note: This profile is used by {product_count} product(s). "
-                        "Changes will affect future media buys using these products. "
-                        "Existing campaigns in GAM will not be modified.",
-                        "info",
+            # Update targeting template
+            targeting_json = form_data.get("targeting_template", "").strip()
+            if targeting_json:
+                try:
+                    targeting_template = json.loads(targeting_json)
+                    profile.targeting_template = targeting_template
+                except json.JSONDecodeError as e:
+                    flash(_invalid_json_message("targeting template", e), "error")
+                    return redirect(
+                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
                     )
-                return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
+            else:
+                profile.targeting_template = None
 
-            except Exception as e:
-                logger.error(f"Error updating inventory profile: {e}", exc_info=True)
-                flash(f"Error updating inventory profile: {safe_error_message(e)}", "error")
-                session.rollback()
+            # The profile supplies its linked products' contract and publisher properties,
+            # so each of them is held to the common-intersection rule as its own save is.
+            # Refused like the product form refuses it: flash and return to the form
+            # without committing, so nothing renders from a rolled-back row.
+            try:
+                for linked in profile.products:
+                    refuse_outside_common_intersection(linked)
+            except ValueError as e:
+                flash(str(e), "error")
+                return redirect(
+                    url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
+                )
+
+            # Count products using this profile before commit
+            product_count = (
+                session.scalar(
+                    select(func.count()).select_from(Product).where(Product.inventory_profile_id == profile_id)
+                )
+                or 0
+            )
+
+            session.commit()
+
+            # Success message with warning about future updates
+            flash(f"Inventory profile '{profile.name}' updated successfully!", "success")
+            if product_count > 0:
+                flash(
+                    f"Note: This profile is used by {product_count} product(s). "
+                    "Changes will affect future media buys using these products. "
+                    "Existing campaigns in GAM will not be modified.",
+                    "info",
+                )
+            return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
 
         # GET: Show form with existing data
         tenant = session.get(Tenant, tenant_id)

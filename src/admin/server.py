@@ -68,9 +68,7 @@ def main():
     except SystemExit:
         logger.error("❌ Admin UI initialization failed - check logs")
         sys.exit(1)
-    except Exception as e:
-        logger.error(f"❌ Admin UI startup error: {e}")
-        sys.exit(1)
+    # Any other start-up failure propagates: Python prints its traceback and exits 1.
 
     # Import the app factory
     from src.admin.app import create_app

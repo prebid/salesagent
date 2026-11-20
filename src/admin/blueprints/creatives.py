@@ -45,6 +45,7 @@ from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.repositories.uow import AdminCreativeUoW
+from src.core.operator_errors import best_effort
 from src.core.tools.media_buy_create import execute_approved_media_buy, push_creative_to_existing_buy
 
 # Note: CreativeFormat table was dropped in migration f2addf453200
@@ -82,7 +83,6 @@ def _cleanup_completed_tasks():
 
 async def _deliver_sync_creatives_webhook(
     *,
-    creative_id,
     reviewed_count: int,
     complete_result: SyncCreativesResponse,
     push_notification_config,
@@ -109,39 +109,38 @@ async def _deliver_sync_creatives_webhook(
         True if the buyer's endpoint took the notification, False if the send failed.
     """
     service = get_protocol_webhook_service()
-    try:
-        # The payload is not built here: notify() builds the one envelope, and it takes a
-        # typed context whose fields have to be named.
-        #
-        # tenant_id and principal_id are the two a hand-built metadata dict drops. Both are
-        # in scope -- the caller raises without tenant_id, and the creative row carries
-        # principal_id -- and without them records_delivery_log is False, so an
-        # admin-originated delivery writes no webhook_delivery_log row and says nothing
-        # about it.
-        await service.notify(
-            push_notification_config,
-            task=WebhookTaskContext(
-                task_id=step_step_id,
-                task_type=step_tool_name,
-                tenant_id=tenant_id,
-                principal_id=principal_id,
-                media_buy_id=None,
-                sequence_number=1,
-                notification_type=None,
-            ),
-            status=GeneratedTaskStatus.completed,
-            result=complete_result,
-        )
+    # The payload is not built here: notify() builds the one envelope, and it takes a
+    # typed context whose fields have to be named.
+    #
+    # tenant_id and principal_id are the two a hand-built metadata dict drops. Both are
+    # in scope -- the caller raises without tenant_id, and the creative row carries
+    # principal_id -- and without them records_delivery_log is False, so an
+    # admin-originated delivery writes no webhook_delivery_log row and says nothing
+    # about it.
+    #
+    # A send that raises reaches the caller's best_effort block, which logs it.
+    delivered = await service.notify(
+        push_notification_config,
+        task=WebhookTaskContext(
+            task_id=step_step_id,
+            task_type=step_tool_name,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            media_buy_id=None,
+            sequence_number=1,
+            notification_type=None,
+        ),
+        status=GeneratedTaskStatus.completed,
+        result=complete_result,
+    )
 
+    if delivered:
         logger.info(
             f"Successfully sent protocol webhook for sync_creatives task {step_step_id} "
             f"with {reviewed_count} reviewed creatives"
         )
 
-        return True
-    except Exception as send_e:
-        logger.error("Failed to send protocol webhook for creative %r: %s", creative_id, send_e)
-        return False
+    return delivered
 
 
 async def _call_webhook_for_creative_status(
@@ -162,7 +161,9 @@ async def _call_webhook_for_creative_status(
 
     from src.core.schemas import CreativeStatusEnum
 
-    try:
+    # A post-commit notice: the review it reports is already committed, so a failure here is
+    # logged and the caller carries on.
+    with best_effort(f"Failed to send the protocol webhook for creative {creative_id}"):
         with AdminCreativeUoW(tenant_id) as uow:
             assert uow.workflows is not None
             assert uow.creatives is not None
@@ -277,7 +278,6 @@ async def _call_webhook_for_creative_status(
         # --- Session closed here; webhook delivery is outside the transaction ---
 
         return await _deliver_sync_creatives_webhook(
-            creative_id=creative_id,
             reviewed_count=len(all_creatives),
             complete_result=complete_result,
             push_notification_config=push_notification_config,
@@ -288,10 +288,7 @@ async def _call_webhook_for_creative_status(
             tenant_id=tenant_id,
             principal_id=step_principal_id,
         )
-
-    except Exception as e:
-        logger.error(f"Error sending protocol webhook for creative {creative_id}: {e}", exc_info=True)
-        return False
+    return False
 
 
 @creatives_bp.route("/", methods=["GET"])
@@ -497,14 +494,12 @@ def _send_post_commit_side_effects(
 
     # Send Slack notification
     if slack_data:
-        try:
+        with best_effort(f"Failed to send the Slack notification for {operation}"):
             from src.services.slack_notifier import get_slack_notifier
 
             tenant_config = {"features": {"slack_webhook_url": slack_data["slack_webhook_url"]}}
             notifier = get_slack_notifier(tenant_config)
             notifier.send_message(slack_data["message"])
-        except Exception as slack_e:
-            logger.warning(f"Failed to send Slack notification: {slack_e}")
 
     # Log audit trail
     if audit_data:
@@ -821,7 +816,12 @@ def _ai_review_creative(
     should_call_webhook = False
     creative_format_str = ""
 
-    try:
+    # This runs on a pool worker whose Future nobody reads, so a failure that escaped would
+    # vanish: best_effort logs it, and the creative is then marked as failed review below.
+    # Only the verdict's own unit of work is inside, so a failure after the verdict is
+    # committed cannot revert it (#1972).
+    reviewed = False
+    with best_effort(f"[AI Review Async] Error reviewing creative {creative_id}"):
         with AdminCreativeUoW(tenant_id) as uow:
             assert uow.creatives is not None
 
@@ -876,63 +876,67 @@ def _ai_review_creative(
                 logger.error(f"[AI Review Async] Creative not found: {creative_id}")
 
             # UoW auto-commits here
+        reviewed = True
 
-        logger.info(f"[AI Review Async] Database updated for {creative_id}: status={ai_result['status']}")
+    if not reviewed:
+        _record_ai_review_failure(tenant_id, creative_id)
+        return
 
-        # --- Post-commit side effects ---
+    logger.info(f"[AI Review Async] Database updated for {creative_id}: status={ai_result['status']}")
 
-        if slack_notification_data:
-            try:
-                from src.services.slack_notifier import get_slack_notifier
+    # --- Post-commit side effects ---
 
-                tenant_config = {"features": {"slack_webhook_url": slack_notification_data["slack_webhook_url"]}}
-                notifier = get_slack_notifier(tenant_config)
-                notifier.notify_creative_pending(
-                    creative_id=creative_id,
-                    principal_name=slack_notification_data["principal_name"],
-                    format_type=creative_format_str,
-                    media_buy_id=None,
-                    tenant_id=tenant_id,
-                    ai_review_reason=slack_notification_data["ai_review_reason"],
-                )
-                logger.info(f"[AI Review Async] Slack notification sent for {creative_id}")
-            except Exception as slack_e:
-                logger.warning(f"[AI Review Async] Failed to send Slack notification: {slack_e}")
+    if slack_notification_data:
+        with best_effort(f"[AI Review Async] Failed to send the Slack notification for creative {creative_id}"):
+            from src.services.slack_notifier import get_slack_notifier
 
-        if should_call_webhook:
-            # run_async_in_sync_context, not asyncio.run: the sanctioned bridge
-            # (disease-scan row 2). It takes a COROUTINE OBJECT and raises
-            # TypeError on a coroutine FUNCTION, so it cannot silently no-op the
-            # way submit() did. asyncio.run would also work now that this
-            # function is a plain def on a pool worker with no running loop, but
-            # that correctness would be incidental -- it was the live landmine
-            # while the caller was async (#1972).
-            run_async_in_sync_context(_call_webhook_for_creative_status(creative_id=creative_id, tenant_id=tenant_id))
-            logger.info(f"[AI Review Async] Webhook called for {creative_id}")
+            tenant_config = {"features": {"slack_webhook_url": slack_notification_data["slack_webhook_url"]}}
+            notifier = get_slack_notifier(tenant_config)
+            notifier.notify_creative_pending(
+                creative_id=creative_id,
+                principal_name=slack_notification_data["principal_name"],
+                format_type=creative_format_str,
+                media_buy_id=None,
+                tenant_id=tenant_id,
+                ai_review_reason=slack_notification_data["ai_review_reason"],
+            )
+            logger.info(f"[AI Review Async] Slack notification sent for {creative_id}")
 
-    except Exception as e:
-        logger.error(f"[AI Review Async] Error reviewing creative {creative_id}: {e}", exc_info=True)
+    if should_call_webhook:
+        # run_async_in_sync_context, not asyncio.run: the sanctioned bridge
+        # (disease-scan row 2). It takes a COROUTINE OBJECT and raises
+        # TypeError on a coroutine FUNCTION, so it cannot silently no-op the
+        # way submit() did. asyncio.run would also work now that this
+        # function is a plain def on a pool worker with no running loop, but
+        # that correctness would be incidental -- it was the live landmine
+        # while the caller was async (#1972).
+        run_async_in_sync_context(_call_webhook_for_creative_status(creative_id=creative_id, tenant_id=tenant_id))
+        logger.info(f"[AI Review Async] Webhook called for {creative_id}")
 
-        # Try to mark creative as pending with error (separate UoW)
-        try:
-            with AdminCreativeUoW(tenant_id) as uow:
-                assert uow.creatives is not None
 
-                creative = uow.creatives.admin_get_by_id(creative_id)
+def _record_ai_review_failure(tenant_id: str, creative_id: str) -> None:
+    """Park a creative whose AI review raised at ``pending_review``, with ``ai_review_error`` saying so.
 
-                if creative:
-                    creative.status = "pending_review"
-                    if not isinstance(creative.data, dict):
-                        creative.data = {}
-                    creative.data["ai_review_error"] = {
-                        "error": safe_error_message(e, "AI review failed"),
-                        "timestamp": datetime.now(UTC).isoformat(),
-                    }
-                    uow.creatives.update_data(creative, creative.data)
-                    # UoW auto-commits
-                    logger.info(f"[AI Review Async] Creative {creative_id} marked as pending_review due to error")
-        except Exception as inner_e:
-            logger.error(f"[AI Review Async] Failed to mark creative as pending: {inner_e}")
+    The review's failure is already logged with its reference; this writes the marker in a
+    unit of work of its own, and a failure here is logged too rather than raised.
+    """
+    with best_effort(f"[AI Review Async] Failed to mark creative {creative_id} as pending"):
+        with AdminCreativeUoW(tenant_id) as uow:
+            assert uow.creatives is not None
+
+            creative = uow.creatives.admin_get_by_id(creative_id)
+
+            if creative:
+                creative.status = "pending_review"
+                if not isinstance(creative.data, dict):
+                    creative.data = {}
+                creative.data["ai_review_error"] = {
+                    "error": "AI review failed. The details have been logged.",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+                uow.creatives.update_data(creative, creative.data)
+                # UoW auto-commits
+                logger.info(f"[AI Review Async] Creative {creative_id} marked as pending_review due to error")
 
 
 def get_ai_review_status(task_id: str) -> dict:
@@ -985,33 +989,28 @@ def _create_review_record(
     """
     from src.core.database.models import CreativeReview
 
-    try:
-        review_id = f"review_{uuid.uuid4().hex[:12]}"
+    review_id = f"review_{uuid.uuid4().hex[:12]}"
 
-        review_record = CreativeReview(
-            review_id=review_id,
-            creative_id=creative_id,
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            reviewed_at=datetime.now(UTC),
-            review_type="ai",
-            reviewer_email=None,
-            ai_decision=ai_result.get("ai_recommendation") or ai_result["status"],
-            confidence_score=ai_result.get("confidence_score"),
-            policy_triggered=ai_result.get("policy_triggered"),
-            reason=ai_result.get("reason"),
-            recommendations=None,
-            human_override=False,
-            final_decision=ai_result["status"],
-        )
+    review_record = CreativeReview(
+        review_id=review_id,
+        creative_id=creative_id,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        reviewed_at=datetime.now(UTC),
+        review_type="ai",
+        reviewer_email=None,
+        ai_decision=ai_result.get("ai_recommendation") or ai_result["status"],
+        confidence_score=ai_result.get("confidence_score"),
+        policy_triggered=ai_result.get("policy_triggered"),
+        reason=ai_result.get("reason"),
+        recommendations=None,
+        human_override=False,
+        final_decision=ai_result["status"],
+    )
 
-        creative_repo.create_review(review_record)
+    creative_repo.create_review(review_record)
 
-        logger.debug(f"Created review record {review_id} for creative {creative_id}")
-
-    except Exception as e:
-        logger.error(f"Error creating review record for creative {creative_id}: {e}", exc_info=True)
-        # Don't fail the review if we can't create the record — let UoW handle rollback
+    logger.debug(f"Created review record {review_id} for creative {creative_id}")
 
 
 def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_offering=None):
@@ -1027,6 +1026,8 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
     - error: error message if failed
     """
     import time
+
+    from pydantic_ai.exceptions import AgentRunError
 
     from src.core.metrics import (
         active_ai_reviews,
@@ -1044,8 +1045,10 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
             db_session=db_session,
             promoted_offering=promoted_offering,
         )
-    except Exception as e:
-        logger.error(f"Error running AI review: {e}", exc_info=True)
+    except (AgentRunError, TimeoutError) as e:
+        # The model call failed (pydantic-ai raises AgentRunError for every provider's API
+        # failure and for an unusable answer) or did not answer within the review's timeout:
+        # the creative waits for a human. Anything else is a fault and reaches the caller.
         # Record error metrics (error_type bounded to a fixed enum)
         record_ai_review_error(tenant_id=tenant_id, error=e)
         return {
@@ -1087,8 +1090,8 @@ def _ai_review_creative_impl_inner(
     with cm as uow:
         if uow is not None:
             # Use repos from UoW — don't create duplicates
-            assert uow.session is not None
-            db_session = uow.session
+            assert uow.tenant_config is not None and uow.creatives is not None
+            assert uow.media_buys is not None and uow.products is not None
             tenant_config_repo = uow.tenant_config
             creative_repo = uow.creatives
             mb_repo = uow.media_buys
@@ -1225,7 +1228,7 @@ def _ai_review_creative_impl_inner(
                     "policy_triggered": "auto_approve",
                 }
                 _create_review_record(
-                    db_session,
+                    creative_repo,
                     creative_id,
                     tenant_id,
                     result_dict,
@@ -1246,7 +1249,7 @@ def _ai_review_creative_impl_inner(
                     "ai_reason": review_result.reason,
                 }
                 _create_review_record(
-                    db_session,
+                    creative_repo,
                     creative_id,
                     tenant_id,
                     result_dict,
@@ -1270,7 +1273,7 @@ def _ai_review_creative_impl_inner(
                     "policy_triggered": "auto_reject",
                 }
                 _create_review_record(
-                    db_session,
+                    creative_repo,
                     creative_id,
                     tenant_id,
                     result_dict,
@@ -1291,7 +1294,7 @@ def _ai_review_creative_impl_inner(
                     "ai_reason": review_result.reason,
                 }
                 _create_review_record(
-                    db_session,
+                    creative_repo,
                     creative_id,
                     tenant_id,
                     result_dict,

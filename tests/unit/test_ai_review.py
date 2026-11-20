@@ -335,14 +335,16 @@ class TestAIReviewCreative:
     @patch("src.services.ai.agents.review_agent.create_review_agent")
     @patch("src.services.ai.AIServiceFactory")
     def test_api_error(self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session):
-        """Test handling of AI API errors."""
+        """Test handling of AI API errors: the provider failure as pydantic-ai raises it."""
+        from pydantic_ai.exceptions import ModelHTTPError
+
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
         mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
-        mock_review_async.side_effect = Exception("API rate limit exceeded")
+        mock_review_async.side_effect = ModelHTTPError(429, "gemini-2.0-flash", body="API rate limit exceeded")
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 

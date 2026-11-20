@@ -10,7 +10,6 @@ from sqlalchemy.orm import attributes
 from src.adapters import get_adapter_schemas
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Product
 
@@ -18,6 +17,29 @@ logger = logging.getLogger(__name__)
 
 # Create blueprint
 adapters_bp = Blueprint("adapters", __name__)
+
+
+class _InvalidMockSetting(Exception):
+    """A mock-config form value the operator must correct; ``message`` is this module's own text."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+def _form_number[N: (int, float)](
+    cast: type[N], field_name: str, default: N, min_val: N | None = None, max_val: N | None = None
+) -> N:
+    """The form field *field_name* as *cast*, within the bounds, or refuse it in this module's words."""
+    try:
+        value = cast(request.form.get(field_name, default))
+    except (ValueError, TypeError):
+        raise _InvalidMockSetting(f"{field_name} must be a number") from None
+    if min_val is not None and value < min_val:
+        raise _InvalidMockSetting(f"{field_name} must be at least {min_val}")
+    if max_val is not None and value > max_val:
+        raise _InvalidMockSetting(f"{field_name} must be at most {max_val}")
+    return value
 
 
 @adapters_bp.route("/adapters/mock/config/<tenant_id>/<product_id>", methods=["GET", "POST"])
@@ -37,28 +59,11 @@ def mock_config(tenant_id, product_id, **kwargs):
             try:
                 config = product.implementation_config or {}
 
-                # Helper function to safely parse and validate numeric values
                 def parse_int(field_name, default, min_val=None, max_val=None):
-                    try:
-                        value = int(request.form.get(field_name, default))
-                        if min_val is not None and value < min_val:
-                            raise ValueError(f"{field_name} must be at least {min_val}")
-                        if max_val is not None and value > max_val:
-                            raise ValueError(f"{field_name} must be at most {max_val}")
-                        return value
-                    except (ValueError, TypeError) as e:
-                        raise ValueError(f"Invalid value for {field_name}: {e}")
+                    return _form_number(int, field_name, default, min_val, max_val)
 
                 def parse_float(field_name, default, min_val=None, max_val=None):
-                    try:
-                        value = float(request.form.get(field_name, default))
-                        if min_val is not None and value < min_val:
-                            raise ValueError(f"{field_name} must be at least {min_val}")
-                        if max_val is not None and value > max_val:
-                            raise ValueError(f"{field_name} must be at most {max_val}")
-                        return value
-                    except (ValueError, TypeError) as e:
-                        raise ValueError(f"Invalid value for {field_name}: {e}")
+                    return _form_number(float, field_name, default, min_val, max_val)
 
                 # Traffic simulation (with validation)
                 config["daily_impressions"] = parse_int("daily_impressions", 100000, min_val=0)
@@ -74,7 +79,7 @@ def mock_config(tenant_id, product_id, **kwargs):
                 test_mode = request.form.get("test_mode", "normal")
                 valid_modes = ["normal", "high_demand", "degraded", "outage"]
                 if test_mode not in valid_modes:
-                    raise ValueError(f"Invalid test_mode: {test_mode}")
+                    raise _InvalidMockSetting(f"test_mode must be one of {', '.join(valid_modes)}")
                 config["test_mode"] = test_mode
                 config["price_variance"] = parse_float("price_variance", 10, min_val=0, max_val=100)
                 config["seasonal_factor"] = parse_float("seasonal_factor", 1.0, min_val=0.1, max_val=10.0)
@@ -99,12 +104,9 @@ def mock_config(tenant_id, product_id, **kwargs):
 
                 flash("Mock adapter configuration saved successfully!", "success")
                 return redirect(url_for("adapters.mock_config", tenant_id=tenant_id, product_id=product_id))
-            except ValueError as e:
-                logger.warning(f"Validation error in mock config: {e}")
-                flash(f"Invalid configuration: {str(e)}", "error")
-            except Exception as e:
-                logger.error(f"Error saving mock config: {e}", exc_info=True)
-                flash(safe_error_message(e, "Error saving configuration"), "error")
+            except _InvalidMockSetting as e:
+                logger.info(f"Validation error in mock config: {e.message}")
+                flash(f"Invalid configuration: {e.message}", "error")
 
         # GET request - render template with product config
         config = product.implementation_config or {}
