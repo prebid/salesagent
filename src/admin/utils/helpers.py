@@ -22,6 +22,8 @@ from src.core.logging_config import log_safe
 T = TypeVar("T")
 
 if TYPE_CHECKING:
+    from flask import Response
+
     from src.core.tools.media_buy_create import ApprovalResult
 
 logger = logging.getLogger(__name__)
@@ -356,10 +358,18 @@ def caller_reads_json() -> bool:
     return request.accept_mimetypes.best_match(["text/html", "application/json"]) == "application/json"
 
 
+def _json_refusal(status: int, message: str, *, api_mode: bool) -> Response | None:
+    """A JSON ``{"error": message}`` answer with *status* if the caller reads JSON, else ``None``.
+
+    The one decision for every refusal in :func:`require_tenant_access`; each refusal
+    keeps its own answer for a caller that reads HTML.
+    """
+    return make_response(jsonify({"error": message}), status) if api_mode or caller_reads_json() else None
+
+
 def _forbid(message: str, *, api_mode: bool) -> NoReturn:
     """Refuse the request with a 403: a JSON ``{"error": message}`` if the caller reads JSON, else the HTML page."""
-    body = make_response(jsonify({"error": message}), 403) if api_mode or caller_reads_json() else None
-    raise Forbidden(response=body)
+    raise Forbidden(response=_json_refusal(403, message, api_mode=api_mode))
 
 
 def require_tenant_access(api_mode: bool = False, role: UserRole = UserRole.VIEWER):
@@ -406,8 +416,8 @@ def require_tenant_access(api_mode: bool = False, role: UserRole = UserRole.VIEW
                 return f(tenant_id, *args, **kwargs)
 
             if "user" not in session:
-                if api_mode or caller_reads_json():
-                    return jsonify({"error": "Authentication required"}), 401
+                if (refusal := _json_refusal(401, "Authentication required", api_mode=api_mode)) is not None:
+                    return refusal
                 # Redirect to tenant-specific login (preserves tenant context)
                 return redirect(url_for("auth.tenant_login", tenant_id=tenant_id, next=request.url))
 
@@ -444,8 +454,8 @@ def require_tenant_access(api_mode: bool = False, role: UserRole = UserRole.VIEW
                     raise
 
                 logger.error(f"Error checking tenant access: {e}")
-                if api_mode or caller_reads_json():
-                    return jsonify({"error": "Internal server error"}), 500
+                if (refusal := _json_refusal(500, "Internal server error", api_mode=api_mode)) is not None:
+                    return refusal
                 abort(500)
 
         return decorated_function

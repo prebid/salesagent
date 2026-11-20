@@ -12,15 +12,14 @@ from __future__ import annotations
 from typing import Any, NamedTuple
 
 import pytest
-from sqlalchemy import select
 
-from src.core.database.models import Tenant, TenantAuthConfig, User
+from src.core.database.models import Tenant, TenantAuthConfig, User, UserRole
 from tests.helpers.admin_session import tenant_user_session
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 TENANT_ID = "rbac_tenant"
-ROLES = ("viewer", "manager", "admin")
+ROLES = tuple(UserRole)
 EMAILS = {role: f"{role}@rbac.example" for role in ROLES}
 USER_IDS = {role: f"rbac_{role}" for role in ROLES}
 NEW_USER = "invited@rbac.example"
@@ -53,10 +52,14 @@ def _client_as(app, role):
     return client
 
 
+def _fresh(env):
+    """The env with its session expired: a route commits through its own session, so a row read earlier is stale."""
+    env.get_session().expire_all()
+    return env
+
+
 def _tenant(env):
-    session = env.get_session()
-    session.expire_all()
-    return session.scalars(select(Tenant).filter_by(tenant_id=TENANT_ID)).one()
+    return _fresh(env).get_one(Tenant, tenant_id=TENANT_ID)
 
 
 def test_a_viewer_may_read(rbac_tenant, test_admin_app):
@@ -127,11 +130,9 @@ ADMIN_ONLY_ROUTES = {
 
 def _state(env):
     """Everything an admin-only route can change: the tenant row, its users and its SSO config."""
-    session = env.get_session()
-    session.expire_all()
-    tenant = session.scalars(select(Tenant).filter_by(tenant_id=TENANT_ID)).one()
-    users = session.scalars(select(User).filter_by(tenant_id=TENANT_ID).order_by(User.user_id)).all()
-    sso = session.scalars(select(TenantAuthConfig).filter_by(tenant_id=TENANT_ID)).one()
+    tenant = _tenant(env)
+    users = sorted(env.query(User, tenant_id=TENANT_ID), key=lambda u: u.user_id)
+    sso = env.get_one(TenantAuthConfig, tenant_id=TENANT_ID)
     return (
         (tenant.name, tenant.is_active, tenant.auth_setup_mode),
         (tuple(tenant.authorized_domains or ()), tuple(tenant.authorized_emails or ())),
@@ -144,7 +145,7 @@ def _call(app, role, route):
     return _client_as(app, role).open(route.url, method=route.method, **route.request)
 
 
-@pytest.mark.parametrize("role", ["viewer", "manager"])
+@pytest.mark.parametrize("role", [r for r in UserRole if r is not UserRole.ADMIN])
 @pytest.mark.parametrize("endpoint", ADMIN_ONLY_ROUTES)
 def test_only_an_admin_may_use_an_admin_only_route(rbac_tenant, test_admin_app, endpoint, role):
     before = _state(rbac_tenant)
@@ -181,9 +182,7 @@ def test_a_refused_fetch_gets_a_json_error(rbac_tenant, test_admin_app):
 
 
 def _user(env, role):
-    session = env.get_session()
-    session.expire_all()
-    return session.scalars(select(User).filter_by(tenant_id=TENANT_ID, user_id=USER_IDS[role])).one()
+    return _fresh(env).get_one(User, user_id=USER_IDS[role])
 
 
 def _toggle(client, role):
