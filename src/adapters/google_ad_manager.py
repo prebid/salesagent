@@ -14,7 +14,6 @@ __all__ = [
 
 import logging
 import uuid
-from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -35,7 +34,7 @@ from src.adapters.base import (
 
 # Import modular components
 from src.adapters.gam.client import GAMClientManager, current_network_time_zone
-from src.adapters.gam.creative_plan import GamCreativeRefusal, placeholder_sizes, plan_gam_creative
+from src.adapters.gam.creative_plan import plan_or_refuse
 from src.adapters.gam.managers import (
     GAMCreativesManager,
     GAMInventoryManager,
@@ -87,7 +86,7 @@ from src.core.schemas import (
     MediaPackage,
     ReportingPeriod,
 )
-from src.core.traffic_carrier import AdapterCreativeAsset, CreativeToTraffic
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 from src.services.ai.config import SellerAIConfig
 
 # Set up logger
@@ -366,17 +365,18 @@ class GoogleAdManager(AdServerAdapter):
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
         *,
-        creatives_by_package: Mapping[str, Sequence[CreativeToTraffic]],
+        creatives_by_package: CreativesByPackage,
     ) -> list[ErrorProblem]:
         """The base checks, plus each creative GAM has no creative for on its package's line item.
 
         Interim; RFC #2529 folds it into plan(buy).
 
-        Each creative is planned (``plan_gam_creative``) against the placeholders the
-        package's line item will be created with (``GAMOrdersManager.line_item_placeholders``,
-        the computation ``create_line_items`` writes), so a size or kind refused here is one
-        the creatives manager would refuse after the order and line items were written. Every
-        refusal is a problem naming its creative and package; core raises the error.
+        Each creative is planned (``plan_or_refuse``, the call the creatives manager makes at
+        upload) against the placeholders the package's line item will be created with
+        (``GAMOrdersManager.line_item_placeholders``, the computation ``create_line_items``
+        writes, from the same carriers), so a size or kind refused here is one the upload
+        would refuse after the order and line items were written. Every refusal is a problem
+        naming its creative and package; core raises the error.
         """
         problems = super().validate_media_buy_request(
             request,
@@ -400,15 +400,12 @@ class GoogleAdManager(AdServerAdapter):
                 product = uow.products.get_by_id(package.product_id) if package.product_id else None
                 impl_configs[package.package_id] = dict((product.implementation_config if product else None) or {})
         for package in planned:
-            sizes = placeholder_sizes(
-                self.orders_manager.line_item_placeholders(
-                    package, impl_configs[package.package_id], tenant_id=self.tenant_id, log=self.log
-                )
+            creatives = creatives_by_package[package.package_id]
+            placeholders = self.orders_manager.line_item_placeholders(
+                package, impl_configs[package.package_id], creatives, tenant_id=self.tenant_id, log=self.log
             )
-            for creative in creatives_by_package[package.package_id]:
-                plan = plan_gam_creative(creative, sizes)
-                if isinstance(plan, GamCreativeRefusal):
-                    problems.append(plan.problem(package.package_id))
+            plans = [plan_or_refuse(creative, placeholders, package.package_id) for creative in creatives]
+            problems.extend(plan for plan in plans if isinstance(plan, ErrorProblem))
         return problems
 
     def create_media_buy(
@@ -418,6 +415,8 @@ class GoogleAdManager(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Create a new media buy (order) in GAM - main orchestration method.
 
@@ -428,6 +427,8 @@ class GoogleAdManager(AdServerAdapter):
             end_time: Campaign end time
             package_pricing_info: Optional validated pricing info (AdCP PR #88)
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
+            creatives_by_package: The carriers ``validate_media_buy_request`` planned, which
+                narrow each line item's placeholders as they did there.
 
         Returns:
             AdapterCreateResult with GAM order details
@@ -740,6 +741,7 @@ class GoogleAdManager(AdServerAdapter):
                 package_pricing_info=package_pricing_info,
                 package_targeting=package_targeting,
                 line_item_name_template=self._line_item_name_template,
+                creatives_by_package=creatives_by_package,
             )
             self.log(f"✓ Created {len(line_item_ids)} line items")
 

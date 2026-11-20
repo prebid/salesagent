@@ -1166,7 +1166,7 @@ def _execute_adapter_media_buy_creation(
         identity: The caller the adapter acts for (from a request or from stored ids)
         carriers: Each creative as the pre-adapter gate read it for each package naming it.
             The adapter's pre-booking check is handed them per package, and refuses a
-            creative it cannot traffic on its package.
+            creative it cannot traffic on its package; its booking is handed the same value.
         named_packages: The packages as the gate was handed them, naming each one's
             creatives in the order the request (or the stored buy) did: where a refusal
             points.
@@ -1187,13 +1187,14 @@ def _execute_adapter_media_buy_creation(
     # so this is the one place an adapter checks a buy before its ad server is written: the
     # pricing models it sells, its own limits, and every creative on its package. It answers
     # problems; the error is built here, once.
+    creatives_by_package = _carriers_by_package_id(packages, carriers)
     problems = adapter.validate_media_buy_request(
         request,
         packages,
         start_time,
         end_time,
         package_pricing_info,
-        creatives_by_package=_carriers_by_package_id(packages, carriers),
+        creatives_by_package=creatives_by_package,
     )
     if problems:
         logger.error(f"[PRE-VALIDATE] Adapter validation failed: {problems}")
@@ -1203,7 +1204,9 @@ def _execute_adapter_media_buy_creation(
 
     # Call adapter with detailed error logging
     try:
-        response = adapter.create_media_buy(request, packages, start_time, end_time, package_pricing_info)
+        response = adapter.create_media_buy(
+            request, packages, start_time, end_time, package_pricing_info, creatives_by_package=creatives_by_package
+        )
         logger.info(
             f"[ADAPTER] create_media_buy succeeded: {response.media_buy_id} with {len(response.packages)} packages"
         )

@@ -22,7 +22,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas import *
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError
-from src.core.traffic_carrier import AdapterCreativeAsset
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 from src.core.utils.frequency_cap import suppress_cooldown_minutes
 
 
@@ -196,6 +196,8 @@ class Kevel(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict[str, Any]] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Creates a new Campaign and associated Flights in Kevel."""
         # Log operation

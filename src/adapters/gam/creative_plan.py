@@ -47,10 +47,7 @@ from src.core.traffic_carrier import (
     TrafficSize,
     TrafficSizeRange,
 )
-
-#: Canonical kinds GAM is not handed through this plan. ``native_in_feed`` is a GAM native
-#: style with a creative template, which PR #2445 owns.
-_KINDS_NOT_PLANNED = frozenset({"native_in_feed"})
+from src.services.gam_product_config_service import gam_format_family
 
 
 @dataclass(frozen=True)
@@ -160,11 +157,13 @@ def plan_gam_creative(
     placeholder, is a refusal: there is no default size.
     """
     representation = ctt.representation
-    if ctt.format_kind in _KINDS_NOT_PLANNED or (
+    if gam_format_family(ctt.format_kind) != "display" or (
         isinstance(representation, MediaRepresentation) and representation.asset_type != "image"
     ):
-        # Audio has no GAM creative. Video needs a duration (VideoRedirectCreative), which the
-        # carrier does not hold.
+        # Only the display family is planned. A native kind is a GAM native style over a
+        # creative template (PR #2445); audio has no GAM creative; video needs a duration
+        # (VideoRedirectCreative), which the carrier does not hold; a kind GAM has no family for
+        # names no GAM creative type.
         return GamCreativeRefusal(ctt.creative_id, GamRefusalReason.NOT_TRAFFICKED, ctt.format_kind)
 
     sizes = _candidate_sizes(ctt, placeholder_sizes)
@@ -199,6 +198,27 @@ def plan_gam_creative(
     if ctt.impression_tracker_urls:
         creative["thirdPartyImpressionTrackingUrls"] = substitute_tracking_urls(list(ctt.impression_tracker_urls))
     return GamCreativePlan(creative=creative, lica_sizes=lica_sizes, html5_bundle_url=bundle_url)
+
+
+def plan_or_refuse(
+    ctt: CreativeToTraffic, placeholders: Iterable[Any], package_id: str | None = None
+) -> GamCreativePlan | ErrorProblem:
+    """The GAM creative *ctt* becomes on a line item with these *placeholders*, or the problem refusing it.
+
+    The one planning call, per line item: the pre-booking check (``GoogleAdManager.validate_media_buy_request``)
+    makes it against the placeholders the line item will be created with, and the upload
+    (``GAMCreativesManager.add_creative_assets``) against the ones GAM holds, so the plan the
+    check approved is the plan the upload executes. A refusal is the problem it is, naming
+    *package_id*; core builds the error (``exceptions.problems_refusal``).
+    """
+    plan = plan_gam_creative(ctt, placeholder_sizes(placeholders))
+    return plan.problem(package_id) if isinstance(plan, GamCreativeRefusal) else plan
+
+
+def placed_sizes(creatives: Iterable[CreativeToTraffic], sizes: Sequence[TrafficSize]) -> set[TrafficSize]:
+    """Those of *sizes* some creative in *creatives* would be planned at, by the plan's own matching."""
+    candidates = tuple(dict.fromkeys(sizes))
+    return {size for ctt in creatives for size in _placed(ctt.sizes, ctt.size_ranges, candidates)}
 
 
 def _destination(ctt: CreativeToTraffic) -> dict[str, str]:

@@ -9,7 +9,7 @@ from adcp.canonical_formats.compat_helpers import FormatIdInput
 from pydantic import ValidationError
 
 from src.core.format_resolver import upgraded_reference
-from src.core.format_satisfaction import product_declarations
+from src.core.format_satisfaction import declared_size_mode, product_declarations
 
 logger = logging.getLogger(__name__)
 
@@ -98,10 +98,11 @@ def declared_gam_slots(declarations: Iterable[Any]) -> list[dict[str, Any]]:
     with no adapter call at all. Attribute reading is the adoption CLAUDE.md names for
     exactly this, and both classes answer both attributes.
 
-    THE DIMENSION SOURCES, in the order the canonical schemas state them: ``sizes[]`` (a
-    declaration accepting several fixed sizes is several GAM slots), then fixed
-    ``width``/``height``. A declaration stating only a RANGE -- ``min_width``/``max_width``
-    on ``image``, ``video_hosted`` and ``video_vast`` -- yields NO slot. A range is not a
+    THE DIMENSIONS are :func:`format_satisfaction.declared_size_mode`'s, the reading the
+    creative reader takes too: a fixed ``width``/``height`` or ``sizes[]`` (a declaration
+    accepting several fixed sizes is several GAM slots). A declaration stating only a RANGE
+    -- ``min_width``/``max_width`` on ``image``, ``video_hosted`` and ``video_vast`` --
+    yields NO slot. A range is not a
     slot size, and picking an endpoint would be the same invention as the 640x480 constant
     this replaced; each caller decides what no slot means for it (the seeder defaults, the
     adapter falls through to the deprecated arm).
@@ -116,15 +117,9 @@ def declared_gam_slots(declarations: Iterable[Any]) -> list[dict[str, Any]]:
             slots.append(_placeholder(1, 1, is_native=True))
             continue
 
-        params = declaration.params
-        sizes = getattr(params, "sizes", None)
+        sizes, _ranges = declared_size_mode(declaration)
         if sizes:
             slots.extend(_placeholder(size.width, size.height) for size in sizes)
-            continue
-
-        width, height = getattr(params, "width", None), getattr(params, "height", None)
-        if width and height:
-            slots.append(_placeholder(width, height))
             continue
 
         logger.warning(

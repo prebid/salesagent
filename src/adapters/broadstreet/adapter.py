@@ -73,7 +73,7 @@ from src.core.schemas import (
     Principal,
     ReportingPeriod,
 )
-from src.core.traffic_carrier import AdapterCreativeAsset
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 
 logger = logging.getLogger(__name__)
 
@@ -347,6 +347,8 @@ class BroadstreetAdapter(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Create a new media buy (campaign) in Broadstreet.
 

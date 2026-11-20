@@ -20,6 +20,7 @@ The representation is the asset the buyer sent, named in the spec's own words (A
 * ``core/assets/html-asset.json``: "Inline HTML content asset", required ``content`` only.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, Literal, NotRequired, TypedDict
 
 from adcp.types.domains.core.assets.asset_union import MarkupType as LibraryMarkupType
@@ -140,6 +141,11 @@ class CreativeToTraffic(BaseModel):
     option_size_ranges: tuple[TrafficSizeRange, ...]
     clickthrough_url: str | None = None
     impression_tracker_urls: tuple[str, ...] = ()
+
+
+#: Each package's creatives as core read them for it, keyed by package id: what an adapter's
+#: pre-booking check and its booking are handed, the same value for both.
+CreativesByPackage = Mapping[str, Sequence[CreativeToTraffic]]
 
 
 class PackageAssignmentDict(TypedDict):

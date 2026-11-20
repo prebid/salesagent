@@ -1,6 +1,5 @@
 import logging
 import random
-from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -51,7 +50,7 @@ from src.core.schemas import (
     Snapshot,
 )
 from src.core.security.webhook_egress import deliver_webhook
-from src.core.traffic_carrier import AdapterCreativeAsset, CreativeToTraffic
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 from src.core.validation_helpers import package_field_path
 from src.services.ai.config import SellerAIConfig
 
@@ -220,7 +219,7 @@ class MockAdServer(AdServerAdapter):
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
         *,
-        creatives_by_package: Mapping[str, Sequence[CreativeToTraffic]],
+        creatives_by_package: CreativesByPackage,
     ) -> list[ErrorProblem]:
         """Validate media buy request with GAM-like validation rules.
 
@@ -647,6 +646,8 @@ class MockAdServer(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Simulates the creation of a media buy using GAM-like templates.
 

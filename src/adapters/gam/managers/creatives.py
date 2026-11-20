@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
-from src.core.errors.details import CreativeRejectionDetails
+from src.core.errors.details import CreativeRejectionDetails, ErrorProblem
 from src.core.exceptions import AdCPCreativeRejectedError, AdCPInternalError, AdCPSalesAgentError, problems_refusal
 from src.core.schemas import AssetStatus
 from src.core.security.outbound_http import CounterpartyUrl, send
@@ -22,8 +22,7 @@ from ..creative_plan import (
     GamCreativePlan,
     GamCreativeRefusal,
     GamRefusalReason,
-    placeholder_sizes,
-    plan_gam_creative,
+    plan_or_refuse,
 )
 from ..utils.error_handler import map_gam_exception
 from ..utils.validation import GAMValidator
@@ -287,28 +286,20 @@ class GAMCreativesManager:
         return created_asset_statuses
 
     @staticmethod
-    def _plan(ctt: CreativeToTraffic, placeholders: list[Any]) -> GamCreativePlan:
-        """The GAM creative *ctt* becomes on line items with these *placeholders*; raises the refusal.
-
-        The error is core's (``problems_refusal``) from the refusal's problem, as at the
-        pre-booking check: this manager classifies, it picks no error class.
-        """
-        plan = plan_gam_creative(ctt, placeholder_sizes(placeholders))
-        if isinstance(plan, GamCreativeRefusal):
-            raise problems_refusal([plan.problem()])
-        return plan
-
-    @classmethod
     def _plans_by_line_item(
-        cls, asset: AdapterCreativeAsset, creative_placeholders: Mapping[str, list]
+        asset: AdapterCreativeAsset, creative_placeholders: Mapping[str, list]
     ) -> dict[str, GamCreativePlan]:
         """Per line item *asset* is assigned to, its package's carrier planned on that line item; raises the refusal.
 
         Each line item's own placeholders, and the carrier core read for that package's
-        product, so nothing is planned against another package's sizes.
+        product, so nothing is planned against another package's sizes. The planning call is
+        the pre-booking check's (``plan_or_refuse``); every line item's refusal rides one
+        error, which core builds (``problems_refusal``): this manager picks no error class.
         """
         plans = {
-            line_item_id: cls._plan(assignment["creative"], creative_placeholders.get(line_item_id, []))
+            line_item_id: plan_or_refuse(
+                assignment["creative"], creative_placeholders.get(line_item_id, []), assignment["package_id"]
+            )
             for line_item_id, assignment in _assigned_line_items(asset["package_assignments"])
         }
         if not plans:
@@ -316,7 +307,10 @@ class GAMCreativesManager:
             raise problems_refusal(
                 [GamCreativeRefusal(asset["creative_id"], GamRefusalReason.NO_PLACEHOLDER).problem()]
             )
-        return plans
+        refused = [plan for plan in plans.values() if isinstance(plan, ErrorProblem)]
+        if refused:
+            raise problems_refusal(refused)
+        return {line_item_id: plan for line_item_id, plan in plans.items() if isinstance(plan, GamCreativePlan)}
 
     def _planned_creative(self, asset: AdapterCreativeAsset, plan: GamCreativePlan) -> dict[str, Any]:
         """The planned GAM creative, with the advertiser and name this manager owns, and an html5 bundle's bytes.

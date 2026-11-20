@@ -896,7 +896,9 @@ class TestMainFlowObligations:
             # with the original request and the resolved package/flight arguments.
             assert isinstance(result, CreateMediaBuySuccess)
             assert result.status == "completed"
-            env.mock["adapter"].return_value.create_media_buy.assert_called_once_with(req, ANY, ANY, ANY, ANY)
+            env.mock["adapter"].return_value.create_media_buy.assert_called_once_with(
+                req, ANY, ANY, ANY, ANY, creatives_by_package=ANY
+            )
 
     def test_unsupported_format_refusal_names_what_was_rejected_and_what_is_accepted(self, integration_db):
         """Requesting a format the product does not carry is refused, NAMING both sides.
