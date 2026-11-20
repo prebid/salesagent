@@ -81,3 +81,33 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     Then the page returns status 400
     And the JSON response has "success" as false
     And the JSON error is the "DiscoveryUrlRequired" refusal
+
+  # A form the seller cannot save is refused with InvalidFormInput: its MESSAGE says the
+  # form was refused, and each issue names a refused field in text the validator wrote,
+  # never another exception's text. A browser is shown MESSAGE and every issue.
+
+  @T-ADMIN-REFUSAL-006 @product-form @pricing
+  Scenario: A pricing option the product form refuses is named on the form
+    # The add form renders itself again rather than going back, so the GAM form can keep
+    # what the operator typed.
+    When the operator submits the add product form from its page with:
+      | field           | value                 |
+      | name            | Refused Pricing Probe |
+      | pricing_model_0 | cpm_fixed             |
+      | rate_0          |                       |
+    Then the page returns status 200
+    And the page is the add product form
+    And the page shows the "InvalidFormInput" refusal
+    And the page contains "Rate is required for fixed pricing (pricing option 0)"
+
+  @T-ADMIN-REFUSAL-007 @inventory-profile-form @format-options
+  Scenario: Format options that are not JSON are refused with where the parse stopped
+    # The edit form is answered by the error handler: back to the page it came from.
+    Given the seller holds a verified property of publisher "pub-psatest.com"
+    And a stored profile "unparsed_options" declaring an image of 300x250
+    When the operator saves the edit form of profile "unparsed_options" from its page with format options "[{"
+    Then the page returns status 200
+    And the page shows the "InvalidFormInput" refusal
+    And the page contains "format_options is not valid JSON at line 1, column 3"
+    And the answer does not carry the JSON parser's text
+    And the profile "unparsed_options" stores an image of 300x250

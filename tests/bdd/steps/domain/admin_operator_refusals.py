@@ -7,15 +7,20 @@ refusal is answered with is read off its class, so no scenario restates it.
 from __future__ import annotations
 
 import html
+import json
 
 from pytest_bdd import given, parsers, then, when
 
 from src.core.http_utils import InvalidVirtualHost
-from src.core.operator_errors import OperatorRefusal
+from src.core.operator_errors import InvalidFormInput, OperatorRefusal
 from src.services.auth_config_service import DiscoveryUrlRequired
 from tests.bdd.steps.domain.admin_accounts import _datatable_to_form, _env, _require_admin_page
+from tests.bdd.steps.domain.admin_inventory_profiles import IMAGE_300X250, _modal_form
+from tests.helpers.admin_product_form import minimal_product_create_form
 
-_REFUSALS: dict[str, type[OperatorRefusal]] = {cls.__name__: cls for cls in (InvalidVirtualHost, DiscoveryUrlRequired)}
+_REFUSALS: dict[str, type[OperatorRefusal]] = {
+    cls.__name__: cls for cls in (InvalidVirtualHost, DiscoveryUrlRequired, InvalidFormInput)
+}
 
 
 def _submitted(ctx: dict, datatable: list) -> dict[str, str]:
@@ -47,6 +52,46 @@ def when_save_oidc_config(ctx: dict, datatable: list) -> None:
 @when("the tenant management API is asked to create a tenant with:")
 def when_management_api_creates_tenant(ctx: dict, datatable: list) -> None:
     ctx["admin_page"] = _env(ctx).post_management_api_tenant(_submitted(ctx, datatable))
+
+
+@when("the operator submits the add product form from its page with:")
+def when_submit_add_product_from_page(ctx: dict, datatable: list) -> None:
+    """The add form at its minimum, declaring an image so the form reaches what the table sets."""
+    form = minimal_product_create_form(
+        "pub-psatest.com:all_inventory", format_options=json.dumps(IMAGE_300X250), **_submitted(ctx, datatable)
+    )
+    ctx["admin_page"] = _env(ctx).submit_create_product(form)
+
+
+@when(
+    parsers.parse(
+        'the operator saves the edit form of profile "{profile_id}" from its page with format options "{raw}"'
+    )
+)
+def when_save_profile_edit_with_raw_format_options(ctx: dict, profile_id: str, raw: str) -> None:
+    env = _env(ctx)
+    form = _modal_form(env, profile_id, None) | {"format_options": raw}
+    ctx["admin_submitted"] = form
+    ctx["admin_page"] = env.submit_inventory_profile_edit(profile_id, form)
+
+
+@then("the page is the add product form")
+def then_page_is_add_product_form(ctx: dict) -> None:
+    page = _require_admin_page(ctx).data.decode()
+    assert "Add New Product" in page, "The page is not the add product form"
+
+
+@then("the answer does not carry the JSON parser's text")
+def then_answer_omits_json_parser_text(ctx: dict) -> None:
+    """What ``json`` says about the submitted format options, derived by parsing them here."""
+    try:
+        json.loads(ctx["admin_submitted"]["format_options"])
+    except json.JSONDecodeError as e:
+        parser_text = e.msg
+    else:
+        raise AssertionError("the submitted format options parse, so there is no parser text to look for")
+    answer = html.unescape(_require_admin_page(ctx).data.decode())
+    assert parser_text not in answer, f"The answer carries the parser's text {parser_text!r}"
 
 
 @then("the page is the create tenant form")

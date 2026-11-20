@@ -202,7 +202,7 @@ class AdminAccountEnv:
 
     # ── Super-admin forms and APIs that answer with an operator refusal ──
 
-    def _submit_as_browser(self, path: str, form_data: dict[str, str], *, from_page: bool) -> AdminResponse:
+    def _submit_as_browser(self, path: str, form_data: dict[str, Any], *, from_page: bool) -> AdminResponse:
         """POST the form at *path* as a browser does, and follow its redirect.
 
         *from_page* sends the ``Referer`` a browser sends from the form's own page; without it
@@ -222,6 +222,15 @@ class AdminAccountEnv:
         return self._recording_new_accounts(
             lambda: self._submit_as_browser(self._url("create"), form_data, from_page=from_create_page)
         )
+
+    def submit_create_product(self, form_data: dict[str, Any]) -> AdminResponse:
+        """POST the add-product form as a browser does from its page."""
+        return self._submit_as_browser(self.products_path("add"), form_data, from_page=True)
+
+    def submit_inventory_profile_edit(self, profile_id: str, form_data: dict[str, Any]) -> AdminResponse:
+        """POST *profile_id*'s edit form as a browser does from its page, and follow the answer."""
+        path = self.inventory_profiles_path(f"{self.inventory_profile_row_id(profile_id)}/edit")
+        return self._submit_as_browser(path, form_data, from_page=True)
 
     def post_oidc_config(self, body: dict[str, str]) -> AdminResponse:
         """POST this tenant's OIDC configuration, as the users page does with fetch()."""
