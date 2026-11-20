@@ -652,8 +652,6 @@ def _validate_creatives_before_adapter_call(
     if session is None:
         raise ValueError("session is required for _validate_creatives_before_adapter_call")
 
-    from src.core.format_resolver import is_dialled_agent_url, registry_projects
-
     all_creative_ids = set(_named_creative_ids(packages))
 
     if not all_creative_ids:
@@ -716,46 +714,11 @@ def _validate_creatives_before_adapter_call(
             bad_state.append(creative)
             continue
 
-        # Get format specification from creative agent (uses in-memory cache with 30min TTL).
-        # Skip the fetch entirely for an adapter-provided pseudo-URL (e.g.
-        # broadstreet://<tenant_id>): those formats are served by the adapter
-        # in-process, so no dialled agent could ever resolve them, and the
-        # unconditional fetch below would reject a format the seller itself
-        # advertised (salesagent-ypgd). CounterpartyUrl marks BUYER provenance for
-        # a genuinely-dialled url — see _get_format_spec_sync's docstring. No
-        # field: create-media-buy-request.json defines no creative:{id} path, so
-        # there is no canonical request-document locator to name (a fabricated
-        # one is not honest — CounterpartyUrl(field=None) states that plainly).
-        # The stored identity, through the ONE row reader. The retained legacy assertion is
-        # what names a format an AGENT serves; a creative identified by its canonical kind
-        # asserts no reference, so there is no agent to dial and nothing here to check.
-        identity = CreativeFormatIdentity.from_row(creative)
-        assertion = identity.assertion
-        format_spec = None
-        if assertion is not None and is_dialled_agent_url(assertion.agent_url):
-            format_spec = _get_format_spec_sync(
-                assertion.agent_url,
-                assertion.id,
-                provenance=CounterpartyUrl(field=None),
-            )
-
-            # Fail validation if format spec not found (no skipping!) — only
-            # meaningful once we know the agent SHOULD have it (a dialled url). A
-            # reference the canonical mapping registry projects is a real format whether
-            # or not the agent's deprecated catalogue lists it (template-format-ids.mdx
-            # § Compatibility, v3.2.7), the rule sync_creatives applies on the way in.
-            if not format_spec and not registry_projects(assertion):
-                validation_errors.append(
-                    f"Creative {creative.creative_id} has unknown format '{assertion.id}' "
-                    f"from agent {assertion.agent_url}. Format must be registered with the creative agent."
-                )
-                continue
-
         # The ONE reader, on every package naming the creative, with the declaration that
         # package's product resolved to. A generative creative is read like any other: its
         # build output is what is served, and no build output is nothing to serve. A creative
         # its product refuses is not read; that refusal is raised below, in order.
-        read = _read_for_packages(creative, identity, format_spec, packages, verdict_at)
+        read = _read_for_packages(creative, packages, verdict_at)
         if isinstance(read, str):
             validation_errors.append(read)
         else:
@@ -858,8 +821,6 @@ def _validate_creatives_before_adapter_call(
 
 def _read_for_packages(
     creative: Any,
-    identity: CreativeFormatIdentity,
-    format_spec: Any | None,
     packages: "Sequence[MediaPackage] | Sequence[_AssignedPackage]",
     verdict_at: Mapping[tuple[int, str], Any],
 ) -> dict[CarrierKey, CreativeToTraffic] | str:
@@ -878,8 +839,48 @@ def _read_for_packages(
     manifest MUST declare and satisfy"), so on such a package it is refused rather than read
     as "any size". A package whose product refuses the creative is skipped: its caller raises
     that refusal.
+
+    The creative's format spec is resolved here, once per read, by one rule for every path: a
+    retained legacy reference at a dialled agent is fetched from that agent, and one the agent
+    does not serve is refused unless the canonical mapping registry projects it.
     """
+    from src.core.format_resolver import is_dialled_agent_url, registry_projects
+
     cid = str(creative.creative_id)
+    # Get format specification from creative agent (uses in-memory cache with 30min TTL).
+    # Skip the fetch entirely for an adapter-provided pseudo-URL (e.g.
+    # broadstreet://<tenant_id>): those formats are served by the adapter
+    # in-process, so no dialled agent could ever resolve them, and the
+    # unconditional fetch below would reject a format the seller itself
+    # advertised (salesagent-ypgd). CounterpartyUrl marks BUYER provenance for
+    # a genuinely-dialled url — see _get_format_spec_sync's docstring. No
+    # field: create-media-buy-request.json defines no creative:{id} path, so
+    # there is no canonical request-document locator to name (a fabricated
+    # one is not honest — CounterpartyUrl(field=None) states that plainly).
+    # The stored identity, through the ONE row reader. The retained legacy assertion is
+    # what names a format an AGENT serves; a creative identified by its canonical kind
+    # asserts no reference, so there is no agent to dial and nothing here to check.
+    identity = CreativeFormatIdentity.from_row(creative)
+    assertion = identity.assertion
+    format_spec = None
+    if assertion is not None and is_dialled_agent_url(assertion.agent_url):
+        format_spec = _get_format_spec_sync(
+            assertion.agent_url,
+            assertion.id,
+            provenance=CounterpartyUrl(field=None),
+        )
+
+        # Fail validation if format spec not found (no skipping!) — only
+        # meaningful once we know the agent SHOULD have it (a dialled url). A
+        # reference the canonical mapping registry projects is a real format whether
+        # or not the agent's deprecated catalogue lists it (template-format-ids.mdx
+        # § Compatibility, v3.2.7), the rule sync_creatives applies on the way in.
+        if not format_spec and not registry_projects(assertion):
+            return (
+                f"Creative {cid} has unknown format '{assertion.id}' "
+                f"from agent {assertion.agent_url}. Format must be registered with the creative agent."
+            )
+
     # A url asset this seller cannot identify is NOT a refusal. core/assets/url-asset.json
     # at the governing version ends "receivers MUST NOT silently pick a mechanism." and
     # stops there; the "they SHOULD reject the manifest" clause that followed it at 3.1.1
@@ -1209,74 +1210,6 @@ def _stored_order_id(packages: Sequence["DBMediaPackage"]) -> str | None:
         (p.package_config["platform_order_id"] for p in packages if (p.package_config or {}).get("platform_order_id")),
         None,
     )
-
-
-def _stored_creative_format_spec(creative: Any, identity: CreativeFormatIdentity, tenant_id: str) -> Any | None:
-    """The format spec a stored creative's retained legacy reference resolves to, for the retroactive push.
-
-    ``None`` when the creative retains no reference an agent hosts, or the format is unknown.
-    """
-    format_spec = None
-    # Prefer cached spec (same as auto-approval path); fall back to the resolver
-    # (product overrides + agent search) on an UNKNOWN-format miss (None). A
-    # typed transient AdCPSalesAgentError from either fetch PROPAGATES — a rate-limited
-    # agent must not be degraded into a missing-spec asset error, and the
-    # fallback must not mask it by re-fetching from the same throttled agent
-    # (#1430 review). AdCPFormatNotFoundError from the resolver = genuinely
-    # unknown -> proceed without a spec (extraction falls back to raw data).
-    #
-    # Skip BOTH the fetch and the fallback for an adapter-provided pseudo-URL
-    # (e.g. broadstreet://<tenant_id>) — served in-process, so no dialled agent
-    # could ever resolve it (salesagent-ypgd). The read falls back to the
-    # creative's raw data fields when format_spec stays None.
-    from src.core.format_resolver import is_dialled_agent_url
-
-    # Only a retained legacy assertion names a format an agent hosts, so its presence plus a
-    # dialled URL is the whole precondition for both fetches.
-    #
-    # The predicate is called INLINE in both conditionals rather than hoisted into a local.
-    # test_architecture_format_spec_dial_guard.py reads the enclosing `if` test for a call to
-    # `is_dialled_agent_url`, so a hoisted boolean reads to it as an unguarded dial —
-    # the guard grades this spelling, and conforming to it is cheaper than teaching it to
-    # resolve local bindings, which is machinery with its own holes.
-    assertion = identity.assertion
-
-    if assertion is not None and is_dialled_agent_url(assertion.agent_url):
-        format_spec = _get_format_spec_sync(
-            assertion.agent_url,
-            assertion.id,
-            provenance=CounterpartyUrl(field=None),
-        )
-    if format_spec is None and assertion is not None and is_dialled_agent_url(assertion.agent_url):
-        from src.core.exceptions import AdCPFormatNotFoundError
-        from src.core.format_resolver import get_format
-
-        try:
-            format_spec = get_format(
-                assertion.id,
-                agent_url=assertion.agent_url,
-                tenant_id=tenant_id,
-                product_id=None,
-                # Same buyer-supplied URL as the first fetch above — omitting
-                # provenance here would silently reclassify it as operator
-                # configuration and route it off the egress seam (salesagent-6gpt.1
-                # diff-review finding).
-                provenance=CounterpartyUrl(field=None),
-            )
-        except AdCPFormatNotFoundError as e:
-            # Genuinely unknown format — proceed without a spec (extraction
-            # falls back to the creative's raw data fields).
-            logger.warning(log_safe(f"[ASSET] Could not load format spec for {creative.creative_id}: {e}"))
-        except AdCPSalesAgentError:
-            # Transient/typed agent failure — propagate with its recovery
-            # semantics rather than degrading to a missing-spec asset error.
-            raise
-        except Exception as e:
-            # Resolver internals (e.g. the product-override DB read) — keep the
-            # historical resilience: log and build from raw creative data.
-            logger.warning(log_safe(f"[ASSET] Could not load format spec for {creative.creative_id}: {e}"))
-
-    return format_spec
 
 
 def _build_adapter_asset_from_creative(
@@ -2087,7 +2020,7 @@ class CreativePushFailure:
 
 
 def _read_for_push(
-    products: "ProductRepository", creative: Any, assigned: Sequence[_AssignedPackage], tenant_id: str
+    products: "ProductRepository", creative: Any, assigned: Sequence[_AssignedPackage]
 ) -> dict[CarrierKey, CreativeToTraffic]:
     """*creative* read for each package it is pushed to, by the rules the pre-adapter gate applies.
 
@@ -2102,9 +2035,7 @@ def _read_for_push(
     for _index, product, _creative, verdict in pairing_verdicts:
         if not verdict:
             raise creative_refusal(verdict, creative_id=creative.creative_id, product_id=product.product_id)
-    identity = CreativeFormatIdentity.from_row(creative)
-    format_spec = _stored_creative_format_spec(creative, identity, tenant_id)
-    read = _read_for_packages(creative, identity, format_spec, assigned, _verdict_at(pairing_verdicts))
+    read = _read_for_packages(creative, assigned, _verdict_at(pairing_verdicts))
     if isinstance(read, str):
         raise AdCPValidationError(details=ValidationDetails(reasons=[read]))
     return read
@@ -2205,7 +2136,7 @@ def push_creative_to_existing_buy(
             # does not accept, say): the push is per creative, so the others are pushed.
             assert uow.products is not None
             try:
-                carriers = _read_for_push(uow.products, creative, _assigned_packages(packages, matching), tenant_id)
+                carriers = _read_for_push(uow.products, creative, _assigned_packages(packages, matching))
             except AdCPSalesAgentError as refusal:
                 return CreativePushFailure(f"Creative {creative_id} is not trafficked: {refusal}", refusal)
             asset = _build_adapter_asset_from_creative(

@@ -84,7 +84,6 @@ def test_the_adapter_names_the_creative_the_builder_named(bound_factory_session)
         ProductRepository(bound_factory_session, tenant.tenant_id),
         creative,
         [_AssignedPackage(PACKAGE_ID, None, [creative.creative_id])],
-        tenant.tenant_id,
     )
     asset = _build_adapter_asset_from_creative(
         creative,

@@ -760,13 +760,13 @@ class TestCreateMediaBuyValidation:
         # The identifier is STRUCTURED now: details/field, not prose.
 
 
-class TestStoredCreativeFormatSpecFallback:
-    """_stored_creative_format_spec format-spec fallback ( TQ-04), the retroactive push's fetch.
+class TestOneFormatResolutionForEveryRead:
+    """``_read_for_packages`` resolves a creative's format spec once, by one rule, on every path.
 
-    Cache-miss (None) falls back to format_resolver.get_format; a genuinely
-    unknown format proceeds with no spec (raw-data extraction); a typed
-    transient AdCPSalesAgentError propagates from EITHER fetch — never degraded into a
-    missing-spec asset error.
+    The pre-adapter gate (create, approval replay) and the retroactive push read through it, so
+    a creative cannot pass the gate and resolve differently at push. A reference the agent does
+    not serve is refused unless the canonical mapping registry projects it, with no second dial;
+    a typed transient agent failure propagates (#1430 review, TQ-04).
     """
 
     def _creative(self):
@@ -780,101 +780,46 @@ class TestStoredCreativeFormatSpecFallback:
         creative.data = {"url": "https://example.com/a.jpg", "width": 300, "height": 250}
         return creative
 
-    def _fetch(self):
-        from src.core.schemas import CreativeFormatIdentity
-        from src.core.tools.media_buy_create import _stored_creative_format_spec
+    def _read(self):
+        from src.core.tools.media_buy_create import _AssignedPackage, _read_for_packages
 
-        creative = self._creative()
-        return _stored_creative_format_spec(creative, CreativeFormatIdentity.from_row(creative), "t1")
+        return _read_for_packages(self._creative(), [_AssignedPackage("p1", None, ["c_fb"])], {})
 
-    def test_cache_miss_uses_format_resolver_fallback(self):
-        from src.core.security.outbound_http import CounterpartyUrl
-
-        spec = MagicMock()
-        # A reference format: a MagicMock answers a truthy Mock for the unstubbed attribute,
-        # which reads as a generative format with no build output.
-        spec.output_format_ids = None
+    def test_a_format_the_agent_does_not_serve_is_refused_with_no_second_resolution(self):
         with (
             patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
-            patch("src.core.format_resolver.get_format", return_value=spec) as resolver,
-        ):
-            spec_read = self._fetch()
-        resolver.assert_called_once_with(
-            "display_300x250",
-            agent_url="https://creative.adcontextprotocol.org",
-            tenant_id="t1",
-            product_id=None,
-            provenance=CounterpartyUrl(field=None),
-        )
-        assert spec_read is spec
-
-    def test_unknown_format_proceeds_without_spec(self):
-        from src.core.exceptions import AdCPFormatNotFoundError
-
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
-            patch("src.core.format_resolver.get_format", side_effect=AdCPFormatNotFoundError()),
-        ):
-            spec_read = self._fetch()
-        # No spec: the read falls back to the creative's raw data fields.
-        assert spec_read is None
-
-    def test_transient_error_from_cached_fetch_propagates_without_fallback(self):
-        from src.core.exceptions import AdCPRateLimitError
-
-        with (
-            patch(
-                "src.core.tools.media_buy_create._get_format_spec_sync",
-                side_effect=AdCPRateLimitError(),
-            ),
+            # Neither the agent nor the canonical mapping registry knows the reference.
+            patch("src.core.format_resolver.registry_projects", return_value=False),
             patch("src.core.format_resolver.get_format") as resolver,
         ):
-            with pytest.raises(AdCPRateLimitError):
-                self._fetch()
+            read = self._read()
+        assert isinstance(read, str) and "has unknown format 'display_300x250'" in read, read
         resolver.assert_not_called()
 
-    def test_transient_error_from_resolver_fallback_propagates(self):
-        from src.core.exceptions import AdCPServiceUnavailableError
+    def test_transient_error_from_the_fetch_propagates(self):
+        from src.core.exceptions import AdCPRateLimitError
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
-            patch(
-                "src.core.format_resolver.get_format",
-                side_effect=AdCPServiceUnavailableError(),
-            ),
+        with patch(
+            "src.core.tools.media_buy_create._get_format_spec_sync",
+            side_effect=AdCPRateLimitError(),
         ):
-            with pytest.raises(AdCPServiceUnavailableError):
-                self._fetch()
+            with pytest.raises(AdCPRateLimitError):
+                self._read()
 
-    def test_fallback_forwards_the_same_provenance_as_the_first_fetch(self):
-        """The fallback dial must carry the SAME provenance as the cached-fetch dial.
+    def test_the_agent_is_dialled_once_as_the_buyers_url(self):
+        """One dial, carrying the buyer's provenance (salesagent-6gpt.1).
 
-        ``_stored_creative_format_spec`` dials the SAME buyer-supplied
-        ``creative.agent_url`` twice: once through ``_get_format_spec_sync``
-        (already passes ``CounterpartyUrl(field=None)``), and again through
-        ``format_resolver.get_format`` when the first dial misses. Omitting
-        provenance on the second dial silently reclassifies a buyer-chosen URL
-        as operator configuration, so a subsequent refusal on that URL comes
-        back CONFIGURATION_ERROR/terminal instead of VALIDATION_ERROR/correctable
-        (salesagent-6gpt.1 diff-review round 1 BLOCKING finding, proven
-        load-bearing by round 2's executed trace: the fix routes the same
-        provenance through ``format_resolver.get_format`` ->
-        ``fetch_format_spec`` -> ``registry.get_format`` ->
-        ``get_formats_for_agent`` -> ``is_counterparty`` -> the egress seam).
-
-        Grades the WIRING at the ``fetch_format_spec`` boundary — the frame
-        the diff-review finding was actually about — rather than a live seam
-        refusal, which would make this test's outcome depend on the
-        ``ADCP_TESTING`` reference-format short-circuit two frames further
-        down (an environment detail unrelated to what this regression is).
+        The stored ``agent_url`` came out of the buyer's own sync, so it is a
+        ``CounterpartyUrl``: omitting it reclassifies the URL as operator configuration, and
+        a refusal on it comes back CONFIGURATION_ERROR/terminal instead of
+        VALIDATION_ERROR/correctable. Graded at the ``fetch_format_spec`` boundary, not by a
+        live seam refusal, so the outcome does not depend on the ``ADCP_TESTING``
+        reference-format short-circuit further down.
         """
         from src.core.security.outbound_http import CounterpartyUrl
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
-            patch("src.core.format_resolver.fetch_format_spec", return_value=None) as fetch_spec,
-        ):
-            self._fetch()
+        with patch("src.core.format_resolver.fetch_format_spec", return_value=None) as fetch_spec:
+            self._read()
 
         fetch_spec.assert_called_once_with(
             "https://creative.adcontextprotocol.org",
