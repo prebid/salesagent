@@ -6,7 +6,7 @@ Once you have the Prebid Sales Agent deployed, this guide covers how to configur
 
 After deployment, you'll need to:
 
-1. **Configure your ad server adapter** - Connect to GAM or use the Mock adapter for testing
+1. **Configure your ad server adapter** - Connect Google Ad Manager, Kevel, Broadstreet, or Triton Digital, or use the Mock adapter for testing
 2. **Set up products** - Define what inventory you're selling
 3. **Add advertisers** - Create principals who can access the MCP API
 4. **Configure creatives workflow** - Set up approval rules
@@ -21,26 +21,31 @@ following pages:
 
 - **Uploaded Creatives** - Review, approve, and reject creatives
 - **Reports** - Read delivery reports, for a tenant that uses Google Ad Manager
-- **Workflows** - Approve or reject pending workflow steps
-- **Webhooks** - Read the delivery webhook log
+- **Workflows** - Read the media buys, the workflow steps, and the audit log
+- **Webhooks** - Read the audit-log entries of the `send_delivery_webhook` operation
 - **Settings** - Configure the tenant
 
-The settings page has the following sections:
+The sales agent records delivery webhooks in a separate delivery log, which the **Webhooks**
+page does not read.
+
+The settings page has a navigation menu. **Setup Checklist** and **Users & Access** open
+separate pages, and each other entry opens a section of the settings page. The menu has the
+following entries:
 
 - **Account** - Organization name, branding, custom domain, and authorized domains and emails
-- **Setup Checklist** - The tasks that remain before the tenant can take orders
+- **Setup Checklist** - Every setup task and whether it is complete, including the critical tasks that must be complete before the tenant can take orders
 - **Users & Access** - Users, allowed domains, and single sign-on (SSO)
 - **Ad Server** - The ad server adapter and its connection
-- **Policies & Workflows** - Budget controls, naming conventions, approval workflow, creative review, and advertising policy
+- **Policies & Workflows** - Budget controls, brand manifest policy, naming conventions, measurement providers, approval workflow, creative review, advertising policy, and product ranking
 - **Integrations** - Slack, AI services, creative agents, and signals agents
-- **Publishers** - The publishers whose `adagents.json` authorizes this sales agent
+- **Publishers** - The publishers you represent
 - **Products** - The product catalog
-- **Inventory** - Inventory sync status, the inventory browser, and the targeting browser
-- **Advertisers** - Principals and their API tokens
+- **Inventory** - For a Google Ad Manager tenant, the inventory sync status and links to the inventory browser and the targeting browser
+- **Advertisers** - Principals, the first characters of each API token, and token rotation
 - **Danger Zone** - Deactivation of the sales agent, hidden in single-tenant mode
 
-A super admin also sees **Accounts** and **Create Account** in the page header. **Accounts**
-lists every tenant.
+In multi-tenant mode, `/admin` opens the **Accounts** page for a super admin. The page lists
+every active tenant, 50 per page, and has a **Create New Account** button.
 
 ## Access levels
 

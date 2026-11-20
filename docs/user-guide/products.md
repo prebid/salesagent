@@ -17,7 +17,9 @@ product and also has an **Add Product** button.
 
 The tenant's ad server decides which form opens. A Google Ad Manager tenant gets a form
 with Google Ad Manager inventory settings. A tenant on any other ad server gets the
-general form, which adds the settings of that ad server.
+general form. On a Mock or Broadstreet tenant, the general form adds that ad server's
+product settings. A tenant with no ad server gets the Mock settings, and a Kevel or Triton
+Digital tenant gets none.
 
 ## Product form
 
@@ -42,8 +44,9 @@ them. To use one, reference it by `publisher_domain` and `format_option_id`.
 
 ### Pricing options
 
-A product needs at least one pricing option. Click **+ Add Pricing Option** for each way a
-buyer can pay. The buyer chooses one option when it creates a media buy.
+A product needs at least one pricing option. The form opens with one empty pricing option.
+Click **+ Add Pricing Option** for each additional way a buyer can pay. The buyer chooses
+one option when it creates a media buy.
 
 The following table lists the pricing models in the form.
 
@@ -57,8 +60,9 @@ The following table lists the pricing models in the form.
 
 Each pricing option also has these fields:
 
-- **Currency**: one of the currencies the tenant accepts. You set them under
-  **Settings > Policies & Workflows > Budget Controls**.
+- **Currency**: one of the currencies set under
+  **Settings > Policies & Workflows > Budget Controls**. When the tenant sets none, the form
+  offers USD.
 - **Rate**: the price of a fixed-price model.
 - **Floor Price**: the minimum price of an auction model.
 - **Min Spend Per Package**: an optional minimum spend.
@@ -81,13 +85,14 @@ On the Google Ad Manager form, **Inventory Configuration** takes one of two inpu
 - The ad units and placements you pick with **Browse Ad Units** and **Browse Placements**.
 
 Both buttons stay inactive until you sync the Google Ad Manager inventory. The sales agent
-chooses the line item type and the priority from the pricing model. See
+picks each line item's type from the package's pricing model and the product's configured
+type. The priority follows from the line item type. See
 [GAM product configuration](../adapters/gam/product-configuration.md) for the details.
 
 ### Targeting
 
 **Channel & Geographic Targeting** sets the advertising channels and the countries of the
-product. **Custom Targeting** is optional and adds key-value pairs that define the audience.
+product. **Custom Targeting (Optional)** adds key-value pairs that define the audience.
 
 ### Access control
 
@@ -126,8 +131,9 @@ files immediately, click **Sync All Publishers** on the **Publishers & Propertie
 
 ## Sample products
 
-A tenant starts without products. When the deployment sets `CREATE_SAMPLE_DATA`, the demo
-tenant gets two sample products: Premium Display - News and Run of Site Display. See
+A tenant starts without products. When the deployment sets `CREATE_SAMPLE_DATA` and the
+`default` tenant has no products, the sales agent adds two sample products to that tenant.
+The products are Premium Display - News and Run of Site Display. See
 [environment variables](../deployment/environment-variables.md).
 
 ## Adapter-specific configuration

@@ -20,9 +20,9 @@ characters.
 ### API token
 
 Each advertiser gets a unique API token, sent as `Authorization: Bearer <token>` on every
-transport. The server stores only a hash of it, so the token is shown exactly once, when the
-advertiser is created. The advertisers list shows the first characters of each token so you
-can tell them apart, never the whole token.
+transport. The database keeps a hash of the token and the token's first 12 characters. The
+Admin UI shows the full token once, when you create the advertiser. The advertisers list
+shows the first characters of each token so you can tell them apart, never the whole token.
 
 If a token is lost or compromised, rotate it:
 
@@ -51,13 +51,18 @@ The `advertiser_id` links to the GAM advertiser for order creation.
 
 ## Access control
 
-Advertisers can only:
-- View products available to them
-- Create media buys under their account
-- Manage their own creatives
-- View their own campaigns
+An advertiser's token reaches every tool that the sales agent serves. With the token, an
+advertiser can do the following:
 
-They cannot access other advertisers' data or system configuration.
+- Read the sales agent's capabilities and creative formats
+- Discover products
+- Manage accounts
+- Create and update media buys, and read their delivery
+- Upload and list creatives
+- Track and complete tasks
+
+`get_products` returns only the products open to all advertisers or to that advertiser.
+`get_media_buys` and `list_creatives` return only that advertiser's media buys and creatives.
 
 ## MCP client configuration
 
@@ -81,5 +86,5 @@ async with Client(transport=transport) as client:
 The sales agent sends notices through Slack and webhooks. It sends no email.
 
 - **Slack**: Under **Settings** > **Integrations** > **Slack Integration**, set the **Task Notifications Webhook URL**. That channel receives notices about new tasks and creative reviews.
-- **Buyer webhooks**: A buyer names its own webhook in the `push_notification_config` field of a `create_media_buy`, `update_media_buy`, `sync_creatives`, or `sync_accounts` request. The sales agent posts status changes for that request there.
-- **Delivery reports**: A buyer sets `reporting_webhook` on `create_media_buy` to receive delivery reports. The dashboard's **Webhooks** page lists the delivery webhooks the sales agent sent.
+- **Buyer webhooks**: A buyer names its own webhook in the `push_notification_config` field of a `create_media_buy`, `update_media_buy`, or `sync_creatives` request. The sales agent posts status changes for that request there. For `sync_creatives`, see [Creative management](creatives.md#notifications). A `sync_accounts` request also accepts the field, but the sales agent sends nothing to it.
+- **Delivery reports**: A buyer sets `reporting_webhook` on `create_media_buy` to receive delivery reports.

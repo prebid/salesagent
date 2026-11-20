@@ -57,6 +57,10 @@ Use one of the following methods:
 uv run scripts/initialize_tenant_mgmt_api_key.py
 ```
 
+The script imports the application package `src`, so run it with the repository root on
+`PYTHONPATH`. The container image sets `PYTHONPATH` to `/app`, the repository root inside the
+container.
+
 Despite its name, the script mints the key that the Inventory Sync API checks. The scheduled
 inventory sync, `scripts/ops/sync_all_tenants.py`, reads the key from `SYNC_API_KEY` only,
 so a deployment that runs the schedule needs the environment variable.
@@ -129,7 +133,7 @@ The following table lists the required fields.
 | `name` | string | The publisher name |
 | `subdomain` | string | A unique identifier for the tenant |
 | `virtual_host` | string | The host name that requests for this tenant arrive on, with no scheme and no path |
-| `ad_server` | string | The adapter: `google_ad_manager`, `kevel`, `triton`, or `mock` |
+| `ad_server` | string | The adapter. The API sets adapter fields for `google_ad_manager`, `kevel`, and `triton`, and stores any other value, such as `mock`, without adapter fields. |
 
 The request must also name at least one person or domain that can sign in. Send one or more
 of the following fields:
@@ -151,7 +155,7 @@ The following table lists the optional fields.
 | `policy_settings` | `{}` | The tenant's advertising policy settings |
 | `slack_webhook_url` | none | The Slack webhook for task notifications |
 | `slack_audit_webhook_url` | none | The Slack webhook for audit notifications |
-| `hitl_webhook_url` | none | The webhook for human-in-the-loop notifications |
+| `hitl_webhook_url` | none | A webhook URL stored with the tenant. The sales agent sends nothing to it. |
 | `create_default_principal` | `true` | Whether the API also creates a first advertiser |
 
 The API checks the three webhook URLs against the outbound egress policy and refuses a URL
@@ -232,9 +236,11 @@ configuration:
 }
 ```
 
-The response never contains a stored secret. It reports `has_refresh_token` for GAM and
-`has_api_key` for Kevel and Triton. `adapter_config` is absent when the tenant has no
-adapter configuration. An unknown tenant returns `404` with `{"error": "Tenant not found"}`.
+The response leaves out the GAM refresh token and the Kevel and Triton API keys. It reports
+`has_refresh_token` for GAM and `has_api_key` for Kevel and Triton instead. It returns
+`slack_webhook_url`, `slack_audit_webhook_url`, and `hitl_webhook_url` as stored.
+`adapter_config` is absent when the tenant has no adapter configuration. An unknown tenant
+returns `404` with `{"error": "Tenant not found"}`.
 
 ### Update a tenant
 
@@ -244,7 +250,7 @@ are. You can update the following fields:
 - `name`, `is_active`, `billing_plan`, and `billing_contact`
 - `enable_axe_signals`, `human_review_required`, `auto_approve_format_ids`, and
   `policy_settings`
-- `authorized_emails` and `authorized_domains`, where the new list replaces the stored list
+- `authorized_emails` and `authorized_domains`, where the list in the request replaces the stored list
 - `slack_webhook_url`, `slack_audit_webhook_url`, and `hitl_webhook_url`, where an empty
   value clears the URL
 - `adapter_config`, an object with the adapter fields from the create request
@@ -276,7 +282,9 @@ flag from the JSON body only. A `hard_delete` query parameter has no effect.
 
 ## Inventory Sync API
 
-Every route requires the `X-API-Key` header. The API serves GAM tenants only.
+Every route requires the `X-API-Key` header. `POST /trigger/<tenant_id>` and
+`POST /tenant/<tenant_id>/orders/sync` refuse a tenant that does not use GAM. The read
+routes return what is stored for the ID that you send.
 
 The following table lists the routes.
 
@@ -297,8 +305,7 @@ On an unexpected error, a route returns `500` with `{"error": "<exception text>"
 ### Run an inventory sync
 
 `POST /trigger/<tenant_id>` runs the sync inside the request and answers when the sync ends.
-A large network takes minutes, so give the client a long timeout. The scheduled job allows
-300 seconds.
+Give the client a long timeout. The scheduled job allows 300 seconds.
 
 ```bash
 curl -X POST "https://sales-agent.example.com/api/sync/trigger/tenant_1a2b3c4d" \
@@ -307,6 +314,7 @@ curl -X POST "https://sales-agent.example.com/api/sync/trigger/tenant_1a2b3c4d" 
   -d '{"sync_type": "full"}'
 ```
 
+Send a JSON body with `Content-Type: application/json`. An empty object, `{}`, is enough.
 The following table lists the body fields. Every field is optional.
 
 | Field | Default | Meaning |
@@ -314,7 +322,7 @@ The following table lists the body fields. Every field is optional.
 | `sync_type` | `"full"` | `full`, `inventory`, `targeting`, or `selective`. The handler runs the same inventory sync for `inventory` and `targeting`. |
 | `force` | `false` | Run the sync even when the tenant has a sync job from the current UTC day |
 | `sync_types` | `[]` | For `selective`: any of `ad_units`, `placements`, `labels`, `custom_targeting`, and `audience_segments` |
-| `custom_targeting_limit` | `1000` | The largest number of values to read per custom targeting key |
+| `custom_targeting_limit` | `1000` | For `selective`, the largest number of values to read per custom targeting key. A `full` sync reads the keys without values. For `inventory` and `targeting`, the sync reads values, at most 1000 per key, unless the field is `0` or `null`. |
 | `audience_segment_limit` | none | For `selective`: the largest number of audience segments to read |
 
 Without `force`, the handler looks for a sync job of the tenant that started since 00:00 UTC
@@ -328,7 +336,8 @@ and is running or completed. The following table lists every response.
 | `400` | `{"error": "Only Google Ad Manager sync is currently supported"}` | The tenant uses another adapter |
 | `400` | `{"error": "Adapter not configured"}` | The tenant has no adapter configuration |
 | `404` | `{"error": "Tenant not found"}` | No tenant has that ID |
-| `500` | `{"sync_id": ..., "status": "failed", "error": ...}` | The sync failed. A `selective` request with no `sync_types` also ends here. |
+| `500` | `{"sync_id": ..., "status": "failed", "error": ...}` | The sync failed. A `selective` request with no `sync_types`, or an unknown `sync_type`, also ends here. |
+| `500` | `{"error": "<parser message>"}` | The request has no JSON body |
 
 A caller that polls should treat the second `200` as "nothing ran". Check for the `message`
 field before reading the summary.
@@ -339,31 +348,38 @@ field before reading the summary.
 
 ```json
 {
-  "sync_id": "sync_tenant_1a2b3c4d_1893456000",
+  "sync_id": "sync_tenant_1a2b3c4d_full_1894701600",
   "tenant_id": "tenant_1a2b3c4d",
   "adapter_type": "google_ad_manager",
   "sync_type": "full",
   "status": "completed",
   "started_at": "2030-01-15T10:00:00+00:00",
   "triggered_by": "api",
-  "triggered_by_id": "tenant_management_api",
+  "triggered_by_id": "api_sync",
   "completed_at": "2030-01-15T10:04:10+00:00",
   "duration_seconds": 250.0,
   "summary": {}
 }
 ```
 
-`status` is `pending`, `running`, `completed`, or `failed`. The response has `completed_at`,
-`duration_seconds`, and `summary` after the job ends, and `error` when the job failed. An
-unknown ID returns `404` with `{"error": "Sync job not found"}`.
+`status` is `pending`, `running`, `completed`, or `failed`. The response has `completed_at`
+and `duration_seconds` after the job ends. It has `summary` when the job stored one, as a
+completed job does, and `error` when the job failed. An unknown ID returns `404` with
+`{"error": "Sync job not found"}`.
+
+The trigger route also writes a record of its own, `sync_<tenant_id>_<timestamp>`, with
+`triggered_by_id` set to `tenant_management_api`. The record stays `pending` when the sync
+succeeds and becomes `failed` when the sync fails. The `sync_id` in a successful trigger
+response names the job that ran, such as `sync_<tenant_id>_full_<timestamp>`.
 
 `GET /history/<tenant_id>` lists a tenant's jobs, newest first. It takes the query
 parameters `limit` (default `10`), `offset` (default `0`), and `status`. The response is
 `{"total": ..., "limit": ..., "offset": ..., "results": [...]}`, where each result has the
 fields of a job without `tenant_id` and `adapter_type`.
 
-Both routes also return the jobs that the Admin UI starts. You can use them to watch a sync
-that an operator started from the **Inventory** page.
+Both routes also return the jobs that the Admin UI starts. You can use them to watch an Admin
+UI sync, such as one that an operator starts from the **Inventory** section of the settings
+page.
 
 ### List tenants and statistics
 
@@ -380,7 +396,7 @@ that an operator started from the **Inventory** page.
       "has_adapter_config": true,
       "gam_network_code": "123456",
       "last_sync": {
-        "sync_id": "sync_tenant_1a2b3c4d_1893456000",
+        "sync_id": "sync_tenant_1a2b3c4d_full_1894701600",
         "completed_at": "2030-01-15T10:04:10+00:00",
         "summary": {}
       }
@@ -395,7 +411,8 @@ that an operator started from the **Inventory** page.
 
 - `status_counts` has the number of jobs per status that started since 00:00 UTC.
 - `recent_failures` has up to five failed jobs from the same period.
-- `stale_tenants` lists the GAM tenants with no completed job in the last day.
+- `stale_tenants` lists the GAM tenants that have no completed job, or whose newest completed
+  job finished two or more days ago.
 - `since` is the start of the period.
 
 ### Sync and read orders
@@ -425,10 +442,10 @@ with `{"error": "Order not found"}`.
 ## The scheduled inventory sync
 
 The container runs `scripts/ops/sync_all_tenants.py` on a schedule, every six hours and once
-more at 07:00 UTC, unless `SKIP_CRON` is set. The schedule is in the `crontab` file at the
+more at 07:00 UTC, unless `SKIP_CRON` is true. The schedule is in the `crontab` file at the
 repository root. The script calls `POST /api/sync/trigger/<tenant_id>` with
-`{"sync_type": "full"}` for every active GAM tenant that has a network code and an OAuth
-refresh token. It skips a tenant that connects to GAM with a service account.
+`{"sync_type": "full"}` for every active GAM tenant that has a network code and a stored
+OAuth refresh token. It skips every other tenant.
 
 The script does not send `force`. A run that follows another completed sync on the same UTC
 day therefore gets the "Recent sync exists" response and changes nothing.

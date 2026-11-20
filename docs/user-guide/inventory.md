@@ -2,7 +2,7 @@
 
 For a tenant that uses Google Ad Manager (GAM), the sales agent keeps a copy of the ad
 server's inventory. The copy holds ad units, placements, labels, targeting keys, and
-audience segments.
+first-party audience segments.
 Products and inventory profiles point at that copy. This page explains how to sync the
 copy, how to browse it, and how to group inventory into reusable profiles.
 
@@ -30,7 +30,7 @@ flowchart LR
     PRODUCT --> BUY
 ```
 
-A product names its inventory in one of two ways: it selects ad units and placements
+A product names its inventory in one of two ways. It selects ad units and placements
 itself, or it links to an inventory profile that selects them.
 
 ## Sync inventory
@@ -47,14 +47,19 @@ To sync inventory, do the following:
 
 1. Open **Settings** and select the **Inventory** section.
 1. Click one of the sync buttons:
-   - **Incremental Sync** reads only the items that changed since the last completed sync.
-     The button is unavailable until one sync has completed.
-   - **Full Reset** deletes the stored inventory of the tenant and reads everything again.
-1. Wait while the page shows **Sync in progress**. The page checks the status every two
+   - **Incremental Sync** reads the ad units and placements that changed since the start of
+     the last completed sync. It reads all labels, custom targeting keys, and audience
+     segments again. The button is unavailable while the tenant has no stored inventory or
+     while a sync runs.
+   - **Full Reset** deletes the stored inventory of the tenant and reads every item type from
+     GAM again.
+1. Wait while the button that you clicked shows **Syncing (Incremental)** or
+   **Syncing (Full Reset)**, and then the current phase. The page checks the status every two
    seconds and reports when the sync ends.
 
-The sync runs in the background, so you can leave the page. Only one sync runs per tenant at
-a time. A second request is refused while the first one runs.
+The sync runs in the background, so you can leave the page. If you open the page while a sync
+runs, the page shows **Sync in progress**. Only one sync runs per tenant at a time. A second
+request is refused while the first one runs.
 
 Use **Incremental Sync** for routine updates. Use **Full Reset** when the stored inventory
 is wrong, for example after a large reorganization in GAM. A full reset takes longer, and
@@ -66,16 +71,18 @@ When an incremental sync finds no earlier completed sync, it runs as a full sync
 
 A sync reads the following from GAM, in this order:
 
-1. Ad units
-1. Placements
+1. Ad units, except archived ones
+1. Placements, except archived ones
 1. Labels
 1. Custom targeting keys
-1. Audience segments
+1. First-party audience segments
 
 A sync does not read the values of custom targeting keys. The targeting browser reads the
 values of a key from GAM when you open the key.
 
-After a full sync, an item that GAM no longer returns is marked stale.
+A full sync from the Admin UI deletes the stored inventory before it reads GAM, so an item
+that GAM no longer returns disappears. The scheduled sync does not delete first. It marks each
+stored item that it did not read as stale, except ad units.
 
 ### Read the sync status
 
@@ -89,8 +96,9 @@ If the status stays at **Sync in progress** long after a sync should have ended,
 **Reset Stuck Sync**. The sales agent marks the running job as failed, and you can start
 another sync.
 
-The sales agent also fails a job by itself when the job has run for more than one hour with
-no progress. It does this check when the next sync starts.
+When an Admin UI sync starts, the sales agent fails a running job that started more than one
+hour earlier and has no recorded progress. The Admin UI records progress for each job that it
+starts, so this check never fails such a job. Use **Reset Stuck Sync** instead.
 
 ### Scheduled sync
 
@@ -100,7 +108,8 @@ hours and once more at 07:00 UTC. The schedule has the following limits:
 - It needs the `SYNC_API_KEY` environment variable.
 - It covers only a tenant that connects to GAM with OAuth. A tenant that uses a service
   account is skipped, so sync it from the Admin UI.
-- A scheduled run does nothing when the tenant already completed a sync on the same UTC day.
+- A scheduled run skips a tenant when any of its syncs started that UTC day and has completed
+  or is still running.
 
 [Tenant Management API and Inventory Sync API](../operations/admin-apis.md#the-scheduled-inventory-sync)
 describes the schedule for the people who operate the deployment.
@@ -117,13 +126,12 @@ In the **Inventory** section of the settings page, click **Browse Inventory**. T
 The **Browse Inventory** tab has the following parts:
 
 - **Inventory Status** shows the time of the last sync.
-- **Quick Stats** counts the stored ad units, placements, labels, targeting keys, and
-  audience segments.
+- **Quick Stats** counts the active items of each type. For ad units, it counts only the
+  top-level ad units at the root of the tree.
 - **Search Inventory** filters by name or path, by type, and by status.
 - **Ad Unit Hierarchy** shows the ad units as a tree. The tree loads the children of an ad
   unit when you expand it, and it shows active ad units only.
-- **Inventory Details & Selection** shows the items you selected. Click **Create Profile**
-  to start an inventory profile from the selection.
+- **Inventory Details & Selection** shows the items that you selected.
 
 The tab also has two sync buttons, and each behaves differently from its label:
 
@@ -173,24 +181,31 @@ inventory, formats, and properties.
 
 To create a profile, do the following:
 
-1. On the **Inventory Profiles** tab, click **Create Your First Profile**, or select
-   inventory on the **Browse Inventory** tab and click **Create Profile**.
+1. On the **Inventory Profiles** tab, click **Create Profile** at the top of the page. When
+   no profile exists, you can also click **Create Your First Profile**.
 1. Under **Profile Information**, enter a name and, optionally, a description.
 1. Under **Inventory (Ad Units & Placements)**, select the ad units and placements.
-1. Under **Creative Formats**, select at least one format.
+1. Under **Creative Formats**, enter at least one format declaration as a JSON array in
+   **Canonical format declarations (`format_options`)**.
 1. Under **Authorized Properties**, select **All Authorized Properties** or
    **Select Specific Properties**.
 1. Click **Save Profile**.
 
 The sales agent refuses a profile and shows the reason in the following cases:
 
-- The name is empty: **Profile name is required**.
-- No format is selected: **At least one canonical format declaration (format_options) is
-  required**.
-- The property selection names a property or a tag that no publisher authorizes. The
-  messages are the same as on the product form.
-- The publishers changed while the form was open: **The publishers of this profile changed
-  since this page was opened. Reload the page and save your changes again.**
+- The name holds only spaces: **Profile name is required**. The browser does not submit an
+  empty name.
+- The format declarations are an empty JSON array: **At least one canonical format
+  declaration (format_options) is required**. If the box is empty, the editor shows an alert
+  and sends nothing.
+- A format declaration is not valid, or it names a publisher's format option that does not
+  resolve for the selected properties. The message names the problem.
+- The property selection names something that the sales agent does not sell as written:
+  **Not authorized publisher selections:** followed by the publisher domains. For a case that
+  affects authorized properties, see [Limitations](#limitations).
+- Another profile has the same profile ID: **Inventory profile with ID '`<profile_id>`'
+  already exists**. If you leave **Profile ID** empty, the sales agent builds the ID from the
+  name.
 
 The profile editor offers only properties that a publisher authorizes at that moment. Add
 the publishers first. See [Publishers and authorized properties](publishers.md).
@@ -199,11 +214,21 @@ the publishers first. See [Publishers and authorized properties](publishers.md).
 
 On the card of the profile, click **Edit**, change the fields, and click **Save Profile**.
 
-When products use the profile, the confirmation says how many, and it reminds you that the
-change affects the media buys created afterward.
+The sales agent checks every linked product that sells properties of more than one publisher
+and has no placements. It refuses the edit when the profile declares a format option scoped
+to one publisher, which is an option that names a `publisher_domain`. To fix it, declare such
+an option without `publisher_domain`, or give the product placements with publisher-scoped
+identities.
 
-The sales agent refuses an edit that leaves a linked product with no format that all of the
-product's sources accept. Change the product first, or keep a shared format in the profile.
+A profile also has a standalone edit page, at
+`/tenant/<tenant_id>/inventory-profiles/<profile_id>/edit`. After a save there, the page
+confirms the save. When products use the profile, the confirmation says how many and reminds
+you that the change affects the media buys created afterward. The editor on the
+**Inventory Profiles** tab reloads the page after a save and shows no confirmation.
+
+The standalone edit page refuses a save when the profile's property selection changed after
+you opened the page. The message is **The publishers of this profile changed since this page
+was opened. Reload the page and save your changes again.**
 
 ### Delete a profile
 
@@ -227,6 +252,19 @@ product then takes its inventory, formats, and properties from the profile. See
   do not open a picker. Use the editor on the **Inventory Profiles** tab.
 - On the **Browse Inventory** tab, the status filter **All Status** shows active items
   only.
+- On the **Browse Inventory** tab, **Create Profile** opens the profile editor titled
+  **Edit Inventory Profile** without the selected items. A save from that editor fails with
+  HTTP status `404`.
+- The editor on the **Inventory Profiles** tab opens every profile in
+  **All Authorized Properties** mode, whatever the profile stores. If you save without
+  changing the mode, the save replaces the profile's property selection with every authorized
+  property.
+- The editor on the **Inventory Profiles** tab sends each property's identifier values in
+  place of its property ID. As a result, the sales agent refuses a property that has tags and
+  only domain identifiers, even when the publisher authorizes it. In
+  **All Authorized Properties** mode, one such authorized property makes the save fail.
+- In **Select Specific Properties** mode, a property that has no tags and only domain
+  identifiers becomes a selection of every property of its publisher.
 
 ## Related documentation
 

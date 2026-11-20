@@ -40,19 +40,19 @@ in the same section concerns media buys and does not change creative review.
 ## AI-powered review
 
 In **AI-powered review** mode, the sales agent runs an AI review after each upload. The
-review needs both of these settings:
+review needs review criteria, which you enter in the **AI Review Criteria** field under
+**Creative Review**.
 
-- An AI provider with an API key, under **Settings > Integrations > AI Services**.
-- Review criteria, in the **AI Review Criteria** field under **Creative Review**.
-
-The AI review runs on the tenant's AI provider. When the tenant sets no AI provider, the
-review uses the deployment's AI key, for example `GEMINI_API_KEY`.
+The AI review runs on the AI provider and API key that you set under
+**Settings > Integrations > AI Services**. When the tenant sets no AI provider, the review
+uses the deployment's AI provider and key, for example `GEMINI_API_KEY`.
 
 The AI review ends in one of three results:
 
 - **Approved**: the AI recommends approval with high confidence.
 - **Rejected**: the AI recommends rejection with high confidence.
-- **Pending review**: every other case. The creative waits for a user and shows the AI
+- **Pending review**: every other case. The creative waits for a user. When the AI
+  recommends approval or rejection without high confidence, the creative also shows that
   recommendation.
 
 A creative also stays in pending review in these cases:
@@ -66,10 +66,15 @@ A creative also stays in pending review in these cases:
 
 To open the creative review page, click **Uploaded Creatives** on the tenant dashboard.
 
-The page counts the creatives in each status: **Pending Review**, **Approved**, and
-**Rejected**. Use the tabs to filter the list by status. Each creative shows its name,
-format, advertiser, and the media buys that use it. A creative the AI reviewed also shows
-the AI recommendation, reasoning, and confidence.
+The page shows counts for **Pending Review**, **Approved**, **Rejected**, and
+**Total Creatives**, and tabs that filter the list by status. The **Pending Review** count
+and the **Pending** tab match a status that the sales agent does not assign, so they show no
+creatives. In the **All** tab, a creative that waits for review has a **Pending Review**
+badge.
+
+Each creative shows its name, format, advertiser, and the media buys that use it. After the
+AI review that runs on upload, a creative also shows that review's result, reason, and
+confidence.
 
 The following table lists the actions on a creative.
 
@@ -84,12 +89,14 @@ The following table lists the actions on a creative.
 
 ## Delivery to the ad server
 
-Approval starts delivery in two ways:
+Approving a creative with **Approve** or **Approve Anyway** starts delivery in two ways:
 
 - A media buy that waits for creatives is created in the ad server when you approve its
   last unapproved creative.
 - A media buy that is live in the ad server receives the approved creative. When the push
-  fails, the page reports a warning.
+  fails, the sales agent logs the failure, and the page reports the approval as successful.
+
+An approval by the AI review starts neither.
 
 ## Notifications
 
@@ -101,13 +108,15 @@ The sales agent reports review activity through Slack and webhooks. It sends no 
   **Require human approval** mode, it also gets a notice for each creative that waits for
   review.
 - **Buyer webhook**: A buyer that sends `push_notification_config` with `sync_creatives`
-  gets one webhook call when every creative of that upload has a decision. The call lists
-  each creative and the reason of each rejection.
+  gets one webhook call per creative that waited for review. The call lists that creative.
+  It comes when a user approves the creative, or when the AI review approves or rejects it.
+  A rejection by a user sends no call.
 
 ## Creative formats
 
-Creative agents define the formats that a tenant accepts. A creative names its format, and
-the sales agent checks the creative against it.
+A creative names its format with a canonical `format_kind` from the Ad Context Protocol
+(AdCP) format vocabulary, or with a named format that a creative agent defines. The sales
+agent checks the creative's assets against that format.
 
 To manage creative agents, open **Settings > Integrations**, then click
 **Manage Creative Agents**. The tenant uses the AdCP standard creative agent until you
