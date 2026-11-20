@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -902,17 +903,27 @@ def then_gam_created_creative_at_size(ctx: dict, width: str, height: str) -> Non
     )
 )
 def then_gam_associated_with_size_override(ctx: dict, sizes: str | None) -> None:
-    """One association, of the one creative onto the one line item, whose ``sizes`` are exactly these or none.
+    """One association, of the one creative onto the one line item, carrying exactly these sizes, or none.
 
     Ad Manager API v202602 ``LineItemCreativeAssociation.sizes``: "Overrides the value set for
     Creative.size, which allows the creative to be served to ad units that would otherwise
     not be compatible for its actual size." "At its own size" is an association stating none.
+    The scenarios say the association "carries" its sizes, which is a set: they are compared
+    as a multiset, so a missing, extra or repeated size fails and their order does not. A
+    real network does not keep the order the seller sent. The creative's own size, the
+    first one, is graded by "created that creative at size".
     """
     (creative,) = _creatives_created(ctx)
-    expected_sizes = parse_sizes(sizes or "")
-    held = [(str(a["creativeId"]), str(a["lineItemId"]), list(a.get("sizes") or [])) for a in _licas_created(ctx)]
-    expected = [(str(creative["id"]), str(_line_item_created(ctx)["id"]), expected_sizes)]
+    held = [
+        (str(a["creativeId"]), str(a["lineItemId"]), _size_counts(a.get("sizes") or [])) for a in _licas_created(ctx)
+    ]
+    expected = [(str(creative["id"]), str(_line_item_created(ctx)["id"]), _size_counts(parse_sizes(sizes or "")))]
     assert held == expected, f"expected GAM to hold {expected}; it holds {held}"
+
+
+def _size_counts(sizes: list[Any]) -> Counter[tuple[int, int]]:
+    """Each (width, height) of *sizes*, counted: the sizes as a multiset."""
+    return Counter((int(size["width"]), int(size["height"])) for size in sizes)
 
 
 @then(

@@ -106,7 +106,8 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
 
   # A GAM creative has one size for life. The first size the option declares that a line item
   # placeholder takes is the creative's; the association carries every declared size a
-  # placeholder takes, the creative's own first, because its sizes "override" Creative.size.
+  # placeholder takes, the creative's own among them, because its sizes "override" Creative.size.
+  # The association's sizes are a set: a real network does not keep the order they were sent in.
   # The 160x600 placeholder is no size the option declares, so it is not one.
   @T-UC-002-local-gam-creative-multi-size @extension
   Scenario: A multi-size display_tag creative is created at its first declared size, and its association carries both
@@ -122,7 +123,7 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
   # third-party tags. Pair with `max_width`"). Every placeholder inside them, each bound
   # inclusive, is a size the tag accepts, in the line item's order: 728x90 sits on the width and
   # height bounds, 300x250 on the others, and 160x600 is outside. The association carries both,
-  # the creative's own size first.
+  # the creative's own size among them.
   @T-UC-002-local-gam-creative-responsive-size @extension
   Scenario: A responsive display_tag creative is created at the first placeholder inside its bounds, and its association carries every one
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_responsive", "params": {"min_width": 300, "max_width": 728, "min_height": 90, "max_height": 250, "supported_delivery_types": ["tag_url"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}]}', with product settings '{"creative_placeholders": [{"width": 160, "height": 600}, {"width": 728, "height": 90}, {"width": 300, "height": 250}]}'
@@ -135,7 +136,7 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
 
   # An option stating no size mode "accepts any dimensions": every placeholder of the line item
   # is a size the tag accepts, the first one the creative's own, and the association carries
-  # them all in the line item's order.
+  # them all.
   @T-UC-002-local-gam-creative-any-size @extension
   Scenario: A display_tag creative whose option states no size is created at the line item's first placeholder, and its association carries every placeholder
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_any", "params": {"supported_delivery_types": ["tag_url"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}]}', with product settings '{"creative_placeholders": [{"width": 300, "height": 600}, {"width": 728, "height": 90}]}'
