@@ -482,8 +482,8 @@ def validate_gam_user_response(user):
     return True, None
 
 
-def get_custom_targeting_mappings(tenant_id=None):
-    """Get custom targeting key and value mappings for a tenant.
+def get_custom_targeting_mappings():
+    """Get the custom targeting key and value mappings.
 
     Returns tuple of (key_mappings, value_mappings) dicts.
     """
@@ -501,25 +501,15 @@ def get_custom_targeting_mappings(tenant_id=None):
         "448946353802": "video",
     }
 
-    if tenant_id:
-        with get_db_session() as db_session:
-            stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-            tenant = db_session.scalars(stmt).first()
-            # TODO: Custom targeting mappings should be stored in a dedicated table or column
-            # For now, return default mappings
-            if tenant:
-                pass  # Could override with tenant-specific mappings
-
     return key_mappings, value_mappings
 
 
-def translate_custom_targeting(custom_targeting_node, tenant_id=None):
+def translate_custom_targeting(custom_targeting_node):
     """Translate GAM custom targeting structure to readable format."""
     if not custom_targeting_node:
         return None
 
-    # Get mappings (could be tenant-specific in future)
-    key_mappings, value_mappings = get_custom_targeting_mappings(tenant_id)
+    key_mappings, value_mappings = get_custom_targeting_mappings()
 
     def translate_node(node):
         if not node:

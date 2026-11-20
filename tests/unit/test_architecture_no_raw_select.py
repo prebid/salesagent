@@ -75,9 +75,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/gam_reporting_api.py", "get_principal_summary"),
     ("src/adapters/google_ad_manager.py", "create_media_buy"),
     ("src/adapters/google_ad_manager.py", "get_packages_snapshot"),
-    ("src/adapters/mock_ad_server.py", "mock_product_config"),
-    ("src/adapters/mock_ad_server.py", "register_ui_routes"),
-    ("src/adapters/mock_ad_server.py", "wrapped_view"),
     ("src/adapters/xandr.py", "_create_human_task"),
     # ── Admin app ──
     ("src/admin/app.py", "create_app"),
@@ -228,7 +225,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/tenant_management_api.py", "update_tenant"),
     ("src/admin/utils/helpers.py", "decorated_function"),
     ("src/admin/utils/helpers.py", "decorator"),
-    ("src/admin/utils/helpers.py", "get_custom_targeting_mappings"),
     ("src/admin/utils/helpers.py", "get_tenant_config_from_db"),
     ("src/admin/utils/helpers.py", "is_super_admin"),
     ("src/admin/utils/helpers.py", "is_tenant_admin"),
