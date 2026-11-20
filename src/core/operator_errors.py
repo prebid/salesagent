@@ -20,6 +20,8 @@ wrapper lives in ``src.admin.utils.operator_errors``.
 
 import logging
 import secrets
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import ClassVar
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -64,3 +66,19 @@ def safe_error_message(e: BaseException, context: str | None = None) -> str:
         context = DB_ERROR_OPERATOR_MESSAGE if isinstance(e, SQLAlchemyError) else GENERIC_OPERATOR_MESSAGE
     logger.error("%s (reference %s)", context, reference, exc_info=e)
     return f"{context}. The details have been logged (reference {reference})."
+
+
+@contextmanager
+def best_effort(context: str) -> Iterator[None]:
+    """Run a step whose failure must not fail its caller, and log the failure once under a reference.
+
+    The one catch-all the admin app has: a side effect (a Slack notice, an audit row, a
+    dashboard tile) or a fallback that keeps a page rendering. A caller that needs a value
+    sets its default before the block. Anything a caller expects to fail in a known way is
+    caught by its type instead, and anything that should fail the request is left to the
+    admin app's error handler.
+    """
+    try:
+        yield
+    except Exception as e:  # noqa: BLE001 - the one sanctioned catch-all; logged with its traceback
+        safe_error_message(e, context)
