@@ -50,10 +50,13 @@ uv run python scripts/generate_encryption_key.py
 
 ### 2. Configure Environment
 
-Add the generated key to `.env.secrets`:
+Add the generated key to the file your compose file reads: `.env` for `docker-compose.yml`
+(the local stack), or `.env.secrets` for `docker-compose.multi-tenant.yml`. See
+[Which file holds secrets](security.md#which-file-holds-secrets). In production, set it
+through your platform's secret store.
 
 ```bash
-# .env.secrets
+# .env
 ENCRYPTION_KEY=RQhloVU0vooMBdE1d-TvFT5P3JC5dOwt7FPyWiyJbjQ=
 ```
 
@@ -167,9 +170,9 @@ The downgrade:
 
 ### Encryption Key Storage
 
-- **Environment Variable**: Store `ENCRYPTION_KEY` in `.env.secrets` (not `.env`)
+- **Environment Variable**: Set `ENCRYPTION_KEY` in the file your compose file reads (see [Which file holds secrets](security.md#which-file-holds-secrets))
 - **Secrets Manager**: Use cloud secrets manager in production (AWS Secrets Manager, GCP Secret Manager, Azure Key Vault)
-- **Never Commit**: Add `.env.secrets` to `.gitignore`
+- **Never Commit**: `.env` and `.env.secrets` are both in `.gitignore`; keep it that way
 - **Backup**: Store backup in secure offline location
 
 ### Key Rotation
@@ -183,7 +186,7 @@ To rotate encryption keys (future implementation):
    export ENCRYPTION_KEY=<new-key>
    ```
 3. Run rotation script: `python scripts/rotate_encryption_key.py` (to be implemented)
-4. Update `.env.secrets` with new key
+4. Update the environment (`.env`, or your secret store) with the new key
 5. Remove old key from environment
 
 ### Access Control
@@ -258,15 +261,15 @@ Test coverage:
 
 **Solution**:
 1. Generate key: `python scripts/generate_encryption_key.py`
-2. Add to `.env.secrets`: `ENCRYPTION_KEY=<key>`
-3. Restart application
+2. Add `ENCRYPTION_KEY=<key>` to `.env` (`.env.secrets` only with `docker-compose.multi-tenant.yml`)
+3. Recreate the containers: `docker compose up -d --force-recreate`
 
 ### "Invalid encrypted data or wrong encryption key"
 
 **Cause**: Trying to decrypt with wrong encryption key.
 
 **Solutions**:
-1. Check `.env.secrets` has correct key
+1. Check that the environment holds the original key: `docker compose exec adcp-server printenv ENCRYPTION_KEY`
 2. Verify key hasn't been changed since encryption
 3. Check key rotation hasn't left some keys encrypted with old key
 4. If keys are corrupted, you may need to re-enter them manually

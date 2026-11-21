@@ -72,7 +72,7 @@ Three details deserve attention:
   the same string the tenant's `brand.json` carries, and never a host from a
   request header — every header is caller-supplied, so `Host: evil.example.com`
   would come back as `supportedInterfaces[0].url`. A `Host` that routes to no
-  tenant is REFUSED — `CONFIGURATION_ERROR`, recovery `terminal`, no card: a card
+  tenant is REFUSED — `TENANT_UNDEFINED` (HTTP 421), recovery `terminal`, no card: a card
   states a tenant's stored identity, so with no tenant there is nothing truthful
   to publish (`tests/e2e/test_a2a_endpoints_working.py:219` pins the refusal).
 
@@ -417,7 +417,7 @@ flowchart TD
     hdrs["Request headers"] --> token["1. Authorization: Bearer"]
     token --> missing{"credential present?"}
     missing -->|"no, row requires one"| am["AdCPAuthRequiredError (AUTH_MISSING)"]
-    missing -->|"otherwise"| tenant["3. Tenant: Host → x-adcp-tenant\nneither → CONFIGURATION_ERROR\nTenantContext.load"]
+    missing -->|"otherwise"| tenant["3. Tenant: Host → x-adcp-tenant\nneither → TENANT_UNDEFINED\nTenantContext.load"]
     tenant --> policy{"3b. seller's brand policy\nrequires a caller?"}
     policy -->|"yes, and nothing presented"| am
     policy -->|"no"| principal["4. Principal inside that tenant\n(get_principal_from_token)"]

@@ -58,7 +58,8 @@ cd salesagent
 # 2. Install Python dependencies
 uv sync
 
-# 3. Create .env (optional — defaults work for development)
+# 3. Create .env. Sign-in needs an OAuth client and SUPER_ADMIN_EMAILS in it:
+#    see docs/quickstart.md steps 2-3
 cp .env.template .env
 
 # 4. Install pre-commit hooks
@@ -188,7 +189,7 @@ The `.env` file is created from `.env.template` during setup. Key variables:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `CREATE_DEMO_TENANT` | `false` | Creates sample data on first startup |
+| `CREATE_DEMO_TENANT` | `false` | No effect with `docker-compose.yml`; see [About `CREATE_DEMO_TENANT`](../quickstart.md#about-create_demo_tenant) |
 | `ENVIRONMENT` | `development` | `development` = strict validation, `production` = lenient |
 | `CONDUCTOR_PORT` | `8000` | Nginx proxy port |
 

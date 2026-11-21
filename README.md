@@ -34,32 +34,18 @@ and for the bump procedure. The pin is enforced by a CI guard
 | I want to... | Start here |
 |--------------|------------|
 | **Deploy my own sales agent** (publisher) | [Quickstart Guide](docs/quickstart.md) |
-| **Evaluate or develop locally** | [Quick Start](#quick-start-evaluation) below |
+| **Evaluate locally** | [Quickstart Guide](docs/quickstart.md) |
+| **Develop the sales agent** | [Getting Started](docs/development/GETTING_STARTED.md) |
 | **Run a multi-tenant platform** | [Deployment Guide](docs/deployment/multi-tenant.md) |
 
 ---
 
-## Quick Start (Evaluation)
+## Quick Start
 
-Try the sales agent locally:
-
-```bash
-# Clone and start
-git clone https://github.com/prebid/salesagent.git
-cd salesagent
-docker compose up -d
-
-# Test the MCP interface
-uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
-uvx adcp http://localhost:8000/mcp/ --auth test-token get_products '{"brief":"video"}'
-```
-
-Access services at http://localhost:8000:
-- **Admin UI:** `/admin` or just click "Log in to Dashboard" (test credentials: `test123`)
-- **MCP Server:** `/mcp/`
-- **A2A Server:** `/a2a`
-
-For production deployment, see the [Quickstart Guide](docs/quickstart.md).
+The [Quickstart Guide](docs/quickstart.md) runs the sales agent locally with Docker Compose,
+from cloning the repository through signing in to the Admin UI and making a first
+`get_products` call from an AI agent. Sign-in is Google OAuth (or another OIDC provider)
+only, so the guide sets up an OAuth client before the first start.
 
 ---
 

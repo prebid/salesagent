@@ -339,7 +339,7 @@ The Prebid Sales Agent is a Python application with the following components:
 - **Admin UI**: Google OAuth secured interface (via nginx at `/admin/` or `/tenant/<name>`)
 - **A2A Server**: python-a2a agent-to-agent communication (via nginx at `/a2a`)
 - **Multi-Tenant**: Database-backed isolation. A request names its tenant in one of two ways, and a
-  request that names neither is refused with `CONFIGURATION_ERROR`: the `Host`, matched against the
+  request that names neither is refused with `TENANT_UNDEFINED` (HTTP 421): the `Host`, matched against the
   `virtual_host` the tenant declares, or an explicit `x-adcp-tenant` header carrying the tenant id.
   Every tenant declares a `virtual_host`; the column refuses `NULL`, and no code derives a host from
   a subdomain.
@@ -352,7 +352,7 @@ The Prebid Sales Agent is a Python application with the following components:
 
 ### Run locally
 Migrations run automatically on container startup. The local-run walkthrough, access points, and
-test login are in [docs/quickstart.md](docs/quickstart.md); MCP client usage and the
+OAuth sign-in setup (there is no password login) are in [docs/quickstart.md](docs/quickstart.md); MCP client usage and the
 `uvx adcp ... list_tools` smoke test are in `.claude/rules/patterns/mcp-patterns.md`.
 
 ### Testing
@@ -444,8 +444,10 @@ Follow these rules:
 
 ## Configuration
 
-Local secrets live in `.env.secrets` (required for a working stack: Gemini, Google OAuth,
-GAM OAuth, super-admin emails, Approximated).
+Local settings and secrets live in `.env` (copied from `.env.template`): `docker-compose.yml`
+reads `.env` only, and does not read `.env.secrets`. A working stack needs the Google OAuth
+client, `SUPER_ADMIN_EMAILS` and `ENCRYPTION_KEY` there; see [docs/quickstart.md](docs/quickstart.md).
+Only `docker-compose.multi-tenant.yml` also reads `.env.secrets`.
 [docs/deployment/environment-variables.md](docs/deployment/environment-variables.md) documents
 every variable — read it before touching credentials or auth configuration.
 

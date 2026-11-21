@@ -44,7 +44,8 @@ Once configured, AI agents connect via MCP:
 ```python
 from fastmcp.client import Client, StreamableHttpTransport
 
-# Get your endpoint and token from Admin UI > Advertisers > View Token
+# The token is shown once, when you create the advertiser (Settings > Advertisers).
+# The server keeps only a hash; if it is lost, rotate it from the advertiser's row.
 transport = StreamableHttpTransport(
     url="https://your-domain.com/mcp/",
     headers={"Authorization": "Bearer your-principal-token"}

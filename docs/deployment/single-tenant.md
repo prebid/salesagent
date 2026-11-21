@@ -84,10 +84,15 @@ Each release publishes a full version tag plus rolling major and major.minor tag
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `CREATE_DEMO_TENANT` | No | Set to `true` for initial setup with demo data |
+| `ENCRYPTION_KEY` | Yes | Fernet key for stored secrets; the image's entrypoint refuses to start without it |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (or the `OAUTH_*` variables) | Yes | The deployment's OAuth client, needed for the first sign-in |
+| `SUPER_ADMIN_EMAILS` | Yes | The accounts that may sign in as super admin |
 | `GEMINI_API_KEY` | No | For AI-powered creative review |
 
-Authentication is configured **per-tenant** in the Admin UI (Users & Access page). No OAuth environment variables are required.
+The Admin UI has no password login, so the first administrator signs in through the
+deployment's OAuth client. Each tenant can then configure its own SSO in the Admin UI (Users
+& Access page). `CREATE_DEMO_TENANT` has no effect in single-tenant mode; see
+[About `CREATE_DEMO_TENANT`](../quickstart.md#about-create_demo_tenant).
 
 For a complete list including GAM integration and all optional settings, see the **[environment variables reference](environment-variables.md)**.
 
@@ -170,16 +175,10 @@ Sign in with the deployment's own OAuth — set `GOOGLE_CLIENT_ID` / `GOOGLE_CLI
 
 See the [SSO setup guide](../user-guide/sso-setup.md) for detailed provider-specific instructions.
 
-### Local testing with demo data
+### Local testing without an ad server
 
-For local development without a real ad server:
-
-```bash
-# Add to .env for local testing only - NOT for production
-CREATE_DEMO_TENANT=true
-```
-
-This creates a "Demo Sales Agent" tenant with a mock adapter, sample currencies, and test data for exploring features.
+The [quickstart](../quickstart.md) runs the stack locally. Its `default` tenant uses the Mock
+adapter, which simulates an ad server.
 
 ## SSO setup
 

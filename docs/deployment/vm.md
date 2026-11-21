@@ -419,7 +419,7 @@ schema in a way the old version cannot read; check `docker compose logs app` fir
 | `app` is healthy but every request returns 502 | The image's nginx did not start. You built an image without #2310; rebuild from a ref that has it. |
 | `list_creative_formats` returns no formats | The app cannot read the creative agent's catalog. With `CREATIVE_AGENT_URL` unset it asks the public agent, whose AdCP 3.2 catalog is rejected (#2274); run the reference agent (step 6). With it set, check `curl https://<apex>/api/creative-agent/health` from the VM, which also proves the VM reaches its own public address. |
 | Admin login fails after the provider redirects back | The redirect URI registered with the provider differs from `GOOGLE_OAUTH_REDIRECT_URI` in `.env`, or the ID token has no `email`. |
-| A tenant answers `CONFIGURATION_ERROR` | The `Host` the request named is not a tenant's host. Check the tenant's **Custom Domain** in the Admin UI. |
+| A tenant answers `TENANT_UNDEFINED` (HTTP 421) | The `Host` the request named is not a tenant's host. Check the tenant's **Custom Domain** in the Admin UI. |
 | A publisher authorizes nothing although its file names the tenant | Open the publisher under **Inventory → Publishers**: its last fetch status says whether the file was not found, unreachable or invalid. A file is fetched at `https://<publisher>/.well-known/adagents.json`, and its entry `url` must name the tenant's agent URL. Fix the file, then **Sync All**. |
 | Seeded sample products show formats no buyer can build | Fixed by #2311 (the seed scripts used format ids the creative agent does not publish). |
 
