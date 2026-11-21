@@ -4,12 +4,12 @@
 normative claims its own documentation makes? Worktree
 `/srv/ws/salesagent/a3-9421-on-1721`, branch `feat/rfc9421-on-1721`.
 
-**Kept current.** The verdicts were first driven at `64c2cfe13`, and every row below
-describes the tree as it stands: where a later change moved a subject, the row moved with it
-rather than being left pointing at code that no longer exists. The subset narrowings
-(`docs/design/request-signing-subset.md`) moved SD-8, SD-9 and the `protocol_methods_*` entry
-under "what I could not verify"; the paragraph on over-cap bodies moved with the `warn`
-bucket's deletion.
+**Dated.** The verdicts were first driven at `64c2cfe13` and kept current while the work was
+in review: where a later change moved a subject, the row moved with it. The page landed
+with #1757 (`3fd31c7d`) and is not maintained past it, so every row describes that tree.
+The subset narrowings (`docs/design/request-signing-subset.md`) moved SD-8, SD-9 and the
+`protocol_methods_*` entry under "what I could not verify"; the paragraph on over-cap bodies
+moved with the `warn` bucket's deletion.
 
 Yardsticks, in the priority the audit was given: `docs/development/request-lifecycle.md`,
 then `docs/development/patterns-reference.md` / `structural-guards.md` /
