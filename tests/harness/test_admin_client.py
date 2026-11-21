@@ -40,7 +40,7 @@ def test_stating_a_session_over_http_replaces_the_cookie_the_server_wrote(state:
         (lambda client: client.state_session(_MEMBER), _MEMBER),
         (
             lambda client: tenant_user_session(client._flask_client, "member@example.com"),
-            {"user": {"email": "member@example.com"}},
+            member_session_payload("member@example.com", auth_method=None),
         ),
     ],
     ids=["state_session", "tenant_user_session"],

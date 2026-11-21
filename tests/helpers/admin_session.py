@@ -10,7 +10,7 @@ writers REPLACE the session the client held:
 What is stated is a payload: a super admin's (:func:`admin_session_payload`) or an ordinary
 member's (:func:`member_session_payload`). :func:`admin_auth_session` and
 :func:`authenticate_http_session` state the super admin's on their transport, and
-:func:`tenant_user_session` states a tenant user by email alone on the Flask client.
+:func:`tenant_user_session` states the member's on the Flask client.
 :func:`no_configured_super_admins` is the other half of stating a member: it keeps the
 deployment's own configuration from promoting that member.
 
@@ -69,21 +69,29 @@ def admin_session_payload(tenant_id: str, *, auth_method: str | None = None) -> 
     return payload
 
 
-def member_session_payload(email: str, tenant_id: str) -> dict[str, Any]:
-    """The session an OIDC login writes for a caller who is NOT a super admin.
+def member_session_payload(
+    email: str, tenant_id: str | None = None, *, auth_method: str | None = "oidc"
+) -> dict[str, Any]:
+    """The session a login writes for a caller who is NOT a super admin.
 
-    The keys ``callback`` writes under "Create session" in ``src/admin/blueprints/oidc.py``,
-    with ``user`` a bare email as it is there. No ``test_user`` key, so
-    ``require_tenant_access`` takes its real branch: the caller's ``User`` row in the
-    requested tenant is the only thing that decides the outcome.
+    ``user`` is a bare email, as both production logins write it: ``callback`` in
+    ``src/admin/blueprints/oidc.py`` and ``google_callback`` in
+    ``src/admin/blueprints/auth.py``. No ``test_user`` key, so ``require_tenant_access``
+    takes its real branch: the caller's ``User`` row in the requested tenant is the only
+    thing that decides the outcome.
+
+    The default is the OIDC login, which also records ``authenticated`` and
+    ``auth_method``. Pass ``auth_method=None`` for a login that records neither, as the
+    Google one does. *tenant_id* is the tenant the login was made against; leave it out
+    for a session that names none.
     """
-    return {
-        "user": email,
-        "user_name": email,
-        "tenant_id": tenant_id,
-        "authenticated": True,
-        "auth_method": "oidc",
-    }
+    payload: dict[str, Any] = {"user": email, "user_name": email}
+    if tenant_id is not None:
+        payload["tenant_id"] = tenant_id
+    if auth_method is not None:
+        payload["authenticated"] = True
+        payload["auth_method"] = auth_method
+    return payload
 
 
 def admin_session_cookie(tenant_id: str, *, auth_method: str | None = None, secret_key: str | None = None) -> str:
@@ -212,16 +220,14 @@ def state_flask_session(client: FlaskClient, payload: dict[str, Any]) -> None:
 def tenant_user_session(client: Any, email: str, *, auth_method: str | None = None) -> None:
     """Sign a Flask test client in as the ordinary tenant user *email*.
 
-    Only ``session["user"]``: none of the super-admin or test-mode keys
-    :func:`admin_auth_session` writes, so ``require_tenant_access`` looks up the user's
-    ``User`` row and applies its role. Use it to test what a tenant user may and may not
-    do; a super admin passes every check and proves nothing there. Pass
-    ``auth_method='oidc'`` for routes that require an SSO sign-in.
+    The member payload with no tenant (:func:`member_session_payload`): none of the
+    super-admin or test-mode keys :func:`admin_auth_session` writes, so
+    ``require_tenant_access`` looks up the user's ``User`` row and applies its role. Use
+    it to test what a tenant user may and may not do; a super admin passes every check
+    and proves nothing there. Pass ``auth_method='oidc'`` for routes that require an SSO
+    sign-in.
     """
-    payload: dict[str, Any] = {"user": {"email": email}}
-    if auth_method is not None:
-        payload["auth_method"] = auth_method
-    state_flask_session(client, payload)
+    state_flask_session(client, member_session_payload(email, auth_method=auth_method))
 
 
 def admin_auth_session(client: FlaskClient, tenant_id: str, *, auth_method: str | None = None) -> None:
