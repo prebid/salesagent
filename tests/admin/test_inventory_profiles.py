@@ -17,6 +17,7 @@ from src.core.database.models import InventoryProfile, Tenant
 from src.core.operator_errors import InvalidFormInput
 from tests.factories import InventoryProfileFactory, TenantFactory
 from tests.factories.publisher import authorize_publishers
+from tests.harness.admin_client import BROWSER_PAGE_HEADERS
 from tests.helpers import concurrent_commit_in_write_window, operator_answer
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -72,8 +73,13 @@ def test_tenant(integration_db):
 
 _ADD_PATH = f"/tenant/{_TENANT_ID}/inventory-profiles/add"
 
-#: The ``Referer`` a browser sends from the add page, the page a refusal goes back to.
-_FROM_THE_ADD_PAGE = {"Referer": f"http://localhost{_ADD_PATH}"}
+
+def _browser_post_from(path: str) -> dict[str, str]:
+    """The headers a browser sends posting the form on *path*: it asks for a page, and the refusal goes back there."""
+    return {**BROWSER_PAGE_HEADERS, "Referer": f"http://localhost{path}"}
+
+
+_FROM_THE_ADD_PAGE = _browser_post_from(_ADD_PATH)
 
 
 def _auth_session(client, tenant_id):
@@ -350,7 +356,7 @@ class TestAddInventoryProfileDuplicateId:
         def post_add():
             # From the add page, as a browser posts it: the refusal goes back there.
             return client.post(
-                add_path, data=self._form(), headers={"Referer": f"http://localhost{add_path}"}, follow_redirects=False
+                add_path, data=self._form(), headers=_browser_post_from(add_path), follow_redirects=False
             )
 
         def commit_conflicting_row():
