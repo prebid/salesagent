@@ -13,23 +13,7 @@ This guide surfaces the repository-specific rules for the Prebid Sales Agent cod
 - **Database changes**: Reach the data through a repository inside a Unit of Work → Use `JSONType` for JSON columns → Create migration with `alembic revision`
 - **Any feature or bug fix**: TDD — the failing test comes first, and every change is gated by `make quality` (full cycles in `.claude/rules/workflows/tdd-workflow.md` and `bug-reporting.md`)
 - **Refactorings**: additionally run `tox -e integration` and verify imports with `uv run python -c "from module import thing"` — pre-commit hooks can't catch import errors
-
-### Scope and reviewability (for agents authoring or reviewing changes)
-
-Keep each pull request focused on one user-visible behavior, bug, or clearly bounded maintenance outcome. Before editing, state the requested outcome and the files or behaviors needed to achieve it. Make the smallest coherent change that satisfies it.
-
-- Do not bundle unrelated cleanup, broad refactors, new architecture guards, or fixes discovered nearby. If they are not required for this outcome, report them as follow-up suggestions and, when appropriate, propose a separate issue.
-- A pre-existing issue in a file touched by the change does not automatically become part of the change. Expand scope only when leaving it would make the requested change incorrect, unsafe, or impossible to review.
-- Split independent work when each part can be reviewed and merged on its own. Keep tightly coupled changes together; do not split only to reduce the line count.
-- In a review, assess the changed behavior and the code it depends on. Distinguish regressions introduced by the change from pre-existing defects. Do not make unrelated findings merge blockers.
-- Label each review finding as one of:
-  - **Must fix** — a demonstrated correctness, security, data-loss, or compatibility problem introduced by the change, or a required project invariant it violates.
-  - **In-scope improvement** — directly improves the requested outcome and should be addressed in this pull request.
-  - **Follow-up** — valid but independent work; suggest a separate issue or pull request.
-  - **Optional** — a preference or cleanup that is not needed for correctness or the requested outcome.
-- For each must-fix or in-scope finding, identify the changed line or behavior, explain the concrete impact, and give a focused remedy when possible. Mark uncertain or unverified concerns as questions to investigate, not established defects.
-- Group related findings into one actionable comment. Avoid repeating the same concern in an overall review and multiple inline comments.
-- Do not ask authors to add tests, abstractions, guards, or documentation for hypothetical cases unless they protect a real contract or a risk relevant to this change. Existing project invariants still apply.
+- **Scope and review**: one outcome per pull request; a review grades what the change writes or touches and files the rest as follow-up issues ([engineering-standards.md § Keep the change to that outcome](docs/development/engineering-standards.md#keep-the-change-to-that-outcome), [§ Review the change](docs/development/engineering-standards.md#review-the-change))
 
 ### Key files to know
 - `src/core/main.py` — MCP server and tool registration
@@ -45,7 +29,7 @@ Keep each pull request focused on one user-visible behavior, bug, or clearly bou
 
 **DRY is a correctness requirement, equivalent to type safety or test integrity — not "premature optimization," and not "refactoring beyond what was asked."**
 
-- When this change introduces a second copy of the same logical operation, extract a shared helper if that is the smallest clear fix. Do not expand a focused change to refactor pre-existing duplicates elsewhere unless those copies make this change incorrect or the refactor is separately requested.
+- If you write a block of logic that is structurally similar to a block already in the codebase (same pattern, different variables), you **MUST** extract a shared helper function. Pre-existing duplicates elsewhere are paid down through `.duplication-baseline`, not folded into an unrelated change.
 - If you are asked to refactor duplicated code, that is a **bug fix**, not an "improvement"
 - **NEVER** cite "avoid over-engineering" or "keep it simple" to justify leaving duplicated logic in place
 - Duplicated code is a defect. It means the next person who fixes a bug in one copy misses the other copy, and it has caused real bugs in this codebase
