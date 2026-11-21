@@ -72,16 +72,23 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
 
   # GAM is asked again when the assignment is sent again: that it holds the creative from
   # another package does not place the creative on this one. The line item takes 728x90 only,
-  # and what the refusal is depends on what the package's product accepts (AdCP 3.2.7
-  # enums/error-code.json):
+  # and what the refusal is depends on what the package's product accepts (AdCP 3.2.7):
   # - 300x250 only (display_300x250_image): no creative the product accepts can serve on the
-  #   line item, so the buyer has no lever, the refusal of
-  #   @T-UC-002-local-gam-creative-size-mismatch (F2, PR #2582 review). CONFIGURATION_ERROR:
-  #   "the buyer cannot fix it, retrying will not help, and reporting to the seller's operator
-  #   is the only remediation ... Recovery: terminal".
+  #   line item, so the buyer has no lever; @T-UC-002-local-gam-creative-size-mismatch refuses
+  #   it CONFIGURATION_ERROR at create (F2, PR #2582 review). On sync that code reaches no entry.
+  #   adcp/_schemas/3.2/enums/error-code.json:136, CONFIGURATION_ERROR: "Wire placement. The
+  #   deployment cannot produce a success artifact, so sellers MUST flip transport-level failure
+  #   markers (HTTP 5xx, MCP `isError: true`, A2A `failed`)";
+  #   adcp/_schemas/3.2/creative/sync-creatives-response.json:26: "Items with action='failed'
+  #   indicate per-item validation/processing failures, not operation-level failures." The
+  #   assignment committed before GAM was asked, so the request does not fail either: the
+  #   package's assignment_errors message is the whole report (same file, :140-146, "Assignment
+  #   errors by package ID"), and the entry of the referenced creative, which this sync did not
+  #   change, stays unchanged.
   # - one image option accepting 300x250 and 728x90: a 728x90 image would serve, so the size
-  #   refusal carries its own code, CREATIVE_SIZE_MISMATCH: "The submitted creative dimensions
-  #   do not match any size accepted by the selected packages ... Recovery: correctable".
+  #   refusal carries its own per-item code, CREATIVE_SIZE_MISMATCH: "The submitted creative
+  #   dimensions do not match any size accepted by the selected packages ... Recovery:
+  #   correctable".
   @T-UC-006-local-gam-refused-assignment-resent
   Scenario Outline: A refused assignment of a creative GAM already holds is refused again when re-sent - <product accepts>
     Given the buyer holds a buy booked in Google Ad Manager as order "6000003" whose package "pkg-leader" is line item "5000003" accepting 728x90, on a product selling '<product formats>'
@@ -90,34 +97,38 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
     When the Buyer Agent references library creative "cr-banner", without resending it, assigned to package "pkg-leader"
     Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
-    And creative "cr-banner" failed with error <code> and recovery <recovery>
+    And the creatives entry for "cr-banner" has action "<action>"
+    And <entry errors>
     And Google Ad Manager associated that creative with line items "5000001"
 
     Examples:
-      | product accepts    | product formats                                                                                                                                                         | code                   | recovery    |
-      | 300x250 only       | {"format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]}                                                               | CONFIGURATION_ERROR    | terminal    |
-      | 300x250 and 728x90 | {"format_options": [{"format_kind": "image", "format_option_id": "image_multi", "params": {"sizes": [{"width": 300, "height": 250}, {"width": 728, "height": 90}]}}]} | CREATIVE_SIZE_MISMATCH | correctable |
+      | product accepts    | product formats                                                                                                                                                         | action    | entry errors                                                                           |
+      | 300x250 only       | {"format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]}                                                               | unchanged | the creatives entry for "cr-banner" omits the "errors" field                           |
+      | 300x250 and 728x90 | {"format_options": [{"format_kind": "image", "format_option_id": "image_multi", "params": {"sizes": [{"width": 300, "height": 250}, {"width": 728, "height": 90}]}}]} | failed    | creative "cr-banner" failed with error CREATIVE_SIZE_MISMATCH and recovery correctable |
 
   # A fault in GAM is not fixed by changing the request. core/error.json: correctable is "fix
   # the request and resend (invalid field, budget too low, creative rejected)", and transient is
   # "retry after delay (rate limit, service unavailable, timeout)". The refused package's row
   # stays, and GAM keeps the association it made: a re-send pushes the same assignment again,
-  # and GAM is asked which it holds.
+  # and GAM is asked which it holds. A network that refuses API access is the seller's
+  # configuration, CONFIGURATION_ERROR, which reaches no entry for the reason the scenario above
+  # quotes: the packages' assignment_errors are the report.
   @T-UC-006-local-gam-refusal-keeps-its-code
-  Scenario Outline: GAM refusing one association answers its fault's own code, not a request error - <reason>
+  Scenario Outline: GAM refusing one association is reported in assignment_errors, not as a request error - <reason>
     Given the buyer holds a buy booked in Google Ad Manager as order "6000007" whose package "pkg-two-a" is line item "5000007" accepting 300x250 and package "pkg-two-b" is line item "5000008" accepting 300x250
     And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
     And Google Ad Manager refuses associations on line item "5000008" with "<reason>"
     When the Buyer Agent references library creative "cr-banner", without resending it, assigned to packages "pkg-two-a, pkg-two-b"
     Then creative "cr-banner" reports package "pkg-two-a" in assignment_errors and not in assigned_to
     And creative "cr-banner" reports package "pkg-two-b" in assignment_errors and not in assigned_to
-    And creative "cr-banner" failed with error <code> and recovery <recovery>
+    And the creatives entry for "cr-banner" has action "<action>"
+    And <entry errors>
     And Google Ad Manager associated that creative with line items "5000001, 5000007"
 
     Examples:
-      | reason                                          | code                | recovery  |
-      | QuotaError.EXCEEDED_QUOTA                       | RATE_LIMITED        | transient |
-      | AuthenticationError.NETWORK_API_ACCESS_DISABLED | CONFIGURATION_ERROR | terminal  |
+      | reason                                          | action    | entry errors                                                               |
+      | QuotaError.EXCEEDED_QUOTA                       | failed    | creative "cr-banner" failed with error RATE_LIMITED and recovery transient |
+      | AuthenticationError.NETWORK_API_ACCESS_DISABLED | unchanged | the creatives entry for "cr-banner" omits the "errors" field               |
 
   # Every push starts by reading the order's line items, ahead of the per-creative work.
   @T-UC-006-local-gam-read-refusal-keeps-its-code

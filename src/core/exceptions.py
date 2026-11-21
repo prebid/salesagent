@@ -426,6 +426,11 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
         """
         return CODE_TABLE[self._error_code].status
 
+    @property
+    def envelope_only(self) -> bool:
+        """Whether this error fails the whole request rather than one item, derived like ``message``."""
+        return CODE_TABLE[self._error_code].envelope_only
+
     def __str__(self) -> str:
         return self.message
 
