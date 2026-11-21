@@ -32,7 +32,7 @@ FEATURES = "tests/bdd/features/*.feature"
 def step_functions():
     """Every decorated step definition, with its AST node and location."""
     for path in sorted(glob.glob(STEPS, recursive=True)):
-        text = pathlib.Path(path).read_text()
+        text = pathlib.Path(path).read_text(encoding="utf-8")
         try:
             tree = ast.parse(text)
         except SyntaxError:
@@ -126,7 +126,7 @@ def _definitions() -> dict[str, list[ast.AST]]:
     for pattern in ROOTS:
         for path in glob.glob(pattern, recursive=True):
             try:
-                tree = ast.parse(pathlib.Path(path).read_text())
+                tree = ast.parse(pathlib.Path(path).read_text(encoding="utf-8"))
             except (SyntaxError, OSError):
                 continue
             for node in ast.walk(tree):
@@ -362,7 +362,7 @@ def _registration_scopes() -> dict[str, frozenset[str]]:
     """Module basename -> the scopes it is registered in ("GLOBAL", or a test module)."""
     scopes: dict[str, set[str]] = collections.defaultdict(set)
     try:
-        tree = ast.parse(pathlib.Path(_CONFTEST).read_text())
+        tree = ast.parse(pathlib.Path(_CONFTEST).read_text(encoding="utf-8"))
     except OSError:
         return {}
     for node in ast.walk(tree):
@@ -371,7 +371,7 @@ def _registration_scopes() -> dict[str, frozenset[str]]:
                 if isinstance(element, ast.Constant):
                     scopes[element.value.split(".")[-1] + ".py"].add("GLOBAL")
     for path in glob.glob("tests/bdd/test_*.py"):
-        text = pathlib.Path(path).read_text()
+        text = pathlib.Path(path).read_text(encoding="utf-8")
         for match in re.finditer(r"from tests\.bdd\.steps[.\w]*\.(\w+) import \*", text):
             scopes[match.group(1) + ".py"].add(pathlib.Path(path).name)
     return {name: frozenset(where) for name, where in scopes.items()}

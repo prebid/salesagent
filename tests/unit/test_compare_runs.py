@@ -60,9 +60,9 @@ def _write_run(
     directory.mkdir(parents=True, exist_ok=True)
     for suite, tests in reports.items():
         payload = {"tests": [{"nodeid": nodeid, "outcome": outcome} for nodeid, outcome in tests.items()]}
-        (directory / f"{suite}.json").write_text(json.dumps(payload))
+        (directory / f"{suite}.json").write_text(json.dumps(payload), encoding="utf-8")
     if declared is not None:
-        (directory / ".suites").write_text(",".join(declared) + "\n")
+        (directory / ".suites").write_text(",".join(declared) + "\n", encoding="utf-8")
     if commit is not None:
         write_run_identity(directory, commit=commit)
     return directory
@@ -439,9 +439,9 @@ def test_a_dirty_tree_refuses_because_its_commit_does_not_identify_it(
     unit = {"tests/unit/test_a.py::test_one": "passed"}
     _write_run(tmp_path / "old", {"unit": unit})
     new = _write_run(tmp_path / "new", {"unit": unit})
-    meta = json.loads((new / "meta.json").read_text())
+    meta = json.loads((new / "meta.json").read_text(encoding="utf-8"))
     meta["tree"] = "dirty"
-    (new / "meta.json").write_text(json.dumps(meta))
+    (new / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
 
     status, out = _run(tmp_path, capsys)
 

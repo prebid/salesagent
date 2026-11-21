@@ -106,7 +106,7 @@ class AdCPSchemaValidator:
 
     @staticmethod
     def _load_json(path: Path) -> dict[str, Any]:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
 
     def _normalize_ref(self, schema_ref: str) -> str:

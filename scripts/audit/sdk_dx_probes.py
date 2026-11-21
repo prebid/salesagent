@@ -66,7 +66,7 @@ def record(pid: str, ok: bool | None, headline: str, detail: str = "") -> None:
 
 def _schema(rel: str) -> dict[str, Any] | None:
     p = SCHEMAS / rel
-    return json.loads(p.read_text()) if p.exists() else None
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
 
 # ─── S1 · Can I find a tool's types by a predictable name? ────────────────────────
@@ -235,7 +235,7 @@ def s6_extension() -> None:
     """salesagent's actual use case: subclass a success arm to attach a serializer mixin."""
     from adcp.types import aliases
 
-    src = pathlib.Path(aliases.__file__).read_text()
+    src = pathlib.Path(aliases.__file__).read_text(encoding="utf-8")
     annotated = len(re.findall(r"^\s*\w+\s*:\s*TypeAlias\s*=", src, re.M))
     plain = len(re.findall(r"^\s*\w+\s*=\s*\w", src, re.M))
     record(

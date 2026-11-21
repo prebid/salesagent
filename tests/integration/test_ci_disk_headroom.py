@@ -48,9 +48,9 @@ def test_free_runner_disk_action(
     tmp_path: Path, readings: list[int | str], cleanup_status: int, expected_status: int, reclaims: bool
 ) -> None:
     action_path = Path(__file__).resolve().parents[2] / ".github/actions/_free-runner-disk/action.yml"
-    script = yaml.safe_load(action_path.read_text())["runs"]["steps"][0]["run"]
-    (tmp_path / "readings").write_text("".join(f"{value}\n" for value in readings))
-    (tmp_path / "cleanup_status").write_text(str(cleanup_status))
+    script = yaml.safe_load(action_path.read_text(encoding="utf-8"))["runs"]["steps"][0]["run"]
+    (tmp_path / "readings").write_text("".join(f"{value}\n" for value in readings), encoding="utf-8")
+    (tmp_path / "cleanup_status").write_text(str(cleanup_status), encoding="utf-8")
     # Probe state lives on disk because command substitutions run in subshells.
     commands = """
     df() {
@@ -74,6 +74,6 @@ def test_free_runner_disk_action(
     cleanup = tmp_path / "cleanup"
     assert cleanup.exists() is reclaims
     if reclaims:
-        assert cleanup.read_text().splitlines() == [
+        assert cleanup.read_text(encoding="utf-8").splitlines() == [
             "rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup"
         ]

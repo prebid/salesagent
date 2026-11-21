@@ -30,7 +30,7 @@ SAME KEY? True
 
 **Two products with different restrictions produce the identical accepted set.** The product's
 restriction is not merely unread, it is unrepresentable. `_legacy_lane`
-(`format_satisfaction.py:779`) then decides acceptance with `claimed in legacy_keys`.
+(`format_satisfaction.py`) then decides acceptance with `claimed in legacy_keys`.
 
 `core/format-id.json`'s `id` description names what the key loses: "When used alone, references
 a **template** format. When combined with dimension/duration fields, creates a parameterized
@@ -76,8 +76,8 @@ comparison". `agent_url` is canonicalized (verified: a trailing slash still matc
 `format_is_supported` comparison against the product's legacy references, which means the
 product's arm must be carried as REFERENCES rather than reduced to template keys.
 `format_id_identity` is NOT touched — it is the graded resolution key and dropping params is
-correct there (`format_resolver.py:758-760`: a parameterized reference must resolve to the
-template it parameterizes).
+correct there (`find_format` in `format_resolver.py`: a parameterized reference must resolve
+to the template it parameterizes).
 
 ## One upstream gap to cover locally
 

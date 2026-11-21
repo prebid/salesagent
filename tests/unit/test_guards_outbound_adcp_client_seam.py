@@ -70,6 +70,8 @@ import ast
 from collections.abc import Iterator
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = REPO_ROOT / "src"
 
@@ -115,8 +117,8 @@ def _call_sites(root: Path, *, modules: frozenset[str], callees: frozenset[str])
     in which callees they watch and in what they then ask of the call node.
     """
     for path in sorted(root.rglob("*.py")):
-        rel = path.relative_to(root).as_posix()
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
+        rel_path = rel(path, root)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel_path)
         names = _local_names(tree, modules=modules, callees=callees)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -124,30 +126,32 @@ def _call_sites(root: Path, *, modules: frozenset[str], callees: frozenset[str])
             callee = node.func
             name = callee.id if isinstance(callee, ast.Name) else getattr(callee, "attr", None)
             if name in names:
-                yield rel, node
+                yield rel_path, node
 
 
 def _dial_sites(root: Path) -> set[tuple[str, int]]:
     """(relative path, line) for every outbound MCP dial."""
-    return {(rel, node.lineno) for rel, node in _call_sites(root, modules=DIAL_MODULES, callees=DIAL_CALLEES)}
+    return {(rel_path, node.lineno) for rel_path, node in _call_sites(root, modules=DIAL_MODULES, callees=DIAL_CALLEES)}
 
 
 def _undecided_dials(root: Path) -> set[tuple[str, int]]:
     """(relative path, line) for every dial that does not pass ``sign=``."""
     return {
-        (rel, node.lineno)
-        for rel, node in _call_sites(root, modules=DIAL_MODULES, callees=DIAL_CALLEES)
-        if rel not in DIAL_ALLOWLIST and not any(keyword.arg == "sign" for keyword in node.keywords)
+        (rel_path, node.lineno)
+        for rel_path, node in _call_sites(root, modules=DIAL_MODULES, callees=DIAL_CALLEES)
+        if rel_path not in DIAL_ALLOWLIST and not any(keyword.arg == "sign" for keyword in node.keywords)
     }
 
 
 def _signer_construction_sites(root: Path) -> set[tuple[str, int]]:
     """(relative path, line) for every construction of a request-signing strategy."""
-    return {(rel, node.lineno) for rel, node in _call_sites(root, modules=SIGNER_MODULES, callees=SIGNER_CALLEES)}
+    return {
+        (rel_path, node.lineno) for rel_path, node in _call_sites(root, modules=SIGNER_MODULES, callees=SIGNER_CALLEES)
+    }
 
 
 def _signer_violations(root: Path) -> set[tuple[str, int]]:
-    return {(rel, line) for rel, line in _signer_construction_sites(root) if rel not in ALLOWLIST}
+    return {(rel_path, line) for rel_path, line in _signer_construction_sites(root) if rel_path not in ALLOWLIST}
 
 
 def test_every_outbound_agent_dial_delegates_the_signing_decision():
@@ -181,7 +185,7 @@ def test_allowlisted_files_are_the_only_signer_construction_sites():
 
     Guards against a stale allowlist entry masking a site that moved or was deleted.
     """
-    files_with_sites = {rel for rel, _line in _signer_construction_sites(SRC_ROOT)}
+    files_with_sites = {rel_path for rel_path, _line in _signer_construction_sites(SRC_ROOT)}
     for allowlisted in ALLOWLIST:
         assert allowlisted in files_with_sites, (
             f"{allowlisted} is allowlisted but constructs no RequestSignerStrategy -- shrink the allowlist."
@@ -197,7 +201,7 @@ def test_the_dial_scan_still_sees_the_real_dial_sites():
     registries out of ``src/``, would produce. Pinning the known dialers keeps
     that failure visible.
     """
-    dialing_files = {rel for rel, _line in _dial_sites(SRC_ROOT)}
+    dialing_files = {rel_path for rel_path, _line in _dial_sites(SRC_ROOT)}
     for expected in (
         "core/creative_agent_registry.py",
         "core/signals_agent_registry.py",
@@ -220,7 +224,8 @@ def test_detector_flags_a_dial_that_omits_the_signing_decision(tmp_path):
     bad_file.write_text(
         "from src.core.utils.operator_mcp import call_operator_mcp_tool\n\n"
         "async def f():\n"
-        "    return await call_operator_mcp_tool(url, 'get_signals', {}, label='x')\n"
+        "    return await call_operator_mcp_tool(url, 'get_signals', {}, label='x')\n",
+        encoding="utf-8",
     )
 
     assert ("some_new_registry.py", 4) in _undecided_dials(tmp_path)
@@ -236,7 +241,8 @@ def test_detector_accepts_a_dial_that_delegates_the_decision(tmp_path):
         "    return await call_operator_mcp_tool(\n"
         "        url, 'get_signals', {}, label='x',\n"
         "        sign=request_signer_for_tenant(tenant_id=None),\n"
-        "    )\n"
+        "    )\n",
+        encoding="utf-8",
     )
 
     assert _undecided_dials(tmp_path) == set()
@@ -247,7 +253,8 @@ def test_detector_flags_a_second_signer_builder(tmp_path):
     bad_file = tmp_path / "some_new_registry.py"
     bad_file.write_text(
         "from src.core.signing.request_signer import RequestSignerStrategy as _Strategy\n\n"
-        "signer = _Strategy(config).build_signed_headers\n"
+        "signer = _Strategy(config).build_signed_headers\n",
+        encoding="utf-8",
     )
 
     assert ("some_new_registry.py", 3) in _signer_violations(tmp_path)
@@ -262,7 +269,8 @@ def test_detector_ignores_unrelated_calls(tmp_path):
         "factory = RequestSignerStrategyFactory()\n\n"
         "def call_mcp_tool_name() -> str:\n"
         "    return 'list_creative_formats'\n\n"
-        "name = call_mcp_tool_name()\n"
+        "name = call_mcp_tool_name()\n",
+        encoding="utf-8",
     )
 
     assert _signer_violations(tmp_path) == set()

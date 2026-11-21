@@ -15,12 +15,11 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import stage_ast_grep_root, write_ast_grep_probe
+from tests.unit._architecture_helpers import stage_ast_grep_root, venv_ast_grep, write_ast_grep_probe
 
 # (rule id, directory the rule's ``files:`` covers, known-bad source, known-good source)
 _RULES: tuple[tuple[str, str, str, str], ...] = (
@@ -48,8 +47,7 @@ _RULES: tuple[tuple[str, str, str, str], ...] = (
 
 def _scan(root: Path, rule_id: str, rel_path: str) -> list[dict]:
     """Run the real ast-grep from the staged *root*, project config, one rule, one file; return its matches."""
-    binary = Path(sys.executable).parent / "ast-grep"
-    assert binary.exists(), f"{binary} missing: ast-grep-cli is not installed in this venv"
+    binary = venv_ast_grep()
     proc = subprocess.run(
         [str(binary), "scan", "--config", "sgconfig.yml", "--filter", f"^{rule_id}$", rel_path, "--json=compact"],
         capture_output=True,

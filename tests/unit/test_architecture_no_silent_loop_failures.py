@@ -670,7 +670,7 @@ def _scan_all_advisory() -> list[tuple[str, str, int]]:
         violations = find_silent_advisory_handlers(tree, relpath)
         if not violations:
             continue
-        source_lines = (REPO_ROOT / relpath).read_text().splitlines()
+        source_lines = (REPO_ROOT / relpath).read_text(encoding="utf-8").splitlines()
         handlers = {h.lineno: h for h in ast.walk(tree) if isinstance(h, ast.ExceptHandler)}
         for violation in violations:
             handler = handlers.get(violation[2])
@@ -891,7 +891,7 @@ def _handler_source(handler: ast.ExceptHandler, source_lines: list[str]) -> str:
 
 
 def _module_source_lines(relpath: str) -> list[str]:
-    return (REPO_ROOT / relpath).read_text().splitlines()
+    return (REPO_ROOT / relpath).read_text(encoding="utf-8").splitlines()
 
 
 def _flagged_products_handlers() -> tuple[list[tuple[str, str, int]], dict[int, ast.ExceptHandler], list[str]]:
