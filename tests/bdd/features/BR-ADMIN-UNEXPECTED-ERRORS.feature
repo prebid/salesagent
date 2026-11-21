@@ -159,3 +159,18 @@ Feature: BR-ADMIN-UNEXPECTED-ERRORS Unexpected failures in the admin app
     Then the page returns status 500
     And the JSON response has "success" as false
     And the JSON error is an unexpected error with a reference
+
+  # A decorated route that raises is recorded as failed in the audit log, and the activity
+  # feed shows that row. The row carries fixed text (src/admin/utils/audit_decorator.py),
+  # never the exception's.
+  @T-ADMIN-FAULT-011 @browser @audit
+  Scenario: A failed action is shown in the activity feed without the exception's text
+    Given the database refuses to store an account named "Fault Probe Audited"
+    When the operator submits the create account form from the create account page with:
+      | field        | value                        |
+      | name         | Fault Probe Audited          |
+      | brand_domain | fault-probe-audited.example  |
+    And the operator reads the tenant's recent activity
+    Then the activity feed shows the create account action as failed with the fixed audit text
+    And the activity feed does not carry the database fault's text
+    And the database refused the write once

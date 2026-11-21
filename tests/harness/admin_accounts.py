@@ -235,6 +235,12 @@ class AdminAccountEnv:
             lambda: self.client.submit(path, form_data, from_page=path if from_create_page else None)
         )
 
+    def get_recent_activities(self) -> AdminResponse:
+        """GET this tenant's recent activity as the activity feed's fallback poll reads it."""
+        return self.client.request(
+            "get", f"/tenant/{self._tenant_id}/activities", headers={"Accept": "application/json"}
+        )
+
     def submit_create_product(self, form_data: dict[str, Any]) -> AdminResponse:
         """POST the add-product form as a browser does from its page."""
         path = self.products_path("add")

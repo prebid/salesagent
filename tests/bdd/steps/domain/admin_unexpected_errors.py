@@ -195,3 +195,34 @@ def when_test_ai_connection_with_body(ctx: dict, body: str) -> None:
 @then("the JSON error is an unexpected error with a reference")
 def then_json_error_is_unexpected_error(ctx: dict) -> None:
     _assert_json_error_is_logged_failure(ctx, GENERIC_OPERATOR_MESSAGE)
+
+
+# ── The audit row of a failed action, as the activity feed shows it ─────────
+
+
+def _failed_create_account_activities(ctx: dict) -> list[dict]:
+    activities = _require_admin_page(ctx).get_json()["activities"]
+    return [a for a in activities if a["operation"].endswith("create_account") and not a["success"]]
+
+
+@when("the operator reads the tenant's recent activity")
+def when_read_recent_activity(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).get_recent_activities()
+
+
+@then("the activity feed shows the create account action as failed with the fixed audit text")
+def then_feed_shows_failed_action(ctx: dict) -> None:
+    from src.admin.utils.audit_decorator import _RAISED_MESSAGE
+
+    failed = _failed_create_account_activities(ctx)
+    assert len(failed) == 1, f"Expected one failed create_account activity, got {failed!r}"
+    assert failed[0]["full_details"].get("error_details") == _RAISED_MESSAGE, (
+        f"Expected the audit row's fixed text {_RAISED_MESSAGE!r}, got {failed[0]['full_details']!r}"
+    )
+
+
+@then("the activity feed does not carry the database fault's text")
+def then_feed_does_not_carry_fault(ctx: dict) -> None:
+    feed = json.dumps(_require_admin_page(ctx).get_json())
+    assert _FAULT_TEXT not in feed, "The activity feed carries the database's own error text"
+    assert _DRIVER_TEXT not in feed, "The activity feed carries the database driver's error"
