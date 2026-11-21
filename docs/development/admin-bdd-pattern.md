@@ -53,8 +53,10 @@ live-stack env at `e2e_config.base_url` for `e2e_admin`.
 `tests/unit/test_bdd_admin_transport_parametrization.py` takes each row's builder from
 `ENV_ROUTES` and checks it on both transports. The env enters `no_configured_super_admins()`
 (`tests/helpers/admin_session.py`) for the scenario, so the member it logs in as is never an
-ambient super admin, and deletes the tenants it created when it exits. The feature file is the one statement of
-the contract: the pytest twins that once ran the same assertions in-process and against the
+ambient super admin. Every membership it seeds holds the `manager` role, the least role that
+may send a write, so the role check never decides a scenario. The env deletes the tenants it
+created when it exits. The feature file is the one statement of the contract: the pytest
+twins that once ran the same assertions in-process and against the
 Docker stack were deleted once `AdminTransport.E2E` carried the Gherkin, as
 BR-ADMIN-ACCOUNTS' own `test_admin_bdd_e2e.py` had been.
 
@@ -232,18 +234,16 @@ fixture by way of `_admin_env_builder`.
    `local-publisher-authorization.feature` serves a publisher's adagents.json from the
    stack's `publisher-origin` service, which the live server reaches on 443 through
    tls-proxy (`tests/harness/publisher_authorization.py`).
-   `local-publisher-authorization.feature` serves a publisher's adagents.json from the
-   stack's `publisher-origin` service, which the live server reaches on 443 through
-   tls-proxy (`tests/harness/publisher_authorization.py`).
 2. **A registry row builds the env.** The `ADMIN` row of `_UC_BUCKET_ROUTES`
-   in `tests/bdd/conftest.py` names `_build_admin_env`. `_uc_bucket_rows()`
-   appends that row to `ENV_ROUTES`, and `_run_env_route` is the single
-   consumer. The `admin-tenant-scoping` predicate row ahead of it names
-   `_build_admin_tenant_scoping_env` for `T-ADMIN-SCOPE-*`. These two builders
-   are the only ones that pass `base_url=` rather than `e2e_config=`, because
-   the admin env needs the address and nothing else from `E2EConfig`;
+   in `tests/bdd/conftest.py` and the `admin-tenant-scoping` predicate row of
+   `ENV_ROUTES`, which claims `T-ADMIN-SCOPE-*` ahead of it, each name their
+   env class to `_admin_env_builder`. `_uc_bucket_rows()` appends the `ADMIN`
+   row to `ENV_ROUTES`, and `_run_env_route` is the single consumer. That
+   builder is the only one that passes `base_url=` rather than `e2e_config=`,
+   because the admin env needs the address and nothing else from `E2EConfig`.
    `tests/unit/test_bdd_admin_transport_parametrization.py` checks that every
-   builder an admin scenario resolves to builds the env its transport names.
+   row an admin scenario resolves to, and that builds an `AdminAccountEnv`,
+   builds the env its transport names.
    An admin feature that needs a different env adds its own `ENV_ROUTES` row,
    which wins over the `ADMIN` row: `admin-inventory-profile-publishers` builds
    `AdminInventoryProfileEnv`, and `pubauth` builds `PublisherAuthorizationEnv`.
