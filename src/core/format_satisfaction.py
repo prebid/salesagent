@@ -3398,8 +3398,8 @@ def accepts_legacy_reference(
 def creative_satisfies(creative: Any, contract: Any) -> FormatSatisfaction:
     """Whether a STORED creative satisfies a product's format contract. Every creative gate asks here.
 
-    THE ONE VALIDATOR for a creative against a product, and four gates ask it: the two on the
-    create path, the update path and the ``sync_creatives`` assignment path. Each used to
+    THE ONE VALIDATOR for a creative against a product, and three gates ask it: the create
+    path's pre-adapter gate, the update path and the ``sync_creatives`` assignment path. Each used to
     build the identity and call :func:`satisfies` itself with no manifest, so a canonical
     creative was graded on its kind alone and a same-kind 728x90 creative satisfied a product
     fixing 300x250 -- the fifth rule of ``formats.mdx``, "Equal format_kind values alone do
