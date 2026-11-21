@@ -106,7 +106,6 @@ cmd_up() {
     reap_abandoned_stacks
 
     export ADCP_TESTING=true CREATE_SAMPLE_DATA=true
-    export DELIVERY_WEBHOOK_INTERVAL=5
     export GEMINI_API_KEY="${GEMINI_API_KEY:-test_key}"
     export ENCRYPTION_KEY="${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}"  # TEST ONLY — never use in production
 
@@ -221,7 +220,6 @@ export E2E_CA_BUNDLE="$(pwd)/.test-tls/ca.pem"
 export DATABASE_URL="$DATABASE_URL"
 export ADCP_TESTING=true
 export CREATE_SAMPLE_DATA=true
-export DELIVERY_WEBHOOK_INTERVAL=5
 export GEMINI_API_KEY="${GEMINI_API_KEY}"
 export ENCRYPTION_KEY="${ENCRYPTION_KEY}"
 EOF
