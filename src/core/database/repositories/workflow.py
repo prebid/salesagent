@@ -16,11 +16,13 @@ handles commit/rollback at the boundary.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 from typing import cast as type_cast
 
-from sqlalchemy import func, literal, select, update
+from sqlalchemy import ColumnElement, Select, SQLColumnExpression, case, func, literal, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -177,6 +179,41 @@ def append_step_comment(
     return type_cast("CursorResult[Any]", session.execute(stmt)).rowcount
 
 
+@dataclass(frozen=True)
+class StepOrder:
+    """How :meth:`WorkflowRepository.list_by_tenant` orders steps.
+
+    ``labels`` orders a categorical column by the label each stored value carries instead of
+    by the stored value itself, and a value with no label sorts as ``unlabelled``. That is how
+    a caller speaking another vocabulary (list_tasks speaks the AdCP task status and task
+    type) gets rows in ITS order while this repository keeps knowing only what it stores.
+
+    ``updated_at`` is ``completed_at`` when the step finished, else ``created_at``: the step
+    table has no update column, and this is the same instant list_tasks reports.
+    Ties break on ``step_id`` so a page boundary is stable.
+    """
+
+    column: Literal["created_at", "updated_at", "status", "tool_name"] = "created_at"
+    descending: bool = True
+    labels: Mapping[str, str] | None = None
+    unlabelled: str = ""
+
+    def clauses(self) -> tuple[ColumnElement[Any], ColumnElement[Any]]:
+        columns: dict[str, SQLColumnExpression[Any]] = {
+            "created_at": WorkflowStep.created_at,
+            "updated_at": func.coalesce(WorkflowStep.completed_at, WorkflowStep.created_at),
+            "status": WorkflowStep.status,
+            "tool_name": WorkflowStep.tool_name,
+        }
+        key = columns[self.column]
+        if self.labels is not None:
+            key = case(dict(self.labels), value=key, else_=self.unlabelled)
+        return (key.desc() if self.descending else key.asc()), WorkflowStep.step_id.asc()
+
+
+_NEWEST_FIRST = StepOrder()
+
+
 class WorkflowRepository:
     """Tenant-scoped data access for WorkflowStep and ObjectWorkflowMapping.
 
@@ -218,7 +255,7 @@ class WorkflowRepository:
         None leaves both exactly as they were.
 
         The BUYER-facing path passes it, and must:
-        protocol/get-task-status-status-request.json (AdCP 3.1.1) says "Sellers MUST return
+        protocol/get-task-status-status-request.json (AdCP) says "Sellers MUST return
         REFERENCE_NOT_FOUND for a task_id that exists only under a different account or
         principal", and the get_products_async storyboard grades it
         (step get_products_task_status_wrong_account, "Sellers MUST NOT reveal whether the
@@ -258,17 +295,24 @@ class WorkflowRepository:
     def list_by_tenant(
         self,
         *,
-        status: str | None = None,
+        statuses: Collection[str] | None = None,
+        tool_names: Collection[str] | None = None,
+        step_ids: Collection[str] | None = None,
         object_type: str | None = None,
         object_id: str | None = None,
         offset: int = 0,
         limit: int = 20,
         principal_id: str | None = None,
+        order: StepOrder = _NEWEST_FIRST,
     ) -> list[WorkflowStep]:
         """List workflow steps for the tenant, with optional filters.
 
         Args:
-            status: Filter by step status (e.g., "pending", "requires_approval").
+            statuses: Keep steps whose stored status is one of these. An EMPTY collection
+                matches nothing, which is the answer to a filter naming only values this
+                seller never stores; ``None`` is "not filtered".
+            tool_names: Keep steps whose ``tool_name`` is one of these; same empty rule.
+            step_ids: Keep steps with one of these ids; same empty rule.
             object_type: Filter by associated object type (e.g., "media_buy").
             object_id: Filter by specific object ID (requires object_type).
             offset: Number of steps to skip.
@@ -276,38 +320,25 @@ class WorkflowRepository:
             principal_id: Narrow to one principal's tasks. The BUYER-facing caller
                 (list_tasks) passes it; the publisher-facing admin views do not, which is
                 why it is optional. See :meth:`get_by_step_id` for the obligation.
+            order: The ordering; newest first by default.
         """
-        stmt = (
-            select(WorkflowStep)
-            .join(DBContext)
-            .where(
-                DBContext.tenant_id == self._tenant_id,
-            )
+        stmt = self._filtered_steps(
+            statuses=statuses,
+            tool_names=tool_names,
+            step_ids=step_ids,
+            object_type=object_type,
+            object_id=object_id,
+            principal_id=principal_id,
         )
-
-        if principal_id is not None:
-            stmt = stmt.where(DBContext.principal_id == principal_id)
-
-        if status:
-            stmt = stmt.where(WorkflowStep.status == status)
-
-        if object_type and object_id:
-            stmt = stmt.join(ObjectWorkflowMapping).where(
-                ObjectWorkflowMapping.object_type == object_type,
-                ObjectWorkflowMapping.object_id == object_id,
-            )
-        elif object_type:
-            stmt = stmt.join(ObjectWorkflowMapping).where(
-                ObjectWorkflowMapping.object_type == object_type,
-            )
-
-        stmt = stmt.order_by(WorkflowStep.created_at.desc()).offset(offset).limit(limit)
+        stmt = stmt.order_by(*order.clauses()).offset(offset).limit(limit)
         return list(self._session.scalars(stmt).all())
 
     def count_by_tenant(
         self,
         *,
-        status: str | None = None,
+        statuses: Collection[str] | None = None,
+        tool_names: Collection[str] | None = None,
+        step_ids: Collection[str] | None = None,
         object_type: str | None = None,
         object_id: str | None = None,
         principal_id: str | None = None,
@@ -317,21 +348,40 @@ class WorkflowRepository:
         Uses the same filter logic as list_by_tenant but returns only the count. The two
         MUST be narrowed together: a count over the tenant beside a page scoped to one
         principal reports how many tasks the OTHER principals have, which is the same
-        disclosure by arithmetic.
+        disclosure by arithmetic. One statement builder serves both, so they cannot drift.
         """
-        stmt = (
-            select(WorkflowStep)
-            .join(DBContext)
-            .where(
-                DBContext.tenant_id == self._tenant_id,
-            )
+        stmt = self._filtered_steps(
+            statuses=statuses,
+            tool_names=tool_names,
+            step_ids=step_ids,
+            object_type=object_type,
+            object_id=object_id,
+            principal_id=principal_id,
         )
+        result = self._session.scalar(select(func.count()).select_from(stmt.subquery()))
+        return result or 0
+
+    def _filtered_steps(
+        self,
+        *,
+        statuses: Collection[str] | None,
+        tool_names: Collection[str] | None,
+        step_ids: Collection[str] | None,
+        object_type: str | None,
+        object_id: str | None,
+        principal_id: str | None,
+    ) -> Select[tuple[WorkflowStep]]:
+        """The tenant-scoped step selection both :meth:`list_by_tenant` and :meth:`count_by_tenant` read."""
+        stmt = select(WorkflowStep).join(DBContext).where(DBContext.tenant_id == self._tenant_id)
 
         if principal_id is not None:
             stmt = stmt.where(DBContext.principal_id == principal_id)
-
-        if status:
-            stmt = stmt.where(WorkflowStep.status == status)
+        if statuses is not None:
+            stmt = stmt.where(WorkflowStep.status.in_(list(statuses)))
+        if tool_names is not None:
+            stmt = stmt.where(WorkflowStep.tool_name.in_(list(tool_names)))
+        if step_ids is not None:
+            stmt = stmt.where(WorkflowStep.step_id.in_(list(step_ids)))
 
         if object_type and object_id:
             stmt = stmt.join(ObjectWorkflowMapping).where(
@@ -342,9 +392,7 @@ class WorkflowRepository:
             stmt = stmt.join(ObjectWorkflowMapping).where(
                 ObjectWorkflowMapping.object_type == object_type,
             )
-
-        result = self._session.scalar(select(func.count()).select_from(stmt.subquery()))
-        return result or 0
+        return stmt
 
     # ------------------------------------------------------------------
     # ObjectWorkflowMapping reads
@@ -385,31 +433,6 @@ class WorkflowRepository:
                 )
             ).all()
         )
-
-    def get_mappings_for_steps(self, step_ids: list[str]) -> dict[str, list[ObjectWorkflowMapping]]:
-        """Get object mappings for multiple workflow steps within the tenant.
-
-        Returns a dict mapping step_id -> list of ObjectWorkflowMapping.
-        """
-        if not step_ids:
-            return {}
-
-        mappings = list(
-            self._session.scalars(
-                select(ObjectWorkflowMapping)
-                .join(WorkflowStep, ObjectWorkflowMapping.step_id == WorkflowStep.step_id)
-                .join(DBContext, WorkflowStep.context_id == DBContext.context_id)
-                .where(
-                    ObjectWorkflowMapping.step_id.in_(step_ids),
-                    DBContext.tenant_id == self._tenant_id,
-                )
-            ).all()
-        )
-
-        result: dict[str, list[ObjectWorkflowMapping]] = {sid: [] for sid in step_ids}
-        for mapping in mappings:
-            result[mapping.step_id].append(mapping)
-        return result
 
     def get_all_steps(self, *, limit: int | None = None) -> list[WorkflowStep]:
         """Get all workflow steps for this tenant, newest first."""

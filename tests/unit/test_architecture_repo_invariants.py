@@ -66,6 +66,10 @@ def test_developer_path_detector_catches_a_hardcoded_home(tmp_path) -> None:
 
 
 @pytest.mark.arch_guard
+@pytest.mark.posix_only(
+    "creating a symlink on Windows needs SeCreateSymbolicLinkPrivilege, and Git for Windows checks "
+    "tracked symlinks out as plain files, so the symlink half of the detector has no Windows input"
+)
 def test_developer_path_detector_catches_a_symlink_into_a_home(tmp_path) -> None:
     """The symlink half — the one that breaks git, not just portability.
 

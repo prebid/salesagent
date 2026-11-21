@@ -53,7 +53,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import REPO_ROOT
+from tests.unit._architecture_helpers import REPO_ROOT, rel
 
 _FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "adcp_schemas_pinned"
 _REFRESH_PATH = _FIXTURE_DIR / "_refresh.py"
@@ -72,6 +72,15 @@ _FLAT_ID_CONVENTION = re.compile(r"^/schemas/[a-z0-9-]+/[a-z0-9-]+\.json$")
 # matched by SHAPE, never against a literal, so advancing a pin cannot leave
 # this pattern asserting a namespace upstream stopped shipping.
 _VERSIONED_ID_CONVENTION = re.compile(r"^/schemas/\d+\.\d+\.\d+/(?:[a-z0-9_-]+/)*[a-z0-9_-]+\.json$")
+
+# The same form behind the origin upstream adopted at AdCP 3.2 (see _refresh.py's "$id
+# convention"). A SEPARATE pattern rather than an optional group, because which one applies
+# is decided by the file's version — a single pattern admitting both would stop grading the
+# distinction, and then a 3.1.1 file carrying the origin (or a 3.2.1 file missing it) would
+# pass.
+_ABSOLUTE_VERSIONED_ID_CONVENTION = re.compile(
+    r"^https://adcontextprotocol\.org/schemas/\d+\.\d+\.\d+/(?:[a-z0-9_-]+/)*[a-z0-9_-]+\.json$"
+)
 
 # The one flat-tree file whose $id IS version-qualified, and why: it is pinned
 # by SHA-256 to the v3.1.1 TAG's copy (tests/unit/test_guards_error_code_fixture_pin.py,
@@ -95,6 +104,11 @@ _DOCUMENTED_VERSIONED_FORMS = (
     "/schemas/3.1.1/<category>/<name>.json",
 )
 
+#: The absolute form upstream adopted at AdCP 3.2. Named here for the same reason the two
+#: above are: the docstring guard grades that a refresher is TOLD which forms are live, and
+#: a third convention nobody wrote down is how the next refresh "fixes" a correct file.
+_DOCUMENTED_ABSOLUTE_FORMS = ("https://adcontextprotocol.org/schemas/<version>/<category>/<name>.json",)
+
 
 def _load_refresh_module():
     """Import _refresh.py by path — the fixture directory is not a package."""
@@ -113,7 +127,7 @@ def _vendored_files() -> list[Path]:
 
 
 def _relpath(path: Path) -> str:
-    return path.relative_to(_FIXTURE_DIR).as_posix()
+    return rel(path, _FIXTURE_DIR)
 
 
 def _spec_version_of(path: Path) -> str | None:
@@ -122,21 +136,41 @@ def _spec_version_of(path: Path) -> str | None:
     Either from the versioned tree it lives in, or — for the one flat file
     re-vendored from a tag — from ``_TAG_VENDORED_FLAT_FILES``.
     """
-    rel = _relpath(path)
-    head = rel.split("/", 1)[0]
+    rel_path = _relpath(path)
+    head = rel_path.split("/", 1)[0]
     if _VERSION_DIR.match(head):
         return head
-    return _TAG_VENDORED_FLAT_FILES.get(rel)
+    return _TAG_VENDORED_FLAT_FILES.get(rel_path)
 
 
 def _expected_id(path: Path) -> str:
     """Upstream's own ``$id`` for *path*: ``/schemas/`` + the layout rule's path,
-    with the version segment present exactly when upstream's namespace has one."""
-    rel = _relpath(path)
+    with the version segment present exactly when upstream's namespace has one, and
+    behind :data:`_refresh.ID_ORIGIN` exactly when upstream's namespace is absolute.
+
+    The origin is decided by the VERSION, not by reading the file: upstream wrote the
+    path form through 3.1.x and the absolute form from 3.2 on, so a file in a ``3.2+``
+    tree must carry the origin and a file below it must not. Deriving it from the file's
+    own ``$id`` would make the assertion vacuous.
+    """
+    rel_path = _relpath(path)
     version = _spec_version_of(path)
-    if version is not None and not rel.startswith(f"{version}/"):
-        rel = f"{version}/{rel}"
-    return f"/schemas/{rel}"
+    if version is not None and not rel_path.startswith(f"{version}/"):
+        rel_path = f"{version}/{rel_path}"
+    ref = f"/schemas/{rel_path}"
+    return f"{_refresh.ID_ORIGIN}{ref}" if _is_absolute_namespace(version) else ref
+
+
+def _is_absolute_namespace(version: str | None) -> bool:
+    """Does upstream stamp the absolute origin into ``$id`` at *version*?
+
+    True from 3.2 on. Version-free files (``version is None``) predate the convention
+    entirely and are never absolute.
+    """
+    if version is None:
+        return False
+    major, minor = (int(part) for part in version.split(".")[:2])
+    return (major, minor) >= (3, 2)
 
 
 def _versioned_tree_files() -> list[Path]:
@@ -168,21 +202,26 @@ def test_the_fixture_set_is_not_empty():
     )
 
 
-@pytest.mark.parametrize("path", _vendored_files(), ids=lambda p: str(p.relative_to(_FIXTURE_DIR)))
+@pytest.mark.parametrize("path", _vendored_files(), ids=lambda p: rel(p, _FIXTURE_DIR))
 def test_vendored_id_is_upstreams_own_and_matches_its_path(path: Path):
     """Each vendored file's $id is upstream's own form for its own path."""
-    schema_id = json.loads(path.read_text())["$id"]
+    schema_id = json.loads(path.read_text(encoding="utf-8"))["$id"]
     expected = _expected_id(path)
 
     assert schema_id == expected, (
-        f"{path.relative_to(REPO_ROOT)} has $id {schema_id!r}, expected {expected!r} — vendored "
+        f"{rel(path)} has $id {schema_id!r}, expected {expected!r} — vendored "
         "fixtures keep upstream's own site-rooted $id verbatim, version segment included or "
         "omitted exactly as the revision they were fetched from writes it "
         "(see _refresh.py's '$id convention' section)."
     )
 
     version = _spec_version_of(path)
-    convention = _VERSIONED_ID_CONVENTION if version else _FLAT_ID_CONVENTION
+    if _is_absolute_namespace(version):
+        convention = _ABSOLUTE_VERSIONED_ID_CONVENTION
+    elif version:
+        convention = _VERSIONED_ID_CONVENTION
+    else:
+        convention = _FLAT_ID_CONVENTION
     assert convention.match(schema_id), (
         f"$id {schema_id!r} does not match the {'version-qualified' if version else 'version-free'} "
         f"convention {convention.pattern!r} that {_relpath(path)}'s upstream revision uses. A flat, "
@@ -191,7 +230,7 @@ def test_vendored_id_is_upstreams_own_and_matches_its_path(path: Path):
     )
 
 
-@pytest.mark.parametrize("path", _vendored_files(), ids=lambda p: str(p.relative_to(_FIXTURE_DIR)))
+@pytest.mark.parametrize("path", _vendored_files(), ids=lambda p: rel(p, _FIXTURE_DIR))
 def test_refresh_accepts_every_vendored_file_at_its_own_id(path: Path):
     """Negative control: the guard is not a blanket reject.
 
@@ -199,7 +238,7 @@ def test_refresh_accepts_every_vendored_file_at_its_own_id(path: Path):
     ref its own convention derives — so the guard below rejects divergence, not
     the vendoring itself, for BOTH root sets.
     """
-    _refresh.check_id_convention(_expected_id(path), json.loads(path.read_text()))
+    _refresh.check_id_convention(_expected_id(path), json.loads(path.read_text(encoding="utf-8")))
 
 
 @pytest.mark.parametrize(
@@ -244,7 +283,11 @@ def test_refresh_rejects_a_divergent_id(ref: str, schema_id: str):
     [
         pytest.param({"enum": []}, id="no-id-at-all"),
         pytest.param({"$id": "enums/error-code.json", "enum": []}, id="relative"),
-        pytest.param({"$id": "https://adcontextprotocol.org/schemas/enums/error-code.json"}, id="absolute-url"),
+        # A foreign origin, NOT adcontextprotocol.org: the absolute form became upstream's
+        # own convention at AdCP 3.2, so ``https://adcontextprotocol.org`` + the ref is now
+        # accepted and only this origin is still off-convention. The case it replaces
+        # (adcontextprotocol.org with no version) is covered by "wrong-version" below.
+        pytest.param({"$id": "https://example.invalid/schemas/enums/error-code.json"}, id="foreign-origin"),
         pytest.param({"$id": "/schemas/3.1/enums/error-code.json", "enum": []}, id="wrong-version"),
     ],
 )

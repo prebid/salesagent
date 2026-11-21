@@ -27,7 +27,7 @@ import sys
 def agent_reports(journal: pathlib.Path) -> list[str]:
     """Every completed agent's returned text, in journal order."""
     out = []
-    for line in journal.read_text().splitlines():
+    for line in journal.read_text(encoding="utf-8").splitlines():
         try:
             row = json.loads(line)
         except ValueError:

@@ -133,6 +133,43 @@ class SeededBuy:
         return self.media_buy.media_buy_id
 
 
+def pending_media_buy(
+    *,
+    tenant: Any,
+    principal: Any,
+    package: dict[str, Any],
+    starts_in_days: int,
+    flight_days: int,
+    **media_buy_fields: Any,
+) -> Any:
+    """A media-buy row an approval can rebuild its request from, with one requested ``package``.
+
+    The ``raw_request`` revalidates as a ``CreateMediaBuyRequest``, and the row's resolved
+    ``start_time``/``end_time`` are the flight the approval books. The caller writes the
+    package row.
+    """
+    from tests.factories import MediaBuyFactory
+
+    start_time = datetime.now(UTC) + timedelta(days=starts_in_days)
+    end_time = start_time + timedelta(days=flight_days)
+    return MediaBuyFactory(
+        tenant=tenant,
+        principal=principal,
+        start_date=start_time.date(),
+        end_date=end_time.date(),
+        start_time=start_time,
+        end_time=end_time,
+        raw_request={
+            "brand": {"domain": "testbrand.com"},
+            "start_time": start_time.isoformat(),
+            "end_time": end_time.isoformat(),
+            "idempotency_key": f"approval-{uuid.uuid4().hex[:8]}",
+            "packages": [package],
+        },
+        **media_buy_fields,
+    )
+
+
 def seed_pending_buy(*, starts_in_days: int, status: str = "pending_approval") -> SeededBuy:
     """Seed a tenant + product + pending-approval buy + its approval step.
 
@@ -152,7 +189,6 @@ def seed_pending_buy(*, starts_in_days: int, status: str = "pending_approval") -
     """
     from src.core.context_manager import ContextManager
     from tests.factories import (
-        MediaBuyFactory,
         MediaPackageFactory,
         PricingOptionFactory,
         PrincipalFactory,
@@ -161,8 +197,6 @@ def seed_pending_buy(*, starts_in_days: int, status: str = "pending_approval") -
     )
 
     suffix = uuid.uuid4().hex[:8]
-    start_time = datetime.now(UTC) + timedelta(days=starts_in_days)
-    end_time = start_time + timedelta(days=30)
 
     tenant = TenantFactory(tenant_id=f"t_appr_{suffix}", ad_server="mock")
     principal = PrincipalFactory(tenant=tenant, principal_id=f"p_appr_{suffix}")
@@ -170,34 +204,18 @@ def seed_pending_buy(*, starts_in_days: int, status: str = "pending_approval") -
     PricingOptionFactory(product=product)
 
     media_buy_id = f"mb_appr_{suffix}"
-    media_buy = MediaBuyFactory(
+    media_buy = pending_media_buy(
         tenant=tenant,
         principal=principal,
+        package={"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"},
+        starts_in_days=starts_in_days,
+        flight_days=30,
         media_buy_id=media_buy_id,
         status=status,
-        start_date=start_time.date(),
-        end_date=end_time.date(),
-        start_time=start_time,
-        end_time=end_time,
-        raw_request={
-            "brand": {"domain": "testbrand.com"},
-            "start_time": start_time.isoformat(),
-            "end_time": end_time.isoformat(),
-            "idempotency_key": f"approval-{suffix}",
-            "packages": [
-                {
-                    "product_id": product.product_id,
-                    "budget": 5000.0,
-                    "pricing_option_id": "cpm_usd_fixed",
-                }
-            ],
-        },
     )
-    MediaPackageFactory(
-        media_buy=media_buy,
-        package_id=f"pkg_appr_{suffix}",
-        package_config={"product_id": product.product_id, "budget": 5000.0},
-    )
+    # The row's budget and package_config (with the pricing_info the approval books from)
+    # come from the raw_request package, as production's pending writer writes them.
+    MediaPackageFactory(media_buy=media_buy, package_id=f"pkg_appr_{suffix}")
 
     # The access grant that used to be written here by hand is now MediaBuyFactory's own
     # ``grant_account_access`` post-generation hook: a factory that cannot produce a

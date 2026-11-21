@@ -7,13 +7,14 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import select
 
+from scripts.setup.seed_products import seed_verified_website
 from src.core.database.models import (
     AdapterConfig,
-    AuthorizedProperty,
     CurrencyLimit,
     GAMInventory,
     Principal,
     Product,
+    Publisher,
     Tenant,
     TenantAuthConfig,
 )
@@ -27,6 +28,7 @@ from src.services.setup_checklist_service import (
 )
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.adcp_factories import create_test_db_product
+from tests.helpers.environ import isolated_environ
 from tests.helpers.signing import deployment_kek
 
 pytestmark = pytest.mark.requires_db
@@ -97,7 +99,7 @@ def setup_complete_tenant(integration_db, test_tenant_id):
             # Delete related records first (due to foreign keys)
             db_session.execute(delete(Principal).where(Principal.tenant_id == test_tenant_id))
             db_session.execute(delete(Product).where(Product.tenant_id == test_tenant_id))
-            db_session.execute(delete(AuthorizedProperty).where(AuthorizedProperty.tenant_id == test_tenant_id))
+            db_session.execute(delete(Publisher).where(Publisher.tenant_id == test_tenant_id))
             db_session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == test_tenant_id))
             db_session.delete(existing)
             db_session.commit()
@@ -142,15 +144,8 @@ def setup_complete_tenant(integration_db, test_tenant_id):
         db_session.add(currency)
 
         # Add authorized property
-        prop = AuthorizedProperty(
-            tenant_id=test_tenant_id,
-            property_id="prop_1",
-            property_type="website",
-            name="Test Property",
-            publisher_domain="test.com",
-            identifiers=[{"type": "domain", "value": "test.com"}],
-        )
-        db_session.add(prop)
+        db_session.flush()
+        seed_verified_website(db_session, test_tenant_id, "test.com")
 
         # Add product
         product = create_test_db_product(
@@ -215,7 +210,7 @@ def setup_complete_tenant(integration_db, test_tenant_id):
         db_session.execute(delete(Principal).where(Principal.tenant_id == test_tenant_id))
         db_session.execute(delete(Product).where(Product.tenant_id == test_tenant_id))
         db_session.execute(delete(GAMInventory).where(GAMInventory.tenant_id == test_tenant_id))
-        db_session.execute(delete(AuthorizedProperty).where(AuthorizedProperty.tenant_id == test_tenant_id))
+        db_session.execute(delete(Publisher).where(Publisher.tenant_id == test_tenant_id))
         db_session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == test_tenant_id))
         db_session.execute(delete(TenantAuthConfig).where(TenantAuthConfig.tenant_id == test_tenant_id))
         stmt = select(Tenant).filter_by(tenant_id=test_tenant_id)
@@ -324,15 +319,8 @@ class TestSetupChecklistService:
             )
             db_session.add(currency)
 
-            prop = AuthorizedProperty(
-                tenant_id=test_tenant_id,
-                property_id="prop_1",
-                property_type="website",
-                name="Test",
-                publisher_domain="test.com",
-                identifiers=[],
-            )
-            db_session.add(prop)
+            db_session.flush()
+            seed_verified_website(db_session, test_tenant_id, "test.com")
             db_session.commit()
 
         with patch.dict(os.environ, {"GEMINI_API_KEY": "test_key"}):
@@ -345,7 +333,7 @@ class TestSetupChecklistService:
 
     def test_action_urls_provided(self, integration_db, setup_minimal_tenant, test_tenant_id):
         """Test that action URLs are provided for incomplete tasks."""
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             service = SetupChecklistService(test_tenant_id)
             status = service.get_setup_status()
 
@@ -357,7 +345,7 @@ class TestSetupChecklistService:
 
     def test_get_next_steps(self, integration_db, setup_minimal_tenant, test_tenant_id):
         """Test get_next_steps returns prioritized actions."""
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             service = SetupChecklistService(test_tenant_id)
             next_steps = service.get_next_steps()
 
@@ -471,16 +459,8 @@ class TestSetupChecklistService:
             )
             db_session.add(auth_config3)
 
-            property3 = AuthorizedProperty(
-                property_id="prop_bulk_3",
-                tenant_id=tenant_ids[2],
-                property_type="website",
-                name="Test Property",
-                identifiers=[{"type": "domain", "value": "example.com"}],
-                publisher_domain="example.com",
-                verification_status="verified",
-            )
-            db_session.add(property3)
+            db_session.flush()
+            seed_verified_website(db_session, tenant_ids[2], "psatest.com")
 
             # Use create_test_db_product factory
             product3 = create_test_db_product(
@@ -571,11 +551,10 @@ class TestSetupChecklistService:
                 for product in products:
                     db_session.delete(product)
 
-                # Delete authorized properties
-                stmt = select(AuthorizedProperty).filter_by(tenant_id=tenant_id)
-                properties = db_session.scalars(stmt).all()
-                for prop in properties:
-                    db_session.delete(prop)
+                # Delete publishers (their derived properties go with them)
+                stmt = select(Publisher).filter_by(tenant_id=tenant_id)
+                for publisher in db_session.scalars(stmt).all():
+                    db_session.delete(publisher)
 
                 # Delete currency limits
                 stmt = select(CurrencyLimit).filter_by(tenant_id=tenant_id)
@@ -623,7 +602,7 @@ class TestSetupValidation:
 
     def test_get_incomplete_critical_tasks(self, integration_db, setup_minimal_tenant, test_tenant_id):
         """Test getting list of incomplete critical tasks."""
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             incomplete = get_incomplete_critical_tasks(test_tenant_id)
 
             # Should have multiple incomplete tasks
@@ -646,7 +625,7 @@ class TestSetupValidation:
         on a buyer-facing error. It also asserted inside an ``except`` block, so it passed
         unchanged when nothing was raised at all.
         """
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             with pytest.raises(AdCPConfigurationError):
                 validate_setup_complete(test_tenant_id)
 
@@ -798,15 +777,8 @@ class TestTaskDetails:
             )
             db_session.add(currency)
 
-            prop = AuthorizedProperty(
-                tenant_id=test_tenant_id,
-                property_id="prop_1",
-                property_type="website",
-                name="Test Property",
-                publisher_domain="test.com",
-                identifiers=[{"type": "domain", "value": "test.com"}],
-            )
-            db_session.add(prop)
+            db_session.flush()
+            seed_verified_website(db_session, test_tenant_id, "test.com")
 
             product = create_test_db_product(
                 tenant_id=test_tenant_id,

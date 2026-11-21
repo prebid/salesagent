@@ -51,7 +51,7 @@ Feature: BR-UC-030 Manage Governance Binding
     And the response account "acct-social-001" does NOT echo governance_agents[0].authentication
     And the response carries an echoed adcp_version envelope
     # POST-S1, POST-S2, POST-S4, POST-S5
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
     Examples:
       | transport |
@@ -68,7 +68,7 @@ Feature: BR-UC-030 Manage Governance Binding
     And the persisted governance agent on "acct-social-001" is "https://governance.new-buyer.com"
     And the previous binding to "https://governance.old-buyer.com" is no longer present
     # Replace semantics, BR-1
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-sync-idempotent-replay @sync @idempotency @post-s3
   Scenario: Idempotent replay of sync_governance returns prior result without re-firing side effects
@@ -88,7 +88,7 @@ Feature: BR-UC-030 Manage Governance Binding
     Then the response variant is error
     And the error code indicates the missing idempotency_key
     # PRE-B1
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-sync-idempotency-key-too-short @sync @validation @partition @boundary
   Scenario Outline: sync_governance idempotency_key boundary <case>
@@ -96,7 +96,7 @@ Feature: BR-UC-030 Manage Governance Binding
     When the Buyer Agent sends a sync_governance request via MCP with idempotency_key "<key>" and one account "acct-social-001"
     Then the response outcome is "<outcome>"
     # PRE-B1 — pattern ^[A-Za-z0-9_.:-]{16,255}$
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
     Examples:
       | case                    | key                                                                                                                                                                                                                                                | outcome  |
@@ -112,7 +112,7 @@ Feature: BR-UC-030 Manage Governance Binding
     Then the response variant is error
     And the error references the url field and indicates https is required
     # PRE-B5, BR-5
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-sync-credentials-too-short @sync @validation @partition @boundary
   Scenario: sync_governance with credentials below 32 chars is rejected
@@ -121,7 +121,7 @@ Feature: BR-UC-030 Manage Governance Binding
     Then the response variant is error
     And the error references the credentials field
     # PRE-B7, BR-6
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-sync-multiple-agents-rejected @sync @validation @partition @boundary @cardinality
   Scenario: sync_governance with more than one governance_agents entry per account is rejected (maxItems 1)
@@ -130,7 +130,7 @@ Feature: BR-UC-030 Manage Governance Binding
     Then the response variant is error
     And the error references the governance_agents cardinality
     # PRE-B4, BR-2
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-sync-zero-agents-rejected @sync @validation @partition @boundary @cardinality
   Scenario: sync_governance with empty governance_agents array is rejected (minItems 1)
@@ -139,7 +139,7 @@ Feature: BR-UC-030 Manage Governance Binding
     Then the response variant is error
     And the error references the governance_agents cardinality
     # PRE-B4, BR-2
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-sync-accounts-max @sync @validation @partition @boundary
   Scenario: sync_governance with more than 100 accounts is rejected (maxItems 100)
@@ -148,7 +148,7 @@ Feature: BR-UC-030 Manage Governance Binding
     Then the response variant is error
     And the error references the accounts array size
     # PRE-B2
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-sync-implicit-account @sync @happy-path @account-ref @partition
   Scenario: Sync governance to an implicit account (brand + operator)
@@ -166,7 +166,7 @@ Feature: BR-UC-030 Manage Governance Binding
     Then the response variant is error
     And the error code is "AUTH_MISSING"
     # PRE-B8, POST-F1, POST-F2
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-sync-no-authority @sync @authority @partition
   Scenario: sync_governance fails per-account when the agent has no authority over the referenced account
@@ -202,7 +202,7 @@ Feature: BR-UC-030 Manage Governance Binding
     And the error code is "IDEMPOTENCY_CONFLICT"
     And no governance bindings are modified
     # BR-RULE-243 INV-5, POST-F1
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-sync-permission-denied @sync @authority @partition
   Scenario: sync_governance fails per-account with PERMISSION_DENIED when the agent's granted scope does not permit governance binding
@@ -213,7 +213,7 @@ Feature: BR-UC-030 Manage Governance Binding
     And the account "acct-social-002" has status "failed"
     And the per-account errors include a PERMISSION_DENIED code
     # BR-RULE-245 INV-4, BR-7
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-sync-absent-account-untouched @sync @replace-semantics @partition
   Scenario: sync_governance replace scope is per-account; an account not named in the request keeps its prior binding
@@ -236,7 +236,7 @@ Feature: BR-UC-030 Manage Governance Binding
     And the Seller Agent persists the governance_context unchanged
     And the Seller Agent proceeds with create_media_buy before expires_at
     # POST-S6, POST-S7, POST-S8, BR-10, BR-12, BR-13, BR-14
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-check-execution-approved @check @outbound @execution @approved
   Scenario: Seller calls check_governance for an execution check (committed planned_delivery)
@@ -247,7 +247,7 @@ Feature: BR-UC-030 Manage Governance Binding
     And the governance agent returns status "approved" with expires_at and a fresh governance_context JWS
     And the Seller Agent persists the governance_context
     # PRE-B14, BR-11
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-check-delivery-phase @check @outbound @delivery @ongoing @post-s11
   Scenario: Seller calls check_governance on phase=delivery with delivery_metrics and schedules next_check
@@ -258,7 +258,7 @@ Feature: BR-UC-030 Manage Governance Binding
     And the governance agent returns status "approved" with next_check populated for the next reporting window
     And the Seller Agent schedules the next outbound check_governance call at next_check
     # PRE-B12, POST-S11, BR-11
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-check-delivery-missing-reporting-period @check @validation @partition @boundary
   Scenario: check_governance on phase=delivery without delivery_metrics.reporting_period is rejected
@@ -268,7 +268,7 @@ Feature: BR-UC-030 Manage Governance Binding
     And the error code is "INVALID_REQUEST"
     And the seller does not proceed with the delivery-phase reporting until reporting_period is supplied
     # PRE-B12
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-check-no-sibling-account @check @validation @partition @contract
   Scenario: check_governance request that carries a sibling account field is rejected as a contract violation
@@ -278,7 +278,7 @@ Feature: BR-UC-030 Manage Governance Binding
     And the error code is "FIELD_NOT_PERMITTED"
     And the Seller Agent strips the account field before retrying (plan_id resolves the account internally)
     # PRE-B10, BR-10
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-check-conditions @check @outbound @conditions @post-s9
   Scenario: Governance agent returns status=conditions with required field-level adjustments
@@ -289,7 +289,7 @@ Feature: BR-UC-030 Manage Governance Binding
     And the Seller Agent applies the adjustments to the payload
     And the Seller Agent re-calls check_governance with the adjusted payload before proceeding
     # POST-S9, BR-14, BR-15
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-check-denied @check @outbound @denied @ext-a @post-s10
   Scenario: Governance agent returns status=denied with findings (Extension A)
@@ -302,7 +302,7 @@ Feature: BR-UC-030 Manage Governance Binding
     And the Seller Agent surfaces the denial to the buyer with the findings attached
     And the surfaced denial error should include a "suggestion" field guiding buyer remediation
     # POST-S10, POST-F1, POST-F3, BR-14, BR-15, BR-17
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-check-jws-forwarded-unchanged @check @outbound @jws @lifecycle @post-s7
   Scenario: Seller forwards governance_context JWS unchanged on subsequent checks for the same governed action
@@ -312,7 +312,7 @@ Feature: BR-UC-030 Manage Governance Binding
     Then the request carries governance_context exactly "JWS-token-aaaa.bbbb.cccc" with no modification
     And the governance agent decodes its own token to resolve internal plan state
     # POST-S7, BR-12, BR-13
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-check-expired-approval @check @lifecycle @expires-at @post-s8
   Scenario: Seller MUST act before expires_at; a lapsed approval is no approval
@@ -321,7 +321,7 @@ Feature: BR-UC-030 Manage Governance Binding
     Then the Seller Agent treats the approval as lapsed and does NOT proceed
     And the Seller Agent re-calls check_governance to obtain a fresh decision
     # POST-S8, BR-16
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-check-defaults @check @defaults @partition
   Scenario: check_governance applies defaults for omitted phase and purchase_type
@@ -338,7 +338,7 @@ Feature: BR-UC-030 Manage Governance Binding
     And the error code is "INVALID_REQUEST"
     And the Seller Agent does NOT proceed with the governed action
     # BR-RULE-247 INV-1
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-check-invalid-caller @check @validation @partition @boundary
   Scenario Outline: check_governance with a missing or non-URI caller is rejected with INVALID_REQUEST
@@ -347,7 +347,7 @@ Feature: BR-UC-030 Manage Governance Binding
     Then the governance agent rejects the request with error code "INVALID_REQUEST"
     And the error code is "INVALID_REQUEST"
     # BR-RULE-247 INV-2, INV-3 -- caller is required and format: uri
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
     Examples:
       | case            | caller    |
@@ -361,7 +361,7 @@ Feature: BR-UC-030 Manage Governance Binding
     Then the governance agent infers a budget-availability probe shape with no specific action proposed
     And the governance agent returns a decision status
     # BR-RULE-248 INV-3
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-check-governance-unavailable @check @outbound @governance-failure @fail-closed @partition
   Scenario: check_governance where the governance agent is unreachable fails closed with GOVERNANCE_UNAVAILABLE
@@ -373,7 +373,7 @@ Feature: BR-UC-030 Manage Governance Binding
     And the Seller Agent surfaces the failure to the buyer with error code "GOVERNANCE_UNAVAILABLE"
     And no error value is introduced into the governance-decision status enum
     # BR-RULE-252 INV-1/2/3, BR-RULE-250 INV-4
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
   @T-UC-030-check-jws-verification-failure @check @outbound @jws @verification @v3-1 @partition
   Scenario Outline: A governance_context whose JWS fails verification blocks the governed action with PERMISSION_DENIED
@@ -385,7 +385,7 @@ Feature: BR-UC-030 Manage Governance Binding
     And the failure is surfaced as error code "PERMISSION_DENIED"
     And the failure is modeled outside the approved/conditions/denied decision enum
     # BR-RULE-250 INV-1/2/3/4
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
     Examples:
       | reason                                  |
@@ -412,7 +412,7 @@ Feature: BR-UC-030 Manage Governance Binding
     When the Seller Agent issues a check_governance request exercising the purchase_type boundary case "<boundary>"
     Then the request verdict is "<verdict>"
     # purchase_type.yaml -- enum [media_buy, rights_license, signal_activation, creative_services], default media_buy
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
     Examples:
       | boundary                           | verdict |
@@ -426,7 +426,7 @@ Feature: BR-UC-030 Manage Governance Binding
     When the Seller Agent issues a check_governance request exercising the phase boundary case "<boundary>"
     Then the request verdict is "<verdict>"
     # governance_phase.yaml -- phase defaults to purchase; delivery phase requires delivery_metrics.reporting_period
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
     Examples:
       | boundary                                   | verdict |
@@ -441,7 +441,7 @@ Feature: BR-UC-030 Manage Governance Binding
     When the Seller Agent receives a governance decision exercising the status boundary case "<boundary>"
     Then the decision verdict is "<verdict>"
     # governance_decision.yaml -- status enum {approved, denied, conditions}; error is NOT an enum member (modeled as transport error)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
     Examples:
       | boundary                                                                          | verdict |
@@ -457,7 +457,7 @@ Feature: BR-UC-030 Manage Governance Binding
     When the Seller Agent exercises the expires_at boundary case "<boundary>"
     Then the lifecycle verdict is "<verdict>"
     # governance_expires_at.yaml -- approved/conditions decisions carry expires_at; acting after expires_at requires a fresh re-check
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
     Examples:
       | boundary                                                               | verdict |
@@ -471,7 +471,7 @@ Feature: BR-UC-030 Manage Governance Binding
     When a sync_governance response exercises the per-account status boundary case "<boundary>"
     Then the response verdict is "<verdict>"
     # sync_governance_account_status.yaml -- per-account status is a two-member enum {synced, failed}
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
     Examples:
       | boundary                                          | verdict |
@@ -485,7 +485,7 @@ Feature: BR-UC-030 Manage Governance Binding
     When the Buyer Agent sends a sync_governance request exercising the governance_agents boundary case "<boundary>"
     Then the request verdict is "<verdict>"
     # governance_agents_cardinality.yaml -- exactly one agent per account (minItems 1, maxItems 1)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
     Examples:
       | boundary                        | verdict |
@@ -498,7 +498,7 @@ Feature: BR-UC-030 Manage Governance Binding
     When the Buyer Agent sends a sync_governance request exercising the accounts boundary case "<boundary>"
     Then the request verdict is "<verdict>"
     # sync_governance_accounts_cardinality.yaml -- accounts minItems 1, maxItems 100
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
     Examples:
       | boundary                  | verdict |
@@ -512,7 +512,7 @@ Feature: BR-UC-030 Manage Governance Binding
     When the Buyer Agent sends a sync_governance request exercising the credentials boundary case "<boundary>"
     Then the request verdict is "<verdict>"
     # governance_credentials.yaml -- credentials required on request (minLength 32), NEVER echoed on response
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
     Examples:
       | boundary                        | verdict |
@@ -525,7 +525,7 @@ Feature: BR-UC-030 Manage Governance Binding
     When the Buyer Agent sends a sync_governance request exercising the authentication.schemes boundary case "<boundary>"
     Then the request verdict is "<verdict>"
     # governance_auth_scheme.yaml -- exactly one scheme from the closed enum
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
     Examples:
       | boundary                  | verdict |
@@ -541,7 +541,7 @@ Feature: BR-UC-030 Manage Governance Binding
     When the Buyer Agent sends a sync_governance request exercising the url boundary case "<boundary>"
     Then the request verdict is "<verdict>"
     # governance_agent_url.yaml -- format: uri, https scheme required (URL_NOT_HTTPS)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-governance-request.json
 
     Examples:
       | boundary                | verdict |

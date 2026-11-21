@@ -2,11 +2,6 @@
 
 This module contains tool implementations following the MCP/A2A shared
 implementation pattern from CLAUDE.md.
-
-SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
-- [valid-type] on lines ~98, ~236: SDK asset class unions (ImageFormatAsset |
-  VideoFormatAsset | ...) are dynamically resolved type factories; mypy cannot
-  validate the union. Permanent until upstream ships StrEnum.
 """
 
 import asyncio
@@ -15,22 +10,15 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-# FIXME(#1388): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp.types import (
-    AudioFormatAsset,
-    CreativeAgentCapability,
-    HtmlFormatAsset,
-    ImageFormatAsset,
-    TextFormatAsset,
-    UrlFormatAsset,
-    VideoFormatAsset,
-)
-from adcp.types import Format as AdcpFormat
+from adcp.types import CreativeAgentCapability
+from adcp.types.legacy import LegacyFormat as AdcpFormat
 from adcp.utils.format_assets import get_format_assets
 
 # Format subclass preserved through backward-compatibility helper (PEP 695 type param below).
 from src.core.exceptions import AdCPSalesAgentError, AdCPServiceUnavailableError
+from src.core.format_resolver import product_format_references
 from src.core.helpers import enum_value
+from src.core.helpers.adapter_helpers import adapter_served_creative_formats
 
 logger = logging.getLogger(__name__)
 
@@ -78,69 +66,44 @@ def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> Forma
 from adcp import ErrorCode
 
 from src.core.audit_logger import get_audit_logger
+from src.core.errors.codes import AppErrorCode
 from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import Error as AdCPResponseError
 
 if TYPE_CHECKING:
     from src.core.creative_agent_registry import FormatFetchResult
-from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse, format_id_identity
-
-
-def _infer_asset_type(asset_id: str) -> str:
-    """Infer asset type from asset ID naming convention.
-
-    Args:
-        asset_id: Asset identifier (e.g., "front_image", "youtube_url", "headline")
-
-    Returns:
-        Asset type string (image, video, text, url)
-    """
-    asset_lower = asset_id.lower()
-    if "image" in asset_lower or "logo" in asset_lower:
-        return "image"
-    elif "video" in asset_lower or "youtube" in asset_lower:
-        return "video"
-    elif "url" in asset_lower or "click" in asset_lower:
-        return "url"
-    elif "html" in asset_lower:
-        return "html"
-    else:
-        return "text"  # Default to text for headlines, body, captions, etc.
-
-
-# Each adcp Assets variant uses a Literal discriminator for asset_type.
-# Map asset type strings to the correct class.
-_ASSET_TYPE_TO_CLASS: dict[str, type] = {
-    "image": ImageFormatAsset,
-    "video": VideoFormatAsset,
-    "audio": AudioFormatAsset,
-    "text": TextFormatAsset,
-    "html": HtmlFormatAsset,
-    "url": UrlFormatAsset,
-}
-
-
-def _make_asset(
-    asset_id: str, asset_type: str, required: bool
-) -> ImageFormatAsset | VideoFormatAsset | AudioFormatAsset | TextFormatAsset | HtmlFormatAsset | UrlFormatAsset:  # type: ignore[valid-type]
-    """Build the correct Assets variant for a given asset type string."""
-    cls = _ASSET_TYPE_TO_CLASS.get(asset_type, TextFormatAsset)  # default to text
-    return cls(
-        item_type="individual",
-        asset_id=asset_id,
-        asset_type=asset_type,
-        required=required,
-    )
+from src.core.schemas import (
+    ListCreativeFormatsRequest,
+    ListCreativeFormatsResponse,
+    canonical_agent_url,
+    format_id_identity,
+)
 
 
 def _list_creative_formats_impl(
     req: ListCreativeFormatsRequest | None, identity: PublicIdentity
 ) -> ListCreativeFormatsResponse:
-    """List all available creative formats (AdCP spec endpoint).
+    """The deprecated 3.x compatibility list: the named formats this seller's products declare.
 
-    Returns formats from all registered creative agents (default + tenant-specific).
-    Uses CreativeAgentRegistry for dynamic format discovery with caching.
-    Supports optional filtering by type, standard_only, category, and format_ids.
+    A PROJECTION OF THE PRODUCTS, never a catalogue of its own. media-buy/specification.mdx
+    § Canonical creative-format discovery: "Compatibility `list_creative_formats` responses
+    MAY be projected from canonical declarations for older 3.x peers, but MUST NOT be
+    independently authored", and creative/sales-agent-creative-capabilities.mdx §
+    Compatibility: "The projection must be derived; it must not become a second authored
+    catalog." So a format is listed when some product's served contract names it -- the
+    ``format_ids`` projection a canonical product's declarations assert through
+    ``v1_format_ref``, or the arm a legacy-only product authored (:func:`_declared_formats`)
+    -- and the entry is that format's definition as its creative agent (or the adapter that
+    serves it in process) publishes it. A format an agent publishes that no product declares
+    is not this seller's to list, and a declared reference no agent defines has no
+    definition to project, so it is omitted rather than invented.
+
+    Filters on what the request declares: format_ids, name_search, asset_types,
+    the dimension and responsive filters, wcag_level, disclosure_positions,
+    disclosure_persistence, output_format_ids and input_format_ids, each narrowing the same list in turn so
+    several filters AND together. `type` is not among them -- the media-buy
+    list-creative-formats request has not declared it since the 3.0 major, and
+    `standard_only` and `category` never existed on it.
     """
     start_time = time.time()
 
@@ -181,76 +144,20 @@ def _list_creative_formats_impl(
         finally:
             loop.close()
 
-    formats = fetch_result.formats
+    # The DEFINITIONS come from where every format reference this seller receives is
+    # resolved: the dialled agents' formats PLUS the ones its own ad-server adapter serves
+    # in process (Broadstreet acting as both sales and creative agent), read through
+    # ``adapter_served_creative_formats`` as ``seller_format_catalogue`` reads them. Which of
+    # them are LISTED is the products' answer alone (see the docstring), matched by the
+    # registry's own rule for whether an entry is the format a reference names, so a format
+    # ``get_format`` resolves for a declaration is the format this lists for it.
+    declared = _declared_formats(tenant.tenant_id)
+    formats = [
+        f
+        for f in [*fetch_result.formats, *adapter_served_creative_formats(tenant.tenant_id)]
+        if any(registry.lists_format(f, agent_url, f.format_id.id) for agent_url in declared.get(f.format_id.id, ()))
+    ]
     agent_errors = _route_agent_failures(fetch_result, req)
-
-    # Get formats from adapter if it provides them (e.g., Broadstreet acting as both sales and creative agent)
-    # Check adapter type from tenant config and load formats without instantiating the full adapter
-    try:
-        from src.core.database.repositories.uow import TenantConfigUoW
-
-        with TenantConfigUoW(tenant.tenant_id) as uow:
-            assert uow.tenant_config is not None
-            config_row = uow.tenant_config.get_adapter_config()
-            adapter_type = config_row.adapter_type if config_row else None
-
-            if adapter_type == "broadstreet":
-                # Import Broadstreet templates and convert to formats
-                from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
-                from src.core.schemas import Format, FormatId, url
-
-                agent_url = f"broadstreet://{tenant.tenant_id}"
-
-                for template_id, template in BROADSTREET_TEMPLATES.items():
-                    try:
-                        format_id = FormatId(
-                            id=f"broadstreet_{template_id}",
-                            agent_url=url(agent_url),
-                        )
-
-                        # Build assets list using the correct Assets variant per type
-                        assets_list: list[  # type: ignore[valid-type]
-                            ImageFormatAsset
-                            | VideoFormatAsset
-                            | AudioFormatAsset
-                            | TextFormatAsset
-                            | HtmlFormatAsset
-                            | UrlFormatAsset
-                        ] = []
-                        for asset_id in template.get("required_assets", []):
-                            asset_type = _infer_asset_type(asset_id)
-                            assets_list.append(_make_asset(asset_id, asset_type, required=True))
-                        for asset_id in template.get("optional_assets", []):
-                            asset_type = _infer_asset_type(asset_id)
-                            assets_list.append(_make_asset(asset_id, asset_type, required=False))
-
-                        fmt = Format(
-                            format_id=format_id,
-                            name=str(template["name"]),
-                            description=str(template["description"]) if template.get("description") else None,
-                            assets=assets_list if assets_list else None,
-                            is_standard=False,
-                            platform_config=None,
-                            category=None,
-                            requirements=None,
-                            iab_specification=None,
-                            accepts_3p_tags=None,
-                        )
-                        formats.append(fmt)
-                    except Exception as e:
-                        # FIXME(#1566): silent per-item failure — unparseable template is
-                        # dropped from the formats response with no signal to the caller.
-                        # Allowlisted in test_architecture_no_silent_loop_failures.py.
-                        logger.warning(f"Failed to parse Broadstreet template {template_id}: {e}")
-                        continue
-
-                logger.info(f"Added {len(BROADSTREET_TEMPLATES)} Broadstreet formats")
-    except Exception as e:
-        # FIXME(#1566): silent degradation — the adapter's formats are dropped from
-        # the response with no errors[] entry, so a failed lookup is indistinguishable
-        # from "this adapter provides none".
-        # Allowlisted in test_architecture_no_silent_loop_failures.py.
-        logger.debug(f"Could not get adapter formats: {e}")
 
     # Apply filters from request
     if req.format_ids:
@@ -325,6 +232,19 @@ def _list_creative_formats_impl(
             return {enum_value(c.position) for c in f.disclosure_capabilities if c.position is not None}
         return {enum_value(p) for p in (f.supported_disclosure_positions or [])}
 
+    def get_format_disclosure_persistence(f) -> set[str]:
+        """Every persistence mode any of the format's disclosure positions supports.
+
+        ``media-buy/list-creative-formats-request.json`` on ``disclosure_persistence``:
+        "Filter to formats where each requested persistence mode is supported by at least
+        one position in disclosure_capabilities. Different positions may satisfy different
+        modes." So the modes are pooled across positions, and only
+        ``disclosure_capabilities`` declares them -- the flat
+        ``supported_disclosure_positions`` carries no persistence at all, so a format
+        declaring only that yields the empty set and drops out of any persistence filter.
+        """
+        return {enum_value(mode) for c in (f.disclosure_capabilities or []) for mode in c.persistence}
+
     def get_format_asset_types(f) -> set[str]:
         """Get all asset types from format's assets.
 
@@ -359,7 +279,7 @@ def _list_creative_formats_impl(
     # Filter by asset_types - formats must support at least one of the requested types
     if req.asset_types:
         # Normalize requested asset types to string values for comparison.
-        # adcp 3.6.0: req.asset_types contains AssetContentType enums; use .value to get string.
+        # the pinned SDK: req.asset_types contains AssetContentType enums; use .value to get string.
         # Format assets now use plain string literals, so must compare using .value not str(enum).
         requested_types = {enum_value(at) for at in req.asset_types}
         formats = [f for f in formats if get_format_asset_types(f) & requested_types]
@@ -389,17 +309,21 @@ def _list_creative_formats_impl(
             if f.accessibility is not None and _WCAG_ORDER.get(f.accessibility.wcag_level, 0) >= min_level
         ]
 
-    # Filter by disclosure_positions — AND semantics, unlike every filter around it.
-    # media-buy/list-creative-formats-request.json: "Filter to formats that support all
-    # of these disclosure positions" -- "all", not "any", so the
-    # requested set must be a SUBSET of what the format declares. asset_types and the
-    # two format-id filters intersect (OR); this one contains (AND), and getting that
-    # backwards would hand a buyer a format missing a position they asked for.
-    # get_format_disclosure_positions owns the disclosure_capabilities ->
-    # supported_disclosure_positions fallback the same schema prescribes.
-    if req.disclosure_positions:
-        requested_positions = {enum_value(p) for p in req.disclosure_positions}
-        formats = [f for f in formats if requested_positions <= get_format_disclosure_positions(f)]
+    # Filter by disclosure_positions and disclosure_persistence — AND semantics, unlike
+    # every filter around them. media-buy/list-creative-formats-request.json: "Filter to
+    # formats that support all of these disclosure positions", and for persistence "each
+    # requested persistence mode is supported" -- every requested member, not any, so the
+    # requested set must be a SUBSET of what the format declares. asset_types and the two
+    # format-id filters intersect (OR); these two contain (AND), and getting that
+    # backwards would hand a buyer a format missing a position or a mode they asked for.
+    # The two readers own where each declaration lives (see their docstrings).
+    for requested_members, declared_members in (
+        (req.disclosure_positions, get_format_disclosure_positions),
+        (req.disclosure_persistence, get_format_disclosure_persistence),
+    ):
+        if requested_members:
+            requested = {enum_value(m) for m in requested_members}
+            formats = [f for f in formats if requested <= declared_members(f)]
 
     # Filter by output_format_ids / input_format_ids (OR semantics each).
     # These $ref the same core/format-id.json schema as format_ids, so they carry
@@ -421,7 +345,7 @@ def _list_creative_formats_impl(
             ]
 
     # Sort formats by name for consistent ordering
-    # (type field removed in adcp 3.12)
+    # (type field removed in the pinned SDK)
     formats.sort(key=lambda f: f.name or "")
 
     # A no-op today: the helper returns each format unchanged, because the pinned Format
@@ -464,7 +388,7 @@ def _list_creative_formats_impl(
     )
 
     # Build creative_agents referrals from registry (POST-S4)
-    from adcp.types.generated_poc.media_buy.list_creative_formats_response import (
+    from adcp.types.domains.media_buy.list_creative_formats_response import (
         CreativeAgent as AdcpCreativeAgent,
     )
 
@@ -506,8 +430,14 @@ def _list_creative_formats_impl(
     )
 
     # Create response (no message/specification_version - not in adapter schema)
-    # Determine sandbox flag from identity (BR-RULE-209 INV-4)
-    sandbox_flag: bool | None = None
+    # The sandbox flag follows the account the request named (BR-RULE-209 INV-4/INV-5).
+    # media-buy/advanced-topics/sandbox.mdx: "Sandbox is account-level, not per-request.
+    # Once a request references a sandbox account, the entire request is treated as
+    # sandbox", and the seller "SHOULD include `sandbox: true` in success responses". A
+    # request naming an account needs a credential even on this public tool, so the
+    # resolver hands over a ResolvedIdentity with that account inside; a request naming
+    # none is a production request and carries no flag.
+    sandbox_flag = identity.sandbox_echo
 
     # Format list from registry is compatible with library Format type
     response = ListCreativeFormatsResponse(
@@ -524,6 +454,36 @@ def _list_creative_formats_impl(
     # Always return Pydantic model - MCP wrapper will handle serialization
     # Schema enhancement (if needed) should happen in the MCP wrapper, not here
     return response
+
+
+def _declared_formats(tenant_id: str) -> dict[str, set[str]]:
+    """The named formats the tenant's products declare: each id, to the canonical agent URLs declaring it.
+
+    Each product's served contract (``Product.format_contract``), so the set is exactly the
+    ``format_ids`` the same products carry on ``get_products``: derived from the canonical
+    declarations' ``v1_format_ref`` for a canonical product (canonical-formats.mdx §
+    Deprecated named-format compatibility projection: "Compatibility ``format_ids`` MUST be
+    derived from them"), the authored arm for a legacy-only one. The parameters a reference
+    pins are dropped, so a reference that pins a template's parameters names the template.
+    The agent half stays a URL rather than a :data:`FormatKey` because a catalogue entry is
+    matched to it by ``CreativeAgentRegistry.lists_format``, which compares the operator
+    agent by origin and accepts the entries of the agent that answers in its place.
+
+    KNOWN CEILING: every product of the tenant, with no principal or account scoping. The
+    pin lets a seller with one shared list ignore the request's ``account``
+    (specification.mdx § Canonical creative-format discovery); a format a hidden product
+    declares is listed to every caller. The upgrade path is the principal filter
+    ``get_products`` applies, read from the same rows.
+    """
+    from src.core.database.repositories.uow import ProductUoW
+
+    with ProductUoW(tenant_id) as uow:
+        assert uow.products is not None
+        declared: dict[str, set[str]] = {}
+        for product in uow.products.list_all():
+            for ref in product_format_references(product.format_contract.format_ids):
+                declared.setdefault(ref.id, set()).add(canonical_agent_url(ref.agent_url))
+        return declared
 
 
 def _route_agent_failures(
@@ -556,7 +516,17 @@ def _route_agent_failures(
     Correlation comes from ``failed_agent_urls``, which is parallel to
     ``errors`` and never reaches the wire; the advisory itself deliberately
     omits the agent_url because every wire field is client-facing.
+
+    Only an UNREACHABLE agent is rerouted. An AGENT_FORMATS_DISCARDED advisory names an
+    agent that answered: the format the buyer referenced may well be among the ones it
+    returned, so "the referenced creative agent is unavailable" would be false.
+
+    The operator agent's failed url is its identity, an origin, while a reference to it
+    carries the path its catalog publishes (``<origin>/api/creative-agent``), so the match
+    is ``names_listed_agent``'s: by origin for the operator agent, as spelled for any other.
     """
+    from src.core.creative_agent_registry import names_listed_agent
+
     requested_agent_urls = {str(fid.agent_url) for fid in (req.format_ids or [])}
     if not requested_agent_urls or not fetch_result.failed_agent_urls:
         return fetch_result.errors
@@ -564,7 +534,8 @@ def _route_agent_failures(
     routed: list[AdCPResponseError] = []
     for index, advisory in enumerate(fetch_result.errors):
         failed_url = fetch_result.failed_agent_urls[index] if index < len(fetch_result.failed_agent_urls) else None
-        if failed_url is not None and str(failed_url) in requested_agent_urls:
+        unreachable = advisory.code == AppErrorCode.AGENT_UNREACHABLE
+        if unreachable and failed_url is not None and names_listed_agent(str(failed_url), requested_agent_urls):
             routed.append(AdCPResponseError.of(ErrorCode.REFERENCE_NOT_FOUND, field="format_ids"))
         else:
             routed.append(advisory)

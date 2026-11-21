@@ -46,13 +46,19 @@ def _call_get_products(ctx: dict, **kwargs: Any) -> None:
 
 
 def _get_first_prop(ctx: dict) -> Any:
-    """Get the inner model of the first publisher_properties entry."""
+    """Get the first publisher_properties entry.
+
+    No ``.root``: adcp 9 ships ``PublisherPropertySelector`` as the union of its
+    three arms (``PublisherProperty85`` / ``86`` / ``87``) rather than a RootModel
+    over them, so the entry IS the arm and carries ``selection_type`` /
+    ``property_ids`` / ``property_tags`` directly. Production made the same move at
+    ``src/core/tools/products.py``; this helper is the test side of it.
+    """
     product = ctx["first_product"]
     pp = product.publisher_properties
     assert pp is not None, "publisher_properties is None"
     assert pp, "publisher_properties is empty"
-    inner = pp[0]
-    return inner.root
+    return pp[0]
 
 
 # ── Given steps ─────────────────────────────────────────────────────
@@ -168,14 +174,23 @@ def given_profile_legacy(ctx: dict, ids: str, domain: str) -> None:
     )
 
 
+def _link_product(ctx: dict, **product_id: str) -> None:
+    """Create a priced product referencing the inventory profile in ``ctx["profile"]``."""
+    product = ProductFactory(tenant=ctx["tenant"], inventory_profile_id=ctx["profile"].id, **product_id)
+    PricingOptionFactory(product=product)
+    ctx["product"] = product
+
+
 @given("a product linked to that inventory profile with pricing")
 def given_product_with_profile(ctx: dict) -> None:
     """Create a product referencing the inventory profile, with pricing."""
-    tenant = ctx["tenant"]
-    profile = ctx["profile"]
-    product = ProductFactory(tenant=tenant, inventory_profile_id=profile.id)
-    PricingOptionFactory(product=product)
-    ctx["product"] = product
+    _link_product(ctx)
+
+
+@given(parsers.parse('product "{product_id}" linked to that inventory profile with pricing'))
+def given_named_product_with_profile(ctx: dict, product_id: str) -> None:
+    """The same product under an id a Then can name."""
+    _link_product(ctx, product_id=product_id)
 
 
 # ── When steps ──────────────────────────────────────────────────────

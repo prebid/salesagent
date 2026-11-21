@@ -68,6 +68,7 @@ from tests.unit._architecture_helpers import (
     REPO_ROOT,
     assert_detector_catches_ast_snippets,
     parse_module,
+    rel,
     src_python_files,
 )
 
@@ -132,9 +133,9 @@ def find_banned_stringification_linenos(tree: ast.Module) -> list[int]:
 def test_no_verified_rootmodel_field_is_stringified():
     violations: list[str] = []
     for path in src_python_files(REPO_ROOT):
-        rel = path.relative_to(REPO_ROOT).as_posix()
+        rel_path = rel(path)
         for site in find_banned_stringification_sites(parse_module(path)):
-            violations.append(f"{rel}:{site.lineno}: [{site.form}] {site.receiver_expr}.{site.attr}")
+            violations.append(f"{rel_path}:{site.lineno}: [{site.form}] {site.receiver_expr}.{site.attr}")
     assert not violations, (
         "A verified RootModel field is stringified. RootModel has no __str__, so this "
         "renders the repr (root='94103'), not the scalar — wrong in an error message a "

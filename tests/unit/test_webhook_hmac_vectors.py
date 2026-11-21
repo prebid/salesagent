@@ -58,7 +58,7 @@ from src.core.security.webhook_strict_json import DuplicateKeyInput, loads_rejec
 from src.services.webhook_verification import WebhookBodyMalformedError, WebhookVerificationError, WebhookVerifier
 
 _VECTORS_PATH = Path(__file__).parent.parent / "fixtures" / "adcp_webhook_vectors_pinned" / "webhook-hmac-sha256.json"
-_DATA = json.loads(_VECTORS_PATH.read_text())
+_DATA = json.loads(_VECTORS_PATH.read_text(encoding="utf-8"))
 _SECRET = _DATA["secret"]
 
 # The one ``vectors`` entry the verifier must REJECT rather than accept: its

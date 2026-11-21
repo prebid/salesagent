@@ -67,7 +67,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/gam/managers/targeting.py", "_load_axe_keys"),
     ("src/adapters/gam/managers/targeting.py", "_load_custom_targeting_key_ids"),
     # sync_custom_targeting_keys removed — uses AdapterConfigRepository
-    ("src/adapters/gam/managers/workflow.py", "create_manual_order_workflow_step"),
     ("src/adapters/gam_reporting_api.py", "get_ad_unit_breakdown"),
     ("src/adapters/gam_reporting_api.py", "get_advertiser_summary"),
     ("src/adapters/gam_reporting_api.py", "get_country_breakdown"),
@@ -75,9 +74,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/gam_reporting_api.py", "get_principal_reporting"),
     ("src/adapters/gam_reporting_api.py", "get_principal_summary"),
     ("src/adapters/google_ad_manager.py", "create_media_buy"),
-    ("src/adapters/google_ad_manager.py", "get_media_buy_delivery"),
     ("src/adapters/google_ad_manager.py", "get_packages_snapshot"),
-    ("src/adapters/mock_ad_server.py", "_create_media_buy_immediate"),
     ("src/adapters/mock_ad_server.py", "mock_product_config"),
     ("src/adapters/mock_ad_server.py", "register_ui_routes"),
     ("src/adapters/mock_ad_server.py", "wrapped_view"),
@@ -99,16 +96,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/auth.py", "tenant_login"),
     # _construct_agent_url removed — the agent URL is stored tenant state, reached
     # through a repository instead of selected here
-    ("src/admin/blueprints/authorized_properties.py", "_save_properties_batch"),
-    ("src/admin/blueprints/authorized_properties.py", "create_property"),
     ("src/admin/blueprints/authorized_properties.py", "create_property_tag"),
-    ("src/admin/blueprints/authorized_properties.py", "delete_property"),
-    ("src/admin/blueprints/authorized_properties.py", "edit_property"),
-    ("src/admin/blueprints/authorized_properties.py", "list_authorized_properties"),
-    ("src/admin/blueprints/authorized_properties.py", "list_authorized_properties_api"),
     ("src/admin/blueprints/authorized_properties.py", "list_property_tags"),
-    ("src/admin/blueprints/authorized_properties.py", "sync_properties_from_adagents"),
-    ("src/admin/blueprints/authorized_properties.py", "upload_authorized_properties"),
     # create_tenant fixed — its duplicate check goes through TenantLookupRepository
     # get_tenant_from_hostname fixed — the admin plane's one host -> tenant lookup now goes
     # through TenantLookupRepository.find_active_by_virtual_host, and public.landing and
@@ -180,11 +169,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     # landing fixed — it asks core.get_tenant_from_hostname instead of selecting tenants
     ("src/admin/blueprints/public.py", "provision_tenant"),
     ("src/admin/blueprints/public.py", "signup_complete"),
-    ("src/admin/blueprints/publisher_partners.py", "add_publisher_partner"),
-    ("src/admin/blueprints/publisher_partners.py", "delete_publisher_partner"),
-    ("src/admin/blueprints/publisher_partners.py", "get_publisher_properties"),
-    ("src/admin/blueprints/publisher_partners.py", "list_publisher_partners"),
-    ("src/admin/blueprints/publisher_partners.py", "sync_publisher_partners"),
     ("src/admin/blueprints/settings.py", "get_approximated_token"),
     ("src/admin/blueprints/settings.py", "register_approximated_domain"),
     ("src/admin/blueprints/settings.py", "test_ai_connection"),
@@ -213,8 +197,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/users.py", "disable_setup_mode"),
     ("src/admin/blueprints/users.py", "enable_setup_mode"),
     ("src/admin/blueprints/users.py", "list_users"),
-    ("src/admin/blueprints/users.py", "toggle_user"),
-    ("src/admin/blueprints/users.py", "update_role"),
     ("src/admin/blueprints/workflows.py", "list_workflows"),  # select(Tenant) — no tenant repo yet
     ("src/admin/blueprints/workflows.py", "review_workflow_step"),  # select(Context) — context lookup
     # ── Alias-hidden, now visible (#2128) ──
@@ -303,8 +285,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/delivery_webhook_scheduler.py", "_send_report_for_media_buy"),
     ("src/services/dynamic_pricing_service.py", "_calculate_product_pricing"),
     ("src/services/dynamic_products.py", "archive_expired_variants"),
-    ("src/services/dynamic_products.py", "generate_variants_for_brief"),
-    ("src/services/dynamic_products.py", "generate_variants_from_signals"),
     ("src/services/format_metrics_service.py", "_process_and_store_metrics"),
     ("src/services/format_metrics_service.py", "aggregate_all_tenants"),
     # _update_adapter_config_targeting_keys removed — uses AdapterConfigRepository
@@ -339,11 +319,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/policy_service.py", "_update_currencies"),
     ("src/services/policy_service.py", "get_policies"),
     ("src/services/policy_service.py", "update_policies"),
-    ("src/services/property_discovery_service.py", "_batch_sync_properties"),
-    ("src/services/property_discovery_service.py", "_batch_sync_tags"),
-    ("src/services/setup_checklist_service.py", "_check_critical_tasks"),
-    ("src/services/setup_checklist_service.py", "_check_optional_tasks"),
-    ("src/services/setup_checklist_service.py", "get_bulk_setup_status"),
+    # _check_critical_tasks, _check_optional_tasks and get_bulk_setup_status removed — the
+    # tenant, its auth config and its verified partners come through the repositories
     ("src/services/setup_checklist_service.py", "get_setup_status"),
 }
 

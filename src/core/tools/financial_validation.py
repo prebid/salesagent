@@ -20,8 +20,12 @@ def raise_if_validation_failed(
     exc_type: type[AdCPSalesAgentError[BudgetDetails]],
     requested_budget: Decimal,
     budget_limit: Decimal,
+    field: str | None = None,
 ) -> None:
     """Raise ``exc_type`` with the two numbers that decided it, when ``reason`` is non-empty.
+
+    ``field`` is the ``core/error.json`` pointer to the refused budget, for a call site
+    that knows which package it is grading.
 
     Shared one-liner so the budget ``validate_*`` call sites in the create and
     update media-buy paths express their failure path uniformly. Each site
@@ -47,7 +51,10 @@ def raise_if_validation_failed(
     """
     if reason:
         logger.warning("Budget validation refused the request: %s", reason)
-        raise exc_type(details=BudgetDetails(requested_budget=str(requested_budget), budget_limit=str(budget_limit)))
+        raise exc_type(
+            details=BudgetDetails(requested_budget=str(requested_budget), budget_limit=str(budget_limit)),
+            field=field,
+        )
 
 
 def validate_budget_positive(

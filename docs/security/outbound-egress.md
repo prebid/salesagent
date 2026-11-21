@@ -266,9 +266,9 @@ than relaxing the gateway.
 `docker-compose.e2e.yml` runs one shared TLS terminator, the `tls-proxy`
 service, fronting every `*.adcp.test` origin the stack connects to —
 `proxy.adcp.test`, `creative-agent.adcp.test`, `webhooks.adcp.test`, and
-`storyboard.adcp.test`, as network aliases on that one service
-(`docker-compose.e2e.yml:351-363`), routed by server name indication (SNI)
-through the map in `config/nginx/nginx-tls-test.conf.template:39-44`.
+`storyboard.adcp.test`, as network aliases on that one service, routed by server
+name indication (SNI) through the `$tls_upstream_named` map in
+`config/nginx/nginx-tls-test.conf.template`.
 `scripts/dev/gen_test_tls.py` generates the private certificate authority (CA)
 and the one leaf covering every name the stack answers to.
 [Webhook testing architecture](../design/webhook-testing-architecture.md)
@@ -355,7 +355,12 @@ item, tracked by GH #1872.
 
 **3. Fixed-destination vendor SDKs** — `googleads`, `google.auth`,
 `google.cloud.iam`, and `pydantic_ai` providers. No attacker- or tenant-controlled
-URL ever reaches them, so there is no SSRF vector to guard.
+URL ever reaches them, so there is no SSRF vector to guard. The one destination
+setting among them is the operator's: `google-genai` reads `GOOGLE_GEMINI_BASE_URL`
+from the process environment when no base URL is passed, and `AIServiceFactory`
+passes none. A tenant's `ai_config` carries a provider, a model and a key, never a
+URL. The e2e stack sets the variable to point the server at its scripted model
+origin (`docker-compose.e2e.yml`).
 
 If you add a fourth, it belongs in that docstring with its reason before it
 belongs in the code. An unlisted caller is indistinguishable from a mistake.

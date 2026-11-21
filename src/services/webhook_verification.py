@@ -63,7 +63,7 @@ class WebhookBodyMalformedError(WebhookVerificationError):
     credential rejection.
 
     Distinct from a bare :class:`WebhookVerificationError` (signature
-    mismatch, bad timestamp, malformed header) per AdCP 3.1.1
+    mismatch, bad timestamp, malformed header) per AdCP.1
     L1/security.mdx §Duplicate object keys: *"the signature IS valid; the
     body is malformed"* — verifier checklist step 14 names this identifier
     ``webhook_body_malformed``, distinct from
@@ -112,7 +112,7 @@ class WebhookVerifier:
             double-parse: this method used to instruct callers to
             "parse the body again" after verification, which is a second,
             independent parse of the same bytes — exactly the
-            parser-differential shape AdCP 3.1.1's duplicate-key rule cites
+            parser-differential shape AdCP.1's duplicate-key rule cites
             CVE-2017-12635 to warn against (a verifier and a business-logic
             parser disagreeing about what a body means). This return-type
             change is NOT required by the duplicate-key MUST itself — a
@@ -125,7 +125,7 @@ class WebhookVerifier:
                 failure. The failing check is carried in ``internal_detail``
                 (server log only), never in the buyer-facing sentence.
             WebhookBodyMalformedError: The signature verified but the body
-                contains a duplicate JSON object key (AdCP 3.1.1
+                contains a duplicate JSON object key (AdCP.1
                 L1/security.mdx §Duplicate object keys, verifier checklist
                 step 14) — raised strictly AFTER signature verification
                 succeeds, never before, and never conflated with a genuine

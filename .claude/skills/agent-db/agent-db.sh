@@ -152,7 +152,13 @@ cmd_up() {
         exit 1
     fi
 
-    local db_url="postgresql://${PG_USER}:${PG_PASS}@localhost:${port}/${PG_DB}"
+    # 127.0.0.1, not localhost: the container publishes IPv4-only (see the -p
+    # 127.0.0.1:${port}:5432 above), while `localhost` resolves to ::1 first on
+    # macOS. libpq usually falls through to IPv4, which is why this cost one
+    # random item in an 8648-item BDD leg rather than all of them -- and a defect
+    # that costs one random item reads as noise. scripts/test-stack.sh already
+    # writes 127.0.0.1 for the same reason. salesagent-8qela.134.
+    local db_url="postgresql://${PG_USER}:${PG_PASS}@127.0.0.1:${port}/${PG_DB}"
 
     # Write state file
     cat > "$STATE_FILE" <<EOF

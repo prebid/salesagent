@@ -6,15 +6,33 @@ all registered creative agents (default + tenant-specific).
 
 import asyncio
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 from pydantic import BaseModel
 
 from src.admin.utils import require_auth
 from src.core.creative_agent_registry import get_creative_agent_registry
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.agent import CreativeAgentRepository
+from src.core.database.repositories.uow import TenantConfigUoW
 
 bp = Blueprint("format_search", __name__, url_prefix="/api/formats")
+
+
+def _unknown_tenant(tenant_id: str | None) -> tuple[Response, int] | None:
+    """The 404 for a ``tenant_id`` that names no tenant; None when it names one or is absent.
+
+    These routes take the tenant from a query parameter, and the registry reads the named
+    tenant's federation setting with ``one()``, which raises for a tenant that does not
+    exist. An absent or empty ``tenant_id`` is the registry's own "no tenant" case (the
+    default agent alone), so only a named tenant is looked up.
+    """
+    if not tenant_id:
+        return None
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        if uow.tenant_config.get_tenant() is not None:
+            return None
+    return jsonify({"error": "Tenant not found"}), 404
 
 
 @bp.route("/search", methods=["GET"])
@@ -35,6 +53,9 @@ def search_formats():
 
     if not query or len(query) < 2:
         return jsonify({"error": "Query must be at least 2 characters"}), 400
+
+    if (refusal := _unknown_tenant(tenant_id)) is not None:
+        return refusal
 
     try:
         # Get registry and search
@@ -58,7 +79,6 @@ def search_formats():
                 "agent_url": fmt.agent_url,
                 "format_id": format_id_str,
                 "name": fmt.name,
-                "category": fmt.category,
                 "description": fmt.description,
                 "is_standard": fmt.is_standard,
             }
@@ -92,6 +112,9 @@ def list_all_formats():
     """
     tenant_id = request.args.get("tenant_id")
     force_refresh = request.args.get("force_refresh", "false").lower() == "true"
+
+    if (refusal := _unknown_tenant(tenant_id)) is not None:
+        return refusal
 
     try:
         registry = get_creative_agent_registry()
@@ -136,7 +159,6 @@ def list_all_formats():
                 {
                     "format_id": format_id_value,  # Nested object, not flattened string
                     "name": fmt.name,
-                    "category": fmt.category,
                     "description": fmt.description,
                     "is_standard": fmt.is_standard,
                     "dimensions": dimensions_str,  # Add dimensions for size matching
@@ -260,16 +282,11 @@ def list_creative_agents():
     if not tenant_id:
         return jsonify({"error": "tenant_id is required"}), 400
 
+    if (refusal := _unknown_tenant(tenant_id)) is not None:
+        return refusal
+
     try:
-        # Get tenant config
         with get_db_session() as session:
-            from src.core.database.repositories.tenant_config import TenantConfigRepository
-
-            tenant = TenantConfigRepository(session, tenant_id).get_tenant()
-
-            if not tenant:
-                return jsonify({"error": "Tenant not found"}), 404
-
             # Get creative agents from config
             agents = []
 

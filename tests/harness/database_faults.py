@@ -58,11 +58,30 @@ class _NextStatementInterrupter:
     """Cancel or terminate the first backend blocked by the lock this object holds.
 
     With *sending*, only a blocked backend whose current statement contains that text.
+
+    WHETHER IT FIRED IS RECORDED, and that is what makes a scenario built on it readable
+    rather than racy (salesagent-f0b86). The lock guarantees the seller's next statement on
+    the table BLOCKS, so the cancellation is ordered against it -- but only once the watcher
+    has seen that blocked backend. If the seller's request has not reached the statement
+    before ``_WAIT_FOR_WAITER_S`` expires, the ``finally`` below releases the lock and the
+    statement then runs to completion UNPROVOKED. The old code returned silently from that
+    path, so the scenario went on to assert a wire rejection that nothing had caused, and its
+    failure was indistinguishable from the seller genuinely failing to reject a cancelled
+    statement -- measured once in 20 box runs on one transport, green in 15 of 15 isolated
+    legs, which is the signature of a race rather than a wrong answer.
+
+    So ``signalled`` is the state that separates "cancelled" from "completed fast", and
+    :meth:`close` refuses a run in which nothing was signalled. A timing change -- a longer
+    deadline, a sleep, a retry -- would have made the row quieter without making its verdict
+    mean one thing.
     """
 
     def __init__(self, url: URL, *, table: str, terminate: bool, sending: str = "") -> None:
         self._signal = "pg_terminate_backend" if terminate else "pg_cancel_backend"
         self._sending = f"%{sending}%"
+        #: The backends this fault actually signalled. Empty means the fault never fired,
+        #: which is a setup failure and never an observation about the seller.
+        self.signalled: set[int] = set()
         self._lock_conn = _connect(url)
         cur = self._lock_conn.cursor()
         cur.execute(f"SET lock_timeout = '{_LOCK_TIMEOUT}'")
@@ -89,19 +108,34 @@ class _NextStatementInterrupter:
                 if victims:
                     for pid in victims:
                         cur.execute(f"SELECT {self._signal}(%s)", (pid,))
-                    # Hold the lock until the signal has landed, or the statement simply
-                    # completes once the lock goes away and nothing was provoked.
+                    self.signalled |= victims
+                    # Hold the lock until the signal has landed. The deadline is a safety
+                    # net against a backend that never clears, not a success condition:
+                    # ``signalled`` is already non-empty here, so whichever way this loop
+                    # ends the fault DID fire and the scenario's wire assertion is about
+                    # the seller.
                     while victims & self._blocked_pids(cur) and time.monotonic() < deadline:
                         time.sleep(0.01)
                     return
                 time.sleep(0.01)
         finally:
+            # Releasing the lock here is what lets an unprovoked statement complete, so the
+            # emptiness of ``signalled`` is the only honest record that this happened.
             self._lock_conn.rollback()
 
     def close(self) -> None:
         self._thread.join(timeout=_WAIT_FOR_WAITER_S + 5)
         self._lock_conn.close()
         self._admin.close()
+        if not self.signalled:
+            raise AssertionError(
+                "the database fault never fired: no backend was ever seen blocked on this "
+                f"fault's lock within {_WAIT_FOR_WAITER_S}s, so nothing was "
+                f"{self._signal}'d and the seller's statement ran to completion unprovoked. "
+                "Whatever this scenario asserted about the wire, it was not asserting it "
+                "about a cancelled statement. This is a SETUP failure, not a finding about "
+                "the seller (salesagent-f0b86)."
+            )
 
 
 def _wait_out_fail_fast(self: DatabaseFaultMixin) -> None:

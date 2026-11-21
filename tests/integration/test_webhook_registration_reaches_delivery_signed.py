@@ -157,7 +157,15 @@ def _register_via_update(env: MediaBuyPushRegistrationEnv, media_buy_id: str) ->
         env,
         "update_media_buy",
         req=_bare_update_req(media_buy_id),
-        push_notification_config={"url": env.webhook_url, "authentication": _tool_auth_block()},
+        # The same factory the create side registers through, not a second dict
+        # literal: the two producers must register the SAME document or this
+        # file's two halves grade different registrations. The literal here
+        # carried no ``operation_id``, so every update-side case registered a
+        # webhook whose envelope cannot be built (``mcp-webhook-payload.json``
+        # /required) and then asserted a delivery.
+        push_notification_config=PushNotificationConfigRequestFactory.payload(
+            url=env.webhook_url, authentication=_tool_auth_block()
+        ),
     )
 
 

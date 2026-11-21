@@ -32,7 +32,9 @@ def _principal() -> Principal:
 
 
 def _adapter(tenant_id: str | None = "tenant_test") -> MockAdServer:
-    return MockAdServer(config={}, principal=_principal(), tenant_id=tenant_id)
+    return MockAdServer(
+        config={}, principal=_principal(), tenant_id=tenant_id, order_name_template=None, tenant_ai_config=None
+    )
 
 
 def _seeded_response(media_buy_id: str = "mb_seed") -> AdapterGetMediaBuyDeliveryResponse:

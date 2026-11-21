@@ -5,11 +5,12 @@ from __future__ import annotations
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
-from src.core.database.models import InventoryProfile
+from src.core.database.models import InventoryProfile, InventoryProfilePublisherSelection
 from tests.factories.core import TenantFactory
+from tests.factories.publisher import SellsPublishersMixin
 
 
-class InventoryProfileFactory(factory.alchemy.SQLAlchemyModelFactory):
+class InventoryProfileFactory(SellsPublishersMixin, factory.alchemy.SQLAlchemyModelFactory):
     class Meta:
         model = InventoryProfile
         sqlalchemy_session = None
@@ -26,8 +27,15 @@ class InventoryProfileFactory(factory.alchemy.SQLAlchemyModelFactory):
     format_ids = factory.LazyFunction(
         lambda: [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
     )
-    publisher_properties = factory.LazyFunction(
-        lambda: [
-            {"publisher_domain": "test.example.com", "property_tags": ["all_inventory"], "selection_type": "by_tag"}
-        ]
+    # The publishers the profile sells, as selectors (``publisher_properties=[...]``); stored
+    # as selection rows, each publisher created first (SellsPublishersMixin).
+    publisher_selections = LazyAttribute(
+        lambda o: InventoryProfilePublisherSelection.from_selectors(o.tenant_id, o.publisher_properties)
     )
+
+    class Params:
+        publisher_properties = factory.LazyFunction(
+            lambda: [
+                {"publisher_domain": "test.psatest.com", "property_tags": ["all_inventory"], "selection_type": "by_tag"}
+            ]
+        )

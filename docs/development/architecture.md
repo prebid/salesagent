@@ -166,8 +166,12 @@ The following diagram shows the main entities and which entity owns which;
 erDiagram
     Tenant ||--o{ CurrencyLimit : has
     Tenant ||--o{ PropertyTag : has
-    Tenant ||--o{ AuthorizedProperty : has
+    Tenant ||--o{ Publisher : "sells for"
+    Publisher ||--o{ PublisherProperty : "its adagents.json authorizes"
+    Publisher ||--o{ PublisherFormatOption : "its formats[] declares"
     Tenant ||--o{ Product : offers
+    Product ||--o{ ProductPublisherSelection : sells
+    Publisher ||--o{ ProductPublisherSelection : "selected by"
     Tenant ||--o{ Principal : has
     Tenant ||--o{ Account : bills
     Tenant ||--o{ WebhookDeliveryRecord : records

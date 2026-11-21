@@ -120,7 +120,7 @@ def _creative_with_agent_url(agent_url: str, creative_id: str):
     'Field required' errors). Everything except the agent_url must be
     acceptable, so the refusal is the only error the request can produce.
     """
-    from adcp.types import FormatId
+    from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
 
     from tests.factories.creative_asset import CreativeAssetFactory
 

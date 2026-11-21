@@ -25,7 +25,7 @@ def check_file(filepath: str) -> list[str]:
 
     # Read file
     try:
-        with open(filepath) as f:
+        with open(filepath, encoding="utf-8") as f:
             lines = f.readlines()
     except Exception as e:
         return [f"Error reading {filepath}: {e}"]

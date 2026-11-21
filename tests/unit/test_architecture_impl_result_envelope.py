@@ -90,7 +90,7 @@ def test_impl_returns_result_envelope(filename, target, result_type, bare_types)
     """The impl's return annotation is its ProtocolEnvelope Result wrapper."""
     impl_file = _TOOLS_DIR / filename
     assert impl_file.exists(), f"Expected {impl_file} to exist"
-    source = impl_file.read_text()
+    source = impl_file.read_text(encoding="utf-8")
     func = _get_impl_func(source, target)
     assert func is not None, f"{target} not found in {impl_file}"
     ann = _return_annotation_name(func)
@@ -104,7 +104,7 @@ def test_impl_returns_result_envelope(filename, target, result_type, bare_types)
 def test_impl_no_bare_domain_returns(filename, target, result_type, bare_types):
     """The impl has no unwrapped bare domain success/error return."""
     impl_file = _TOOLS_DIR / filename
-    source = impl_file.read_text()
+    source = impl_file.read_text(encoding="utf-8")
     func = _get_impl_func(source, target)
     assert func is not None
     bare = _find_bare_domain_returns(func, bare_types)

@@ -13,6 +13,7 @@ from src.core.utils.encryption import (
     generate_encryption_key,
     is_encrypted,
 )
+from tests.helpers.environ import isolated_environ
 
 
 @pytest.fixture
@@ -71,13 +72,13 @@ class TestEncryptDecrypt:
 
     def test_encrypt_without_key_fails(self):
         """Test that encryption fails without ENCRYPTION_KEY set."""
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             with pytest.raises(ValueError, match="ENCRYPTION_KEY environment variable not set"):
                 encrypt_api_key("test-key")
 
     def test_decrypt_without_key_fails(self):
         """Test that decryption fails without ENCRYPTION_KEY set."""
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             with pytest.raises(ValueError, match="ENCRYPTION_KEY environment variable not set"):
                 decrypt_api_key("some-encrypted-data")
 
@@ -293,6 +294,51 @@ class TestTenantModelIntegration:
             _ = tenant.gemini_api_key
         # The old pattern matched the AUTHORED sentence; the sentence is the
         # code's table entry now, so assert it exactly.
+
+
+class TestAdapterConfigRefreshToken:
+    """``AdapterConfig.gam_refresh_token`` is stored encrypted, like the service account JSON."""
+
+    TOKEN = "1//oauth-refresh-token-for-the-publisher-network"
+
+    def test_the_constructor_stores_ciphertext(self, set_encryption_key):
+        from src.core.database.models import AdapterConfig
+
+        config = AdapterConfig(tenant_id="t1", adapter_type="google_ad_manager", gam_refresh_token=self.TOKEN)
+
+        assert config._gam_refresh_token != self.TOKEN
+        assert decrypt_api_key(config._gam_refresh_token) == self.TOKEN
+        assert config.gam_refresh_token == self.TOKEN
+
+    def test_assignment_stores_ciphertext(self, set_encryption_key):
+        from src.core.database.models import AdapterConfig
+
+        config = AdapterConfig(tenant_id="t1", adapter_type="google_ad_manager")
+        config.gam_refresh_token = self.TOKEN
+
+        assert decrypt_api_key(config._gam_refresh_token) == self.TOKEN
+        assert config.gam_refresh_token == self.TOKEN
+
+    @pytest.mark.parametrize("cleared", [None, ""])
+    def test_a_cleared_token_is_stored_as_null(self, set_encryption_key, cleared):
+        from src.core.database.models import AdapterConfig
+
+        config = AdapterConfig(tenant_id="t1", adapter_type="google_ad_manager", gam_refresh_token=self.TOKEN)
+        config.gam_refresh_token = cleared
+
+        assert config._gam_refresh_token is None
+        assert config.gam_refresh_token is None
+
+    def test_a_value_that_does_not_decrypt_is_a_configuration_error(self, set_encryption_key):
+        from src.core.database.models import AdapterConfig
+        from src.core.exceptions import AdCPConfigurationError
+
+        config = AdapterConfig(tenant_id="t1", adapter_type="google_ad_manager")
+        config._gam_refresh_token = self.TOKEN  # plaintext, as stored before encryption
+
+        with pytest.raises(AdCPConfigurationError) as raised:
+            _ = config.gam_refresh_token
+        assert raised.value.details.tenant_id == "t1"
 
 
 class TestErrorHandling:

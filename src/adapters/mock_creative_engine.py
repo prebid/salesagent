@@ -7,7 +7,27 @@ from src.core.schemas import Creative, CreativeAdaptation, CreativeApprovalStatu
 
 
 class MockCreativeEngine(CreativeEngineAdapter):
-    """A mock creative engine that simulates a simple approval and adaptation workflow."""
+    """A mock creative engine that simulates a simple approval and adaptation workflow.
+
+    NO PRODUCTION PATH REACHES ``process_creatives``. Measured: it has no caller under
+    ``src/``, and the one module-level instance that existed (``core/main.py``) was built from
+    a hardcoded empty config and read by nothing, in any import spelling -- enumerated by
+    resolving the name through the AST rather than grepping it. It is deleted; this class is
+    kept because it is a mock adapter and its own unit tests construct their own instance.
+
+    TWO CONSEQUENCES, both recorded rather than acted on here (salesagent-ol033.8 D4):
+
+    * ``auto_approve_format_ids`` below cannot grant an approval. It is the legacy-only
+      convenience the tenant column of the same name documents itself as; the live decision is
+      ``tenant.approval_mode``, which is format-blind. So there is no format-keyed approval
+      policy to re-key onto ``format_kind``, and adding one would be new behaviour that no
+      pinned schema requires and no storyboard grades.
+    * the sub-format inference in ``process_creatives`` -- deciding "video" and "16x9" from
+      SUBSTRINGS of a format id -- is the kind of id-string reasoning this seller is moving
+      off (``format_kind`` is the canonical identifier). It is NOT fixed here precisely
+      because it sits on this unreachable path: changing it could not be observed, and
+      ``salesagent-ol033.9`` owns the tests that grade code which cannot run.
+    """
 
     def __init__(self, config: dict[str, Any]):
         self.config = config
@@ -50,13 +70,11 @@ class MockCreativeEngine(CreativeEngineAdapter):
             if format_id_str and "video" in format_id_str.lower():
                 # Suggest vertical version for horizontal videos
                 if "16x9" in format_id_str or "horizontal" in format_id_str:
-                    from pydantic import AnyUrl
-
                     suggested_adaptations.append(
                         CreativeAdaptation(
                             adaptation_id=f"adapt_{creative.creative_id}_vertical",
                             format_id=FormatId(
-                                agent_url=AnyUrl("https://creative.adcontextprotocol.org"),
+                                agent_url="https://creative.adcontextprotocol.org",
                                 id="video_vertical_9x16",
                             ),
                             name="Mobile Vertical Version",
@@ -80,13 +98,11 @@ class MockCreativeEngine(CreativeEngineAdapter):
                         break
 
                 if duration_ms / 1000.0 > 15:
-                    from pydantic import AnyUrl
-
                     suggested_adaptations.append(
                         CreativeAdaptation(
                             adaptation_id=f"adapt_{creative.creative_id}_6s",
                             format_id=FormatId(
-                                agent_url=AnyUrl("https://creative.adcontextprotocol.org"),
+                                agent_url="https://creative.adcontextprotocol.org",
                                 id="video_6s_bumper",
                             ),
                             name="6-Second Bumper Version",

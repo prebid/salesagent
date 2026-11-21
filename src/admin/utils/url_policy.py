@@ -26,7 +26,7 @@ non-AdCP namespace in it.
 The message handed to the operator never interpolates the reason. The reason
 names the resolved IP and distinguishes "cannot resolve" from "reserved range";
 handed back to whoever supplied the URL, the pair is an internal host and port
-scanner (AdCP 3.1.1, ``building/by-layer/L1/security.mdx``, point 6: do not
+scanner (``building/by-layer/L1/security.mdx``, point 6: do not
 echo fetch errors back to the party that supplied the URL). The real reason is
 not lost — ``outbound_http`` logs it at WARNING before these functions return,
 and the log line below pins it to the URL and the field it came from.

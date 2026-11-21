@@ -1,3 +1,6 @@
+<!-- FIXME(#2613): this page still names code by line number. Name the function, class, test,
+constant, or section instead, and lower its count in BASELINE in
+tests/unit/test_architecture_docs_no_line_numbers.py in the same change. -->
 # A2A and MCP agent flows
 
 MCP, A2A, and REST run one flow. Each parses its own wire and then hands the raw

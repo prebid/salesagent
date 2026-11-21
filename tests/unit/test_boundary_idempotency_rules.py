@@ -12,7 +12,7 @@ Each rule cites the pinned prose it comes from: ``docs/building/by-layer/L1/secu
 Rule 2 -- the seller stores "the inner response payload (not the protocol envelope)" -- used
 to be graded here by three asserts over a ``_cacheable_body`` / ``_is_task_envelope`` pair.
 Both are gone, and so is what they chose between: a response IS its protocol envelope now
-(``AdcpResponse``), so there is no wrapper to unwrap and no second shape to store.
+(``SalesAgentAdcpResponse``), so there is no wrapper to unwrap and no second shape to store.
 """
 
 from __future__ import annotations

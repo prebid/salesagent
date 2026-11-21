@@ -67,10 +67,12 @@ class TestAuthRemovalChanges:
         principal_id = None
 
         # Verify we have a fixed rate pricing option (for authenticated users)
-        # adcp 2.14.0+ uses RootModel wrapper - the V3 fixed rate is on .root.fixed_price
+        # No wrapper: Product.pricing_options holds the typed member itself from adcp 9 on
         pricing_option = product.pricing_options[0]
-        assert hasattr(pricing_option, "root")  # noqa: rootmodel
-        assert pricing_option.root.fixed_price == 2.50
+        # The element is the TYPED MEMBER, asserted by type rather than by the absent
+        # ``root`` attribute the old wrapper carried.
+        assert type(pricing_option).__name__ == "CpmPricingOption"
+        assert pricing_option.fixed_price == 2.50
 
         # For anonymous users, we would replace with auction pricing (no rate field)
         # Here we just verify the concept by checking the structure
@@ -79,8 +81,8 @@ class TestAuthRemovalChanges:
             # For this test, we're verifying the pricing option structure
             pass
 
-        # Verify other fields remain accessible (also via .root)
-        assert pricing_option.root.currency == "USD"
+        # Verify other fields remain accessible
+        assert pricing_option.currency == "USD"
 
         # Other data should remain
         assert product.product_id == "test_product"
@@ -139,10 +141,10 @@ class TestAuthRemovalChanges:
             pass  # Would replace with auction pricing
 
         # Verify pricing data is preserved (not removed for authenticated users)
-        # adcp 2.14.0+ uses RootModel wrapper - access via .root
+        # No wrapper: the element IS the typed member
         pricing_option = product.pricing_options[0]
-        assert pricing_option.root.fixed_price == 2.50
-        assert pricing_option.root.min_spend_per_package == 1000.0
+        assert pricing_option.fixed_price == 2.50
+        assert pricing_option.min_spend_per_package == 1000.0
 
         # No pricing message for authenticated users
         pricing_message = None

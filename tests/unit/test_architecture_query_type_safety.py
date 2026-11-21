@@ -19,6 +19,7 @@ import pytest
 from tests.unit._architecture_helpers import (
     assert_violations_match_allowlist,
     iter_call_expressions,
+    rel,
     repo_root,
     src_python_files,
 )
@@ -54,7 +55,9 @@ INTEGER_PK_MODELS = {
     "SyncJob": "sync_id",
     "WorkflowStep": "step_id",
     "ObjectWorkflowMapping": "id",
-    "PublisherPartner": "id",
+    "PublisherProperty": "id",
+    "ProductPublisherSelection": "id",
+    "InventoryProfilePublisherSelection": "id",
     "PushNotificationConfig": "id",
     "WebhookDeliveryRecord": "delivery_id",
     "WebhookDeliveryLog": "id",
@@ -74,7 +77,7 @@ def _find_in_queries_on_integer_columns(filepath: str) -> list[tuple[int, str, s
     if not path.exists():
         return []
 
-    source = path.read_text()
+    source = path.read_text(encoding="utf-8")
     try:
         tree = ast.parse(source, filename=filepath)
     except SyntaxError:
@@ -118,7 +121,7 @@ def _find_filter_by_on_integer_columns(filepath: str) -> list[tuple[int, str, st
     if not path.exists():
         return []
 
-    source = path.read_text()
+    source = path.read_text(encoding="utf-8")
     try:
         tree = ast.parse(source, filename=filepath)
     except SyntaxError:
@@ -218,14 +221,14 @@ def test_no_legacy_session_query() -> None:
     repo = repo_root()
     violations: list[str] = []
     for path in src_python_files(repo):
-        rel = str(path.relative_to(repo))
-        if "test_" in rel:
+        rel_path = rel(path, repo)
+        if "test_" in rel_path:
             continue
-        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if "# legacy-ok" in line or "# noqa" in line:
                 continue
             if _LEGACY_QUERY_RE.search(line):
-                violations.append(f"{rel}:{lineno}: legacy session.query() — use select() + scalars()")
+                violations.append(f"{rel_path}:{lineno}: legacy session.query() — use select() + scalars()")
     assert not violations, "\n".join(violations)
 
 
@@ -237,10 +240,10 @@ def test_models_use_mapped_not_column() -> None:
     models_path = repo / "src" / "core" / "database" / "models.py"
     if not models_path.exists():
         return
-    rel = str(models_path.relative_to(repo))
-    for lineno, line in enumerate(models_path.read_text().splitlines(), 1):
+    rel_path = rel(models_path, repo)
+    for lineno, line in enumerate(models_path.read_text(encoding="utf-8").splitlines(), 1):
         if "# legacy-ok" in line or "# noqa" in line:
             continue
         if _LEGACY_COLUMN_RE.search(line):
-            violations.append(f"{rel}:{lineno}: bare Column() — use Mapped[] + mapped_column()")
+            violations.append(f"{rel_path}:{lineno}: bare Column() — use Mapped[] + mapped_column()")
     assert not violations, "\n".join(violations)

@@ -30,7 +30,6 @@ items, real markers and the real conftest.
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import sys
@@ -38,6 +37,7 @@ from pathlib import Path
 
 import pytest
 
+from tests._collection_manifest import unpublished_env
 from tests.bdd.conftest import pytest_collection_modifyitems
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -214,7 +214,7 @@ def test_real_module_collection_is_seed_independent_and_complete():
     deselect_re = re.compile(r"(\d+) deselected")
 
     # Explicitly scrubbed: the guarded property is what a DEFAULT run collects.
-    env = {k: v for k, v in os.environ.items() if k != "BDD_ALL_TRANSPORTS"}
+    env = {k: v for k, v in unpublished_env().items() if k != "BDD_ALL_TRANSPORTS"}
 
     def collect(seed: int) -> tuple[set[str], int]:
         result = subprocess.run(
@@ -293,7 +293,7 @@ def test_bdd_conftest_has_exactly_one_transport_derivation():
     N times, because each copy is free to disagree about `e2e_rest`. Route new
     code through `_transport_of(nodeid)`.
     """
-    hits = _handrolled_derivations(_BDD_CONFTEST.read_text())
+    hits = _handrolled_derivations(_BDD_CONFTEST.read_text(encoding="utf-8"))
 
     assert hits == [], (
         "transport identity is being re-derived from a nodeid by hand in "

@@ -167,6 +167,7 @@ For GAM adapter integration:
 | `SALES_AGENT_DOMAIN` | - | Base domain for tenant subdomains (for example, `sales-agent.example.com`). Also scopes session cookies across subdomains. |
 | `ADMIN_DOMAIN` | - | Domain where the Admin UI is accessible (for example, `admin.sales-agent.example.com`) |
 | `SUPER_ADMIN_DOMAIN` | - | Email domain whose users get super admin access |
+| `TLS_ASK_ENABLED` | `false` | Mount `GET /tls/ask`, the endpoint an on-demand TLS proxy (Caddy) asks before issuing a certificate for a host. Off, the path answers 404. Needed only behind such a proxy; see [Caddy on-demand TLS](multi-tenant.md#caddy-on-demand-tls-no-wildcard-certificate). |
 
 ### SSO requirements by deployment mode
 
@@ -184,14 +185,13 @@ The SSO requirement varies based on deployment mode:
 | `ENVIRONMENT` | `development` | `development` or `production` |
 | `PRODUCTION` | `false` | Set to `true` for production deployments |
 | `FLY_APP_NAME` | unset | Set by Fly.io; its presence also marks the deployment as production |
-| `PUBLISHER_AUTO_VERIFY` | derived | `false` checks each publisher partner's adagents.json before verifying it; `true` verifies partners without reading the file. Unset, it is `true` outside production and `false` in production. Leave it unset unless a non-production deployment must run the check |
 | `ADMIN_UI_URL` | `http://localhost:8001` | Public URL for the Admin UI (used in notifications) |
 
 Any one of `PRODUCTION=true`, `ENVIRONMENT=production` or a `FLY_APP_NAME` makes the
 deployment production, and every production-dependent behaviour reads that one answer:
 lenient request validation, structured JSON logging, secure session cookies, the trust in
-proxy headers, the absence of verbose auth logging, and (unless `PUBLISHER_AUTO_VERIFY`
-says otherwise) checking a publisher partner's adagents.json.
+proxy headers, and the absence of verbose auth logging. A publisher's adagents.json is read
+in every deployment: properties come only from it.
 
 ### Demo data
 
@@ -204,7 +204,7 @@ says otherwise) checking a publisher partner's adagents.json.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENCRYPTION_KEY` | - | Fernet key for encrypting stored secrets (OIDC client secrets, API keys). The application refuses to encrypt or decrypt without it. Generate with `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` |
+| `ENCRYPTION_KEY` | - | Fernet key for encrypting stored secrets (OIDC client secrets, API keys, GAM service account JSON and GAM OAuth refresh tokens). The application refuses to encrypt or decrypt without it, so every deployment with a GAM tenant needs it, whichever GAM authentication method the tenant uses. The database migration that encrypts existing GAM refresh tokens stops if they exist and this is not set. Keep it stable: changing it makes the stored secrets unreadable. Generate with `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` |
 | `FLASK_SECRET_KEY` | auto-generated at startup | Flask session secret. Set it explicitly so sessions survive restarts and work across multiple processes. |
 | `WEBHOOK_SECRET` | - | Secret for verifying incoming webhooks |
 
@@ -216,6 +216,8 @@ says otherwise) checking a publisher partner's adagents.json.
 |----------|---------|-------------|
 | `APPROXIMATED_API_KEY` | - | Approximated proxy service API key |
 | `APPROXIMATED_BACKEND_URL` | `adcp-sales-agent.fly.dev` | Backend address that Approximated proxies custom domains to |
+| `CREATIVE_AGENT_URL` | - | The MCP endpoint of the operator's creative agent, the URL the app dials and nothing else. Give the endpoint itself: MCP has no path convention, and the AdCP reference creative agent serves MCP only at `<base>/api/creative-agent/mcp`. Unset, the app dials the public agent's endpoint, `https://creative.adcontextprotocol.org/api/creative-agent/mcp`; an agent's identity is never dialled, so setting `CREATIVE_AGENT_ORIGIN` without this variable leaves the app nothing to dial, and every dial to that agent fails as a configuration error. |
+| `CREATIVE_AGENT_ORIGIN` | `https://creative.adcontextprotocol.org` | The operator creative agent's identity: an origin, `scheme://host[:port]`. A format reference whose `agent_url` has this origin, whatever its path, is the operator's agent, and the app connects to it through `CREATIVE_AGENT_URL`. The app refuses to start when the value carries a path, query, fragment or userinfo. |
 
 ---
 

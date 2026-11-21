@@ -14,6 +14,7 @@ fixture supplies the address; both arrive as arguments.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import delete
 
@@ -224,6 +225,64 @@ class AdminAccountEnv:
 
         self._created_account_ids.append(account_id)
         return account_id
+
+    def inventory_profiles_path(self, path: str = "") -> str:
+        """The inventory-profile routes of this tenant, which the page's modal posts to."""
+        return f"/tenant/{self._tenant_id}/inventory-profiles/{path}"
+
+    def _inventory_profile(self, profile_id: str) -> Any:
+        from sqlalchemy import select
+
+        from src.core.database.models import InventoryProfile
+
+        with get_db_session() as session:
+            stmt = select(InventoryProfile).filter_by(tenant_id=self._tenant_id, profile_id=profile_id)
+            return session.scalars(stmt).first()
+
+    def inventory_profile_format_options(self, profile_id: str) -> Any:
+        """The stored declarations of *profile_id*, or None when there is no such profile."""
+        profile = self._inventory_profile(profile_id)
+        return None if profile is None else profile.format_options
+
+    def inventory_profile_row_id(self, profile_id: str) -> int:
+        """The integer id the edit route takes."""
+        return self._inventory_profile(profile_id).id
+
+    def authorize_publisher(self, domain: str) -> None:
+        """Store *domain*'s adagents.json authorizing this tenant for one website, unless it is stored.
+
+        The profile forms accept a publisher selector only for a publisher whose stored file
+        authorizes the seller (``selector_selection``), as ``get_products`` sells it. Stored
+        without a fetch, through the ingest service's apply half, as a seed stores it.
+        """
+        from scripts.setup.seed_products import seed_verified_website
+
+        with get_db_session() as session:
+            if seed_verified_website(session, self._tenant_id, domain):
+                session.commit()
+
+    def products_path(self, path: str = "") -> str:
+        """The product routes of this tenant, which the product forms post to."""
+        return f"/tenant/{self._tenant_id}/products/{path}"
+
+    def agent_host(self) -> str:
+        """The hostname this tenant's agent answers at (``Tenant.virtual_host_name``)."""
+        from src.core.database.models import Tenant
+
+        with get_db_session() as session:
+            tenant = session.get(Tenant, self._tenant_id)
+            assert tenant is not None, f"no tenant {self._tenant_id!r}"
+            return tenant.virtual_host_name
+
+    def product_is_stored(self, product_id: str) -> bool:
+        """Whether this tenant holds a product *product_id*."""
+        from sqlalchemy import select
+
+        from src.core.database.models import Product
+
+        with get_db_session() as session:
+            stmt = select(Product.product_id).filter_by(tenant_id=self._tenant_id, product_id=product_id)
+            return session.scalars(stmt).first() is not None
 
     def get_account_from_db(self, *, name: str | None = None, account_id: str | None = None) -> Account | None:
         """Look up an account in the database."""

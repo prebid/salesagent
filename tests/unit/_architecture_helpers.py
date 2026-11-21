@@ -31,6 +31,8 @@ from typing import Any, NamedTuple
 
 import yaml
 
+from tests._collection_manifest import unpublished_env
+
 # ---------------------------------------------------------------------------
 # Repo-root anchor
 # ---------------------------------------------------------------------------
@@ -46,8 +48,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src/core/tools", REPO_ROOT / "src/adapters"]
 
 
-def rel(path: Path) -> str:
-    """Return path relative to repo root for stable allowlist keys.
+def rel(path: Path, root: Path = REPO_ROOT) -> str:
+    """Return *path* relative to *root* (the repo root by default), ``/``-separated, for stable allowlist keys.
 
     A path outside the repo root has no stable key to give, so it returns its
     own absolute form rather than raising: every real caller scans repo paths,
@@ -56,7 +58,7 @@ def rel(path: Path) -> str:
     independently of whatever the repo happens to contain.
     """
     try:
-        return str(path.relative_to(REPO_ROOT))
+        return path.relative_to(root).as_posix()
     except ValueError:
         return str(path)
 
@@ -87,7 +89,7 @@ def iter_module_trees(scan_dirs: list[Path]) -> Iterator[tuple[ast.Module, str]]
         if not scan_dir.exists():
             continue
         for py_file in sorted(scan_dir.rglob("*.py")):
-            if "__pycache__" in str(py_file):
+            if is_untracked_repo_file(py_file):
                 continue
             try:
                 tree = parse_module(py_file)
@@ -407,9 +409,9 @@ def read_source_roots(roots: Iterable[str]) -> dict[str, str]:
     sources: dict[str, str] = {}
     for root in roots:
         for path in sorted((REPO_ROOT / root).rglob("*.py")):
-            if "__pycache__" in str(path):
+            if is_untracked_repo_file(path):
                 continue
-            sources[str(path.relative_to(REPO_ROOT))] = path.read_text(encoding="utf-8")
+            sources[rel(path)] = path.read_text(encoding="utf-8")
     return sources
 
 
@@ -726,7 +728,7 @@ def extract_select_calls(
         lines from the select() call through the next ten lines (the full
         statement can span multiple lines).
     """
-    source_text = source_path.read_text()
+    source_text = source_path.read_text(encoding="utf-8")
     tree = ast.parse(source_text)
     lines = source_text.splitlines()
 
@@ -773,7 +775,7 @@ def find_raw_select_violations(
     repo = repo_root()
     violations: list[tuple[str, str, str, int]] = []
     for py_file in (repo / "src").rglob("*.py"):
-        rel_path = str(py_file.relative_to(repo))
+        rel_path = rel(py_file, repo)
         if skip(rel_path):
             continue
         tree = safe_parse(py_file)
@@ -809,7 +811,7 @@ def iter_architecture_guard_trees(
     """Yield ``(parsed_tree, repo_relative_path)`` for each ``test_architecture_*.py`` module."""
     repo = repo_root()
     skip = set(exempt or ())
-    for path in sorted((repo / "tests" / "unit").glob("test_architecture_*.py")):
+    for path in sorted((repo / "tests").glob("*/test_architecture_*.py")):
         rel = path.relative_to(repo)
         if rel in skip:
             continue
@@ -824,32 +826,46 @@ def iter_architecture_guard_trees(
 # ---------------------------------------------------------------------------
 
 
-#: Third-party source copied into the tree. Excluded from every structural scan
-#: because these guards grade AUTHORSHIP decisions -- which repository to reach
-#: through, which error type to raise, whether a URL was rebuilt -- and nobody
-#: here made those decisions. ``src/vendor/__init__.py`` forbids editing the
-#: files, so a violation flagged in one could not be fixed anyway; the only
-#: honest response would be an allowlist entry, and these guards deliberately
-#: have none.
-#:
-#: This code was ALREADY in the dependency tree and already unscanned when it
-#: lived in site-packages. Copying it under ``src/`` for a version pin does not
-#: make it ours, and should not silently enrol it in checks it never passed.
-#: ``test_architecture_vendored_code.py`` keeps the exclusion from becoming a
-#: hiding place.
-VENDOR_DIR = "vendor"
+def src_python_files(repo: Path) -> tuple[Path, ...]:
+    """Every .py file under src/, and never zero of them.
 
+    There is no exclusion. ``src/vendor/`` held a verbatim copy of the SDK's URL
+    canonicalizer, carried because the then-pinned adcp 6.6.0 failed 14 of the 37
+    published canonicalization vectors. The pin is now 9.0.0b1, which passes all 37
+    (measured), so the copy is gone and with it the one region of ``src/`` the
+    architecture guards did not grade.
 
-def src_python_files(repo: Path) -> Iterator[Path]:
-    """Every .py file under src/, EXCEPT vendored third-party source.
+    IT REFUSES AN EMPTY SCAN, and that is the whole reason it is not a generator
+    any more. THIRTY-TWO call sites across the architecture guards consume this,
+    and every one of them sweeps for a violation and asserts there are none — so a
+    scan that finds no files makes all thirty-two PASS. Not a skip, not a moved
+    item count: a clean green pass that neither a per-nodeid delta nor a
+    reconciled total can see, because every item still runs and still passes.
 
-    See :data:`VENDOR_DIR`.
+    Measured (salesagent-kdkbo): 341 files at a correct ``repo``, 0 and no error at
+    a wrong one. A ``repo_root()`` that resolved wrong, or ``src/`` renamed, would
+    switch the whole guard layer off silently. The sibling precedent is
+    ``tests/unit/_storyboard_guard_env.py``'s Finding 12 — ``ADCP_HOME=/nonexistent``
+    once gave "670 passed, 25 skipped, exit 0" with twenty-five guards switched off —
+    and its answer is the one applied here: a MISCONFIGURED instrument must fail,
+    where only a genuinely unprovisioned one may opt out.
+
+    Returning a tuple rather than yielding is deliberate. A generator could only
+    discover emptiness at exhaustion, so the refusal would land at the end of
+    whatever loop consumed it, attributed to that caller; and a generator created
+    and never consumed would not check at all. Checked at the call, the refusal
+    names the real fault. No caller uses generator semantics — verified across all
+    32 sites, every one is plain iteration.
     """
-    vendor_root = repo / "src" / VENDOR_DIR
-    for path in (repo / "src").rglob("*.py"):
-        if vendor_root in path.parents:
-            continue
-        yield path
+    files = tuple((repo / "src").rglob("*.py"))
+    assert files, (
+        f"src_python_files({repo}) found no .py files under {repo / 'src'}. "
+        "Every architecture guard reached through this helper sweeps for violations and asserts "
+        "there are none, so an empty scan makes all 32 of them pass green with nothing graded "
+        "(salesagent-kdkbo). This is a misconfigured instrument, not a clean tree: check that "
+        "repo_root() resolves to the repository and that src/ exists under it."
+    )
+    return files
 
 
 def iter_workflow_files(repo: Path) -> Iterator[Path]:
@@ -864,6 +880,43 @@ def iter_workflow_files(repo: Path) -> Iterator[Path]:
 # that ``git ls-files`` never reports. In a clean checkout this mirrors the ignored
 # set closely enough that the fallback matches the tracked set. ``.github`` is
 # intentionally NOT excluded: the version-anchor guards scan ``.github/workflows/``.
+@functools.lru_cache(maxsize=1)
+def _tracked_repo_files() -> frozenset[Path]:
+    """Every tracked file in the repo. Cached: ~150 guards ask, each ask is a subprocess."""
+    return frozenset(iter_git_tracked_files(REPO_ROOT))
+
+
+def is_untracked_repo_file(path: Path) -> bool:
+    """Is *path* inside this repo but not tracked by git?
+
+    This is the question every filesystem walk here needs, and "our source" has exactly
+    one correct definition: what git tracks. The walks used to ``rglob`` and prune
+    ``__pycache__``, so their population was whatever happened to be ON DISK -- which is
+    not the same set on a developer's machine and on the CI box. The gap was not
+    theoretical: the storyboard tox env runs ``npm ci`` inside
+    ``tests/storyboard/runner/``, that directory is not gitignored, and npm ships Python
+    inside it. A guard scanning ``tests/`` therefore read third-party sources on the box
+    and none locally -- passing where it was written and failing where it was graded, for
+    a reason in neither the guard nor the code it grades.
+
+    Deciding by tracked-ness rather than by a denylist of build directories is the point.
+    A denylist only approximates the answer and goes stale the first time a tool invents a
+    new cache dir; nothing untracked can enter the tracked set, so ``node_modules``,
+    ``.tox``, ``.venv`` and a CI runner's dropped artifacts are all excluded by
+    construction. :data:`_FALLBACK_PRUNE_DIRS` keeps its one legitimate caller, the
+    git-unreachable fallback inside :func:`iter_git_tracked_files`, which warns when it
+    degrades.
+
+    A path OUTSIDE the repo is never "untracked" by this rule: the helpers here take
+    arbitrary ``scan_dirs``, and the contract suite exercises them against synthetic trees
+    under ``tmp_path``, which is what makes the detectors falsifiable at all. For those the
+    caller's directory is the whole universe and git has no opinion.
+    """
+    if not path.is_relative_to(REPO_ROOT):
+        return False
+    return path not in _tracked_repo_files()
+
+
 _FALLBACK_PRUNE_DIRS = frozenset(
     {
         ".claude",
@@ -1033,19 +1086,15 @@ def python_version_pattern_map() -> dict[str, str]:
     }
 
 
-def _repo_relative(path: Path, repo: Path) -> str:
-    return str(path.relative_to(repo))
-
-
 def _github_yaml_candidate(path: Path, repo: Path) -> bool:
-    rel_path = _repo_relative(path, repo)
+    rel_path = rel(path, repo)
     return path.suffix in {".yml", ".yaml"} and (
         rel_path.startswith(".github/workflows/") or rel_path.startswith(".github/actions/")
     )
 
 
 def _python_anchor_candidate(path: Path, repo: Path) -> bool:
-    rel_path = _repo_relative(path, repo)
+    rel_path = rel(path, repo)
     if path.name.startswith("Dockerfile"):
         return True
     if path.name in _PYTHON_ANCHOR_NAMES:
@@ -1141,7 +1190,7 @@ def _postgres_scan_candidate(path: Path) -> bool:
     )
 
 
-_SETUP_UV_ACTION = re.compile(r"astral-sh/setup-uv@([0-9a-f]{40})")
+_FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _INSTALL_UV_ACTION = ".github/actions/_install-uv/action.yml"
 _HARDCODED_UV_VERSION_ENV_RE = re.compile(r'^\s*UV_VERSION:\s*["\']')
 _HARDCODED_PYTHON_VERSION_RE = re.compile(r"python-version:\s*['\"]?[0-9]")
@@ -1153,45 +1202,59 @@ def extract_dockerfile_python_version(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-def assert_setup_uv_single_pinned_source(pins: Iterable[tuple[Path, str]], repo: Path) -> None:
-    """Assert ``astral-sh/setup-uv`` is pinned in exactly one composite action file."""
-    pin_list = list(pins)
-    if not pin_list:
-        raise AssertionError("non-vacuity: no astral-sh/setup-uv references found")
-
+def _pins_by_file(pins: Iterable[tuple[Path, str]], repo: Path | None = None) -> dict[str, set[str]]:
     by_file: dict[str, set[str]] = {}
-    for path, pin in pin_list:
-        rel = str(path.relative_to(repo))
-        by_file.setdefault(rel, set()).add(pin)
+    for path, ref in pins:
+        key = rel(path, repo) if repo else path.as_posix()
+        by_file.setdefault(key, set()).add(ref)
+    return by_file
 
+
+def _render_pins(by_file: dict[str, set[str]]) -> str:
+    return "\n".join(f"  {path}: {sorted(refs)}" for path, refs in sorted(by_file.items()))
+
+
+def assert_single_sha_pin(pins: Iterable[tuple[Path, str]], action: str) -> None:
+    """Assert every ``(path, ref)`` pin of *action* is a full commit SHA, and that all are the same SHA."""
+    by_file = _pins_by_file(pins)
+    if not by_file:
+        raise AssertionError(f"non-vacuity: no {action} references found")
+    not_sha = {path: refs for path, refs in by_file.items() if any(not _FULL_SHA.fullmatch(ref) for ref in refs)}
+    if not_sha:
+        raise AssertionError(f"{action} must be pinned to a full commit SHA:\n{_render_pins(not_sha)}")
+    if len(set().union(*by_file.values())) > 1:
+        raise AssertionError(f"{action} is pinned to different SHAs:\n{_render_pins(by_file)}")
+
+
+def assert_setup_uv_single_pinned_source(pins: Iterable[tuple[Path, str]], repo: Path) -> None:
+    """Assert ``astral-sh/setup-uv`` is referenced from one composite action file and nowhere else.
+
+    The pin itself (full SHA, one value) is ``assert_single_sha_pin``'s rule, which
+    ``test_action_pinned_to_one_full_sha`` applies to setup-uv.
+    """
+    by_file = _pins_by_file(pins, repo)
     if set(by_file) != {_INSTALL_UV_ACTION}:
         raise AssertionError(
-            "astral-sh/setup-uv must be referenced only from "
-            f"{_INSTALL_UV_ACTION} — found pins in:\n"
-            + "\n".join(f"  {path}: {sorted(values)}" for path, values in sorted(by_file.items()))
-        )
-    if len(by_file[_INSTALL_UV_ACTION]) != 1:
-        raise AssertionError(
-            f"expected exactly one setup-uv pin in {_INSTALL_UV_ACTION}, got {sorted(by_file[_INSTALL_UV_ACTION])}"
+            f"astral-sh/setup-uv must be referenced only from {_INSTALL_UV_ACTION} — found pins in:\n"
+            + (_render_pins(by_file) or "  (none)")
         )
 
 
-def iter_setup_uv_action_pins(repo: Path) -> Iterator[tuple[Path, str]]:
-    """Yield (file_path, full_pin) for every ``astral-sh/setup-uv@<sha>`` reference."""
-    install_uv = repo / _INSTALL_UV_ACTION
-    if install_uv.is_file():
-        for m in _SETUP_UV_ACTION.finditer(install_uv.read_text(encoding="utf-8")):
-            yield install_uv, m.group(0)
+def iter_action_pins(repo: Path, action: str) -> Iterator[tuple[Path, str]]:
+    """Yield ``(file_path, ref)`` for every ``<action>@<ref>`` in a git-tracked YAML file.
 
+    *ref* is whatever follows ``@``, a SHA or a tag, so a tag ref is reported rather than skipped.
+    """
+    pattern = re.compile(rf"(?<![\w./-]){re.escape(action)}@([^\s'\"]+)")
     for path in iter_git_tracked_files(repo):
-        if path == install_uv or path.suffix not in {".yml", ".yaml"}:
+        if path.suffix not in {".yml", ".yaml"}:
             continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for m in _SETUP_UV_ACTION.finditer(text):
-            yield path, m.group(0)
+        for m in pattern.finditer(text):
+            yield path, m.group(1)
 
 
 def _iter_hardcoded_yaml_anchor(
@@ -1236,7 +1299,7 @@ def assert_adr008_target_version_pinned(anchors: Iterable[tuple[Path, str, str]]
     if not target_versions:
         raise AssertionError("non-vacuity: pyproject.toml target-version anchor must be scanned")
     drift = [
-        f"{path.relative_to(repo)}: {version}"
+        f"{rel(path, repo)}: {version}"
         for path, version, anchor_kind in anchors
         if anchor_kind == "target-version" and version != _ADR_008_TARGET_VERSION
     ]
@@ -1725,18 +1788,16 @@ def collect_bdd_node_ids_with_e2e_enabled(
 ) -> list[str]:
     """Collect pytest node ids under *target* with BDD_E2E_ENABLED=true.
 
-    Shared by the e2e_rest known-failures ledger fitness function and any
-    test asserting a specific scenario's transport parametrization —
-    same subprocess invocation, same env, same flags (-n0 satisfies the
-    BDD_E2E_ENABLED xdist guard; addopts is cleared so -q prints bare
-    nodeids).
+    For a test that compares two seeded collections of one module, which one real
+    run cannot answer: it has one seed. -n0 satisfies the BDD_E2E_ENABLED xdist
+    guard; addopts is cleared so -q prints bare nodeids.
 
     *randomly_seed* selects the collection ORDER. The default (``None``)
     disables pytest-randomly, which is what a caller asserting "this scenario
     is collected" wants: one stable order. A caller asserting that collection
     does not DEPEND on order passes two different seeds and compares — the
     suite runs with pytest-randomly live and a fresh seed per run
-    (``tox.ini`` [testenv:bdd_inprocess] does not pass ``-p no:randomly``), so
+    (``tox.ini`` [testenv:bdd-inprocess-s{1,2}] does not pass ``-p no:randomly``), so
     order-sensitive collection shows up there as a per-run flap.
     """
     order = ["-p", "no:randomly"] if randomly_seed is None else ["-p", "randomly", f"--randomly-seed={randomly_seed}"]
@@ -1754,7 +1815,7 @@ def collect_bdd_node_ids_with_e2e_enabled(
             "-n0",
         ],
         cwd=repo_root(),
-        env={**os.environ, "BDD_E2E_ENABLED": "true", "BDD_XDIST_N": "0"},
+        env={**unpublished_env(), "BDD_E2E_ENABLED": "true", "BDD_XDIST_N": "0"},
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -1774,7 +1835,7 @@ def scan_src(
 
     The one walk every src-scanning guard needs, so a guard supplies only what
     it detects. Files with no findings are omitted; keys are :func:`rel` spelling
-    (``str(path.relative_to(REPO_ROOT))``), and every suppression constant must
+    (``path.relative_to(REPO_ROOT).as_posix()``), and every suppression constant must
     be written in that same spelling.
 
     Suppression has two axes, and they are NOT the same rule:
@@ -1801,15 +1862,7 @@ def scan_src(
     suppressed_exempt: dict[str, list[int]] = {}
     suppressed_prefix: dict[str, list[int]] = {}
 
-    vendor_prefix = f"src/{VENDOR_DIR}/"
     for tree, rel_path in iter_module_trees(scan_dirs if scan_dirs is not None else [root]):
-        # Vendored third-party source is out of scope for EVERY src-scanning guard, for
-        # the reasons on VENDOR_DIR. Silent rather than a `skip_prefixes` entry: that axis
-        # raises when a prefix flags nothing, which would force each guard to declare a
-        # boundary only some of them actually need. Bounded by
-        # tests/unit/test_architecture_vendored_code.py.
-        if rel_path.replace("\\", "/").startswith(vendor_prefix):
-            continue
         lines = detector(tree)
         if not lines:
             continue
@@ -1919,6 +1972,28 @@ AST_GREP_CONFIG = "sgconfig.yml"
 AST_GREP_RULE_DIR = ".ast-grep"
 
 
+def venv_ast_grep() -> Path:
+    """The venv-local ast-grep -- what ``uv run ast-grep`` resolves to, and nothing else.
+
+    Resolved next to ``sys.executable`` (``.exe`` on Windows) and NOWHERE ELSE, on purpose.
+    A PATH lookup would find a homebrew binary that exists on a developer machine and not
+    in CI, so a guard would pass locally while the ``quality-ci`` line it grades failed in
+    CI with command-not-found.
+
+    Absence FAILS, it does not skip: a skip is the same silent nothing-graded outcome as a
+    ``quality-ci`` line arranged to tolerate the binary's absence. The fix is to declare
+    ``ast-grep-cli`` in the pyproject dev group.
+    """
+    candidate = Path(sys.executable).parent / ("ast-grep.exe" if os.name == "nt" else "ast-grep")
+    assert candidate.exists(), (
+        f"{candidate} does not exist: ast-grep is not installed in this environment's venv. "
+        "Declare `ast-grep-cli` in the pyproject dev group so `uv run ast-grep` resolves -- "
+        "a binary on PATH is deliberately NOT used, because relying on it would let a guard "
+        "pass while the make quality-ci line fails in CI."
+    )
+    return candidate
+
+
 def stage_ast_grep_root(tmp_dir: Path) -> Path:
     """A disposable project root holding the REAL ``sgconfig.yml`` and ``.ast-grep/`` rules.
 
@@ -1943,5 +2018,50 @@ def write_ast_grep_probe(root: Path, rel_dir: str, source: str, *, stem: str = "
     rel_path = f"{rel_dir}/{stem}_{uuid.uuid4().hex}.py"
     path = root / rel_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(source)
+    path.write_text(source, encoding="utf-8")
     return rel_path
+
+
+# ── run_all_tests.sh: which services the in-network runner starts ───────────
+
+#: The line that brings the in-network stack up. Matched rather than parsed: the
+#: runner is a shell script, and the service list is the one thing here that has
+#: to stay in step with compose.
+_RUNNER_UP_LINE_RE = re.compile(r"^dc up -d (?P<services>.+)$", re.MULTILINE)
+
+#: A ``dc run --use-aliases ... <service> <cmd>`` invocation. A run container started
+#: WITH ``--use-aliases`` joins the network under its compose service's aliases, so nginx
+#: resolves an SNI route to it exactly as it does to an ``up -d`` service. Without the flag
+#: it would not, which is why the flag is what this matches on rather than ``dc run`` alone.
+_RUNNER_RUN_ALIASED_RE = re.compile(r"^dc run\b(?P<args>[^\n]*--use-aliases[^\n]*)$", re.MULTILINE)
+
+
+def runner_started_services(source: str) -> list[str]:
+    """Every service ``run_all_tests.sh`` makes reachable on the network.
+
+    TWO START FORMS, because the runner uses two. ``dc up -d`` names long-lived
+    services. ``dc run --use-aliases`` starts the suite container, and the flag is
+    what puts it on the network under its compose aliases — so nginx resolves an SNI
+    route to it identically. Reading only the ``up`` line reported the suite container
+    as never started, which is a false 502 warning for a service the server really can
+    dial (the storyboard runner's own webhook receiver is routed to it).
+    """
+    match = _RUNNER_UP_LINE_RE.search(source)
+    started = match.group("services").split() if match else []
+    for run in _RUNNER_RUN_ALIASED_RE.finditer(source):
+        # The service name is the first bare word after the flags and any `-e K=V`
+        # pairs; everything after it is the command to run inside the container.
+        tokens = run.group("args").split()
+        skip_next = False
+        for token in tokens:
+            if skip_next:
+                skip_next = False
+                continue
+            if token in {"-e", "--env", "-v", "--volume", "-w", "--workdir"}:
+                skip_next = True
+                continue
+            if token.startswith("-") or token.startswith("$"):
+                continue
+            started.append(token)
+            break
+    return started

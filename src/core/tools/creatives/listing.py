@@ -6,10 +6,10 @@ from datetime import UTC, datetime
 from typing import Any, cast, get_args
 
 from adcp.types import AssignedPackage, Assignments, SnapshotUnavailableReason
-from adcp.types.generated_poc.core.creative_item import CreativeItem
-from adcp.types.generated_poc.core.creative_item import CreativeItem1 as MediaItem
-from adcp.types.generated_poc.core.creative_item import CreativeItem2 as TextItem
-from adcp.types.generated_poc.core.creative_variable import CreativeVariable
+from adcp.types.domains.core.creative_item import CreativeItem
+from adcp.types.domains.core.creative_item import CreativeItem1 as MediaItem
+from adcp.types.domains.core.creative_item import CreativeItem2 as TextItem
+from adcp.types.domains.core.creative_variable import CreativeVariable
 from pydantic import TypeAdapter, ValidationError
 
 from src.core.audit_logger import get_audit_logger
@@ -18,15 +18,16 @@ from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails, EntityRefDetails, ValidationDetails
 from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPInvalidRequestError
+from src.core.format_resolver import equivalent_formats
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     Creative,
+    CreativeFormatIdentity,
     Error,
     ListCreativesRequest,
     ListCreativesResponse,
-    canonical_agent_url,
 )
 from src.core.tools.creatives._assets import ASSET_MAP
 
@@ -225,25 +226,23 @@ def _items_from_assets(assets: Any) -> list[CreativeItem] | None:
             url_value = getattr(candidate, "url", None)
             content = getattr(candidate, "content", None)
             if url_value is not None:
+                # The ARM, not a wrapper: the pinned SDK ships ``CreativeItem`` as the union of
+                # its two arms rather than a RootModel over them.
                 items.append(
-                    CreativeItem(
-                        root=MediaItem(
-                            asset_kind="media",
-                            asset_type=asset_type,
-                            asset_id=asset_id,
-                            content_uri=str(url_value),
-                        )
+                    MediaItem(
+                        asset_kind="media",
+                        asset_type=asset_type,
+                        asset_id=asset_id,
+                        content_uri=str(url_value),
                     )
                 )
             elif content is not None:
                 items.append(
-                    CreativeItem(
-                        root=TextItem(
-                            asset_kind="text",
-                            asset_type=asset_type,
-                            asset_id=asset_id,
-                            content=content,
-                        )
+                    TextItem(
+                        asset_kind="text",
+                        asset_type=asset_type,
+                        asset_id=asset_id,
+                        content=content,
                     )
                 )
     return items or None
@@ -265,10 +264,15 @@ def _assignments_block(assignments_by_creative: dict[str, list[DBCreativeAssignm
     )
 
 
-#: The six members list-creatives-response.json marks REQUIRED on every creative item.
-#: They survive every projection: a response that dropped one would not validate, whatever
-#: the buyer selected.
-_ALWAYS_ON_THE_WIRE = frozenset({"creative_id", "name", "format_id", "status", "created_date", "updated_date"})
+#: The members every creative item must carry, whatever the buyer selected: the five
+#: list-creatives-response.json marks REQUIRED, plus the creative's format identity, which
+#: the item's oneOf makes mandatory as exactly one of ``format_id`` (named-format arm) or
+#: ``format_kind`` (canonical arm). Both names are kept because a creative only ever holds
+#: one of them -- ``wire_format_kind`` chooses the arm -- so keeping both keeps the arm this
+#: creative has. Keeping ``format_id`` alone dropped a canonical creative's only identity.
+_ALWAYS_ON_THE_WIRE = frozenset(
+    {"creative_id", "name", "status", "created_date", "updated_date", "format_id", "format_kind"}
+)
 
 #: The two `fields` members that do not name one response field. list-creatives-request.json
 #: says so for the first: "The 'concept' value returns both concept_id and concept_name";
@@ -297,14 +301,16 @@ def _project_to_fields(creative: Creative, fields: list[Any] | None) -> Creative
     """Narrow a creative to the ``fields`` the buyer selected, per list-creatives-request.json.
 
     ``fields`` is "Specific fields to include in response (omit for all fields)" over a
-    closed 13-member enum, so an absent list means the whole creative and a present one
+    closed enum, so an absent list means the whole creative and a present one
     means those members ONLY.
 
-    Only the OPTIONAL members are narrowed. The same pinned response schema marks six
-    members required on every item, so a projection that dropped them would answer the
-    buyer's selection with a document that violates the contract it was selected from —
-    and `fields` cannot express keeping them, since all six are enum members a buyer may
-    omit. Keeping them is the reading that satisfies both halves of the pin.
+    Only the OPTIONAL members are narrowed. The same pinned response schema marks five
+    members required on every item and requires one format identity through its oneOf, so
+    a projection that dropped them would answer the buyer's selection with a document that
+    violates the contract it was selected from — and `fields` cannot express keeping them,
+    since all are enum members a buyer may omit. Keeping them is the reading that satisfies
+    both halves of the pin; the request schema's own `fields` description says the same of
+    localization, which "automatically includes ... the selected format identity".
 
     A member is dropped by being set to None, which ``exclude_none`` then omits — the same
     mechanism that omits an absent tag list, rather than a second way of shaping the wire.
@@ -405,14 +411,13 @@ def _list_creatives_impl(
             field="filters.has_served",
         )
     creative_ids = req_filters.creative_ids if req_filters else None
-    # format_id is an object (core/format-id.json); the repository matches both members, and
-    # the agent_url half goes through the ONE canonicalization the spec makes a MUST before
-    # two references may be treated as the same format.
-    format_ids = (
-        [(canonical_agent_url(f.agent_url), f.id) for f in req_filters.format_ids]
-        if req_filters and req_filters.format_ids
-        else None
-    )
+    requested_format_ids = req_filters.format_ids if req_filters and req_filters.format_ids else None
+    # The canonical kind is handed through as the buyer sent it: the pin's items are bare
+    # strings from a closed vocabulary, the stored identity is the same vocabulary in a
+    # column, and the comparison is therefore equality with no identity to build. Nothing is
+    # projected here -- the v1 -> v2 order already ran on the way IN, once per creative, and
+    # re-running it per request would be a second answer to a settled question.
+    format_kinds = list(req_filters.format_kinds) if req_filters and req_filters.format_kinds else None
     created_after_dt = req_filters.created_after if req_filters else None
     created_before_dt = req_filters.created_before if req_filters else None
     search = req_filters.name_contains if req_filters else None
@@ -455,15 +460,32 @@ def _list_creatives_impl(
 
     with CreativeUoW(tenant.tenant_id) as uow:
         assert uow.creatives is not None
+        # The deprecated format_ids filter is answered on the CANONICAL shape:
+        # docs/creative/template-format-ids.mdx § Compatibility (v3.2.7), "Normalize them to
+        # canonical declarations immediately and do all matching on the canonical shape". A
+        # creative synced on display_300x250_image IS a display_300x250 creative
+        # (canonical-formats.mdx: the two are "equivalent even though their wire identifiers
+        # differ"), so a stored reference matches when it is equivalent to one the filter
+        # names (``equivalent_formats``, agent canonicalized), and the page query is handed
+        # those references' keys. Equality of the raw key answered that creative "no match".
+        format_ids = (
+            [
+                key
+                for key, stored in uow.creatives.legacy_format_references(principal_id)
+                if any(equivalent_formats(stored, wanted) for wanted in requested_format_ids)
+            ]
+            if requested_format_ids is not None
+            else None
+        )
         result = uow.creatives.get_by_principal(
             principal_id,
             statuses=statuses,
-            format=None,
             tags=tags,
             tags_any=tags_any,
             has_variables=has_variables,
             creative_ids=creative_ids,
             format_ids=format_ids,
+            format_kinds=format_kinds,
             created_after=created_after_dt,
             created_before=created_before_dt,
             search=search,
@@ -503,44 +525,34 @@ def _list_creatives_impl(
                     else "https://placeholder.example.com/missing.jpg"
                 )
 
-            # Build Creative directly with explicit types to satisfy mypy
-            from src.core.schemas import FormatId, url
+            # THE STORED IDENTITY, read once and asked for the one arm the wire carries. The
+            # item schema's oneOf forbids both arms and forbids neither, and the state mirrors
+            # the input: a creative synced by format_id lists by format_id, one synced by
+            # format_kind lists by format_kind. ``assertion`` is the retained reference echoed
+            # back VERBATIM; ``wire_format_kind`` is None whenever that assertion is present,
+            # which is where the exclusivity is decided.
+            #
+            # One column, one model, nothing reassembled. The reference used to be rebuilt
+            # from three partial columns here, copying the parameters by name, and ``FormatId``
+            # declares four of them: ``pixel_ratio`` was stored on sync and dropped on every
+            # readback, so a parameterized format came back as a different format than the
+            # buyer sent. A document that went in whole comes back whole.
+            stored_identity = CreativeFormatIdentity.from_row(db_creative)
+            format_obj = stored_identity.assertion
 
-            # Build FormatId with optional parameters (AdCP 2.5 format templates)
-            format_kwargs: dict[str, Any] = {
-                "agent_url": url(db_creative.agent_url),
-                "id": db_creative.format or "",
-            }
-            # Add format parameters if present
-            if db_creative.format_parameters:
-                params = db_creative.format_parameters
-                if "width" in params:
-                    format_kwargs["width"] = params["width"]
-                if "height" in params:
-                    format_kwargs["height"] = params["height"]
-                if "duration_ms" in params:
-                    format_kwargs["duration_ms"] = params["duration_ms"]
-
-            format_obj = FormatId(**format_kwargs)
-
-            # Ensure datetime fields are timezone-aware (database may store naive datetimes)
-            if isinstance(db_creative.created_at, datetime):
-                created_at_dt = (
-                    db_creative.created_at.replace(tzinfo=UTC)
-                    if db_creative.created_at.tzinfo is None
-                    else db_creative.created_at
-                )
-            else:
-                created_at_dt = datetime.now(UTC)
-
-            if isinstance(db_creative.updated_at, datetime):
-                updated_at_dt = (
-                    db_creative.updated_at.replace(tzinfo=UTC)
-                    if db_creative.updated_at.tzinfo is None
-                    else db_creative.updated_at
-                )
-            else:
-                updated_at_dt = datetime.now(UTC)
+            # The columns are ``DateTime(timezone=True)``, so what the ORM read hands back is
+            # a tz-aware datetime or NULL -- nothing else is representable. This used to
+            # ``isinstance``-check for ``datetime`` and patch a missing ``tzinfo``, defending
+            # against two states the column type forbids; the ORM read is the boundary, and
+            # past it the declared type is the fact.
+            #
+            # NULL is the one state the column does permit, and the response requires both
+            # dates, so a row written outside the server default is read as "now". That
+            # substitutes a value the seller does not know -- the same shape as the status
+            # fabrication BR-RULE-149 grades -- and is left as-is here rather than widened
+            # into a second change.
+            created_at_dt = db_creative.created_at or datetime.now(UTC)
+            updated_at_dt = db_creative.updated_at or datetime.now(UTC)
 
             # AdCP v1 spec compliant - only spec fields
             # Get assets dict from database (all production data uses AdCP v2.4 format)
@@ -552,7 +564,7 @@ def _list_creatives_impl(
             try:
                 status_enum = CreativeStatus(db_creative.status)
             except ValueError:
-                # A stored status that is not a CreativeStatus member. AdCP 3.1.1
+                # A stored status that is not a CreativeStatus member. AdCP.1
                 # list-creatives-response.json makes `status` REQUIRED on every item and
                 # $refs a CLOSED 6-member enum with no `unknown`, so some value must be
                 # emitted — every choice makes some claim, which is why the errors[]
@@ -625,7 +637,14 @@ def _list_creatives_impl(
             creative = Creative(
                 creative_id=db_creative.creative_id,
                 name=db_creative.name,
+                # Exactly one arm reaches the model, and the identity decides which: a legacy
+                # creative stores BOTH the assertion and the kind it projects to, so reading
+                # the kind column straight onto the wire emitted both arms and the model
+                # refused the response on construction. ``wire_format_kind`` is the one place
+                # that exclusivity lives -- not a rule restated here.
                 format_id=format_obj,
+                format_kind=stored_identity.wire_format_kind,
+                format_option_ref=db_creative.format_option_ref,
                 assets=coerced_assets,
                 # tags is typed list[str] but read from the untyped blob, where an
                 # external producer may write a malformed value (a bare string, or
@@ -665,6 +684,11 @@ def _list_creatives_impl(
                     else None
                 ),
                 items=_items_from_assets(coerced_assets) if req.include_items else None,
+                # list-creatives-response.json (v3.2.7) representation_lineage_readback:
+                # "required_when_current_creative_was_resolved_from_representation_set",
+                # "must_equal": "last_accepted_current_representation_selection". The sync
+                # stores the lineage the buyer sent whole, and only while it is current.
+                representation_selection=data_blob.get("representation_selection"),
                 # Internal field (our extension)
                 principal_id=db_creative.principal_id,
             )
@@ -686,6 +710,12 @@ def _list_creatives_impl(
             filters_applied.append(f"statuses={','.join(str(s) for s in req.filters.statuses)}")
         if req.filters.format_ids:
             filters_applied.append(f"format_ids={','.join(str(f) for f in req.filters.format_ids)}")
+        if format_kinds:
+            # Reported from the list that was APPLIED, not from `req.filters` -- the same
+            # discipline the media_buy_ids entry follows. The pin makes format_kinds
+            # `uniqueItems: true` and the generated model dedupes, so the two happen to agree
+            # today; reading the applied value is what keeps POST-S7 honest if they stop.
+            filters_applied.append(f"format_kinds={','.join(format_kinds)}")
         if req.filters.tags:
             filters_applied.append(f"tags={','.join(req.filters.tags)}")
         if req.filters.tags_any:
@@ -754,7 +784,7 @@ def _list_creatives_impl(
         # response that is not simulated makes no claim either way. list_creatives calls no
         # ad platform at all, so sandbox mode has nothing to suppress here (INV-2); what the
         # flag reports is the mode of the account whose library the buyer is reading.
-        sandbox=True if identity.account is not None and identity.account.sandbox else None,
+        sandbox=identity.sandbox_echo,
         errors=unreadable_status_advisories or None,
         message=(
             f"Found {len(creatives)} creative{'s' if len(creatives) != 1 else ''}."

@@ -1,12 +1,17 @@
 """The two ratchets too slow for the unit suite, graded by the full gate.
 
 ``mypy --check-untyped-defs`` over ``src/`` and ``pylint R0801`` over
-``src/``+``tests/``+``scripts/`` measure at 12m18s together, against a unit
-suite that runs in ~5m30s — putting them there would roughly triple the suite
-every executor runs on every iteration. They run here instead, in the
-``quality`` tox env, which ``run_all_tests.sh`` executes in parallel with the
-other suites; the gate's critical path is bdd_inprocess at ~12m40s, so this
-costs no additional wall-clock.
+``src/``+``tests/``+``scripts/`` are minutes each, against a unit suite that
+runs in ~5m30s — putting them there would multiply the suite every executor
+runs on every iteration. They run here instead, in the ``quality`` tox env,
+which ``run_all_tests.sh`` executes alongside the other suites.
+
+That does NOT make them free, and this docstring used to say it did. ``quality``
+has been the longest suite in every full run since 2026-09-09 and the run's
+suite span equals it, so whatever this env costs, the gate costs. Each counter
+is measured once per process (``_MEASURED`` in ``tests/utils/ratchet_counters``)
+because the two assertions below need the same number and measuring it twice
+ran six pylint processes for three answers.
 
 The registry and the assertions are shared with the fast half — see
 ``tests/utils/ratchet_counters.py``. This module only chooses WHERE they run.

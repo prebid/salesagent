@@ -55,6 +55,8 @@ from adcp.signing.signer import sign_request
 from adcp.signing.verifier import VerifierCapability, VerifyOptions, verify_request_signature
 from sqlalchemy.orm import Session as SASession
 
+from tests.helpers.signing import buyer_signing_profile_version
+
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 SIGNED_URL = "https://sales.example.com/mcp/"
@@ -155,6 +157,7 @@ def _sign(keyid: str, *, nonce: str | None = None, signing_jwk_pair=None):
         alg=ALG_ED25519,
         cover_content_digest=True,
         nonce=nonce,
+        signing_profile_version=buyer_signing_profile_version(),
     ).as_dict()
     return headers, jwk
 

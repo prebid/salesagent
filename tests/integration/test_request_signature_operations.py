@@ -216,7 +216,17 @@ def _account_registration(*, with_authentication: bool) -> dict[str, Any]:
     config: dict[str, Any] = {
         "subscriber_id": "sub-signature-probe",
         "url": "https://buyer.example.com/account-webhook",
-        "event_types": ["scheduled"],
+        # ACCOUNT-ANCHORED, which the pin now requires on this surface. This read
+        # ``["scheduled"]``, and the pinned conformance storyboard
+        # ``notification_config_event_scope`` names that value in the set it deliberately
+        # removed: "notification-type.json HISTORICALLY contained both media-buy-anchored
+        # event types (`scheduled`, `final`, `delayed`, `adjusted`, `window_update`,
+        # `impairment`) and account-anchored event types (`creative.*`, `product.*`,
+        # `signal.*`, `wholesale_feed.bulk_change`). Account-level notification config
+        # schemas now expose only account-anchored event types so media-buy registrations
+        # fail." So the pin GRADES the rejection of the old value, and the body here has to
+        # be a valid registration or it never reaches the escalation it exists to probe.
+        "event_types": ["creative.status_changed"],
     }
     if with_authentication:
         config["authentication"] = dict(_WEBHOOK_AUTHENTICATION)

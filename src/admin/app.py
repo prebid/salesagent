@@ -37,14 +37,13 @@ from src.admin.blueprints.signing_keys import signing_keys_bp
 from src.admin.blueprints.tenants import tenants_bp
 from src.admin.blueprints.users import users_bp
 from src.admin.blueprints.workflows import workflows_bp
+from src.admin.csrf import init_csrf_protection
 from src.core.config import load_settings
 from src.core.config_loader import is_single_tenant_mode
 from src.core.domain_config import (
     get_session_cookie_domain,
 )
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -119,11 +118,16 @@ def create_app(config=None, settings=None):
     app.secret_key = settings.runtime.flask_secret_key
     app.logger.setLevel(logging.INFO)
 
-    # Configure session cookies for EventSource compatibility
+    # Session cookies. Lax keeps the cookie off cross-site posts, frames and fetches while
+    # still sending it on top-level navigations, which is all the OAuth/OIDC callbacks need
+    # (they arrive as top-level GETs). The admin UI's subdomains are same-site, so a shared
+    # SESSION_COOKIE_DOMAIN is unaffected. No script reads the session cookie: same-origin
+    # fetch and EventSource send it without JavaScript access, so it is HttpOnly.
+    # init_csrf_protection below is the main CSRF defence; Lax backs it up.
     if is_production:
-        app.config["SESSION_COOKIE_SECURE"] = True  # Required for SameSite=None over HTTPS
-        app.config["SESSION_COOKIE_HTTPONLY"] = False  # Allow EventSource to access cookies
-        app.config["SESSION_COOKIE_SAMESITE"] = "None"  # Required for EventSource cross-origin requests
+        app.config["SESSION_COOKIE_SECURE"] = True
+        app.config["SESSION_COOKIE_HTTPONLY"] = True
+        app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
         # Use root path so session works for both /admin/* and /auth/* (OAuth callbacks)
         app.config["SESSION_COOKIE_PATH"] = "/"
         # Only set cookie domain in multi-tenant mode for subdomain sharing
@@ -201,6 +205,9 @@ def create_app(config=None, settings=None):
     else:
         # In development, still apply custom proxy fix if needed
         app.wsgi_app = CustomProxyFix(app.wsgi_app)
+
+    # Refuse cross-origin state-changing requests (CSRF) before any view runs
+    init_csrf_protection(app)
 
     # Initialize OAuth
     init_oauth(app)

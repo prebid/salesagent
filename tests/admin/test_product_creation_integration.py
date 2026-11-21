@@ -1,5 +1,7 @@
 """Integration tests for product creation via UI and API."""
 
+import json
+
 import pytest
 from sqlalchemy import delete, select
 
@@ -122,7 +124,17 @@ def test_add_product_json_encoding(client, test_tenant, integration_db):
             ("currency_0", "USD"),
             ("floor_0", "5.0"),
             ("min_spend_0", "1000"),
-            ("property_mode", "none"),  # Bypass property tag validation — this test is about JSON encoding
+            # The property the fixture publisher's stored adagents.json authorizes
+            # (add_required_setup_data): every product names its publishers.
+            ("property_mode", "property_ids"),
+            ("selected_property_ids", "fixture_default_psatest_com"),
+            # A format arm, because core/product.json's root anyOf requires one and the
+            # form now refuses a product that declares neither. This payload used to
+            # declare no format at all, which stored a row that
+            # convert_product_model_to_schema rejects -- and get_products re-raises, so the
+            # whole tenant's discovery answered INTERNAL_ERROR. The canonical arm is the
+            # one the pin tells a new product to author.
+            ("format_options", json.dumps([{"format_kind": "image", "params": {"width": 300, "height": 250}}])),
         ]
     )
 

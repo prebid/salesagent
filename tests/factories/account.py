@@ -11,7 +11,8 @@ from __future__ import annotations
 from typing import Any
 
 import factory
-from adcp.types.generated_poc.core.business_entity import (  # TODO: no stable alias in adcp.types
+from adcp.types import BrandReference
+from adcp.types.domains.core.business_entity import (  # TODO: no stable alias in adcp.types
     Address,
     Bank,
     BusinessEntity,
@@ -71,7 +72,11 @@ class AgentAccountAccessFactory(factory.alchemy.SQLAlchemyModelFactory):
 
 
 def seed_default_account(
-    tenant_id: str, principal_id: str | None = None, *, account_id: str = DEFAULT_TEST_ACCOUNT_ID
+    tenant_id: str,
+    principal_id: str | None = None,
+    *,
+    account_id: str = DEFAULT_TEST_ACCOUNT_ID,
+    natural_key: tuple[str, str | None, bool | None] | None = None,
 ) -> str:
     """Get-or-create the tenant's default Account row, and optionally grant one principal access.
 
@@ -96,6 +101,18 @@ def seed_default_account(
     per-module e2e tenant therefore needs THIS row under THAT id, and the alternative --
     a second get-or-create next to the e2e seeder -- is the copy this function exists to
     prevent. The default keeps every existing caller unchanged.
+
+    *natural_key* is ``(brand_domain, operator, sandbox)`` for a payload that names an
+    account by NATURAL KEY rather than by id. ``account_lookup._by_natural_key`` resolves
+    such a reference against existing rows and never provisions one, and the unique index
+    it matches is ``(operator, brand->>'domain', brand->>'brand_id',
+    COALESCE(sandbox, false))`` -- so a row seeded without these columns is invisible to
+    the reference however it is named. ``sandbox`` is part of the key and is filtered
+    exactly: a row seeded ``False`` cannot satisfy a reference asking for ``True``.
+
+    Still keyed on ``account_id`` for idempotency, deliberately. The caller supplies an id
+    derived from the natural key, so re-running is a no-op and two ids cannot collide on
+    one natural key -- which the partial unique index would reject rather than ignore.
     """
     from sqlalchemy import select
 
@@ -106,7 +123,11 @@ def seed_default_account(
         # one would.
         return account_id
     if session.scalars(select(Account).filter_by(tenant_id=tenant_id, account_id=account_id)).first() is None:
-        AccountFactory(tenant_id=tenant_id, account_id=account_id)
+        extra: dict[str, Any] = {}
+        if natural_key is not None:
+            brand_domain, operator, sandbox = natural_key
+            extra = {"brand": BrandReference(domain=brand_domain), "operator": operator, "sandbox": sandbox}
+        AccountFactory(tenant_id=tenant_id, account_id=account_id, **extra)
         session.flush()
     if principal_id:
         already = session.scalars(

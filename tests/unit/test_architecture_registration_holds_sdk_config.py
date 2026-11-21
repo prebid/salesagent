@@ -1,7 +1,7 @@
 """Guard: the webhook registration value HOLDS the adcp SDK config, never a copy.
 
 Critical Pattern #1 says local types extend the adcp library type rather than
-duplicating it. ``test_architecture_schema_inheritance.py`` enforces that, but
+duplicating it. That is critical pattern #1 rather than a guard, but
 only inside ``src/core/schemas/`` — and ``ValidatedWebhookRegistration`` was
 introduced in ``src/core/webhooks/``, outside that scan, as a frozen dataclass
 carrying ``url`` plus two FLATTENED auth primitives.

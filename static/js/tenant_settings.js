@@ -241,12 +241,8 @@ function initiateGAMAuth() {
 function detectGAMNetwork() {
     const button = document.querySelector('button[onclick="detectGAMNetwork()"]');
     const originalText = button.textContent;
+    // Blank means the stored token: the page never renders it
     const refreshToken = document.getElementById('gam_refresh_token').value;
-
-    if (!refreshToken) {
-        alert('Please enter a refresh token first');
-        return;
-    }
 
     button.disabled = true;
     button.textContent = 'Detecting...';
@@ -268,7 +264,7 @@ function detectGAMNetwork() {
         if (data.success) {
             // Handle multiple networks - show dropdown for selection
             if (data.multiple_networks && data.networks) {
-                showNetworkSelector(data.networks, refreshToken);
+                showNetworkSelector(data.networks);
             } else {
                 // Single network - auto-select
                 document.getElementById('gam_network_code').value = data.network_code;
@@ -297,7 +293,7 @@ function detectGAMNetwork() {
 }
 
 // Show network selector when multiple networks found
-function showNetworkSelector(networks, refreshToken) {
+function showNetworkSelector(networks) {
     const container = document.createElement('div');
     container.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;';
 
@@ -316,7 +312,7 @@ function showNetworkSelector(networks, refreshToken) {
         </select>
         <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
             <button onclick="cancelNetworkSelection()" class="btn btn-secondary">Cancel</button>
-            <button onclick="confirmNetworkSelection('${refreshToken}')" class="btn btn-primary">Confirm Selection</button>
+            <button onclick="confirmNetworkSelection()" class="btn btn-primary">Confirm Selection</button>
         </div>
     `;
 
@@ -338,7 +334,8 @@ function cancelNetworkSelection() {
 }
 
 // Confirm network selection and get trafficker ID
-function confirmNetworkSelection(refreshToken) {
+function confirmNetworkSelection() {
+    const refreshToken = document.getElementById('gam_refresh_token').value;
     const selector = document.getElementById('network-selector');
     const selectedNetworkCode = selector.value;
     const selectedNetwork = window.gamNetworks.find(n => n.network_code === selectedNetworkCode);
@@ -453,11 +450,6 @@ function saveGAMConfig() {
     const secondaryCurrencies = window.gamSecondaryCurrencies || [];
     const networkTimezone = window.gamDetectedTimezone || null;
 
-    if (!refreshToken) {
-        alert('Please provide a Refresh Token');
-        return;
-    }
-
     const button = event.target;
     const originalText = button.textContent;
     button.disabled = true;
@@ -503,11 +495,6 @@ function saveGAMConfig() {
 function refreshGAMInfo() {
     const refreshToken = document.getElementById('gam_refresh_token').value;
     const networkCode = document.getElementById('gam_network_code').value;
-
-    if (!refreshToken) {
-        alert('Please configure OAuth first');
-        return;
-    }
 
     const button = event.target;
     const originalText = button.textContent;
@@ -563,11 +550,6 @@ function refreshGAMInfo() {
 // Test GAM connection
 function testGAMConnection() {
     const refreshToken = document.getElementById('gam_refresh_token').value;
-
-    if (!refreshToken) {
-        alert('Please provide a refresh token first');
-        return;
-    }
 
     const button = event.target;
     const originalText = button.textContent;

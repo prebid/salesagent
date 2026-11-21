@@ -12,7 +12,7 @@ why that package is retired rather than merged.
 Where each piece lives:
 
 :mod:`.vocabulary`      every name an operation label can carry, derived from TOOLS
-:mod:`.canonical`       the URL-canonicalization seam over ``src.vendor.adcp_canonical``;
+:mod:`.canonical`       the URL-canonicalization seam over ``adcp.signing.canonical``;
                         comparer side and producer side, and both target-uri codes
 :mod:`.posture`         a tenant's ``request_signing`` block (declared, inbound) and its
                         ``webhook_signing`` block (derived, outbound)

@@ -23,6 +23,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ADMIN_BLUEPRINTS = REPO_ROOT / "src" / "admin"
 TEMPLATE_DIR = REPO_ROOT / "templates"
@@ -46,12 +48,12 @@ def _rendered_templates() -> set[tuple[str, str, str]]:
                 # A computed template name is outside this guard: it cannot be resolved
                 # statically, and inventing a resolution would make the check lie.
                 if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                    found.add((path.relative_to(REPO_ROOT).as_posix(), node.name, first.value))
+                    found.add((rel(path, REPO_ROOT), node.name, first.value))
     return found
 
 
 def _existing_templates() -> set[str]:
-    return {p.relative_to(TEMPLATE_DIR).as_posix() for p in TEMPLATE_DIR.rglob("*.html")}
+    return {rel(p, TEMPLATE_DIR) for p in TEMPLATE_DIR.rglob("*.html")}
 
 
 def test_every_rendered_admin_template_exists() -> None:

@@ -39,8 +39,9 @@ from tests.helpers.signing_vectors import (
     load_vector_manifest,
     vectors_with_expected_signature_base,
 )
+from tests.unit._architecture_helpers import rel
 
-#: The 13 vector files that ship ``expected_signature_base`` at v3.1.1, measured.
+#: The vector files that ship ``expected_signature_base``, measured from the re-vendored set.
 #:
 #: The B3 design said 12 ("11 positives + negative/015"). That is WRONG: it missed
 #: ``negative/010-content-digest-mismatch``, which ships the field too (it is graded
@@ -55,6 +56,8 @@ EXPECTED_L1_SET = frozenset(
     {
         "negative/010-content-digest-mismatch",
         "negative/015-signature-invalid",
+        "negative/026-non-ascii-host",
+        "negative/031-malformed-host-authority",
         "positive/001-basic-post",
         "positive/002-post-with-content-digest",
         "positive/003-es256-post",
@@ -66,6 +69,9 @@ EXPECTED_L1_SET = frozenset(
         "positive/010-percent-encoded-slash-preserved",
         "positive/011-ipv6-authority",
         "positive/012-ipv6-authority-default-port-stripped",
+        "positive/013-two-signature-labels-distinct",
+        "positive/014-content-digest-two-algorithms",
+        "positive/015-bracketed-ipv6-host-with-port",
     }
 )
 
@@ -86,9 +92,7 @@ def test_vendored_file_set_matches_the_manifest() -> None:
     """No file added, dropped or renamed under the vendored tree."""
     manifest = load_vector_manifest()
     on_disk = {
-        str(path.relative_to(VECTORS_DIR))
-        for path in VECTORS_DIR.rglob("*")
-        if path.is_file() and path.name != "MANIFEST.json"
+        rel(path, VECTORS_DIR) for path in VECTORS_DIR.rglob("*") if path.is_file() and path.name != "MANIFEST.json"
     }
     assert on_disk == set(manifest["files"]), (
         f"Vendored vector file set drifted from MANIFEST.json.\n"
@@ -109,17 +113,20 @@ def test_every_vendored_file_hashes_to_the_manifest() -> None:
 
 
 def test_vector_counts_are_exactly_the_graded_set() -> None:
-    """12 positive + 28 negative request vectors, 31 canonicalization cases."""
+    """15 positive + 31 negative request vectors, 41 canonicalization cases.
+
+    Measured from the re-vendored set, not adjusted to make the assertion pass.
+    """
     vectors = load_signing_vectors()
     positives = sorted(v for v in vectors if v.startswith("positive/"))
     negatives = sorted(v for v in vectors if v.startswith("negative/"))
-    assert len(positives) == 12, f"expected 12 positive vectors, found {len(positives)}: {positives}"
-    assert len(negatives) == 28, f"expected 28 negative vectors, found {len(negatives)}: {negatives}"
-    assert len(load_canonicalization_cases()) == 31
+    assert len(positives) == 15, f"expected 15 positive vectors, found {len(positives)}: {positives}"
+    assert len(negatives) == 31, f"expected 31 negative vectors, found {len(negatives)}: {negatives}"
+    assert len(load_canonicalization_cases()) == 41
 
 
 def test_l1_signature_base_set_is_pinned_by_name() -> None:
-    """Exactly these 13 files carry ``expected_signature_base`` — the L1(a) set."""
+    """Exactly these 18 files carry ``expected_signature_base`` — the L1(a) set."""
     actual = frozenset(vectors_with_expected_signature_base())
     assert actual == EXPECTED_L1_SET, (
         "The set of vectors shipping expected_signature_base changed, so L1(a) now grades a "
@@ -130,15 +137,17 @@ def test_l1_signature_base_set_is_pinned_by_name() -> None:
 
 
 def test_canonicalization_internal_version_is_not_the_spec_pin() -> None:
-    """The measured trap: ``canonicalization.json`` self-reports ``"version": "3.0"``.
+    """The measured trap: ``canonicalization.json`` self-reports a version of its own.
 
     Pinned as a fact so a future reader does not "helpfully" wire that field into
     the spec-version assertion above and make the guard pass for the wrong reason.
     """
     import json
 
-    raw = json.loads((VECTORS_DIR / "canonicalization.json").read_text())
-    assert raw["version"] == "3.0" != adcp.get_adcp_spec_version()
+    raw = json.loads((VECTORS_DIR / "canonicalization.json").read_text(encoding="utf-8"))
+    # ``"3.2"`` at the 3.2.1 pin, ``"3.0"`` at 3.1.1 -- the field tracks the MAJOR.MINOR
+    # of its own format, never the spec pin, which is the whole point of pinning it here.
+    assert raw["version"] == "3.2" != adcp.get_adcp_spec_version()
 
 
 def test_runner_keys_cover_every_keyid_the_vectors_reference() -> None:

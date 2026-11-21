@@ -74,7 +74,7 @@ class TestOAuthCrossDomainLimitations:
         expected_production_config = {
             "SESSION_COOKIE_DOMAIN": ".sales-agent.example.com",
             "SESSION_COOKIE_SECURE": True,
-            "SESSION_COOKIE_SAMESITE": "None",
+            "SESSION_COOKIE_SAMESITE": "Lax",
             "SESSION_COOKIE_PATH": "/admin/",
         }
 

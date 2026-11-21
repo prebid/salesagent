@@ -11,7 +11,6 @@ PRINCIPAL, and returns the Account ROW rather than an account_id string.
 
 import pytest
 from adcp.types import (
-    AccountReference,
     AccountReferenceById,
     AccountReferenceByNaturalKey,
 )
@@ -36,7 +35,7 @@ class TestResolveAccountById:
             AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
             env._commit_factory_data()
 
-            ref = AccountReference(AccountReferenceById(account_id="acc_001"))
+            ref = AccountReferenceById(account_id="acc_001")
             with AccountUoW(tenant.tenant_id) as uow:
                 assert uow.accounts is not None
                 # Read inside the unit of work: the row detaches when it closes, which is
@@ -49,7 +48,7 @@ class TestResolveAccountById:
             env.setup_default_data()
             env._commit_factory_data()
 
-            ref = AccountReference(AccountReferenceById(account_id="nonexistent"))
+            ref = AccountReferenceById(account_id="nonexistent")
             with AccountUoW("resolve_t2") as uow:
                 assert uow.accounts is not None
                 with pytest.raises(AdCPAccountNotFoundError):
@@ -63,7 +62,7 @@ class TestResolveAccountById:
             AccountFactory(tenant=tenant, account_id="acc_noaccess")
             env._commit_factory_data()
 
-            ref = AccountReference(AccountReferenceById(account_id="acc_noaccess"))
+            ref = AccountReferenceById(account_id="acc_noaccess")
             with AccountUoW(tenant.tenant_id) as uow:
                 assert uow.accounts is not None
                 with pytest.raises(AdCPAuthorizationError):
@@ -86,7 +85,7 @@ class TestResolveAccountByNaturalKey:
             AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
             env._commit_factory_data()
 
-            ref = AccountReference(AccountReferenceByNaturalKey(brand={"domain": "acme.com"}, operator="acme.com"))
+            ref = AccountReferenceByNaturalKey(brand={"domain": "acme.com"}, operator="acme.com")
             with AccountUoW(tenant.tenant_id) as uow:
                 assert uow.accounts is not None
                 assert find_account(uow.accounts, ref, env.identity.principal).account_id == "acc_nat"
@@ -110,7 +109,7 @@ class TestResolveAccountByNaturalKey:
             )
             env._commit_factory_data()
 
-            ref = AccountReference(AccountReferenceByNaturalKey(brand={"domain": "hidden.com"}, operator="hidden.com"))
+            ref = AccountReferenceByNaturalKey(brand={"domain": "hidden.com"}, operator="hidden.com")
             with AccountUoW(tenant.tenant_id) as uow:
                 assert uow.accounts is not None
                 with pytest.raises(AdCPAccountNotFoundError):
@@ -122,9 +121,7 @@ class TestResolveAccountByNaturalKey:
             env.setup_default_data()
             env._commit_factory_data()
 
-            ref = AccountReference(
-                AccountReferenceByNaturalKey(brand={"domain": "unknown.com"}, operator="unknown.com")
-            )
+            ref = AccountReferenceByNaturalKey(brand={"domain": "unknown.com"}, operator="unknown.com")
             with AccountUoW("resolve_t5") as uow:
                 assert uow.accounts is not None
                 with pytest.raises(AdCPAccountNotFoundError):

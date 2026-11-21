@@ -292,7 +292,7 @@ def aggregate_all_tenants(period_days: int = 30) -> dict[str, Any]:
                 Tenant.ad_server == "google_ad_manager",
                 Tenant.is_active,
                 AdapterConfig.gam_network_code.isnot(None),
-                AdapterConfig.gam_refresh_token.isnot(None),
+                AdapterConfig._gam_refresh_token.isnot(None),
             )
         )
         tenants = db_session.execute(stmt).all()

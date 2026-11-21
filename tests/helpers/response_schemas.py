@@ -5,51 +5,44 @@ never names a schema file: a filename in a feature file is a second spelling of
 "which tool is this scenario exercising", and the two drift.
 
 Everything here is derived from two live sources — the tool registry and the
-pinned SDK's own module layout — so a tool cannot be graded against the wrong
+pinned SDK's own domain tree — so a tool cannot be graded against the wrong
 contract by anyone forgetting to update a table.
+
+``tests/unit/test_response_schema_category_resolves.py`` grades that derivation,
+and grades a BARE-FILENAME resolution as a failure even when it loads. Without
+it, a derivation that silently stops working goes unreported for as long as the
+basenames it falls back to happen to be unique — which is exactly what adcp
+9.0.0 did to six of these tools.
 """
 
 from __future__ import annotations
 
-import typing
-
-from adcp import types as adcp_types
-from pydantic import BaseModel
-
 from src.core.tools.registry import TOOLS
+from tests.helpers.adcp_domain_types import response_declaration
+from tests.helpers.adcp_domain_types import tool_camel as _camel
 from tests.helpers.pinned_schema import load, validator_for
 
 
-def _camel(tool: str) -> str:
-    return "".join(part.title() for part in tool.split("_"))
-
-
 def _category(tool: str) -> str | None:
-    """The schema's directory, read off the SDK response type's module path.
+    """The schema's directory, read off the domain package that declares the response.
 
-    ``GetProductsResponse`` lives in ``adcp.types.generated_poc.media_buy.…``,
-    and its schema in ``media-buy/``. This is not decoration: two DIFFERENT
-    schemas share the basename ``list-creative-formats-response.json`` (one
-    under ``creative/``, one under ``media-buy/``), so a bare filename is
-    genuinely ambiguous and the loader refuses it rather than guessing.
+    ``GetProductsResponse`` is declared in ``adcp.types.domains.media_buy``, and
+    its schema lives in ``media-buy/``. The package name IS the directory, so
+    there is nothing to translate beyond the underscore.
 
-    A response type that is a UNION of outcome branches has no ``__module__`` of
-    its own; the branches do, and they agree, so the first is read.
+    Qualifying the ref is not decoration: two DIFFERENT schemas share the
+    basename ``list-creative-formats-response.json`` (one under ``creative/``,
+    titled "(Creative Agent)", one under ``media-buy/``), so a bare filename is
+    genuinely ambiguous there and the loader refuses it rather than guessing.
 
-    Returns ``None`` for a tool the SDK does not type at all — the app-owned
-    schemas in ``schemas/`` are found by bare filename, which is unambiguous
-    there.
+    The lookup itself lives in :mod:`tests.helpers.adcp_domain_types`, because the
+    harness's parse-back helper asks the same question and the two copies were
+    wrong about the same four tools. Read that module for what the flat
+    ``adcp.types`` namespace does to this and why a ``Legacy*`` fallback is not
+    the fix.
     """
-    model = getattr(adcp_types, _camel(tool) + "Response", None)
-    if model is None:
-        return None
-    if not (isinstance(model, type) and issubclass(model, BaseModel)):
-        branches = [arg for arg in typing.get_args(model) if isinstance(arg, type)]
-        model = branches[0] if branches else None
-    module = getattr(model, "__module__", "") or ""
-    if ".generated_poc." not in module:
-        return None
-    return module.split(".")[-2].replace("_", "-")
+    domain, _ = response_declaration(tool)
+    return domain.replace("_", "-") if domain is not None else None
 
 
 def response_schema_ref(tool: str) -> str:

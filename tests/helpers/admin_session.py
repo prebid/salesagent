@@ -141,6 +141,21 @@ def admin_test_app() -> Any:
     return app
 
 
+def tenant_user_session(client: Any, email: str, *, auth_method: str | None = None) -> None:
+    """Sign a Flask test client in as the ordinary tenant user *email*.
+
+    Only ``session["user"]``: none of the super-admin or test-mode keys
+    :func:`admin_auth_session` writes, so ``require_tenant_access`` looks up the user's
+    ``User`` row and applies its role. Use it to test what a tenant user may and may not
+    do; a super admin passes every check and proves nothing there. Pass
+    ``auth_method='oidc'`` for routes that require an SSO sign-in.
+    """
+    with client.session_transaction() as sess:
+        sess["user"] = {"email": email}
+        if auth_method is not None:
+            sess["auth_method"] = auth_method
+
+
 def admin_auth_session(client: Any, tenant_id: str, *, auth_method: str | None = None) -> None:
     """Populate a super-admin test-mode session on a Flask test client.
 
