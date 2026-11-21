@@ -503,7 +503,7 @@ class GamSellerMixin:
 
         Each package is on *product*, or on the product id *package_products* names for it.
         """
-        from datetime import UTC, date, datetime, timedelta
+        from datetime import UTC, datetime, timedelta
 
         from tests.factories import MediaBuyFactory
         from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
@@ -513,13 +513,20 @@ class GamSellerMixin:
         # A flight that has started and ends 30 days from this run: a buy in a serving status is
         # delivering. Relative, not a far-future literal: GAM refuses a line item ending too far out
         # (LineItemFlightDateError.END_DATE_TIME_TOO_LATE), and the seller books this flight there.
-        ends = datetime.now(UTC).replace(hour=23, minute=59, second=59, microsecond=0) + timedelta(days=30)
+        today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        ends = today + timedelta(days=30, hours=23, minutes=59, seconds=59)
+        # A pending_start buy is one whose flight has not started, so its flight starts tomorrow.
+        # A started one is not stable: the live server's status scheduler promotes a pending_start
+        # buy whose start has passed and whose creatives are approved to active
+        # (src/services/media_buy_status_scheduler.py), and whether a sweep lands mid-scenario is
+        # timing.
+        starts = today + timedelta(days=1) if buy.get("status") == "pending_start" else datetime(2025, 1, 1, tzinfo=UTC)
         return MediaBuyFactory(
             tenant=tenant,
             principal=principal or buyer,
-            start_date=date(2025, 1, 1),
+            start_date=starts.date(),
             end_date=ends.date(),
-            start_time=datetime(2025, 1, 1, tzinfo=UTC),
+            start_time=starts,
             end_time=ends,
             raw_request={
                 "packages": [
