@@ -36,7 +36,7 @@ def list_authorized_properties(tenant_id: str) -> str | Response:
         tenant = uow.tenant_config.get_tenant()
         if tenant is None:
             flash(PROPERTY_ERROR_MESSAGES["tenant_not_found"], "error")
-            return redirect(url_for("core.admin_dashboard"))
+            return redirect(url_for("core.index"))
         publishers = uow.publishers.list_all()
         rows = [
             {"property": prop, "publisher": publisher, "authorized": prop in authorized_properties(publisher, now)}
@@ -68,7 +68,7 @@ def list_property_tags(tenant_id: str) -> str | Response:
             tenant = db_session.scalars(stmt).first()
             if not tenant:
                 flash("Tenant not found", "error")
-                return redirect(url_for("core.admin_dashboard"))
+                return redirect(url_for("core.index"))
 
             # Ensure 'all_inventory' tag exists (default tag for all properties)
             tag_stmt = select(PropertyTag).where(

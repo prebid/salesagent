@@ -17,10 +17,10 @@ from urllib.parse import urlsplit
 import pytest
 
 from src.admin.blueprints import auth as auth_view
-from src.core.database.models import AdapterConfig, Tenant
+from src.core.database.models import Tenant
 from src.services.google_oauth_client import GoogleTokenResponse
 from tests.factories import TenantFactory, UserFactory
-from tests.integration.gam_oauth_helpers import AUTH_CODE, authorize, callback, log_in, start_flow
+from tests.integration.gam_oauth_helpers import AUTH_CODE, authorize, callback, log_in, persisted, start_flow
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -58,21 +58,6 @@ def member(own_tenant):
     return UserFactory(tenant=own_tenant, role="admin")
 
 
-def _persisted(session, tenant_id: str) -> tuple[str, bool, str | None]:
-    """``(tenant.ad_server, an adapter_config row exists, its gam_refresh_token)`` as stored right now.
-
-    Row existence is graded separately from the token: a callback that inserts the
-    row and only then denies has still written to the tenant.
-    """
-    session.expire_all()
-    adapter_config = session.get(AdapterConfig, tenant_id)
-    return (
-        session.get(Tenant, tenant_id).ad_server,
-        adapter_config is not None,
-        adapter_config.gam_refresh_token if adapter_config else None,
-    )
-
-
 # --- /auth/gam/authorize/<tenant_id> -----------------------------------------------------
 
 
@@ -94,18 +79,19 @@ def test_authorize_by_a_non_member_is_forbidden(admin_client, member, other_tena
 # --- /auth/gam/callback ------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("script_root", ["", "/admin"])
 def test_member_connects_gam_with_the_state_it_was_issued(
-    admin_client, member, own_tenant, gam_oauth_configured, token_exchange, bound_factory_session
+    admin_client, member, own_tenant, gam_oauth_configured, token_exchange, bound_factory_session, script_root
 ):
     """AC5: authorize, come back with the state Google echoes, and the token is stored."""
     log_in(admin_client, member)
-    state = start_flow(admin_client, own_tenant.tenant_id)
+    state = start_flow(admin_client, own_tenant.tenant_id, script_root=script_root)
 
-    response = callback(admin_client, state)
+    response = callback(admin_client, state, script_root=script_root)
 
-    assert urlsplit(response.headers["Location"]).path == f"/tenant/{own_tenant.tenant_id}/settings"
+    assert urlsplit(response.headers["Location"]).path == f"{script_root}/tenant/{own_tenant.tenant_id}/settings"
     assert token_exchange == [AUTH_CODE]
-    assert _persisted(bound_factory_session, own_tenant.tenant_id) == ("google_ad_manager", True, _REFRESH_TOKEN)
+    assert persisted(bound_factory_session, own_tenant.tenant_id) == ("google_ad_manager", True, _REFRESH_TOKEN)
 
 
 def test_each_flow_is_issued_a_fresh_unguessable_state(admin_client, member, own_tenant, gam_oauth_configured):
@@ -137,8 +123,8 @@ def test_callback_without_a_started_flow_writes_nothing(
 
     callback(admin_client, {"own": own_tenant, "other": other_tenant}[named].tenant_id)
 
-    assert _persisted(bound_factory_session, own_tenant.tenant_id) == _UNTOUCHED
-    assert _persisted(bound_factory_session, other_tenant.tenant_id) == _UNTOUCHED
+    assert persisted(bound_factory_session, own_tenant.tenant_id) == _UNTOUCHED
+    assert persisted(bound_factory_session, other_tenant.tenant_id) == _UNTOUCHED
     assert token_exchange == []
 
 
@@ -157,8 +143,8 @@ def test_callback_with_a_state_the_session_was_not_issued_writes_nothing(
 
     callback(admin_client, {"own": own_tenant, "other": other_tenant}[forged].tenant_id)
 
-    assert _persisted(bound_factory_session, own_tenant.tenant_id) == _UNTOUCHED
-    assert _persisted(bound_factory_session, other_tenant.tenant_id) == _UNTOUCHED
+    assert persisted(bound_factory_session, own_tenant.tenant_id) == _UNTOUCHED
+    assert persisted(bound_factory_session, other_tenant.tenant_id) == _UNTOUCHED
     assert token_exchange == []
 
 
@@ -171,5 +157,5 @@ def test_callback_without_a_session_writes_nothing(
 
     callback(admin_client.application.test_client(), state)
 
-    assert _persisted(bound_factory_session, own_tenant.tenant_id) == _UNTOUCHED
+    assert persisted(bound_factory_session, own_tenant.tenant_id) == _UNTOUCHED
     assert token_exchange == []
