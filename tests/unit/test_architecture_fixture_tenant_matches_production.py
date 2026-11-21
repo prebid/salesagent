@@ -27,7 +27,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests.unit._architecture_helpers import called_function_names
+from tests.unit._architecture_helpers import called_function_names, orm_classes
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -59,21 +59,13 @@ _NOT_REQUIRED_OF_A_FIXTURE = frozenset(
 )
 
 
-def _orm_model_names() -> frozenset[str]:
-    """Every mapped ORM class, asked of the declarative registry rather than listed.
-
-    The first version of this guard counted any CapWords call and flagged
-    ``PrincipalRepository`` -- a repository, not a row. Pattern-matching the SPELLING of a
-    name cannot tell a model from anything else that happens to be capitalised, so the
-    population comes from the mapper registry: whatever is mapped to a table is a row, and
-    nothing else is.
-    """
-    from src.core.database.models import Base
-
-    return frozenset(mapper.class_.__name__ for mapper in Base.registry.mappers)
-
-
-_ORM_MODELS = _orm_model_names()
+#: Every mapped ORM class, asked of the mapper registry (``orm_classes``) rather than listed.
+#: The first version of this guard counted any CapWords call and flagged
+#: ``PrincipalRepository`` -- a repository, not a row. Pattern-matching the SPELLING of a
+#: name cannot tell a model from anything else that happens to be capitalised, so the
+#: population comes from the registry: whatever is mapped to a table is a row, and nothing
+#: else is.
+_ORM_MODELS = frozenset(orm_classes())
 
 
 def _models_constructed_in(relative_path: str) -> set[str]:

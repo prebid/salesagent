@@ -4,7 +4,7 @@ All ORM model data access in production code must go through repository classes.
 Direct select() calls bypass tenant isolation, skip business logic, and violate
 the repository pattern (CLAUDE.md Pattern #3).
 
-ORM model names are auto-discovered from src/core/database/models.py — any new
+ORM model names come from the live mapper registry (``orm_classes``) — any new
 model gets coverage automatically without manual listing.
 
 Repository files (src/core/database/repositories/*.py) are exempt because they
@@ -18,7 +18,7 @@ import pytest
 from tests.unit._architecture_helpers import (
     assert_violations_match_allowlist,
     find_raw_select_violations,
-    orm_model_class_defs,
+    orm_classes,
 )
 
 # ── Exempt directories and files ────────────────────────────────────
@@ -30,22 +30,8 @@ INFRASTRUCTURE_FILES = {
     "src/core/database/database.py",
 }
 
-# ── Auto-discover ORM models ───────────────────────────────────────
-
-
-def _discover_orm_model_names() -> set[str]:
-    """Every ORM model class name declared in src/core/database/models.py.
-
-    A class is an ORM model if it inherits from Base (directly or with mixins).
-    The Base class itself is excluded. Discovery reads the shared
-    ``models_module_tree()`` parse so this guard, the uniqueness-index-verdict
-    guard and every other models.py reader agree on one inventory.
-    """
-    return {cls.name for cls in orm_model_class_defs()}
-
-
-# Cache the model names at module load (fast — single file parse)
-ORM_MODEL_NAMES = _discover_orm_model_names()
+# ── ORM models: every mapped class, from the one shared inventory ──
+ORM_MODEL_NAMES = set(orm_classes())
 
 # ── Pre-existing violations (allowlist) ─────────────────────────────
 # These existed before the guard was created. The allowlist can only SHRINK.
@@ -104,7 +90,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     # auth.login call it instead of each hand-rolling the same select (#2263)
     ("src/admin/blueprints/core.py", "index"),
     ("src/admin/blueprints/core.py", "reactivate_tenant"),
-    ("src/admin/blueprints/core.py", "render_super_admin_index"),
+    # render_super_admin_index removed — its tenant page and count come from
+    # TenantLookupRepository.list_active / count_active
     ("src/admin/blueprints/creative_agents.py", "add_creative_agent"),
     ("src/admin/blueprints/creative_agents.py", "delete_creative_agent"),
     ("src/admin/blueprints/creative_agents.py", "edit_creative_agent"),
@@ -231,7 +218,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/utils/helpers.py", "get_custom_targeting_mappings"),
     ("src/admin/utils/helpers.py", "get_tenant_config_from_db"),
     ("src/admin/utils/helpers.py", "is_super_admin"),
-    ("src/admin/utils/helpers.py", "is_tenant_admin"),
     ("src/admin/utils/helpers.py", "require_tenant_access"),
     # ── Core ──
     ("src/core/audit_logger.py", "log_operation"),
@@ -287,7 +273,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/dynamic_products.py", "archive_expired_variants"),
     ("src/services/format_metrics_service.py", "_process_and_store_metrics"),
     ("src/services/format_metrics_service.py", "aggregate_all_tenants"),
-    # _update_adapter_config_targeting_keys removed — uses AdapterConfigRepository
+    # _save_inventory_to_db, _update_adapter_config_targeting_keys, _write_custom_targeting_keys and
+    # _write_inventory_batch removed — the sync reads gam_inventory through GAMInventoryRepository
     ("src/services/gam_inventory_service.py", "_upsert_inventory_item"),
     ("src/services/gam_inventory_service.py", "create_inventory_endpoints"),
     ("src/services/gam_inventory_service.py", "fetch_custom_targeting_values"),

@@ -21,6 +21,7 @@ from src.adapters.gam_inventory_discovery import (
 from src.core.database.db_config import DatabaseConfig
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
+from src.core.database.repositories.gam_inventory import GAMInventoryRepository
 from src.services.gam_product_config_service import product_gam_slots
 
 # Create database session factory
@@ -78,11 +79,7 @@ class GAMInventoryService:
         BATCH_SIZE = 500  # Write every 500 items to keep memory usage low
 
         # Load ALL existing inventory IDs once (1 query instead of N)
-        stmt = select(GAMInventory.inventory_type, GAMInventory.inventory_id, GAMInventory.id).where(
-            GAMInventory.tenant_id == tenant_id
-        )
-        existing_inventory = self.db.execute(stmt).all()
-        existing_ids = {(row.inventory_type, row.inventory_id): row.id for row in existing_inventory}
+        existing_ids = GAMInventoryRepository(self.db, tenant_id).row_ids()
 
         # Track totals for logging
         total_inserted = 0
@@ -488,11 +485,7 @@ class GAMInventoryService:
 
         # Load existing inventory IDs once
         logger.info(f"🔍 Loading existing {inventory_type} IDs from database...")
-        stmt = select(GAMInventory.inventory_id, GAMInventory.id).where(
-            and_(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == inventory_type)
-        )
-        existing = self.db.execute(stmt).all()
-        existing_ids = {row.inventory_id: row.id for row in existing}
+        existing_ids = GAMInventoryRepository(self.db, tenant_id).row_ids(inventory_type)
         logger.info(f"✅ Found {len(existing_ids)} existing {inventory_type} items")
 
         to_insert: list[dict[str, Any]] = []
@@ -503,8 +496,8 @@ class GAMInventoryService:
         for idx, item in enumerate(items):
             item_data = self._convert_item_to_db_format(tenant_id, inventory_type, item, sync_time)
 
-            if item.id in existing_ids:
-                item_data["id"] = existing_ids[item.id]
+            if (inventory_type, item.id) in existing_ids:
+                item_data["id"] = existing_ids[(inventory_type, item.id)]
                 to_update.append(item_data)
             else:
                 to_insert.append(item_data)
@@ -538,12 +531,6 @@ class GAMInventoryService:
 
         BATCH_SIZE = 500
 
-        # Load existing key IDs once
-        # Use a fresh query to avoid stale connection issues
-        stmt = select(GAMInventory.inventory_id, GAMInventory.id).where(
-            and_(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == "custom_targeting_key")
-        )
-
         # Explicitly expire_all() and test connection health before querying
         # This prevents hanging on stale connections in long-running syncs
         self.db.expire_all()
@@ -555,8 +542,8 @@ class GAMInventoryService:
             logger.warning(f"Connection test failed, will retry query: {e}")
             # Connection is stale - SQLAlchemy will automatically reconnect on next query
 
-        existing = self.db.execute(stmt).all()
-        existing_ids = {row.inventory_id: row.id for row in existing}
+        # Load existing key IDs once, with a fresh query to avoid stale connection issues
+        existing_ids = GAMInventoryRepository(self.db, tenant_id).row_ids("custom_targeting_key")
 
         to_insert: list[dict[str, Any]] = []
         to_update: list[dict[str, Any]] = []
@@ -577,8 +564,8 @@ class GAMInventoryService:
                 "last_synced": sync_time,
             }
 
-            if key.id in existing_ids:
-                item_data["id"] = existing_ids[key.id]
+            if ("custom_targeting_key", key.id) in existing_ids:
+                item_data["id"] = existing_ids[("custom_targeting_key", key.id)]
                 to_update.append(item_data)
             else:
                 to_insert.append(item_data)
@@ -603,14 +590,7 @@ class GAMInventoryService:
         """
         try:
             # Build mapping from gam_inventory table
-            stmt = select(GAMInventory.name, GAMInventory.inventory_id).where(
-                and_(
-                    GAMInventory.tenant_id == tenant_id,
-                    GAMInventory.inventory_type == "custom_targeting_key",
-                )
-            )
-            results = self.db.execute(stmt).all()
-            key_mapping = {row.name: row.inventory_id for row in results}
+            key_mapping = GAMInventoryRepository(self.db, tenant_id).inventory_ids_by_name("custom_targeting_key")
 
             if key_mapping:
                 # Update adapter_config via repository

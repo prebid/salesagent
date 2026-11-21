@@ -83,7 +83,6 @@ The tests use several pytest fixtures for setup:
 
 4. **TestHelperFunctions**: Tests authorization helper functions
    - `is_super_admin()` with emails and domains
-   - `is_tenant_admin()` for specific tenants and all tenants
 
 5. **TestSessionManagement**: Tests session-related functionality
    - Logout functionality

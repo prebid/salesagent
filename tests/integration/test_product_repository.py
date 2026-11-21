@@ -559,6 +559,22 @@ class TestProductRepositoryCommonIntersection:
 
 
 @pytest.mark.requires_db
+class TestProductRepositoryProductIds:
+    """product_ids(): the tenant's product ids, whole, and no other tenant's."""
+
+    def test_returns_the_tenants_product_ids(self, factory_session):
+        tenant = TenantFactory()
+        ProductFactory(tenant=tenant, product_id="run_of_site_display")
+        ProductFactory(tenant=tenant, product_id="video_preroll")
+        ProductFactory(product_id="homepage_takeover")  # another tenant's
+
+        assert ProductRepository(factory_session, tenant.tenant_id).product_ids() == {
+            "run_of_site_display",
+            "video_preroll",
+        }
+
+
+@pytest.mark.requires_db
 class TestProductRepositoryListForOffer:
     """ProductRepository.list_for_offer returns products with their relationships loaded."""
 

@@ -26,39 +26,40 @@ oracle, so those tests cannot drift from the behaviour they mirror either.
 
 import ast
 
-from tests.unit._architecture_helpers import REPO_ROOT, parse_module
+from tests.unit._architecture_helpers import ORM_MODELS_MODULE, REPO_ROOT, orm_bindings, parse_module
 
 TOOLS_MODULE = "src/core/tools/accounts.py"
 ADMIN_MODULE = "src/admin/blueprints/accounts.py"
 REPO_MODULE = "src/core/database/repositories/account.py"
 BUILDER = "build_row"
-ORM_MODULE = "src.core.database.models"
 ORM_CLASS = "Account"
 
 
-def orm_row_names(tree: ast.Module) -> set[str]:
-    """The local name(s) a module binds to the ORM ``Account`` model.
+def orm_row_names(relpath: str, tree: ast.Module) -> set[str]:
+    """The local name(s) a module binds to the ORM ``Account`` model (``orm_bindings``).
 
     Resolved from the module's own imports rather than hardcoded, because the
     Pydantic SCHEMA is also called ``Account`` in some modules and constructing
     it is not a row construction at all. ``accounts.py`` imports the ORM model
     as ``DBAccount`` precisely to keep the two apart; reading the alias means
     the guard follows a rename instead of silently going blind or crying wolf.
+    A relative import resolves too.
     """
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == ORM_MODULE:
-            names.update(alias.asname or alias.name for alias in node.names if alias.name == ORM_CLASS)
-    return names
+    return {local for local, original in orm_bindings(relpath, tree).items() if original == ORM_CLASS}
+
+
+def _module(relpath: str) -> tuple[ast.Module, set[str]]:
+    """*relpath*'s tree and the names it binds to the ORM ``Account``."""
+    tree = parse_module(REPO_ROOT / relpath)
+    return tree, orm_row_names(relpath, tree)
 
 
 def _is_row_construction(call: ast.Call, names: set[str]) -> bool:
     return (getattr(call.func, "id", None) or getattr(call.func, "attr", None)) in names
 
 
-def find_any_row_construction(tree: ast.Module, row_names: set[str] | None = None) -> list[int]:
+def find_any_row_construction(tree: ast.Module, names: set[str]) -> list[int]:
     """Line numbers of EVERY ORM Account row construction in the module."""
-    names = orm_row_names(tree) if row_names is None else row_names
     if not names:
         return []
     return sorted(
@@ -66,11 +67,8 @@ def find_any_row_construction(tree: ast.Module, row_names: set[str] | None = Non
     )
 
 
-def find_row_constructions_outside_builder(
-    tree: ast.Module, row_names: set[str] | None = None, builder: str = BUILDER
-) -> list[int]:
+def find_row_constructions_outside_builder(tree: ast.Module, names: set[str], builder: str = BUILDER) -> list[int]:
     """Line numbers where an ORM Account row is constructed outside ``builder``."""
-    names = orm_row_names(tree) if row_names is None else row_names
     if not names:
         return []
 
@@ -94,20 +92,19 @@ def test_the_orm_row_alias_is_still_resolvable_in_accounts_module():
     If accounts.py stopped importing the ORM model under a name this can see, the
     scan above would return an empty list and pass while checking nothing.
     """
-    names = orm_row_names(parse_module(REPO_ROOT / TOOLS_MODULE))
-    assert names, f"{TOOLS_MODULE} no longer imports {ORM_CLASS} from {ORM_MODULE} — the guard would be inert"
+    _, names = _module(TOOLS_MODULE)
+    assert names, f"{TOOLS_MODULE} no longer imports {ORM_CLASS} from {ORM_MODELS_MODULE} — the guard would be inert"
 
 
 def test_the_orm_row_alias_is_still_resolvable_in_repository_module():
-    names = orm_row_names(parse_module(REPO_ROOT / REPO_MODULE))
-    assert names, f"{REPO_MODULE} no longer imports {ORM_CLASS} from {ORM_MODULE} — the guard would be inert"
+    _, names = _module(REPO_MODULE)
+    assert names, f"{REPO_MODULE} no longer imports {ORM_CLASS} from {ORM_MODELS_MODULE} — the guard would be inert"
 
 
 def test_accounts_tools_module_never_constructs_a_row_directly():
     """accounts.py must route every Account row through AccountRepository.build_row —
     it must never construct one itself (the tools layer owns no ORM construction)."""
-    path = REPO_ROOT / TOOLS_MODULE
-    violations = find_any_row_construction(parse_module(path))
+    violations = find_any_row_construction(*_module(TOOLS_MODULE))
     assert not violations, (
         f"{TOOLS_MODULE} constructs an Account row directly at line(s) {violations}. "
         "Route it through AccountRepository.build_row(...) instead -- ORM row construction "
@@ -124,7 +121,7 @@ def test_admin_blueprint_never_constructs_a_row_directly():
     A module that does not import the ORM model at all trivially satisfies this
     (no names resolved -> nothing to construct), which is the desired end state.
     """
-    violations = find_any_row_construction(parse_module(REPO_ROOT / ADMIN_MODULE))
+    violations = find_any_row_construction(*_module(ADMIN_MODULE))
     assert not violations, (
         f"{ADMIN_MODULE} constructs an Account row directly at line(s) {violations}. "
         "Route it through AccountRepository.build_row(...) + create() instead (#1721)."
@@ -132,8 +129,7 @@ def test_admin_blueprint_never_constructs_a_row_directly():
 
 
 def test_account_repository_builds_its_row_in_one_place():
-    path = REPO_ROOT / REPO_MODULE
-    violations = find_row_constructions_outside_builder(parse_module(path))
+    violations = find_row_constructions_outside_builder(*_module(REPO_MODULE))
     assert not violations, (
         f"{REPO_MODULE} constructs an Account row outside {BUILDER}() at line(s) {violations}. "
         "Every caller must describe the SAME row -- two field lists in one module is the "
