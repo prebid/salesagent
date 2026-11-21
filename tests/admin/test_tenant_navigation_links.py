@@ -1,23 +1,22 @@
 """The buyer Accounts and Signing Keys pages are linked from the tenant Settings navigation.
 
 Issue #2609: no page linked to ``accounts.list_accounts``, and the only link to
-``signing_keys.list_signing_keys`` was the action URL of the optional "Message Signing
-Key" setup task, which the checklist renders only while the task is incomplete. Once a
-key could sign, nothing linked to the page where keys are revoked and rotated.
+``signing_keys.list_signing_keys`` was the **Configure** link of the optional "Message
+Signing Key" setup task, which ``templates/setup_checklist.html`` renders only while the
+task is incomplete. Once a key could sign, nothing linked to the page where keys are
+revoked and rotated.
 
 Each test signs in as an ordinary tenant admin (``tenant_user_session``), not a super
-admin, because the links are for tenant operators, and follows the links the way an
-operator would: dashboard, then Settings, then the two pages.
+admin, because the links are for tenant operators. Every page is fetched over HTTP at the
+URL ``url_for`` builds for its endpoint, and every link is read from the ``<a>`` tags of
+the rendered page.
 """
 
 from __future__ import annotations
 
-import re
-
 import pytest
 from flask import url_for
 
-from src.services.setup_checklist_service import SetupChecklistService
 from tests.factories import SigningKeyFactory, TenantFactory, UserFactory
 from tests.helpers.admin_session import tenant_user_session
 from tests.helpers.signing import deployment_kek
@@ -25,17 +24,17 @@ from tests.helpers.signing import deployment_kek
 pytestmark = [pytest.mark.admin, pytest.mark.requires_db]
 
 
-def _expected_hrefs(client, tenant_id: str) -> dict[str, str]:
-    """The two link targets, built by the same ``url_for`` the template calls."""
+def _url(client, endpoint: str, **values: str) -> str:
+    """The URL of ``endpoint``, built by the same ``url_for`` the templates call."""
     with client.application.test_request_context():
-        return {
-            "accounts": url_for("accounts.list_accounts", tenant_id=tenant_id),
-            "signing_keys": url_for("signing_keys.list_signing_keys", tenant_id=tenant_id),
-        }
+        return url_for(endpoint, **values)
 
 
-def _hrefs(html: str) -> set[str]:
-    return set(re.findall(r'href="([^"]*)"', html))
+def _links(client, page_validator, url: str) -> list[str]:
+    """The ``<a>`` hrefs of the page at ``url``, which must render without a redirect."""
+    response = client.get(url)
+    assert response.status_code == 200, (url, response.status_code)
+    return page_validator(response).get_links()
 
 
 def _signed_in_tenant_admin(client):
@@ -45,56 +44,53 @@ def _signed_in_tenant_admin(client):
     return tenant
 
 
-def _settings_links(client, tenant_id: str) -> set[str]:
-    response = client.get(f"/tenant/{tenant_id}/settings")
-    assert response.status_code == 200, response.status_code
-    return _hrefs(response.get_data(as_text=True))
-
-
-def _signing_key_task(tenant_id: str) -> dict:
-    status = SetupChecklistService(tenant_id).get_setup_status()
-    tasks = status["critical"] + status["recommended"] + status["optional"]
-    return next(task for task in tasks if task["key"] == "signing_key")
-
-
 class TestSettingsNavigationLinks:
-    def test_settings_links_to_buyer_accounts_and_signing_keys(self, admin_client, factory_session):
-        tenant = _signed_in_tenant_admin(admin_client)
-        expected = _expected_hrefs(admin_client, tenant.tenant_id)
-
-        links = _settings_links(admin_client, tenant.tenant_id)
-
-        assert expected["accounts"] in links
-        assert expected["signing_keys"] in links
-
-    def test_signing_keys_stays_linked_once_the_setup_task_is_complete(
-        self, admin_client, factory_session, monkeypatch
+    @pytest.mark.parametrize("with_signing_key", [False, True], ids=["no_key", "key_signs"])
+    def test_settings_links_both_pages_whether_or_not_the_signing_key_task_is_complete(
+        self, admin_client, factory_session, page_validator, monkeypatch, with_signing_key
     ):
         with deployment_kek(monkeypatch):
             tenant = _signed_in_tenant_admin(admin_client)
-            SigningKeyFactory(tenant=tenant)
-            factory_session.commit()
-            # The precondition the bug needed: the task is done, so the checklist no
-            # longer renders its Configure link.
-            assert _signing_key_task(tenant.tenant_id)["is_complete"] is True
+            if with_signing_key:
+                SigningKeyFactory(tenant=tenant)
+                factory_session.commit()
+            tenant_id = tenant.tenant_id
+            signing_keys = _url(admin_client, "signing_keys.list_signing_keys", tenant_id=tenant_id)
+            accounts = _url(admin_client, "accounts.list_accounts", tenant_id=tenant_id)
 
-            expected = _expected_hrefs(admin_client, tenant.tenant_id)
-            links = _settings_links(admin_client, tenant.tenant_id)
+            # The bug's precondition, read from the page it was on: the checklist links
+            # the signing-keys page only while the task is incomplete. Its action URL has
+            # no trailing slash, so the comparison ignores one.
+            checklist = _links(
+                admin_client, page_validator, _url(admin_client, "tenants.setup_checklist", tenant_id=tenant_id)
+            )
+            checklist_links_signing_keys = any(
+                href and href.rstrip("/") == signing_keys.rstrip("/") for href in checklist
+            )
+            assert checklist_links_signing_keys is not with_signing_key
 
-        assert expected["signing_keys"] in links
-        assert expected["accounts"] in links
+            settings = _links(
+                admin_client, page_validator, _url(admin_client, "tenants.tenant_settings", tenant_id=tenant_id)
+            )
 
-    def test_both_pages_are_reachable_from_the_dashboard(self, admin_client, factory_session):
+        assert signing_keys in settings
+        assert accounts in settings
+
+    def test_both_pages_are_reachable_from_the_dashboard(self, admin_client, factory_session, page_validator):
         tenant = _signed_in_tenant_admin(admin_client)
-        expected = _expected_hrefs(admin_client, tenant.tenant_id)
-        with admin_client.application.test_request_context():
-            settings_href = url_for("tenants.tenant_settings", tenant_id=tenant.tenant_id)
+        tenant_id = tenant.tenant_id
+        settings = _url(admin_client, "tenants.tenant_settings", tenant_id=tenant_id)
 
-        dashboard = admin_client.get(f"/tenant/{tenant.tenant_id}", follow_redirects=True)
-        assert dashboard.status_code == 200, dashboard.status_code
-        assert settings_href in _hrefs(dashboard.get_data(as_text=True))
+        dashboard_links = _links(
+            admin_client, page_validator, _url(admin_client, "tenants.dashboard", tenant_id=tenant_id)
+        )
+        assert settings in dashboard_links
 
-        links = _settings_links(admin_client, tenant.tenant_id)
-        for href in (expected["accounts"], expected["signing_keys"]):
-            assert href in links
-            assert admin_client.get(href, follow_redirects=True).status_code == 200, href
+        settings_links = _links(admin_client, page_validator, settings)
+        for endpoint in ("accounts.list_accounts", "signing_keys.list_signing_keys"):
+            href = _url(admin_client, endpoint, tenant_id=tenant_id)
+            assert href in settings_links
+            # No redirect is followed: a route that sent this session to the login page
+            # would answer 302 here, not the 200 the rendered login page gives.
+            response = admin_client.get(href)
+            assert response.status_code == 200, (href, response.status_code)
