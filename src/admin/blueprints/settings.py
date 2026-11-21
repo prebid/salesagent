@@ -8,14 +8,16 @@
 """
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
 from babel import numbers as babel_numbers
-from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
 
-from src.admin.form_validation import form_number, json_object_body
+from src.admin.form_validation import form_number, json_object_body, required_values
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import caller_reads_json
@@ -26,7 +28,17 @@ from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, UserRole
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
-from src.core.operator_errors import FormIssue, InvalidFormInput, OperatorRefusal
+from src.core.operator_errors import (
+    FormIssue,
+    InvalidFormInput,
+    OperatorRefusal,
+    RecordedFailure,
+    ServerNotConfigured,
+    StateConflict,
+    TenantNotFound,
+    UpstreamFailure,
+    safe_error_message,
+)
 from src.core.security.outbound_http import OutboundError
 from src.services.ai.config import DEFAULT_GOOGLE_MODEL, TenantAIConfig, uses_legacy_gemini_api_key
 from src.services.approximated_client import (
@@ -303,7 +315,7 @@ def update_general(tenant_id):
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
 
-class NoAdapterConfigured(OperatorRefusal):
+class NoAdapterConfigured(StateConflict):
     """An adapter update that names no adapter, for a tenant that has not chosen one."""
 
     MESSAGE = "No adapter configured. Choose an ad server adapter first."
@@ -325,7 +337,7 @@ def update_adapter(tenant_id):
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
-            abort(404)
+            raise TenantNotFound(f"Tenant {tenant_id}")
 
         # If no adapter specified, use current adapter (for updating config only)
         if not new_adapter:
@@ -593,7 +605,7 @@ def test_ai_connection(tenant_id):
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
-            return jsonify({"success": False, "error": "Tenant not found"}), 404
+            raise TenantNotFound(f"Tenant {tenant_id}")
 
         if api_key:
             test_config["api_key"] = api_key
@@ -603,11 +615,11 @@ def test_ai_connection(tenant_id):
             test_config["api_key"] = tenant.gemini_api_key
 
     if not test_config.get("api_key"):
-        return jsonify({"success": False, "error": "No API key provided"}), 400
+        raise InvalidFormInput(FormIssue("api_key", "No API key provided"))
 
     model_string = AIServiceFactory().build(TenantAIConfig.model_validate(test_config))
     if model_string is None:
-        return jsonify({"success": False, "error": f"Cannot build a model for provider {provider!r}"}), 400
+        raise InvalidFormInput(FormIssue("provider", f"Cannot build a model for provider {provider!r}"))
 
     # Simple test: ask the model to respond with a single word
     class TestResponse(BaseModel):
@@ -666,7 +678,7 @@ class AIModelNotFound(OperatorRefusal):
     MESSAGE = "Model not found. Please check the model name."
 
 
-class AIProviderRateLimited(OperatorRefusal):
+class AIProviderRateLimited(UpstreamFailure):
     """The AI provider refused the call for its rate limit or quota (HTTP 429)."""
 
     MESSAGE = "Rate limit exceeded. Please try again later."
@@ -699,39 +711,31 @@ def ai_refusal_for(status_code: int | None) -> type[OperatorRefusal] | None:
 @require_tenant_access()
 def test_logfire_connection(tenant_id):
     """Test Logfire connection with provided token."""
-    try:
-        data = json_object_body()
-        logfire_token = data.get("logfire_token", "").strip()
+    [logfire_token] = required_values(json_object_body(), "logfire_token")
 
-        if not logfire_token:
-            return jsonify({"success": False, "error": "No Logfire token provided"}), 400
+    # A dependency of this app (pyproject.toml), so it is always importable.
+    import logfire
 
-        # Try to configure logfire with the token
-        import logfire
+    # No token is refused here: logfire.configure accepts any string and checks the token
+    # on a background thread, where it only warns. What it does raise
+    # (LogfireConfigError) is about this deployment's own Logfire settings, not the
+    # operator's token, so the admin error handler answers it as an unexpected failure.
+    logfire.configure(
+        token=logfire_token,
+        service_name="adcp-sales-agent-test",
+    )
 
-        # No token is refused here: logfire.configure accepts any string and checks the token
-        # on a background thread, where it only warns. What it does raise
-        # (LogfireConfigError) is about this deployment's own Logfire settings, not the
-        # operator's token, so the admin error handler answers it as an unexpected failure.
-        logfire.configure(
-            token=logfire_token,
-            service_name="adcp-sales-agent-test",
-        )
+    # Send a test span to verify the token works
+    with logfire.span("test_connection", _level="info") as span:
+        span.set_attribute("test", True)
+        span.set_attribute("tenant_id", tenant_id)
 
-        # Send a test span to verify the token works
-        with logfire.span("test_connection", _level="info") as span:
-            span.set_attribute("test", True)
-            span.set_attribute("tenant_id", tenant_id)
-
-        return jsonify(
-            {
-                "success": True,
-                "message": "Logfire connection successful! Check your Logfire dashboard for the test span.",
-            }
-        )
-
-    except ImportError:
-        return jsonify({"success": False, "error": "Logfire package not installed"}), 400
+    return jsonify(
+        {
+            "success": True,
+            "message": "Logfire connection successful! Check your Logfire dashboard for the test span.",
+        }
+    )
 
 
 @settings_bp.route("/ai/models", methods=["GET"])
@@ -1205,54 +1209,59 @@ def update_business_rules(tenant_id):
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
 
-def _resolve_owned_domain(tenant_id: str, domain: str | None) -> OwnedDomain | None:
-    """Prove the tenant owns *domain*, or report that the tenant is missing.
+class ApproximatedNotConfigured(ServerNotConfigured):
+    """This deployment has no Approximated API key: no domain is registered and no DNS widget served."""
+
+    MESSAGE = "Approximated is not configured on this server"
+
+
+def _approximated_api_key() -> str:
+    """This deployment's Approximated API key; :class:`ApproximatedNotConfigured` when it has none."""
+    api_key = get_settings().integrations.approximated_api_key
+    if not api_key:
+        raise ApproximatedNotConfigured("APPROXIMATED_API_KEY is not set")
+    return api_key
+
+
+def _owned_domain_request(tenant_id: str) -> tuple[OwnedDomain, str]:
+    """The domain the request's body names, proved to be the tenant's, and the Approximated API key.
 
     One owner for the ownership rule, so no Approximated handler can be written
-    without it. The status and unregister routes share it from here;
-    register_approximated_domain still proves it inline (see the comment there)
-    because its raw ``select()`` is a live no-raw-select allowlist row.
+    without it. A missing tenant is a 404; a domain the tenant does not own raises
+    ``DomainNotOwned``, which the admin error handler answers with 400.
 
     ``tenant.virtual_host`` is read INSIDE the session block on purpose -- a
     detached instance would raise at the read rather than refuse.
-
-    Returns ``None`` when the tenant row does not exist, so each route renders
-    its own 404 rather than have one imposed here; raises ``DomainNotOwned``
-    when the tenant exists but does not own the domain, which the admin error
-    handler answers with 400.
     """
+    [domain] = required_values(json_object_body(), "domain")
+    api_key = _approximated_api_key()
     with get_db_session() as db_session:
         tenant = TenantConfigRepository(db_session, tenant_id).get_tenant()
         if not tenant:
-            return None
-        return tenant_owns_domain(tenant, domain)
+            raise TenantNotFound(f"Tenant {tenant_id}")
+        return tenant_owns_domain(tenant, domain), api_key
+
+
+@contextmanager
+def _approximated_call(context: str) -> Iterator[None]:
+    """A failed Approximated API call, logged under a reference and answered 500 with *context* and it."""
+    try:
+        yield
+    except OutboundError as exc:
+        raise RecordedFailure(safe_error_message(exc, context), str(exc)) from exc
 
 
 @settings_bp.route("/approximated-domain-status", methods=["POST"])
 @require_tenant_access()
 def check_approximated_domain_status(tenant_id):
     """Check if a domain is registered with Approximated."""
-    data = request.get_json()
-    domain = data.get("domain")
-    if not domain:
-        return jsonify({"success": False, "error": "Domain required"}), 400
-
-    approximated_api_key = get_settings().integrations.approximated_api_key
-    if not approximated_api_key:
-        return jsonify({"success": False, "error": "Approximated not configured"}), 500
-
-    owned = _resolve_owned_domain(tenant_id, domain)
-    if owned is None:
-        return jsonify({"success": False, "error": "Tenant not found"}), 404
+    owned, api_key = _owned_domain_request(tenant_id)
 
     # Check domain registration status via the Approximated service. A
     # not-registered domain is a meaningful result the service already
     # translated from the vendor's 404 -- not an error this route interprets.
-    try:
-        domain_status = get_domain_status(owned, approximated_api_key)
-    except OutboundError as exc:
-        logger.error("Approximated API error: %s", exc)
-        return jsonify({"success": False, "error": "API error"}), 500
+    with _approximated_call("Approximated API error checking a domain"):
+        domain_status = get_domain_status(owned, api_key)
 
     if not domain_status.registered:
         return jsonify({"success": True, "registered": False})
@@ -1274,25 +1283,7 @@ def check_approximated_domain_status(tenant_id):
 @log_admin_action("register_approximated_domain")
 def register_approximated_domain(tenant_id):
     """Register a domain with Approximated for TLS and routing."""
-    data = request.get_json()
-    domain = data.get("domain")
-    if not domain:
-        return jsonify({"success": False, "error": "Domain required"}), 400
-
-    approximated_api_key = get_settings().integrations.approximated_api_key
-    if not approximated_api_key:
-        return jsonify({"success": False, "error": "Approximated not configured"}), 500
-
-    with get_db_session() as db_session:
-        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        if not tenant:
-            return jsonify({"success": False, "error": "Tenant not found"}), 404
-
-        # Ownership is proved here rather than via _resolve_owned_domain only
-        # because this handler's raw select() is a live row in the
-        # no-raw-select allowlist; folding it into the helper is a separate,
-        # owned change. The RULE is the same one the helper applies.
-        owned = tenant_owns_domain(tenant, domain)
+    owned, api_key = _owned_domain_request(tenant_id)
 
     # Get backend target address from the settings
     backend_url = get_settings().integrations.approximated_backend_url
@@ -1300,18 +1291,15 @@ def register_approximated_domain(tenant_id):
     # Register the domain via the Approximated service. Already-registered
     # is a meaningful result the service already translated from the
     # vendor's 409 -- not an error this route interprets.
-    try:
-        result = register_domain(owned, backend_url, approximated_api_key)
-    except OutboundError as exc:
-        logger.error("Approximated API error registering %s: %s", domain, exc)
-        return jsonify({"success": False, "error": "Approximated API error"}), 502
+    with _approximated_call("Approximated API error registering a domain"):
+        result = register_domain(owned, backend_url, api_key)
 
     if result.already_registered:
-        logger.info("✅ Domain already registered: %s", domain)
-        return jsonify({"success": True, "message": f"Domain {domain} already registered"})
+        logger.info("✅ Domain already registered: %s", owned.domain)
+        return jsonify({"success": True, "message": f"Domain {owned.domain} already registered"})
 
-    logger.info("✅ Registered domain with Approximated: %s", domain)
-    return jsonify({"success": True, "message": f"Domain {domain} registered successfully"})
+    logger.info("✅ Registered domain with Approximated: %s", owned.domain)
+    return jsonify({"success": True, "message": f"Domain {owned.domain} registered successfully"})
 
 
 @settings_bp.route("/approximated-unregister-domain", methods=["POST"])
@@ -1319,63 +1307,38 @@ def register_approximated_domain(tenant_id):
 @log_admin_action("unregister_approximated_domain")
 def unregister_approximated_domain(tenant_id):
     """Unregister a domain from Approximated."""
-    data = request.get_json()
-    domain = data.get("domain")
-    if not domain:
-        return jsonify({"success": False, "error": "Domain required"}), 400
-
-    approximated_api_key = get_settings().integrations.approximated_api_key
-    if not approximated_api_key:
-        return jsonify({"success": False, "error": "Approximated not configured"}), 500
-
-    owned = _resolve_owned_domain(tenant_id, domain)
-    if owned is None:
-        return jsonify({"success": False, "error": "Tenant not found"}), 404
+    owned, api_key = _owned_domain_request(tenant_id)
 
     # Unregister the domain via the Approximated service.
     # Already-unregistered is a meaningful result the service already
     # translated from the vendor's 404 -- not an error this route interprets.
-    try:
-        result = unregister_domain(owned, approximated_api_key)
-    except OutboundError as exc:
-        logger.error("Approximated API error unregistering %s: %s", domain, exc)
-        return jsonify({"success": False, "error": "Approximated API error"}), 502
+    with _approximated_call("Approximated API error unregistering a domain"):
+        result = unregister_domain(owned, api_key)
 
     if result.already_unregistered:
-        logger.info("✅ Domain already unregistered: %s", domain)
-        return jsonify({"success": True, "message": f"Domain {domain} was not registered"})
+        logger.info("✅ Domain already unregistered: %s", owned.domain)
+        return jsonify({"success": True, "message": f"Domain {owned.domain} was not registered"})
 
-    logger.info("✅ Unregistered domain from Approximated: %s", domain)
-    return jsonify({"success": True, "message": f"Domain {domain} unregistered successfully"})
+    logger.info("✅ Unregistered domain from Approximated: %s", owned.domain)
+    return jsonify({"success": True, "message": f"Domain {owned.domain} unregistered successfully"})
 
 
 @settings_bp.route("/approximated-token", methods=["POST"])
 @require_tenant_access()
 def get_approximated_token(tenant_id):
     """Generate an Approximated DNS widget token and get DNS target."""
-    # Get API key from environment
-    approximated_api_key = get_settings().integrations.approximated_api_key
-    if not approximated_api_key:
-        logger.error("APPROXIMATED_API_KEY not configured in environment")
-        return jsonify({"success": False, "error": "DNS widget not configured on server"}), 500
+    api_key = _approximated_api_key()
 
     # The IP address of your Approximated proxy cluster
     approximated_proxy_ip = get_settings().integrations.approximated_proxy_ip
 
     with get_db_session() as db_session:
-        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        if not tenant:
-            return jsonify({"success": False, "error": "Tenant not found"}), 404
+        if TenantConfigRepository(db_session, tenant_id).get_tenant() is None:
+            raise TenantNotFound(f"Tenant {tenant_id}")
 
-        # Request a token via the Approximated service. Every status this
-        # operation can receive is a genuine failure, so the upstream status
-        # is propagated from the typed error -- an operator with bad
-        # Approximated credentials must still see 401 here, not a blanket 500.
-        try:
-            dns = get_dns_token(approximated_api_key)
-        except OutboundError as exc:
-            logger.error("Approximated API error requesting a DNS token: %s", exc)
-            return jsonify({"success": False, "error": "Approximated API error"}), exc.http_status or 502
+    # Every status this operation can receive is a genuine failure.
+    with _approximated_call("Approximated API error requesting a DNS widget token"):
+        dns = get_dns_token(api_key)
 
-        logger.info("Approximated API response: %s", dns)
-        return jsonify({"success": True, "token": dns.token, "proxy_ip": approximated_proxy_ip})
+    logger.info("Approximated API response: %s", dns)
+    return jsonify({"success": True, "token": dns.token, "proxy_ip": approximated_proxy_ip})

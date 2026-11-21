@@ -15,7 +15,7 @@ from sqlalchemy import select
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
-from src.core.operator_errors import OperatorRefusal, safe_error_message
+from src.core.operator_errors import StateConflict, safe_error_message
 from src.core.thread_registry import ThreadRegistry
 from src.services.sync_jobs import record_sync_failure
 
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 _active_syncs = ThreadRegistry()
 
 
-class SyncAlreadyRunning(OperatorRefusal):
+class SyncAlreadyRunning(StateConflict):
     """An inventory sync is already running for the tenant; ``sync_id`` names it.
 
     ``MESSAGE`` is the operator-facing text; the exception's own text carries

@@ -24,7 +24,7 @@ from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, UserRole
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.operator_errors import best_effort_call
+from src.core.operator_errors import ConnectionTestFailed, StateConflict, TenantNotFound, best_effort_call
 from src.services.ai.factory import tenant_ai_enabled
 from src.services.setup_checklist_service import SetupChecklistService
 from src.services.slack_notifier import SlackNotifier
@@ -388,6 +388,12 @@ def update(tenant_id):
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
 
+class SlackWebhookNotConfigured(StateConflict):
+    """The tenant has no Slack webhook stored, so there is nothing to send a test message to."""
+
+    MESSAGE = "No Slack webhook configured"
+
+
 @tenants_bp.route("/<tenant_id>/test_slack", methods=["POST"])
 @log_admin_action("test_slack")
 @require_tenant_access()
@@ -396,10 +402,10 @@ def test_slack(tenant_id):
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
-            return jsonify({"success": False, "error": "Tenant not found"}), 404
+            raise TenantNotFound(f"Tenant {tenant_id}")
 
         if not tenant.slack_webhook_url:
-            return jsonify({"success": False, "error": "No Slack webhook configured"}), 400
+            raise SlackWebhookNotConfigured(f"Slack test for tenant {tenant_id}: no webhook stored")
 
         # One Block Kit owner: the route does not assemble its own blocks or dial the
         # egress seam itself, because that duplicates slack_notifier and skips its
@@ -435,9 +441,11 @@ def test_slack(tenant_id):
         )
 
         if not sent:
-            # 400 with an opaque message. Slack's own response body is a counterparty
-            # response and is never echoed back to the operator.
-            return jsonify({"success": False, "error": "Slack webhook delivery failed"}), 400
+            # Fixed text: Slack's own response body is a counterparty response and is
+            # never echoed back to the operator.
+            raise ConnectionTestFailed(
+                f"Slack test for tenant {tenant_id}: delivery failed", details=("Slack webhook delivery failed",)
+            )
 
         return jsonify({"success": True, "message": "Test message sent successfully"})
 

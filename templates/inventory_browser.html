@@ -325,14 +325,12 @@ function syncInventory() {
         body: JSON.stringify({ mode: 'full' })
     })
         .then(response => {
-            if (response.status === 202 || response.ok) {
-                return response.json();
-            }
-            throw new Error(`Server error: ${response.status}`);
+            // Every answer is JSON: a started sync, or a refusal the next step shows
+            return response.json();
         })
         .then(data => {
             if (data.error) {
-                throw new Error(data.error);
+                throw new Error(adminErrorText(data));
             }
 
             // Sync started in background
@@ -368,7 +366,7 @@ function pollInventorySyncStatus(syncId, btn) {
                     alert(`✅ Sync completed!\n\nAd Units: ${adUnitCount}\nPlacements: ${placementCount}\nLabels: ${labelCount}`);
                     window.location.reload();
                 } else if (data.status === 'failed' || data.error) {
-                    throw new Error(data.error || 'Sync failed');
+                    throw new Error(adminErrorText(data));
                 } else {
                     // Still running - check again in 2 seconds
                     setTimeout(checkStatus, 2000);
@@ -622,7 +620,7 @@ async function saveProductAssignment() {
             });
             const data = await response.json();
             if (data.error) {
-                results.push(`❌ Failed to add: ${data.error}`);
+                results.push(`❌ Failed to add: ${adminErrorText(data)}`);
             } else {
                 results.push(`✓ Added to 1 product`);
             }
@@ -636,7 +634,7 @@ async function saveProductAssignment() {
             });
             const data = await response.json();
             if (!data.success) {
-                results.push(`❌ Failed to remove: ${data.error || data.message || 'Unknown error'}`);
+                results.push(`❌ Failed to remove: ${adminErrorText(data)}`);
             } else {
                 results.push(`✓ Removed from 1 product`);
             }
@@ -699,20 +697,13 @@ function performSelectiveSync() {
         .then(async response => {
             // Check HTTP status first before parsing JSON
             if (!response.ok) {
-                // Try to parse error message from JSON response
-                try {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
-                } catch (e) {
-                    // If JSON parsing fails, use status text
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
+                throw new Error(adminErrorText(await response.json()));
             }
             return response.json();
         })
         .then(data => {
             if (data.error) {
-                throw new Error(data.error);
+                throw new Error(adminErrorText(data));
             }
 
             let message = 'Selective sync completed!\n\n';

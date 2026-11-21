@@ -11,6 +11,7 @@ from src.admin.utils.url_policy import redirect_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CreativeAgent, Tenant
 from src.core.database.repositories.uow import TenantConfigUoW
+from src.core.operator_errors import ConnectionTestFailed
 
 logger = logging.getLogger(__name__)
 
@@ -270,17 +271,15 @@ def test_creative_agent(tenant_id, agent_id):
         # production. The JSON keys below are templates/creative_agents.html's
         # contract and stay as they are; only what they are projected FROM
         # changed.
-        result = asyncio.run(CreativeAgentRegistry().probe_agent(agent))
+        probe = asyncio.run(CreativeAgentRegistry().probe_agent(agent))
 
-        if result.ok:
-            return jsonify(
-                {
-                    "success": True,
-                    "message": result.message,
-                    "format_count": result.count,
-                    "sample_formats": list(result.samples),
-                }
-            )
-        # ProbeResult.message is a required field, not an AdCP response
-        # attribute -- the hook regex cannot tell the two apart.
-        return jsonify({"success": False, "error": result.message}), 400  # noqa: response-attribute
+        if not probe.ok:
+            raise ConnectionTestFailed(f"Creative agent {agent_id} probe failed", details=(probe.message,))
+        return jsonify(
+            {
+                "success": True,
+                "message": probe.message,
+                "format_count": probe.count,
+                "sample_formats": list(probe.samples),
+            }
+        )

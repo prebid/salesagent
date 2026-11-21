@@ -9,16 +9,30 @@ import logging
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
-from src.admin.form_validation import json_object_body
+from src.admin.form_validation import json_object_body, required_values
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import require_tenant_access
 from src.core.billing_policy import BILLING_PARTY_VALUES
 from src.core.database.repositories.account import AccountRepository, NaturalKeyConflict
 from src.core.database.repositories.uow import AccountUoW
+from src.core.operator_errors import RecordNotFound, StateConflict
 
 logger = logging.getLogger(__name__)
 
 accounts_bp = Blueprint("accounts", __name__)
+
+
+class AccountNotFound(RecordNotFound):
+    """The account the request names does not exist in the tenant."""
+
+    MESSAGE = "Account not found"
+
+
+class AccountStatusTransitionRefused(StateConflict):
+    """The account's current status does not allow the requested one; *details* say which ones it allows."""
+
+    MESSAGE = "The account cannot change to that status"
+
 
 # Valid status transitions
 _STATUS_TRANSITIONS: dict[str, set[str]] = {
@@ -191,26 +205,22 @@ def edit_account(tenant_id, account_id):
 @log_admin_action("change_account_status")
 def change_status(tenant_id, account_id):
     """Change account status (JSON API for AJAX calls)."""
-    data = json_object_body()
-    new_status = data.get("status")
-
-    if not new_status:
-        return jsonify({"success": False, "error": "Status is required."}), 400
+    [new_status] = required_values(json_object_body(), "status")
 
     with AccountUoW(tenant_id) as uow:
         account = uow.accounts.get_by_id(account_id)
         if account is None:
-            return jsonify({"success": False, "error": "Account not found."}), 404
+            raise AccountNotFound(f"Account {account_id} of tenant {tenant_id}")
 
         allowed = _STATUS_TRANSITIONS.get(account.status, set())
         if new_status not in allowed:
-            return jsonify(
-                {
-                    "success": False,
-                    "error": f"Cannot transition from '{account.status}' to '{new_status}'. "
+            raise AccountStatusTransitionRefused(
+                f"Account {account_id} of tenant {tenant_id}: {account.status} -> {new_status}",
+                details=(
+                    f"Cannot transition from '{account.status}' to '{new_status}'. "
                     f"Allowed: {', '.join(sorted(allowed)) if allowed else 'none (terminal state)'}.",
-                }
-            ), 400
+                ),
+            )
 
         uow.accounts.update_status(account_id, new_status)
 

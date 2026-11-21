@@ -3,12 +3,12 @@
 import logging
 from datetime import datetime
 
-from src.core.operator_errors import OperatorRefusal
+from src.core.operator_errors import ServerNotConfigured
 
 logger = logging.getLogger(__name__)
 
 
-class GAMOAuthNotConfigured(OperatorRefusal):
+class GAMOAuthNotConfigured(ServerNotConfigured):
     """This deployment has no GAM OAuth client (``GAM_OAUTH_CLIENT_ID`` and ``GAM_OAUTH_CLIENT_SECRET``)."""
 
     MESSAGE = (

@@ -58,6 +58,18 @@ def json_object_body(field: str = "body") -> dict[str, Any]:
     return body
 
 
+def required_values(data: dict[str, Any], *fields: str) -> list[Any]:
+    """The values of *fields* in *data*, a string trimmed, or one refusal naming every blank field.
+
+    A field is blank when it is absent, ``None`` or a string of whitespace.
+    """
+    values = [value.strip() if isinstance(value, str) else value for value in map(data.get, fields)]
+    blank = [field for field, value in zip(fields, values, strict=True) if value is None or value == ""]
+    if blank:
+        raise InvalidFormInput(*(FormIssue(field, f"{field} is required") for field in blank))
+    return values
+
+
 def form_number[N: (int, float, Decimal)](
     cast: type[N], field: str, raw: str | N, min_val: N | None = None, max_val: N | None = None
 ) -> N:

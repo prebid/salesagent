@@ -10,6 +10,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.url_policy import json_error_if_url_blocked, redirect_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SignalsAgent, Tenant
+from src.core.operator_errors import ConnectionTestFailed
 
 logger = logging.getLogger(__name__)
 
@@ -268,29 +269,18 @@ def test_signals_agent(tenant_id, agent_id):
         # The registry owns the row -> dial-config mapping, so the probe uses
         # the stored timeout rather than a hard-coded one and dials exactly as
         # production does.
-        result = asyncio.run(registry.probe_agent(agent))
+        probe = asyncio.run(registry.probe_agent(agent))
 
         # The JSON keys are the template's contract (templates/signals_agents.html
-        # reads data.signal_count / data.message / data.error), so they stay put.
+        # reads data.signal_count / data.message), so they stay put; a failed probe is refused.
         # What changed is that they are now projected from a typed result instead
         # of read out of a dict with a default standing in for a missing key.
-        if result.ok:
-            return jsonify(
-                {
-                    "success": True,
-                    "message": result.message,
-                    "signal_count": result.count,
-                }
-            )
-        else:
-            return (
-                jsonify(
-                    {
-                        "success": False,
-                        # ProbeResult.message is a required field, not an AdCP
-                        # response attribute -- the hook regex cannot tell.
-                        "error": result.message,  # noqa: response-attribute
-                    }
-                ),
-                400,
-            )
+        if not probe.ok:
+            raise ConnectionTestFailed(f"Signals agent {agent_id} probe failed", details=(probe.message,))
+        return jsonify(
+            {
+                "success": True,
+                "message": probe.message,
+                "signal_count": probe.count,
+            }
+        )

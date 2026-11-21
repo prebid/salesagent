@@ -61,24 +61,24 @@ from sqlalchemy import select
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig
-from src.core.operator_errors import OperatorRefusal, safe_error_message
+from src.core.operator_errors import ServerNotConfigured, StateConflict, safe_error_message
 
 logger = logging.getLogger(__name__)
 
 
-class TenantAdapterConfigMissing(OperatorRefusal):
+class TenantAdapterConfigMissing(StateConflict):
     """The tenant has no adapter config to attach a service account to."""
 
     MESSAGE = "This tenant has no ad server configuration yet"
 
 
-class ServiceAccountAlreadyExists(OperatorRefusal):
+class ServiceAccountAlreadyExists(StateConflict):
     """The tenant already has a service account; it is not replaced."""
 
     MESSAGE = "This tenant already has a service account"
 
 
-class GCPProjectNotConfigured(OperatorRefusal):
+class GCPProjectNotConfigured(ServerNotConfigured):
     """The deployment names no GCP project to create service accounts in (``GCP_PROJECT_ID``)."""
 
     MESSAGE = "GCP_PROJECT_ID not configured. Please set this environment variable."

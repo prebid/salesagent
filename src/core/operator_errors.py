@@ -22,7 +22,7 @@ import json
 import logging
 import re
 import secrets
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import ClassVar, NamedTuple
@@ -44,24 +44,81 @@ class OperatorRefusal(Exception):
     Raised on purpose (a sync already running, a domain the tenant does not own)
     and answered with ``MESSAGE``, never with the exception's own text, which may
     carry ids for the log. Based on ``Exception`` rather than ``ValueError`` so a
-    broad ``except ValueError`` cannot absorb one. Every subclass must set
-    ``MESSAGE``; defining one without it fails at import.
+    broad ``except ValueError`` cannot absorb one.
+
+    The CLASS decides the answer, as a buyer-facing error's code decides its status:
+    ``MESSAGE`` is its text and ``STATUS`` its HTTP status, and no raise site chooses
+    either. ``STATUS`` comes from the meaning the refusal subclasses: 400 (a value the
+    operator can change) here, or one of the meaning bases below. A meaning base is
+    declared with ``abstract=True`` and sets ``STATUS`` alone; every concrete refusal
+    sets ``MESSAGE``, and defining one without it fails at import.
+
+    *details* are lines the operator is shown beside ``MESSAGE``, for a refusal whose
+    class-level text cannot say what the operator should look at: text this seller
+    wrote, such as a connection test's finding.
     """
 
     MESSAGE: ClassVar[str]
+    STATUS: ClassVar[int] = 400
 
-    def __init_subclass__(cls, **kwargs: object) -> None:
+    def __init_subclass__(cls, abstract: bool = False, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
-        if not isinstance(cls.__dict__.get("MESSAGE"), str):
+        if not isinstance(cls.STATUS, int):
+            raise TypeError(f"{cls.__name__} must define STATUS as an int")
+        if not abstract and not isinstance(cls.__dict__.get("MESSAGE"), str):
             raise TypeError(f"{cls.__name__} must define MESSAGE as a str")
+
+    def __init__(self, *args: object, details: Sequence[str] = ()) -> None:
+        super().__init__(*args)
+        self._details = tuple(details)
 
     def response_fields(self) -> dict[str, object]:
         """Keys a JSON answer carries beside ``error``, for a refusal whose caller reads one."""
-        return {}
+        return {"details": list(self._details)} if self._details else {}
 
     def details(self) -> tuple[str, ...]:
-        """Lines a browser is shown beside ``MESSAGE``; each is text this seller wrote."""
-        return ()
+        """Lines the operator is shown beside ``MESSAGE``; each is text this seller wrote."""
+        return self._details
+
+
+class RecordNotFound(OperatorRefusal, abstract=True):
+    """The record the request names does not exist."""
+
+    STATUS = 404
+
+
+class StateConflict(OperatorRefusal, abstract=True):
+    """The request conflicts with the current state: something is running, exists already, or is not set up yet."""
+
+    STATUS = 409
+
+
+class UpstreamFailure(OperatorRefusal, abstract=True):
+    """Another system the request reached did not answer as it must: an agent, an ad server, a webhook."""
+
+    STATUS = 502
+
+
+class ServerNotConfigured(OperatorRefusal, abstract=True):
+    """This deployment lacks the configuration the request needs, which only its operator can add."""
+
+    STATUS = 503
+
+
+class ConnectionTestFailed(UpstreamFailure):
+    """A connection the operator asked to test did not work; *details* say what the test saw.
+
+    For every "test connection" button and lookup in the admin app: an agent probe, an ad
+    server's network lookup, a Slack webhook's test message.
+    """
+
+    MESSAGE = "The connection test failed"
+
+
+class TenantNotFound(RecordNotFound):
+    """The tenant the request names does not exist."""
+
+    MESSAGE = "Tenant not found"
 
 
 class RecordedFailure(Exception):

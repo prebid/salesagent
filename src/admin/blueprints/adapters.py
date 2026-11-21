@@ -8,12 +8,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import attributes
 
 from src.adapters import get_adapter_schemas
-from src.admin.form_validation import form_number
+from src.admin.form_validation import form_number, json_object_body, required_values
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Product
-from src.core.operator_errors import FormIssue, InvalidFormInput
+from src.core.operator_errors import ConnectionTestFailed, FormIssue, InvalidFormInput
 
 logger = logging.getLogger(__name__)
 
@@ -136,15 +136,12 @@ def save_adapter_config(tenant_id, **kwargs):
         "config": { ... adapter-specific config ... }
     }
     """
+    # get_json, not json_object_body: a body that is not JSON is refused by Flask (415).
     data = request.get_json()
-    if not data:
-        return jsonify({"success": False, "error": "No JSON data provided"}), 400
-
-    adapter_type = data.get("adapter_type")
+    if not isinstance(data, dict):
+        data = {}
+    [adapter_type] = required_values(data, "adapter_type")
     config_data = data.get("config", {})
-
-    if not adapter_type:
-        return jsonify({"success": False, "error": "adapter_type is required"}), 400
 
     # Validate config against adapter schema (keeps Pydantic model flowing)
     schemas = get_adapter_schemas(adapter_type)
@@ -214,15 +211,7 @@ def get_adapter_capabilities(adapter_type, tenant_id, **kwargs):
 @require_tenant_access()
 def test_broadstreet_connection(tenant_id, **kwargs):
     """Test Broadstreet API connection with provided credentials."""
-    data = request.get_json()
-    if not data:
-        return jsonify({"success": False, "error": "No JSON data provided"}), 400
-
-    network_id = data.get("network_id")
-    api_key = data.get("api_key")
-
-    if not network_id or not api_key:
-        return jsonify({"success": False, "error": "network_id and api_key are required"}), 400
+    network_id, api_key = required_values(json_object_body(), "network_id", "api_key")
 
     # Test connection by fetching network info
     from src.adapters.broadstreet import BroadstreetClient
@@ -230,16 +219,18 @@ def test_broadstreet_connection(tenant_id, **kwargs):
     client = BroadstreetClient(access_token=api_key, network_id=network_id)
     network_info = client.get_network()
 
-    if network_info:
-        return jsonify(
-            {
-                "success": True,
-                "network_name": network_info.get("name", "Unknown"),
-                "network_id": network_id,
-            }
+    if not network_info:
+        raise ConnectionTestFailed(
+            f"Broadstreet network {network_id} lookup returned nothing",
+            details=("Could not retrieve network information",),
         )
-    else:
-        return jsonify({"success": False, "error": "Could not retrieve network information"})
+    return jsonify(
+        {
+            "success": True,
+            "network_name": network_info.get("name", "Unknown"),
+            "network_id": network_id,
+        }
+    )
 
 
 @adapters_bp.route("/api/tenant/<tenant_id>/adapters/broadstreet/zones", methods=["GET"])

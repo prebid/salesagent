@@ -45,13 +45,20 @@ from src.admin.form_validation import json_object_body
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
-from src.core.operator_errors import best_effort, safe_error_message
+from src.core.operator_errors import StateConflict, best_effort, safe_error_message
 from src.core.tools.media_buy_create import execute_approved_media_buy, push_creative_to_existing_buy
 
 # Note: CreativeFormat table was dropped in migration f2addf453200
 # All format-related routes have been removed
 
 logger = logging.getLogger(__name__)
+
+
+class AIReviewUnavailable(StateConflict):
+    """The AI review gave no verdict; its details say why (AI not configured, no criteria, a logged failure)."""
+
+    MESSAGE = "The AI review did not run; the creative needs a manual review"
+
 
 # Buy statuses where the order is live in the ad server (retroactive creative push, #1038).
 # pending_start is booked and has not started: a change approved now reaches GAM before it serves.
@@ -1332,7 +1339,7 @@ def ai_review_creative(tenant_id, creative_id, **kwargs):
     result = _ai_review_creative_impl(tenant_id, creative_id)
 
     if "error" in result:
-        return jsonify({"success": False, "error": result["error"]}), 400
+        raise AIReviewUnavailable(f"AI review of creative {creative_id}: {result['error']}", details=(result["error"],))
 
     return jsonify(
         {

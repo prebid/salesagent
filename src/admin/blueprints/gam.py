@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from flask import Blueprint, jsonify, render_template, request, session
+from flask import Blueprint, jsonify, render_template
 from googleads import ad_manager, oauth2
 from sqlalchemy import select
 
@@ -21,7 +21,14 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, GAMLineItem, GAMOrder, Tenant
 from src.core.database.repositories.adapter_config import AdapterConfigRepository, read_adapter_config
-from src.core.operator_errors import safe_error_message
+from src.core.operator_errors import (
+    ConnectionTestFailed,
+    FormIssue,
+    InvalidFormInput,
+    StateConflict,
+    TenantNotFound,
+    safe_error_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +134,9 @@ def safe_get(obj, key, default=None):
     return getattr(obj, key, default)
 
 
-def validate_gam_config(data: dict) -> list | None:
-    """Validate GAM configuration data."""
-    errors = []
+def validate_gam_config(data: dict) -> None:
+    """Refuse GAM configuration data with one :class:`FormIssue` per field that cannot be saved."""
+    errors: list[FormIssue] = []
 
     auth_method = data.get("auth_method", "oauth")
 
@@ -138,18 +145,18 @@ def validate_gam_config(data: dict) -> list | None:
     if network_code:
         network_code_str = str(network_code).strip()
         if not network_code_str.isdigit():
-            errors.append("Network code must be numeric")
+            errors.append(FormIssue("network_code", "Network code must be numeric"))
         elif len(network_code_str) > 20:
-            errors.append("Network code is too long")
+            errors.append(FormIssue("network_code", "Network code is too long"))
 
     # Authentication method specific validation
     if auth_method == "oauth":
         # Refresh token validation
-        refresh_token = data.get("refresh_token", "").strip()
+        refresh_token = (data.get("refresh_token") or "").strip()
         if not refresh_token:
-            errors.append("Refresh token is required for OAuth authentication")
+            errors.append(FormIssue("refresh_token", "Refresh token is required for OAuth authentication"))
         elif len(refresh_token) > 1000:
-            errors.append("Refresh token is too long")
+            errors.append(FormIssue("refresh_token", "Refresh token is too long"))
     elif auth_method == "service_account":
         # Service account JSON validation
         # Note: service_account_json is only required on initial setup
@@ -164,22 +171,30 @@ def validate_gam_config(data: dict) -> list | None:
                 required_fields = ["type", "project_id", "private_key_id", "private_key", "client_email"]
                 missing_fields = [field for field in required_fields if field not in key_data]
                 if missing_fields:
-                    errors.append(f"Service account JSON missing required fields: {', '.join(missing_fields)}")
+                    errors.append(
+                        FormIssue(
+                            "service_account_json",
+                            f"Service account JSON missing required fields: {', '.join(missing_fields)}",
+                        )
+                    )
                 elif key_data.get("type") != "service_account":
-                    errors.append("Service account JSON must be of type 'service_account'")
+                    errors.append(
+                        FormIssue("service_account_json", "Service account JSON must be of type 'service_account'")
+                    )
             except json.JSONDecodeError:
-                errors.append("Invalid JSON format in service account JSON")
+                errors.append(FormIssue("service_account_json", "Invalid JSON format in service account JSON"))
 
     # Trafficker ID validation
     trafficker_id = data.get("trafficker_id")
     if trafficker_id:
         trafficker_id_str = str(trafficker_id).strip()
         if not trafficker_id_str.isdigit():
-            errors.append("Trafficker ID must be numeric")
+            errors.append(FormIssue("trafficker_id", "Trafficker ID must be numeric"))
         elif len(trafficker_id_str) > 20:
-            errors.append("Trafficker ID is too long")
+            errors.append(FormIssue("trafficker_id", "Trafficker ID is too long"))
 
-    return errors if errors else None
+    if errors:
+        raise InvalidFormInput(*errors)
 
 
 @gam_bp.route("/detect-network", methods=["POST"])
@@ -187,19 +202,12 @@ def validate_gam_config(data: dict) -> list | None:
 @require_tenant_access()
 def detect_gam_network(tenant_id):
     """Auto-detect GAM network code from refresh token."""
-    if session.get("role") == "viewer":
-        return jsonify({"success": False, "error": "Access denied"}), 403
-
-    # Use force=True and silent=True to handle empty/malformed requests gracefully
-    data = request.get_json(force=True, silent=True)
-    if data is None:
-        return jsonify({"success": False, "error": "Invalid or empty request body"}), 400
-
+    data = json_object_body()
     refresh_token = _presented_or_stored_refresh_token(tenant_id, data.get("refresh_token"))
     network_code_provided = data.get("network_code")  # For multi-network selection
 
     if not refresh_token:
-        return jsonify({"success": False, "error": "Refresh token required"}), 400
+        raise InvalidFormInput(FormIssue("refresh_token", "refresh_token is required"))
 
     # Create a temporary GAM client with just the refresh token
     from googleads import ad_manager, oauth2
@@ -284,9 +292,9 @@ def detect_gam_network(tenant_id):
                     logger.warning(f"Invalid network in list: {error_msg}")
 
             if not validated_networks:
-                return (
-                    jsonify({"success": False, "error": "No valid networks found in GAM account"}),
-                    500,
+                raise ConnectionTestFailed(
+                    f"GAM network detection for tenant {tenant_id}: no network validated",
+                    details=("No valid networks found in GAM account",),
                 )
 
             # If multiple networks, return list for user to choose
@@ -340,15 +348,12 @@ def detect_gam_network(tenant_id):
         pass
 
     # If getAllNetworks didn't work, we can't get the network without a network_code
-    logger.warning("getAllNetworks() returned empty/None or AttributeError - cannot auto-detect network")
-    return (
-        jsonify(
-            {
-                "success": False,
-                "error": "Unable to retrieve network information. The getAllNetworks() API returned no networks. Please enter your network code manually (found in GAM Admin → Network settings).",
-            }
+    raise ConnectionTestFailed(
+        f"GAM network detection for tenant {tenant_id}: getAllNetworks() returned nothing",
+        details=(
+            "Unable to retrieve network information. The getAllNetworks() API returned no networks. "
+            "Please enter your network code manually (found in GAM Admin → Network settings).",
         ),
-        400,
     )
 
 
@@ -357,38 +362,13 @@ def detect_gam_network(tenant_id):
 @require_tenant_access()
 def configure_gam(tenant_id):
     """Save GAM configuration for a tenant."""
-    if session.get("role") == "viewer":
-        return jsonify({"success": False, "error": "Access denied"}), 403
-
-    # Try to get JSON - use force=True to handle potential Content-Type issues
-    data = request.get_json(force=True, silent=True)
-
-    # Handle None data (request parsing failed)
-    if data is None:
-        logger.error(
-            f"Failed to parse JSON from request for tenant {tenant_id}. "
-            f"Content-Type: {request.content_type}, "
-            f"Data length: {len(request.data) if request.data else 0}, "
-            f"Data preview: {request.data[:200] if request.data else 'empty'}"
-        )
-        return (
-            jsonify(
-                {
-                    "success": False,
-                    "error": "Invalid JSON in request body. Please ensure you're sending valid JSON.",
-                }
-            ),
-            400,
-        )
+    data = json_object_body()
 
     # A blank OAuth token means "keep the stored one" (the page never renders it)
-    if isinstance(data, dict) and data.get("auth_method", "oauth") == "oauth":
+    if data.get("auth_method", "oauth") == "oauth":
         data["refresh_token"] = _presented_or_stored_refresh_token(tenant_id, data.get("refresh_token"))
 
-    # Validate GAM configuration data
-    validation_errors = validate_gam_config(data)
-    if validation_errors:
-        return jsonify({"success": False, "errors": validation_errors}), 400
+    validate_gam_config(data)
 
     # Sanitize input data
     auth_method = data.get("auth_method", "oauth")
@@ -425,7 +405,7 @@ def configure_gam(tenant_id):
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
 
         if not tenant:
-            return jsonify({"success": False, "error": "Tenant not found"}), 404
+            raise TenantNotFound(f"Tenant {tenant_id}")
 
         # Get or create adapter config
         from src.core.database.models import AdapterConfig
@@ -693,6 +673,12 @@ def get_latest_sync_status(tenant_id):
         return jsonify(response)
 
 
+class NoRunningSyncToReset(StateConflict):
+    """A stuck-sync reset found no running inventory sync for the tenant."""
+
+    MESSAGE = "No running sync found to reset"
+
+
 @gam_bp.route("/reset-stuck-sync", methods=["POST"])
 @log_admin_action("reset_stuck_gam_sync")
 @require_tenant_access()
@@ -702,9 +688,6 @@ def reset_stuck_sync(tenant_id):
     Marks any running inventory sync as failed and allows a new sync to start.
     Use this when a sync appears to be hanging or frozen.
     """
-    if session.get("role") == "viewer":
-        return jsonify({"success": False, "error": "Access denied"}), 403
-
     with get_db_session() as db_session:
         from src.core.database.models import SyncJob
 
@@ -716,7 +699,7 @@ def reset_stuck_sync(tenant_id):
         ).first()
 
         if not running_sync:
-            return jsonify({"success": False, "message": "No running sync found to reset"}), 404
+            raise NoRunningSyncToReset(f"Stuck-sync reset for tenant {tenant_id}: no inventory sync is running")
 
         running_sync.mark_failed("Manually reset by admin (sync appeared to be stuck)")
 
@@ -746,9 +729,6 @@ def create_service_account(tenant_id):
     and stores them encrypted in the database. The partner then configures
     this service account email in their GAM.
     """
-    if session.get("role") == "viewer":
-        return jsonify({"success": False, "error": "Access denied"}), 403
-
     from src.services.gcp_service_account_service import GCPServiceAccountService
 
     # The service refuses on the tenant's own state first, then on a deployment with no
@@ -828,9 +808,6 @@ def test_gam_connection(tenant_id):
 
     If no refresh_token is provided, tries to use service account credentials from tenant's adapter config.
     """
-    if session.get("role") == "viewer":
-        return jsonify({"success": False, "error": "Access denied"}), 403
-
     data = json_object_body()
     auth_method = data.get("auth_method")
     refresh_token = (
@@ -963,9 +940,10 @@ def test_gam_connection(tenant_id):
                 "networks. Verify your Google account has access to at least "
                 "one Google Ad Manager network."
             )
-        if network_error:
-            error_msg = f"{error_msg} (Underlying error: {network_error})"
-        return jsonify({"success": False, "error": error_msg}), 200
+        raise ConnectionTestFailed(
+            f"GAM connection test for tenant {tenant_id}: no accessible network",
+            details=(error_msg, network_error) if network_error else (error_msg,),
+        )
 
     result = {
         "success": True,

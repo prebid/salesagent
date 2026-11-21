@@ -105,9 +105,7 @@ function saveBroadstreetConfig() {
         if (data.success) {
             showNotification('Configuration saved successfully', 'success');
         } else {
-            // A refused config names each refused field in `issues`.
-            const issues = (data.issues || []).map(issue => issue.text);
-            showNotification('Failed to save: ' + [data.error || 'Unknown error', ...issues].join(' '), 'error');
+            showNotification('Failed to save: ' + adminErrorText(data), 'error');
         }
     })
     .catch(error => {
@@ -145,7 +143,8 @@ function testBroadstreetConnection() {
         if (data.success) {
             statusEl.innerHTML = '<span style="color: #10b981;">✓ Connected to ' + (data.network_name || 'Broadstreet') + '</span>';
         } else {
-            statusEl.innerHTML = '<span style="color: #ef4444;">✗ ' + (data.error || 'Connection failed') + '</span>';
+            statusEl.innerHTML = '<span style="color: #ef4444;"></span>';
+            statusEl.firstChild.textContent = '✗ ' + adminErrorText(data);
         }
     })
     .catch(error => {

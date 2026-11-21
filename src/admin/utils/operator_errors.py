@@ -89,8 +89,8 @@ def handle_unexpected_error(e: Exception) -> ResponseReturnValue:
     ``HTTPException`` (``abort(404)`` and friends) passes through unchanged, except that
     an error status with no response of its own, sent to a caller that reads JSON, is
     answered as JSON with Werkzeug's status name as its text. An :class:`OperatorRefusal`
-    is expected, so it is answered 400 with its class's ``MESSAGE`` (for a browser, beside its details) and
-    logged at info. A :class:`RecordedFailure` is already logged and worded, so it is
+    is expected, so it is answered with its class's ``STATUS`` and ``MESSAGE``, beside its
+    details, and logged at info. A :class:`RecordedFailure` is already logged and worded, so it is
     answered 500 with its ``operator_message`` and not logged again. Anything else is
     logged with its traceback under a reference by :func:`safe_error_message`, and the
     operator gets fixed text plus that reference with 500.
@@ -101,7 +101,7 @@ def handle_unexpected_error(e: Exception) -> ResponseReturnValue:
         return e
     if isinstance(e, OperatorRefusal):
         logger.info("Operator refusal: %s", e)
-        return _answer(e.MESSAGE, 400, e.response_fields(), e.details())
+        return _answer(e.MESSAGE, type(e).STATUS, e.response_fields(), e.details())
     if isinstance(e, RecordedFailure):
         return _answer(e.operator_message, 500, e.response_fields())
     return _answer(safe_error_message(e), 500, {})

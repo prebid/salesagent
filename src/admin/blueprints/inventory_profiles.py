@@ -52,7 +52,7 @@ from src.core.helpers.publisher_property_helpers import (
     selector_selection,
     tag_selection,
 )
-from src.core.operator_errors import FormIssue, InvalidFormInput, OperatorRefusal
+from src.core.operator_errors import FormIssue, InvalidFormInput, StateConflict
 from src.core.publisher_format_catalog import options_by_key, resolve_declarations
 
 logger = logging.getLogger(__name__)
@@ -197,7 +197,7 @@ def _get_property_summary(publisher_properties: list[dict]) -> str:
     return ", ".join(parts)
 
 
-class InventoryProfileInUse(OperatorRefusal):
+class InventoryProfileInUse(StateConflict):
     """A profile that products link cannot be deleted; the exception's text carries the count for the log."""
 
     MESSAGE = "Cannot delete an inventory profile that products use"

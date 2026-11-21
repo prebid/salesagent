@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
+from src.admin.form_validation import json_object_body, required_values
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
 from src.core.database.database_session import get_db_session
@@ -13,11 +14,34 @@ from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig, User, UserRole
 from src.core.database.repositories.tenant_config import UserChange
 from src.core.database.repositories.uow import TenantConfigUoW
+from src.core.operator_errors import FormIssue, InvalidFormInput, StateConflict, TenantNotFound
 
 logger = logging.getLogger(__name__)
 
 # Create Blueprint
 users_bp = Blueprint("users", __name__, url_prefix="/tenant/<tenant_id>/users")
+
+
+class SSOSignInRequired(StateConflict):
+    """Setup mode is disabled only by an operator signed in through SSO, so the tenant cannot lock itself out."""
+
+    MESSAGE = (
+        "You must be logged in via SSO to disable setup mode. "
+        "Log out and log back in using 'Sign in with SSO' to verify SSO works."
+    )
+
+
+class DomainAlreadyAuthorized(StateConflict):
+    """The tenant already authorizes the domain the request adds."""
+
+    MESSAGE = "Domain already exists"
+
+
+class SSONotEnabled(StateConflict):
+    """Setup mode is disabled only once the tenant's SSO is configured and enabled."""
+
+    MESSAGE = "SSO must be configured and enabled before disabling setup mode"
+
 
 # What each role may do, for the Users page's role pickers. One entry per UserRole,
 # least access first; tests/unit/test_admin_role_permits.py checks it covers them all.
@@ -224,20 +248,22 @@ def update_role(tenant_id, user_id):
     return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
 
+def _requested_domain() -> str:
+    """The domain the request's body names, lowercased; refused when it names none."""
+    [domain] = required_values(json_object_body(), "domain")
+    return str(domain).lower()
+
+
 @users_bp.route("/domains", methods=["POST"])
 @require_tenant_access(role=UserRole.ADMIN)
 @log_admin_action("add_domain", extract_details=lambda r, **kw: {"domain": request.json.get("domain")})
 def add_domain(tenant_id):
     """Add an authorized domain for the tenant."""
-    data = request.json
-    domain = data.get("domain", "").strip().lower()
-
-    if not domain:
-        return jsonify({"success": False, "error": "Domain is required"}), 400
+    domain = _requested_domain()
 
     # Basic domain validation
     if "." not in domain or domain.startswith(".") or domain.endswith("."):
-        return jsonify({"success": False, "error": "Invalid domain format"}), 400
+        raise InvalidFormInput(FormIssue("domain", "Invalid domain format"))
 
     # Atomic append: the membership check rides in the UPDATE's WHERE
     # clause, so a concurrent add can be neither lost nor duplicated.
@@ -246,9 +272,9 @@ def add_domain(tenant_id):
         outcome = uow.tenant_config.add_to_authorized_list("authorized_domains", domain)
 
     if outcome == "missing_tenant":
-        return jsonify({"success": False, "error": "Tenant not found"}), 404
+        raise TenantNotFound(f"Tenant {tenant_id}")
     if outcome == "duplicate":
-        return jsonify({"success": False, "error": "Domain already exists"}), 400
+        raise DomainAlreadyAuthorized(f"Tenant {tenant_id} already authorizes {domain}")
 
     return jsonify({"success": True, "domain": domain})
 
@@ -258,18 +284,14 @@ def add_domain(tenant_id):
 @log_admin_action("remove_domain", extract_details=lambda r, **kw: {"domain": request.json.get("domain")})
 def remove_domain(tenant_id):
     """Remove an authorized domain from the tenant."""
-    data = request.json
-    domain = data.get("domain", "").strip().lower()
-
-    if not domain:
-        return jsonify({"success": False, "error": "Domain is required"}), 400
+    domain = _requested_domain()
 
     with TenantConfigUoW(tenant_id) as uow:
         assert uow.tenant_config is not None
         outcome = uow.tenant_config.remove_from_authorized_list("authorized_domains", domain)
 
     if outcome == "missing_tenant":
-        return jsonify({"success": False, "error": "Tenant not found"}), 404
+        raise TenantNotFound(f"Tenant {tenant_id}")
 
     # "removed" and "absent" both answer success — removal is idempotent.
     return jsonify({"success": True})
@@ -286,32 +308,19 @@ def disable_setup_mode(tenant_id):
     """
     # Require the user to be logged in via SSO (not test credentials)
     # This ensures they can actually authenticate via SSO before disabling test auth
-    auth_method = session.get("auth_method")
-    if auth_method != "oidc":
-        return (
-            jsonify(
-                {
-                    "success": False,
-                    "error": "You must be logged in via SSO to disable setup mode. "
-                    "Log out and log back in using 'Sign in with SSO' to verify SSO works.",
-                }
-            ),
-            403,
-        )
+    if session.get("auth_method") != "oidc":
+        raise SSOSignInRequired(f"Disabling setup mode for tenant {tenant_id} without an SSO sign-in")
 
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
-            return jsonify({"success": False, "error": "Tenant not found"}), 404
+            raise TenantNotFound(f"Tenant {tenant_id}")
 
         # Check if SSO is configured and enabled
         auth_config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
 
         if not auth_config or not auth_config.oidc_enabled:
-            return (
-                jsonify({"success": False, "error": "SSO must be configured and enabled before disabling setup mode"}),
-                400,
-            )
+            raise SSONotEnabled(f"Disabling setup mode for tenant {tenant_id} with SSO not enabled")
 
         # Disable setup mode
         tenant.auth_setup_mode = False
@@ -332,7 +341,7 @@ def enable_setup_mode(tenant_id):
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
-            return jsonify({"success": False, "error": "Tenant not found"}), 404
+            raise TenantNotFound(f"Tenant {tenant_id}")
 
         tenant.auth_setup_mode = True
         db_session.commit()

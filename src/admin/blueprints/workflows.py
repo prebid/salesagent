@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 workflows_bp = Blueprint("workflows", __name__)
 
 
+class MediaBuyApprovalFailed(Exception):
+    """An approved media buy could not be created in the ad server: a failure, answered with a log reference."""
+
+
 @workflows_bp.route("/<tenant_id>/workflows")
 @require_tenant_access()
 def list_workflows(tenant_id, **kwargs):
@@ -194,7 +198,9 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     return jsonify({"success": True}), 200
 
                 if not approval.ok:
-                    return jsonify({"success": False, "error": approval.error_msg}), 500
+                    # error_msg can carry an adapter's exception text: it goes to the log, under
+                    # the reference the admin error handler answers with.
+                    raise MediaBuyApprovalFailed(f"Media buy {media_buy_id}: {approval.error_msg}")
 
                 logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
                 flash("Workflow step approved and media buy created successfully", "success")
