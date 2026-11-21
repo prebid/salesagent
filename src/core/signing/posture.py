@@ -621,6 +621,15 @@ class KeyBacking(NamedTuple):
         return self.active_kid is not None and self.active_key_fault is None
 
 
+#: Why a KEK fault must not be answered with a new key: the one spelling of the sentence
+#: both KEK arms of :attr:`ActiveKeyFault.advice` end with. ``MATERIAL_CHANGED`` does not
+#: use it, because a new key is its fix.
+_DO_NOT_REMINT = (
+    "Do not re-mint: a replacement publishes a second key and strands this one, "
+    "which is the key counterparties already trust."
+)
+
+
 class ActiveKeyFault(StrEnum):
     """Why this deployment cannot sign with the tenant's active key (#2288).
 
@@ -644,14 +653,12 @@ class ActiveKeyFault(StrEnum):
             case ActiveKeyFault.KEK_UNSET:
                 return (
                     "This deployment has no key encryption key (KEK) configured, so it cannot decrypt the key. "
-                    "Restore the KEK. Do not re-mint: a replacement publishes a second key and strands this one, "
-                    "which is the key counterparties already trust."
+                    f"Restore the KEK. {_DO_NOT_REMINT}"
                 )
             case ActiveKeyFault.KEK_WRONG:
                 return (
                     "The key encryption key (KEK) this deployment holds is not the one the key was provisioned "
-                    "under, so it cannot decrypt the key. Restore the original KEK. Do not re-mint: a replacement "
-                    "publishes a second key and strands this one, which is the key counterparties already trust."
+                    f"under, so it cannot decrypt the key. Restore the original KEK. {_DO_NOT_REMINT}"
                 )
             case ActiveKeyFault.MATERIAL_CHANGED:
                 return (

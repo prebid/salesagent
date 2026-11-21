@@ -48,11 +48,11 @@
     </button>
 </form>
 
-{% if active_key_fault %}
+{% if key_backing.active_key_fault %}
 <div class="kek-warning" role="alert">
-    <strong>Key {{ active_kid }} is active, but this deployment cannot sign with it, so this seller is not signing.</strong>
-    <span class="kek-advice">{{ active_key_fault.advice }}</span>
-    <a href="https://github.com/prebid/salesagent/blob/main/docs/operations/signing-key-runbook.md#{{ active_key_fault.runbook_anchor }}"
+    <strong>Key {{ key_backing.active_kid }} is active, but this deployment cannot sign with it, so this seller is not signing.</strong>
+    <span class="kek-advice">{{ key_backing.active_key_fault.advice }}</span>
+    <a href="https://github.com/prebid/salesagent/blob/main/docs/operations/signing-key-runbook.md#{{ key_backing.active_key_fault.runbook_anchor }}"
        target="_blank" rel="noopener">Signing key runbook</a>
 </div>
 {% endif %}
@@ -78,10 +78,12 @@
             <td>
                 {% if key.revoked_at %}
                 <span class="status-badge status-revoked">revoked {{ key.revoked_at }}</span>
-                {% elif key.kid == active_kid and active_key_fault %}
-                <span class="status-badge status-revoked">active, cannot sign</span>
-                {% elif key.kid == active_kid %}
+                {% elif key.kid == key_backing.active_kid %}
+                {% if key_backing.signs %}
                 <span class="status-badge status-active">signing</span>
+                {% else %}
+                <span class="status-badge status-revoked">active, cannot sign</span>
+                {% endif %}
                 {% else %}
                 <span class="status-badge status-published">published</span>
                 {% endif %}

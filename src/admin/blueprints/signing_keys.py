@@ -57,7 +57,9 @@ def list_signing_keys(tenant_id: str) -> ResponseReturnValue:
     The active key's badge comes from ``signing_key_backed`` — the derivation the
     signer and the setup checklist read — so a key in its active window that this
     deployment cannot sign with is shown as not signing, with the advice for its
-    cause that the checklist shows too (#2288).
+    cause that the checklist shows too (#2288). The template is handed the whole
+    ``KeyBacking`` and branches on its ``signs``, never on the fields ``signs`` is
+    derived from, so the badge cannot drift from the signer and the checklist.
     """
     now = datetime.now(UTC)
     with SigningKeyUoW(tenant_id) as uow:
@@ -69,8 +71,7 @@ def list_signing_keys(tenant_id: str) -> ResponseReturnValue:
             "signing_keys_list.html",
             tenant_id=tenant_id,
             keys=published,
-            active_kid=backing.active_kid,
-            active_key_fault=backing.active_key_fault,
+            key_backing=backing,
             algorithms=SIGNING_ALG_VALUES,
         )
 
