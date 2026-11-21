@@ -636,52 +636,70 @@ class TestSetupValidation:
             validate_setup_complete(test_tenant_id)
 
 
+#: What the Admin UI's AI Services form stores: provider, model and key (any provider).
+_AI_UI_CONFIG = {"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "sk-ant-tenant"}
+
+#: What the same form stores when the key field is left blank.
+_AI_KEYLESS_CONFIG = {"provider": "google", "model": "gemini-2.0-flash"}
+
+
+def _ai_task(status: dict) -> dict:
+    """The optional AI task out of a setup-status report."""
+    return next(task for task in status["optional"] if task["key"] == "ai_provider_key")
+
+
 class TestTaskDetails:
     """Tests for individual task checking logic."""
 
-    def test_ai_provider_key_detection(self, integration_db):
-        """The optional AI task follows `TenantAIConfig.from_tenant`, not the legacy column alone.
+    @pytest.mark.parametrize(
+        ("tenant_fields", "platform_key", "is_complete"),
+        [
+            ({}, None, False),
+            ({}, "platform-key", False),
+            ({"ai_config": _AI_UI_CONFIG}, None, True),
+            ({"ai_config": _AI_KEYLESS_CONFIG}, None, False),
+            ({"ai_config": _AI_KEYLESS_CONFIG}, "platform-key", False),
+            ({"gemini_api_key": "test_tenant_key"}, None, True),
+        ],
+        ids=[
+            "nothing-configured",
+            "nothing-configured-the-platform-key-is-not-the-sellers",
+            "configured-through-the-admin-ui",
+            "keyless-row",
+            "keyless-row-the-platform-key-is-not-the-sellers",
+            "legacy-gemini-column",
+        ],
+    )
+    def test_ai_provider_key_detection(self, integration_db, tenant_fields, platform_key, is_complete):
+        """The optional AI task is done exactly when the seller's own AI configuration can run.
 
-        The Admin UI's AI Services form writes `tenant.ai_config`; nothing writes
-        `tenant.gemini_api_key` any more. Reading only the legacy column kept this task
-        incomplete for every seller who configured AI the way the UI asks them to.
+        It follows ``tenant_ai_enabled(tenant, platform_fallback=False)``, not the legacy
+        column alone. The Admin UI's AI Services form writes ``tenant.ai_config``, and
+        nothing writes ``tenant.gemini_api_key`` any more, so reading only the legacy
+        column kept the task incomplete for every seller who configured AI the way the UI
+        asks (#2224). The keyless row the form saves when the key field is left blank is
+        not a configuration ("AI features will be disabled", the form says as it saves
+        it), and a platform key is not the seller's. Both enumeration paths, per tenant and
+        the dashboard's bulk one, must grade the task the same way.
         """
-        from cryptography.fernet import Fernet
-
         from tests.factories import TenantFactory
-        from tests.harness._base import IntegrationEnv
+        from tests.harness._base import BareIntegrationEnv
+        from tests.helpers.settings_injection import PlatformAICredential
 
-        def ai_task(tenant_id):
-            status = SetupChecklistService(tenant_id).get_setup_status()
-            return next(t for t in status["optional"] if t["key"] == "ai_provider_key")
+        with PlatformAICredential(platform_key), BareIntegrationEnv() as env:
+            TenantFactory(tenant_id="chk-ai", **tenant_fields)
+            env._commit_factory_data()
+            SetupChecklistService.clear_cache()
 
-        # Nothing configured
-        with IntegrationEnv(tenant_id="chk_ai_none"):
-            TenantFactory(tenant_id="chk_ai_none")
-            task = ai_task("chk_ai_none")
-            assert not task["is_complete"]
-            assert task["name"] == "AI Features"
-            assert "Gemini" not in task["details"]
+            single = _ai_task(SetupChecklistService("chk-ai").get_setup_status())
+            bulk = _ai_task(SetupChecklistService.get_bulk_setup_status(["chk-ai"])["chk-ai"])
 
-        # Configured through the Admin UI: provider, model and key on ai_config (any provider)
-        with IntegrationEnv(tenant_id="chk_ai_ui"):
-            TenantFactory(
-                tenant_id="chk_ai_ui",
-                ai_config={"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "sk-ant-tenant"},
-            )
-            assert ai_task("chk_ai_ui")["is_complete"]
-
-        # The keyless row the AI Services form writes when the key field is left blank is
-        # not a configuration ("AI features will be disabled", the form says as it saves it)
-        with IntegrationEnv(tenant_id="chk_ai_keyless"):
-            TenantFactory(tenant_id="chk_ai_keyless", ai_config={"provider": "google", "model": "gemini-2.0-flash"})
-            assert not ai_task("chk_ai_keyless")["is_complete"]
-
-        # The legacy encrypted column still counts (requires ENCRYPTION_KEY for encrypted storage)
-        with patch.dict(os.environ, {"ENCRYPTION_KEY": Fernet.generate_key().decode()}):
-            with IntegrationEnv(tenant_id="chk_ai_legacy"):
-                TenantFactory(tenant_id="chk_ai_legacy", gemini_api_key="test_tenant_key")
-                assert ai_task("chk_ai_legacy")["is_complete"]
+        assert single["is_complete"] is is_complete, single["details"]
+        assert single["name"] == "AI Features"
+        assert single["details"] == (
+            "AI features enabled" if is_complete else "Optional: Configure an AI provider API key for AI features"
+        )
+        assert bulk == single, "the dashboard's bulk path grades the AI task differently"
 
     def test_currency_count_in_details(self, integration_db, test_tenant_id):
         """Test that currency count is shown in task details."""
