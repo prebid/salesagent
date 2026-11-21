@@ -176,14 +176,14 @@ For the full architecture, including how to add a new outbound call, see
 All authentication changes must include tests for the following:
 
 - Environment versus database precedence
-- Audit logging completeness
+- A new state-changing admin route carries `log_admin_action`
 - The session cookie attributes that `create_app` sets
 - The cross-site request check in `src/admin/csrf.py`
 - The OAuth `state` check
 
 The Admin UI sets no session lifetime, so the session cookie has no expiry date. Flask still rejects a session cookie signed more than 31 days earlier, which is its default `PERMANENT_SESSION_LIFETIME`. Unless you set `FLASK_SECRET_KEY`, each process signs sessions with its own random key, so a restart ends every session. Besides the origin check that [Cross-site request forgery](#cross-site-request-forgery) describes, the OAuth `state` parameter protects the sign-in flows and the Google Ad Manager authorization flow.
 
-**Test locations**: `TestEnvironmentFirstAuthentication` in `tests/integration/test_product_deletion.py` tests the source order of `is_super_admin()` and its session cache. `tests/unit/test_admin_csrf_protection.py` tests the cross-site request check and the production session cookie attributes.
+**Test locations**: `TestEnvironmentFirstAuthentication` in `tests/integration/test_product_deletion.py` checks that each of the `SUPER_ADMIN_EMAILS` list, the `SUPER_ADMIN_DOMAINS` list, and the `super_admin_emails` row grants super admin on its own, and that a database match writes the session cache. No test checks the source order, the `super_admin_domains` row, or the database-error path. `tests/integration/test_audit_decorator.py` checks the rows that `log_admin_action` writes. `tests/unit/test_admin_csrf_protection.py` checks the cross-site request check, and that the production session cookie is `SameSite=Lax`, `HttpOnly`, and `Secure`. No test checks `SESSION_COOKIE_PATH` or `SESSION_COOKIE_DOMAIN`.
 
 ## OAuth cross-domain authentication
 
@@ -244,7 +244,7 @@ Direct users to sign in on the deployment's own domain or one of its subdomains 
 
 ### Test coverage
 
-`tests/integration/test_oauth_session_handling.py` records the cross-domain limitation as data, and its tests do not call the sign-in code. `test_oauth_callback_redirects_to_onboarding_for_signup_flow` in `tests/integration/test_self_service_signup.py` calls `google_callback` for a signup. `tests/unit/test_admin_csrf_protection.py` checks the production session cookie attributes.
+`tests/integration/test_oauth_session_handling.py` records the cross-domain limitation as data, and its tests do not call the sign-in code. `test_oauth_callback_redirects_to_onboarding_for_signup_flow` in `tests/integration/test_self_service_signup.py` calls `google_callback` for a signup. The session cookie test is listed under [Security testing requirements](#security-testing-requirements).
 
 ## Generic OIDC provider support
 
@@ -366,7 +366,6 @@ SUPER_ADMIN_DOMAINS=example.com
 
 A secrets file provides the following benefits:
 
-- **Single source**: All secrets live in one place.
 - **Gitignore protection**: `.gitignore` excludes `.env` and `.env.secrets`, so neither file
   reaches the repository.
 - **Workspace isolation**: Each workspace can have different secrets.
