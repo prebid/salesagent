@@ -53,8 +53,9 @@ curl http://localhost:8000/health
      `docker compose up -d` again.
 2. Register both of these redirect URIs with the OAuth client:
    `http://localhost:8000/admin/auth/google/callback` and
-   `http://localhost:8000/auth/google/callback`. The Admin UI answers under `/admin/` and at
-   the root, and the callback follows the path that the sign-in starts from.
+   `http://localhost:8000/auth/google/callback`.
+   [Deployment OAuth](deployment/environment-variables.md#deployment-oauth) explains why it
+   needs both.
 3. Open http://localhost:8000/admin/
 4. Log in with Google as one of the `SUPER_ADMIN_EMAILS` addresses
 5. In **Settings > Account**, set **Custom Domain** to `localhost:8000`. **Users & Access**
