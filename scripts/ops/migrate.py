@@ -18,20 +18,8 @@ def _get_alembic_cfg() -> Config:
     return Config(str(_ALEMBIC_INI))
 
 
-def _ensure_default_tenant() -> None:
-    """In single-tenant mode, ensure the default tenant exists."""
-    try:
-        from src.core.config_loader import ensure_default_tenant_exists
-
-        tenant = ensure_default_tenant_exists()
-        if tenant:
-            print(f"✅ Default tenant ready: {tenant.get('name', 'Unknown')}")
-    except Exception as e:
-        print(f"⚠️ Could not ensure default tenant: {e}")
-
-
 def run_migrations(exit_on_error=True):
-    """Run all pending database migrations.
+    """Run all pending database migrations, and nothing else: no tenant is created here (#2260).
 
     Args:
         exit_on_error: If True, exit the process on error. If False, raise exception.
@@ -47,7 +35,6 @@ def run_migrations(exit_on_error=True):
         #   uv run alembic merge -m "Merge migration heads" heads
         command.upgrade(alembic_cfg, "head")
         print("✅ Database migrations completed successfully!")
-        _ensure_default_tenant()
     except Exception as e:
         error_msg = str(e)
         print(f"❌ Error running migrations: {error_msg}")
@@ -59,7 +46,6 @@ def run_migrations(exit_on_error=True):
             try:
                 command.upgrade(alembic_cfg, "head")
                 print("✅ Database migrations completed successfully on retry!")
-                _ensure_default_tenant()
                 return
             except Exception as retry_error:
                 print(f"❌ Migration retry also failed: {retry_error}")

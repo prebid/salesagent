@@ -72,8 +72,8 @@ def _custom_domain_task(tenant_id: str, virtual_host: str) -> "SetupTask":
     A custom domain is a host that DIFFERS from the one this deployment declares for
     itself. Every tenant declares a host — ``tenants.virtual_host`` is mandatory — so the
     presence of one says nothing about whether an operator configured it; the only host
-    nobody chose is the one ``deployment_virtual_host`` derives for the tenant a deployment
-    bootstraps for itself, and the bootstraps store that answer verbatim (#1845).
+    nobody chose is the one ``deployment_virtual_host`` derives, which the demo command
+    stores verbatim when its operator names no host (#1845, #2260).
 
     A deployment that declares no host of its own has no default for a tenant to be sitting
     on, so every tenant's host was stated by somebody and the task is done.

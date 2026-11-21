@@ -84,7 +84,7 @@ Each release publishes a full version tag plus rolling major and major.minor tag
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `CREATE_DEMO_TENANT` | No | Set to `true` for initial setup with demo data |
+| `SUPER_ADMIN_EMAILS` | Yes, for the first login | Addresses that may sign in to every tenant through the deployment's OAuth |
 | `GEMINI_API_KEY` | No | For AI-powered creative review |
 
 Authentication is configured **per-tenant** in the Admin UI (Users & Access page). No OAuth environment variables are required.
@@ -153,16 +153,26 @@ docker compose exec adcp-server alembic revision -m "description"
 
 ## First-time setup
 
-On first startup, the system creates an empty default tenant with **Setup Mode** enabled,
-which lets you complete an OIDC login for it before its SSO is switched on.
+Starting the server applies migrations and nothing else: it creates no tenant, credential or
+sample data. A fresh deployment serves nobody until you create its first tenant, once:
 
-Sign in with the deployment's own OAuth — set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
-(or the generic `OAUTH_*` variables) and put your address in `SUPER_ADMIN_EMAILS`.
+```bash
+docker compose exec adcp-server python -m scripts.setup.setup_tenant "Acme"   --tenant-id acme --virtual-host sales.acme.com --adapter mock
+```
+
+The command prints a principal token for the tenant's first advertiser. It is shown once; store
+it. Running it again for a tenant id, subdomain or virtual host that already exists refuses and
+changes nothing. A super admin can also create tenants in the Admin UI.
+
+New tenants start in **Setup Mode**, which lets you complete an OIDC login for them before their
+SSO is switched on. Sign in with the deployment's own OAuth — set `GOOGLE_CLIENT_ID` /
+`GOOGLE_CLIENT_SECRET` (or the generic `OAUTH_*` variables) and put your address in
+`SUPER_ADMIN_EMAILS`. There is no password login and no web route that creates the first admin.
 
 **To complete setup:**
 
 1. Log in with Google as a `SUPER_ADMIN_EMAILS` address.
-2. Go to **Users & Access**.
+2. Open the tenant and go to **Users & Access**.
 3. Configure your SSO provider (Google, Microsoft, or a custom OIDC provider).
 4. **Add yourself**: Add your email OR your domain to Allowed Domains.
 5. Click **Test Connection** - SSO is automatically enabled on success.
@@ -175,11 +185,16 @@ See the [SSO setup guide](../user-guide/sso-setup.md) for detailed provider-spec
 For local development without a real ad server:
 
 ```bash
-# Add to .env for local testing only - NOT for production
-CREATE_DEMO_TENANT=true
+docker compose --profile demo up
+docker compose logs demo-setup     # shows the demo tenant's token, once
 ```
 
-This creates a "Demo Sales Agent" tenant with a mock adapter, sample currencies, and test data for exploring features.
+The `demo` profile runs `scripts/setup/demo_tenant.py` once. On an empty database it creates a
+"Demo Sales Agent" tenant (id `demo`, served at `localhost:8000`) with the mock adapter,
+USD/EUR/GBP, one publisher and two sample products, and prints a freshly minted principal token.
+Once the database holds any tenant it creates nothing. Call it with
+`uvx adcp http://localhost:8000/mcp/ --auth <token> list_tools`, or send
+`x-adcp-tenant: demo` with the token from any other host. Do not use the profile in production.
 
 ## SSO setup
 

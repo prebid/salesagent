@@ -126,17 +126,6 @@ class TenantLookupRepository:
         """The active tenant with this id, if any."""
         return self._session.scalars(select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)).first()
 
-    def find_default_active(self) -> Tenant | None:
-        """The tenant a request that names none gets: ``default``, else the oldest active.
-
-        For the CLI and single-tenant deployments. ``None`` means there is no active
-        tenant at all — a real answer, not a gap for the caller to fill.
-        """
-        by_id = self.find_active_by_id("default")
-        if by_id is not None:
-            return by_id
-        return self._session.scalars(select(Tenant).filter_by(is_active=True).order_by(Tenant.created_at)).first()
-
 
 def _same_host(requested: str) -> ColumnElement[bool]:
     """Match the tenant whose host names the same NAME as *requested*, port aside.

@@ -198,10 +198,11 @@ async def main():
     print("=" * 60)
     print()
 
-    # Initialize database
-    from src.core.database.database import init_db
+    # Apply migrations. Migrations create no tenant: create "default" first with
+    # python -m scripts.setup.setup_tenant "Default" --tenant-id default --virtual-host localhost:8000
+    from scripts.ops.migrate import run_migrations
 
-    init_db()
+    run_migrations()
 
     # Start upstream server
     upstream_proc = start_upstream_server()

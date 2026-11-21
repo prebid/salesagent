@@ -168,23 +168,6 @@ def check_schema_issues():
         print(f"⚠️  Could not check schema: {e}")
 
 
-def init_database():
-    """Initialize database schema and default data."""
-    print("📦 Initializing database schema and default data...")
-    print(
-        "ℹ️  Note: init_db() is safe - it only creates tables (IF NOT EXISTS) and default tenant (if no tenants exist)"
-    )
-
-    try:
-        from src.core.database.database import init_db
-
-        init_db(exit_on_error=True)
-        print("✅ Database initialization complete")
-    except Exception as e:
-        print(f"❌ Database initialization failed: {e}")
-        sys.exit(1)
-
-
 def cleanup(signum=None, frame=None):
     """Clean up all processes on exit."""
     print("\nShutting down all services...")
@@ -349,14 +332,19 @@ def main():
     # Check database connectivity
     check_database_health()
 
-    # Run migrations
-    run_migrations()
+    # Run migrations, unless the operator runs them as their own step (SKIP_MIGRATIONS=true,
+    # then `python scripts/ops/migrate.py` once per release before the service starts).
+    if get_settings().provisioning.skip_migrations:
+        print("ℹ️  SKIP_MIGRATIONS=true: not running migrations at start")
+    else:
+        run_migrations()
 
     # Check for schema issues (non-blocking)
     check_schema_issues()
 
-    # Initialize database
-    init_database()
+    # Starting the server provisions nothing: no tenant, credential or sample row (#2260).
+    # Tenants come from scripts/setup/setup_tenant.py, the Admin UI, or, for a local demo,
+    # scripts/setup/demo_tenant.py.
 
     # Start services in threads
     threads = []

@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 # Database models
 
 # Other imports
-from src.core.database.database import init_db
 from src.core.database.models import (
     WorkflowStep,
 )
@@ -219,10 +218,6 @@ context_map: dict[str, str] = {}  # Maps context_id to media_buy_id
 # Creative macro support is now simplified to a single creative_macro string
 # that AEE can provide as a third type of provided_signal.
 # Ad servers like GAM can inject this string into creatives.
-
-if __name__ == "__main__":
-    init_db(exit_on_error=True)  # Exit on error when run as main
-    # Server is now run via run_server.py script
 
 # Always add health check endpoint
 

@@ -67,11 +67,7 @@ def test_a_removed_field_is_removed_here_too() -> None:
 
 def test_provisioning_is_not_a_test_flag() -> None:
     """The split holds: nothing that merely provisions a deployment sits on the test class."""
-    assert set(ProvisioningSettings.model_fields) == {
-        "create_demo_tenant",
-        "create_sample_data",
-        "skip_migrations",
-    }
+    assert set(ProvisioningSettings.model_fields) == {"skip_migrations"}
     assert not set(ProvisioningSettings.model_fields) & set(TestingSettings.model_fields), (
         "a field is on both classes; one of them is wrong about what it is"
     )
