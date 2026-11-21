@@ -286,7 +286,8 @@ Failures notify repository watchers via GitHub's default workflow notifications.
 **Local equivalent** (requires credentials + Docker). The network is configuration
 (`ToolingSettings.gam_suite_network`), all or nothing: each contributor names the network
 their suite books against. With no GAM setting at all the preflight prints
-`GAM: not configured` and the GAM tests xfail as "this environment configures no GAM
+`GAM: not configured` (`./run_all_tests.sh` prints it itself, without uv, when no `GAM_*`
+variable is set) and the GAM tests xfail as "this environment configures no GAM
 network"; with some of them, a test fails naming each one that is unset; with all of them the
 preflight prints `GAM: configured, network <code>` and the tests book against it. The same
 settings drive the GAM BDD scenarios on e2e_rest, `./run_all_tests.sh` checks them first

@@ -166,8 +166,13 @@ def test_network_checks_require_an_advertiser_and_an_active_ad_unit(
     assert graded == expected
 
 
-def _run_runner(tmp_path, *args: str, uv_exit: int, stop_after_preflight: bool) -> tuple[int, str, str, str]:
-    """Run run_all_tests.sh with ``uv`` and ``docker`` stood in; return (exit, output, uv argv, docker argv)."""
+def _run_runner(
+    tmp_path, *args: str, uv_exit: int, gam_setting: bool, stop_after_preflight: bool = True
+) -> tuple[int, str, str, str]:
+    """Run run_all_tests.sh with ``uv`` and ``docker`` stood in; return (exit, output, uv argv, docker argv).
+
+    The environment holds no GAM_* variable but, with *gam_setting*, ``GAM_SUITE_NETWORK_CODE``.
+    """
     stub_bin = tmp_path / "bin"
     stub_bin.mkdir()
     for tool in ("uv", "docker"):
@@ -177,13 +182,15 @@ def _run_runner(tmp_path, *args: str, uv_exit: int, stop_after_preflight: bool) 
         )
         stub.chmod(0o755)
     env = {
-        **{k: v for k, v in os.environ.items() if k not in ("E2E_WORKERS", "GAM_SUITE_PREFLIGHT_SKIP")},
+        **{k: v for k, v in os.environ.items() if k != "E2E_WORKERS" and not k.upper().startswith("GAM_")},
         "PATH": f"{stub_bin}:{os.environ.get('PATH', '')}",
         "STUB_UV_EXIT": str(uv_exit),
         "STUB_DOCKER_EXIT": "0",
     }
     if stop_after_preflight:
         env["RUN_ALL_TESTS_STOP_AFTER_GAM_PREFLIGHT"] = "1"
+    if gam_setting:
+        env["GAM_SUITE_NETWORK_CODE"] = "1"
     proc = subprocess.run(
         ["bash", str(RUNNER), *args], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60
     )
@@ -196,7 +203,9 @@ def _run_runner(tmp_path, *args: str, uv_exit: int, stop_after_preflight: bool) 
 
 
 def test_runner_stops_before_docker_when_the_preflight_fails(tmp_path) -> None:
-    code, output, uv_argv, docker_argv = _run_runner(tmp_path, "e2e", uv_exit=1, stop_after_preflight=False)
+    code, output, uv_argv, docker_argv = _run_runner(
+        tmp_path, "e2e", uv_exit=1, gam_setting=True, stop_after_preflight=False
+    )
     assert code == 1, output
     assert "scripts/gam_prerequisites_check.py --suite-network" in uv_argv
     assert "GAM preflight FAILED" in output
@@ -204,14 +213,25 @@ def test_runner_stops_before_docker_when_the_preflight_fails(tmp_path) -> None:
 
 
 def test_runner_passes_the_opt_out_flag_to_the_preflight_and_goes_on(tmp_path) -> None:
-    code, output, uv_argv, _ = _run_runner(
-        tmp_path, "--skip-gam-preflight", "bdd_e2e", uv_exit=0, stop_after_preflight=True
-    )
+    code, output, uv_argv, _ = _run_runner(tmp_path, "--skip-gam-preflight", "bdd_e2e", uv_exit=0, gam_setting=True)
     assert code == 0, output
     assert uv_argv.split().count("--skip") == 1, uv_argv
 
 
-def test_runner_runs_no_preflight_for_a_run_without_a_gam_leg(tmp_path) -> None:
-    code, output, uv_argv, _ = _run_runner(tmp_path, "unit,integration", uv_exit=1, stop_after_preflight=True)
+@pytest.mark.parametrize(
+    "suites, gam_setting, statement",
+    [
+        ("unit,integration", True, "not checked, this run selects no GAM leg (e2e, bdd, bdd_e2e)"),
+        # The CI in-network job: a GAM leg, no GAM setting, and no uv installed.
+        ("bdd_e2e", False, "not configured"),
+    ],
+    ids=["no-gam-leg", "no-gam-setting"],
+)
+def test_runner_runs_no_preflight_without_a_gam_leg_or_a_gam_setting(
+    tmp_path, suites: str, gam_setting: bool, statement: str
+) -> None:
+    """Neither needs the preflight, so neither needs uv: the runner states why and goes on."""
+    code, output, uv_argv, _ = _run_runner(tmp_path, suites, uv_exit=1, gam_setting=gam_setting)
     assert code == 0, output
     assert uv_argv == ""
+    assert f"GAM network: {statement}" in output.splitlines(), output

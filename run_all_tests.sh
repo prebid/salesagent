@@ -268,21 +268,27 @@ STORYBOARD_SUBDIR="storyboard"
 # GAM configuration preflight, before Docker or any suite starts. The e2e and bdd legs
 # run the GAM tests against the Google Ad Manager network the environment configures
 # (ToolingSettings.gam_suite_network). An environment with no GAM setting at all configures
-# no network: the preflight prints "GAM: not configured" and passes, and the GAM tests
-# declare themselves unsupported. A partial or broken configuration fails here, with every
-# failing check named, instead of an hour later as GAM failures. Read-only: it creates
-# nothing in GAM. --skip-gam-preflight (or GAM_SUITE_PREFLIGHT_SKIP=1) runs the
+# no network: "GAM: not configured" is printed and the run goes on, and the GAM tests
+# declare themselves unsupported. That one answer needs no uv (the CI in-network job installs
+# none), so with no GAM_* variable in the environment it is printed here; the preflight's
+# settings are read from the environment alone, by case-insensitive name, so it could answer
+# nothing else. Any GAM_* variable at all hands the decision to the preflight, which needs uv.
+# A partial or broken configuration fails here, with every failing check named, instead of an
+# hour later as GAM failures. Read-only: it creates nothing in GAM. --skip-gam-preflight (or GAM_SUITE_PREFLIGHT_SKIP=1) runs the
 # suites anyway; the skip is printed and kept in the run's gam_preflight.log, and the GAM
 # tests then fail where they fail. RUN_ALL_TESTS_STOP_AFTER_GAM_PREFLIGHT exits 0 right
 # after this stage: the seam that proves the gate without starting a stack.
 _gam_preflight_log="$(mktemp)"
 case ",$SUITES," in
     *,e2e,*|*,bdd,*|*,bdd_e2e,*)
-        if ! command -v uv >/dev/null 2>&1; then
-            echo "GAM preflight FAILED: uv is not on PATH (install uv, or pass --skip-gam-preflight)" | tee "$_gam_preflight_log"
+        # grep without -q reads the whole list, so pipefail cannot see compgen's SIGPIPE.
+        if [ -z "$(compgen -e | grep -i '^GAM_' || true)" ]; then
+            # scripts/gam_prerequisites_check.py's NOT_CONFIGURED, verbatim.
+            echo "GAM: not configured" | tee "$_gam_preflight_log"
+        elif ! command -v uv >/dev/null 2>&1; then
+            echo "GAM preflight FAILED: uv is not on PATH, and the GAM_* settings in this environment need it to be checked (install uv)" | tee "$_gam_preflight_log"
             exit 1
-        fi
-        if ! UV_FROZEN=1 uv run --quiet python scripts/gam_prerequisites_check.py --suite-network ${_gam_preflight_skip:+"$_gam_preflight_skip"} \
+        elif ! UV_FROZEN=1 uv run --quiet python scripts/gam_prerequisites_check.py --suite-network ${_gam_preflight_skip:+"$_gam_preflight_skip"} \
             2>&1 | tee "$_gam_preflight_log"; then
             echo "GAM preflight FAILED: configure the settings named above, or pass --skip-gam-preflight (GAM_SUITE_PREFLIGHT_SKIP=1) to run the suites anyway"
             exit 1

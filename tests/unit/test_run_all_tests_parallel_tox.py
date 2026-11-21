@@ -348,7 +348,8 @@ def test_the_run_records_the_gam_network_its_preflight_stated(tmp_path):
     """meta.json and the run's last line carry the preflight's "GAM: ..." statement (here the stand-in's)."""
     import json
 
-    proc, _ = _run_with_stubbed_docker(tmp_path)
+    # A GAM setting hands the decision to the preflight; with none the runner answers itself.
+    proc, _ = _run_with_stubbed_docker(tmp_path, GAM_SUITE_NETWORK_CODE="1")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     meta = json.loads((_published_run(tmp_path) / "meta.json").read_text())
     assert (meta["gam_network"], proc.stdout.splitlines()[-1]) == (

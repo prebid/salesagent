@@ -38,7 +38,8 @@ if TYPE_CHECKING:
 
 from src.core.config import GamSuiteNetwork, GamSuiteNetworkUnconfigured, ToolingSettings, load_settings  # noqa: E402
 
-#: What the preflight prints when no GAM setting is set at all, and exits 0.
+#: What the preflight prints when no GAM setting is set at all, and exits 0. run_all_tests.sh
+#: prints the same line itself, without uv, when the environment holds no GAM_* variable.
 NOT_CONFIGURED = "GAM: not configured"
 #: What the preflight prints when it is skipped, and exits 0.
 SKIPPED = "GAM: preflight skipped (--skip or GAM_SUITE_PREFLIGHT_SKIP), no check ran"
