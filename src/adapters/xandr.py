@@ -25,6 +25,7 @@ from src.core.schemas import (
     ReportingPeriod,
 )
 from src.core.security.outbound_http import OutboundError
+from src.core.traffic_carrier import CreativesByPackage
 
 # NOTE: Xandr adapter needs full refactor - it's using old schemas and patterns
 # The other methods (get_media_buy_status, get_media_buy_delivery, etc.) still use old schemas
@@ -498,6 +499,8 @@ class XandrAdapter(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Create insertion order and line items in Xandr."""
         if self._requires_manual_approval("create_media_buy"):

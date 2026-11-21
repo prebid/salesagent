@@ -36,6 +36,7 @@ from googleads.errors import GoogleAdsServerFault
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.schemas import Principal
 from src.core.security.egress.response import OutboundResult
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativeToTraffic, TagUrlRepresentation, TrafficSize
 
 
 class SoapObject(dict):
@@ -56,6 +57,33 @@ def gam_line_item(name: str, *, item_id: str = "1001", sizes: tuple[tuple[int, i
         creativePlaceholders=[
             SoapObject(size=SoapObject(width=width, height=height), creativeSizeType="PIXEL") for width, height in sizes
         ],
+    )
+
+
+def gam_tag_asset(
+    creative_id: str, *, line_item_id: str = "1001", package_id: str = "test_package", size: tuple[int, int] = (728, 90)
+) -> AdapterCreativeAsset:
+    """One creative as core hands ``add_creative_assets`` it: a display_tag tag URL fixed at *size*, on one line item."""
+    width, height = size
+    sizes = (TrafficSize(width=width, height=height),)
+    carrier = CreativeToTraffic(
+        creative_id=creative_id,
+        format_kind="display_tag",
+        representation=TagUrlRepresentation(url=f"https://ads.example.com/{creative_id}.js"),
+        sizes=sizes,
+        option_sizes=sizes,
+        option_size_ranges=(),
+    )
+    return AdapterCreativeAsset(
+        creative_id=creative_id,
+        creative=carrier,
+        name=f"Creative {creative_id}",
+        package_assignments=[
+            {"package_id": package_id, "weight": 100, "platform_line_item_id": line_item_id, "creative": carrier}
+        ],
+        platform_creative_id=None,
+        platform_creative_outdated=False,
+        click_url=None,
     )
 
 
@@ -218,10 +246,27 @@ def stub_gam_client(
                     order["status"] = "APPROVED"
         return SoapObject(numChanges=1)
 
+    def _read_back(line_item: SoapObject) -> SoapObject:
+        """A created line item as GAM answers for it: its placeholders in another order than written.
+
+        One observed sample, not a known GAM sort rule: R9's e2e run 025d613f wrote a line item's
+        placeholders [300x600, 728x90] and read its association back [728x90, 300x600]. Reversed
+        here, so nothing graded may depend on which order comes back.
+        """
+        placeholders = line_item.get("creativePlaceholders")
+        if not placeholders:
+            return SoapObject(line_item)
+        return SoapObject(line_item, creativePlaceholders=list(reversed(placeholders)))
+
     services: dict[str, MagicMock] = {
         "LineItemService": MagicMock(
             getLineItemsByStatement=MagicMock(
-                side_effect=lambda *_args: SoapObject(results=[SoapObject(item) for item in _held_line_items()])
+                side_effect=lambda *_args: SoapObject(
+                    results=[
+                        *(SoapObject(item) for item in client.line_items),
+                        *(_read_back(item) for item in created.get(("LineItemService", "createLineItems"), [])),
+                    ]
+                )
             ),
             performLineItemAction=MagicMock(side_effect=_line_item_action),
         ),

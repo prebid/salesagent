@@ -7,13 +7,14 @@ for Google Ad Manager orders.
 
 import logging
 import math
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from googleads import ad_manager
 
+from src.adapters.gam.creative_plan import placed_sizes, placeholder_sizes
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
 from src.adapters.gam.utils.error_handler import map_gam_exception
 from src.adapters.gam.utils.formatters import format_datetime_for_gam
@@ -28,6 +29,7 @@ from src.core.exceptions import (
 )
 from src.core.helpers.pricing_helpers import impressions_for_budget, unit_price
 from src.core.schemas import Format, MediaPackage
+from src.core.traffic_carrier import CreativesByPackage, CreativeToTraffic
 from src.core.utils.frequency_cap import suppress_cooldown_minutes
 
 logger = logging.getLogger(__name__)
@@ -273,74 +275,37 @@ def _format_id_dimensions(
     return default
 
 
-def _stored_creative_sizes(creative_ids: Iterable[str], tenant_id: str | None) -> set[tuple[int, int]]:
-    """The distinct sizes the stored creatives *creative_ids* record, at their root or on an asset."""
-    from src.core.database.database_session import get_db_session
-
-    # Collect unique creative sizes from uploaded creatives
-    creative_sizes = set()
-    with get_db_session() as session:
-        from src.core.database.repositories.creative import CreativeRepository
-
-        # No tenant, no rows: the raw query this replaced compared
-        # tenant_id against NULL and matched nothing.
-        db_creatives = CreativeRepository(session, tenant_id).admin_get_by_ids(list(creative_ids)) if tenant_id else []
-
-        for db_creative in db_creatives:
-            creative_data = db_creative.data or {}
-            # Try to get dimensions from creative data
-            width = creative_data.get("width")
-            height = creative_data.get("height")
-
-            # Also check in assets (AdCP v2.4 structure)
-            if not (width and height) and creative_data.get("assets"):
-                for _asset_id, asset in creative_data["assets"].items():
-                    if isinstance(asset, dict):
-                        width = asset.get("width")
-                        height = asset.get("height")
-                        if width and height:
-                            break
-
-            if width and height:
-                creative_sizes.add((int(width), int(height)))
-    return creative_sizes
-
-
-def _fit_to_creative_sizes(
+def _fit_to_creatives(
     creative_placeholders: list[dict[str, Any]],
-    creative_sizes: set[tuple[int, int]],
+    creatives: Sequence[CreativeToTraffic],
     log: Callable[[str], None],
 ) -> list[dict[str, Any]]:
-    """The placeholders narrowed to the sizes the package's creatives have; built from them when there are none."""
-    if not creative_sizes:
+    """The placeholders narrowed to the sizes the package's creatives are planned at; built from theirs when there are none.
+
+    The creatives are the carriers core read for the package, and the matching is the plan's
+    own (``creative_plan.placed_sizes``), so the line item takes the sizes its creatives are
+    created at and no other: one placeholder per size, which keeps GAM from waiting on a
+    creative for a size none of them serves. A 1x1 placeholder is a size like any other. When
+    no placeholder is one a creative is planned at, they are kept as they are, and the plan
+    refuses each creative against them, naming why.
+    """
+    if not creatives:
         return creative_placeholders
     if not creative_placeholders:
-        # No format_ids specified - create placeholders directly from creative sizes
-        # One placeholder per unique size
-        built = [
-            {"size": {"width": width, "height": height}, "expectedCreativeCount": 1, "creativeSizeType": "PIXEL"}
-            for width, height in sorted(creative_sizes)
-        ]
-        log(f"  [blue]Created {len(built)} placeholders from actual creative sizes (no format_ids)[/blue]")
+        sizes = dict.fromkeys(size for ctt in creatives for size in ctt.sizes)
+        built = [_gam_placeholder({"width": size.width, "height": size.height}) for size in sizes]
+        log(f"  [blue]Created {len(built)} placeholders from the package's creative sizes (no format_ids)[/blue]")
         return built
-
-    # Filter existing placeholders to only include sizes that have creatives
-    # 1x1 placeholders are special (templates, native) - always include
-    filtered_placeholders = [
-        placeholder
-        for placeholder in creative_placeholders
-        if (placeholder.get("size", {}).get("width"), placeholder.get("size", {}).get("height"))
-        in {(1, 1), *creative_sizes}
-    ]
-    # If filtering removed all placeholders, keep originals (fail-safe)
-    # This shouldn't happen if creatives have valid dimensions
-    if not filtered_placeholders:
+    placed = placed_sizes(creatives, placeholder_sizes(creative_placeholders))
+    filtered = [placeholder for placeholder in creative_placeholders if placeholder_sizes([placeholder])[0] in placed]
+    if not filtered:
         return creative_placeholders
-    if len(filtered_placeholders) < len(creative_placeholders):
+    if len(filtered) < len(creative_placeholders):
         log(
-            f"  [blue]Filtered placeholders from {len(creative_placeholders)} to {len(filtered_placeholders)} based on actual creative sizes[/blue]"
+            f"  [blue]Filtered placeholders from {len(creative_placeholders)} to {len(filtered)} "
+            f"by the package's creative sizes[/blue]"
         )
-    return filtered_placeholders
+    return filtered
 
 
 class GAMOrdersManager:
@@ -686,6 +651,7 @@ class GAMOrdersManager:
         self,
         package: MediaPackage,
         impl_config: dict[str, Any],
+        creatives: Sequence[CreativeToTraffic],
         *,
         tenant_id: str | None,
         log: Callable[[str], None],
@@ -695,7 +661,9 @@ class GAMOrdersManager:
         The one computation: ``create_line_items`` writes them, and
         ``GoogleAdManager.validate_media_buy_request`` plans each creative against them
         before anything is written, so the size a creative is refused or created at is the
-        size its line item takes.
+        size its line item takes. *creatives* are the package's creatives as core read them
+        for it, which narrow the placeholders (:func:`_fit_to_creatives`); nothing here reads
+        a stored creative.
         """
         # --- Creative placeholders, canonical arm first ----------------------------
         #
@@ -754,12 +722,8 @@ class GAMOrdersManager:
         if not creative_placeholders and impl_config.get("creative_placeholders"):
             creative_placeholders.extend(_gam_placeholder(slot) for slot in impl_config["creative_placeholders"])
 
-        # If package has creatives, filter placeholders to match actual creative sizes
-        # This prevents "X out of Y expected" issues and ensures one placeholder per unique size
-        if package.creative_ids:
-            creative_placeholders = _fit_to_creative_sizes(
-                creative_placeholders, _stored_creative_sizes(package.creative_ids, tenant_id), log
-            )
+        if creatives:
+            creative_placeholders = _fit_to_creatives(creative_placeholders, creatives, log)
         # No creatives in package - placeholders are optional
         # Allow empty array if no format_ids and no creatives
         elif not creative_placeholders:
@@ -781,6 +745,7 @@ class GAMOrdersManager:
         package_pricing_info: dict[str, dict] | None = None,
         package_targeting: dict[str, dict] | None = None,
         line_item_name_template: str | None = None,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> list[str]:
         """Create line items for an order.
 
@@ -799,6 +764,9 @@ class GAMOrdersManager:
             package_targeting: Pre-built GAM targeting dicts per package
                 Maps package_id → GAM targeting dict (built by adapter from targeting_overlay
                 and the product's custom_targeting_keys)
+            creatives_by_package: Each package's creatives as core read them for it, the
+                carriers the pre-booking check planned: they narrow each line item's
+                placeholders exactly as they did there (``line_item_placeholders``).
 
         Returns:
             List of created line item IDs
@@ -881,7 +849,13 @@ class GAMOrdersManager:
                 log(f"[red]Error: {error_msg}[/red]")
                 raise AdCPConfigurationError()
 
-            creative_placeholders = self.line_item_placeholders(package, impl_config, tenant_id=tenant_id, log=log)
+            creative_placeholders = self.line_item_placeholders(
+                package,
+                impl_config,
+                (creatives_by_package or {}).get(package.package_id, ()),
+                tenant_id=tenant_id,
+                log=log,
+            )
 
             # Apply line item naming template
             from src.adapters.gam.utils.constants import GAM_NAME_LIMITS

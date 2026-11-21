@@ -3109,22 +3109,13 @@ def _assert_entry_failed_and_nothing_stored(ctx: dict, code: str) -> None:
     assert_sync_entry_refused_and_not_stored(ctx, _SYNC_CREATIVE_ID, code)
 
 
-@then(parsers.parse("the creative is refused {code:w} naming the packages field"))
-def then_creative_refused_naming_packages(ctx: dict, code: str) -> None:
-    """The create path's manifest refusal: the code, the ``packages`` pointer and the creative.
-
-    The pointer names the request field the buyer sent and ``details.creative_id`` names the
-    creative.
-    """
-    _assert_creative_refused(ctx, code, field="packages")
-
-
 @then(parsers.parse('the creative is refused {code:w} naming the creative at "{field}"'))
 def then_creative_refused_naming_creative(ctx: dict, code: str, field: str) -> None:
-    """The create path's size refusal, pointing at the creative where the request named it.
+    """The create path's creative refusal, pointing at the creative where the request named it.
 
-    enums/error-code.json on CREATIVE_SIZE_MISMATCH: "Sellers SHOULD identify the offending
-    creative in error.field".
+    One pointer for every creative code on that path. enums/error-code.json on
+    CREATIVE_SIZE_MISMATCH: "Sellers SHOULD identify the offending creative in error.field";
+    core/error.json ``field``: "Field path associated with the error".
     """
     _assert_creative_refused(ctx, code, field=field)
 
@@ -3637,18 +3628,6 @@ def then_no_legacy_formats_to_provide(ctx: dict) -> None:
         "the declaration asserts no v1_format_ref, so there is nothing to project -- yet the "
         f"package carries format_ids_to_provide={package['format_ids_to_provide']!r}"
     )
-
-
-@then("the buyer is refused UNSUPPORTED_FEATURE naming the packages field")
-def then_refused_naming_packages(ctx: dict) -> None:
-    """The creative-side refusal, which names ``packages`` rather than one selector arm.
-
-    A creative is not a selector: the buyer sent ``creative_ids``, and WHICH creative is in
-    ``details.creative_id`` rather than in the pointer, because the pointer names a request
-    FIELD and the request field here is the packages array. The same pointer the sibling
-    creative refusals on this path already use (``PACKAGES_FIELD``).
-    """
-    ctx["result"].assert_wire_error("UNSUPPORTED_FEATURE", field="packages")
 
 
 # ── The MANUAL-APPROVAL path ────────────────────────────────────────

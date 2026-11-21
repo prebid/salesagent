@@ -47,10 +47,7 @@ from src.core.traffic_carrier import (
     TrafficSize,
     TrafficSizeRange,
 )
-
-#: Canonical kinds GAM is not handed through this plan. ``native_in_feed`` is a GAM native
-#: style with a creative template, which PR #2445 owns.
-_KINDS_NOT_PLANNED = frozenset({"native_in_feed"})
+from src.services.gam_product_config_service import gam_format_family
 
 
 @dataclass(frozen=True)
@@ -138,12 +135,19 @@ class GamCreativeRefusal:
 
 
 def placeholder_sizes(placeholders: Iterable[Any]) -> tuple[TrafficSize, ...]:
-    """The sizes of GAM ``CreativePlaceholder`` objects (dicts or Zeep objects), in order, each once."""
-    sizes = (
+    """The sizes of GAM ``CreativePlaceholder`` objects (dicts or Zeep objects), each once, in canonical order.
+
+    Canonical is ascending ``(width, height)``, never the order the placeholders arrive in. The
+    pre-booking check reads the placeholders a line item will be written with, and the upload
+    the ones GAM answers for it, and GAM does not answer them in the order written (R9's e2e
+    run 025d613f wrote [300x600, 728x90] and read [728x90, 300x600]), so a plan reading arrival
+    order could approve one size and create another. Both plan through this order.
+    """
+    sizes = {
         TrafficSize(width=int(placeholder["size"]["width"]), height=int(placeholder["size"]["height"]))
         for placeholder in placeholders
-    )
-    return tuple(dict.fromkeys(sizes))
+    }
+    return tuple(sorted(sizes, key=lambda size: (size.width, size.height)))
 
 
 def plan_gam_creative(
@@ -151,20 +155,24 @@ def plan_gam_creative(
 ) -> GamCreativePlan | GamCreativeRefusal:
     """The GAM creative for *ctt* on line items taking *placeholder_sizes*, or why there is none.
 
-    Size: the candidates are the declared ``sizes`` a placeholder takes, plus the placeholders
-    inside a declared ``size_ranges`` entry (every stated bound inclusive); with neither
-    declared, every placeholder. The first candidate is the creative's size. With more than
+    Size: the candidates are the declared ``sizes`` a placeholder takes, in the order declared,
+    or the placeholders inside a declared ``size_ranges`` entry (every stated bound
+    inclusive); with neither declared, every placeholder. Placeholders are taken in the order
+    given, which in production is :func:`placeholder_sizes`' canonical one. The first candidate
+    is the creative's size. With more than
     one, ``lica_sizes`` is every candidate, the creative's own first: the association's sizes
     "override" ``Creative.size``, and listing its own keeps it served at that size whether GAM
-    adds them or replaces it. With one, the association states none. No candidate, or no
-    placeholder, is a refusal: there is no default size.
+    adds them or replaces it. With one, the association states none. No candidate is a
+    refusal: there is no default size.
     """
     representation = ctt.representation
-    if ctt.format_kind in _KINDS_NOT_PLANNED or (
+    if gam_format_family(ctt.format_kind) != "display" or (
         isinstance(representation, MediaRepresentation) and representation.asset_type != "image"
     ):
-        # Audio has no GAM creative. Video needs a duration (VideoRedirectCreative), which the
-        # carrier does not hold.
+        # Only the display family is planned. A native kind is a GAM native style over a
+        # creative template (PR #2445); audio has no GAM creative; video needs a duration
+        # (VideoRedirectCreative), which the carrier does not hold; a kind GAM has no family for
+        # names no GAM creative type.
         return GamCreativeRefusal(ctt.creative_id, GamRefusalReason.NOT_TRAFFICKED, ctt.format_kind)
 
     sizes = _candidate_sizes(ctt, placeholder_sizes)
@@ -201,6 +209,27 @@ def plan_gam_creative(
     return GamCreativePlan(creative=creative, lica_sizes=lica_sizes, html5_bundle_url=bundle_url)
 
 
+def plan_or_refuse(
+    ctt: CreativeToTraffic, placeholders: Iterable[Any], package_id: str | None = None
+) -> GamCreativePlan | ErrorProblem:
+    """The GAM creative *ctt* becomes on a line item with these *placeholders*, or the problem refusing it.
+
+    The one planning call, per line item: the pre-booking check (``GoogleAdManager.validate_media_buy_request``)
+    makes it against the placeholders the line item will be created with, and the upload
+    (``GAMCreativesManager.add_creative_assets``) against the ones GAM holds, so the plan the
+    check approved is the plan the upload executes. A refusal is the problem it is, naming
+    *package_id*; core builds the error (``exceptions.problems_refusal``).
+    """
+    plan = plan_gam_creative(ctt, placeholder_sizes(placeholders))
+    return plan.problem(package_id) if isinstance(plan, GamCreativeRefusal) else plan
+
+
+def placed_sizes(creatives: Iterable[CreativeToTraffic], sizes: Sequence[TrafficSize]) -> set[TrafficSize]:
+    """Those of *sizes* some creative in *creatives* would be planned at, by the plan's own matching."""
+    candidates = tuple(dict.fromkeys(sizes))
+    return {size for ctt in creatives for size in _placed(ctt.sizes, ctt.size_ranges, candidates)}
+
+
 def _destination(ctt: CreativeToTraffic) -> dict[str, str]:
     """An image's click-through, with AdCP macros in GAM's spelling; none states ``NONE``."""
     if ctt.clickthrough_url:
@@ -218,8 +247,6 @@ def _candidate_sizes(
     size, no creative the option accepts can serve on these line items.
     """
     placeholders = tuple(dict.fromkeys(placeholder_sizes))
-    if not placeholders:
-        return GamCreativeRefusal(ctt.creative_id, GamRefusalReason.NO_PLACEHOLDER)
     candidates = _placed(ctt.sizes, ctt.size_ranges, placeholders)
     if candidates:
         return candidates
@@ -237,12 +264,19 @@ def _candidate_sizes(
 def _placed(
     sizes: Sequence[TrafficSize], size_ranges: Sequence[TrafficSizeRange], placeholders: tuple[TrafficSize, ...]
 ) -> tuple[TrafficSize, ...]:
-    """The placeholders these sizes and bounds take, declared sizes first; with neither stated, every placeholder."""
-    if not sizes and not size_ranges:
-        return placeholders
-    declared = [size for size in sizes if size in placeholders]
-    in_range = [size for size in placeholders if any(_within(size, bounds) for bounds in size_ranges)]
-    return tuple(dict.fromkeys([*declared, *in_range]))
+    """The placeholders one size mode takes: the declared sizes a placeholder takes, in declared order;
+    else the placeholders inside the bounds; with neither stated, every placeholder.
+
+    One mode, never both: ``formats/canonical/display_tag.json``, ``image.json`` and ``html5.json``
+    reject a declaration combining them ("Exactly one of: (a) fixed ... (b) multi-size ... (c)
+    responsive ... (d) none"), and the reader takes a carrier's sizes from one declaration or from
+    the file's own size.
+    """
+    if sizes:
+        return tuple(size for size in sizes if size in placeholders)
+    if size_ranges:
+        return tuple(size for size in placeholders if any(_within(size, bounds) for bounds in size_ranges))
+    return placeholders
 
 
 def _within(size: TrafficSize, bounds: TrafficSizeRange) -> bool:

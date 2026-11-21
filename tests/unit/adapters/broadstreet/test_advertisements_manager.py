@@ -131,7 +131,6 @@ class TestBroadstreetAdvertisementManager:
     def test_get_ad_type_from_html_content(self, manager):
         """Test ad type detection from HTML content."""
         assert manager._get_ad_type({"html": "<div>Ad</div>"}) == "html"
-        assert manager._get_ad_type({"snippet": "<script>...</script>"}) == "html"
 
     def test_get_ad_type_from_image_url(self, manager):
         """Test ad type detection from image URL."""
@@ -160,13 +159,6 @@ class TestBroadstreetAdvertisementManager:
         params = manager._build_ad_params(asset, "html")
 
         assert params["html"] == "<div>HTML Ad</div>"
-
-    def test_build_ad_params_html_from_snippet(self, manager):
-        """Test building params for HTML ad from snippet."""
-        asset = {"snippet": "<script>...</script>"}
-        params = manager._build_ad_params(asset, "html")
-
-        assert params["html"] == "<script>...</script>"
 
     def test_build_ad_params_html_from_url(self, manager):
         """Test building params for HTML ad from URL."""

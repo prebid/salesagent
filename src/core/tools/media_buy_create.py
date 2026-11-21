@@ -47,7 +47,6 @@ from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
     AdCPCreativeNotFoundError,
-    AdCPCreativeSizeMismatchError,
     AdCPGoneError,
     AdCPIdempotencyExpiredError,
     AdCPIdempotencyInFlightError,
@@ -72,10 +71,6 @@ from src.core.idempotency_replay import raise_on_payload_conflict
 from src.core.traffic_carrier import (
     AdapterCreativeAsset,
     CreativeToTraffic,
-    Html5BundleRepresentation,
-    HtmlRepresentation,
-    LegacyContentKeys,
-    MediaRepresentation,
     PackageAssignmentDict,
 )
 
@@ -777,14 +772,14 @@ def _validate_creatives_before_adapter_call(
         # or CREATIVE_VALIDATION_FAILED_GENERIC. Refused ahead of ``reasons`` because the
         # code differs: folding it into ``reasons`` would answer the buyer
         # VALIDATION_ERROR for a condition with its own recovery.
-        refusal = creative_refusal(verdict, field=PACKAGES_FIELD, creative_id=cid, product_id=product.product_id)
-        if isinstance(refusal, AdCPCreativeSizeMismatchError):
-            # enums/error-code.json CREATIVE_SIZE_MISMATCH: "Sellers SHOULD identify the
-            # offending creative in error.field", so its pointer names the creative where the
-            # request named it. The other creative codes carry no such clause and keep the
-            # packages pointer, with the creative in details.
-            creative_path = _creative_path(packages, index, cid)
-            refusal = creative_refusal(verdict, field=creative_path, creative_id=cid, product_id=product.product_id)
+        # One pointer for every creative refusal, the gate's and the adapter's pre-booking
+        # check's (_adapter_refusal): the creative where the request named it. core/error.json
+        # ``field`` is the "Field path associated with the error", and enums/error-code.json asks
+        # for this one where it says anything (CREATIVE_SIZE_MISMATCH "Sellers SHOULD identify
+        # the offending creative in error.field").
+        refusal = creative_refusal(
+            verdict, field=_creative_path(packages, index, cid), creative_id=cid, product_id=product.product_id
+        )
         refusals.append((cid, refusal))
     if refusals:
         # EVERY refused creative, in one error: a buy with two misfits names both, rather than
@@ -1166,7 +1161,7 @@ def _execute_adapter_media_buy_creation(
         identity: The caller the adapter acts for (from a request or from stored ids)
         carriers: Each creative as the pre-adapter gate read it for each package naming it.
             The adapter's pre-booking check is handed them per package, and refuses a
-            creative it cannot traffic on its package.
+            creative it cannot traffic on its package; its booking is handed the same value.
         named_packages: The packages as the gate was handed them, naming each one's
             creatives in the order the request (or the stored buy) did: where a refusal
             points.
@@ -1187,13 +1182,14 @@ def _execute_adapter_media_buy_creation(
     # so this is the one place an adapter checks a buy before its ad server is written: the
     # pricing models it sells, its own limits, and every creative on its package. It answers
     # problems; the error is built here, once.
+    creatives_by_package = _carriers_by_package_id(packages, carriers)
     problems = adapter.validate_media_buy_request(
         request,
         packages,
         start_time,
         end_time,
         package_pricing_info,
-        creatives_by_package=_carriers_by_package_id(packages, carriers),
+        creatives_by_package=creatives_by_package,
     )
     if problems:
         logger.error(f"[PRE-VALIDATE] Adapter validation failed: {problems}")
@@ -1203,7 +1199,9 @@ def _execute_adapter_media_buy_creation(
 
     # Call adapter with detailed error logging
     try:
-        response = adapter.create_media_buy(request, packages, start_time, end_time, package_pricing_info)
+        response = adapter.create_media_buy(
+            request, packages, start_time, end_time, package_pricing_info, creatives_by_package=creatives_by_package
+        )
         logger.info(
             f"[ADAPTER] create_media_buy succeeded: {response.media_buy_id} with {len(response.packages)} packages"
         )
@@ -1290,13 +1288,11 @@ def _build_adapter_asset_from_creative(
     :func:`_read_for_packages` read it for that package, and the adapter traffics each
     package's carrier on that package's line item.
 
-    ``asset["creative"]`` is the first assignment's carrier, and the keys the adapters that do
-    not read a carrier yet (Broadstreet, the mock, Kevel, Triton) read are derived from it; the
-    kinds that had no ``url`` there are given none.
+    ``asset["creative"]`` is the first assignment's carrier. An adapter derives what it serves
+    from the carrier; nothing here projects it onto a ``url`` or a ``snippet``.
     """
     creative_data = creative.data or {}
     carrier = package_assignments[0]["creative"]
-    first_size = carrier.sizes[0] if carrier.sizes else None
     asset: AdapterCreativeAsset = {
         "creative_id": creative.creative_id,
         "creative": carrier,
@@ -1305,34 +1301,12 @@ def _build_adapter_asset_from_creative(
         # ...unless its content changed since: the ad server's copy is updated, keeping its id
         "platform_creative_outdated": bool(creative_data.get("ad_server_creative_outdated")),
         "package_assignments": package_assignments,
-        "width": first_size.width if first_size else None,
-        "height": first_size.height if first_size else None,
         "click_url": carrier.clickthrough_url,
         "name": creative.name or f"Creative {creative.creative_id}",
-        **_legacy_content_keys(carrier),
     }
     if carrier.impression_tracker_urls:
         asset["delivery_settings"] = {"tracking_urls": {"impression": list(carrier.impression_tracker_urls)}}
     return asset
-
-
-def _legacy_content_keys(carrier: CreativeToTraffic) -> LegacyContentKeys:
-    """The content keys an adapter that does not read ``asset["creative"]`` reads, as it read them before.
-
-    A kind those adapters were handed no ``url`` for gets none: a third-party tag, inline or
-    by URL, is carried only under ``creative``.
-    """
-    representation = carrier.representation
-    if isinstance(representation, HtmlRepresentation):
-        # An html asset is delivered as its markup (AdCP 3.2.7 core/assets/html-asset.json,
-        # ``content``), never as the URL of a page that renders it.
-        return {"snippet": representation.content, "snippet_type": "html"}
-    if isinstance(representation, MediaRepresentation):
-        return {"url": representation.url}
-    if isinstance(representation, Html5BundleRepresentation) and representation.backup_image_url:
-        # What those adapters were handed for an html5 creative before: its backup image.
-        return {"url": representation.backup_image_url}
-    return {}
 
 
 class ApprovalOutcome(StrEnum):

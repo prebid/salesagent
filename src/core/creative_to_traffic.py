@@ -32,9 +32,11 @@ from adcp.types.domains.core.assets.asset_union import ZipAsset as LibraryZipAss
 from pydantic import TypeAdapter, ValidationError
 
 from src.core.format_satisfaction import (
+    RANGE_BOUNDS,
     declaration_slot_asset_ids,
-    declared_params,
+    declared_size_mode,
     declared_slots_by_kind,
+    size_mode,
 )
 from src.core.helpers.creative_helpers import (
     _read_media_assets,
@@ -298,33 +300,16 @@ def _declared_sizes(
     declarations: Sequence[Any], format_spec: Any | None
 ) -> tuple[tuple[TrafficSize, ...], tuple[TrafficSizeRange, ...]]:
     """The sizes and responsive ranges the format accepts, over every declaration, else the legacy render."""
-    sizes: list[TrafficSize] = []
-    ranges: list[TrafficSizeRange] = []
-    for declaration in declarations:
-        _add_size_mode(declared_params(declaration), sizes, ranges)
-    if not sizes and not ranges and format_spec is not None:
+    modes = [declared_size_mode(declaration) for declaration in declarations]
+    if not any(sizes or ranges for sizes, ranges in modes) and format_spec is not None:
         for render in getattr(format_spec, "renders", None) or ():
             dimensions = getattr(render, "dimensions", None)
             if getattr(render, "role", None) == "primary" and dimensions is not None:
-                _add_size_mode(_attributes(dimensions), sizes, ranges)
+                modes = [
+                    size_mode({name: getattr(dimensions, name, None) for name in ("width", "height", *RANGE_BOUNDS)})
+                ]
                 break
-    return tuple(dict.fromkeys(sizes)), tuple(dict.fromkeys(ranges))
-
-
-_RANGE_BOUNDS = ("min_width", "max_width", "min_height", "max_height")
-
-
-def _add_size_mode(params: Mapping[str, Any], sizes: list[TrafficSize], ranges: list[TrafficSizeRange]) -> None:
-    """One option's size mode: a fixed size, a list of sizes, or a responsive range."""
-    if params.get("width") and params.get("height"):
-        sizes.append(TrafficSize(width=int(params["width"]), height=int(params["height"])))
-    for size in params.get("sizes") or ():
-        sizes.append(TrafficSize(width=int(size["width"]), height=int(size["height"])))
-    bounds = {bound: int(params[bound]) for bound in _RANGE_BOUNDS if params.get(bound)}
-    if bounds:
-        ranges.append(TrafficSizeRange(**bounds))
-
-
-def _attributes(dimensions: Any) -> dict[str, Any]:
-    """A legacy render's dimensions as plain params."""
-    return {name: getattr(dimensions, name, None) for name in ("width", "height", *_RANGE_BOUNDS)}
+    return (
+        tuple(dict.fromkeys(size for sizes, _ in modes for size in sizes)),
+        tuple(dict.fromkeys(bounds for _, ranges in modes for bounds in ranges)),
+    )

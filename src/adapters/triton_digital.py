@@ -22,7 +22,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas import *
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError, send
-from src.core.traffic_carrier import AdapterCreativeAsset
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 
 
 class TritonDigital(AdServerAdapter):
@@ -135,6 +135,8 @@ class TritonDigital(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict[str, Any]] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Creates a new Campaign and Flights in the Triton TAP API."""
         # Log operation

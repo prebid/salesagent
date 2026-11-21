@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -38,7 +38,7 @@ from src.core.schemas import (
     PushNotificationConfig,
     ReportingPeriod,
 )
-from src.core.traffic_carrier import AdapterCreativeAsset, CreativeToTraffic
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 from src.core.validation_helpers import package_field_path
 
 # Return type of AdServerAdapter._require_config — preserves the caller's value type.
@@ -524,7 +524,7 @@ class AdServerAdapter(ABC):
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
         *,
-        creatives_by_package: Mapping[str, Sequence[CreativeToTraffic]],
+        creatives_by_package: CreativesByPackage,
     ) -> list[ErrorProblem]:
         """Pre-validate a media buy request without creating anything: the one pre-booking seam.
 
@@ -587,6 +587,8 @@ class AdServerAdapter(ABC):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Creates a new media buy on the ad server from selected packages.
 
@@ -597,6 +599,9 @@ class AdServerAdapter(ABC):
             end_time: Campaign end time
             package_pricing_info: Optional validated pricing information per package (AdCP PR #88)
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
+            creatives_by_package: The value ``validate_media_buy_request`` was handed, so an
+                adapter that sizes its line items from the creatives sizes them from the
+                carriers its check planned. ``None`` when the caller names no creatives.
 
         Returns:
             AdapterCreateResult with the ad server's ids. Failures are raised as

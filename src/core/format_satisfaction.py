@@ -130,6 +130,7 @@ from src.core.exceptions import (
     problems_refusal,
 )
 from src.core.schemas import Format, FormatOptionIdentity, FormatSelector
+from src.core.traffic_carrier import TrafficSize, TrafficSizeRange
 
 logger = logging.getLogger(__name__)
 
@@ -442,6 +443,38 @@ def declared_params(declaration: LibraryFormatDeclaration) -> Mapping[str, Any]:
     """The constraints one declaration states, as plain values keyed by param name."""
     params = _plain(declaration.params)
     return params if isinstance(params, Mapping) else {}
+
+
+#: The bounds of a responsive size mode, in the order ``TrafficSizeRange`` declares them.
+RANGE_BOUNDS = ("min_width", "max_width", "min_height", "max_height")
+
+
+def size_mode(params: Mapping[str, Any]) -> tuple[tuple[TrafficSize, ...], tuple[TrafficSizeRange, ...]]:
+    """The sizes and the responsive range one option's *params* state, each once.
+
+    ``formats/canonical/display_tag.json`` (AdCP 3.2.7) gives an option one size mode:
+    "Exactly one of ``(width, height)``, ``sizes[]``, or ``min/max_width`` +
+    ``min/max_height``". A fixed size and a list both land in the sizes; stated bounds are the
+    range, an absent bound left out.
+    """
+    sizes: list[TrafficSize] = []
+    if params.get("width") and params.get("height"):
+        sizes.append(TrafficSize(width=int(params["width"]), height=int(params["height"])))
+    sizes.extend(
+        TrafficSize(width=int(size["width"]), height=int(size["height"])) for size in params.get("sizes") or ()
+    )
+    bounds = {bound: int(params[bound]) for bound in RANGE_BOUNDS if params.get(bound)}
+    return tuple(dict.fromkeys(sizes)), (TrafficSizeRange(**bounds),) if bounds else ()
+
+
+def declared_size_mode(declaration: Any) -> tuple[tuple[TrafficSize, ...], tuple[TrafficSizeRange, ...]]:
+    """The sizes and range one declaration (or a package's snapshot of it) states: :func:`size_mode` of its params.
+
+    The one reading of a declaration's size: the creative reader's carrier sizes and the GAM
+    line item's slots both take it, so a creative and its line item cannot disagree on the
+    size a declaration names.
+    """
+    return size_mode(declared_params(declaration))
 
 
 def _option_identity(declaration: LibraryFormatDeclaration) -> FormatOptionIdentity | None:
