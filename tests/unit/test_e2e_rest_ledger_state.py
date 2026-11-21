@@ -73,6 +73,9 @@ from tests.helpers.ledger import load_ledger_nodeids
 # comparison.
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
+        # Added for prebid/salesagent#2636 (GAM pause writes the readonly LineItem.status):
+        # the scenario is strict-xfailed on every transport, e2e_rest also here.
+        "tests/bdd/test_local_gam_seller.py::test_a_buyer_who_pauses_an_active_buy_booked_in_gam_leaves_its_line_item_paused_in_gam[e2e_rest]",
         # salesagent-3cs7o.54 GRADUATED. The entry read "asset-level provenance absent
         # from the stored creative over e2e_rest only ... every source-readable hop is
         # cleared by measurement; the next step is a live-stack probe". The probe was

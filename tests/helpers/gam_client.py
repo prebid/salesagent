@@ -55,7 +55,9 @@ def _bound(statement: Mapping[str, Any]) -> dict[str, str]:
 
 
 def _update_held(held: list[SoapObject], objects: list[Any], *, readonly: tuple[str, ...] = ()) -> list[SoapObject]:
-    """GAM's ``update*``: each sent object replaces the one *held* under its ``id``, keeping its *readonly* fields.
+    """GAM's ``update*``: each sent object replaces the one *held* under its ``id``, except its *readonly* fields.
+
+    A *readonly* field keeps the value the network holds, or stays absent, whatever was sent.
 
     An id the network does not hold raises ``gam_fault``. Each answer is a copy.
     """
@@ -67,7 +69,7 @@ def _update_held(held: list[SoapObject], objects: list[Any], *, readonly: tuple[
             raise gam_fault("CommonError.NOT_FOUND")
         kept = {key: item[key] for key in readonly if key in item}
         item.clear()
-        item.update(obj, **kept)
+        item.update({key: value for key, value in obj.items() if key not in readonly}, **kept)
         answered.append(SoapObject(item))
     return answered
 
@@ -188,10 +190,7 @@ def stub_gam_client(
       read at call time: ``client.line_items`` (seeded from ``line_items``; a test adds held
       line items there), then the line items it created. Each answer is a copy, as a real
       network's is: a caller that edits it changes nothing the network holds.
-    * ``LineItemService.performLineItemAction`` sets ``status`` PAUSED (PauseLineItems) or
-      READY (ResumeLineItems) on the line items it holds whose ``id`` or ``orderId`` the
-      statement binds (``lineItemId`` / ``orderId``), and answers ``numChanges``.
-      ``updateLineItems`` replaces each sent line item's fields on the one it holds by ``id``
+    * ``LineItemService.updateLineItems`` replaces each sent line item's fields on the one it holds by ``id``
       (an id it does not hold raises ``gam_fault``), except ``status``:
       ``LineItemSummary.status`` is "readonly" (Ad Manager API v202602).
     * ``OrderService.performOrderAction`` answers ``numChanges: 1``, so the adapter's
@@ -249,19 +248,6 @@ def stub_gam_client(
     def _held_line_items() -> list[SoapObject]:
         return [*client.line_items, *created.get(("LineItemService", "createLineItems"), [])]
 
-    _line_item_status = {"PauseLineItems": "PAUSED", "ResumeLineItems": "READY"}
-
-    def _line_item_action(action: Mapping[str, Any], statement: Mapping[str, Any], *_a: Any, **_k: Any) -> SoapObject:
-        bound = _bound(statement)
-        acted = [
-            item
-            for item in _held_line_items()
-            if str(item.get("id")) == bound.get("lineItemId") or str(item.get("orderId")) == bound.get("orderId")
-        ]
-        for item in acted:
-            item["status"] = _line_item_status[action["xsi_type"]]
-        return SoapObject(numChanges=len(acted))
-
     def _update_line_items(objects: list[Any], *_args: Any, **_kwargs: Any) -> list[SoapObject]:
         return _update_held(_held_line_items(), objects, readonly=("status",))
 
@@ -295,7 +281,6 @@ def stub_gam_client(
                     ]
                 )
             ),
-            performLineItemAction=MagicMock(side_effect=_line_item_action),
             updateLineItems=MagicMock(side_effect=_update_line_items),
         ),
         "OrderService": MagicMock(performOrderAction=MagicMock(side_effect=_order_action)),
