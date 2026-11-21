@@ -3321,6 +3321,27 @@ def then_raw_request_advisory_code_and_recovery(ctx: dict, mb_id: str, field: st
     )
 
 
+@then(
+    parsers.parse('the media buy "{mb_id}" valid_actions set should equal {expected_actions}')
+)
+def then_media_buy_valid_actions_set_equal(ctx: dict, mb_id: str, expected_actions: str) -> None:
+    """Compare the buyer-visible valid_actions set with the scenario's expected values."""
+    expected_text = expected_actions.strip()
+    assert expected_text.startswith("[") and expected_text.endswith("]"), (
+        f"Expected valid_actions in bracketed-list form, got {expected_actions!r}"
+    )
+    inner = expected_text[1:-1].strip()
+    expected = [value.strip() for value in inner.split(",") if value.strip()]
+
+    actual = _wire_media_buy(ctx, mb_id).get("valid_actions")
+    assert isinstance(actual, list), f"Expected valid_actions array on the wire, got {actual!r}"
+    assert all(isinstance(value, str) for value in actual), f"Expected string actions, got {actual!r}"
+    assert len(actual) == len(set(actual)), f"valid_actions contains duplicate entries: {actual!r}"
+    assert set(actual) == set(expected), (
+        f"Expected valid_actions set {sorted(expected)!r} for {mb_id!r}, got {sorted(actual)!r}"
+    )
+
+
 def _wire_media_buy(ctx: dict, mb_id: str) -> dict:
     """Return the media buy the buyer received on the wire, by Gherkin label."""
     real_id = _resolve_media_buy_id(ctx, mb_id)
