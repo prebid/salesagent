@@ -20,6 +20,10 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
   # The caller's session is always held against a tenant that is NOT the target,
   # so the target tenant's membership row is the only thing that decides.
   #
+  # Every membership row holds the manager role, the least role that may send POST
+  # (role_permits in src/admin/utils/helpers.py), so the role check decides no outcome
+  # here. tests/integration/test_admin_role_enforcement.py grades what each role may do.
+  #
   # Transports (both run here, chosen at collection like BR-ADMIN-ACCOUNTS):
   #   - integration: Flask test_client (in-process, no Docker)
   #   - e2e: requests.Session against Docker stack (full deployment)

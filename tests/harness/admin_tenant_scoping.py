@@ -35,7 +35,7 @@ from typing import Any, NamedTuple
 from urllib.parse import urlsplit
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant
+from src.core.database.models import Tenant, UserRole
 from src.services.default_products import get_default_products
 from tests.factories import MediaBuyFactory, ProductFactory, TenantFactory, UserFactory
 from tests.factories.mint import mint
@@ -51,6 +51,11 @@ MEMBER_EMAIL = "test_tenant_user@example.com"
 #: this row a lookup that forgot the caller's email would still find nobody, and a refusal
 #: would prove nothing about whose membership was checked.
 OTHER_MEMBER_EMAIL = "target_tenant_member@example.com"
+#: The role every seeded membership holds: the least one that may send every method in
+#: ``ROUTES``, because ``role_permits`` asks ``manager`` for a write. A refusal is then the
+#: membership check's and never the role check's, which
+#: tests/integration/test_admin_role_enforcement.py grades.
+MEMBER_ROLE = UserRole.MANAGER
 ACTIVE_BUY_BUDGET = Decimal("1500.00")
 
 
@@ -92,6 +97,11 @@ class TenantState(NamedTuple):
 def _unique_id(prefix: str) -> str:
     """A collision-free id: the e2e stack DB persists across runs, so factory sequences would repeat."""
     return mint(f"{prefix}_{uuid.uuid4().hex[:10]}")
+
+
+def _seed_member(tenant: Tenant, email: str, *, is_active: bool = True) -> None:
+    """A ``User`` row for *email* in *tenant*, holding ``MEMBER_ROLE``. Call it inside ``bound_factory_session()``."""
+    UserFactory(tenant=tenant, user_id=_unique_id("user"), email=email, role=MEMBER_ROLE, is_active=is_active)
 
 
 def redirect_path(response: AdminResponse) -> str:
@@ -185,7 +195,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
                 # from it (tests/factories/principal.py), so a unique id is a unique credential.
                 principal__principal_id=_unique_id("principal"),
             )
-            UserFactory(tenant=tenant, user_id=_unique_id("user"), email=OTHER_MEMBER_EMAIL)
+            _seed_member(tenant, OTHER_MEMBER_EMAIL)
             products_payload = [
                 {
                     "product_id": product.product_id,
@@ -221,7 +231,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         home_tenant_id = self._new_home_tenant(with_member=False)
         with bound_factory_session() as session:
             target = session.get(Tenant, self.target.tenant_id)
-            UserFactory(tenant=target, user_id=_unique_id("user"), email=MEMBER_EMAIL, is_active=is_active)
+            _seed_member(target, MEMBER_EMAIL, is_active=is_active)
         self._authenticate_member(home_tenant_id)
 
     def _new_home_tenant(self, *, with_member: bool) -> str:
@@ -229,7 +239,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         with bound_factory_session():
             home = TenantFactory(tenant_id=self._new_tenant_id("home"))
             if with_member:
-                UserFactory(tenant=home, user_id=_unique_id("user"), email=MEMBER_EMAIL)
+                _seed_member(home, MEMBER_EMAIL)
             return home.tenant_id
 
     def _authenticate_member(self, login_tenant_id: str) -> None:
