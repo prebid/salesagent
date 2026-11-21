@@ -54,11 +54,9 @@ proves the signature this seam produced was actually verified.
 
 from __future__ import annotations
 
-import os
 from contextlib import contextmanager
 from typing import Any
 
-import httpx
 import pytest
 from adcp.types import GetAdcpCapabilitiesResponse
 
@@ -510,39 +508,7 @@ def test_an_unsignable_leg_refuses_every_realization(integration_db, signed):
 # ---------------------------------------------------------------------------
 
 
-def _live_stack() -> E2EConfig | None:
-    """The live stack this run was given, or ``None`` if it was given none.
-
-    Same contract as ``tests/bdd/conftest.py``'s ``e2e_stack``, deliberately: an
-    ``E2E_BASE_URL`` that is SET but unreachable is a hard ERROR — the stack was
-    explicitly configured and could not be reached, and degrading that to a skip
-    reports a leg that never ran as success. Absent configuration means this run
-    was never offered a stack (a plain integration slice), and the e2e leg below
-    is simply not defined; the in-network runner sets these vars for every suite
-    (``docker-compose.e2e.yml``'s ``tests`` service + tox ``pass_env``), so the
-    leg IS graded on every full run.
-    """
-    base_url = os.environ.get("E2E_BASE_URL")
-    postgres_url = os.environ.get("E2E_POSTGRES_URL")
-    if not base_url or not postgres_url:
-        return None
-    try:
-        httpx.get(f"{base_url}/health", timeout=10).raise_for_status()
-    except Exception as exc:  # noqa: BLE001 - re-raised loudly below
-        raise RuntimeError(
-            f"E2E_BASE_URL={base_url!r} is set but {base_url}/health did not answer ({exc!r}). The signed "
-            "e2e_rest leg cannot run. Start the in-network stack (run_all_tests.sh) or unset E2E_BASE_URL. "
-            "Refusing to skip — a skipped e2e leg is a false green."
-        ) from exc
-    return E2EConfig(
-        base_url=base_url,
-        postgres_url=postgres_url,
-        tls_base_url=os.environ.get("E2E_TLS_BASE_URL"),
-        ca_bundle=os.environ.get("E2E_CA_BUNDLE"),
-    )
-
-
-LIVE_STACK = _live_stack()
+LIVE_STACK = E2EConfig.from_environment()
 
 
 @contextmanager
