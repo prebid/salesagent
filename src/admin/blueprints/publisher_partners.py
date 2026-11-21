@@ -11,9 +11,9 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, jsonify
 
-from src.admin.utils.operator_errors import safe_error_message
+from src.admin.form_validation import json_object_body
 from src.core.database.models import Publisher
 from src.core.database.repositories.uow import PublisherUoW
 from src.core.http_utils import canonical_publisher_domain
@@ -70,22 +70,16 @@ def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["POST"])
 def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
     """Add a publisher by its domain, and ingest its adagents.json."""
-    data = request.get_json(silent=True) or {}
+    data = json_object_body()
     domain = canonical_publisher_domain(str(data.get("publisher_domain") or ""))
     if not domain:
         return jsonify({"error": "Publisher domain is required"}), 400
-    try:
-        with PublisherUoW(tenant_id) as uow:
-            assert uow.publishers is not None and uow.tenant_config is not None
-            if uow.tenant_config.get_tenant() is None:
-                return jsonify({"error": "Tenant not found"}), 404
-            if not uow.publishers.add_publisher(domain, str(data.get("display_name") or "").strip() or None):
-                return jsonify({"error": "Publisher already exists"}), 409
-    except Exception as e:
-        # Anything but the duplicate the repository resolves: the operator is told the write
-        # failed, never the driver's statement or parameters.
-        logger.error(f"Error adding publisher: {e}", exc_info=True)
-        return jsonify({"error": safe_error_message(e)}), 500
+    with PublisherUoW(tenant_id) as uow:
+        assert uow.publishers is not None and uow.tenant_config is not None
+        if uow.tenant_config.get_tenant() is None:
+            return jsonify({"error": "Tenant not found"}), 404
+        if not uow.publishers.add_publisher(domain, str(data.get("display_name") or "").strip() or None):
+            return jsonify({"error": "Publisher already exists"}), 409
     (outcome,) = ingest_sync(tenant_id, [domain])
     return jsonify({**_outcome_json(outcome), "message": "Publisher added"}), 201
 
@@ -103,14 +97,10 @@ def delete_publisher_partner(tenant_id: str, domain: str) -> Response | tuple[Re
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/sync", methods=["POST"])
 def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
     """Ingest every publisher's adagents.json now."""
-    try:
-        with PublisherUoW(tenant_id) as uow:
-            assert uow.publishers is not None
-            domains = [publisher.domain for publisher in uow.publishers.list_all()]
-        outcomes = ingest_sync(tenant_id, domains)
-    except Exception as e:
-        logger.error(f"Error syncing publishers: {e}", exc_info=True)
-        return jsonify({"error": safe_error_message(e)}), 500
+    with PublisherUoW(tenant_id) as uow:
+        assert uow.publishers is not None
+        domains = [publisher.domain for publisher in uow.publishers.list_all()]
+    outcomes = ingest_sync(tenant_id, domains)
     return jsonify(
         {
             "message": "Sync completed",

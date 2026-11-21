@@ -6,19 +6,42 @@ from datetime import UTC, datetime
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
+from src.admin.form_validation import json_object_body, required_values
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
-from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig, User, UserRole
 from src.core.database.repositories.tenant_config import UserChange
 from src.core.database.repositories.uow import TenantConfigUoW
+from src.core.operator_errors import FormIssue, InvalidFormInput, StateConflict, TenantNotFound
 
 logger = logging.getLogger(__name__)
 
 # Create Blueprint
 users_bp = Blueprint("users", __name__, url_prefix="/tenant/<tenant_id>/users")
+
+
+class SSOSignInRequired(StateConflict):
+    """Setup mode is disabled only by an operator signed in through SSO, so the tenant cannot lock itself out."""
+
+    MESSAGE = (
+        "You must be logged in via SSO to disable setup mode. "
+        "Log out and log back in using 'Sign in with SSO' to verify SSO works."
+    )
+
+
+class DomainAlreadyAuthorized(StateConflict):
+    """The tenant already authorizes the domain the request adds."""
+
+    MESSAGE = "Domain already exists"
+
+
+class SSONotEnabled(StateConflict):
+    """Setup mode is disabled only once the tenant's SSO is configured and enabled."""
+
+    MESSAGE = "SSO must be configured and enabled before disabling setup mode"
+
 
 # What each role may do, for the Users page's role pickers. One entry per UserRole,
 # least access first; tests/unit/test_admin_role_permits.py checks it covers them all.
@@ -135,66 +158,61 @@ def list_users(tenant_id):
 )
 def add_user(tenant_id):
     """Add a new user to the tenant."""
-    try:
-        email = request.form.get("email", "").strip().lower()
-        role = request.form.get("role", UserRole.VIEWER)
+    email = request.form.get("email", "").strip().lower()
+    role = request.form.get("role", UserRole.VIEWER)
 
-        if not email:
-            flash("Email is required", "error")
-            return redirect(url_for("users.list_users", tenant_id=tenant_id))
+    if not email:
+        flash("Email is required", "error")
+        return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
-        if role not in UserRole:
-            flash("Invalid role", "error")
-            return redirect(url_for("users.list_users", tenant_id=tenant_id))
+    if role not in UserRole:
+        flash("Invalid role", "error")
+        return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
-        # Validate email format
-        if not _is_valid_email(email):
-            flash("Invalid email format", "error")
-            return redirect(url_for("users.list_users", tenant_id=tenant_id))
+    # Validate email format
+    if not _is_valid_email(email):
+        flash("Invalid email format", "error")
+        return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
-        with get_db_session() as db_session:
-            # Check if user already exists. uq_users_tenant_email is the authority,
-            # so this same answer serves the loser of a concurrent add.
-            existing_user_stmt = select(User).filter_by(tenant_id=tenant_id, email=email)
+    with get_db_session() as db_session:
+        # Check if user already exists. uq_users_tenant_email is the authority,
+        # so this same answer serves the loser of a concurrent add.
+        existing_user_stmt = select(User).filter_by(tenant_id=tenant_id, email=email)
 
-            def already_exists():
-                existing = db_session.scalars(existing_user_stmt).first()
-                if existing:
-                    flash(f"User {email} already exists", "error")
-                    return redirect(url_for("users.list_users", tenant_id=tenant_id))
-                return None
+        def already_exists():
+            existing = db_session.scalars(existing_user_stmt).first()
+            if existing:
+                flash(f"User {email} already exists", "error")
+                return redirect(url_for("users.list_users", tenant_id=tenant_id))
+            return None
 
-            # Create new user
-            import uuid
+        # Create new user
+        import uuid
 
-            # Use provided name or default to email username
-            name = request.form.get("name", "").strip() or email.split("@")[0]
+        # Use provided name or default to email username
+        name = request.form.get("name", "").strip() or email.split("@")[0]
 
-            user = User(
-                tenant_id=tenant_id,
-                user_id=f"user_{uuid.uuid4().hex[:8]}",
-                email=email,
-                name=name,
-                role=role,
-                is_active=True,
-                created_at=datetime.now(UTC),
-            )
+        user = User(
+            tenant_id=tenant_id,
+            user_id=f"user_{uuid.uuid4().hex[:8]}",
+            email=email,
+            name=name,
+            role=role,
+            is_active=True,
+            created_at=datetime.now(UTC),
+        )
 
-            conflict = resolve_or_write(
-                db_session,
-                conflict=already_exists,
-                write=lambda: db_session.add(user),
-                constraint="uq_users_tenant_email",
-            )
-            if conflict is not None:
-                return conflict
-            db_session.commit()
+        conflict = resolve_or_write(
+            db_session,
+            conflict=already_exists,
+            write=lambda: db_session.add(user),
+            constraint="uq_users_tenant_email",
+        )
+        if conflict is not None:
+            return conflict
+        db_session.commit()
 
-            flash(f"User {email} added successfully", "success")
-
-    except Exception as e:
-        logger.error(f"Error adding user: {e}", exc_info=True)
-        flash(f"Error adding user: {safe_error_message(e)}", "error")
+        flash(f"User {email} added successfully", "success")
 
     return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
@@ -204,15 +222,10 @@ def add_user(tenant_id):
 @require_tenant_access(role=UserRole.ADMIN)
 def toggle_user(tenant_id, user_id):
     """Toggle user active status. Refuses to deactivate the tenant's last active admin."""
-    try:
-        with TenantConfigUoW(tenant_id) as uow:
-            assert uow.tenant_config is not None
-            change = uow.tenant_config.toggle_user_active(user_id)
-        _flash_user_change(change, f"User {change.email} {'activated' if change.is_active else 'deactivated'}")
-
-    except Exception as e:
-        logger.error(f"Error toggling user: {e}", exc_info=True)
-        flash(f"Error toggling user: {safe_error_message(e)}", "error")
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        change = uow.tenant_config.toggle_user_active(user_id)
+    _flash_user_change(change, f"User {change.email} {'activated' if change.is_active else 'deactivated'}")
 
     return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
@@ -222,22 +235,23 @@ def toggle_user(tenant_id, user_id):
 @require_tenant_access(role=UserRole.ADMIN)
 def update_role(tenant_id, user_id):
     """Update user role. Refuses to demote the tenant's last active admin."""
-    try:
-        new_role = request.form.get("role", "")
-        if new_role not in UserRole:
-            flash("Invalid role", "error")
-            return redirect(url_for("users.list_users", tenant_id=tenant_id))
+    new_role = request.form.get("role", "")
+    if new_role not in UserRole:
+        flash("Invalid role", "error")
+        return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
-        with TenantConfigUoW(tenant_id) as uow:
-            assert uow.tenant_config is not None
-            change = uow.tenant_config.set_user_role(user_id, UserRole(new_role))
-        _flash_user_change(change, f"User {change.email} role updated to {new_role}")
-
-    except Exception as e:
-        logger.error(f"Error updating user role: {e}", exc_info=True)
-        flash(f"Error updating role: {safe_error_message(e)}", "error")
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        change = uow.tenant_config.set_user_role(user_id, UserRole(new_role))
+    _flash_user_change(change, f"User {change.email} role updated to {new_role}")
 
     return redirect(url_for("users.list_users", tenant_id=tenant_id))
+
+
+def _requested_domain() -> str:
+    """The domain the request's body names, lowercased; refused when it names none."""
+    [domain] = required_values(json_object_body(), "domain")
+    return str(domain).lower()
 
 
 @users_bp.route("/domains", methods=["POST"])
@@ -245,33 +259,24 @@ def update_role(tenant_id, user_id):
 @log_admin_action("add_domain", extract_details=lambda r, **kw: {"domain": request.json.get("domain")})
 def add_domain(tenant_id):
     """Add an authorized domain for the tenant."""
-    try:
-        data = request.json
-        domain = data.get("domain", "").strip().lower()
+    domain = _requested_domain()
 
-        if not domain:
-            return jsonify({"success": False, "error": "Domain is required"}), 400
+    # Basic domain validation
+    if "." not in domain or domain.startswith(".") or domain.endswith("."):
+        raise InvalidFormInput(FormIssue("domain", "Invalid domain format"))
 
-        # Basic domain validation
-        if "." not in domain or domain.startswith(".") or domain.endswith("."):
-            return jsonify({"success": False, "error": "Invalid domain format"}), 400
+    # Atomic append: the membership check rides in the UPDATE's WHERE
+    # clause, so a concurrent add can be neither lost nor duplicated.
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        outcome = uow.tenant_config.add_to_authorized_list("authorized_domains", domain)
 
-        # Atomic append: the membership check rides in the UPDATE's WHERE
-        # clause, so a concurrent add can be neither lost nor duplicated.
-        with TenantConfigUoW(tenant_id) as uow:
-            assert uow.tenant_config is not None
-            outcome = uow.tenant_config.add_to_authorized_list("authorized_domains", domain)
+    if outcome == "missing_tenant":
+        raise TenantNotFound(f"Tenant {tenant_id}")
+    if outcome == "duplicate":
+        raise DomainAlreadyAuthorized(f"Tenant {tenant_id} already authorizes {domain}")
 
-        if outcome == "missing_tenant":
-            return jsonify({"success": False, "error": "Tenant not found"}), 404
-        if outcome == "duplicate":
-            return jsonify({"success": False, "error": "Domain already exists"}), 400
-
-        return jsonify({"success": True, "domain": domain})
-
-    except Exception as e:
-        logger.error(f"Error adding domain: {e}", exc_info=True)
-        return jsonify({"success": False, "error": safe_error_message(e)}), 500
+    return jsonify({"success": True, "domain": domain})
 
 
 @users_bp.route("/domains", methods=["DELETE"])
@@ -279,26 +284,17 @@ def add_domain(tenant_id):
 @log_admin_action("remove_domain", extract_details=lambda r, **kw: {"domain": request.json.get("domain")})
 def remove_domain(tenant_id):
     """Remove an authorized domain from the tenant."""
-    try:
-        data = request.json
-        domain = data.get("domain", "").strip().lower()
+    domain = _requested_domain()
 
-        if not domain:
-            return jsonify({"success": False, "error": "Domain is required"}), 400
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        outcome = uow.tenant_config.remove_from_authorized_list("authorized_domains", domain)
 
-        with TenantConfigUoW(tenant_id) as uow:
-            assert uow.tenant_config is not None
-            outcome = uow.tenant_config.remove_from_authorized_list("authorized_domains", domain)
+    if outcome == "missing_tenant":
+        raise TenantNotFound(f"Tenant {tenant_id}")
 
-        if outcome == "missing_tenant":
-            return jsonify({"success": False, "error": "Tenant not found"}), 404
-
-        # "removed" and "absent" both answer success — removal is idempotent.
-        return jsonify({"success": True})
-
-    except Exception as e:
-        logger.error(f"Error removing domain: {e}", exc_info=True)
-        return jsonify({"success": False, "error": safe_error_message(e)}), 500
+    # "removed" and "absent" both answer success — removal is idempotent.
+    return jsonify({"success": True})
 
 
 @users_bp.route("/disable-setup-mode", methods=["POST"])
@@ -310,48 +306,28 @@ def disable_setup_mode(tenant_id):
     Once disabled, test credentials no longer work and only SSO authentication is allowed.
     Requires the user to be logged in via SSO to prevent lockout.
     """
-    try:
-        # Require the user to be logged in via SSO (not test credentials)
-        # This ensures they can actually authenticate via SSO before disabling test auth
-        auth_method = session.get("auth_method")
-        if auth_method != "oidc":
-            return (
-                jsonify(
-                    {
-                        "success": False,
-                        "error": "You must be logged in via SSO to disable setup mode. "
-                        "Log out and log back in using 'Sign in with SSO' to verify SSO works.",
-                    }
-                ),
-                403,
-            )
+    # Require the user to be logged in via SSO (not test credentials)
+    # This ensures they can actually authenticate via SSO before disabling test auth
+    if session.get("auth_method") != "oidc":
+        raise SSOSignInRequired(f"Disabling setup mode for tenant {tenant_id} without an SSO sign-in")
 
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                return jsonify({"success": False, "error": "Tenant not found"}), 404
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            raise TenantNotFound(f"Tenant {tenant_id}")
 
-            # Check if SSO is configured and enabled
-            auth_config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
+        # Check if SSO is configured and enabled
+        auth_config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
 
-            if not auth_config or not auth_config.oidc_enabled:
-                return (
-                    jsonify(
-                        {"success": False, "error": "SSO must be configured and enabled before disabling setup mode"}
-                    ),
-                    400,
-                )
+        if not auth_config or not auth_config.oidc_enabled:
+            raise SSONotEnabled(f"Disabling setup mode for tenant {tenant_id} with SSO not enabled")
 
-            # Disable setup mode
-            tenant.auth_setup_mode = False
-            db_session.commit()
+        # Disable setup mode
+        tenant.auth_setup_mode = False
+        db_session.commit()
 
-            logger.info(f"Auth setup mode disabled for tenant {tenant_id} by user {session.get('user')}")
-            return jsonify({"success": True, "message": "Setup mode disabled. Only SSO authentication is now allowed."})
-
-    except Exception as e:
-        logger.error(f"Error disabling setup mode: {e}", exc_info=True)
-        return jsonify({"success": False, "error": safe_error_message(e)}), 500
+        logger.info(f"Auth setup mode disabled for tenant {tenant_id} by user {session.get('user')}")
+        return jsonify({"success": True, "message": "Setup mode disabled. Only SSO authentication is now allowed."})
 
 
 @users_bp.route("/enable-setup-mode", methods=["POST"])
@@ -362,18 +338,13 @@ def enable_setup_mode(tenant_id):
 
     This allows test credentials to work again, useful for troubleshooting.
     """
-    try:
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                return jsonify({"success": False, "error": "Tenant not found"}), 404
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            raise TenantNotFound(f"Tenant {tenant_id}")
 
-            tenant.auth_setup_mode = True
-            db_session.commit()
+        tenant.auth_setup_mode = True
+        db_session.commit()
 
-            logger.info(f"Auth setup mode re-enabled for tenant {tenant_id}")
-            return jsonify({"success": True, "message": "Setup mode enabled. Test credentials now work."})
-
-    except Exception as e:
-        logger.error(f"Error enabling setup mode: {e}", exc_info=True)
-        return jsonify({"success": False, "error": safe_error_message(e)}), 500
+        logger.info(f"Auth setup mode re-enabled for tenant {tenant_id}")
+        return jsonify({"success": True, "message": "Setup mode enabled. Test credentials now work."})

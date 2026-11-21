@@ -6,7 +6,17 @@ providers (Google, Microsoft, Okta, Auth0, Keycloak).
 
 import logging
 
+from authlib.common.errors import AuthlibBaseError
+
 logger = logging.getLogger(__name__)
+
+#: What an authlib ``authorize_access_token()`` raises when the provider's callback cannot
+#: be turned into a token: ``AuthlibBaseError`` covers the OAuth errors (a state mismatch,
+#: an ``error=`` callback, a refused token request) and the id_token checks; ``OSError``
+#: covers the ``requests`` failures of the discovery and token calls, since
+#: ``requests.RequestException`` is an ``IOError``. The ``requests`` module itself is
+#: banned in ``src/`` (ruff-egress.toml), so it is not named here.
+OAUTH_CALLBACK_ERRORS: tuple[type[Exception], ...] = (AuthlibBaseError, OSError)
 
 
 def extract_user_info(token: dict) -> dict | None:
@@ -36,7 +46,7 @@ def extract_user_info(token: dict) -> dict | None:
         if id_token:
             try:
                 user = jwt.decode(id_token, options={"verify_signature": False})
-            except Exception as e:
+            except jwt.PyJWTError as e:
                 logger.warning(f"Failed to decode ID token: {e}")
                 return None
 

@@ -482,7 +482,7 @@ function syncOrders() {
             alert(`Sync completed! Synced ${orderCount} orders and ${lineItemCount} line items.`);
             loadOrders();
         } else {
-            alert('Sync failed: ' + (data.error || 'Unknown error'));
+            alert('Sync failed: ' + adminErrorText(data));
         }
     })
     .catch(error => {

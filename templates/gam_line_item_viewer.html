@@ -364,15 +364,7 @@ async function loadLineItem() {
         }
 
         if (!response.ok) {
-            let errorMsg = 'Failed to fetch line item';
-            try {
-                const error = await response.json();
-                errorMsg = error.error || errorMsg;
-            } catch (e) {
-                // Response wasn't JSON
-                errorMsg = `HTTP ${response.status}: ${response.statusText}`;
-            }
-            throw new Error(errorMsg);
+            throw new Error(adminErrorText(await response.json()));
         }
 
         currentLineItemData = await response.json();

@@ -31,9 +31,23 @@ from typing import Any
 TEST_FLASK_SECRET_KEY = "adcp-test-stack-session-signing-key"
 
 
-def _session_payload(tenant_id: str, *, auth_method: str | None = None) -> dict[str, Any]:
-    """The session an authenticated super admin carries. ONE definition, both transports."""
-    payload: dict[str, Any] = {
+def _session_payload(
+    tenant_id: str | None, *, auth_method: str | None = None, tenant_user: str | None = None
+) -> dict[str, Any]:
+    """The session an authenticated super admin carries. ONE definition, both transports.
+
+    *tenant_user* names a user of the tenant instead, with the session its own login
+    writes (``oidc.callback``): no super-admin key, so ``require_tenant_access`` checks the
+    tenant's ``users`` row for that email, as it does for every operator who is not one.
+    """
+    if tenant_user is not None:
+        payload: dict[str, Any] = {"authenticated": True, "user": tenant_user, "user_name": tenant_user}
+        if tenant_id is not None:
+            payload["tenant_id"] = tenant_id
+        if auth_method is not None:
+            payload["auth_method"] = auth_method
+        return payload
+    payload = {
         "authenticated": True,
         "user": {"email": "test@example.com", "is_super_admin": True},
         "email": "test@example.com",
@@ -53,7 +67,9 @@ def _session_payload(tenant_id: str, *, auth_method: str | None = None) -> dict[
     return payload
 
 
-def admin_session_cookie(tenant_id: str, *, auth_method: str | None = None, secret_key: str | None = None) -> str:
+def admin_session_cookie(
+    tenant_id: str, *, auth_method: str | None = None, secret_key: str | None = None, tenant_user: str | None = None
+) -> str:
     """A signed Flask session cookie for an authenticated super admin.
 
     Signed with Flask's own ``SecureCookieSessionInterface``, so the format follows Flask
@@ -70,10 +86,12 @@ def admin_session_cookie(tenant_id: str, *, auth_method: str | None = None, secr
     app.secret_key = secret_key or os.environ.get("FLASK_SECRET_KEY") or TEST_FLASK_SECRET_KEY
     serializer = SecureCookieSessionInterface().get_signing_serializer(app)
     assert serializer is not None, "Flask refused to build a session serializer without a secret key"
-    return serializer.dumps(_session_payload(tenant_id, auth_method=auth_method))
+    return serializer.dumps(_session_payload(tenant_id, auth_method=auth_method, tenant_user=tenant_user))
 
 
-def authenticate_http_session(session: Any, base_url: str, tenant_id: str, *, auth_method: str | None = None) -> Any:
+def authenticate_http_session(
+    session: Any, base_url: str, tenant_id: str, *, auth_method: str | None = None, tenant_user: str | None = None
+) -> Any:
     """Give a ``requests.Session`` an authenticated admin cookie, for any host.
 
     The HTTP-side twin of :func:`admin_auth_session`. Returns the session, so a caller can
@@ -90,7 +108,8 @@ def authenticate_http_session(session: Any, base_url: str, tenant_id: str, *, au
     *base_url* is still taken, because a caller naming the session's target reads better
     than one that does not, and because a future scheme- or host-specific rule belongs here.
     """
-    session.cookies.set("session", admin_session_cookie(tenant_id, auth_method=auth_method), path="/")
+    cookie = admin_session_cookie(tenant_id, auth_method=auth_method, tenant_user=tenant_user)
+    session.cookies.set("session", cookie, path="/")
     return session
 
 
@@ -141,26 +160,45 @@ def admin_test_app() -> Any:
     return app
 
 
-def tenant_user_session(client: Any, email: str, *, auth_method: str | None = None) -> None:
+def admin_blueprint_app(blueprint: Any, *, url_prefix: str | None = None) -> Any:
+    """A Flask app serving *blueprint* alone, with the admin error handler ``create_app`` installs.
+
+    For a test of one blueprint that needs none of the rest of the admin app. The handler is
+    part of the composition because a route lets its failures escape to it: without it, a
+    refusal would reach the test client as an exception instead of the answer production gives.
+    """
+    from flask import Flask
+
+    from src.admin.utils.operator_errors import register_error_handler
+
+    app = Flask(__name__)
+    app.config["TESTING"] = True
+    app.register_blueprint(blueprint, url_prefix=url_prefix)
+    register_error_handler(app)
+    return app
+
+
+def tenant_user_session(
+    client: Any, email: str, *, auth_method: str | None = None, tenant_id: str | None = None
+) -> None:
     """Sign a Flask test client in as the ordinary tenant user *email*.
 
-    Only ``session["user"]``: none of the super-admin or test-mode keys
-    :func:`admin_auth_session` writes, so ``require_tenant_access`` looks up the user's
-    ``User`` row and applies its role. Use it to test what a tenant user may and may not
-    do; a super admin passes every check and proves nothing there. Pass
+    The session that user's own login writes (see :func:`_session_payload`), with none of
+    the super-admin or test-mode keys :func:`admin_auth_session` writes, so
+    ``require_tenant_access`` looks up the user's ``User`` row and applies its role. It
+    REPLACES whatever the client held, as the cookie does over HTTP. Pass
     ``auth_method='oidc'`` for routes that require an SSO sign-in.
     """
     with client.session_transaction() as sess:
-        sess["user"] = {"email": email}
-        if auth_method is not None:
-            sess["auth_method"] = auth_method
+        sess.clear()
+        sess.update(_session_payload(tenant_id, auth_method=auth_method, tenant_user=email))
 
 
 def admin_auth_session(client: Any, tenant_id: str, *, auth_method: str | None = None) -> None:
     """Populate a super-admin test-mode session on a Flask test client.
 
     Pass ``auth_method='oidc'`` to exercise routes that gate on SSO login
-    (e.g. ``disable-setup-mode``).
+    (e.g. ``disable-setup-mode``). For a user of the tenant, use :func:`tenant_user_session`.
     """
     with client.session_transaction() as sess:
         sess.update(_session_payload(tenant_id, auth_method=auth_method))

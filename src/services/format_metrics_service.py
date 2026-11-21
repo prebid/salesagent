@@ -20,6 +20,7 @@ from src.adapters.gam_reporting_service import GAMReportingService
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import FormatPerformanceMetrics, Tenant
+from src.core.operator_errors import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -333,17 +334,13 @@ def aggregate_all_tenants(period_days: int = 30) -> dict[str, Any]:
                 )
 
             except Exception as e:
-                logger.error(
-                    f"Failed to aggregate metrics for tenant {tenant_id}: {e}",
-                    exc_info=True,
-                )
                 summary["failed"] += 1
                 summary["details"].append(
                     {
                         "tenant_id": tenant_id,
                         "tenant_name": tenant.name,
                         "status": "failed",
-                        "error": str(e),
+                        "error": safe_error_message(e, f"Failed to aggregate metrics for tenant {tenant_id}"),
                     }
                 )
 

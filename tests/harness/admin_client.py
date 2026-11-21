@@ -19,7 +19,19 @@ from tests.helpers.admin_session import (
     admin_test_app,
     authenticate_http_session,
     drop_stated_session_cookie,
+    tenant_user_session,
 )
+
+#: Where the in-process Flask client sends its requests.
+_IN_PROCESS_ORIGIN = "https://localhost"
+
+#: What a current browser sends on a page load and on a form submit. The admin app answers
+#: a caller that sends neither ``Sec-Fetch-Mode: navigate`` nor an ``Accept`` preferring HTML
+#: with JSON (``caller_reads_json``), so a request that stands for a browser must say so.
+BROWSER_PAGE_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Sec-Fetch-Mode": "navigate",
+}
 
 
 class _CaseInsensitiveHeaders(dict):
@@ -115,12 +127,25 @@ class AdminClient:
 
             self._http = requests.Session()
 
-    def authenticate(self, tenant_id: str) -> None:
-        """State an authenticated super-admin session for *tenant_id*."""
+    @property
+    def origin(self) -> str:
+        """The scheme and host requests are sent to, as a browser's ``Referer`` names a page."""
+        return self._base_url or _IN_PROCESS_ORIGIN
+
+    def authenticate(self, tenant_id: str, *, tenant_user: str | None = None, auth_method: str | None = None) -> None:
+        """State an authenticated super-admin session for *tenant_id*, or *tenant_user*'s session.
+
+        *auth_method* is how the session says its user signed in (``oidc`` for SSO).
+        """
         if self._flask_client is not None:
-            admin_auth_session(self._flask_client, tenant_id)
+            if tenant_user is not None:
+                tenant_user_session(self._flask_client, tenant_user, tenant_id=tenant_id, auth_method=auth_method)
+            else:
+                admin_auth_session(self._flask_client, tenant_id, auth_method=auth_method)
         else:
-            authenticate_http_session(self._http, self._base_url or "", tenant_id)
+            authenticate_http_session(
+                self._http, self._base_url or "", tenant_id, tenant_user=tenant_user, auth_method=auth_method
+            )
 
     def clear_auth(self) -> None:
         """Drop the admin session, so the next request arrives anonymous."""
@@ -140,13 +165,21 @@ class AdminClient:
         *,
         data: dict[str, str] | None = None,
         json: dict[str, Any] | None = None,
-        headers: dict[str, str] | None = None,
+        headers: dict[str, str | None] | None = None,
     ) -> AdminResponse:
-        """Send *method* to *path* (``/tenant/...``) with a form body or a JSON body."""
+        """Send *method* to *path* (``/tenant/...``) with a form body or a JSON body.
+
+        With no *headers* and no JSON body the request is a browser's (a page load or a form
+        post) and carries :data:`BROWSER_PAGE_HEADERS`. A header given as ``None`` is not sent
+        at all, on either transport (``requests`` otherwise sends ``Accept: */*`` itself).
+        """
+        if headers is None and json is None:
+            headers = dict(BROWSER_PAGE_HEADERS)
         if self._flask_client is not None:
+            sent = {name: value for name, value in (headers or {}).items() if value is not None}
             # Over https, because a production app marks its session cookie Secure.
             response = self._flask_client.open(
-                path, method=method.upper(), data=data, json=json, headers=headers, base_url="https://localhost"
+                path, method=method.upper(), data=data, json=json, headers=sent, base_url=_IN_PROCESS_ORIGIN
             )
             return AdminResponse.from_flask(response)
         response = self._http.request(
@@ -154,12 +187,26 @@ class AdminClient:
         )
         return AdminResponse.from_requests(response)
 
-    def submit(self, path: str, data: dict[str, Any]) -> AdminResponse:
-        """POST the form *data* to *path* and GET the page its redirect names, flash included.
+    def submit(
+        self,
+        path: str,
+        data: dict[str, Any],
+        *,
+        from_page: str | None = None,
+        browser_headers: dict[str, str | None] | None = None,
+    ) -> AdminResponse:
+        """POST the form *data* to *path* as a browser does, and GET the page its redirect names, flash included.
 
-        A form that answers without a redirect (it re-rendered with an error) is returned as is.
+        *from_page* is the page the form is on, sent as the browser's ``Referer``: the page an
+        answer goes back to. A path is a page on this server; a URL with a scheme is another
+        site's page. Without it the request names no page to go back to. A form that answers
+        without a redirect (it re-rendered with an error) is returned as is. *browser_headers*
+        say how the browser asks for a page, :data:`BROWSER_PAGE_HEADERS` by default.
         """
-        response = self.request("post", path, data=data)
+        headers: dict[str, str | None] = dict(BROWSER_PAGE_HEADERS if browser_headers is None else browser_headers)
+        if from_page is not None:
+            headers["Referer"] = from_page if urlsplit(from_page).scheme else f"{self.origin}{from_page}"
+        response = self.request("post", path, data=data, headers=headers)
         location = response.headers.get("location")
         if not location:
             return response
