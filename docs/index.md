@@ -49,6 +49,7 @@ The [Quickstart guide](quickstart.md) gets the agent running locally in 5 minute
 - **[Architecture](development/architecture.md)** — system design
 - **[Request lifecycle](development/request-lifecycle.md)** — how a request reaches business logic
 - **[Building a tool](development/building-tools.md)** — add or change an AdCP tool
+- **[Admin UI route reference](development/admin-ui-routes.md)** — every route with its access check, generated from the code
 - **[Engineering standards](development/engineering-standards.md)** — the standards every change is held to
 - **[Troubleshooting](development/troubleshooting.md)** — common issues
 
