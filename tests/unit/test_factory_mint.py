@@ -26,6 +26,7 @@ from tests.factories.mint import (
     begin_test,
     install_declaration_recording,
     mint,
+    mint_id,
     mint_shared,
     minted_forms,
     uninstall_declaration_recording,
@@ -90,6 +91,15 @@ def test_datetimes_are_recorded_in_both_spellings() -> None:
     mint(moment)
     assert moment.isoformat() in minted_forms()
     assert str(moment) in minted_forms()
+
+
+def test_mint_id_makes_a_fresh_id_and_records_it() -> None:
+    """The one generator this module carries: two calls never agree, and the record holds both ids."""
+    first, second = mint_id("acc"), mint_id("acc")
+    assert first != second
+    assert first.startswith("acc_")
+    assert second.startswith("acc_")
+    assert {first, second} <= minted_forms()
 
 
 # ── Scope ────────────────────────────────────────────────────────────

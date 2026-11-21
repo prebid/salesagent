@@ -175,6 +175,7 @@ def disable(tenant_id: str):
 
 
 @oidc_bp.route("/test/<tenant_id>")
+@require_tenant_access()
 def test_initiate(tenant_id: str):
     """Initiate a test OAuth flow.
 

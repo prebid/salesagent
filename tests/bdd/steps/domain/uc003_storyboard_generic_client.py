@@ -16,7 +16,7 @@ from pytest_bdd import given, then, when
 from tests.bdd.steps._outcome_helpers import wire_error_dict
 from tests.bdd.steps.generic._dispatch import dispatch_via_client
 from tests.bdd.steps.generic.then_error import then_error_recovery
-from tests.factories.mint import mint
+from tests.factories.mint import mint, mint_id
 from tests.harness.transport import DERIVED_STATUS_ADCP_ERROR, DERIVED_STATUS_TRANSPORT_FAULT
 
 
@@ -68,7 +68,7 @@ def stamp_correlation_id(ctx: dict, payload: dict) -> None:
 @given("the buyer fabricates a media_buy_id that does not exist in the seller catalog")
 def given_fabricated_nonexistent_media_buy_id(ctx: dict) -> None:
     """Stash a guaranteed-nonexistent media_buy_id — nothing to seed against."""
-    ctx["fabricated_media_buy_id"] = mint(f"mb_does_not_exist_{uuid4()}")
+    ctx["fabricated_media_buy_id"] = mint_id("mb_does_not_exist")
 
 
 @when("the Buyer Agent sends update_media_buy with the unknown media_buy_id and paused true")
