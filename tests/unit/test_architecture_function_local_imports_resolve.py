@@ -58,6 +58,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCANNED = ("src", "tests", "scripts")
 
@@ -110,10 +112,10 @@ def _function_local_src_imports() -> list[tuple[str, int, str, str]]:
                         continue
                     if not node.module or not node.module.startswith("src."):
                         continue
-                    rel = str(path.relative_to(REPO_ROOT))
+                    rel_path = rel(path, REPO_ROOT)
                     for alias in node.names:
                         if alias.name != "*":
-                            found.append((rel, node.lineno, node.module, alias.name))
+                            found.append((rel_path, node.lineno, node.module, alias.name))
     return found
 
 
@@ -121,16 +123,16 @@ def _function_local_src_imports() -> list[tuple[str, int, str, str]]:
 def test_every_function_local_src_import_resolves() -> None:
     """A function-local import must name something that exists, or it is a deferred crash."""
     broken: list[str] = []
-    for rel, lineno, module, name in _function_local_src_imports():
+    for rel_path, lineno, module, name in _function_local_src_imports():
         if module in _ABSENT_MODULES:
             continue
         try:
             mod = importlib.import_module(module)
         except Exception as exc:  # noqa: BLE001 - any failure to import is a finding
-            broken.append(f"{rel}:{lineno}: cannot import {module} ({type(exc).__name__}: {exc})")
+            broken.append(f"{rel_path}:{lineno}: cannot import {module} ({type(exc).__name__}: {exc})")
             continue
         if not hasattr(mod, name):
-            broken.append(f"{rel}:{lineno}: {module} has no attribute {name!r}")
+            broken.append(f"{rel_path}:{lineno}: {module} has no attribute {name!r}")
 
     assert not broken, (
         "function-local import(s) naming a symbol that does not exist:\n  "
@@ -146,7 +148,7 @@ def test_the_scan_reaches_the_corpus() -> None:
     """A resolver bug that silenced the scan would make the guard above pass on nothing."""
     found = _function_local_src_imports()
     assert len(found) > 500, f"only {len(found)} function-local src imports found — the scan is not reaching the tree"
-    files = {rel for rel, _, _, _ in found}
+    files = {rel_path for rel_path, _, _, _ in found}
     assert any(f.startswith("tests/") for f in files), "scan reached no tests/ file"
     assert any(f.startswith("src/") for f in files), "scan reached no src/ file"
 

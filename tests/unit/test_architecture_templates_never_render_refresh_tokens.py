@@ -16,6 +16,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 TEMPLATES = Path(__file__).resolve().parents[2] / "templates"
 OUTPUT_EXPRESSION = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
 CONDITIONAL = re.compile(r"^(?P<value>.*?)\bif\b(?P<condition>.*?)\belse\b(?P<otherwise>.*)$", re.DOTALL)
@@ -37,7 +39,7 @@ def rendered_refresh_tokens(text: str) -> list[str]:
 
 def test_no_template_renders_a_refresh_token():
     offenders = {
-        str(path.relative_to(TEMPLATES)): rendered
+        rel(path, TEMPLATES): rendered
         for path in sorted(TEMPLATES.rglob("*.html"))
         if (rendered := rendered_refresh_tokens(path.read_text(encoding="utf-8")))
     }

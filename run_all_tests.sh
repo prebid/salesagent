@@ -183,8 +183,9 @@ case "${1:-ci}" in
     *) SUITES="$1" ;;
 esac
 
-# Testability seam: resolve the argument contract and exit BEFORE any Docker
-# call so tests/unit/test_run_all_tests_contract.py can assert it without a stack.
+# Testability seam: resolve the argument contract and exit before any stack is
+# built. The `docker info` memory probe above still runs, so the tests that use
+# this seam put a stub `docker` first on PATH.
 if [ -n "${RUN_ALL_TESTS_RESOLVE_ONLY:-}" ]; then
     if [ "$DELEGATE" = 1 ]; then echo "RESOLVED delegate-host: $*"; else echo "RESOLVED suites=$SUITES"; fi
     exit 0

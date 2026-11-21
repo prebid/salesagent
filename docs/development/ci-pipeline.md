@@ -36,6 +36,7 @@ plus the aggregate `CI / BDD Tests` status proxy (replacing PR3's single BDD job
 | `CI / Quickstart` | docker compose health |
 | `CI / Smoke Tests` | import smoke + skip-decorator guard |
 | `CI / Unit Tests` | unit + harness with coverage artifact |
+| `CI / Unit Tests (Windows)` | the same unit + harness run on windows-latest (a row of the `unit-tests` matrix; no coverage) |
 | `CI / Integration (creative)` | integration shard |
 | `CI / Integration (product)` | integration shard |
 | `CI / Integration (media-buy)` | integration shard |

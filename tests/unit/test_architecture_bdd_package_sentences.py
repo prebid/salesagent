@@ -59,7 +59,7 @@ def _feature_sentences() -> set[str]:
     """Every Given/And/But line in the corpus that establishes create-request packages."""
     found: set[str] = set()
     for feature in FEATURES.rglob("*.feature"):
-        for raw in feature.read_text().splitlines():
+        for raw in feature.read_text(encoding="utf-8").splitlines():
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
@@ -110,7 +110,7 @@ def test_the_canonical_sentence_has_exactly_one_definition() -> None:
     definers = [
         path.relative_to(steps.parent.parent)
         for path in steps.rglob("*.py")
-        if re.search(rf'@given\(\s*"{re.escape(literal)}"', path.read_text())
+        if re.search(rf'@given\(\s*"{re.escape(literal)}"', path.read_text(encoding="utf-8"))
     ]
     assert not definers, (
         f"{literal!r} is defined as a LITERAL string in {definers}. The canonical definition "

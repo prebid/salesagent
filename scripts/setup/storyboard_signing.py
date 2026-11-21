@@ -206,7 +206,7 @@ def counterparty_jwks() -> dict[str, Any]:
     private key installed in a verifier's TRUST STORE is the wrong shape regardless of who
     else can read it.
     """
-    published = json.loads(_KEYS_JSON.read_text())
+    published = json.loads(_KEYS_JSON.read_text(encoding="utf-8"))
     return {
         "keys": [
             {name: value for name, value in key.items() if name not in _PRIVATE_MEMBERS}

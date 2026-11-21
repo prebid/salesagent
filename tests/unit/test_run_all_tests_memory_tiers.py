@@ -32,7 +32,7 @@ _DECLARED_RANGE_RE = re.compile(r"\((\d+)/(\d+)/(\d+) at (\d+)-(\d+)GB\)")
 
 
 def _runner_source() -> str:
-    return RUNNER.read_text()
+    return RUNNER.read_text(encoding="utf-8")
 
 
 def test_ci_box_floor_matches_the_range_the_comment_declares() -> None:

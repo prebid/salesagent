@@ -140,7 +140,7 @@ def _ledger_entries() -> list[ledger.LedgerCheckId]:
 def _write_ledger(tmp_path: Path, entries: list[ledger.LedgerCheckId]) -> dict[str, str]:
     """Write ``entries`` as a ledger file and return the env that points the loader at it."""
     path = tmp_path / "synthetic_known_failures.txt"
-    path.write_text("\n".join(_NODEID.format(e.format()) for e in entries) + "\n")
+    path.write_text("\n".join(_NODEID.format(e.format()) for e in entries) + "\n", encoding="utf-8")
     return {"STORYBOARD_LEDGER_PATH": str(path)}
 
 

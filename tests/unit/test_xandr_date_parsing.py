@@ -46,7 +46,7 @@ class TestXandrDateFormats:
         import ast
         from pathlib import Path
 
-        source = Path("src/adapters/xandr.py").read_text()
+        source = Path("src/adapters/xandr.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
 
         # Find fromisoformat calls that operate on external API data

@@ -58,7 +58,7 @@ _PAIRINGS = {
 
 
 def _required_fields(stem: str) -> list[str]:
-    return json.loads((_BUNDLE / f"{stem}.json").read_text()).get("required") or []
+    return json.loads((_BUNDLE / f"{stem}.json").read_text(encoding="utf-8")).get("required") or []
 
 
 def test_bundle_is_readable() -> None:
