@@ -899,6 +899,11 @@ services:
       # BLACKHOLE the live public creative agent (see the adcp-server entry):
       # a runner-side leak fails instantly instead of flaking on a 429.
       - "creative.adcontextprotocol.org:127.0.0.1"
+    # Signals fixtures serve TLS from this runner to the seller over the shared leaf.
+    networks:
+      default:
+        aliases:
+          - signals.adcp-e2e.dev
     # Fix the Docker embedded-DNS concurrent-lookup race (moby/moby#22142): under
     # the e2e suite's connection churn, glibc fires the A and AAAA queries in
     # parallel over one UDP socket to 127.0.0.11 and one response gets dropped,

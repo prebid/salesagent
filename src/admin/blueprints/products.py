@@ -12,7 +12,7 @@ from typing import Any
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
 from pydantic import ValidationError
-from sqlalchemy import func, inspect, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload
 from werkzeug.exceptions import HTTPException
 
@@ -30,7 +30,7 @@ from src.core.database.models import (
     ProductPublisherSelection,
     Tenant,
 )
-from src.core.database.product_pricing import get_product_pricing_options
+from src.core.database.product_pricing import get_product_pricing_options, pricing_option_terms
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.product import offer_refusal
@@ -562,20 +562,6 @@ def parse_pricing_options_from_form(form_data: dict) -> list[PricingOption]:
         index += 1
 
     return pricing_options
-
-
-#: Which columns are IDENTITY rather than terms — the one judgement a program cannot
-#: derive. ``tenant_id``/``product_id`` say which product the row belongs to, and
-#: ``pricing_option_id`` is what a buyer's ``PackageRequest`` names, so re-pricing an
-#: option must not rename the entity that buyer selected.
-_IDENTITY_COLUMNS = frozenset({"id", "tenant_id", "product_id", "pricing_option_id"})
-
-#: Everything else the model declares. Read off the mapper so a column added to
-#: ``PricingOption`` is carried by the edit form without anyone remembering to list it
-#: here — a hand-written list of the same names silently stops covering the model.
-_FORM_OWNED_COLUMNS = tuple(
-    attr.key for attr in inspect(PricingOption).mapper.column_attrs if attr.key not in _IDENTITY_COLUMNS
-)
 
 
 def custom_key_inventory_ids(custom_targeting: CustomTargeting) -> list[str]:
@@ -1715,8 +1701,8 @@ def edit_product(tenant_id, product_id):
                     if idx < len(existing_options):
                         # Copy the TERMS onto the existing row and keep its identity.
                         po = existing_options[idx]
-                        for column in _FORM_OWNED_COLUMNS:
-                            setattr(po, column, getattr(parsed, column))
+                        for column, value in pricing_option_terms(parsed).items():
+                            setattr(po, column, value)
                     else:
                         parsed.tenant_id = tenant_id
                         parsed.product_id = product.product_id

@@ -11,8 +11,8 @@ So this origin is a genuine ``fastmcp`` server served by uvicorn over TLS on an
 ephemeral loopback port, using the same generated CA/leaf every other in-process
 TLS front in this repo reuses (``scripts/dev/gen_test_tls.py``) — never a second
 mechanism. Callers reach it over https because the egress seam requires https
-unconditionally (salesagent-e6h0), and over loopback because a test origin must
-not be reachable from outside this machine.
+unconditionally (salesagent-e6h0). It binds to loopback by default. In-network
+fixtures can bind to their runner's interface and advertise its service host.
 
 The origin records every tool invocation it actually serves. That counter is the
 grade for a retry that must re-execute its body: a client that re-dials but does
@@ -76,8 +76,13 @@ def run_mcp_origin(
     tools: Mapping[str, Callable[..., Any]],
     certfile: Path | str,
     keyfile: Path | str,
+    listen_host: str = "127.0.0.1",
+    public_host: str = "127.0.0.1",
 ) -> Iterator[MCPOrigin]:
     """Serve *tools* as a real MCP endpoint at ``<base_url>`` until the block exits.
+
+    ``listen_host`` controls the bind address. ``public_host`` names the host
+    reachable by the client, including a runner alias for in-network tests.
 
     The path ends in ``/mcp`` so the seam synthesises no ``/mcp`` fallback
     candidate — one URL, one attempt budget, so an attempt count means what the
@@ -92,7 +97,7 @@ def run_mcp_origin(
     server = uvicorn.Server(
         uvicorn.Config(
             server_mcp.http_app(path="/mcp"),
-            host="127.0.0.1",
+            host=listen_host,
             port=0,
             log_level="critical",
             ssl_certfile=str(certfile),
@@ -109,7 +114,7 @@ def run_mcp_origin(
             raise TimeoutError("the stub MCP origin never started listening")
         time.sleep(0.01)
 
-    origin.base_url = f"https://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}/mcp"
+    origin.base_url = f"https://{public_host}:{server.servers[0].sockets[0].getsockname()[1]}/mcp"
     try:
         yield origin
     finally:

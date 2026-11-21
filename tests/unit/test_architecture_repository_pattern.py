@@ -420,8 +420,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_creative_formats_validation_a.py", "test_broadstreet_formats_have_correct_structure"),
     ("tests/integration/test_creative_formats_validation_a.py", "test_non_broadstreet_adapter_no_extra_formats"),
     # tests/integration/test_dynamic_products.py
-    ("tests/integration/test_dynamic_products.py", "_ensure_tenant"),
-    ("tests/integration/test_dynamic_products.py", "_create_dynamic_template"),
     ("tests/integration/test_dynamic_products.py", "test_expired_variants_archived"),
     ("tests/integration/test_dynamic_products.py", "test_non_expired_variants_untouched"),
     ("tests/integration/test_dynamic_products.py", "test_already_archived_not_rearchived"),
@@ -826,8 +824,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_delivery_webhooks_force.py", "test_trigger_report_for_media_buy_public_method"),
     ("tests/integration/test_delivery_webhooks_integration.py", "_create_basic_media_buy_with_webhook"),
     ("tests/integration/test_delivery_webhooks_integration.py", "_create_test_tenant_and_principal"),
-    ("tests/integration/test_dynamic_products.py", "_create_dynamic_template"),
-    ("tests/integration/test_dynamic_products.py", "_ensure_tenant"),
     ("tests/integration/test_dynamic_products.py", "_get_variants"),
     ("tests/integration/test_dynamic_products.py", "test_already_archived_not_rearchived"),
     ("tests/integration/test_dynamic_products.py", "test_existing_variant_updated_not_duplicated"),
