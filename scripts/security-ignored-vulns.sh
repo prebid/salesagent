@@ -5,12 +5,7 @@
 # IDs for the same advisory can differ by tool/vendor namespace — both are
 # listed here for cross-reference. Format: GHSA/PYSEC == CVE.
 #
-# Active suppressions:
-#
-# - GHSA-53pm-wgxf-c6qf == CVE-2026-132276: wcmatch 8.5.2, dev-only (semgrep):
-#   the only path to wcmatch is the dev dependency semgrep 1.79.0, and
-#   semgrep >= 1.186.0 conflicts with the ui-tests extra. Tracked in #2639.
-#   TODO(#2639): remove once semgrep can move past the conflict.
+# Active suppressions: (none)
 #
 # Previously ignored, now resolved:
 #
@@ -35,7 +30,7 @@
 #   Resolved: fastapi bumped to >=0.133.0 (starlette 1.0+ support) (PR 2).
 
 # uv-secure supports GHSA/PYSEC/MAL identifiers.
-UV_SECURE_IGNORED_VULNS="GHSA-53pm-wgxf-c6qf"
+UV_SECURE_IGNORED_VULNS=""
 
 # pip-audit supports CVE, GHSA, PYSEC, and MAL IDs.
-PIP_AUDIT_IGNORED_VULNS="CVE-2026-132276,GHSA-53pm-wgxf-c6qf"
+PIP_AUDIT_IGNORED_VULNS=""
