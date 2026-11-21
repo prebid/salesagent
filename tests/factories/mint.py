@@ -118,7 +118,9 @@ def mint_id(prefix: str) -> str:
 
     For an id written to a database that outlives the test, such as the e2e stack's. A
     factory ``Sequence`` restarts with each process, so it repeats an id that an earlier
-    run left there. The suffix length is decided here and nowhere else.
+    run left there. The BDD steps, the harness and the factories take every
+    ``<prefix>_<uuid suffix>`` id from here, so the suffix length of such an id is decided
+    once.
     """
     return mint(f"{prefix}_{uuid4().hex[:12]}")
 

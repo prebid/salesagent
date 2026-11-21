@@ -55,6 +55,7 @@ from tests.factories.creative_asset import (
     url_spec,
 )
 from tests.factories.malformed import malformed
+from tests.factories.mint import mint_id
 from tests.factories.principal import PrincipalFactory
 from tests.factories.request import OMIT, CreativeAssetRequestFactory
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
@@ -249,20 +250,6 @@ def _scenario_format_id(ctx: dict, env: object) -> str:
         return recorded
     format_id, _agent_url, _assets = _format_payload(ctx, env)
     return format_id
-
-
-def _e2e_unique_id(prefix: str) -> str:
-    """Generate a UUID-based unique ID for e2e tests.
-
-    Factory sequences produce predictable IDs (mb_0000, pkg_0000) that collide
-    with rows persisted in Docker's Postgres from prior runs. Use this for any
-    factory object created for e2e_rest.
-    """
-    import uuid
-
-    from tests.factories.mint import mint
-
-    return mint(f"{prefix}_{uuid.uuid4().hex[:8]}")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1170,8 +1157,8 @@ def given_assignment_to_existing_package(ctx: dict) -> None:
     mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "active"}
     prod_kwargs: dict = {"tenant": tenant, "format_ids": [_product_format_entry(ctx, env)]}
     if is_e2e(ctx):
-        mb_kwargs["media_buy_id"] = _e2e_unique_id("mb")
-        prod_kwargs["product_id"] = _e2e_unique_id("prod")
+        mb_kwargs["media_buy_id"] = mint_id("mb")
+        prod_kwargs["product_id"] = mint_id("prod")
 
     media_buy = MediaBuyFactory(**mb_kwargs)
     # Product accepts the default known format so the format check passes.
@@ -1181,7 +1168,7 @@ def given_assignment_to_existing_package(ctx: dict) -> None:
         "package_config": {"product_id": product.product_id, "budget": 1000.0},
     }
     if is_e2e(ctx):
-        pkg_kwargs["package_id"] = _e2e_unique_id("pkg")
+        pkg_kwargs["package_id"] = mint_id("pkg")
     package = MediaPackageFactory(**pkg_kwargs)
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
@@ -1390,7 +1377,7 @@ def given_library_creative_on_buy(ctx: dict, creative_id: str, status: str, paus
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     fmt = ctx["creatives"][-1]["format_id"]
-    product = ProductFactory(tenant=ctx["tenant"], **({"product_id": _e2e_unique_id("prod")} if is_e2e(ctx) else {}))
+    product = ProductFactory(tenant=ctx["tenant"], **({"product_id": mint_id("prod")} if is_e2e(ctx) else {}))
     media_buy = MediaBuyFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
@@ -1399,12 +1386,12 @@ def given_library_creative_on_buy(ctx: dict, creative_id: str, status: str, paus
         end_date=date(2099, 12, 31),
         start_time=datetime(2025, 1, 1, tzinfo=UTC),
         end_time=datetime(2099, 12, 31, 23, 59, 59, tzinfo=UTC),
-        **({"media_buy_id": _e2e_unique_id("mb")} if is_e2e(ctx) else {}),
+        **({"media_buy_id": mint_id("mb")} if is_e2e(ctx) else {}),
     )
     package = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 1000.0, "paused": paused == "paused"},
-        **({"package_id": _e2e_unique_id("pkg")} if is_e2e(ctx) else {}),
+        **({"package_id": mint_id("pkg")} if is_e2e(ctx) else {}),
     )
     creative = CreativeFactory(
         tenant=ctx["tenant"],
@@ -1516,8 +1503,8 @@ def given_assignment_already_exists(ctx: dict) -> None:
     mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "pending_start"}
     prod_kwargs: dict = {"tenant": tenant, "format_ids": [fmt_entry]}
     if is_e2e(ctx):
-        mb_kwargs["media_buy_id"] = _e2e_unique_id("mb")
-        prod_kwargs["product_id"] = _e2e_unique_id("prod")
+        mb_kwargs["media_buy_id"] = mint_id("mb")
+        prod_kwargs["product_id"] = mint_id("prod")
 
     media_buy = MediaBuyFactory(**mb_kwargs)
     product = ProductFactory(**prod_kwargs)
@@ -1526,7 +1513,7 @@ def given_assignment_already_exists(ctx: dict) -> None:
         "package_config": {"product_id": product.product_id, "budget": 1000.0},
     }
     if is_e2e(ctx):
-        pkg_kwargs["package_id"] = _e2e_unique_id("pkg")
+        pkg_kwargs["package_id"] = mint_id("pkg")
     package = MediaPackageFactory(**pkg_kwargs)
     # Use same creative_id as the payload so the pre-existing row matches.
     creative_payload = ctx["creatives"][-1]
@@ -1748,7 +1735,7 @@ def given_assignment_entry_missing_creative_id(ctx: dict) -> None:
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    package = MediaPackageFactory(media_buy=media_buy, package_id=_e2e_unique_id("pkg"))
+    package = MediaPackageFactory(media_buy=media_buy, package_id=mint_id("pkg"))
     env._commit_factory_data()
     ctx["assignment_entries"] = [{"package_id": package.package_id}]
 
@@ -1830,8 +1817,8 @@ def _setup_assignment_package(
     mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "active"}
     prod_kwargs: dict = {"tenant": tenant, "format_ids": [_product_format_entry(ctx, env)]}
     if is_e2e(ctx):
-        mb_kwargs["media_buy_id"] = _e2e_unique_id("mb")
-        prod_kwargs["product_id"] = _e2e_unique_id("prod")
+        mb_kwargs["media_buy_id"] = mint_id("mb")
+        prod_kwargs["product_id"] = mint_id("prod")
 
     media_buy = MediaBuyFactory(**mb_kwargs)
     product = ProductFactory(**prod_kwargs)
@@ -1842,7 +1829,7 @@ def _setup_assignment_package(
     if package_id is not None:
         pkg_kwargs["package_id"] = package_id
     elif is_e2e(ctx):
-        pkg_kwargs["package_id"] = _e2e_unique_id("pkg")
+        pkg_kwargs["package_id"] = mint_id("pkg")
     package = MediaPackageFactory(**pkg_kwargs)
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
@@ -3896,9 +3883,9 @@ def _setup_assignment_package_for_format(
     extra_pkg: dict = {}
     extra_prod: dict = {}
     if is_e2e(ctx):
-        extra_mb["media_buy_id"] = _e2e_unique_id("mb")
-        extra_pkg["package_id"] = _e2e_unique_id("pkg")
-        extra_prod["product_id"] = _e2e_unique_id("prod")
+        extra_mb["media_buy_id"] = mint_id("mb")
+        extra_pkg["package_id"] = mint_id("pkg")
+        extra_prod["product_id"] = mint_id("prod")
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active", **extra_mb)
     package_config: dict = {"budget": 1000.0}
@@ -5854,11 +5841,11 @@ def given_assignments_two_packages_format_compat(ctx: dict) -> None:
     # assignment lookup then resolved both entries to whichever row won, and the
     # "compatible" assignment was graded against the incompatible product. There is no
     # reason to mint ids only for e2e_rest -- a fresh id is right everywhere.
-    extra_mb: dict = {"media_buy_id": _e2e_unique_id("mb")}
-    extra_pkg_compat: dict = {"package_id": _e2e_unique_id("pkg")}
-    extra_pkg_incompat: dict = {"package_id": _e2e_unique_id("pkg")}
-    extra_prod_compat: dict = {"product_id": _e2e_unique_id("prod")}
-    extra_prod_incompat: dict = {"product_id": _e2e_unique_id("prod")}
+    extra_mb: dict = {"media_buy_id": mint_id("mb")}
+    extra_pkg_compat: dict = {"package_id": mint_id("pkg")}
+    extra_pkg_incompat: dict = {"package_id": mint_id("pkg")}
+    extra_prod_compat: dict = {"product_id": mint_id("prod")}
+    extra_prod_incompat: dict = {"product_id": mint_id("prod")}
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active", **extra_mb)
 
@@ -6371,12 +6358,12 @@ def given_assignments_three_packages_mixed(ctx: dict) -> None:
     # rows built from it collapsed into one assignment.
     valid_pkg_1 = MediaPackageFactory(
         media_buy=media_buy,
-        package_id=_e2e_unique_id("pkg"),
+        package_id=mint_id("pkg"),
         package_config={"product_id": product.product_id, "budget": 1000.0},
     )
     valid_pkg_2 = MediaPackageFactory(
         media_buy=media_buy,
-        package_id=_e2e_unique_id("pkg"),
+        package_id=mint_id("pkg"),
         package_config={"product_id": product.product_id, "budget": 1000.0},
     )
     env._commit_factory_data()
