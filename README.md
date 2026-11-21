@@ -259,38 +259,10 @@ a buyer sent it; the only difference between them is the tenant's adapter.
 
 ## Using the MCP Client
 
-```python
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
-
-# Connect to the server
-transport = StreamableHttpTransport(
-    url="http://localhost:8000/mcp/",
-    headers={"Authorization": "Bearer your_token"},
-)
-client = Client(transport=transport)
-
-async with client:
-    # 1. Discover products. Each product carries one or more `pricing_options`.
-    products = await client.tools.get_products(brief="video ads for sports content")
-
-    # 2. Book a media buy. Each package references a product and one of its
-    #    pricing options. `idempotency_key` is REQUIRED (16-255 chars) — reusing
-    #    the same key makes retries safe (returns the original buy, no duplicate).
-    result = await client.tools.create_media_buy(
-        brand="acme.com",                     # domain shorthand for a BrandReference
-        start_time="2026-08-01T00:00:00Z",    # ISO 8601, or "asap"
-        end_time="2026-08-31T23:59:59Z",
-        packages=[
-            {
-                "product_id": "ctv_sports",
-                "pricing_option_id": "cpm_usd",  # from product.pricing_options
-                "budget": 50000,                 # amount in the pricing option's currency
-            }
-        ],
-        idempotency_key="acme-ctv-2026-08-0001",
-    )
-```
+An AI agent connects with the `fastmcp` client and calls the AdCP tools by name:
+`client.call_tool("get_products", {...})`, then `client.call_tool("create_media_buy", {...})`.
+The [quick start guide](docs/quickstart.md#connecting-an-ai-agent) has the complete example,
+including the headers a local call needs and a `create_media_buy` payload the server accepts.
 
 ## Project Structure
 

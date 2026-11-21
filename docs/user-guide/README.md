@@ -42,6 +42,8 @@ Users and access levels are managed **per-tenant** via the **Users & Access** pa
 Once configured, AI agents connect via MCP:
 
 ```python
+import uuid
+
 from fastmcp.client import Client, StreamableHttpTransport
 
 # The Admin UI shows an advertiser's token once: when you add the advertiser
@@ -57,7 +59,8 @@ async with Client(transport=transport) as client:
 
     # Create a media buy. Each package names a product and one of its pricing options.
     result = await client.call_tool("create_media_buy", {
-        "idempotency_key": "acme-video-0001-2f9c",  # 16-255 characters; repeat it only to retry
+        # A fresh UUID v4 per request; resend the same key only to retry the identical payload.
+        "idempotency_key": str(uuid.uuid4()),
         "account": {"account_id": "acc_123"},  # from sync_accounts or list_accounts
         "brand": {"domain": "acme.example"},
         "start_time": "2030-02-01T00:00:00Z",  # ISO 8601, or "asap"
