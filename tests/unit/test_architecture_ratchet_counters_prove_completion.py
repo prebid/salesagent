@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import os
 import sys
 from pathlib import Path
 
@@ -184,10 +185,14 @@ def test_a_failed_version_probe_is_named_rather_than_dropped(tmp_path: Path) -> 
     ).startswith("version UNKNOWN (exit ")
 
     # Exits 0 and prints nothing. A bare executable, so `--version` reaches IT and
-    # not the interpreter running it.
-    stub = tmp_path / "quiet_tool"
-    stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    stub.chmod(0o755)
+    # not the interpreter running it. Windows has no shebang; it runs a batch file.
+    if os.name == "nt":
+        stub = tmp_path / "quiet_tool.cmd"
+        stub.write_text("@exit /b 0\r\n", encoding="utf-8")
+    else:
+        stub = tmp_path / "quiet_tool"
+        stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        stub.chmod(0o755)
     assert driver._tool_version([str(stub), "src"], cwd=tmp_path) == "version UNKNOWN (no output)"
 
 

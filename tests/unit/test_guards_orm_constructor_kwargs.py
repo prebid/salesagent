@@ -21,7 +21,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import class_mapper
 
-from tests.unit._architecture_helpers import orm_bindings, orm_classes
+from tests.unit._architecture_helpers import orm_bindings, orm_classes, rel
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -39,9 +39,9 @@ def _mapped_attrs() -> dict[str, set[str]]:
 
 def _scan_file(path: Path, mapped: dict[str, set[str]]) -> list[tuple[str, str, list[str], int]]:
     """Return (rel_path, class_name, bad_kwargs, lineno) for each violating call."""
-    tree = ast.parse(path.read_text())
-    rel = str(path.relative_to(REPO_ROOT))
-    bindings = orm_bindings(rel, tree)
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    relpath = rel(path, REPO_ROOT)
+    bindings = orm_bindings(relpath, tree)
     violations = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
@@ -51,7 +51,7 @@ def _scan_file(path: Path, mapped: dict[str, set[str]]) -> list[tuple[str, str, 
             continue
         bad = [kw.arg for kw in node.keywords if kw.arg and kw.arg not in mapped[orm_name]]
         if bad:
-            violations.append((rel, orm_name, bad, node.lineno))
+            violations.append((relpath, orm_name, bad, node.lineno))
     return violations
 
 
@@ -86,7 +86,7 @@ class TestGuardMetaTests:
         import tempfile
 
         mapped = _mapped_attrs()
-        with tempfile.NamedTemporaryFile("w", suffix=".py", dir=REPO_ROOT, delete=False) as fh:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".py", dir=REPO_ROOT, delete=False) as fh:
             fh.write(source)
             tmp = Path(fh.name)
         try:

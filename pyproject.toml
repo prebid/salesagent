@@ -1,6 +1,6 @@
 [project]
 name = "adcp-sales-agent"
-version = "2.0.0"
+version = "3.0.1"
 description = "Prebid Sales Agent — AdCP-compliant MCP/A2A/REST server for ad inventory orchestration."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -64,7 +64,7 @@ dependencies = [
     "python-multipart>=0.0.27",  # GHSA-wp53-j4wj-2cfg + GHSA-mj87-hwqh-73pj + GHSA-pp6c-gr5w-3c5g
     "pyasn1>=0.6.5",  # GHSA-2qm8-x737-gmw5 + GHSA-fm9c-5rcf-2q5p + GHSA-mm57-4v3p-rchx + GHSA-9m75-vc3g-4x39; earlier GHSA-jr27-m4p2-rc6r, PYSEC-2026-3455/3456/3457
     "joserfc>=1.7.6",  # GHSA-jpxq-7h8p-2q76 (fixed in 1.7.5) + GHSA-9pg5-8c7x-5hfx (fixed in 1.7.6) (transitive via authlib and fastmcp-slim)
-    "mako>=1.3.12",  # GHSA-2h4p-vjrc-8xpq (transitive via alembic)
+    "mako>=1.4.2",  # GHSA-5639-2j2p-m4mx; earlier GHSA-2h4p-vjrc-8xpq (transitive via alembic)
     "click>=8.3.3",  # PYSEC-2026-2132 (transitive via flask/uvicorn)
     "fsspec>=2026.6.0",  # GHSA-27vj-qcqg-25rc (transitive via huggingface-hub, from the cohere extra)
     "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2 / PYSEC-2026-4320 (transitive via httpx/httpcore/requests)
@@ -127,7 +127,6 @@ dev = [
     "pytest-json-report>=1.5.0",
     "pytest-bdd>=7.0.0",
     "pytest-xdist>=3.5.0",  # bdd suite runs `pytest -n auto --dist loadfile`
-    "semgrep>=1.50.0",
     "pylint>=4.0.9",  # GHSA-22qq-2fwx-7p67
     # Security patches for transitive dev dependencies
     "black>=26.10.1",  # GHSA-cg8m-r9f2-5wm2; earlier GHSA-3936-cmfr-pm3m

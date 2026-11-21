@@ -200,7 +200,7 @@ def _dormant_baseline() -> frozenset[tuple[str, str]]:
     count.
     """
     entries = set()
-    for line in DORMANT_SCENARIOS_PATH.read_text().splitlines():
+    for line in DORMANT_SCENARIOS_PATH.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or " :: " not in line:
             continue
@@ -399,7 +399,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
     seen: set[str] = set()
     for feature_file in features_dir.glob("**/*.feature"):
-        text = feature_file.read_text()
+        text = feature_file.read_text(encoding="utf-8")
         for match in re.finditer(r"@([\w.\-]+)", text):
             tag = match.group(1)
             if tag not in seen:

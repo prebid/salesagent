@@ -39,7 +39,7 @@ def check_file(filepath: str) -> list[str]:
             return []
 
     try:
-        with open(filepath) as f:
+        with open(filepath, encoding="utf-8") as f:
             lines = f.readlines()
     except Exception:
         return []

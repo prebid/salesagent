@@ -24,7 +24,7 @@ from pathlib import Path
 from sqlalchemy.orm import class_mapper
 
 from src.core.database.json_type import JSONType
-from tests.unit._architecture_helpers import orm_bindings, orm_classes
+from tests.unit._architecture_helpers import orm_bindings, orm_classes, rel
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -62,9 +62,9 @@ def _is_json_dumps(node: ast.expr) -> bool:
 def _scan_file(path: Path, by_class: dict[str, set[str]]) -> list[tuple[str, str, int]]:
     """(rel_path, target-description, lineno) per violation in one file."""
     all_json_cols = set().union(*by_class.values()) if by_class else set()
-    tree = ast.parse(path.read_text())
-    rel = str(path.relative_to(REPO_ROOT))
-    bindings = orm_bindings(rel, tree)
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    relpath = rel(path, REPO_ROOT)
+    bindings = orm_bindings(relpath, tree)
     hits: list[tuple[str, str, int]] = []
     for node in ast.walk(tree):
         # Form A: Model(col=json.dumps(...)) with Model imported from models.py
@@ -73,12 +73,12 @@ def _scan_file(path: Path, by_class: dict[str, set[str]]) -> list[tuple[str, str
             if orm in by_class:
                 for kw in node.keywords:
                     if kw.arg in by_class[orm] and _is_json_dumps(kw.value):
-                        hits.append((rel, f"{orm}.{kw.arg}", node.lineno))
+                        hits.append((relpath, f"{orm}.{kw.arg}", node.lineno))
         # Form B: obj.col = json.dumps(...) where col is a JSONType column name
         if isinstance(node, ast.Assign) and _is_json_dumps(node.value):
             for tgt in node.targets:
                 if isinstance(tgt, ast.Attribute) and tgt.attr in all_json_cols:
-                    hits.append((rel, f".{tgt.attr}", node.lineno))
+                    hits.append((relpath, f".{tgt.attr}", node.lineno))
     return hits
 
 
@@ -111,7 +111,7 @@ class TestGuardMetaTests:
         import tempfile
 
         by_class = _jsontype_cols_by_class()
-        with tempfile.NamedTemporaryFile("w", suffix=".py", dir=REPO_ROOT, delete=False) as fh:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".py", dir=REPO_ROOT, delete=False) as fh:
             fh.write(source)
             tmp = Path(fh.name)
         try:

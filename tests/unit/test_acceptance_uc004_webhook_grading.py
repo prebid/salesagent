@@ -95,7 +95,7 @@ def _scenarios() -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     title = None
     in_assertions = False
-    for raw in FEATURE.read_text().splitlines():
+    for raw in FEATURE.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if line.startswith(("Scenario:", "Scenario Outline:")):
             title = line.split(":", 1)[1].strip()

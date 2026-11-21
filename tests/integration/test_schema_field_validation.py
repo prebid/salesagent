@@ -42,7 +42,7 @@ class TestSchemaFieldValidation:
                 continue
 
             try:
-                with open(py_file) as f:
+                with open(py_file, encoding="utf-8") as f:
                     content = f.read()
 
                 # Find patterns like model.field or model['field']
@@ -160,7 +160,7 @@ class TestSchemaFieldValidation:
                 if "test_" in str(py_file.name):
                     continue
                 try:
-                    with open(py_file) as f:
+                    with open(py_file, encoding="utf-8") as f:
                         content = f.read()
                     if "Product.created_at" in content:
                         pytest.fail(
@@ -226,7 +226,7 @@ class TestSchemaFieldValidation:
         errors = []
         for html_file in template_dir.rglob("*.html"):
             try:
-                with open(html_file) as f:
+                with open(html_file, encoding="utf-8") as f:
                     content = f.read()
 
                 for pattern, correction in problematic_patterns:

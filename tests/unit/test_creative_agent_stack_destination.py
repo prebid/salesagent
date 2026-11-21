@@ -50,7 +50,7 @@ _REFERENCE_AGENT_MCP_PATH = "/api/creative-agent/mcp"
 
 def _service_environments() -> dict[str, dict[str, str]]:
     """Each e2e compose service's environment, as a mapping."""
-    compose = yaml.safe_load((repo_root() / _COMPOSE).read_text())
+    compose = yaml.safe_load((repo_root() / _COMPOSE).read_text(encoding="utf-8"))
     environments: dict[str, dict[str, str]] = {}
     for service_name, service in (compose.get("services") or {}).items():
         env = (service or {}).get("environment") or {}
@@ -133,7 +133,7 @@ def test_ci_workflow_does_not_hardcode_a_creative_agent_url() -> None:
     loopback while the compose path stayed correct. ``run_all_tests_host.sh``
     already models the right shape by asking the stack script for the value.
     """
-    workflow = (repo_root() / _WORKFLOW).read_text()
+    workflow = (repo_root() / _WORKFLOW).read_text(encoding="utf-8")
 
     hardcoded = re.findall(r"CREATIVE_AGENT_URL\s*:\s*(.+)", workflow)
 

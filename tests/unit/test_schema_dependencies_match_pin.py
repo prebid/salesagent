@@ -98,10 +98,10 @@ def _reached() -> dict[type[BaseModel], str]:
 
 def _document(sdk_class: type) -> tuple[str, dict[str, Any]]:
     """The pinned schema document the generated module of ``sdk_class`` was built from."""
-    header = _HEADER.search(Path(sys.modules[sdk_class.__module__].__file__ or "").read_text()[:400])
+    header = _HEADER.search(Path(sys.modules[sdk_class.__module__].__file__ or "").read_text(encoding="utf-8")[:400])
     assert header, f"{sdk_class.__module__} names no source document in its header"
     path = header.group(1).replace("_", "-")
-    return path, json.loads((_schema_root() / path).read_text())
+    return path, json.loads((_schema_root() / path).read_text(encoding="utf-8"))
 
 
 def _sites(node: Any, pointer: str = "") -> Iterator[tuple[str, dict[str, Any]]]:

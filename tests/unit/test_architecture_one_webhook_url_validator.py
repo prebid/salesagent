@@ -74,6 +74,7 @@ from tests.unit._architecture_helpers import (
     called_function_names,
     format_failure,
     parse_module,
+    rel,
     repo_root,
     src_python_files,
 )
@@ -102,10 +103,10 @@ def _policy_definitions() -> dict[str, list[str]]:
         tree = parse_module(path)
         if tree is None:
             continue
-        rel = str(path.relative_to(repo))
+        rel_path = rel(path, repo)
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name in POLICY_NAMES:
-                found[node.name].append(f"{rel}:{node.lineno}")
+                found[node.name].append(f"{rel_path}:{node.lineno}")
     return found
 
 

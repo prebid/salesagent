@@ -64,7 +64,7 @@ from tests.factories.targeting import (
     TargetingFactory,
 )
 from tests.factories.user import TenantAuthConfigFactory, UserFactory
-from tests.factories.webhook import PushNotificationConfigFactory, WebhookTaskContextFactory
+from tests.factories.webhook import PushNotificationConfigFactory, WebhookDeliveryLogFactory, WebhookTaskContextFactory
 from tests.factories.workflow import ContextFactory, WorkflowStepFactory
 
 # Only SQLAlchemyModelFactory subclasses belong here: the harness rebinds
@@ -91,6 +91,7 @@ ALL_FACTORIES = [
     MediaBuyFactory,
     MediaPackageFactory,
     PushNotificationConfigFactory,
+    WebhookDeliveryLogFactory,
     DeliverySimulationConfigFactory,
     CreativeFactory,
     CreativeAssignmentFactory,
@@ -149,6 +150,7 @@ __all__ = [
     "TenantAuthConfigFactory",
     "TenantFactory",
     "UserFactory",
+    "WebhookDeliveryLogFactory",
     "WebhookTaskContextFactory",
     "ContextFactory",
     "WorkflowStepFactory",

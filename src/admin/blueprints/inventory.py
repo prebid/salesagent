@@ -206,7 +206,7 @@ def get_targeting_values(tenant_id, key_id):
                 logger.debug(
                     f"Network code: {adapter_config.gam_network_code}, "
                     f"auth_method: {adapter_config.gam_auth_method}, "
-                    f"has refresh token: {bool(adapter_config.gam_refresh_token)}, "
+                    f"has refresh token: {bool(adapter_config._gam_refresh_token)}, "
                     f"has service account: {bool(adapter_config.gam_service_account_json)}"
                 )
 
@@ -218,7 +218,7 @@ def get_targeting_values(tenant_id, key_id):
                 return jsonify({"error": "GAM network code not configured"}), 400
 
             # Check for EITHER OAuth or Service Account authentication
-            has_oauth = bool(adapter_config.gam_refresh_token)
+            has_oauth = bool(adapter_config._gam_refresh_token)
             has_service_account = bool(adapter_config.gam_service_account_json)
 
             if not has_oauth and not has_service_account:

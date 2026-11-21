@@ -51,7 +51,7 @@ import importlib
 
 import pytest
 
-from tests.unit._architecture_helpers import format_failure, parse_module, repo_root, safe_parse
+from tests.unit._architecture_helpers import format_failure, parse_module, rel, repo_root, safe_parse
 
 #: The module that owns the decision. Everything else asks it.
 OWNER = "src/core/security/egress/policy.py"
@@ -147,8 +147,8 @@ def _scan(repo) -> list[str]:
         if not root.exists():
             continue
         for path in sorted(root.rglob("*.py")):
-            rel = str(path.relative_to(repo))
-            if rel == OWNER or rel in ALLOWED_FILES:
+            rel_path = rel(path, repo)
+            if rel_path == OWNER or rel_path in ALLOWED_FILES:
                 continue
             tree = safe_parse(path)
             if tree is None:
@@ -158,7 +158,7 @@ def _scan(repo) -> list[str]:
                 line = source_lines[lineno - 1] if lineno <= len(source_lines) else ""
                 if _ESCAPE_HATCH in line:
                     continue
-                violations.append(f"{rel}:{lineno}: {what} — the owner is {OWNER}")
+                violations.append(f"{rel_path}:{lineno}: {what} — the owner is {OWNER}")
     return violations
 
 

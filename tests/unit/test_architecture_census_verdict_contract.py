@@ -100,7 +100,7 @@ def _census_attr(name: str) -> Any:
 def _report(tmp_path: Path, sources: dict[str, str]) -> dict[str, Any]:
     """Run the census over one throwaway file per named source."""
     for name, source in sources.items():
-        (tmp_path / f"{name}.py").write_text(source)
+        (tmp_path / f"{name}.py").write_text(source, encoding="utf-8")
     return _census_attr("census")([str(tmp_path / "*.py")])
 
 
@@ -279,7 +279,7 @@ UNION_DISAGREEMENT_PAYLOAD = {
 @pytest.mark.arch_guard
 def test_scan_no_longer_emits_the_validity_proxy(tmp_path: Path) -> None:
     """``omits_assets`` is gone. A boolean named like a verdict IS the proxy."""
-    (tmp_path / "site.py").write_text(MISSING_ONLY_CREATIVE)
+    (tmp_path / "site.py").write_text(MISSING_ONLY_CREATIVE, encoding="utf-8")
     creatives, _pricing = scan([str(tmp_path / "*.py")])
     assert creatives, "fixture produced no site; the rest of this assertion would be vacuous"
     proxies = sorted(key for key in creatives[0] if any(word in key for word in VERDICT_SHAPED_WORDS))
@@ -603,7 +603,7 @@ def test_the_census_never_sets_the_environment(tmp_path: Path) -> None:
     _report(tmp_path, {"site": CONFORMANT_CREATIVE})
     assert dict(os.environ) == before, "running the census mutated os.environ"
 
-    tree = ast.parse((repo_root() / "scripts/audit/creative_literal_sites.py").read_text())
+    tree = ast.parse((repo_root() / "scripts/audit/creative_literal_sites.py").read_text(encoding="utf-8"))
     setters = sorted(
         {
             node.func.attr
@@ -653,7 +653,7 @@ def test_frozen_api_still_resolves() -> None:
 @pytest.mark.arch_guard
 def test_frozen_api_scan_still_returns_the_same_site_rows(tmp_path: Path) -> None:
     """The malformation guard keys its allowlist on (path, enclosing function) from these lines."""
-    (tmp_path / "site.py").write_text(ESCAPING_CREATIVE)
+    (tmp_path / "site.py").write_text(ESCAPING_CREATIVE, encoding="utf-8")
     creatives, pricing = scan([str(tmp_path / "*.py")])
     assert len(creatives) == 1 and pricing == [], f"got {len(creatives)} creative, {len(pricing)} pricing"
     row = creatives[0]
@@ -672,7 +672,7 @@ def test_neither_committed_guard_reads_a_verdict_field() -> None:
     )
     imported: dict[str, set[str]] = {}
     for relpath in consumers:
-        tree = ast.parse((repo_root() / relpath).read_text())
+        tree = ast.parse((repo_root() / relpath).read_text(encoding="utf-8"))
         imported[relpath] = {
             alias.name
             for node in ast.walk(tree)

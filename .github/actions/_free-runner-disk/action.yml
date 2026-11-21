@@ -1,15 +1,39 @@
 name: Free runner disk
 description: >
-  Remove the hosted runner's preinstalled toolchains these jobs never use. On a pull
-  request the pinned creative agent is built from source, and its build context alone is
-  about 3.8 GB, so a runner with less free disk than usual fails the build with
-  "no space left on device" before any test starts.
+  Check hosted-runner disk headroom before in-network builds, reclaim unused
+  toolchains only when needed, and fail if available space remains insufficient.
 runs:
   using: composite
   steps:
-    - name: Remove unused toolchains
+    - name: Ensure disk headroom
       shell: bash
       run: |
-        df -h /
+        set -euo pipefail
+        # Peak additional use: 60.67 GiB (integration, source build + 8 GiB swap).
+        # https://github.com/numarasSigmaSoftware/prebid_salesagent/actions/runs/43008735752/job/130482683134
+        # 25% headroom, rounded up to the next GiB: ceil(60.67 * 1.25) = 76.
+        min_gib=76
+        min_bytes=$((min_gib * 1024 * 1024 * 1024))
+        available_bytes() {
+          local available
+          available="$(df -B1 --output=avail / | tail -1)" || return 1
+          # GNU df right-aligns short counts under the Avail heading.
+          read -r available <<< "$available"
+          if [[ ! "$available" =~ ^[0-9]+$ ]]; then
+            echo "::error::Disk probe did not return an integer byte count." >&2
+            return 1
+          fi
+          printf '%s\n' "$available"
+        }
+        before="$(available_bytes)"
+        if (( before >= min_bytes )); then
+          echo "Free space ${before} bytes meets ${min_gib} GiB floor; skipping reclaim."
+          exit 0
+        fi
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup
-        df -h /
+        after="$(available_bytes)"
+        echo "Free space ${before} -> ${after} bytes; floor ${min_gib} GiB."
+        if (( after < min_bytes )); then
+          echo "::error::Free space ${after} bytes remains below ${min_gib} GiB."
+          exit 1
+        fi

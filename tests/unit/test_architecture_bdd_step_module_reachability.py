@@ -56,7 +56,7 @@ _ALLOWED_UNREGISTERED: set[str] = {
 
 def _registered_plugins() -> set[str]:
     """Return the dotted module names listed in conftest's pytest_plugins."""
-    tree = ast.parse(_CONFTEST.read_text(), filename=str(_CONFTEST))
+    tree = ast.parse(_CONFTEST.read_text(encoding="utf-8"), filename=str(_CONFTEST))
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:

@@ -48,6 +48,7 @@ from tests.unit._architecture_helpers import (
     orm_references,
     parse_module,
     query_bindings,
+    rel,
     scope_bindings,
     scope_nodes,
     select_chain,
@@ -232,9 +233,9 @@ class TestCreativeLookupPrincipalScoped:
         """Found violations must EXACTLY match the allowlist (new ones rejected, fixed ones removed)."""
         found: set[tuple[str, str]] = set()
         for path in _scanned_files():
-            rel = str(path.relative_to(_REPO_ROOT))
-            for _lineno, func in find_unscoped_creative_queries(parse_module(path), rel):
-                found.add((rel, func))
+            rel_path = rel(path, _REPO_ROOT)
+            for _lineno, func in find_unscoped_creative_queries(parse_module(path), rel_path):
+                found.add((rel_path, func))
         assert_violations_match_allowlist(
             found,
             _QUERY_ALLOWLIST,
@@ -250,9 +251,9 @@ class TestCreativeLookupPrincipalScoped:
     def test_no_admin_repo_calls_in_buyer_tools(self):
         found: set[tuple[str, str]] = set()
         for path in sorted(_TOOLS_DIR.rglob("*.py")):
-            rel = str(path.relative_to(_REPO_ROOT))
+            rel_path = rel(path, _REPO_ROOT)
             for _lineno, func in find_admin_calls(parse_module(path)):
-                found.add((rel, func))
+                found.add((rel_path, func))
         assert_violations_match_allowlist(
             found,
             _ADMIN_CALL_ALLOWLIST,

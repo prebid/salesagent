@@ -125,7 +125,8 @@ class WebhookDeliveryOutcome:
 #: admitted both. Naming it lets a reader of the log (a test asserting an outcome was
 #: recorded, say) be sender-AGNOSTIC by importing the same authority the writer consults,
 #: instead of restating one of the two literals and silently grading only that sender.
-DELIVERY_LOG_TASK_TYPES = ("delivery_report", "media_buy_delivery")
+SCHEDULER_SEQUENCE_TASK_TYPE = "media_buy_delivery"
+DELIVERY_LOG_TASK_TYPES = ("delivery_report", SCHEDULER_SEQUENCE_TASK_TYPE)
 
 
 @dataclass(frozen=True, slots=True)

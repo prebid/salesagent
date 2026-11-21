@@ -149,7 +149,7 @@ class PublisherAdagentsMixin:
         elif status is None and document is not None:
             well_known = directory / ".well-known"
             well_known.mkdir(parents=True)
-            (well_known / "adagents.json").write_text(json.dumps(document))
+            (well_known / "adagents.json").write_text(json.dumps(document), encoding="utf-8")
         else:
             # A missing file is how a 404 answers.
             assert status in (None, 404), f"publisher-origin answers 404 or 503, not {status}"
