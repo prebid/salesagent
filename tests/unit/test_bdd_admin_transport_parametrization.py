@@ -62,7 +62,9 @@ _FEATURES_DIR = _REPO_ROOT / "tests" / "bdd" / "features"
 # Admin features are found by tag, the way pytest_generate_tests finds admin
 # scenarios, not by file name, so a new admin feature is graded the day it is
 # authored.
-_ADMIN_FEATURES = sorted(p.name for p in _FEATURES_DIR.glob("*.feature") if "@T-ADMIN-" in p.read_text())
+_ADMIN_FEATURES = sorted(
+    p.name for p in _FEATURES_DIR.glob("*.feature") if "@T-ADMIN-" in p.read_text(encoding="utf-8")
+)
 _BDD_CONFTEST = _REPO_ROOT / "tests" / "bdd" / "conftest.py"
 
 # The two admin transports the feature file itself declares. Ids are the pytest
@@ -93,7 +95,8 @@ _ADMIN_SCENARIOS = [scenario for feature in _ADMIN_FEATURES for scenario in _adm
 
 def _declared_scenario_count(feature: str) -> int:
     """How many scenarios *feature* declares, counted from its ``Scenario:`` / ``Scenario Outline:`` lines."""
-    return len(re.findall(r"^\s*Scenario(?: Outline)?:", (_FEATURES_DIR / feature).read_text(), re.MULTILINE))
+    text = (_FEATURES_DIR / feature).read_text(encoding="utf-8")
+    return len(re.findall(r"^\s*Scenario(?: Outline)?:", text, re.MULTILINE))
 
 
 def _admin_routes() -> list:
