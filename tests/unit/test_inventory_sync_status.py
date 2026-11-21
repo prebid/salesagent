@@ -41,9 +41,7 @@ def test_inventory_sync_checks_gam_inventory_not_products(tenant_row, scalars_by
         ]
 
         # Create service and get status
-        with patch.dict("os.environ", {"GEMINI_API_KEY": "test_key"}):
-            service = SetupChecklistService(tenant_id)
-            status = service.get_setup_status()
+        status = SetupChecklistService(tenant_id).get_setup_status()
 
         # Find the inventory_synced task
         critical = {task["key"]: task for task in status["critical"]}
@@ -94,9 +92,7 @@ def test_inventory_sync_incomplete_when_no_gam_inventory(tenant_row, scalars_by_
         ]
 
         # Create service and get status
-        with patch.dict("os.environ", {"GEMINI_API_KEY": "test_key"}):
-            service = SetupChecklistService(tenant_id)
-            status = service.get_setup_status()
+        status = SetupChecklistService(tenant_id).get_setup_status()
 
         # Find the inventory_synced task
         critical = {task["key"]: task for task in status["critical"]}

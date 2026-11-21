@@ -9,8 +9,6 @@ production ad server. This means:
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.core.database.repositories.publisher import AuthorizedCounts
 from tests.utils.database_helpers import vhost_for
 
@@ -229,7 +227,7 @@ class TestSetupChecklistMockAdapter:
 
     def test_validate_setup_complete_with_all_requirements(self, tenant_row, scalars_by_entity):
         """validate_setup_complete() passes when all requirements are met (in multi-tenant mode)."""
-        from src.services.setup_checklist_service import AdCPConfigurationError, validate_setup_complete
+        from src.services.setup_checklist_service import validate_setup_complete
 
         tenant_id = "test_tenant"
 
@@ -257,25 +255,11 @@ class TestSetupChecklistMockAdapter:
                 mock_session.scalars.side_effect = scalars_by_entity(tenant)
                 mock_session.scalar.side_effect = scalar_side_effect
 
-                # Mock GEMINI_API_KEY env var. The authorized properties are a repository read
-                # (one authorizing publisher, two properties), not a counted scalar.
-                with (
-                    patch("os.getenv") as mock_getenv,
-                    patch(
-                        "src.services.setup_checklist_service.PublisherRepository.count_authorized",
-                        return_value=AuthorizedCounts(publishers=1, properties=2, stale=0),
-                    ),
+                # The authorized properties are a repository read (one authorizing publisher,
+                # two properties), not a counted scalar.
+                with patch(
+                    "src.services.setup_checklist_service.PublisherRepository.count_authorized",
+                    return_value=AuthorizedCounts(publishers=1, properties=2, stale=0),
                 ):
-                    mock_getenv.return_value = "fake-api-key"
-
-                    # This should NOT raise AdCPConfigurationError when all requirements met
-                    try:
-                        validate_setup_complete(tenant_id)
-                        # If we get here, validation passed (expected)
-                        assert True
-                    except AdCPConfigurationError as e:
-                        # Should not happen when all requirements met
-                        pytest.fail(
-                            f"validate_setup_complete raised error unexpectedly: {e.message}. "
-                            f"Missing tasks: {e.missing_tasks}"
-                        )
+                    # Returns without raising when every requirement is met.
+                    validate_setup_complete(tenant_id)
