@@ -45,8 +45,8 @@ Both suites talk to the same compose stack, defined in
 | `postgres` | One Postgres instance holding every database the run uses | Single DB service; isolation comes from database names, not containers |
 | `adcp-server` | The application under test (FastAPI, all protocols on one port) | The system under test |
 | `adcp-server-storyboard` | A second copy of the same image, `ENVIRONMENT: production`, waiting on `adcp-server` to be healthy | The conformance storyboards grade a production-mode deployment; sequencing on health keeps two boots from running `alembic upgrade` concurrently |
-| `proxy` | nginx in front of `adcp-server`, plaintext `:8000` | Tests go through the same reverse proxy production does |
-| `tls-proxy` | A second nginx listener terminating TLS on `:8443` for the `*.adcp.test` origins | Serves real HTTPS from a generated private certificate authority (CA), so https behavior is true rather than asserted |
+| `proxy` | nginx in front of `adcp-server`, plaintext on port 8000 | Tests go through the same reverse proxy production does |
+| `tls-proxy` | A second nginx listener terminating TLS on port 8443 for the `*.adcp.test` origins | Serves real HTTPS from a generated private certificate authority (CA), so https behavior is true rather than asserted |
 | `webhook-capture` | Long-lived webhook receiver (`tests/e2e/webhook_capture_service.py`) | Captures the server's outbound webhook deliveries; delivery arrives over TLS, readback is a plain-HTTP test control plane |
 | `creative-agent` + `creative-pg` | A pinned in-network creative agent with its own registry DB | The live public agent drifts and rate-limits; `adcp-server`'s `extra_hosts` blackholes it so a regression fails instantly |
 | `tests` | The in-network test runner (profile `runner`) | Runs tox inside the compose network so suites reach services by name |
@@ -56,8 +56,8 @@ stack's own bridge network, addressed by service name or dotted alias — no
 host ports exist. The `tls-proxy` service fronts every HTTPS origin on one
 listener — four dotted aliases — and routes by Server Name Indication (SNI).
 That is what makes the server's outbound calls real HTTPS. The SNI map is
-`config/nginx/nginx-tls-test.conf.template:39-44`; read the alias list there
-rather than from this diagram.
+`$tls_upstream_named` in `config/nginx/nginx-tls-test.conf.template`; read the
+alias list there rather than from this diagram.
 
 ```mermaid
 flowchart LR

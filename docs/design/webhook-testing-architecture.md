@@ -1,3 +1,6 @@
+<!-- FIXME(#2613): this page still names code by line number. Name the function, class, test,
+constant, or section instead, and lower its count in BASELINE in
+tests/unit/test_architecture_docs_no_line_numbers.py in the same change. -->
 # Webhook testing architecture
 
 This document tells you how to write a test that grades outbound delivery —
