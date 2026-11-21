@@ -18,7 +18,7 @@ from tests.utils.database_helpers import vhost_for
 class TestSetupChecklistMockAdapter:
     """Test setup checklist service handles mock adapter correctly."""
 
-    def test_mock_adapter_not_fully_configured_in_production(self):
+    def test_mock_adapter_not_fully_configured_in_production(self, tenant_row, scalars_by_entity):
         """Mock adapter is not considered fully configured for production (ADCP_TESTING not set).
 
         When using mock adapter in non-test environments, only the first critical tasks appear:
@@ -40,31 +40,13 @@ class TestSetupChecklistMockAdapter:
                 mock_session = MagicMock()
                 mock_db.return_value.__enter__.return_value = mock_session
 
-                # Create mock tenant with mock adapter
-                mock_tenant = MagicMock()
-                # TenantAIConfig.from_tenant reads these two fields for the optional AI task and
-                # refuses a non-dict (a bare MagicMock attribute) by design.
-                mock_tenant.ai_config = None
-                mock_tenant.gemini_api_key = None
-                mock_tenant.tenant_id = tenant_id
-                mock_tenant.name = "Test Tenant"
-                mock_tenant.ad_server = "mock"
-                mock_tenant.adapter_config = None
-                mock_tenant.is_gam_tenant = False
-                mock_tenant.authorized_domains = []
-                mock_tenant.authorized_emails = []
-                mock_tenant.human_review_required = None
-                mock_tenant.auto_approve_format_ids = None
-                mock_tenant.order_name_template = None
-                mock_tenant.line_item_name_template = None
-                mock_tenant.slack_webhook_url = None
-                mock_tenant.virtual_host = vhost_for(tenant_id)
-                mock_tenant.enable_axe_signals = False
-                mock_tenant.policy_settings = {}
-                mock_tenant.auth_setup_mode = True  # Setup mode active
+                # A tenant row with mock adapter
+                tenant = tenant_row(
+                    tenant_id=tenant_id, ad_server="mock", auth_setup_mode=True, virtual_host=vhost_for(tenant_id)
+                )
 
                 # Mock database queries
-                mock_session.scalars.return_value.first.return_value = mock_tenant
+                mock_session.scalars.side_effect = scalars_by_entity(tenant)
                 mock_session.scalar.return_value = 0
 
                 # Get setup status
@@ -92,7 +74,7 @@ class TestSetupChecklistMockAdapter:
                 ad_server_task = next(t for t in status["critical"] if t["key"] == "ad_server_connected")
                 assert ad_server_task["is_complete"] is False, "Mock adapter should not be considered fully configured"
 
-    def test_gam_adapter_inventory_sync_requires_database_records(self):
+    def test_gam_adapter_inventory_sync_requires_database_records(self, tenant_row, scalars_by_entity):
         """GAM adapter should require GAMInventory records to be synced."""
         from src.services.setup_checklist_service import SetupChecklistService
 
@@ -102,32 +84,16 @@ class TestSetupChecklistMockAdapter:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
 
-            # Create mock tenant with GAM adapter
-            mock_tenant = MagicMock()
-            # TenantAIConfig.from_tenant reads these two fields for the optional AI task and
-            # refuses a non-dict (a bare MagicMock attribute) by design.
-            mock_tenant.ai_config = None
-            mock_tenant.gemini_api_key = None
-            mock_tenant.tenant_id = tenant_id
-            mock_tenant.name = "Test Tenant"
-            mock_tenant.ad_server = "google_ad_manager"
-            mock_tenant.adapter_config = MagicMock()  # Has adapter config (authenticated)
-            mock_tenant.adapter_config.gam_oauth_complete = True
-            mock_tenant.is_gam_tenant = True
-            mock_tenant.authorized_domains = []
-            mock_tenant.authorized_emails = []
-            mock_tenant.human_review_required = None
-            mock_tenant.auto_approve_format_ids = None
-            mock_tenant.order_name_template = None
-            mock_tenant.line_item_name_template = None
-            mock_tenant.slack_webhook_url = None
-            mock_tenant.virtual_host = vhost_for(tenant_id)
-            mock_tenant.enable_axe_signals = False
-            mock_tenant.policy_settings = {}
-            mock_tenant.auth_setup_mode = True  # Setup mode active
+            # A tenant row with GAM adapter
+            tenant = tenant_row(
+                tenant_id=tenant_id,
+                ad_server="google_ad_manager",
+                auth_setup_mode=True,
+                virtual_host=vhost_for(tenant_id),
+            )
 
             # Mock database queries - no inventory synced
-            mock_session.scalars.return_value.first.return_value = mock_tenant
+            mock_session.scalars.side_effect = scalars_by_entity(tenant)
             mock_session.scalar.return_value = 0  # No GAMInventory records
 
             # Get setup status
@@ -142,7 +108,7 @@ class TestSetupChecklistMockAdapter:
             assert inventory_task["is_complete"] is False, "GAM adapter should require inventory sync"
             assert "Sync ad units and placements" in inventory_task["description"], "Description should mention syncing"
 
-    def test_gam_adapter_inventory_sync_complete_with_records(self):
+    def test_gam_adapter_inventory_sync_complete_with_records(self, tenant_row, scalars_by_entity):
         """GAM adapter with synced inventory should have task marked complete."""
         from src.services.setup_checklist_service import SetupChecklistService
 
@@ -152,29 +118,13 @@ class TestSetupChecklistMockAdapter:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
 
-            # Create mock tenant with GAM adapter
-            mock_tenant = MagicMock()
-            # TenantAIConfig.from_tenant reads these two fields for the optional AI task and
-            # refuses a non-dict (a bare MagicMock attribute) by design.
-            mock_tenant.ai_config = None
-            mock_tenant.gemini_api_key = None
-            mock_tenant.tenant_id = tenant_id
-            mock_tenant.name = "Test Tenant"
-            mock_tenant.ad_server = "google_ad_manager"
-            mock_tenant.adapter_config = MagicMock()  # Has adapter config (authenticated)
-            mock_tenant.adapter_config.gam_oauth_complete = True
-            mock_tenant.is_gam_tenant = True
-            mock_tenant.authorized_domains = []
-            mock_tenant.authorized_emails = []
-            mock_tenant.human_review_required = None
-            mock_tenant.auto_approve_format_ids = None
-            mock_tenant.order_name_template = None
-            mock_tenant.line_item_name_template = None
-            mock_tenant.slack_webhook_url = None
-            mock_tenant.virtual_host = vhost_for(tenant_id)
-            mock_tenant.enable_axe_signals = False
-            mock_tenant.policy_settings = {}
-            mock_tenant.auth_setup_mode = True  # Setup mode active
+            # A tenant row with GAM adapter
+            tenant = tenant_row(
+                tenant_id=tenant_id,
+                ad_server="google_ad_manager",
+                auth_setup_mode=True,
+                virtual_host=vhost_for(tenant_id),
+            )
 
             # Mock database queries - inventory synced (1000 records)
             def scalar_side_effect(stmt):
@@ -182,7 +132,7 @@ class TestSetupChecklistMockAdapter:
                 # This is a simplification - in reality we'd inspect the statement
                 return 1000  # GAMInventory count
 
-            mock_session.scalars.return_value.first.return_value = mock_tenant
+            mock_session.scalars.side_effect = scalars_by_entity(tenant)
             mock_session.scalar.side_effect = scalar_side_effect
 
             # Get setup status
@@ -196,7 +146,7 @@ class TestSetupChecklistMockAdapter:
             assert inventory_task is not None, "Inventory sync task should exist"
             assert inventory_task["is_complete"] is True, "GAM adapter with synced inventory should be complete"
 
-    def test_no_adapter_selected_shows_minimal_tasks(self):
+    def test_no_adapter_selected_shows_minimal_tasks(self, tenant_row, scalars_by_entity):
         """When no adapter is selected (None), only essential tasks appear."""
         from src.services.setup_checklist_service import SetupChecklistService
 
@@ -208,29 +158,13 @@ class TestSetupChecklistMockAdapter:
                 mock_session = MagicMock()
                 mock_db.return_value.__enter__.return_value = mock_session
 
-                # Create mock tenant with no adapter selected
-                mock_tenant = MagicMock()
-                # TenantAIConfig.from_tenant reads these two fields for the optional AI task and
-                # refuses a non-dict (a bare MagicMock attribute) by design.
-                mock_tenant.ai_config = None
-                mock_tenant.gemini_api_key = None
-                mock_tenant.tenant_id = tenant_id
-                mock_tenant.name = "Test Tenant"
-                mock_tenant.ad_server = None  # No adapter selected
-                mock_tenant.authorized_domains = []
-                mock_tenant.authorized_emails = []
-                mock_tenant.human_review_required = None
-                mock_tenant.auto_approve_format_ids = None
-                mock_tenant.order_name_template = None
-                mock_tenant.line_item_name_template = None
-                mock_tenant.slack_webhook_url = None
-                mock_tenant.virtual_host = vhost_for(tenant_id)
-                mock_tenant.enable_axe_signals = False
-                mock_tenant.policy_settings = {}
-                mock_tenant.auth_setup_mode = True  # Setup mode active
+                # A tenant row with no adapter selected
+                tenant = tenant_row(
+                    tenant_id=tenant_id, ad_server=None, auth_setup_mode=True, virtual_host=vhost_for(tenant_id)
+                )
 
                 # Mock database queries
-                mock_session.scalars.return_value.first.return_value = mock_tenant
+                mock_session.scalars.side_effect = scalars_by_entity(tenant)
                 mock_session.scalar.return_value = 0
 
                 # Get setup status
@@ -258,7 +192,7 @@ class TestSetupChecklistMockAdapter:
                 ad_server_task = next(t for t in status["critical"] if t["key"] == "ad_server_connected")
                 assert ad_server_task["is_complete"] is False, "Ad server should be incomplete when None"
 
-    def test_sso_optional_in_multi_tenant_mode(self):
+    def test_sso_optional_in_multi_tenant_mode(self, tenant_row, scalars_by_entity):
         """In multi-tenant mode, SSO is optional."""
         from src.services.setup_checklist_service import SetupChecklistService
 
@@ -270,29 +204,13 @@ class TestSetupChecklistMockAdapter:
                 mock_session = MagicMock()
                 mock_db.return_value.__enter__.return_value = mock_session
 
-                # Create mock tenant
-                mock_tenant = MagicMock()
-                # TenantAIConfig.from_tenant reads these two fields for the optional AI task and
-                # refuses a non-dict (a bare MagicMock attribute) by design.
-                mock_tenant.ai_config = None
-                mock_tenant.gemini_api_key = None
-                mock_tenant.tenant_id = tenant_id
-                mock_tenant.name = "Test Tenant"
-                mock_tenant.ad_server = "mock"
-                mock_tenant.authorized_domains = []
-                mock_tenant.authorized_emails = []
-                mock_tenant.human_review_required = None
-                mock_tenant.auto_approve_format_ids = None
-                mock_tenant.order_name_template = None
-                mock_tenant.line_item_name_template = None
-                mock_tenant.slack_webhook_url = None
-                mock_tenant.virtual_host = vhost_for(tenant_id)
-                mock_tenant.enable_axe_signals = False
-                mock_tenant.policy_settings = {}
-                mock_tenant.auth_setup_mode = True  # Setup mode active
+                # A tenant row
+                tenant = tenant_row(
+                    tenant_id=tenant_id, ad_server="mock", auth_setup_mode=True, virtual_host=vhost_for(tenant_id)
+                )
 
                 # Mock database queries
-                mock_session.scalars.return_value.first.return_value = mock_tenant
+                mock_session.scalars.side_effect = scalars_by_entity(tenant)
                 mock_session.scalar.return_value = 0
 
                 # Get setup status
@@ -309,7 +227,7 @@ class TestSetupChecklistMockAdapter:
                 optional_keys = {task["key"] for task in status["optional"]}
                 assert "sso_configuration" in optional_keys, "SSO should be optional in multi-tenant mode"
 
-    def test_validate_setup_complete_with_all_requirements(self):
+    def test_validate_setup_complete_with_all_requirements(self, tenant_row, scalars_by_entity):
         """validate_setup_complete() passes when all requirements are met (in multi-tenant mode)."""
         from src.services.setup_checklist_service import AdCPConfigurationError, validate_setup_complete
 
@@ -321,44 +239,22 @@ class TestSetupChecklistMockAdapter:
                 mock_session = MagicMock()
                 mock_db.return_value.__enter__.return_value = mock_session
 
-                # Create mock tenant with GAM adapter - all critical tasks complete
-                mock_tenant = MagicMock()
-                # TenantAIConfig.from_tenant reads these two fields for the optional AI task and
-                # refuses a non-dict (a bare MagicMock attribute) by design.
-                mock_tenant.ai_config = None
-                mock_tenant.gemini_api_key = None
-                mock_tenant.tenant_id = tenant_id
-                mock_tenant.name = "Test Tenant"
-                mock_tenant.ad_server = "google_ad_manager"  # Real ad server
-                mock_tenant.authorized_domains = ["example.com"]
-                mock_tenant.authorized_emails = []
-                mock_tenant.human_review_required = None
-                mock_tenant.auto_approve_format_ids = None
-                mock_tenant.order_name_template = None
-                mock_tenant.line_item_name_template = None
-                mock_tenant.slack_webhook_url = None
-                mock_tenant.virtual_host = vhost_for(tenant_id)
-                mock_tenant.enable_axe_signals = False
-                mock_tenant.policy_settings = {}
-                mock_tenant.auth_setup_mode = True  # Setup mode still active (SSO is optional in multi-tenant)
-                mock_tenant.adapter_config = MagicMock()  # Has adapter config (authenticated)
-                mock_tenant.adapter_config.gam_oauth_complete = True
+                # A tenant row with GAM adapter - all critical tasks complete
+                tenant = tenant_row(
+                    tenant_id=tenant_id,
+                    ad_server="google_ad_manager",
+                    auth_setup_mode=True,
+                    authorized_domains=["example.com"],
+                    virtual_host=vhost_for(tenant_id),
+                )
 
                 # SSO is optional in multi-tenant mode, so no need for mock auth config
-
-                # Track which query is being called and return appropriate mock
-                def scalars_side_effect(stmt):
-                    result = MagicMock()
-                    # Return tenant for all queries
-                    result.first.return_value = mock_tenant
-                    result.all.return_value = []
-                    return result
 
                 def scalar_side_effect(stmt):
                     # Return counts for different queries (non-zero = requirements met)
                     return 10  # At least 1 currency, property, product, principal, inventory
 
-                mock_session.scalars.side_effect = scalars_side_effect
+                mock_session.scalars.side_effect = scalars_by_entity(tenant)
                 mock_session.scalar.side_effect = scalar_side_effect
 
                 # Mock GEMINI_API_KEY env var. The authorized properties are a repository read
