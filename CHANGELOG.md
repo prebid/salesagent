@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0](https://github.com/prebid/salesagent/compare/v3.0.1...v3.1.0) (2026-11-21)
+
+
+### Features
+
+* add atomic scheduler webhook sequence reservations ([#2548](https://github.com/prebid/salesagent/issues/2548)) ([2973172](https://github.com/prebid/salesagent/commit/2973172f2ce24f20f8052841e9f2643ddd398ba1))
+
+
+### Bug Fixes
+
+* **admin:** enforce tenant user roles ([#2566](https://github.com/prebid/salesagent/issues/2566)) ([fbd0855](https://github.com/prebid/salesagent/commit/fbd0855e27f462b835f6583e8594928757731c43))
+* **admin:** link the Accounts and Signing Keys pages from tenant navigation ([#2625](https://github.com/prebid/salesagent/issues/2625)) ([0d2078e](https://github.com/prebid/salesagent/commit/0d2078ea899112b1ba00c139331e397aeb42c314))
+* **ci:** sign release images by name and digest, not the dropped image_tags output ([#2574](https://github.com/prebid/salesagent/issues/2574)) ([6b14bd4](https://github.com/prebid/salesagent/commit/6b14bd4d909d6c3cfc4259ed4b80144acb7fbc42))
+* **ci:** update vulnerable dependencies in the creative-agent image ([#2570](https://github.com/prebid/salesagent/issues/2570)) ([56abb65](https://github.com/prebid/salesagent/commit/56abb65f2acfd97ad99943a20321fa9f54b78966))
+* keep every log record on one line through the formatters ([#2569](https://github.com/prebid/salesagent/issues/2569)) ([581c59c](https://github.com/prebid/salesagent/commit/581c59c99eb83e6fdfaa1fa8e528f6fc24e4b321))
+* **test:** stub docker in the run_all_tests contract test ([#2588](https://github.com/prebid/salesagent/issues/2588)) ([d82e7a1](https://github.com/prebid/salesagent/commit/d82e7a1be07949031cc17722cc38d6ebecdb576e))
+
+
+### Documentation
+
+* forbid line-number references in living docs ([#2612](https://github.com/prebid/salesagent/issues/2612)) ([a77edd5](https://github.com/prebid/salesagent/commit/a77edd519c79db9777a2f0636f0e3712a83e912d))
+* make the first sign-in of every deployment guide work ([#2634](https://github.com/prebid/salesagent/issues/2634)) ([4da336c](https://github.com/prebid/salesagent/commit/4da336c33b6006bcd0ad76c295525473d4a0db44))
+* trim CLAUDE.md from 54K to 37K — rules without narratives ([#2578](https://github.com/prebid/salesagent/issues/2578)) ([24b9895](https://github.com/prebid/salesagent/commit/24b98958fa25251122813218c8cbfb953ee45751))
+
 ## [3.0.1](https://github.com/prebid/salesagent/compare/v3.0.0...v3.0.1) (2026-11-18)
 
 
