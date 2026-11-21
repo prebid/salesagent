@@ -270,9 +270,10 @@ STORYBOARD_SUBDIR="storyboard"
 # (ToolingSettings.gam_suite_network). An environment with no GAM setting at all configures
 # no network: "GAM: not configured" is printed and the run goes on, and the GAM tests
 # declare themselves unsupported. That one answer needs no uv (the CI in-network job installs
-# none), so with no GAM_* variable in the environment it is printed here; the preflight's
-# settings are read from the environment alone, by case-insensitive name, so it could answer
-# nothing else. Any GAM_* variable at all hands the decision to the preflight, which needs uv.
+# none), so with no non-empty GAM_* variable in the environment it is printed here; the
+# preflight's settings are read from the environment alone, by case-insensitive name, with an
+# empty value counting as unset, so it could answer nothing else. Any non-empty GAM_* variable
+# hands the decision to the preflight, which needs uv.
 # A partial or broken configuration fails here, with every failing check named, instead of an
 # hour later as GAM failures. Read-only: it creates nothing in GAM. --skip-gam-preflight (or GAM_SUITE_PREFLIGHT_SKIP=1) runs the
 # suites anyway; the skip is printed and kept in the run's gam_preflight.log, and the GAM
@@ -281,8 +282,8 @@ STORYBOARD_SUBDIR="storyboard"
 _gam_preflight_log="$(mktemp)"
 case ",$SUITES," in
     *,e2e,*|*,bdd,*|*,bdd_e2e,*)
-        # grep without -q reads the whole list, so pipefail cannot see compgen's SIGPIPE.
-        if [ -z "$(compgen -e | grep -i '^GAM_' || true)" ]; then
+        # A count, so no value is captured; -c reads all of env, so pipefail sees no SIGPIPE.
+        if [ "$(env | grep -ci '^GAM_[^=]*=.' || true)" = 0 ]; then
             # scripts/gam_prerequisites_check.py's NOT_CONFIGURED, verbatim.
             echo "GAM: not configured" | tee "$_gam_preflight_log"
         elif ! command -v uv >/dev/null 2>&1; then

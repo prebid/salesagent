@@ -172,7 +172,10 @@ def _run_runner(
     """Run run_all_tests.sh with ``uv`` and ``docker`` stood in; return (exit, output, uv argv, docker argv).
 
     The environment holds no GAM_* variable but, with *gam_setting*, ``GAM_SUITE_NETWORK_CODE``.
+    ``unset`` is applied after ``env``, so it names every inherited GAM_* variable except the one
+    set here: the in-network ``tests`` container exports each GAM_* setting, empty when unset.
     """
+    gam = {"GAM_SUITE_NETWORK_CODE": "1"} if gam_setting else {}
     proc = run_bash_with_stubs(
         [str(RUNNER), *args],
         stub_dir=tmp_path / "bin",
@@ -184,9 +187,9 @@ def _run_runner(
             "STUB_ARGV_DIR": str(tmp_path),
             "STUB_UV_EXIT": str(uv_exit),
             **({"RUN_ALL_TESTS_STOP_AFTER_GAM_PREFLIGHT": "1"} if stop_after_preflight else {}),
-            **({"GAM_SUITE_NETWORK_CODE": "1"} if gam_setting else {}),
+            **gam,
         },
-        unset=["E2E_WORKERS", *(name for name in os.environ if name.upper().startswith("GAM_"))],
+        unset=["E2E_WORKERS", *(name for name in os.environ if name.upper().startswith("GAM_") and name not in gam)],
         cwd=REPO_ROOT,
     )
 
