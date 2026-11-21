@@ -251,6 +251,27 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     And Google Ad Manager received no order and no line item
     And Google Ad Manager created no creative
 
+  # The same rule when GAM's check refuses the package rather than the creative: the product's
+  # GAM settings exclude the display family the selected display_tag option declares, so GAM's
+  # placeholder computation refuses it as a capability the product does not offer, before the
+  # order is written. Nothing was booked, so the buy still awaits approval. adcp/_schemas/3.2/
+  # enums/error-code.json:149 UNSUPPORTED_FEATURE: "A requested feature or field is not
+  # supported by this seller". That the buy stays pending is the seller's own approval rule,
+  # ungraded by the storyboard runner.
+  @T-UC-002-local-gam-family-excluded-on-approval @extension
+  Scenario: A held buy selecting a display_tag option whose family the product's GAM settings exclude is refused at the seller's approval, and the buy still awaits approval
+    Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_728x90", "params": {"width": 728, "height": 90, "supported_delivery_types": ["tag_url"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}]}', with product settings '{"supported_format_types": ["video"]}'
+    And the package references the buyer's approved display_tag creative "cr-tag" carrying the tag URL "https://ads.example.com/tag.js?slot=1"
+    And the package selects that format option by its format_option_ref
+    And the tenant requires manual approval
+    When the Buyer Agent sends the create_media_buy request
+    Then the response status should be "submitted"
+    When the seller approves the media buy
+    Then the seller's approval fails with error code "UNSUPPORTED_FEATURE"
+    And the media buy still awaits approval
+    And Google Ad Manager received no order and no line item
+    And Google Ad Manager created no creative
+
   # F2 (PR #2582 review): the GAM-layer size refusal carries no error.field. Here the refusal is
   # the buyer's to fix: the option accepts 728x90 as well, and the line items take it, so a
   # 728x90 image would serve. AdCP 3.2.7 enums/error-code.json CREATIVE_SIZE_MISMATCH: "The

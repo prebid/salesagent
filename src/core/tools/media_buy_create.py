@@ -1165,9 +1165,9 @@ def _execute_adapter_media_buy_creation(
         named_packages: The packages as the gate was handed them, naming each one's
             creatives in the order the request (or the stored buy) did: where a refusal
             points.
-        on_refused_before_booking: Called when the adapter's pre-booking check refuses,
-            before the refusal is raised: nothing was booked. Any other raise may follow a
-            booking.
+        on_refused_before_booking: Called when the adapter's pre-booking check refuses, by
+            returning problems or raising a typed error, before the refusal is raised: nothing
+            was booked. Any other raise may follow a booking.
 
     Returns:
         AdapterCreateResult from the adapter
@@ -1183,19 +1183,24 @@ def _execute_adapter_media_buy_creation(
     # pricing models it sells, its own limits, and every creative on its package. It answers
     # problems; the error is built here, once.
     creatives_by_package = _carriers_by_package_id(packages, carriers)
-    problems = adapter.validate_media_buy_request(
-        request,
-        packages,
-        start_time,
-        end_time,
-        package_pricing_info,
-        creatives_by_package=creatives_by_package,
-    )
-    if problems:
-        logger.error(f"[PRE-VALIDATE] Adapter validation failed: {problems}")
+    # The check writes nothing, so a typed error it raises is a refusal before booking too,
+    # exactly as the problems it returns are.
+    try:
+        problems = adapter.validate_media_buy_request(
+            request,
+            packages,
+            start_time,
+            end_time,
+            package_pricing_info,
+            creatives_by_package=creatives_by_package,
+        )
+        if problems:
+            logger.error(f"[PRE-VALIDATE] Adapter validation failed: {problems}")
+            raise _adapter_refusal(problems, named_packages)
+    except AdCPSalesAgentError:
         if on_refused_before_booking is not None:
             on_refused_before_booking()
-        raise _adapter_refusal(problems, named_packages)
+        raise
 
     # Call adapter with detailed error logging
     try:

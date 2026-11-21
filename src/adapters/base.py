@@ -536,7 +536,10 @@ class AdServerAdapter(ABC):
         core's gate read it for that package. An adapter refuses here a creative it cannot
         traffic on its package, as a problem whose subject is the creative and whose
         ``package_id`` is the package; core builds the error and points it at the request
-        (``exceptions.problems_refusal``). An adapter constructs no error for it.
+        (``exceptions.problems_refusal``). An adapter constructs no error for it. A typed
+        error (``AdCPSalesAgentError``) the check raises instead is treated by core as a
+        refusal before booking all the same: the check writes nothing, so on approval the
+        buy stays ``pending_approval``.
 
         Default implementation validates pricing model compatibility.
         Subclasses can override to add adapter-specific checks (e.g., impressions limits).

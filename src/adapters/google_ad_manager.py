@@ -358,8 +358,10 @@ class GoogleAdManager(AdServerAdapter):
         upload) against the placeholders the package's line item will be created with
         (``GAMOrdersManager.line_item_placeholders``, the computation ``create_line_items``
         writes, from the same carriers), so a size or kind refused here is one the upload
-        would refuse after the order and line items were written. Every refusal is a problem
-        naming its creative and package; core raises the error.
+        would refuse after the order and line items were written. Every creative refusal is a
+        problem naming its creative and package; core raises the error. What the placeholder
+        computation itself refuses (a format family the product excludes, audio, a format
+        lookup that fails) it raises, and core treats that raise as a refusal before booking.
         """
         problems = super().validate_media_buy_request(
             request,
