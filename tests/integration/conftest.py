@@ -12,7 +12,7 @@ from pathlib import Path
 import psycopg2
 import pytest
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-from sqlalchemy import create_engine, delete, select
+from sqlalchemy import create_engine
 
 from scripts.setup.seed_products import seed_verified_website, whole_publisher_selections
 from src.admin.app import create_app
@@ -26,7 +26,7 @@ from tests.integration.conftest_ci_seed import ci_test_principal  # noqa: F401
 
 admin_app = create_app()
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy, MediaPackage, Principal, ProductPublisherSelection, Tenant
+from src.core.database.models import MediaBuy, MediaPackage, ProductPublisherSelection, Tenant
 from tests.fixtures import TenantFactory
 from tests.helpers.local_http_origin import run_local_origin
 from tests.helpers.local_mcp_origin import MCPOrigin, run_mcp_origin
@@ -40,18 +40,6 @@ from tests.utils.database_helpers import vhost_for
 
 # integration_db fixture moved to tests/conftest_db.py (visible to all test suites including tests/bdd/)
 # It is available here via tests/conftest.py -> from tests.conftest_db import *
-
-
-def cleanup_tenant(tenant_id: str) -> None:
-    """Delete tenant and all dependent data (correct FK order)."""
-    with get_db_session() as session:
-        mb_ids = session.scalars(select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == tenant_id)).all()
-        if mb_ids:
-            session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id.in_(mb_ids)))
-        session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == tenant_id))
-        session.execute(delete(Principal).where(Principal.tenant_id == tenant_id))
-        session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
-        session.commit()
 
 
 def make_media_buy(tenant_id: str, principal_id: str, media_buy_id: str, **kwargs) -> MediaBuy:
