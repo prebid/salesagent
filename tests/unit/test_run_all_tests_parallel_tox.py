@@ -358,6 +358,7 @@ def test_the_run_records_the_gam_network_its_preflight_stated(tmp_path):
     )
 
 
+@_RUNS_THE_BASH_RUNNER
 @pytest.mark.slow
 def test_the_fast_path_publishes_its_shards_as_one_bdd_inprocess(tmp_path):
     """Every reader keys on one report per suite, and `.suites` must name what is published."""

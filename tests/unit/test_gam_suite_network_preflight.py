@@ -11,13 +11,13 @@ failed preflight. The live checks run where the network is configured.
 from __future__ import annotations
 
 import os
-import subprocess
 from unittest.mock import MagicMock
 
 import pytest
 
 from scripts.gam_prerequisites_check import SKIPPED, check_suite_network
 from src.adapters.gam.utils.health_check import GAMHealthChecker, HealthStatus
+from tests.helpers.bash_stubs import run_bash_with_stubs
 from tests.unit._run_all_tests_helpers import REPO_ROOT, RUNNER
 
 _GAM_SETTINGS = (
@@ -173,31 +173,26 @@ def _run_runner(
 
     The environment holds no GAM_* variable but, with *gam_setting*, ``GAM_SUITE_NETWORK_CODE``.
     """
-    stub_bin = tmp_path / "bin"
-    stub_bin.mkdir()
-    for tool in ("uv", "docker"):
-        stub = stub_bin / tool
-        stub.write_text(
-            f'#!/usr/bin/env bash\necho "$*" >>"{tmp_path}/{tool}.argv"\nexit ${{STUB_{tool.upper()}_EXIT:-0}}\n'
-        )
-        stub.chmod(0o755)
-    env = {
-        **{k: v for k, v in os.environ.items() if k != "E2E_WORKERS" and not k.upper().startswith("GAM_")},
-        "PATH": f"{stub_bin}:{os.environ.get('PATH', '')}",
-        "STUB_UV_EXIT": str(uv_exit),
-        "STUB_DOCKER_EXIT": "0",
-    }
-    if stop_after_preflight:
-        env["RUN_ALL_TESTS_STOP_AFTER_GAM_PREFLIGHT"] = "1"
-    if gam_setting:
-        env["GAM_SUITE_NETWORK_CODE"] = "1"
-    proc = subprocess.run(
-        ["bash", str(RUNNER), *args], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60
+    proc = run_bash_with_stubs(
+        [str(RUNNER), *args],
+        stub_dir=tmp_path / "bin",
+        stubs={
+            tool: f'#!/usr/bin/env bash\necho "$*" >>"$STUB_ARGV_DIR/{tool}.argv"\nexit ${{STUB_{tool.upper()}_EXIT:-0}}\n'
+            for tool in ("uv", "docker")
+        },
+        env={
+            "STUB_ARGV_DIR": str(tmp_path),
+            "STUB_UV_EXIT": str(uv_exit),
+            **({"RUN_ALL_TESTS_STOP_AFTER_GAM_PREFLIGHT": "1"} if stop_after_preflight else {}),
+            **({"GAM_SUITE_NETWORK_CODE": "1"} if gam_setting else {}),
+        },
+        unset=["E2E_WORKERS", *(name for name in os.environ if name.upper().startswith("GAM_"))],
+        cwd=REPO_ROOT,
     )
 
     def argv(tool: str) -> str:
         path = tmp_path / f"{tool}.argv"
-        return path.read_text() if path.exists() else ""
+        return path.read_text(encoding="utf-8") if path.exists() else ""
 
     return proc.returncode, proc.stdout + proc.stderr, argv("uv"), argv("docker")
 
