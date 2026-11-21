@@ -20,7 +20,7 @@
 # re-raises, and the handlers this rule replaces were mostly exactly that: log, then answer.
 # The rule refuses the clause itself, whatever its body does.
 #
-# Graded by tests/unit/test_ast_grep_admin_blanket_except.py.
+# Enforced by `ast-grep scan` in `make quality` and the ast-grep-structural-rules pre-commit hook.
 id: admin-no-blanket-except
 language: Python
 severity: error
@@ -31,6 +31,8 @@ message: >-
   from src.core.operator_errors.
 files:
   - "src/admin/**/*.py"
+  # Registered on the admin app (src/admin/app.py) though it lives under src/adapters.
+  - "src/adapters/gam_reporting_api.py"
 utils:
   # A type expression that names Exception or BaseException anywhere a handler can put it.
   # Recursive, so `((Exception))` and a tuple nested in a tuple are covered too. `has`

@@ -636,7 +636,7 @@ async function saveProductAssignment() {
             });
             const data = await response.json();
             if (!data.success) {
-                results.push(`❌ Failed to remove: ${data.message || 'Unknown error'}`);
+                results.push(`❌ Failed to remove: ${data.error || data.message || 'Unknown error'}`);
             } else {
                 results.push(`✓ Removed from 1 product`);
             }
