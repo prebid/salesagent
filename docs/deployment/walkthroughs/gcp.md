@@ -37,7 +37,7 @@ Note the **Connection name** from the instance overview (e.g., `your-project:us-
 
 ## Step 3: Deploy
 
-Deploy the application. Authentication is configured **per-tenant** via the Admin UI after deployment.
+Deploy the application. Step 4 configures the first sign-in, and each tenant then configures its own SSO in the Admin UI.
 
 ### Option A: Use Prebuilt Image (Recommended)
 
@@ -54,12 +54,14 @@ gcloud run deploy adcp-sales-agent \
   --no-cpu-throttling \
   --min-instances=1 \
   --add-cloudsql-instances YOUR_PROJECT:us-central1:adcp-sales-agent \
-  --set-env-vars "DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@/salesagent?host=/cloudsql/YOUR_PROJECT:us-central1:adcp-sales-agent"
+  --set-env-vars "DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@/salesagent?host=/cloudsql/YOUR_PROJECT:us-central1:adcp-sales-agent,ENCRYPTION_KEY=YOUR_ENCRYPTION_KEY,FLASK_SECRET_KEY=YOUR_SESSION_KEY"
 ```
 
 Replace:
 - `YOUR_PROJECT`: Your GCP project ID
 - `YOUR_PASSWORD`: The password you set when creating the Cloud SQL instance
+- `YOUR_ENCRYPTION_KEY`: A Fernet key. Generate one with `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'`. See [`ENCRYPTION_KEY`](../environment-variables.md#security) for what it encrypts and why it must stay stable.
+- `YOUR_SESSION_KEY`: A long random value that signs session cookies, such as the output of `openssl rand -hex 32`. Without it, each instance generates its own, and sessions end at every restart.
 
 ### Option B: Build Your Own Image
 
@@ -80,7 +82,7 @@ gcloud run deploy adcp-sales-agent \
   --no-cpu-throttling \
   --min-instances=1 \
   --add-cloudsql-instances YOUR_PROJECT:us-central1:adcp-sales-agent \
-  --set-env-vars "DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@/salesagent?host=/cloudsql/YOUR_PROJECT:us-central1:adcp-sales-agent"
+  --set-env-vars "DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@/salesagent?host=/cloudsql/YOUR_PROJECT:us-central1:adcp-sales-agent,ENCRYPTION_KEY=YOUR_ENCRYPTION_KEY,FLASK_SECRET_KEY=YOUR_SESSION_KEY"
 ```
 
 **Important Flags Explained:**
@@ -91,7 +93,38 @@ Note your service URL from the output (e.g., `https://adcp-sales-agent-abc123-uc
 
 ## Step 4: Initial Setup
 
-1. Open `https://YOUR-SERVICE-URL.run.app/admin`
+The first sign-in uses the deployment's own OAuth client, with an address listed in
+`SUPER_ADMIN_EMAILS`. Set both on the service with the command for your provider.
+
+**Google OAuth:**
+```bash
+gcloud run services update adcp-sales-agent \
+  --region us-central1 \
+  --update-env-vars "GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com" \
+  --update-env-vars "GOOGLE_CLIENT_SECRET=your-client-secret" \
+  --update-env-vars "SUPER_ADMIN_EMAILS=you@example.com"
+```
+
+**Other OIDC Providers (Okta, Auth0, Azure AD):**
+```bash
+gcloud run services update adcp-sales-agent \
+  --region us-central1 \
+  --update-env-vars "OAUTH_CLIENT_ID=your-client-id" \
+  --update-env-vars "OAUTH_CLIENT_SECRET=your-client-secret" \
+  --update-env-vars "OAUTH_DISCOVERY_URL=https://your-provider/.well-known/openid-configuration" \
+  --update-env-vars "SUPER_ADMIN_EMAILS=you@example.com"
+```
+
+Register both of the following redirect URIs with the OAuth client.
+[Deployment OAuth](../environment-variables.md#deployment-oauth) explains which callback each
+sign-in uses.
+
+- `https://YOUR-SERVICE-URL.run.app/admin/auth/google/callback`
+- `https://YOUR-SERVICE-URL.run.app/auth/google/callback`
+
+Then sign in with the following steps:
+
+1. Open `https://YOUR-SERVICE-URL.run.app/admin/`
 2. Log in with the deployment's own OAuth account (the address you put in
    `SUPER_ADMIN_EMAILS`). Setup Mode, enabled by default for new tenants, lets you verify
    a tenant's OIDC login before you enable it.
@@ -101,34 +134,13 @@ Note your service URL from the output (e.g., `https://adcp-sales-agent-abc123-uc
 
 Configure SSO via the Admin UI for production use.
 
-1. Go to **Users & Access** in the Admin UI
-2. Configure your SSO provider (Google, Microsoft, Okta, Auth0, Keycloak, or any OIDC provider)
-3. Add redirect URI to your provider: `https://YOUR-SERVICE-URL.run.app/auth/oidc/callback`
-4. Test your SSO login
-5. Disable Setup Mode once SSO is working
+Follow the [SSO quick start](../../user-guide/sso-setup.md#quick-start). In its first step,
+set **Custom Domain** to your service's host, for example
+`adcp-sales-agent-abc123-uc.a.run.app`. **Users & Access** then shows the **Required Redirect
+URI** `https://adcp-sales-agent-abc123-uc.a.run.app/admin/auth/oidc/callback`, which you add
+to your SSO provider (Google, Microsoft, Okta, Auth0, Keycloak, or any OIDC provider).
 
 See [SSO Setup Guide](../../user-guide/sso-setup.md) for detailed provider-specific instructions.
-
-### Legacy: Environment Variable OAuth (Optional)
-
-For backward compatibility, you can also configure OAuth via environment variables:
-
-**Google OAuth:**
-```bash
-gcloud run services update adcp-sales-agent \
-  --region us-central1 \
-  --update-env-vars "GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com" \
-  --update-env-vars "GOOGLE_CLIENT_SECRET=your-client-secret"
-```
-
-**Other OIDC Providers (Okta, Auth0, Azure AD):**
-```bash
-gcloud run services update adcp-sales-agent \
-  --region us-central1 \
-  --update-env-vars "OAUTH_CLIENT_ID=your-client-id" \
-  --update-env-vars "OAUTH_CLIENT_SECRET=your-client-secret" \
-  --update-env-vars "OAUTH_DISCOVERY_URL=https://your-provider/.well-known/openid-configuration"
-```
 
 ## Step 6: Custom Domain (Optional)
 
@@ -139,19 +151,21 @@ gcloud beta run domain-mappings create \
   --region us-central1
 ```
 
-If using a custom domain, add it as an additional redirect URI in your OAuth credentials.
+If you use a custom domain, register the two callback URLs from Step 4 on that domain with the OAuth client as well.
 
 ## Environment Variables Reference
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | Cloud SQL connection string |
+| `ENCRYPTION_KEY` | Yes | Fernet key that encrypts stored secrets. The container refuses to start without it |
+| `FLASK_SECRET_KEY` | Yes | Signs session cookies. Unset, each instance generates its own, and sessions end at every restart |
 | `GEMINI_API_KEY` | No | Platform-level AI key (tenants can configure their own) |
-| `SUPER_ADMIN_EMAILS` | No | Legacy: Comma-separated admin emails (use per-tenant SSO instead) |
-| `GOOGLE_CLIENT_ID` | No | Legacy: Google OAuth client ID (use per-tenant SSO instead) |
-| `GOOGLE_CLIENT_SECRET` | No | Legacy: Google OAuth client secret |
+| `SUPER_ADMIN_EMAILS` | For sign-in | Comma-separated super admin emails |
+| `GOOGLE_CLIENT_ID` | For sign-in | Google OAuth client ID of the deployment's own sign-in, or use the `OAUTH_*` variables from Step 4 |
+| `GOOGLE_CLIENT_SECRET` | For sign-in | Google OAuth client secret, read with `GOOGLE_CLIENT_ID` |
 
-Authentication is configured **per-tenant** via the Admin UI. See [SSO Setup Guide](../../user-guide/sso-setup.md).
+Each tenant configures its own SSO in the Admin UI. Until a tenant enables SSO, its users sign in through the deployment's OAuth client. See [SSO Setup Guide](../../user-guide/sso-setup.md).
 
 ## Troubleshooting
 

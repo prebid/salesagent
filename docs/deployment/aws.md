@@ -306,6 +306,10 @@ app_secrets = {
 }
 ```
 
+Register the `GOOGLE_OAUTH_REDIRECT_URI` value with the provider as a redirect URI, and run
+`terraform apply`. Then open `https://admin.<domain>/` and sign in with an address in
+`super_admin_emails`.
+
 `app_secrets` go into the app secret in Secrets Manager; any other secret variable
 (`GEMINI_API_KEY`, `GAM_OAUTH_CLIENT_SECRET`, ...) goes there the same way. The verified run
 configured no provider and checked only that the Admin UI redirects to its login page.
