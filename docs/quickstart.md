@@ -8,6 +8,9 @@ to be configured before the first start.
 
 - Docker with Docker Compose v2 (`docker compose version`)
 - Git
+- [uv](https://docs.astral.sh/uv/getting-started/installation/), to run the example agent
+  call in step 7. It fetches Python and the `fastmcp` client for that one command. Without
+  uv, use Python 3.12 or later with `pip install fastmcp`.
 - A Google account, and access to the [Google Cloud Console](https://console.cloud.google.com/)
   to create an OAuth client. This is required: sign-in to the Admin UI is OAuth only.
 
@@ -97,15 +100,21 @@ Google variables you can use any OIDC provider with `OAUTH_DISCOVERY_URL`,
 
 ```bash
 docker compose up -d
-
-# Verify it's running
-curl http://localhost:8000/health
 ```
 
 The first run builds the image, which takes several minutes. The `db-init` service runs the
 database migrations and then creates the `default` tenant; `adcp-server` starts after it
-finishes. If you edit `.env` later, run `docker compose up -d --force-recreate` so the
-containers pick up the change.
+finishes. The proxy starts as soon as `adcp-server` has started, not when it is ready, so a
+request sent too early gets `502 Bad Gateway`. Wait until `adcp-server` reports `(healthy)`,
+which takes about a minute after the build:
+
+```bash
+docker compose ps        # repeat until adcp-server shows (healthy)
+curl http://localhost:8000/health
+```
+
+If you edit `.env` later, run `docker compose up -d --force-recreate` so the containers pick
+up the change.
 
 ## 5. Sign in
 
@@ -115,7 +124,9 @@ containers pick up the change.
 
 If the login page says "Authentication not configured" instead of sending you to Google,
 the OAuth variables did not reach the container; see
-[Troubleshooting](#the-login-page-offers-no-way-to-sign-in).
+[The login page offers no way to sign in](development/troubleshooting.md#the-login-page-offers-no-way-to-sign-in).
+Other sign-in failures are in
+[Troubleshooting: Authentication issues](development/troubleshooting.md#authentication-issues).
 
 There is no password login. A route that accepted a fixed password existed for local use and
 is gone: it was composed only when a test-mode flag was set, which made the app under test a
@@ -193,7 +204,10 @@ A request has to say which seller it is for. A tenant is served at the host it d
 `virtual_host`, but the `Host` a local agent sends is `localhost:8000`, which no tenant
 declares. So a local call names the tenant explicitly with the `x-adcp-tenant` header,
 carrying the tenant id. This is the same header the test suites use. A request naming no
-tenant is refused (see [Troubleshooting](#no-seller-is-served-at-the-address-this-request-named)).
+tenant is refused (see
+[No seller is served at the address this request named](development/troubleshooting.md#no-seller-is-served-at-the-address-this-request-named)).
+
+Save this as `first_call.py`:
 
 ```python
 import asyncio
@@ -219,6 +233,14 @@ async def main():
 
 asyncio.run(main())
 ```
+
+Run it with uv, which supplies the `fastmcp` client:
+
+```bash
+uv run --with fastmcp python first_call.py
+```
+
+With Python and `pip install fastmcp` instead, run `python first_call.py`.
 
 The token is needed even for `get_products`: a tenant's **Brand Context Requirement**
 (**Settings > Policies & Workflows**) defaults to "Require Authentication". A2A clients send
@@ -283,71 +305,21 @@ docker compose build && docker compose up -d
 
 ## Troubleshooting
 
-### The login page offers no way to sign in
-The page says "Authentication not configured" when the application has no OAuth client.
-Check that `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are in `.env` (not `.env.secrets`,
-which `docker-compose.yml` does not read), then recreate the containers and check that the
-value arrived:
+Each problem below is documented once, in the
+[troubleshooting guide](development/troubleshooting.md):
 
-```bash
-docker compose up -d --force-recreate
-docker compose exec adcp-server printenv GOOGLE_CLIENT_ID
-```
-
-### Google shows "Error 400: redirect_uri_mismatch"
-The redirect URI the application sent is not registered on the OAuth client. The error
-details page shows the URI that was sent (for example
-`http://localhost:8000/auth/google/callback`). Add it to **Authorized redirect URIs** on the
-client exactly as shown, including the port, with `http` rather than `https`. Register both
-URIs from [step 2](#2-create-a-google-oauth-client). Changes in the console can take a few
-minutes to apply.
-
-### Google says the app is restricted to test users, or access is blocked
-The OAuth consent screen is External and in "Testing". Add your Google account under
-**Google Auth Platform > Audience > Test users**.
-
-### Signed in, but no tenant or "access denied"
-The address you signed in with is not in `SUPER_ADMIN_EMAILS`. Add it to `.env`, run
-`docker compose up -d --force-recreate`, and sign in again.
-
-### "No seller is served at the address this request named"
-The agent's request named no tenant. The error code is `TENANT_UNDEFINED` (HTTP 421);
-older releases returned `CONFIGURATION_ERROR` "no tenant context" for the same condition.
-
-- Send `x-adcp-tenant` with the tenant id (`default` unless you created another), or send a
-  `Host` matching the tenant's `virtual_host`.
-- Check that the tenant exists: `docker compose logs db-init` should show the migrations
-  completing and "Default tenant ready".
-
-### Agent calls are refused with `AUTH_MISSING`
-The call had no `Authorization: Bearer <token>` header. `get_products` needs one too unless
-the tenant's **Brand Context Requirement** is set to "Public". Create an advertiser to get a
-token (step 6).
-
-### Container won't start on first run
-If containers don't start properly on the first attempt, this is usually a timing issue:
-```bash
-docker compose down -v          # Clean up
-docker compose build --no-cache # Rebuild without cache
-docker compose up -d            # Start fresh
-```
-
-### Docker volume conflicts
-If you have other Postgres containers, volumes may conflict. The salesagent uses `adcp_` prefixed volumes to avoid conflicts. If issues persist:
-```bash
-docker compose down -v  # Remove volumes
-docker volume prune     # Clean up orphan volumes
-docker compose up -d
-```
-
-### Port 8000 already in use
-Set `CONDUCTOR_PORT` in `.env` to publish the proxy on another port (for example
-`CONDUCTOR_PORT=8010`), and use that port in the redirect URIs and agent URLs. To find what
-holds port 8000:
-```bash
-lsof -i :8000                    # macOS / Linux
-netstat -ano | findstr :8000     # Windows
-```
+- Signing in to the Admin UI:
+  [The login page offers no way to sign in](development/troubleshooting.md#the-login-page-offers-no-way-to-sign-in),
+  [Google shows "Error 400: redirect_uri_mismatch"](development/troubleshooting.md#google-shows-error-400-redirect_uri_mismatch),
+  [Google restricts the app to test users](development/troubleshooting.md#google-restricts-the-app-to-test-users),
+  [Access denied in the Admin UI](development/troubleshooting.md#access-denied-in-the-admin-ui)
+- The first agent call:
+  [No seller is served at the address this request named](development/troubleshooting.md#no-seller-is-served-at-the-address-this-request-named),
+  [Agent calls are refused with `AUTH_MISSING`](development/troubleshooting.md#agent-calls-are-refused-with-auth_missing),
+  [MCP returns an empty products array](development/troubleshooting.md#mcp-returns-an-empty-products-array)
+- The stack:
+  [Container does not start](development/troubleshooting.md#container-does-not-start),
+  [Port 8000 already in use](development/troubleshooting.md#port-8000-already-in-use)
 
 ## Next Steps
 

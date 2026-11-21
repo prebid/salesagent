@@ -70,28 +70,26 @@ deployment's own OAuth (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` or the gener
 
 Once SSO is configured and tested, disable Setup Mode from the Users & Access page. After that, only SSO authentication works for that tenant.
 
-### Legacy: environment variable OAuth
+### Deployment OAuth client and super admins
 
-These variables configure a **global** OAuth provider shared by all tenants. For new deployments, use per-tenant SSO configuration instead.
+These variables bootstrap the first sign-in. The deployment's OAuth client is the only way
+into the Admin UI until a tenant has its own SSO, and the super admins are the accounts it
+lets in. Per-tenant SSO and per-tenant users (**Users & Access**) come after that first
+sign-in; they do not replace these variables. Configure one OAuth provider: `GOOGLE_*`, or
+the generic `OAUTH_*` variables for any OIDC provider. The redirect URIs to register are in
+[quickstart step 2](../quickstart.md#2-create-a-google-oauth-client).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GOOGLE_CLIENT_ID` | - | Google OAuth client ID (legacy) |
-| `GOOGLE_CLIENT_SECRET` | - | Google OAuth client secret (legacy) |
-| `OAUTH_DISCOVERY_URL` | - | OIDC discovery URL (legacy) |
-| `OAUTH_CLIENT_ID` | - | OAuth client ID (legacy) |
-| `OAUTH_CLIENT_SECRET` | - | OAuth client secret (legacy) |
+| `GOOGLE_CLIENT_ID` | - | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | - | Google OAuth client secret |
+| `OAUTH_DISCOVERY_URL` | - | OIDC discovery URL, for a provider other than Google |
+| `OAUTH_CLIENT_ID` | - | OIDC client ID |
+| `OAUTH_CLIENT_SECRET` | - | OIDC client secret |
 | `OAUTH_SCOPES` | `openid email profile` | OAuth scopes to request |
 | `OAUTH_PROVIDER` | `google` | Provider name for display |
-
-### Legacy: super admin access control
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SUPER_ADMIN_EMAILS` | - | Comma-separated super admin emails. **Deprecated - use per-tenant user management.** |
-| `SUPER_ADMIN_DOMAINS` | - | Comma-separated domains for admin access. **Deprecated.** |
-
-> **Note**: Per-tenant SSO configuration replaces `SUPER_ADMIN_EMAILS`. Users are managed per-tenant on the Users & Access page, with authorized emails and domains configured per-tenant.
+| `SUPER_ADMIN_EMAILS` | - | Comma-separated emails that may sign in as super admin |
+| `SUPER_ADMIN_DOMAINS` | - | Comma-separated email domains whose accounts may sign in as super admin |
 
 ---
 
@@ -201,8 +199,8 @@ in every deployment: properties come only from it.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CREATE_DEMO_TENANT` | `false` | **Local testing only.** Creates a "Demo Sales Agent" tenant with the mock adapter. Do NOT use in production. |
-| `CREATE_SAMPLE_DATA` | `false` | Create sample products, media buys, and related records (requires the demo tenant) |
+| `CREATE_DEMO_TENANT` | `false` | Has no effect with `docker-compose.yml` or in single-tenant mode, where the migration step creates the `default` tenant first. The [quickstart](../quickstart.md#about-create_demo_tenant) explains when it applies. Do not use in production. |
+| `CREATE_SAMPLE_DATA` | `false` | Create sample products, media buys, and related records. Applies only where `CREATE_DEMO_TENANT` does |
 
 ### Security
 
@@ -259,13 +257,14 @@ Set these through your platform's secret store (for example, `fly secrets set`) 
 
 - `DATABASE_URL`
 - `ENCRYPTION_KEY`
+- `GOOGLE_CLIENT_SECRET` or `OAUTH_CLIENT_SECRET` (the deployment's OAuth client)
 - `GAM_OAUTH_CLIENT_ID`, `GAM_OAUTH_CLIENT_SECRET` (for GAM integration)
 - `GOOGLE_APPLICATION_CREDENTIALS_JSON` (for GAM service accounts)
 - `APPROXIMATED_API_KEY`
 - `WEBHOOK_SECRET`
 - `FLASK_SECRET_KEY`
 
-> **Note**: Admin OAuth credentials (`GOOGLE_CLIENT_ID` and the other legacy OAuth variables) are configured per-tenant in the Admin UI instead of environment variables.
+> **Note**: The deployment's OAuth client (`GOOGLE_*` or `OAUTH_*`) is set in the environment and is needed for the first sign-in. A tenant's own SSO client is configured in the Admin UI afterwards and stored encrypted with `ENCRYPTION_KEY`.
 
 ### Non-sensitive configuration
 
