@@ -188,7 +188,7 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     Then Google Ad Manager holds one creative, showing "https://example.com/banner-v2.png"
     And Google Ad Manager associated that creative with line items "5000005"
     When the seller approves creative "cr-banner"
-    Then Google Ad Manager holds one creative, showing "https://example.com/banner-v2.png"
+    Then Google Ad Manager still holds that creative as it last read it, unmodified
 
     Examples:
       | state          | status        | paused |

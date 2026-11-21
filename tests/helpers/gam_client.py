@@ -28,11 +28,13 @@ import gzip
 import io
 import itertools
 from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 from googleads.errors import GoogleAdsServerFault
 
+from src.adapters.gam.utils.formatters import format_datetime_for_gam
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.schemas import Principal
 from src.core.security.egress.response import OutboundResult
@@ -209,9 +211,12 @@ def stub_gam_client(
     * ``CreativeService.updateCreatives`` replaces each sent creative in
       ``client.created_objects``, by the ``id`` GAM requires on an update, and answers it. An id
       the network does not hold raises ``gam_fault``. Given a reason in
-      ``client.creative_update_fault`` it refuses instead, with ``gam_fault``. Ceiling: nobody has
-      tried this call against real GAM; the stand-in does not model which fields GAM lets an
-      update change (``Creative.size`` is read-only after creation).
+      ``client.creative_update_fault`` it refuses instead, with ``gam_fault``. Each update stamps
+      the creative's ``lastModifiedDateTime`` (``Creative.lastModifiedDateTime``, "assigned by
+      Google and is readonly"), one second later than the update before it, so two updates
+      never read back the same stamp. Ceiling: nobody has tried this call against real GAM; the
+      stand-in does not model which fields GAM lets an update change (``Creative.size`` is
+      read-only after creation), and it stamps no creative at creation.
     * ``LineItemCreativeAssociationService.performLineItemCreativeAssociationAction`` sets
       ``status`` (ACTIVE for ActivateLineItemCreativeAssociations, INACTIVE for
       DeactivateLineItemCreativeAssociations) on the associations it created for the statement's
@@ -302,10 +307,17 @@ def stub_gam_client(
     for service, method in GAM_CREATE_METHODS:
         setattr(services.setdefault(service, MagicMock()), method, MagicMock(side_effect=_creates(service, method)))
 
+    updates = itertools.count(1)
+    first_update = datetime.now(UTC)
+
     def _update_creatives(objects: list[Any], *_args: Any, **_kwargs: Any) -> list[SoapObject]:
         if client.creative_update_fault is not None:
             raise gam_fault(client.creative_update_fault)
-        return _update_held(created.setdefault(("CreativeService", "createCreatives"), []), objects)
+        stamp = format_datetime_for_gam(first_update + timedelta(seconds=next(updates)), network_time_zone)
+        return _update_held(
+            created.setdefault(("CreativeService", "createCreatives"), []),
+            [{**obj, "lastModifiedDateTime": stamp} for obj in objects],
+        )
 
     services["CreativeService"].updateCreatives = MagicMock(side_effect=_update_creatives)
     lica = "LineItemCreativeAssociationService"

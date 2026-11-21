@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -1049,6 +1050,34 @@ def then_gam_holds_one_creative(ctx: dict, url: str) -> None:
     """
     (held,) = _creatives_created(ctx)
     assert held.get("imageUrl") == url, f"expected GAM to hold the creative showing {url}; it holds {held}"
+    ctx["gam_creative_last_read"] = _modification_of(held)
+
+
+def _modification_of(creative: Mapping[str, Any]) -> tuple[str, Any, Any]:
+    """(id, ``lastModifiedDateTime``, image URL) of a GAM creative: what an update would change.
+
+    A copy of the values, never the object: the stand-in updates the creative it holds in place.
+    """
+    return str(creative["id"]), creative.get("lastModifiedDateTime"), creative.get("imageUrl")
+
+
+@then("Google Ad Manager still holds that creative as it last read it, unmodified")
+def then_gam_creative_unmodified(ctx: dict) -> None:
+    """The one creative GAM holds was not modified since "holds one creative" last read it: nothing more was sent.
+
+    Ad Manager API v202602 ``Creative.lastModifiedDateTime``: "The date and time this creative
+    was last modified. This attribute is assigned by Google and is readonly." An
+    ``updateCreatives`` re-sending the same content leaves ``imageUrl`` as it was and moves
+    this stamp, on the stand-in (which stamps each update) and on a live network alike. The
+    stamp read must be there, or the comparison would hold whatever was sent. Ceiling: a live
+    network stamps to the second, so an update within the same second as the read is not seen.
+    """
+    last_read = ctx["gam_creative_last_read"]
+    assert last_read[1] is not None, f"GAM held no lastModifiedDateTime on the creative it last read: {last_read}"
+    (held,) = _creatives_created(ctx)
+    assert _modification_of(held) == last_read, (
+        f"expected GAM to hold the creative as it last read it, {last_read}; it holds {_modification_of(held)}"
+    )
 
 
 @then(
