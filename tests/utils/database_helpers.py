@@ -30,6 +30,7 @@ from src.core.database.models import (
     PushNotificationConfig,
     SigningKey,
     Tenant,
+    TenantAuthConfig,
     User,
     WebhookDeliveryLog,
     WorkflowStep,
@@ -196,9 +197,11 @@ def bound_factory_session() -> Iterator[Session]:
         session.close()
 
 
-#: Every model whose rows carry a ``tenant_id``, children before the rows they reference
-#: and ``Tenant`` last: the order :func:`delete_tenant_rows` deletes in. ONE statement of
-#: what a tenant's rows are, so a teardown and a before/after snapshot cannot disagree.
+#: The models :func:`delete_tenant_rows` deletes by ``tenant_id``, children before the rows
+#: they reference and ``Tenant`` last. ONE statement of what a tenant's rows are, so a
+#: teardown and a before/after snapshot cannot disagree. A table that is not listed loses
+#: its rows with the tenant when its foreign key cascades; when it does not, the delete of
+#: ``Tenant`` fails, and the model belongs here.
 TENANT_SCOPED_MODELS = (
     Context,
     CreativeAssignment,
@@ -214,6 +217,7 @@ TENANT_SCOPED_MODELS = (
     Publisher,
     AuditLog,
     User,
+    TenantAuthConfig,
     Tenant,
 )
 
@@ -632,31 +636,3 @@ def seed_media_buy_with_package(
             package_config={"product_id": product_id},
         )
     return media_buy_id
-
-
-def cleanup_test_data(session, tenant_id: str, principal_id: str = None):
-    """Clean up test data for a tenant and optionally principal.
-
-    This helper provides a consistent pattern for cleaning up test data
-    in the correct order to avoid foreign key constraint violations.
-
-    Args:
-        session: Database session
-        tenant_id: Tenant ID to clean up
-        principal_id: Optional principal ID to clean up specifically
-
-    Example:
-        cleanup_test_data(session, "test_tenant_001", "test_principal_001")
-    """
-    # Clean up in reverse dependency order
-    if principal_id:
-        session.execute(delete(Product).where(Product.tenant_id == tenant_id))
-        session.execute(
-            delete(Principal).where(Principal.tenant_id == tenant_id, Principal.principal_id == principal_id)
-        )
-    else:
-        session.execute(delete(Product).where(Product.tenant_id == tenant_id))
-        session.execute(delete(Principal).where(Principal.tenant_id == tenant_id))
-
-    session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
-    session.commit()
