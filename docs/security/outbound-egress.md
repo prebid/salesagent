@@ -266,9 +266,9 @@ than relaxing the gateway.
 `docker-compose.e2e.yml` runs one shared TLS terminator, the `tls-proxy`
 service, fronting every `*.adcp.test` origin the stack connects to —
 `proxy.adcp.test`, `creative-agent.adcp.test`, `webhooks.adcp.test`, and
-`storyboard.adcp.test`, as network aliases on that one service
-(`docker-compose.e2e.yml:351-363`), routed by server name indication (SNI)
-through the map in `config/nginx/nginx-tls-test.conf.template:39-44`.
+`storyboard.adcp.test`, as network aliases on that one service, routed by server
+name indication (SNI) through the `$tls_upstream_named` map in
+`config/nginx/nginx-tls-test.conf.template`.
 `scripts/dev/gen_test_tls.py` generates the private certificate authority (CA)
 and the one leaf covering every name the stack answers to.
 [Webhook testing architecture](../design/webhook-testing-architecture.md)

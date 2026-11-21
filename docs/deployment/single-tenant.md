@@ -13,7 +13,6 @@ Single-tenant mode is the default and recommended for most publishers deploying 
 - [Docker management](#docker-management)
 - [Database migrations](#database-migrations)
 - [First-time setup](#first-time-setup)
-- [SSO setup](#sso-setup)
 - [Custom domain configuration](#custom-domain-configuration)
 - [Health monitoring](#health-monitoring)
 - [Security checklist](#security-checklist)
@@ -35,7 +34,7 @@ The [architecture guide](../development/architecture.md#deployment-topology) sho
 
 - Docker and Docker Compose (or your cloud platform's container service)
 - PostgreSQL database (required)
-- OAuth credentials from your identity provider (Google, Microsoft, Okta, or another OIDC provider) - configured in the Admin UI
+- OAuth credentials from your identity provider (Google, Microsoft, Okta, or another OIDC provider) for the deployment's own sign-in, set in environment variables
 
 ## Docker images
 
@@ -84,14 +83,15 @@ Each release publishes a full version tag plus rolling major and major.minor tag
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `ENCRYPTION_KEY` | Yes | Fernet key for stored secrets; the image's entrypoint refuses to start without it |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (or the `OAUTH_*` variables) | Yes | The deployment's OAuth client, needed for the first sign-in |
-| `SUPER_ADMIN_EMAILS` | Yes | The accounts that may sign in as super admin |
+| `ENCRYPTION_KEY` | Yes | Fernet key that encrypts stored secrets, such as a tenant's SSO client secret; the image's entrypoint refuses to start without it |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | For sign-in | The deployment's own OAuth client. `OAUTH_DISCOVERY_URL`, `OAUTH_CLIENT_ID`, and `OAUTH_CLIENT_SECRET` configure any OIDC provider instead |
+| `SUPER_ADMIN_EMAILS` | For sign-in | Comma-separated super admin addresses. `SUPER_ADMIN_DOMAINS` names whole email domains instead |
+| `FLASK_SECRET_KEY` | Yes | Long random value that signs session cookies |
 | `GEMINI_API_KEY` | No | For AI-powered creative review |
 
-The Admin UI has no password login, so the first administrator signs in through the
-deployment's OAuth client. Each tenant can then configure its own SSO in the Admin UI (Users
-& Access page). `CREATE_DEMO_TENANT` has no effect in single-tenant mode; see
+The Admin UI has no password login, so the first sign-in uses the deployment's own OAuth
+client and a super admin address. After it, each tenant configures its own SSO on the
+**Users & Access** page. `CREATE_DEMO_TENANT` has no effect in single-tenant mode; see
 [About `CREATE_DEMO_TENANT`](../quickstart.md#about-create_demo_tenant).
 
 For a complete list including GAM integration and all optional settings, see the **[environment variables reference](environment-variables.md)**.
@@ -164,42 +164,32 @@ which lets you complete an OIDC login for it before its SSO is switched on.
 Sign in with the deployment's own OAuth — set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
 (or the generic `OAUTH_*` variables) and put your address in `SUPER_ADMIN_EMAILS`.
 
+On the Docker Compose stack, register the two redirect URIs in
+[quickstart step 2](../quickstart.md#2-create-a-google-oauth-client) with that OAuth client
+before you sign in.
+
 **To complete setup:**
 
 1. Log in with Google as a `SUPER_ADMIN_EMAILS` address.
-2. Go to **Users & Access**.
-3. Configure your SSO provider (Google, Microsoft, or a custom OIDC provider).
-4. **Add yourself**: Add your email OR your domain to Allowed Domains.
-5. Click **Test Connection** - SSO is automatically enabled on success.
-6. Click **Disable Setup Mode** to require SSO for all users.
+2. Configure the tenant's SSO in the Admin UI with the
+   [SSO quick start](../user-guide/sso-setup.md#quick-start). In its first step, set
+   **Custom Domain** to `localhost:8000`, the host where you open the Admin UI.
 
-See the [SSO setup guide](../user-guide/sso-setup.md) for detailed provider-specific instructions.
+The [SSO setup guide](../user-guide/sso-setup.md) has provider-specific instructions.
+[Security and authentication](../security.md) covers how sessions and secrets are handled.
 
 ### Local testing without an ad server
 
 The [quickstart](../quickstart.md) runs the stack locally. Its `default` tenant uses the Mock
 adapter, which simulates an ad server.
 
-## SSO setup
-
-SSO is configured per-tenant in the Admin UI:
-
-1. Log in with Google as a `SUPER_ADMIN_EMAILS` address.
-2. Go to the **Users & Access** page.
-3. Configure your identity provider (Google, Microsoft, or any OIDC provider as Custom OIDC).
-4. Copy the **Redirect URI** shown and add it to your provider's allowed redirect URIs.
-5. **Add yourself**: Add your email as a user OR add your domain to Allowed Domains.
-6. Click **Save Configuration**, then **Test Connection** - SSO is automatically enabled on success.
-7. **Disable Setup Mode** once SSO is working.
-
-See the [SSO setup guide](../user-guide/sso-setup.md) for detailed provider-specific instructions. [Security and authentication](../security.md) covers how sessions and secrets are handled.
-
 ## Custom domain configuration
 
 1. Deploy to your cloud platform (see [walkthroughs](walkthroughs/)).
 2. Point your domain's DNS to your deployment.
 3. In the Admin UI, go to **Settings > Account** and set the **Custom Domain** field.
-4. Update your OAuth redirect URI to include the custom domain.
+4. Register `https://<custom domain>/admin/auth/google/callback` and `https://<custom domain>/auth/google/callback` with the deployment's OAuth client, and in production set `SALES_AGENT_DOMAIN` to the custom domain. [Deployment OAuth](environment-variables.md#deployment-oauth) says which callback each sign-in uses.
+5. If the tenant uses SSO, add the **Required Redirect URI** that **Users & Access** then shows to your SSO provider.
 
 ## Health monitoring
 

@@ -47,12 +47,11 @@ In the Google Cloud Console:
    http://localhost:8000/admin/auth/google/callback
    ```
 
-   The application builds the redirect URI from the path the browser came in on. A sign-in
-   that starts under `http://localhost:8000/admin/` asks Google to return to
-   `/admin/auth/google/callback`; one that starts anywhere else asks for
-   `/auth/google/callback`. Registering both covers either entry point. If you change the
-   published port with `CONDUCTOR_PORT`, use that port in both URIs. No authorized
-   JavaScript origins are needed.
+   The Admin UI answers under `/admin/` and at the root, and the callback keeps the path the
+   sign-in started from, so both are needed;
+   [Deployment OAuth](deployment/environment-variables.md#deployment-oauth) has the full
+   rule. If you change the published port with `CONDUCTOR_PORT`, use that port in both URIs.
+   No authorized JavaScript origins are needed.
 6. Choose **Create**, then copy the **Client ID** and **Client secret**.
 
 The application requests the `openid email profile` scopes, which need no Google
@@ -167,7 +166,8 @@ To get an agent to the point of seeing products:
    API token when it is shown; see [API Token](user-guide/advertisers.md#api-token).
 
 To configure SSO for the tenant (so that sign-in no longer depends on the deployment-wide
-OAuth client), use **Users & Access**; see the [SSO Setup Guide](user-guide/sso-setup.md).
+OAuth client), follow the [SSO quick start](user-guide/sso-setup.md#quick-start). In its
+first step, set **Custom Domain** to `localhost:8000`, the host where you open the Admin UI.
 
 ### Creating a tenant from the command line
 
@@ -257,12 +257,15 @@ All services are reached through the nginx proxy on port 8000:
 
 If you already run PostgreSQL, the published image runs the whole application in one
 container. Put the same variables from step 3 in a file (or reuse `.env`) and add the
-database URL. From inside a container, `localhost` is the container itself, so a database on
-your machine is `host.docker.internal`:
+database URL and `FLASK_SECRET_KEY`. `docker-compose.yml` supplies a session-signing key and
+`docker run` does not, so without one every restart signs everybody out. From inside a
+container, `localhost` is the container itself, so a database on your machine is
+`host.docker.internal`:
 
 ```bash
 # In the env file, alongside the variables from step 3:
 # DATABASE_URL=postgresql://user:pass@host.docker.internal:5432/dbname
+# FLASK_SECRET_KEY=<a long random value>
 
 docker run -p 8000:8000 --env-file .env --add-host host.docker.internal:host-gateway \
   ghcr.io/prebid/salesagent:latest

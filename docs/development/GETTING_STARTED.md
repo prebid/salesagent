@@ -45,9 +45,14 @@ When complete, services are running at **http://localhost:8000**:
 | Health Check | http://localhost:8000/health |
 
 **Log in:** with Google, as one of the `SUPER_ADMIN_EMAILS` addresses. There is no password login.
-`make setup` generates `ENCRYPTION_KEY` but not the OAuth client: add it and
-`SUPER_ADMIN_EMAILS` to `.env` as in [quickstart steps 2-3](../quickstart.md#2-create-a-google-oauth-client),
-then run `docker compose up -d --force-recreate`.
+Before you sign in, with either setup, complete the following steps:
+
+1. Create the OAuth client and register its two redirect URIs as in
+   [quickstart step 2](../quickstart.md#2-create-a-google-oauth-client).
+2. In `.env`, set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `SUPER_ADMIN_EMAILS`. The
+   `OAUTH_*` variables configure another OIDC provider instead. After a manual setup, also set
+   `ENCRYPTION_KEY`; `make setup` writes it for you.
+3. Run `docker compose up -d --force-recreate` so that the server reads them.
 
 ## Manual Setup
 

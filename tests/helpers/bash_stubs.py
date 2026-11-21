@@ -44,7 +44,7 @@ def run_bash_with_stubs(
     run_env["PATH"] = f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}"
 
     # The bash on PATH, by full path: on Windows a bare "bash" can resolve to WSL's
-    # System32ash.exe ahead of Git Bash.
+    # System32\bash.exe ahead of Git Bash.
     return subprocess.run(
         [shutil.which("bash") or "bash", *args],
         cwd=cwd,
