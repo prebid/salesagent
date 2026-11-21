@@ -54,7 +54,7 @@ def login_as_tenant_admin(page: Page, tenant_id: str) -> None:
     page.context.add_cookies(
         [{"name": "session", "value": admin_session_cookie(tenant_id), "domain": host, "path": "/"}]
     )
-    page.goto(f"/tenant/{tenant_id}/", wait_until="networkidle")
+    page.goto(f"/tenant/{tenant_id}", wait_until="domcontentloaded")
 
 
 def build_admin_test_session(base_url: str, tenant_id: str) -> requests.Session:
@@ -66,3 +66,17 @@ def build_admin_test_session(base_url: str, tenant_id: str) -> requests.Session:
     from tests.helpers.admin_session import authenticate_http_session
 
     return authenticate_http_session(requests.Session(), base_url, tenant_id)
+
+
+def media_buy_for_task(live_server: dict, tenant_id: str, task_id: str) -> str:
+    """Resolve the submitted task through the tenant-scoped production repository.
+
+    The current spec no longer exposes associated_objects in get_task_status.
+    """
+    from src.core.database.repositories.workflow import WorkflowRepository
+    from tests.e2e.utils import live_repo_session
+
+    with live_repo_session(live_server) as env:
+        mappings = WorkflowRepository(env.get_session(), tenant_id).get_mappings_for_step(task_id)
+        (media_buy_id,) = [row.object_id for row in mappings if row.object_type == "media_buy"]
+        return media_buy_id

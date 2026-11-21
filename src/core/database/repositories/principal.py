@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import MediaBuy, Principal
 
 
@@ -85,6 +86,20 @@ class PrincipalRepository:
         row, token = Principal.issue(tenant_id=self._tenant_id, **fields)
         self._session.add(row)
         return row, token
+
+    def issue_unless_taken(self, principal_id: str, **fields: Any) -> str | None:
+        """Issue once, returning the plaintext token or None when the ID is taken.
+
+        The primary key settles concurrent attempts; the caller owns the commit.
+        """
+        row, token = Principal.issue(tenant_id=self._tenant_id, principal_id=principal_id, **fields)
+        conflict = resolve_or_write(
+            self._session,
+            conflict=lambda: self.get(principal_id),
+            write=lambda: self._session.add(row),
+            constraint="principals_pkey",
+        )
+        return token if conflict is None else None
 
     def create_with_token(self, token: str, **fields: Any) -> Principal:
         """A new principal of this tenant whose token is *token*, added to the session.

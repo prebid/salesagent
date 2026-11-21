@@ -56,30 +56,30 @@ ROTATE_OPERATION = "AdminUI.rotate_principal_token"
 @pytest.mark.requires_db
 def test_unauthenticated_rotate_token_writes_no_success_row(integration_db):
     """No session, so no audit row claiming the rotation succeeded."""
-    env = AdminPrincipalEnv(tenant_id="audit_order_tenant")
-    principal_id = env.seed_principal(principal_id="audit_order_principal")
+    with AdminPrincipalEnv(tenant_id="audit_order_tenant") as env:
+        principal_id = env.seed_principal(principal_id="audit_order_principal")
 
-    response = env.post_rotate_token(
-        principal_id,
-        authenticated=False,
-        form={"attacker_supplied": "value"},
-    )
+        response = env.post_rotate_token(
+            principal_id,
+            authenticated=False,
+            form={"attacker_supplied": "value"},
+        )
 
-    # Which refusal it is — a redirect to login or a 401 — is the framework's business.
-    # What this test owns is that nothing was AUDITED as a success.
-    assert response.status_code != 200, (
-        f"an unauthenticated POST reached the handler (status {response.status_code}); "
-        "require_tenant_access should have refused it"
-    )
+        # The framework chooses whether to redirect to login or return a 401.
+        # What this test owns is that nothing was AUDITED as a success.
+        assert response.status_code != 200, (
+            f"an unauthenticated POST reached the handler (status {response.status_code}); "
+            "require_tenant_access should have refused it"
+        )
 
-    forged = [row for row in env.audit_rows(ROTATE_OPERATION) if row.success]
-    assert not forged, (
-        f"{len(forged)} audit row(s) record {ROTATE_OPERATION} as success=True for an "
-        "UNAUTHENTICATED request. The audit decorator is running outside "
-        "require_tenant_access, so it logged a refusal as a completed admin action. Put "
-        "@require_tenant_access() ABOVE @log_admin_action(...), per the convention in "
-        "src/admin/utils/audit_decorator.py's module docstring."
-    )
+        forged = [row for row in env.audit_rows(ROTATE_OPERATION) if row.success]
+        assert not forged, (
+            f"{len(forged)} audit row(s) record {ROTATE_OPERATION} as success=True for an "
+            "UNAUTHENTICATED request. The audit decorator is running outside "
+            "require_tenant_access, so it logged a refusal as a completed admin action. Put "
+            "@require_tenant_access() ABOVE @log_admin_action(...), per the convention in "
+            "src/admin/utils/audit_decorator.py's module docstring."
+        )
 
 
 @pytest.mark.requires_db
@@ -95,20 +95,20 @@ def test_authorized_rotate_token_still_rotates_and_is_audited(integration_db):
     auditing, which a refusal-only test reported as a clean fix. The endpoint had no test
     of any kind before this file, and it is the route that issues tenant credentials.
     """
-    env = AdminPrincipalEnv(tenant_id="audit_order_ok_tenant")
-    principal_id = env.seed_principal(principal_id="audit_order_ok_principal")
-    before = env.token_hash(principal_id)
+    with AdminPrincipalEnv(tenant_id="audit_order_ok_tenant") as env:
+        principal_id = env.seed_principal(principal_id="audit_order_ok_principal")
+        before = env.token_hash(principal_id)
 
-    response = env.post_rotate_token(principal_id, authenticated=True)
-    assert response.status_code in (200, 302), f"authorized rotation was refused with {response.status_code}"
+        response = env.post_rotate_token(principal_id, authenticated=True)
+        assert response.status_code in (200, 302), f"authorized rotation was refused with {response.status_code}"
 
-    after = env.token_hash(principal_id)
-    audited = [row for row in env.audit_rows(ROTATE_OPERATION) if row.success]
+        after = env.token_hash(principal_id)
+        audited = [row for row in env.audit_rows(ROTATE_OPERATION) if row.success]
 
-    assert after != before, "the stored token hash did not change, so nothing was rotated"
-    assert audited, (
-        "an AUTHORIZED rotation wrote no success=True audit row. Moving "
-        "require_tenant_access outside log_admin_action must not stop authorized actions "
-        "being audited — that is the whole point of the decorator. Check that "
-        "log_admin_action still resolves tenant_id when it is not the outermost wrapper."
-    )
+        assert after != before, "the stored token hash did not change, so nothing was rotated"
+        assert audited, (
+            "an AUTHORIZED rotation wrote no success=True audit row. Moving "
+            "require_tenant_access outside log_admin_action must not stop authorized actions "
+            "being audited. Check that "
+            "log_admin_action still resolves tenant_id when it is not the outermost wrapper."
+        )
