@@ -61,6 +61,7 @@ if TYPE_CHECKING:
 # fixture lookup. Simple ``import`` is not enough — pytest only discovers
 # fixtures from conftest files and registered plugins.
 pytest_plugins = [
+    "tests.bdd.steps.domain.a2a_task_ownership",
     "tests.bdd.payload_capture",
     "tests.bdd.scenario_liveness",
     "tests.bdd.steps.generic.given_auth",
@@ -2343,7 +2344,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         #   That pass rode the adapter flag its Given also raised; with the Given setting the
         #   tenant flag alone it is xfailed in _XFAIL_TAGS against #2483 on every transport.
         # - T-UC-003-approval-adapter → GRADUATE — BR-RULE-017 INV-3: same real-wire path;
-        #   the last_a2a_task guard is Transport.A2A-gated and inert on e2e_rest.
         # No UC-003 entries remain in e2e_rest_known_failures.txt — no sibling conflict.
 
         # Graduated: eleven of the twelve scenarios of the _UC005_E2E_FIXTURE_INJECTION_TAGS
@@ -5618,6 +5618,11 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         # transport itself.
         return
 
+    # Native task methods exist on A2A only; grade both actual HTTP topologies.
+    if "a2a-task-ownership" in marker_names:
+        _parametrize_ctx(metafunc, [Transport.A2A], [Transport.E2E_A2A])
+        return
+
     # Single-transport scenarios still get a real (one-element) parametrization,
     # so the transport that grades them is visible at collection. See
     # _SINGLE_TRANSPORT_TAGS.
@@ -6762,6 +6767,11 @@ _UC006_WIRED_SCENARIOS = frozenset(
 )
 
 ENV_ROUTES: list[EnvRoute] = [
+    EnvRoute(
+        tag="a2a-task-ownership",
+        when=lambda m: "a2a-task-ownership" in m,
+        env_builder=_env("tests.harness.a2a_task_ownership.A2ATaskOwnershipEnv"),
+    ),
     # ── @ctxecho (local context-echo-on-every-outcome feature) ──────────────
     # Same reason the @egress rows below are UNSCOPED `when` rows: these
     # scenarios carry T-CTXECHO-* identity tags, not T-UC-<n>, so

@@ -33,7 +33,7 @@ from tests.harness.admin_client import AdminOperatorMixin
 from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.peer_agent import PeerCreativeAgentMixin
 from tests.harness.publisher_authorization import PublisherAdagentsMixin
-from tests.harness.transport import DeliverResult
+from tests.harness.transport import DeliverResult, TransportResult
 
 if TYPE_CHECKING:
     from src.core.tools.media_buy_create import ApprovalResult
@@ -830,7 +830,7 @@ class MediaBuyCreateEnv(
         flat.update(kwargs)
         return flat
 
-    def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
+    def deliver_a2a(self, **kwargs: Any) -> TransportResult:
         """Dispatch create_media_buy through the real A2A ``on_message_send`` pipeline.
 
         Delegates to the base ``_run_a2a_handler`` (drives ``on_message_send`` →

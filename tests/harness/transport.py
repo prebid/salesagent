@@ -265,15 +265,15 @@ class TransportResult:
         envelope: Transport-specific metadata (HTTP status, ToolResult, etc.).
         error: Exception raised during dispatch, if any.
         raw_response: Unprocessed transport response (httpx.Response, ToolResult, etc.).
-        wire_response: Serialized success-path response body as a dict, captured
-            from the real wire (REST HTTP JSON body, MCP structured_content, A2A
-            artifact DataPart). ``None`` on error and on IMPL (no wire — serialize
-            the typed ``payload`` instead). Lets success-path tests assert the
-            actual serialized shape (e.g. the v3.1 format_id federation contract).
+        wire_response: Captured response body (REST JSON, MCP structured_content,
+            or A2A artifact DataPart). A2A retains this body on domain and typed
+            parser failures too. Direct native delivery retains the converted
+            Task in envelope["task"] with has_wire=False; HTTP delivery additionally
+            retains raw_response and has_wire=True. Parsers receive deep copies.
         wire_error_envelope: Raw two-layer error envelope dict captured from
             the actual wire bytes (REST HTTP body, MCP ToolError content text,
-            A2A failed-Task artifact DataPart). ``None`` on success or on the
-            IMPL transport, which has no wire. This is the canonical field
+            A2A artifact DataPart with adcp_error or native FAILED state).
+            ``None`` on success or when no error envelope was captured. This is the canonical field
             for error verification — see ``tests/CLAUDE.md`` § Error
             Verification Policy.
         has_wire: Whether these bytes crossed a REAL wire, declared by the

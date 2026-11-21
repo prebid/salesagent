@@ -91,7 +91,7 @@ from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 from tests.harness.peer_agent import PeerCreativeAgentMixin
-from tests.harness.transport import DeliverResult
+from tests.harness.transport import DeliverResult, TransportResult
 from tests.helpers.creative_test_helpers import creative_payload
 from tests.helpers.peer_creative_agent import single_preview_document
 
@@ -1486,7 +1486,7 @@ class CreativeSyncEnv(GamSellerMixin, PeerCreativeAgentMixin, IntegrationEnv):
         )
         return _sync_creatives_impl(req=req, identity=identity)
 
-    def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
+    def deliver_a2a(self, **kwargs: Any) -> TransportResult:
         """Dispatch sync_creatives through the REAL A2A ``on_message_send`` pipeline.
 
         This used to call ``sync_creatives_raw`` directly, routing AROUND

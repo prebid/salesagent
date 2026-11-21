@@ -272,7 +272,7 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
     Per SITE, never per transport (Design Amendment v2, A2): ``has_wire=True``
     only where the construction is downstream of an actual send/receive. Several
     constructions owned by a WIRE transport still return before any bytes move —
-    the three catch-all error unwraps (``unwrap_mcp_error`` / ``unwrap_a2a_error``
+    the three catch-all error unwraps (``unwrap_mcp_error`` / ``unwrap_delivery_error``
     / ``unwrap_rest_error`` each wrap a whole delivery, so they can fire pre-send)
     and ``RestE2EDispatcher``'s missing-``e2e_config`` guard (ahead of every httpx
     call). Grading these "by transport" would re-freeze, one layer up in the pin,
@@ -302,19 +302,9 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
     # (module, owner, ordinal-in-owner) -> (expected has_wire, why this SITE is what it is)
     EXPECTED_SITES: dict[tuple[str, str, int], tuple[bool, str]] = {
         # ── tests/harness/dispatchers.py — the per-transport dispatch entry points ──
-        # TWO sites, because the A2A leg moved out of the dispatcher method and into the
-        # module-level ``a2a_transport_result`` helper, which declares ``has_wire`` per
-        # construction site rather than once for the function: the success leg has the
-        # artifact DataPart in hand, the registration/refusal leg never reached the wire.
-        # Ordinals follow the SOURCE order in the current dispatchers.py (success at :201,
-        # registration at :210), not the order the pre-merge branch happened to write them.
         ("dispatchers.py", "a2a_transport_result", 0): (
-            True,
-            "success, downstream of the A2A artifact DataPart capture",
-        ),
-        ("dispatchers.py", "a2a_transport_result", 1): (
             False,
-            "registration/refusal leg — nothing was delivered, so no wire to claim",
+            "registration leg — no native Task or HTTP response observed",
         ),
         ("dispatchers.py", "McpDispatcher.dispatch", 0): (
             True,
@@ -349,7 +339,7 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
             "catch-all wrapping the whole MCP delivery — can fire before any bytes move (the STRADDLE case: "
             "it still hands back the REAL envelope it recovered)",
         ),
-        ("client.py", "unwrap_a2a_error", 0): (
+        ("client.py", "unwrap_delivery_error", 0): (
             False,
             "catch-all wrapping the whole A2A delivery — can fire before any bytes move (STRADDLE, as above)",
         ),
@@ -358,19 +348,18 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
             "REST DELIVER exception — no HTTP body existed at all, so nothing crossed the wire",
         ),
         # ── tests/harness/raw_wire.py — a document sent as written (REST goes through client.py) ──
+        ("client.py", "jsonrpc_http_result", 0): (
+            True,
+            "A2A HTTP response received — success, AdCP refusal, protocol refusal or malformed body",
+        ),
         ("raw_wire.py", "_protocol_refusal", 0): (
             False,
             "the transport's own refusal (JSON-RPC error, MCP ToolError with no envelope) — no AdCP body "
             "came back, and on the in-process legs the refusal fires before any bytes move",
         ),
-        ("raw_wire.py", "_a2a_task_result", 0): (
+        ("client.py", "native_task_result", 0): (
             False,
-            "failed A2A Task — the error convention shared with unwrap_a2a_error; the envelope it recovered "
-            "is still the REAL artifact",
-        ),
-        ("raw_wire.py", "_a2a_task_result", 1): (
-            True,
-            "completed A2A Task — downstream of the artifact DataPart capture, as _unwrap_tool_success",
+            "direct native receipt — authentic Task evidence without HTTP; HTTP callers explicitly replace the declaration",
         ),
         ("raw_wire.py", "_mcp", 0): (
             False,
@@ -497,13 +486,13 @@ class TestDispatchersDeclareHasWireOnRealDispatch:
     """The declaration survives a real dispatch — not just the source text."""
 
     @pytest.mark.parametrize("transport", [Transport.REST, Transport.A2A, Transport.MCP])
-    def test_wire_transports_declare_a_wire_and_carry_one(self, transport, integration_db):
+    def test_dispatches_declare_http_evidence_and_carry_the_received_body(self, transport, integration_db):
         with CreativeFormatsEnv() as env:
             # The request has to NAME a seller this deployment serves: one naming none is
             # refused (TENANT_UNDEFINED). This test creates no tenant of its own.
             env.setup_default_data()
             result = env.call_via(transport)
-        assert result.has_wire is True, f"{transport}: success dispatch did not declare has_wire"
+        assert result.has_wire is (transport is not Transport.A2A), f"{transport}: incorrect HTTP evidence declaration"
         assert result.wire_response is not None, (
             f"{transport}: declared has_wire but stashed no wire_response — harness bug, not a no-wire result"
         )
@@ -649,4 +638,4 @@ class TestBothDispatchSeamsStashTheTransportResult:
                 f"{transport}: when_request._call_via did not stash ctx['result'] "
                 "— the wire readers have no declaration to branch on"
             )
-            assert result.has_wire is True
+            assert result.has_wire is (transport != "a2a")
