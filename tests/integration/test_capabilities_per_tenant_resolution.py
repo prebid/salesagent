@@ -41,11 +41,12 @@ precondition these scenarios have to satisfy -- see ``_tenant_with_a_portfolio``
 from __future__ import annotations
 
 import pytest
-from adcp.types.generated_poc.enums.channels import MediaChannel
+from adcp.types.domains.enums.channels import MediaChannel
 
 from src.adapters.mock_ad_server import MockAdServer
 from tests.factories import ProductFactory
-from tests.factories.core import PublisherPartnerFactory, set_adapter_type
+from tests.factories.core import set_adapter_type
+from tests.factories.publisher import authorize_publishers
 from tests.harness._base import IntegrationEnv
 
 
@@ -53,7 +54,7 @@ def _tenant_with_a_portfolio(env: IntegrationEnv) -> tuple:
     """Seed a tenant that has a ``media_buy.portfolio`` at all, then return it.
 
     ``primary_channels`` lives on ``Portfolio``, and ``Portfolio`` is only emitted
-    for a tenant with at least one real ``PublisherPartner`` row: ``publisher_domains``
+    for a tenant with at least one publisher whose stored adagents.json authorizes it: ``publisher_domains``
     is REQUIRED with ``minItems: 1`` there (pinned v3.1.1
     get-adcp-capabilities-response.json), so ``_get_adcp_capabilities_impl`` omits the
     whole section rather than fabricate a ``<subdomain>.example.com`` domain the seller
@@ -68,7 +69,7 @@ def _tenant_with_a_portfolio(env: IntegrationEnv) -> tuple:
     (tests/bdd/steps/domain/uc010_capabilities.py), and for the same reason.
     """
     tenant, principal = env.setup_default_data()
-    PublisherPartnerFactory(tenant=tenant)
+    authorize_publishers(tenant, "partner.psatest.com")
     env._commit_factory_data()
     return tenant, principal
 
@@ -77,15 +78,18 @@ def _tenant_with_a_portfolio(env: IntegrationEnv) -> tuple:
 class TestMisconfiguredAdapterDegrades:
     """An adapter_type production cannot resolve degrades discovery, advisory and all."""
 
-    def test_unresolvable_adapter_type_degrades_to_display_only(self, integration_db):
+    def test_unresolvable_adapter_type_omits_channel_scope(self, integration_db):
         """A tenant pointed at an ad server that does not exist still gets an answer.
 
         ``get_adapter_class`` raises ``AdCPConfigurationError`` for an
         ``adapter_type`` outside ``ADAPTER_REGISTRY``; that call sits inside the
-        capabilities degradation boundary, so the response degrades to the
-        ``[display]`` fallback and records an advisory rather than failing. This is
-        the state the two UC-010 degradation scenarios describe, reached the way a
-        real operator reaches it -- by typing the adapter name wrong.
+        capabilities degradation boundary, so the response omits primary_channels and
+        records an advisory rather than failing. Omission is the pin's spelling of
+        unknown scope ("Omission means channel scope is unknown"); a present array is an
+        exhaustive brief-routing allowlist, so a guessed ``[display]`` would turn buyers
+        away for every other channel. This is the state the two UC-010 degradation
+        scenarios describe, reached the way a real operator reaches it -- by typing the
+        adapter name wrong.
         """
         with IntegrationEnv(tenant_id="t_bad_adapter", principal_id="p_bad_adapter") as env:
             tenant, _principal = _tenant_with_a_portfolio(env)
@@ -97,10 +101,9 @@ class TestMisconfiguredAdapterDegrades:
 
         assert response.media_buy is not None
         channels = response.media_buy.portfolio.primary_channels
-        assert channels == [MediaChannel.display], (
-            "expected the [display]-only degraded fallback for a tenant whose adapter_type "
-            f"cannot be resolved, got {channels!r} -- a real adapter answered, so the "
-            "misconfiguration was not refused"
+        assert channels is None, (
+            "expected primary_channels omitted (unknown scope) for a tenant whose adapter_type "
+            f"cannot be resolved, got {channels!r}"
         )
         assert response.errors, (
             "expected a top-level advisory recording the degradation "

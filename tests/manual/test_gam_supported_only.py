@@ -39,7 +39,7 @@ class SupportedTargetingTester:
     def load_config(self):
         """Load test configuration."""
         config_path = Path(__file__).parent.parent.parent / ".gam-test-config.json"
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             self.test_config = json.load(f)
 
         self.network_code = self.test_config["test_network"]["network_code"]
@@ -92,6 +92,7 @@ class SupportedTargetingTester:
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
             tenant_id="test",
+            tenant_ai_config=None,
         )
 
         package = MediaPackage(
@@ -131,6 +132,7 @@ class SupportedTargetingTester:
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
             tenant_id="test",
+            tenant_ai_config=None,
         )
 
         package = MediaPackage(
@@ -190,6 +192,7 @@ class SupportedTargetingTester:
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
             tenant_id="test",
+            tenant_ai_config=None,
         )
 
         package = MediaPackage(
@@ -247,6 +250,7 @@ class SupportedTargetingTester:
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
             tenant_id="test",
+            tenant_ai_config=None,
         )
 
         package = MediaPackage(
@@ -285,6 +289,7 @@ class SupportedTargetingTester:
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
             tenant_id="test",
+            tenant_ai_config=None,
         )
 
         package = MediaPackage(
@@ -323,6 +328,7 @@ class SupportedTargetingTester:
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
             tenant_id="test",
+            tenant_ai_config=None,
         )
 
         package = MediaPackage(

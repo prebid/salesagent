@@ -382,7 +382,7 @@ def get_tenant(tenant_id):
                     adapter_data.update(
                         {
                             "gam_network_code": adapter.gam_network_code,
-                            "has_refresh_token": bool(adapter.gam_refresh_token),
+                            "has_refresh_token": bool(adapter._gam_refresh_token),
                             "gam_trafficker_id": adapter.gam_trafficker_id,
                             "gam_manual_approval_required": bool(adapter.gam_manual_approval_required),
                         }

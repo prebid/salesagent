@@ -78,7 +78,7 @@ _ROUTING_KEYS = {"account", "brand", "operator"}
 
 def _declared_entry_fields() -> set[str]:
     """Settable fields BOTH request branches declare, minus the routing keys."""
-    from adcp.types.generated_poc.account.sync_accounts_request import Accounts, Accounts1
+    from adcp.types.domains.account.sync_accounts_request import Accounts, Accounts1
 
     return (set(Accounts.model_fields) & set(Accounts1.model_fields)) - _ROUTING_KEYS
 

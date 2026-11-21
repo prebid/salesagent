@@ -28,13 +28,51 @@ hazard the environment route had, removed rather than patched.
 
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
+from unittest.mock import patch
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     import pytest
 
-    from src.core.config import LimitSettings
+    from src.core.config import LimitSettings, RuntimeSettings
+
+# Where the platform's AI credential comes from. With PYDANTIC_AI_PROVIDER unset the
+# platform provider is Google, so GEMINI_API_KEY is the key that counts; the others are
+# removed so an ambient provider/model/key from the developer's shell cannot make a
+# different vendor the platform's.
+PLATFORM_AI_ENV: tuple[str, ...] = (
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "PYDANTIC_AI_PROVIDER",
+    "PYDANTIC_AI_MODEL",
+)
+
+
+def _inject(monkeypatch: pytest.MonkeyPatch, group: str, overrides: dict[str, Any]) -> Any:
+    """Replace the named fields of one settings group on the cached settings; return the group."""
+    # Compose the app first. src.app calls load_settings() when it is imported, which
+    # replaces the settings object, so an injection made before a later first import of it (an
+    # env entered after this call, say) would be discarded.
+    import src.app  # noqa: F401
+    import src.core.config as config_module
+    from src.core.config import get_settings
+
+    current = get_settings()
+    group_settings = getattr(current, group)
+    unknown = set(overrides) - set(type(group_settings).model_fields)
+    if unknown:
+        raise AttributeError(f"not {type(group_settings).__name__} fields: {sorted(unknown)}")
+    # ``model_copy`` rather than a re-validated construction: the value is already typed,
+    # and re-running validation here would make this helper's behaviour depend on the
+    # constraints of fields the caller did not name.
+    updated = group_settings.model_copy(update=overrides)
+    monkeypatch.setattr(config_module, "_settings", replace(current, **{group: updated}))
+    return updated
 
 
 def inject_limits(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> LimitSettings:
@@ -51,17 +89,68 @@ def inject_limits(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> LimitSet
         The injected ``LimitSettings``, for a caller that wants to read a shipped default
         off it without a second import.
     """
-    import src.core.config as config_module
-    from src.core.config import LimitSettings, get_settings
+    return _inject(monkeypatch, "limits", overrides)
 
-    unknown = set(overrides) - set(LimitSettings.model_fields)
-    if unknown:
-        raise AttributeError(f"not LimitSettings fields: {sorted(unknown)}")
 
-    current = get_settings()
-    # ``model_copy`` rather than a re-validated construction: the value is already typed,
-    # and re-running validation here would make this helper's behaviour depend on the
-    # constraints of fields the caller did not name.
-    limits = current.limits.model_copy(update=overrides)
-    monkeypatch.setattr(config_module, "_settings", replace(current, limits=limits))
-    return limits
+def inject_runtime(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> RuntimeSettings:
+    """Put ``overrides`` on the cached settings' :class:`RuntimeSettings` and return it.
+
+    Same contract as :func:`inject_limits`: typed values, unknown names refused,
+    accumulating, restored at teardown -- e.g. ``sales_agent_domain="agent.example.com"``.
+    """
+    return _inject(monkeypatch, "runtime", overrides)
+
+
+class PlatformAICredential:
+    """The platform's AI credential, stated for the length of a test: none, or one Gemini key.
+
+    ``tests/conftest.py`` sets ``GEMINI_API_KEY`` for every test, and
+    ``AIServiceFactory.build`` falls back to the platform key, so a test about the
+    SELLER's own configuration has to remove it or every tenant looks AI-enabled.
+
+    Pinned in the ENVIRONMENT, unlike :func:`inject_limits`: a composition root rebuilds
+    the settings from the environment whenever it starts (the REST leg imports
+    ``src.app``, which calls ``load_settings()``), so a value put only on the settings
+    object is undone by the first REST dispatch. The settings are reloaded on every
+    change and again after the environment is restored.
+
+    A harness env calls :meth:`start` and registers :meth:`stop` with its guard; a test
+    uses it as a context manager.
+    """
+
+    def __init__(self, gemini_api_key: str | None = None) -> None:
+        """``gemini_api_key`` is the platform key :meth:`start` states; ``None`` is none."""
+        self._environ = patch.dict(os.environ)
+        self._gemini_api_key = gemini_api_key
+
+    def start(self) -> None:
+        self._environ.start()
+        self.set(self._gemini_api_key)
+
+    def set(self, gemini_api_key: str | None) -> None:
+        """Replace the platform credential: ``None`` removes it."""
+        from src.core.config import load_settings
+
+        for var in PLATFORM_AI_ENV:
+            os.environ.pop(var, None)
+        if gemini_api_key is not None:
+            os.environ["GEMINI_API_KEY"] = gemini_api_key
+        load_settings()
+
+    def stop(self) -> None:
+        from src.core.config import load_settings
+
+        self._environ.stop()
+        load_settings()
+
+    def __enter__(self) -> PlatformAICredential:
+        self.start()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.stop()

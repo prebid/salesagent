@@ -57,6 +57,9 @@ select = ["TID251"]
 "src/core/errors/issues.py" = ["TID251"]
 "src/core/errors/details.py" = ["TID251"]
 "src/core/database/repositories/**" = ["TID251"]
+# The mapping layer, which now owns the document composition the repositories did. See the
+# matching note in .ast-grep/rules/serialize-only-at-the-edges.yml: one file, not a glob.
+"src/core/database/mapping/creative.py" = ["TID251"]
 "src/core/database/database_session.py" = ["TID251"]
 "src/core/context_manager.py" = ["TID251"]
 "src/core/json_validators.py" = ["TID251"]

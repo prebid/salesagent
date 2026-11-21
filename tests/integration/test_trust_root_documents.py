@@ -13,16 +13,19 @@ actually resolve.
 
 What each group grades, and why it is written the way it is:
 
-* **Per-endpoint entries (R-H1).** security.mdx:1104 step 5 byte-equals the URL
-  whose ``get_adcp_capabilities`` the counterparty invoked — and that is an
-  ENDPOINT (``/mcp``, ``/a2a``), never a bare origin. The brand.json schema's own
-  ``#/definitions/agents`` description blesses several same-type entries with
-  distinct urls. The expected literals are therefore discovered by ASKING THE
-  RUNNING APP which path it actually serves, never by rebuilding the string with
-  the same helper production uses: a trailing-slash mismatch is the spec's own
-  worked failure example (``https://x.com/mcp`` vs ``https://x.com/mcp/``), and
-  Starlette's ``/mcp`` mount redirects while ``/a2a`` does not. A test that
-  constructs its expectation the way the code does proves nothing.
+* **Per-endpoint entries (R-H1).** security.mdx's key-discovery step 5 matches a
+  canonicalized ``agents[].url`` against the canonicalized agent URL the
+  counterparty HOLDS — and that is an ENDPOINT (``/mcp``, ``/a2a``), never a bare
+  origin. The brand.json schema's own ``#/definitions/agents`` description blesses
+  several same-type entries with distinct urls. The expected literals are the paths
+  a counterparty DIALS, confirmed against the running app rather than rebuilt with
+  the same helper production uses: a test that constructs its expectation the way
+  the code does proves nothing. A trailing-slash mismatch is the spec's own worked
+  failure example (``https://x.com/mcp`` vs ``https://x.com/mcp/``) and step 5 says
+  "a trailing slash remains significant", so WHICH side the published value anchors
+  on is the whole question — Starlette's ``/mcp`` mount 307s to ``/mcp/`` while
+  ``/a2a`` answers in place, and a redirect moves the client without changing the URL
+  the client was given. The dialed path is what it was given.
 
 * **``revoked_at`` on the JWKS, not only on adagents (R-H3).** Per F1 the JWKS is
   authoritative for REQUEST signing; the adagents pin governs sell-side webhooks
@@ -45,10 +48,11 @@ Schema authority: the vendored v3.1.1 fixtures under
 ``tests/fixtures/adcp_schemas_pinned/3.1.1/`` (``adagents.json`` and
 ``brand.json`` DIFFER at the older ``PINNED_SHA``, and
 ``core/authorized-agent-base.json`` — where ``signing_keys[]`` lives — does not
-exist there at all). The adagents document additionally goes through
-``adcp.adagents.validate_adagents_structure``: that is the exact code path our
-OWN consumers run (``src/admin/blueprints/publisher_partners.py``), so it grades
-the producer against the consumer rather than against a second opinion.
+exist there at all). Whether a host publishes adagents.json at all, and that the
+document it publishes validates against the pinned schema and against
+``adcp.adagents.validate_adagents_structure`` (the code path our OWN consumers run),
+is graded on every transport by ``tests/bdd/features/local-trust-root-adagents.feature``;
+this file grades the key pin inside it.
 
 No BDD feature accompanies this work. Not because the harness cannot model these
 documents — it models them as COUNTERPARTY state today (``BR-UC-020:721`` serves
@@ -67,7 +71,6 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import urlsplit
 
 import pytest
 from adcp import get_adcp_spec_version
@@ -86,7 +89,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 _NOW = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
 _BRAND_SCHEMA = f"{EXPECTED_SPEC_VERSION}/brand.json"
-_ADAGENTS_SCHEMA = f"{EXPECTED_SPEC_VERSION}/adagents.json"
 
 _BRAND_PATH = "/.well-known/brand.json"
 _ADAGENTS_PATH = "/.well-known/adagents.json"
@@ -107,7 +109,12 @@ _BRAND_AGENT_KEYS = {
 
 
 def _seed(env, slug: str, **key_kwargs):
-    """Seed one tenant reachable at its own virtual host, plus one signing key.
+    """Seed one tenant reachable at its own virtual host, one signing key, and one
+    authorized property on that host.
+
+    The property is what makes the host publish an adagents.json at all (a host that owns
+    none answers 404), and what gives the document an ``authorized_agents`` entry to carry
+    the key pin: without it every pin assertion below holds over an empty set.
 
     Every test gets its OWN slug: the integration database is not rolled back
     between tests in this suite, and two live tenants sharing a ``virtual_host``
@@ -117,6 +124,7 @@ def _seed(env, slug: str, **key_kwargs):
     ILLEGAL in brand.json's ``brand_agent_entry.id`` (``^[a-z0-9_]+$``).
     """
     from tests.factories import SigningKeyFactory, TenantFactory
+    from tests.factories.publisher import authorize_properties
 
     tenant = TenantFactory(
         tenant_id=f"tr_{slug}",
@@ -125,41 +133,51 @@ def _seed(env, slug: str, **key_kwargs):
     )
     key_kwargs.setdefault("not_before", _NOW - timedelta(days=1))
     key = SigningKeyFactory(tenant=tenant, **key_kwargs)
+    # The tenant's own host is a publisher: its stored adagents.json authorizes a property there.
+    authorize_properties(tenant, tenant.virtual_host_name, [("own_home", ("premium_news",))])
     env.get_session()  # commits pending factory data
     return tenant, key
 
 
 def _served_endpoint_paths(client) -> dict[str, str]:
-    """Ask the RUNNING APP which path a counterparty actually ends up calling.
+    """Ask the RUNNING APP which path a counterparty DIALS for each transport.
 
-    Returns ``{"mcp": ..., "a2a": ...}`` — the path AFTER any redirect the app
-    itself issues. ``/mcp`` is a Starlette ``Mount`` and answers ``GET /mcp`` with
-    a 307 to ``/mcp/``; ``/a2a`` is a JSON-RPC POST route and answers ``GET /a2a``
-    with 405, i.e. it is served at exactly that path. That asymmetry is the whole
-    point: the byte-equal match in security.mdx step 5 is against the URL the
-    counterparty invoked, and the redirect decides what that string is.
+    Returns ``{"mcp": "/mcp", "a2a": "/a2a"}`` — the path as dialed, confirmed against
+    the running app, and NOT the path any redirect lands on. The two differ for MCP:
+    ``/mcp`` is a Starlette ``Mount`` and answers ``GET /mcp`` with a 307 to ``/mcp/``,
+    while ``/a2a`` is a JSON-RPC POST route and answers ``GET /a2a`` with 405. Both are
+    answered by this app; only one is answered by moving the client.
 
-    The ``404`` guard is what makes the fallback branch legitimate. "Not a redirect"
-    only means "served at *candidate*" while SOMETHING answers *candidate*; a ``404``
-    means nothing does, and recording it as the served path would publish a URL that
-    resolves to nothing. It has a concrete trigger: a sibling test file that starts the
-    app lifespan and does not restore leaves the Flask catch-all ``Mount("")`` on the
+    The dialed path is the one that belongs in ``agents[].url``, and that is a spec
+    reading rather than a preference. security.mdx's key-discovery step 5 canonicalizes
+    the agent URL a counterparty HOLDS and every candidate ``agents[].url``, then
+    requires one equal pair — and "a trailing slash remains significant under the shared
+    algorithm". The URL a counterparty holds is the one it was given (``seller-setup.mdx``
+    publishes ``https://ads.streamhaus.example/mcp``), not the one our mount bounces it
+    to, so publishing the post-redirect ``/mcp/`` makes a conformant buyer match no entry.
+    This function recorded the redirect TARGET until the one-spelling change, which is why
+    ``AGENT_ENDPOINT_PATHS`` published ``/mcp/``.
+
+    The candidates are literals here on purpose: rebuilding them from
+    ``AGENT_ENDPOINT_PATHS`` would assert that production agrees with itself. What is
+    measured against the app is that the published path is answered AT ALL.
+
+    The ``404`` guard carries that measurement. A ``404`` means nothing on this app
+    answers the candidate, and publishing a URL that resolves to nothing is the failure
+    worth catching. It has a concrete trigger: a sibling test file that starts the app
+    lifespan and does not restore leaves the Flask catch-all ``Mount("")`` on the
     singleton's route table, which swallows both bare paths and turns the ``307``/``405``
-    above into ``404`` (``salesagent-66a1``, :mod:`tests.helpers.app_state`). Failing
-    here names that cause; falling through produced a byte-equality mismatch that did
-    not.
+    above into ``404`` (``salesagent-66a1``, :mod:`tests.helpers.app_state`). Failing here
+    names that cause; falling through produced a byte-equality mismatch that did not.
     """
     paths: dict[str, str] = {}
     for name, candidate in (("mcp", "/mcp"), ("a2a", "/a2a")):
         response = client.get(candidate, follow_redirects=False)
-        if response.status_code in (301, 302, 303, 307, 308):
-            paths[name] = urlsplit(response.headers["location"]).path
-            continue
         assert response.status_code != 404, (
-            f"discovery is meaningless: nothing on this app answers {candidate!r} and it "
-            "issues no redirect either, so no served path can be read off it. Most likely "
-            "another test file started the app lifespan without restoring "
-            "src.app.app.router.routes (see tests.helpers.app_state)"
+            f"discovery is meaningless: nothing on this app answers {candidate!r}, so a "
+            "published URL naming it would resolve to nothing. Most likely another test "
+            "file started the app lifespan without restoring src.app.app.router.routes "
+            "(see tests.helpers.app_state)"
         )
         paths[name] = candidate
     return paths
@@ -200,6 +218,14 @@ def _publishable(env, tenant_id: str, *, now: datetime = _NOW, purpose: str = RE
 
     repo = SigningKeyRepository(env.get_session(), tenant_id)
     return repo.publishable_at(now=now, grace_seconds=_grace_seconds(), purpose=purpose)
+
+
+def _authorizations(env, tenant) -> list:
+    """The properties the route builds the tenant's adagents.json from, read the way it reads them."""
+    from src.core.database.repositories.publisher import PublisherRepository
+
+    repo = PublisherRepository(env.get_session(), tenant.tenant_id)
+    return repo.list_for_publisher_domain(tenant.virtual_host_name)
 
 
 class TestCanonicalAgentUrlIsTheOneIdentity:
@@ -274,33 +300,6 @@ class TestCanonicalAgentUrlIsTheOneIdentity:
             )
             assert card_url.endswith(served["a2a"]), (
                 f"the card must advertise the A2A path this app serves ({served['a2a']!r}); got {card_url!r}"
-            )
-
-    def test_construct_agent_url_derives_from_the_canonical_helper(self, integration_db):
-        """R-M2: the admin blueprint's URL builder is the second migrated call site,
-        not a third independent derivation.
-
-        Its PRODUCTION/localhost ladder is what makes the adagents authorization
-        checks compare against a different string from the one we publish.
-
-        No environment variable is neutralized here, and that is the point rather than
-        an omission: ``canonical_agent_url`` reads STORED TENANT STATE first — the
-        seeded ``virtual_host`` — and its only fallback is
-        ``get_settings().runtime``, so ``os.environ`` steers nothing on this path.
-        ``src/core/config.py`` is the one env reader (``ruff-environment.toml``) and it
-        builds its ``Settings`` once, so a ``monkeypatch.delenv`` would be a safeguard
-        that neutralizes nothing while implying env still decides the answer.
-        """
-        from src.admin.blueprints.authorized_properties import _construct_agent_url
-        from src.core.agent_identity import canonical_agent_url
-
-        with BareIntegrationEnv(tenant_id="trust_root_env_c") as env:
-            env.setup_default_data()
-            tenant, _ = _seed(env, "c")
-
-            assert _construct_agent_url(tenant.tenant_id) == canonical_agent_url(tenant), (
-                "_construct_agent_url must return the canonical agent URL, not a PRODUCTION-flag / "
-                "localhost-port derivation of its own"
             )
 
     def test_agent_entry_ids_satisfy_the_schema_charset_for_a_hyphenated_subdomain(self, integration_db):
@@ -456,27 +455,18 @@ class TestRevocationGraceWindow:
         without the marker inverts the property the grace window exists for.
         """
         from src.core.signing.trust_root import build_adagents_json, build_jwks
-        from tests.factories import AuthorizedPropertyFactory, SigningKeyFactory
+        from tests.factories import SigningKeyFactory
 
         with BareIntegrationEnv(tenant_id="trust_root_env_j") as env:
             env.setup_default_data()
             tenant, live = _seed(env, "j")
             revoked_at = _NOW - timedelta(seconds=_grace_seconds() // 2)
             revoked = SigningKeyFactory(tenant=tenant, not_before=_NOW - timedelta(days=2), revoked_at=revoked_at)
-            # An authorization record is a PRECONDITION for this test, not incidental setup:
-            # every authorized_agents[*] variant requires its selector array (minItems: 1), so a
-            # tenant with no backing record correctly publishes authorized_agents == [] (asserted
-            # by test_adagents_claims_no_authorization_without_a_backing_record). Without a record
-            # there is no pin to inspect, and the marker assertions below would pass VACUOUSLY —
-            # `all(...)` over an empty list is true. Same shape as the two sibling tests.
-            authorization = AuthorizedPropertyFactory(
-                tenant=tenant, publisher_domain=tenant.virtual_host, tags=["premium_news"]
-            )
             env.get_session()
 
             keys = _publishable(env, tenant.tenant_id)
             jwks = build_jwks(keys)
-            adagents = build_adagents_json(tenant, keys, [authorization])
+            adagents = build_adagents_json(tenant, keys, _authorizations(env, tenant))
 
             assert _kids(jwks["keys"]) == {live.kid, revoked.kid}, (
                 f"a key inside its grace window stays in the JWKS; got {sorted(_kids(jwks['keys']))}"
@@ -528,12 +518,12 @@ class TestRevocationGraceWindow:
 
             keys = _publishable(env, tenant.tenant_id)
             jwks = build_jwks(keys)
-            adagents = build_adagents_json(tenant, keys, [])
+            adagents = build_adagents_json(tenant, keys, _authorizations(env, tenant))
 
             assert _kids(jwks["keys"]) == {live.kid}, (
                 f"a key revoked beyond the grace window must be gone from the JWKS; got {sorted(_kids(jwks['keys']))}"
             )
-            assert expired.kid not in _pinned_kids(adagents), (
+            assert _pinned_kids(adagents) == {live.kid}, (
                 f"...and gone from the adagents pin too; got {sorted(_pinned_kids(adagents))}"
             )
 
@@ -633,47 +623,16 @@ class TestWellKnownEndpoints:
 
 
 class TestAdagentsDocument:
-    """The publisher-pin document — same key set, and never a fabricated claim."""
-
-    def test_adagents_is_schema_valid_and_passes_the_consumer_validator(self, integration_db):
-        """Graded twice on purpose: jsonschema against the vendored v3.1.1 file, and
-        ``validate_adagents_structure`` — the exact function our own admin code runs
-        when it consumes a PUBLISHER's adagents.json.
-        """
-        from adcp.adagents import validate_adagents_structure
-
-        from tests.factories import AuthorizedPropertyFactory
-
-        with BareIntegrationEnv(tenant_id="trust_root_env_o") as env:
-            env.setup_default_data()
-            tenant, _ = _seed(env, "o")
-            AuthorizedPropertyFactory(tenant=tenant, publisher_domain=tenant.virtual_host, tags=["premium_news"])
-            env.get_session()
-            client = env.get_rest_client()
-
-            document = _get_document(client, _ADAGENTS_PATH, tenant)
-
-            validate_against_pinned_schema(_ADAGENTS_SCHEMA, document)
-
-            report = validate_adagents_structure(document)
-            assert report.schema_valid, f"our own consumer path rejects the document we publish: {report.errors}"
-            assert report.authorized_agents_count >= 1, (
-                "the document must carry the authorization backed by the seeded authorized-property "
-                f"record; got {report.authorized_agents_count} entries"
-            )
+    """The publisher-pin document carries the same key set as the JWKS."""
 
     def test_adagents_signing_keys_are_the_jwks_key_set(self, integration_db):
         """R7: both documents are produced from the SAME ``publishable_at`` result.
         If the pin drifts from the JWKS, our own sell-side webhooks are rejected
         against our own published document.
         """
-        from tests.factories import AuthorizedPropertyFactory
-
         with BareIntegrationEnv(tenant_id="trust_root_env_p") as env:
             env.setup_default_data()
             tenant, _ = _seed(env, "p")
-            AuthorizedPropertyFactory(tenant=tenant, publisher_domain=tenant.virtual_host, tags=["premium_news"])
-            env.get_session()
             client = env.get_rest_client()
 
             jwks = _get_document(client, _JWKS_PATH, tenant)
@@ -682,24 +641,4 @@ class TestAdagentsDocument:
             assert _pinned_kids(adagents) == _kids(jwks["keys"]), (
                 "the adagents signing_keys[] pin and the JWKS must be the same key set; "
                 f"pin={sorted(_pinned_kids(adagents))} jwks={sorted(_kids(jwks['keys']))}"
-            )
-
-    def test_adagents_claims_no_authorization_without_a_backing_record(self, integration_db):
-        """R-M1: ``authorizations`` come from the existing authorized-properties
-        records and are NEVER fabricated — fabricating them means self-attesting an
-        authorization no publisher granted.
-        """
-        with BareIntegrationEnv(tenant_id="trust_root_env_q") as env:
-            env.setup_default_data()
-            tenant, _ = _seed(env, "q")
-            client = env.get_rest_client()
-
-            response = client.get(_ADAGENTS_PATH, headers={"Host": tenant.virtual_host})
-
-            assert response.status_code == 200, (
-                f"the endpoint answers for a tenant with no properties; got {response.status_code}"
-            )
-            assert response.json()["authorized_agents"] == [], (
-                "with no authorized-property record on file the document must claim NO authorization; "
-                f"got {response.json()['authorized_agents']}"
             )

@@ -24,8 +24,10 @@ class TestAIReviewCreative:
         """Create a mock tenant with AI review configuration."""
         tenant = Mock(spec=Tenant)
         tenant.tenant_id = "test_tenant"
-        tenant.gemini_api_key = "test-api-key"
-        tenant.ai_config = None  # Explicitly set to None to use gemini_api_key fallback
+        tenant.ai_config = {"provider": "gemini", "api_key": "test-api-key"}
+        # The legacy column as a row without one holds it: NULL. Left unstubbed, the Mock
+        # answers a Mock, which TenantAIConfig.from_tenant reads as a legacy key.
+        tenant.gemini_api_key = None
         tenant.creative_review_criteria = "Approve if creative is brand-safe and follows guidelines."
         tenant.ai_policy = {
             "auto_approve_threshold": 0.90,
@@ -41,7 +43,16 @@ class TestAIReviewCreative:
         creative.creative_id = "test_creative_123"
         creative.tenant_id = "test_tenant"
         creative.name = "Test Banner Ad"
-        creative.format = "display_300x250"
+        # The four identity columns as the ORM hands them back: a stored assertion is a JSON
+        # document, the kind is a string, and both may be NULL. A Mock attribute left
+        # unstubbed answers a Mock, which is not a state any of these columns can hold.
+        creative.format_kind = "image"
+        creative.format_option_ref = None
+        creative.legacy_format_id = {
+            "agent_url": "https://creative.adcontextprotocol.org",
+            "id": "display_300x250",
+        }
+        creative.legacy_format_key = "https://creative.adcontextprotocol.org/\x1fdisplay_300x250"
         creative.data = {"url": "https://example.com/banner.jpg", "tags": ["retail", "fashion"]}
         creative.status = "pending"
         return creative
@@ -94,8 +105,7 @@ class TestAIReviewCreative:
 
         # Mock factory
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
         # Mock review_creative_async to return review result
@@ -122,8 +132,7 @@ class TestAIReviewCreative:
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
         mock_review_async.return_value = self._create_mock_review_result(
@@ -156,8 +165,7 @@ class TestAIReviewCreative:
         mock_creative.data = {"category": "political", "tags": ["election", "candidate"]}
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
         mock_review_async.return_value = self._create_mock_review_result(
@@ -182,8 +190,7 @@ class TestAIReviewCreative:
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
         mock_review_async.return_value = self._create_mock_review_result(
@@ -208,8 +215,7 @@ class TestAIReviewCreative:
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
         mock_review_async.return_value = self._create_mock_review_result(
@@ -238,8 +244,7 @@ class TestAIReviewCreative:
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
         mock_review_async.return_value = self._create_mock_review_result(
@@ -254,17 +259,16 @@ class TestAIReviewCreative:
         assert result["policy_triggered"] == "uncertain"
         assert "could not make confident decision" in result["reason"].lower()
 
-    # Edge Case: Missing Gemini API key (and no ai_config)
+    # Edge Case: no AI configuration on the tenant
     @patch("src.services.ai.AIServiceFactory")
     def test_missing_gemini_api_key(self, mock_factory_class, mock_db_session, mock_tenant):
         """Test behavior when AI is not configured."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
-        mock_tenant.gemini_api_key = None
         mock_tenant.ai_config = None
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = False
+        mock_factory.build.return_value = None
         mock_factory_class.return_value = mock_factory
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
@@ -272,6 +276,41 @@ class TestAIReviewCreative:
         assert result["status"] == "pending_review"
         assert result["error"] == "AI not configured"
         assert "AI review unavailable" in result["reason"]
+
+    # Configuration resolution: the tenant's own ai_config wins over the legacy column
+    @patch("src.services.ai.agents.review_agent.review_creative_async")
+    @patch("src.services.ai.agents.review_agent.create_review_agent")
+    @patch("src.services.ai.AIServiceFactory")
+    def test_tenant_ai_config_reaches_the_factory(
+        self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_tenant
+    ):
+        """The resolved tenant configuration is what the factory is asked about.
+
+        Graded explicitly because no other test here can catch a regression in it: the
+        rest leave the resolution unasserted and mock build truthy, so a site that
+        resolved nothing at all still reviews creatives and still passes.
+        """
+        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.services.ai.config import TenantAIConfig
+
+        mock_tenant.ai_config = {"provider": "anthropic", "model": "claude-x", "api_key": "tenant-key"}
+        mock_tenant.gemini_api_key = "legacy-key-that-must-lose"
+
+        mock_factory = MagicMock()
+        mock_factory.build.return_value = "anthropic:claude-x"
+        mock_factory_class.return_value = mock_factory
+
+        mock_review_async.return_value = self._create_mock_review_result(
+            decision="APPROVE",
+            reason="Creative is brand-safe",
+            confidence="high",
+        )
+
+        result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
+
+        expected = TenantAIConfig(provider="anthropic", model="claude-x", api_key="tenant-key")
+        mock_factory.build.assert_called_once_with(expected)
+        assert result["status"] == "approved"
 
     # Edge Case: Missing review criteria
     @patch("src.services.ai.AIServiceFactory")
@@ -282,7 +321,7 @@ class TestAIReviewCreative:
         mock_tenant.creative_review_criteria = None
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.build.return_value = MagicMock()
         mock_factory_class.return_value = mock_factory
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
@@ -300,8 +339,7 @@ class TestAIReviewCreative:
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
         mock_review_async.side_effect = Exception("API rate limit exceeded")
@@ -323,8 +361,7 @@ class TestAIReviewCreative:
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
         mock_review_async.return_value = self._create_mock_review_result(
@@ -350,8 +387,7 @@ class TestAIReviewCreative:
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
         mock_review_async.return_value = self._create_mock_review_result(
@@ -380,8 +416,7 @@ class TestAIReviewCreative:
         mock_tenant.ai_policy["auto_reject_threshold"] = 0.30
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
         mock_review_async.return_value = self._create_mock_review_result(
@@ -410,8 +445,7 @@ class TestAIReviewCreative:
         mock_creative.data = {"tags": ["healthcare", "wellness"], "category": None}
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
         mock_review_async.return_value = self._create_mock_review_result(
@@ -439,8 +473,7 @@ class TestAIReviewCreative:
         mock_creative.data = {"category": "financial", "tags": ["banking", "investment"]}
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
         mock_review_async.return_value = self._create_mock_review_result(
@@ -468,8 +501,7 @@ class TestAIReviewCreative:
         mock_creative.data = {}
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
         mock_review_async.return_value = self._create_mock_review_result(
@@ -513,7 +545,7 @@ class TestAIReviewCreative:
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
+        mock_factory.build.return_value = MagicMock()
         mock_factory_class.return_value = mock_factory
 
         # Create session that returns tenant first, then None for creative
@@ -556,8 +588,7 @@ class TestAIReviewCreative:
         mock_tenant.ai_policy = None  # No policy configured
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = "google-gla:gemini-2.0-flash"
+        mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
         mock_review_async.return_value = self._create_mock_review_result(

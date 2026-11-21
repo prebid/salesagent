@@ -12,20 +12,57 @@ session and do not enforce tenant isolation — these are system-level operation
 from __future__ import annotations
 
 import datetime
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.database.models import (
+    CreativeAssignment,
     MediaBuy,
     MediaPackage,
     PersistedMediaBuyStatus,
 )
 from src.core.errors.details import EntityRefDetails
 from src.core.idempotency_canonical import canonical_request_hash
+
+if TYPE_CHECKING:
+    from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
+    from adcp.types.domains.core.package_format_snapshot import PackageFormatSnapshot as LibraryPackageFormatSnapshot
+
+    from src.core.schemas import PackageRequest
+
+
+@dataclass(frozen=True)
+class RequestedPackage:
+    """One package of a create request, and what the seller decided for it before the row is written.
+
+    ``request`` is the buyer's package as sent; the row records it (product, budget, targeting,
+    creatives, formats). ``package_id`` is the id the seller minted for it, ``pricing_info`` the
+    pricing option the seller resolved, and ``paused`` the state the adapter reported, or the
+    buyer's ask on a buy parked for approval.
+
+    ``formats_to_provide`` and ``format_ids_to_provide`` come from the declaration the package's
+    selector selected, which the caller resolved and this repository cannot. ``core/package.json``
+    requires a package to "retain and return this checklist" and says "the live Product is never
+    substituted for the package snapshot", so a later read answers from the row. ``minItems: 1``
+    on ``formats_to_provide`` means an empty selection records None.
+    """
+
+    package_id: str
+    request: PackageRequest
+    pricing_info: dict[str, Any] | None
+    paused: bool = False
+    formats_to_provide: list[LibraryPackageFormatSnapshot] | None = None
+    format_ids_to_provide: list[LibraryFormatId] | None = None
+
+
+def stored_line_item_id(package: MediaPackage) -> str | None:
+    """The ad server line item a package row stores, None for a package not booked as one."""
+    return (package.package_config or {}).get("platform_line_item_id")
 
 
 class MediaBuyRepository:
@@ -88,6 +125,26 @@ class MediaBuyRepository:
 
             raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
         return media_buy
+
+    def lock_revision(self, media_buy_id: str) -> int | None:
+        """Lock the media buy's row for this transaction and return its current revision.
+
+        ``SELECT ... FOR NO KEY UPDATE``: the row stays locked until the Unit of Work ends,
+        so no other writer can bump the revision between a caller's comparison against this
+        value and the bump its own write makes. That is the atomicity the update request's
+        ``revision`` demands of the check. ``NO KEY`` is the lock PostgreSQL's own UPDATE of
+        a non-key column takes: it serializes writers of this row but not inserts of rows
+        that reference it (packages, webhook delivery logs), which take ``FOR KEY SHARE``.
+        ``None`` when the buy is not in this tenant.
+        """
+        return self._session.scalars(
+            select(MediaBuy.revision)
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.media_buy_id == media_buy_id,
+            )
+            .with_for_update(key_share=True)
+        ).first()
 
     def find_by_idempotency_key(
         self, idempotency_key: str, principal_id: str, account_id: str | None = None
@@ -183,6 +240,28 @@ class MediaBuyRepository:
                 )
             ).all()
         )
+
+    def buy_packages_of_creative(self, creative_id: str, principal_id: str) -> list[tuple[MediaBuy, MediaPackage]]:
+        """Each package of the principal's own buys that the principal's creative is assigned to, with its buy."""
+        rows = self._session.execute(
+            select(MediaBuy, MediaPackage)
+            .join(MediaPackage, MediaPackage.media_buy_id == MediaBuy.media_buy_id)
+            .join(
+                CreativeAssignment,
+                and_(
+                    CreativeAssignment.tenant_id == MediaBuy.tenant_id,
+                    CreativeAssignment.principal_id == MediaBuy.principal_id,
+                    CreativeAssignment.media_buy_id == MediaBuy.media_buy_id,
+                    CreativeAssignment.package_id == MediaPackage.package_id,
+                ),
+            )
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.principal_id == principal_id,
+                CreativeAssignment.creative_id == creative_id,
+            )
+        ).all()
+        return [(buy, package) for buy, package in rows]
 
     def get_package(self, media_buy_id: str, package_id: str) -> MediaPackage | None:
         """Get a specific package, verified to belong to this tenant."""
@@ -339,10 +418,11 @@ class MediaBuyRepository:
         order_name: str | None = None,
         campaign_objective: str | None = None,
         kpi_goal: str | None = None,
-        package_id_map: dict[int, str] | None = None,
+        packages: Sequence[RequestedPackage] = (),
         by_alias: bool = False,
         created_at: datetime.datetime | None = None,
         account_id: str | None = None,
+        creative_deadline: datetime.datetime | None = None,
     ) -> MediaBuy:
         """Create a MediaBuy from a request model, serializing raw_request at the DB boundary.
 
@@ -363,20 +443,22 @@ class MediaBuyRepository:
             order_name: Order name (defaults to req.po_number or "Order-{id}").
             campaign_objective: Optional campaign objective.
             kpi_goal: Optional KPI goal.
-            package_id_map: Map of package index → package_id to inject into serialized packages.
+            packages: The request's packages, in request order, each with its minted id. One
+                package row is written per entry, in the same flush as the buy, and each id is
+                injected into the stored request's package at the same position. The rows are
+                part of the create, so they do not bump the buy's revision.
             by_alias: Whether to serialize with field aliases (e.g., content_uri).
             created_at: Optional explicit created_at timestamp.
             account_id: Resolved account scope (AdCP idempotency scope is agent+account+key).
+            creative_deadline: The buy-level creative deadline the adapter reported, or None.
 
         Returns:
             The created MediaBuy ORM object (added to session, not committed).
         """
         raw = req.model_dump(mode="json", by_alias=by_alias)
-        if package_id_map:
-            packages = raw.get("packages", [])
-            for idx, pkg_id in package_id_map.items():
-                if idx < len(packages):
-                    packages[idx]["package_id"] = pkg_id
+        raw_packages = raw.get("packages") or []
+        for raw_package, requested in zip(raw_packages, packages, strict=False):
+            raw_package["package_id"] = requested.package_id
 
         kwargs: dict[str, Any] = {
             "media_buy_id": media_buy_id,
@@ -384,6 +466,7 @@ class MediaBuyRepository:
             "principal_id": principal_id,
             "idempotency_key": getattr(req, "idempotency_key", None),
             "order_name": order_name or getattr(req, "po_number", None) or f"Order-{media_buy_id}",
+            "name": getattr(req, "name", None),
             "advertiser_name": advertiser_name,
             "budget": budget,
             "currency": currency,
@@ -404,6 +487,7 @@ class MediaBuyRepository:
             # arrangement started; a repository is not an ``_impl``, so it may canonicalize
             # the request it was handed.
             "payload_hash": canonical_request_hash(req) if getattr(req, "idempotency_key", None) else None,
+            "creative_deadline": creative_deadline,
         }
         if campaign_objective is not None:
             kwargs["campaign_objective"] = campaign_objective
@@ -417,8 +501,52 @@ class MediaBuyRepository:
         media_buy = MediaBuy(**kwargs)
         self._stamp_confirmation_if_needed(media_buy, seller_committed=seller_committed)
         self._session.add(media_buy)
+        for requested in packages:
+            self._session.add(self._requested_package_row(media_buy_id, requested, currency))
         self._session.flush()
         return media_buy
+
+    @staticmethod
+    def _requested_package_row(media_buy_id: str, requested: RequestedPackage, currency: str) -> MediaPackage:
+        """The package row for one requested package: what the buyer booked, as the request carried it.
+
+        The budget is stored as ``{"total", "currency"}``, its currency the pricing option's when
+        the seller resolved one and the buy's otherwise; the ``budget`` and ``bid_price`` columns
+        carry the same values.
+
+        ``pricing_option_id`` and ``catalogs`` are here because update_media_buy's
+        ``affected_packages`` report them off the row (``core/package.json``;
+        ``media-buy/package-update.json``: "Omit to leave catalogs unchanged"). Models go in, not
+        dicts: the JSONType column serializes them through the engine's serializer.
+        """
+        request = requested.request
+        pricing_info = requested.pricing_info
+        budget: dict[str, Any] | None = None
+        if request.budget is not None:
+            budget = {"total": float(request.budget), "currency": (pricing_info or {}).get("currency", currency)}
+        bid_price = (pricing_info or {}).get("bid_price")
+        package_config = {
+            "package_id": requested.package_id,
+            "paused": requested.paused,
+            "product_id": request.product_id,
+            "pricing_option_id": request.pricing_option_id,
+            "budget": budget,
+            "targeting_overlay": request.targeting_overlay,
+            "creative_ids": request.creative_ids,
+            "format_ids": request.format_ids,
+            "catalogs": request.catalogs,
+            "formats_to_provide": requested.formats_to_provide,
+            "format_ids_to_provide": requested.format_ids_to_provide,
+            "pricing_info": pricing_info,
+            "impressions": request.impressions,
+        }
+        return MediaPackage(
+            media_buy_id=media_buy_id,
+            package_id=requested.package_id,
+            package_config=package_config,
+            budget=Decimal(str(budget["total"])) if budget is not None else None,
+            bid_price=Decimal(str(bid_price)) if bid_price is not None else None,
+        )
 
     def create(self, media_buy: MediaBuy, *, seller_committed: bool = False) -> MediaBuy:
         """Persist a new media buy within this tenant.
@@ -510,13 +638,13 @@ class MediaBuyRepository:
         buyer-visible and write-once, while a missing one is corrected by the next
         genuine commit.
 
-        Pinned contract: ``create-media-buy-response.json`` @ 3.1.1 branch0 types
+        Pinned contract: ``create-media-buy-response.json`` @ 3.2.7 branch0 types
         ``confirmed_at`` ["string","null"], lists it in ``required``, and describes it
-        as "the moment the seller committed... May be null in deferred or
-        manual-approval flows until seller commitment occurs" -- an event, in the
-        spec's own words. Its one hard constraint is that a null value forbids
-        ``status == "active"``, which holds: ACTIVE is only ever reached through a
-        writer that commits.
+        as "ISO 8601 timestamp when this media buy was committed by the seller... May
+        be null in deferred or manual-approval flows until seller commitment occurs" --
+        an event, in the spec's own words. Its constraint on the status is that a null
+        value forbids ``media_buy_status == "active"``, which holds: ACTIVE is only ever
+        reached through a writer that commits.
 
         Graded by @T-UC-002-v31-success-revision-and-actions (the auto-approval branch,
         which requires a timestamp) and by the approval-route integration tests (the
@@ -537,10 +665,16 @@ class MediaBuyRepository:
         seller_committed: bool = False,
         approved_at: datetime.datetime | None = None,
         approved_by: str | None = None,
+        creative_deadline: datetime.datetime | None = None,
     ) -> MediaBuy | None:
         """Update the status of a media buy within this tenant.
 
         Returns the updated MediaBuy, or None if not found in this tenant.
+
+        ``creative_deadline`` is the buy-level deadline the adapter reported when it
+        created the order. The approval path records it in this same write, so a
+        manually approved buy keeps it the way ``create_from_request`` keeps it for an
+        auto-approved one. None leaves the column as it is.
 
         The status must be a member of the persisted vocabulary. Rejecting an
         unknown value HERE is what lets every reader stop guessing: the wire
@@ -561,6 +695,8 @@ class MediaBuyRepository:
             media_buy.approved_at = approved_at
         if approved_by is not None:
             media_buy.approved_by = approved_by
+        if creative_deadline is not None:
+            media_buy.creative_deadline = creative_deadline
         # Stamp before bumping: _bump_revision leaves revision holding a SQL
         # expression, and reading any attribute after that can trigger a refresh
         # mid-mutation. The stamp reads status and confirmed_at, so it goes first.

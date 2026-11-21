@@ -47,7 +47,7 @@ v3.1.1:<path>``):
    emits, and it is independently pinned for the sync_creatives leg by
    ``tests/bdd/features/BR-UC-006-sync-creatives.feature``
    ``@T-UC-006-ext-webhook-ssrf`` (``VALIDATION_ERROR`` + ``correctable`` +
-   ``suggestion``, carrying an ``@source repo=adcp ref=v3.1.1`` citation on
+   ``suggestion``, carrying an ``@source repo=adcp ref=v3.2.1`` citation on
    ``dist/schemas/3.1.1/enums/error-code.json``).
 3. ``push_notification_config`` is a TOP-LEVEL property of
    ``dist/schemas/3.1.1/media-buy/create-media-buy-request.json`` (``$ref``

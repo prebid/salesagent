@@ -16,9 +16,11 @@ from __future__ import annotations
 import json
 import os
 import re
+from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
+from src.core.http_utils import hostname_of
 from tests.utils.database_helpers import vhost_for
 
 
@@ -112,22 +114,26 @@ def reset_to_revision(
     engine, db_url = migration_db
     run_alembic_upgrade(db_url, revision)
     run_alembic_downgrade(db_url, revision)
+    # virtual_host is NOT NULL from revision 7f31c0ab94d2, which also adds virtual_host_name
+    # (NOT NULL, UNIQUE). The host is derived from the tenant_id so it stays distinct across
+    # seeded tenants, and the name is derived from the host by the function production uses.
+    # Which columns exist depends on ``revision``, so the row states the ones the table has.
+    vhost = vhost_for(tenant_id)
+    row = {"tenant_id": tenant_id, "name": tenant_name, "subdomain": subdomain, "virtual_host": vhost}
     with engine.begin() as conn:
-        conn.execute(text("DELETE FROM accounts"))
-        conn.execute(text("DELETE FROM tenants"))
+        if any(column["name"] == "virtual_host_name" for column in inspect(conn).get_columns("tenants")):
+            row["virtual_host_name"] = hostname_of(vhost)
+        # CASCADE, not a DELETE per known child table: every row a previous test seeded
+        # belongs to a tenant (accounts, products, ...), and a DELETE list names only the
+        # children its author knew of -- the placements tests' products outlived it and
+        # every later reset failed on products_tenant_id_fkey.
+        conn.execute(text("TRUNCATE TABLE tenants CASCADE"))
         conn.execute(
             text(
-                "INSERT INTO tenants (tenant_id, name, subdomain, virtual_host, ad_server, is_active) "
-                "VALUES (:tid, :name, :subdomain, :vhost, 'mock', true)"
+                f"INSERT INTO tenants ({', '.join(row)}, ad_server, is_active) "
+                f"VALUES ({', '.join(f':{column}' for column in row)}, 'mock', true)"
             ),
-            # virtual_host is NOT NULL from revision 7f31c0ab94d2 and its index is UNIQUE, so
-            # the value is derived from the tenant_id to stay distinct across seeded tenants.
-            {
-                "tid": tenant_id,
-                "name": tenant_name,
-                "subdomain": subdomain,
-                "vhost": vhost_for(tenant_id),
-            },
+            row,
         )
     return engine, db_url
 
@@ -183,3 +189,33 @@ def seed_account(
                 "billing": billing,
             },
         )
+
+
+def _json_or_null(value: Any) -> str | None:
+    return None if value is None else json.dumps(value)
+
+
+def seed_inventory_profile(
+    engine, *, tenant_id: str, profile_id: str, format_options: Any, publisher_properties: Any
+) -> int:
+    """Insert an inventory_profiles row with raw SQL, as the schema under test stores it; return its id."""
+    with engine.begin() as conn:
+        return conn.execute(
+            text(
+                "INSERT INTO inventory_profiles (tenant_id, profile_id, name, inventory_config, format_options, "
+                "publisher_properties, created_at, updated_at) VALUES (:tid, :pid, :pid, '{}'::jsonb, "
+                "CAST(:options AS jsonb), CAST(:properties AS jsonb), now(), now()) RETURNING id"
+            ),
+            {
+                "tid": tenant_id,
+                "pid": profile_id,
+                "options": _json_or_null(format_options),
+                "properties": _json_or_null(publisher_properties),
+            },
+        ).scalar_one()
+
+
+def stored_format_options(engine, table: str, where: str, key: Any) -> Any:
+    """The ``format_options`` column of the one *table* row whose *where* column is *key*."""
+    with engine.begin() as conn:
+        return conn.execute(text(f"SELECT format_options FROM {table} WHERE {where} = :key"), {"key": key}).scalar_one()

@@ -12,10 +12,11 @@ The convergence removed one entry (``when_request._call_via`` folded into
 ``AccountListDispatchMixin.is_list_request`` discriminates on
 ``isinstance(kwargs["req"], ListAccountsRequest)``, so a raw list payload sent
 through ``env.call_via`` is misrouted to ``sync_accounts`` — so it is gated in
-place. Two read-back sites reach a transport directly and must not route through
+place. One read-back site reaches a transport directly and must not route through
 either ctx-writing entry, because ``ctx["result"]`` has exactly one producer and a
-read-back must not clobber the result the scenario is grading; they call
-``gate_and_record`` themselves.
+read-back must not clobber the result the scenario is grading; it calls
+``gate_and_record`` itself. A read-back that can hand ``dispatch_via_client`` a ctx
+of its own does that instead and is not listed.
 
 That is the complete set, and it may only shrink. A new direct site fails here.
 """
@@ -24,6 +25,8 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+
+from tests.unit._architecture_helpers import rel
 
 BDD_ROOT = Path(__file__).resolve().parents[1] / "bdd"
 
@@ -49,7 +52,6 @@ _ENTRY_MODULE = "steps/generic/_dispatch.py"
 #: this list buys the right to dispatch directly, never the right to skip the gate.
 #: ALLOWLISTS ONLY SHRINK. A new entry here is a design decision, not a fix.
 _DIRECT_DISPATCH_SITES = {
-    ("steps/domain/uc006_storyboard_creative_sync.py", "then_format_id_roundtrips_verbatim"),
     ("steps/domain/uc011_accounts.py", "_persisted_subscribers"),
 }
 
@@ -85,10 +87,10 @@ def _dispatch_sites() -> list[tuple[str, str]]:
     sites: list[tuple[str, str]] = []
     for path in sorted(BDD_ROOT.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        rel = path.relative_to(BDD_ROOT).as_posix()
+        rel_path = rel(path, BDD_ROOT)
         for function in _enclosing_functions(tree):
             if any(_reaches_transport(node) for node in ast.walk(function)):
-                sites.append((rel, function.name))
+                sites.append((rel_path, function.name))
     return sites
 
 

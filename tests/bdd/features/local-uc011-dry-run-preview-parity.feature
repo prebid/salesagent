@@ -22,9 +22,9 @@
 # Reconcile upstream in adcp-req (dry_run × delete_missing, and a repeated-key
 # preview scenario), then retire this file in favour of the regenerated one.
 #
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/dry_run
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/delete_missing
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/properties/accounts/items/properties/status
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/dry_run
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/delete_missing
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/status
 Feature: UC-011 sync_accounts — a dry_run preview describes an outcome a real run produces (local)
 
   @T-UC-011-local-dryrun-delete-missing @sync @dry-run @delete-missing @invariant

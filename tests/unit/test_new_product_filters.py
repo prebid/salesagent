@@ -6,7 +6,7 @@ Currently implemented filters: countries, channels.
 
 from unittest.mock import Mock
 
-from adcp.types import ProductFilters
+from adcp.types import LegacyProductFilters as ProductFilters
 
 from src.adapters import get_adapter_default_channels
 

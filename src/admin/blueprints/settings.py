@@ -22,11 +22,11 @@ from src.admin.utils.url_policy import redirect_if_url_blocked
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import Tenant
+from src.core.database.models import Tenant, UserRole
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.security.outbound_http import OutboundError
-from src.services.ai.config import uses_legacy_gemini_api_key
+from src.services.ai.config import DEFAULT_GOOGLE_MODEL, TenantAIConfig, uses_legacy_gemini_api_key
 from src.services.approximated_client import (
     DomainNotOwned,
     OwnedDomain,
@@ -306,16 +306,6 @@ def update_general(tenant_id):
                         max_daily_package_spend=max_value,
                     )
                     db_session.add(limit)
-
-            if "enable_axe_signals" in request.form:
-                tenant.enable_axe_signals = request.form.get("enable_axe_signals") == "on"
-            else:
-                tenant.enable_axe_signals = False
-
-            if "human_review_required" in request.form:
-                tenant.human_review_required = request.form.get("human_review_required") == "on"
-            else:
-                tenant.human_review_required = False
 
             tenant.updated_at = datetime.now(UTC)
             db_session.commit()
@@ -639,7 +629,7 @@ def test_ai_connection(tenant_id):
     try:
         data = request.get_json() or {}
         provider = data.get("provider", "gemini")
-        model = data.get("model", "gemini-2.0-flash")
+        model = data.get("model", DEFAULT_GOOGLE_MODEL)
         api_key = data.get("api_key", "").strip()
 
         # Build config for testing
@@ -661,9 +651,9 @@ def test_ai_connection(tenant_id):
         if not test_config.get("api_key"):
             return jsonify({"success": False, "error": "No API key provided"}), 400
 
-        # Create factory and set up credentials
-        factory = AIServiceFactory()
-        model_string = factory.create_model(test_config)
+        model_string = AIServiceFactory().build(TenantAIConfig.model_validate(test_config))
+        if model_string is None:
+            return jsonify({"success": False, "error": f"Cannot build a model for provider {provider!r}"}), 400
 
         # Simple test: ask the model to respond with a single word
         class TestResponse(BaseModel):
@@ -847,7 +837,7 @@ def get_ai_models(tenant_id):
 # Domain and Email Management Routes
 @settings_bp.route("/domains/add", methods=["POST"])
 @log_admin_action("add_authorized_domain")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def add_authorized_domain(tenant_id):
     """Add domain to tenant's authorized domains list."""
     from src.admin.domain_access import add_authorized_domain as add_domain
@@ -878,7 +868,7 @@ def add_authorized_domain(tenant_id):
 
 @settings_bp.route("/domains/remove", methods=["POST"])
 @log_admin_action("remove_authorized_domain")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def remove_authorized_domain(tenant_id):
     """Remove domain from tenant's authorized domains list."""
     from src.admin.domain_access import remove_authorized_domain as remove_domain
@@ -904,7 +894,7 @@ def remove_authorized_domain(tenant_id):
 
 @settings_bp.route("/emails/add", methods=["POST"])
 @log_admin_action("add_authorized_email")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def add_authorized_email(tenant_id):
     """Add email to tenant's authorized emails list."""
     from src.admin.domain_access import add_authorized_email as add_email
@@ -935,7 +925,7 @@ def add_authorized_email(tenant_id):
 
 @settings_bp.route("/emails/remove", methods=["POST"])
 @log_admin_action("remove_authorized_email")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def remove_authorized_email(tenant_id):
     """Remove email from tenant's authorized emails list."""
     from src.admin.domain_access import remove_authorized_email as remove_email

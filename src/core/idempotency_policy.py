@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from src.core.errors.details import ConfigurationDetails
 
 if TYPE_CHECKING:
-    from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Idempotency, Idempotency3
+    from adcp.types.domains.protocol.get_adcp_capabilities_response import Idempotency, Idempotency1
 
 # Matches GetAdcpCapabilitiesResponse.adcp.idempotency.replay_ttl_seconds (86400 = 24h).
 DEFAULT_REPLAY_TTL = timedelta(seconds=86400)
@@ -75,15 +75,15 @@ class IdempotencyPosture(BaseModel):
                 ),
             )
 
-    def to_sdk_union(self) -> Idempotency | Idempotency3:
-        """The SDK's discriminated Adcp.idempotency union. ``Idempotency3`` is a
+    def to_sdk_union(self) -> Idempotency | Idempotency1:
+        """The SDK's discriminated Adcp.idempotency union. ``Idempotency1`` is a
         generator artifact name for the ``supported: Literal[False]`` branch --
         no friendlier alias exists in adcp.types (mirrors the ``Targeting``
         false-cognate comment, capabilities.py:33-37)."""
-        from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Idempotency, Idempotency3
+        from adcp.types.domains.protocol.get_adcp_capabilities_response import Idempotency, Idempotency1
 
         if not self.supported:
-            return Idempotency3(supported=False)
+            return Idempotency1(supported=False)
         return Idempotency(
             supported=True,
             replay_ttl_seconds=self.replay_ttl_seconds,

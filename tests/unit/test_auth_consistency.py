@@ -110,6 +110,8 @@ class TestDiscoveryEndpointsAnonymousAccess:
         with (
             # get_creative_agent_registry is imported inside the function from src.core.creative_agent_registry
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,
+            # The list projects the tenant's products, read through ProductUoW.
+            patch("src.core.database.repositories.uow.get_db_session"),
         ):
             mock_reg = MagicMock()
 
@@ -193,7 +195,11 @@ class TestDiscoveryEndpointsInvalidAuth:
         mock_tenant = {"tenant_id": "test-tenant"}
         identity = PrincipalFactory.make_public_identity(tenant=mock_tenant)
 
-        with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry:
+        with (
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,
+            # The list projects the tenant's products, read through ProductUoW.
+            patch("src.core.database.repositories.uow.get_db_session"),
+        ):
             mock_reg = MagicMock()
 
             async def mock_list_formats(**kwargs):

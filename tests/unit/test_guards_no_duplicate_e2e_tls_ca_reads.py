@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._architecture_helpers import REPO_ROOT
+from tests.unit._architecture_helpers import REPO_ROOT, rel
 
 _E2E_DIR = REPO_ROOT / "tests" / "e2e"
 _ENV_VAR_NAMES = {"E2E_CA_BUNDLE", "E2E_TLS_BASE_URL"}
@@ -61,16 +61,16 @@ def _scan() -> set[tuple[str, int, str]]:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except SyntaxError:
             continue
-        rel = str(path.relative_to(REPO_ROOT))
+        rel_path = rel(path)
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 var = _reads_target_env_var(node)
                 if var:
-                    violations.add((rel, node.lineno, var))
+                    violations.add((rel_path, node.lineno, var))
             elif isinstance(node, ast.Subscript):
                 var = _reads_target_env_subscript(node)
                 if var:
-                    violations.add((rel, node.lineno, var))
+                    violations.add((rel_path, node.lineno, var))
     return violations
 
 

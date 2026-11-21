@@ -29,12 +29,6 @@ def test_profile_formats_match_adcp_format_id_schema():
             {"agent_url": "https://test.example.com", "id": "display_728x90"},
             {"agent_url": "https://buyer.example.com", "id": "video_15s"},
         ],
-        publisher_properties=[
-            {
-                "publisher_domain": "example.com",
-                "property_ids": ["prop_1"],
-            }
-        ],
     )
 
     # Verify each format is valid FormatId object
@@ -56,74 +50,6 @@ def test_profile_formats_match_adcp_format_id_schema():
 
         # Verify no extra fields (AdCP compliance)
         assert len(format_dict.keys()) == 2, "FormatId should only have agent_url and id"
-
-
-def test_profile_publisher_properties_match_adcp_property_schema():
-    """Test that profile publisher_properties match AdCP Property schema.
-
-    adcp 3.10: Property schema requires:
-    - property_type (PropertyType enum), name (str), identifiers (list of {type, value})
-    - Optional: property_id, tags, supported_channels, publisher_domain
-    """
-    # Create profile with various property configurations using new schema
-    profile = InventoryProfile(
-        tenant_id="test_tenant",
-        profile_id="test_profile_property_schema",
-        name="Test Profile Property Schema",
-        description="Testing property schema compliance",
-        inventory_config={
-            "ad_units": ["unit_1"],
-            "placements": [],
-            "include_descendants": False,
-        },
-        format_ids=[
-            {"agent_url": "https://test.example.com", "id": "display_300x250"},
-        ],
-        publisher_properties=[
-            {
-                "property_type": "website",
-                "name": "Example Website",
-                "identifiers": [{"type": "domain", "value": "example.com"}],
-            },
-            {
-                "property_type": "mobile_app",
-                "name": "Another App",
-                "identifiers": [{"type": "google_play_id", "value": "com.another.app"}],
-            },
-            {
-                "property_type": "ctv_app",
-                "name": "Roku App",
-                "identifiers": [{"type": "roku_store_id", "value": "roku123"}],
-            },
-        ],
-    )
-
-    # Verify each property matches AdCP Property schema
-    assert len(profile.publisher_properties) == 3
-
-    for prop_dict in profile.publisher_properties:
-        # adcp 3.10: required fields are property_type, name, identifiers
-        assert "property_type" in prop_dict, "Property must have property_type"
-        assert "name" in prop_dict, "Property must have name"
-        assert "identifiers" in prop_dict, "Property must have identifiers"
-        assert isinstance(prop_dict["property_type"], str), "property_type must be string"
-        assert isinstance(prop_dict["name"], str), "name must be string"
-        assert isinstance(prop_dict["identifiers"], list), "identifiers must be a list"
-
-        # Validate using Pydantic schema
-        property_obj = Property(**prop_dict)
-        assert property_obj.name == prop_dict["name"]
-        assert property_obj.property_type.value == prop_dict["property_type"]
-
-
-# test_product_with_profile_passes_adcp_validation is REMOVED: already graded by all six
-# scenarios in BR-UC-GET-PRODUCTS-inventory-profile.feature, each of which links a real
-# product to an inventory profile, calls get_products, and asserts "the response is compliant
-# with the get_products spec" plus the inferred selection_type and property values --
-# MEASURED passed:3 in-process and passed:1 in-network EACH. That compliance Then validates
-# the buyer's response against the pinned get-products-response schema
-# (tests/bdd/steps/generic/then_schema.py), so it grades product spec-conformance on the wire
-# where this test graded it on a hand-assembled dict.
 
 
 def test_profile_formats_validation_rejects_invalid_structure():
@@ -151,14 +77,14 @@ def test_profile_properties_validation_rejects_invalid_structure():
     """
     # Test invalid property structures
     invalid_properties = [
-        {"publisher_domain": "example.com"},  # Missing all required fields
+        {"publisher_domain": "psatest.com"},  # Missing all required fields
         {
             "name": "Test",
-            "identifiers": [{"type": "domain", "value": "example.com"}],
+            "identifiers": [{"type": "domain", "value": "psatest.com"}],
         },  # Missing property_type
         {
             "property_type": "website",
-            "identifiers": [{"type": "domain", "value": "example.com"}],
+            "identifiers": [{"type": "domain", "value": "psatest.com"}],
         },  # Missing name
         {
             "property_type": "website",
@@ -167,7 +93,7 @@ def test_profile_properties_validation_rejects_invalid_structure():
         {
             "property_type": "invalid_type",
             "name": "Test",
-            "identifiers": [{"type": "domain", "value": "example.com"}],
+            "identifiers": [{"type": "domain", "value": "psatest.com"}],
         },  # Invalid property_type enum value
         {
             "property_type": "website",

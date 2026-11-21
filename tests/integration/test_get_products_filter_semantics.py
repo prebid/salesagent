@@ -9,37 +9,64 @@ Tests covering:
 """
 
 import pytest
+from adcp.types import PaginationRequest
 
+from src.core.format_cache import load_reference_formats
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import (
-    ListCreativeFormatsRequest,
-    ListCreativeFormatsResponse,
-)
+from src.core.schemas import Format, ListCreativeFormatsRequest
+from src.core.tenant_context import TenantContext
 from src.core.tools.creative_formats import _list_creative_formats_impl
+from tests.factories import ProductFactory, TenantFactory
 from tests.factories.principal import PrincipalFactory
+from tests.harness._base import BareIntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 @pytest.fixture
 def identity(integration_db):
-    """ResolvedIdentity with a tenant dict for format/signal tests.
+    """ResolvedIdentity over a seeded tenant row, the caller the resolver hands on.
 
-    Uses integration_db because _list_creative_formats_impl accesses the DB
-    for adapter config (AdapterConfig table lookup). The tenant is a plain dict
-    since formats and signals don't require a Tenant row.
+    The tenant row is required: production reaches ``_list_creative_formats_impl`` only
+    through the resolver, which has loaded the tenant, and the impl reads that row
+    (``tenants.use_default_creative_agent`` decides whether the standard creative agent
+    is listed, and the adapter config is looked up by tenant). The context is derived
+    from the row through production's own constructor, so the identity cannot describe a
+    tenant the database disagrees with.
+
+    The tenant's product declares every format of the reference catalog: the list projects
+    the seller's product declarations, so these filter tests grade the whole catalog only
+    because a product names all of it.
     """
-    return PrincipalFactory.make_identity(
-        principal_id="test_principal",
-        tenant_id="filter-sem-test",
-        tenant={"tenant_id": "filter-sem-test", "name": "Filter Semantics Test"},
-    )
+    with BareIntegrationEnv():
+        tenant = TenantFactory(tenant_id="filter-sem-test", name="Filter Semantics Test")
+        ProductFactory(
+            tenant=tenant,
+            format_ids=[
+                {"agent_url": str(fmt.format_id.agent_url), "id": fmt.format_id.id} for fmt in load_reference_formats()
+            ],
+        )
+        context = TenantContext.from_orm_model(tenant)
+    return PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="filter-sem-test", tenant=context)
 
 
-def _call_list_formats(identity: ResolvedIdentity, **kwargs) -> ListCreativeFormatsResponse:
-    """Helper to call _list_creative_formats_impl with typed request."""
-    req = ListCreativeFormatsRequest(**kwargs)
-    return _list_creative_formats_impl(req, identity)
+def _call_list_formats(identity: ResolvedIdentity, **kwargs) -> list[Format]:
+    """Every format _list_creative_formats_impl lists for the typed request, across all pages.
+
+    The list is paginated (core/pagination-request.json: ``max_results`` defaults to 50), and
+    the reference catalog is larger than one page, so a filter test that took one page as
+    "all formats" would grade a truncated catalog. The cursor is followed until
+    ``has_more`` is false.
+    """
+    formats: list[Format] = []
+    cursor = None
+    while True:
+        req = ListCreativeFormatsRequest(pagination=PaginationRequest(cursor=cursor), **kwargs)
+        response = _list_creative_formats_impl(req, identity)
+        formats.extend(response.formats)
+        if not response.pagination.has_more:
+            return formats
+        cursor = response.pagination.cursor
 
 
 # ---------------------------------------------------------------------------
@@ -57,14 +84,14 @@ class TestFormatDiscoveryFilterConjunction:
         """
         # Get all formats
         all_formats = _call_list_formats(identity)
-        all_names = {f.name for f in all_formats.formats}
+        all_names = {f.name for f in all_formats}
 
         # Get all formats matching name search "static"
         name_only = _call_list_formats(identity, name_search="static")
-        name_names = {f.name for f in name_only.formats}
+        name_names = {f.name for f in name_only}
 
         # AND semantics: every result matches the filter
-        for f in name_only.formats:
+        for f in name_only:
             assert "static" in f.name.lower(), f"format {f.name} should contain 'static'"
 
         # Name-filtered results are a subset of all
@@ -76,7 +103,7 @@ class TestFormatDiscoveryFilterConjunction:
         Covers: BR-RULE-031-01
         """
         result = _call_list_formats(identity)
-        formats = result.formats
+        formats = result
 
         assert len(formats) > 1, "Need multiple formats to verify sorting"
 
@@ -102,8 +129,8 @@ class TestPerFilterFormatSemantics:
         """
         result = _call_list_formats(identity)
 
-        assert len(result.formats) > 0, "Should have formats"
-        for f in result.formats:
+        assert len(result) > 0, "Should have formats"
+        for f in result:
             assert f.format_id is not None, f"format {f.name} should have format_id"
             assert f.name is not None, "format should have name"
 
@@ -114,18 +141,18 @@ class TestPerFilterFormatSemantics:
         """
         # First get all formats to find a name to search for
         all_formats = _call_list_formats(identity)
-        assert len(all_formats.formats) > 0
+        assert len(all_formats) > 0
 
         # Pick a format and search with mixed case substring
-        target = all_formats.formats[0]
+        target = all_formats[0]
         # Use first 4 chars of name as substring, uppercase
         search_term = target.name[:4].upper()
 
         result = _call_list_formats(identity, name_search=search_term)
-        assert len(result.formats) > 0, f"name_search '{search_term}' should match at least one format"
+        assert len(result) > 0, f"name_search '{search_term}' should match at least one format"
 
         # Verify all results contain the search term (case-insensitive)
-        for f in result.formats:
+        for f in result:
             assert search_term.lower() in f.name.lower(), (
                 f"format {f.name} should contain '{search_term}' (case-insensitive)"
             )
@@ -140,8 +167,8 @@ class TestPerFilterFormatSemantics:
         non_responsive = _call_list_formats(identity, is_responsive=False)
 
         # Bidirectional: responsive + non-responsive should cover all formats
-        responsive_ids = {f.format_id.id for f in responsive.formats}
-        non_responsive_ids = {f.format_id.id for f in non_responsive.formats}
+        responsive_ids = {f.format_id.id for f in responsive}
+        non_responsive_ids = {f.format_id.id for f in non_responsive}
 
         # No overlap between responsive and non-responsive
         assert not responsive_ids & non_responsive_ids, (
@@ -156,7 +183,7 @@ class TestPerFilterFormatSemantics:
         result = _call_list_formats(identity, is_responsive=False)
 
         # When is_responsive=false, all returned formats should be non-responsive
-        for f in result.formats:
+        for f in result:
             # Check that no render has responsive dimensions
             if f.renders:
                 for render in f.renders:
@@ -186,9 +213,9 @@ class TestFormatIdsFilter:
         """
         # First get all formats to pick a valid one
         all_formats = _call_list_formats(identity)
-        assert len(all_formats.formats) > 0
+        assert len(all_formats) > 0
 
-        target = all_formats.formats[0]
+        target = all_formats[0]
         target_id = target.format_id.id
         target_url = str(target.format_id.agent_url)
 
@@ -198,8 +225,8 @@ class TestFormatIdsFilter:
             format_ids=[{"agent_url": target_url, "id": target_id}],
         )
 
-        assert len(result.formats) == 1, f"Should return exactly the requested format, got {len(result.formats)}"
-        assert result.formats[0].format_id.id == target_id
+        assert len(result) == 1, f"Should return exactly the requested format, got {len(result)}"
+        assert result[0].format_id.id == target_id
 
     def test_non_matching_format_ids_silently_excluded(self, identity):
         """Non-matching format_ids are silently excluded (no error).
@@ -208,9 +235,9 @@ class TestFormatIdsFilter:
         """
         # Get a valid format
         all_formats = _call_list_formats(identity)
-        assert len(all_formats.formats) > 0
+        assert len(all_formats) > 0
 
-        target = all_formats.formats[0]
+        target = all_formats[0]
         target_id = target.format_id.id
         target_url = str(target.format_id.agent_url)
 
@@ -224,7 +251,7 @@ class TestFormatIdsFilter:
         )
 
         # Only the matching format is returned; nonexistent is silently excluded
-        returned_ids = {f.format_id.id for f in result.formats}
+        returned_ids = {f.format_id.id for f in result}
         assert target_id in returned_ids, "Valid format should be returned"
         assert "nonexistent_format_xyz" not in returned_ids, "Nonexistent format should be silently excluded"
 
@@ -245,7 +272,7 @@ class TestDimensionFilter:
         # Filter for formats with width in a reasonable range
         result = _call_list_formats(identity, min_width=300, max_width=728)
 
-        for f in result.formats:
+        for f in result:
             # At least one render must have width in [300, 728]
             has_matching = False
             if f.renders:
@@ -270,6 +297,4 @@ class TestDimensionFilter:
         narrow = _call_list_formats(identity, min_width=300, max_width=300)
 
         # Should have fewer formats (or same, but not more)
-        assert len(narrow.formats) <= len(all_formats.formats), (
-            "Dimension filter should not return more formats than unfiltered"
-        )
+        assert len(narrow) <= len(all_formats), "Dimension filter should not return more formats than unfiltered"

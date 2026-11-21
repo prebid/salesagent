@@ -17,13 +17,16 @@ from pydantic import RootModel
 from rich.console import Console
 
 from src.core.errors.codes import AppErrorCode, ErrorCode
-from src.core.errors.details import EntityRefDetails
+from src.core.errors.details import ConfigurationDetails, EntityRefDetails
 from src.core.exceptions import (
     AdCPInternalError,
+    AdCPPersistedStateError,
     AdCPSalesAgentError,
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
+from src.core.validation_helpers import campaign_interval_violated
+from src.core.webhooks.registration import REPORTING_STREAM_ID_FIELD, suppressed_reporting_stream
 
 
 def _validate_attribution_window(attribution_window: "AttributionWindow | None") -> None:
@@ -42,28 +45,24 @@ def _validate_attribution_window(attribution_window: "AttributionWindow | None")
     """
     if attribution_window is None:
         return
-    for window in (attribution_window.post_click, attribution_window.post_view):
-        if window is None:
-            continue
-        unit = enum_value(window.unit)
-        if unit == "campaign" and window.interval != 1:
-            raise AdCPValidationError(
-                field="attribution_window",
-            )
+    if any(campaign_interval_violated(w) for w in (attribution_window.post_click, attribution_window.post_view)):
+        raise AdCPValidationError(
+            field="attribution_window",
+        )
 
 
 logger = logging.getLogger(__name__)
 console = Console()
 
 from adcp.types import Duration, MediaBuyStatus
-from adcp.types.generated_poc.core.attribution_window import (
+from adcp.types.domains.core.attribution_window import (
     AttributionWindow as ResponseAttributionWindow,  # TODO: no stable alias in adcp.types
 )
-from adcp.types.generated_poc.core.duration import (
+from adcp.types.domains.core.duration import (
     Unit as DurationUnit,  # TODO: no stable alias in adcp.types — Unit from adcp.types is DimensionUnit
 )
-from adcp.types.generated_poc.enums.attribution_model import AttributionModel  # TODO: no stable alias in adcp.types
-from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
+from adcp.types.domains.enums.attribution_model import AttributionModel  # TODO: no stable alias in adcp.types
+from adcp.types.domains.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
 )
 
@@ -76,14 +75,13 @@ from src.core.schemas import Error
 # platform default (industry-standard single-touch attribution).
 PLATFORM_DEFAULT_ATTRIBUTION_MODEL = AttributionModel.last_touch
 
-# adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
+# the pinned SDK: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
 # Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
 
-from src.core.database.models import MediaBuy, PricingOption
+from src.core.database.models import MediaBuy
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.database.repositories.delivery import POLL_SEQUENCE_TASK_TYPE, DeliveryRepository
-from src.core.database.repositories.product import ProductRepository
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity, identity_of
 from src.core.schemas import (
@@ -131,7 +129,7 @@ def _get_media_buy_delivery_impl(
     # (cross-field constraint the schema can't express, so it reaches us as valid).
     _validate_attribution_window(req.attribution_window)
 
-    return get_media_buy_delivery(req, identity=identity)
+    return get_media_buy_delivery(req, identity=identity, webhook_context=False)
 
 
 def delivery_for_media_buy(
@@ -140,7 +138,7 @@ def delivery_for_media_buy(
     start_date: str,
     end_date: str,
 ) -> GetMediaBuyDeliveryResponse:
-    """Delivery for ONE media buy over one window, for a SERVER-initiated read.
+    """Delivery for ONE media buy over one window, for a SERVER-initiated read: webhook context.
 
     The entry point for callers with no buyer and no request envelope -- the delivery
     webhook scheduler is the one today. They ask a domain question and this answers it;
@@ -161,17 +159,27 @@ def delivery_for_media_buy(
         ),
         # Resolution from stored ids: the job acts as the buy's owner, on the buy's account.
         identity=identity_of(media_buy.tenant_id, media_buy.principal_id, media_buy.account_id),
+        webhook_context=True,
     )
 
 
 def get_media_buy_delivery(
-    req: GetMediaBuyDeliveryRequest, *, identity: ResolvedIdentity
+    req: GetMediaBuyDeliveryRequest, *, identity: ResolvedIdentity, webhook_context: bool
 ) -> GetMediaBuyDeliveryResponse:
     """Gather delivery for the buys *req* names, for an already-resolved caller.
 
     The service half of :func:`_get_media_buy_delivery_impl`. It asks nothing about
     transports, auth or idempotency, so a server-initiated read can reach it through
     :func:`delivery_for_media_buy` without the front door.
+
+    *webhook_context* says which answer the caller gets for a buy whose adapter reports
+    the period unfinished (``expected_availability`` set). In webhook context the buy is
+    ``reporting_delayed`` with that ``expected_availability`` (get_media_buy_delivery.mdx:
+    "In webhook context, may also be `reporting_delayed`"; the response schema's
+    ``expected_availability`` is "only present when status is reporting_delayed"). A
+    buyer's pull gets the figures reported so far with the buy's lifecycle status (the same
+    page: the seller "returns the buy in `media_buy_deliveries` with zero or partial
+    metrics"). Required, so no caller gets the webhook answer by omission.
     """
     principal_id = identity.principal.principal_id
     tenant = identity.tenant
@@ -198,7 +206,7 @@ def get_media_buy_delivery(
     # Determine which media buys to fetch from database
     # UoW scope encompasses all code that accesses MediaBuy ORM objects to prevent
     # DetachedInstanceError — the session must stay open while we read attributes
-    # like buy.raw_request, buy.start_date, etc.
+    # like buy.start_date and the package rows' package_config.
     with MediaBuyUoW(tenant.tenant_id) as uow:
         assert uow.media_buys is not None
         repo = uow.media_buys
@@ -210,6 +218,27 @@ def get_media_buy_delivery(
         # Per-buy adapter failures degrade (UC-004): record an advisory error and continue
         # with the other buys instead of aborting the whole multi-buy request.
         adapter_errors: list[Error] = []
+        # THE BUYER'S HALF OF THE SUPPRESSED REPORTING STREAM. AdCP.1
+        # ``L3/webhooks.mdx`` :666 asks for two things of a ``reporting_webhook``
+        # registered without a correlation id — "Flag the missing value for the buyer
+        # and suppress scheduled sends" — and :667 names THIS read as where the buyer
+        # goes meanwhile: "Existing buyers need to update their registration with an ID
+        # before reports resume. They can use get_media_buy_delivery while arranging
+        # support."
+        #
+        # The suppression is the scheduler's (``delivery_webhook_scheduler``), which
+        # runs in a background batch with no request to answer; the flag has to ride a
+        # response, and this is the response the spec sends the buyer to. An advisory,
+        # not a raised failure: the delivery data IS the answer the buyer asked for, so
+        # by the advisory rule (error-architecture.md § Which lane a failure takes) the
+        # response stays a success and ``errors[]`` reports what is degraded.
+        #
+        # It is NOT flagged at ``create_media_buy`` instead, and the reason is the
+        # route's own shape: ``core/reporting-webhook.json`` does not define
+        # ``operation_id`` at the 3.2 pin, so a registration omitting it is a document
+        # the published schema accepts, and :666 governs buyers who ALREADY registered
+        # one — for whom no create-time response exists any more.
+        suppressed_stream_errors: list[Error] = []
         found_ids = {buy_id for buy_id, _ in target_media_buys}
         if req.media_buy_ids:
             for requested_id in req.media_buy_ids:
@@ -220,20 +249,6 @@ def get_media_buy_delivery(
                             details=EntityRefDetails(media_buy_id=requested_id),
                         )
                     )
-
-        pricing_option_ids: list[Any] = []
-        for _, buy in target_media_buys:
-            if buy.raw_request and isinstance(buy.raw_request, dict):
-                for pkg in buy.raw_request.get("packages", []):
-                    pkg_id = pkg.get("pricing_option_id")
-                    if pkg_id is not None:
-                        pricing_option_ids.append(pkg_id)
-        # FIXME(#2129): delivery UoW should provide a product repo directly
-        assert uow.session is not None
-        product_repo = ProductRepository(uow.session, tenant.tenant_id)
-        pricing_options = _get_pricing_options(
-            pricing_option_ids, tenant_id=tenant.tenant_id, product_repo=product_repo
-        )
 
         # Per-request invariants, hoisted out of the per-buy loop:
         # - the circuit breaker is tenant-scoped, so one check covers every buy;
@@ -253,6 +268,18 @@ def get_media_buy_delivery(
         total_conversion_value: float | None = None
 
         for media_buy_id, buy in target_media_buys:
+            # Flagged BEFORE the try, so a buy whose adapter read also fails still
+            # reports its suppressed stream: the two advisories are independent facts
+            # and the adapter branch below ``continue``s.
+            if suppressed_reporting_stream(buy.raw_request):
+                suppressed_stream_errors.append(
+                    Error.of(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+                        ErrorCode.INVALID_REQUEST,
+                        field=REPORTING_STREAM_ID_FIELD,
+                        details=EntityRefDetails(media_buy_id=media_buy_id),
+                    )
+                )
+
             try:
                 # Determine status from the persisted lifecycle column,
                 # date-refined only for serving states — the same single
@@ -281,6 +308,7 @@ def get_media_buy_delivery(
                 adapter_conversions: float | None = None
                 adapter_conversion_value: float | None = None
                 adapter_viewability: float | None = None
+                expected_availability: datetime | None = None
 
                 # Call adapter to get per-package delivery metrics
                 # Note: Mock adapter returns simulated data, GAM adapter returns real data from Reporting API
@@ -319,6 +347,12 @@ def get_media_buy_delivery(
                     adapter_conversion_value = float(raw_conversion_value) if raw_conversion_value is not None else None
                     adapter_viewability = getattr(adapter_response.totals, "viewability", None)
 
+                    # The ad server has not finished reporting the period. Any buy, not only an
+                    # active one: a buy that completed yesterday still has figures to come.
+                    if webhook_context and adapter_response.expected_availability is not None:
+                        status = "reporting_delayed"
+                        expected_availability = adapter_response.expected_availability
+
                 except Exception as e:
                     logger.error("Error getting delivery for %s: %s", media_buy_id, e)
                     # Write adapter failure to audit trail (NFR-003)
@@ -346,94 +380,69 @@ def get_media_buy_delivery(
                     )
                     continue
 
-                # Create package delivery data
+                # One entry per persisted package: the rows are the buy's packages, under the
+                # ids create_media_buy returned, each priced from the terms stored with it.
                 package_deliveries = []
-
-                # Get pricing info from MediaPackage.package_config (batch-fetched above)
-                package_pricing_map = {}
                 media_packages = packages_by_buy.get(media_buy_id, [])
                 for media_pkg in media_packages:
-                    package_config = media_pkg.package_config or {}
-                    pricing_info = package_config.get("pricing_info")
-                    if pricing_info:
-                        package_pricing_map[media_pkg.package_id] = pricing_info
+                    package_id = media_pkg.package_id
+                    pricing = _package_pricing(package_id, media_pkg.package_config.get("pricing_info"))
 
-                # Get packages from raw_request
-                if buy.raw_request and isinstance(buy.raw_request, dict):
-                    packages = buy.raw_request.get("packages", [])
+                    raw_placements: list[dict[str, Any]] | None = None
+                    raw_geo: list[dict[str, Any]] | None = None
+                    raw_device_type: list[dict[str, Any]] | None = None
+                    pkg_metrics = adapter_package_metrics.get(package_id)
+                    if pkg_metrics is not None:
+                        package_spend = pkg_metrics["spend"]
+                        package_impressions = pkg_metrics["impressions"]
+                        _raw = pkg_metrics.get("by_placement")
+                        raw_placements = _raw if isinstance(_raw, list) else None
+                        _raw_geo = pkg_metrics.get("by_geo")
+                        raw_geo = _raw_geo if isinstance(_raw_geo, list) else None
+                        _raw_dt = pkg_metrics.get("by_device_type")
+                        raw_device_type = _raw_dt if isinstance(_raw_dt, list) else None
+                    else:
+                        # Fallback: divide equally if adapter didn't return this package
+                        package_spend = spend / len(media_packages)
+                        package_impressions = impressions / len(media_packages)
 
-                    i = -1
-                    for pkg_data in packages:
-                        i += 1
+                    package_clicks = (
+                        # FIXME(#2394): the base is the buy's spend, not the package's.
+                        floor(spend / pricing["rate"])
+                        if pricing["pricing_model"] == PricingModel.cpc.value and pricing["rate"]
+                        else None
+                    )
 
-                        package_id = pkg_data.get("package_id") or f"pkg_{pkg_data.get('product_id', 'unknown')}_{i}"
-                        pricing_option_id = pkg_data.get("pricing_option_id") or None
+                    # Build placement breakdown if reporting_dimensions includes "placement"
+                    placement_dim = req.reporting_dimensions.placement if req.reporting_dimensions else None
+                    placement_breakdown, placement_truncated = _build_placement_breakdown(
+                        placement_dim, raw_placements, package_impressions, package_spend, package_clicks
+                    )
 
-                        # Get pricing info for this package
-                        pricing_info = package_pricing_map.get(package_id)
-                        pricing_option = (
-                            pricing_options.get(pricing_option_id) if pricing_option_id is not None else None
+                    geo_breakdown, geo_truncated = _build_geo_breakdown(
+                        req, package_impressions, package_spend, raw_geo
+                    )
+                    device_type_breakdown, device_type_truncated = _build_device_type_breakdown(
+                        req, package_impressions, package_spend, raw_device_type
+                    )
+
+                    package_deliveries.append(
+                        PackageDelivery(
+                            package_id=package_id,
+                            impressions=package_impressions or 0.0,
+                            spend=package_spend or 0.0,
+                            clicks=package_clicks,
+                            completed_views=None,  # Optional field, not calculated in this implementation
+                            pacing_index=1.0 if status == "active" else 0.0,
+                            **pricing,
+                            by_placement=placement_breakdown,
+                            by_placement_truncated=placement_truncated,
+                            by_geo=geo_breakdown,
+                            by_geo_truncated=geo_truncated,
+                            by_device_type=device_type_breakdown,
+                            by_device_type_truncated=device_type_truncated,
                         )
-
-                        # Get REAL per-package metrics from adapter if available, otherwise divide equally
-                        raw_placements: list[dict[str, Any]] | None = None
-                        raw_geo: list[dict[str, Any]] | None = None
-                        raw_device_type: list[dict[str, Any]] | None = None
-                        if package_id in adapter_package_metrics:
-                            # Use real metrics from adapter
-                            pkg_metrics = adapter_package_metrics[package_id]
-                            package_spend = pkg_metrics["spend"]
-                            package_impressions = pkg_metrics["impressions"]
-                            _raw = pkg_metrics.get("by_placement")
-                            raw_placements = _raw if isinstance(_raw, list) else None
-                            _raw_geo = pkg_metrics.get("by_geo")
-                            raw_geo = _raw_geo if isinstance(_raw_geo, list) else None
-                            _raw_dt = pkg_metrics.get("by_device_type")
-                            raw_device_type = _raw_dt if isinstance(_raw_dt, list) else None
-                        else:
-                            # Fallback: divide equally if adapter didn't return this package
-                            package_spend = spend / len(packages)
-                            package_impressions = impressions / len(packages)
-
-                        if (
-                            pricing_option
-                            and pricing_option.pricing_model == PricingModel.cpc.value
-                            and pricing_option.rate
-                        ):
-                            package_clicks = floor(spend / (float(pricing_option.rate)))
-                        else:
-                            package_clicks = None
-
-                        # Build placement breakdown if reporting_dimensions includes "placement"
-                        placement_dim = req.reporting_dimensions.placement if req.reporting_dimensions else None
-                        placement_breakdown, placement_truncated = _build_placement_breakdown(
-                            placement_dim, raw_placements, package_impressions, package_spend, package_clicks
-                        )
-
-                        geo_breakdown, geo_truncated = _build_geo_breakdown(
-                            req, package_impressions, package_spend, raw_geo
-                        )
-                        device_type_breakdown, device_type_truncated = _build_device_type_breakdown(
-                            req, package_impressions, package_spend, raw_device_type
-                        )
-
-                        package_deliveries.append(
-                            PackageDelivery(
-                                package_id=package_id,
-                                impressions=package_impressions or 0.0,
-                                spend=package_spend or 0.0,
-                                clicks=package_clicks,
-                                completed_views=None,  # Optional field, not calculated in this implementation
-                                pacing_index=1.0 if status == "active" else 0.0,
-                                **_package_pricing(package_id, pricing_info, pricing_option),
-                                by_placement=placement_breakdown,
-                                by_placement_truncated=placement_truncated,
-                                by_geo=geo_breakdown,
-                                by_geo_truncated=geo_truncated,
-                                by_device_type=device_type_breakdown,
-                                by_device_type_truncated=device_type_truncated,
-                            )
-                        )
+                    )
 
                 # Calculate clicks and CTR (click-through rate) where applicable
 
@@ -465,6 +474,7 @@ def get_media_buy_delivery(
                     ),
                     by_package=package_deliveries,
                     daily_breakdown=None,  # Optional field, not calculated in this implementation
+                    expected_availability=expected_availability,
                 )
 
                 deliveries.append(delivery_data)
@@ -516,7 +526,7 @@ def get_media_buy_delivery(
         # rejected/canceled/failed buy from being promised a next report that
         # will never come (next_expected_at is "only present ... when
         # notification_type is not 'final'" per
-        # get-media-buy-delivery-response.json @ v3.1-04f59d2d5).
+        # get-media-buy-delivery-response.json-04f59d2d5).
         #
         # UNGRADED: the schema/storyboard describe "final" narrowly as "the
         # campaign completes" (optimization-reporting.mdx §Publisher Commitment).
@@ -571,7 +581,7 @@ def get_media_buy_delivery(
 
         attribution_window = _resolve_attribution_window(req, campaign_length_days)
 
-        # Derived quotients — top-level aggregated_totals scalars per the AdCP 3.1
+        # Derived quotients — top-level aggregated_totals scalars per the
         # response schema (media-buy/get-media-buy-delivery-response.json defines
         # roas as "total conversion_value / total spend" and cost_per_acquisition
         # as "total spend / total conversions"). Conformance-ungraded on this
@@ -587,7 +597,7 @@ def get_media_buy_delivery(
         )
 
         # Normalize advisory error codes to guaranteed-standard wire codes.
-        advisory_errors = not_found_errors + adapter_errors
+        advisory_errors = not_found_errors + adapter_errors + suppressed_stream_errors
 
         # Create AdCP-compliant response
         response = GetMediaBuyDeliveryResponse(
@@ -793,9 +803,22 @@ def _build_placement_breakdown(
     (``get-media-buy-delivery-response.json`` §by_placement_truncated;
     ``get_media_buy_delivery.mdx`` §Truncation.)
 
-    - Uses the adapter's per-placement metrics when present, else synthesizes
-      a representative multi-placement split of the package totals so the
-      requested sort ordering is observable.
+    - Uses the adapter's per-placement metrics, and INVENTS NOTHING when the adapter
+      reports none. Three placements with the ids ``plc_a``/``plc_b``/``plc_c`` and a
+      ``clicks`` value from a hardcoded 1% CTR used to be synthesized here, so that a
+      ``sort_by=clicks`` request had a substantive ordering to grade. That ran in
+      production: a buyer asking a GAM tenant for a placement breakdown received three
+      placement identifiers that exist in no ad server and a click count nothing had
+      measured. The rows the sort tests need now come from the mock adapter, which
+      supplies them through ``simulate_breakdowns`` the way it already supplies
+      ``by_geo`` and ``by_device_type`` -- test input belongs in a fixture, not in a
+      production branch every tenant shares.
+    - Omits rather than returning an empty array, matching
+      ``_build_device_type_breakdown``: ``([], False)`` asserts a complete zero-row
+      breakdown for a package that delivered impressions. The pin permits the omission --
+      "unsupported dimensions are silently omitted from the response" -- and will stop
+      permitting it only if ``supports_placement_breakdown`` is ever declared true, which
+      no adapter can honour today.
     - Delegates sort + limit to ``_apply_breakdown_limit`` (spec §Truncation:
       rows sorted by ``sort_by`` descending, then truncated by ``limit``).
       When the seller does not report the requested metric on the breakdown
@@ -805,28 +828,10 @@ def _build_placement_breakdown(
     if placement_dim is None:
         return None, None
 
-    if raw_placements:
-        placements: list[PlacementBreakdown] = [PlacementBreakdown(**p) for p in raw_placements]
-    else:
-        # No per-placement data from the adapter — synthesize a deterministic
-        # representative split so the breakdown (and its ordering) is
-        # meaningful. Weights are distinct so descending sorts are verifiable.
-        # ``clicks`` is always populated (a representative 1% CTR of the
-        # placement's impression share) so a ``sort_by=clicks`` request is a
-        # substantive ordering, not a vacuous all-null sort.
-        imp = float(package_impressions or 0.0)
-        spd = float(package_spend or 0.0)
-        weights = ((0.5, "plc_a"), (0.3, "plc_b"), (0.2, "plc_c"))
-        placements = [
-            PlacementBreakdown(
-                placement_id=pid,
-                impressions=imp * w,
-                spend=spd * w,
-                clicks=round(imp * w * 0.01, 4),
-            )
-            for w, pid in weights
-        ]
+    if not raw_placements:
+        return None, None
 
+    placements: list[PlacementBreakdown] = [PlacementBreakdown(**p) for p in raw_placements]
     return _apply_breakdown_limit(placements, placement_dim)
 
 
@@ -930,41 +935,34 @@ def _build_device_type_breakdown(
     return limited, truncated
 
 
-def _package_pricing(
-    package_id: str, pricing_info: dict[str, Any] | None, pricing_option: PricingOption | None
-) -> dict[str, Any]:
+def _package_pricing(package_id: str, pricing_info: dict[str, Any] | None) -> dict[str, Any]:
     """The three pricing fields the pin REQUIRES on every ``by_package`` entry.
 
     ``get-media-buy-delivery-response.json`` lists ``pricing_model``, ``rate`` and
     ``currency`` in the item's ``required`` set and types all three non-nullable, so a
-    delivery report that cannot state them is not a delivery report. This resolves them from
-    the two sources the caller has already looked up, in order of specificity:
+    delivery report that cannot state them is not a delivery report. They are read from
+    ``MediaPackage.package_config["pricing_info"]``: the terms the seller stored for THIS
+    package at create (both create paths write it), and ``by_package[].rate`` is "the
+    agreed rate".
 
-    1. ``MediaPackage.package_config["pricing_info"]`` -- what was agreed for THIS package;
-    2. the ``PricingOption`` row the package's ``pricing_option_id`` names -- the product's
-       terms, which the same block already trusts for ``pricing_option.rate`` when it
-       derives clicks from spend.
-
-    Raises rather than defaulting. The call site used to read only source 1 and pass ``None``
-    for all three when it was absent; the model widened them to accept it, the SDK base's
-    ``exclude_none=True`` then dropped the keys, and every buyer got a schema-invalid
-    document. A seller that cannot say what a package cost must say so (GH #2130,
-    salesagent-ioxoc), not emit a report that looks complete.
+    Raises rather than defaulting. A package without its terms cannot state what it cost,
+    and a seller that cannot say what a package cost must say so (GH #2130), not emit a
+    report that looks complete. That row is a defect in the seller's store: the buyer cannot
+    fix it and a retry reads the same row, so it is ``CONFIGURATION_ERROR``, terminal. An
+    auction package's terms are complete without a ``rate``, because its rate is the
+    effective rate from actual delivery. This report does not derive that yet, so it is
+    refused separately (#2229). No pricing option is looked up instead: a
+    ``pricing_option_id`` is unique only within its product (pricing-options/*.json), so a
+    lookup by that id prices a package from whichever product's option shares it (#2377).
     """
-    for source in (pricing_info, pricing_option):
-        if source is None:
-            continue
-        get = source.get if isinstance(source, dict) else lambda k, _s=source: getattr(_s, k, None)
-        model, rate, currency = get("pricing_model"), get("rate"), get("currency")
+    if pricing_info is not None:
+        model, rate, currency = (
+            pricing_info.get("pricing_model"),
+            pricing_info.get("rate"),
+            pricing_info.get("currency"),
+        )
         if model is not None and rate is not None and currency is not None:
             return {"pricing_model": model, "rate": float(rate), "currency": currency}
-    raise AdCPInternalError(details=EntityRefDetails(package_id=package_id))
-
-
-def _get_pricing_options(
-    pricing_option_ids: list[str], tenant_id: str, product_repo: ProductRepository
-) -> dict[str, PricingOption]:
-    wanted = set(pricing_option_ids)
-    if not wanted:
-        return {}
-    return {po.pricing_option_id: po for po in product_repo.get_all_pricing_options() if po.pricing_option_id in wanted}
+        if pricing_info.get("is_fixed") is False:
+            raise AdCPInternalError(details=EntityRefDetails(package_id=package_id))
+    raise AdCPPersistedStateError(details=ConfigurationDetails(package_id=package_id), field="pricing_info")

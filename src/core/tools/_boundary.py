@@ -64,7 +64,7 @@ from src.core.exceptions import AdcpFailure, adcp_error_for
 from src.core.idempotency_canonical import canonical_request_hash
 from src.core.idempotency_replay import cache_success, lookup_cached_replay, maybe_evict_expired
 from src.core.resolved_identity import PublicIdentity, TransportProtocol
-from src.core.schemas._base import AdcpErrorResponse, AdcpResponse, BuyerRequest
+from src.core.schemas._base import AdcpErrorResponse, BuyerRequest, SalesAgentAdcpResponse
 from src.core.signing.capture import HttpExchange, SignatureSubject
 from src.core.signing.webhook_credentials import log_arriving_webhook_credentials, registers_webhook_credentials
 from src.core.tool_error_logging import record_boundary_error
@@ -73,14 +73,14 @@ from src.core.version_negotiation import SERVED_ADCP_VERSION, negotiate_adcp_ver
 logger = logging.getLogger(__name__)
 
 
-def _response_model_for(impl: Callable[..., Any]) -> type[AdcpResponse] | None:
+def _response_model_for(impl: Callable[..., Any]) -> type[SalesAgentAdcpResponse] | None:
     """The model an implementation returns, read off its annotation.
 
     Derived rather than declared: a registry row says which DTO a tool ACCEPTS, and the
     implementation's own signature already says what it returns. Storing the response type
     a second time would be a second declaration that can disagree with the function.
 
-    Narrowed to ``AdcpResponse``, which is what an AdCP response IS -- every pinned response
+    Narrowed to ``SalesAgentAdcpResponse``, which is what an AdCP response IS -- every pinned response
     schema composes the version and protocol envelopes at its root, and that base carries both.
     The narrowing is what lets this module ASSIGN ``adcp_version`` and ``replayed`` and CALL
     ``revive`` without probing for them; ``_register_tool`` refuses at import any tool whose
@@ -96,7 +96,7 @@ def _response_model_for(impl: Callable[..., Any]) -> type[AdcpResponse] | None:
     except Exception:
         return None
     annotation = hints.get("return")
-    if isinstance(annotation, type) and issubclass(annotation, AdcpResponse):
+    if isinstance(annotation, type) and issubclass(annotation, SalesAgentAdcpResponse):
         return annotation
     return None
 
@@ -104,7 +104,7 @@ def _response_model_for(impl: Callable[..., Any]) -> type[AdcpResponse] | None:
 def _deserializer_for(impl: Callable[..., Any]) -> Callable[[dict[str, Any]], Any | None]:
     """Turn a stored envelope back into a typed response, or None if it no longer validates.
 
-    ``AdcpResponse.revive`` resolves the stored body to its type -- for a tool whose schema is
+    ``SalesAgentAdcpResponse.revive`` resolves the stored body to its type -- for a tool whose schema is
     a ``oneOf``, to the BRANCH the buyer originally received.
 
     None means "treat as a miss": a stored envelope that stopped validating -- because the
@@ -117,7 +117,7 @@ def _deserializer_for(impl: Callable[..., Any]) -> Callable[[dict[str, Any]], An
     reason, and the cached body stays clean so repeated replays of one key each carry it once.
 
     A plain assignment, with no check that the field exists: every response model inherits
-    ``AdcpResponse``, which ``_register_tool`` refuses to register a tool without.
+    ``SalesAgentAdcpResponse``, which ``_register_tool`` refuses to register a tool without.
     """
     model = _response_model_for(impl)
 
@@ -169,6 +169,7 @@ def failure_response(
     *,
     echo: ContextObject | None = None,
     identity: PublicIdentity | None = None,
+    document: Any = None,
 ) -> AdcpErrorResponse:
     """Record one failure and build the response that answers it. THE one failure builder.
 
@@ -177,7 +178,7 @@ def failure_response(
     ``echo`` and the ``identity`` are the boundary's alone -- only ``serve`` holds a validated
     request and a resolved caller -- so only ``_failed`` passes them.
 
-    The ORIGINAL exception goes to the recorder: the body carries no exception text (AdCP 3.1.1
+    The ORIGINAL exception goes to the recorder: the body carries no exception text (AdCP.1
     transport-errors.mdx, Security Considerations), so the server-side record is the sole
     answer to what broke. ``adcp_error_for`` types it -- an untyped ValueError is a
     VALIDATION_ERROR, a PermissionError a PERMISSION_DENIED, anything else an INTERNAL_ERROR --
@@ -195,9 +196,15 @@ def failure_response(
     ``DetailsT`` to ``Any``; it is parameterized now. Catching here instead would answer
     INTERNAL_ERROR while the record said BUDGET_EXCEEDED -- making the log-versus-wire
     disagreement that was the damage into permanent behavior.
+
+    ``document`` is the RAW payload, passed only by the one caller that holds one -- the
+    parse step. A pydantic ``loc`` is not a pointer into it (pydantic synthesizes segments
+    for the unions it was resolving), so the buyer's own payload is what resolves the
+    difference; see ``JsonPointer.from_pydantic_loc``. A failure raised after the parse has
+    no payload to blame and passes none.
     """
     record_boundary_error(protocol, operation, exc, identity=identity)
-    return _served(echo, AdcpErrorResponse.of(adcp_error_for(exc)))
+    return _served(echo, AdcpErrorResponse.of(adcp_error_for(exc, document=document)))
 
 
 def _failed(
@@ -206,9 +213,12 @@ def _failed(
     exc: Exception,
     echo: ContextObject | None,
     identity: PublicIdentity | None = None,
+    document: Any = None,
 ) -> NoReturn:
     """Leave the boundary with the failure response for ``exc``, scoped to the caller once resolved."""
-    raise AdcpFailure(failure_response(protocol, tool_name, exc, echo=echo, identity=identity)) from exc
+    raise AdcpFailure(
+        failure_response(protocol, tool_name, exc, echo=echo, identity=identity, document=document)
+    ) from exc
 
 
 def validated_request(tool_name: str, raw: Any, protocol: TransportProtocol) -> BuyerRequest:
@@ -233,7 +243,7 @@ def validated_request(tool_name: str, raw: Any, protocol: TransportProtocol) -> 
             echo = ContextObject.model_validate(raw["context"])
         except (TypeError, KeyError, IndexError, ValidationError):
             echo = None
-        _failed(protocol, tool_name, exc, echo)
+        _failed(protocol, tool_name, exc, echo, document=raw)
 
 
 async def serve(
@@ -242,7 +252,7 @@ async def serve(
     headers: Mapping[str, str],
     protocol: TransportProtocol,
     exchange: HttpExchange | None = None,
-) -> AdcpResponse:
+) -> SalesAgentAdcpResponse:
     """Answer one buyer payload. THE transport entry.
 
     Parses the payload and runs the tool. Either step can fail, and both failures leave the
@@ -255,6 +265,22 @@ async def serve(
     are: sourced from the transport, never re-derived here. A transport that is not serving
     an HTTP request passes none, which is a request presenting no signature.
     """
+    # THE ORDER BELOW IS CORRECT AND DELIBERATE: validate the body first, refuse an invalid
+    # body, and only then resolve the caller (where the request signature is verified).
+    #
+    # - The body is read and parsed ONCE, here. Verifying first would mean a second read.
+    # - Whether a signature is needed at all is only known from the parsed request: the
+    #   operation, and the account it names, decide which signing bucket applies. That cannot
+    #   be decided before the body is read and validated.
+    # - So an invalid body is refused as INVALID_REQUEST without reaching the verifier.
+    #
+    # Do not move signature verification ahead of validation, not even for invalid bodies, to
+    # satisfy a conformance vector. A vector that grades signature correctness must send a
+    # VALID payload with the faulty signature. One that sends an invalid payload AND a faulty
+    # signature carries two refusals and grades the order of checks, not the signature: that
+    # is a defect in the vector (e.g. request-signing profile-3.2/negative/001-base64url-sf-binary,
+    # whose stub body is not a valid create_media_buy request), raised with the grader, not
+    # fixed here. Reordering was tried once and reverted (salesagent-c7dz1).
     return await invoke_tool(tool_name, validated_request(tool_name, raw, protocol), headers, protocol, exchange)
 
 
@@ -264,7 +290,7 @@ async def invoke_tool(
     headers: Mapping[str, str],
     protocol: TransportProtocol,
     exchange: HttpExchange | None = None,
-) -> AdcpResponse:
+) -> SalesAgentAdcpResponse:
     """Run the registry's tool named ``tool_name``, for the caller the request *headers* present.
 
     The form every transport calls. A transport names the TOOL and hands over the request it
@@ -279,7 +305,7 @@ async def invoke_tool(
     The same is true of ``exchange``, the captured HTTP message an RFC 9421 signature covers.
     Nothing here reads it either. What this function DOES add is the two things only it knows
     and the capture cannot: the registry key this request dispatched on, and whether the
-    VALIDATED request registers webhook credentials (security.mdx @ v3.1.1 :1462-1465). Both
+    VALIDATED request registers webhook credentials (security.mdx :1462-1465). Both
     go into one :class:`~src.core.signing.verifier.SignatureSubject` beside the headers, and
     the resolver -- the one reader of a credential, signature included -- decides.
     """
@@ -298,7 +324,7 @@ async def invoke_tool(
     # The INBOUND half of version negotiation, FIRST and before anything reads the database.
     # A version pin is a property of the request in exactly the sense the account and the
     # idempotency key are, so it belongs at the one chokepoint rather than inside a tool;
-    # AdCP 3.1.1 ``compliance/universal/error-compliance.yaml`` grades it on ``get_products``.
+    # ``compliance/universal/error-compliance.yaml`` grades it on ``get_products``.
     # A release this build does not speak ends the exchange, so a rejected pin must not
     # resolve a credential, a tenant or an account, must not hash the request, and must not be
     # answered from the replay cache. The pins are declared fields on the request (the SDK's
@@ -370,7 +396,7 @@ async def invoke_tool(
         _failed(protocol, tool_name, exc, echo, identity)
 
 
-def _served[Served: AdcpResponse](echo: ContextObject | None, response: Served) -> Served:
+def _served[Served: SalesAgentAdcpResponse](echo: ContextObject | None, response: Served) -> Served:
     """Stamp what the BOUNDARY owns onto one response envelope: the release, and the echo.
 
     THE one assignment for both, on every outcome: a fresh run, a replayed one and a failure
@@ -381,13 +407,13 @@ def _served[Served: AdcpResponse](echo: ContextObject | None, response: Served) 
     ``adcp_version``, inherited from the SDK's ``AdcpVersionEnvelope`` -- and it is set HERE
     for the same reason the account and the idempotency key are read at the boundary: it is a
     property of the seller and the call, not of the work, so an implementation neither knows
-    it nor should have to. AdCP 3.1.1 ``compliance/universal/version-negotiation.yaml`` grades
+    it nor should have to. ``compliance/universal/version-negotiation.yaml`` grades
     it at the envelope root with ``envelope_field_present`` and ``envelope_field_pattern``
     (advisory at 3.1, MUST at 4.0). The INBOUND half of that negotiation is a precondition
     rather than an envelope field, and runs at the top of ``invoke_tool``.
     """
     response.adcp_version = SERVED_ADCP_VERSION
-    # ``object.__setattr__``, not assignment: ``AdcpResponse.__setattr__`` refuses ``context``
+    # ``object.__setattr__``, not assignment: ``SalesAgentAdcpResponse.__setattr__`` refuses ``context``
     # so that no code outside this function can write it. This is the one bypass, and it is
     # the reason the refusal can be unconditional everywhere else.
     object.__setattr__(response, "context", echo)
@@ -399,7 +425,7 @@ async def _invoke(
     impl: Callable[..., Any],
     req: BuyerRequest,
     identity: PublicIdentity,
-) -> AdcpResponse:
+) -> SalesAgentAdcpResponse:
     """``invoke`` without the envelope stamp: honour the key, run it.
 
     The account the request named is already ON the identity: the resolver built it with

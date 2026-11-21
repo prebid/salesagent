@@ -47,7 +47,6 @@ _STEPDEF_PREFIX = "pytestbdd_stepdef_"
 #     regression, so this kind of entry is a PERMANENT exception, not pending work.
 _ALLOWED_UNREGISTERED: set[str] = {
     # (A) dead-pending-harness:
-    "tests.bdd.steps.domain.uc002_task_query",
     "tests.bdd.steps.generic.then_media_buy",
     # (B) intentionally-local (live via test_uc019_query_media_buys.py `import *`;
     # kept out of pytest_plugins so its 8 generic-step overrides stay UC-019-scoped):
@@ -57,7 +56,7 @@ _ALLOWED_UNREGISTERED: set[str] = {
 
 def _registered_plugins() -> set[str]:
     """Return the dotted module names listed in conftest's pytest_plugins."""
-    tree = ast.parse(_CONFTEST.read_text(), filename=str(_CONFTEST))
+    tree = ast.parse(_CONFTEST.read_text(encoding="utf-8"), filename=str(_CONFTEST))
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:

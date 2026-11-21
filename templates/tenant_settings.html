@@ -570,29 +570,27 @@
                                     {% endif %}
                                 </div>
                                 {% if tenant.favicon_url %}
-                                <form method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/remove_favicon" style="margin: 0;">
-                                    <button type="submit" class="btn btn-outline-danger btn-sm" onclick="return confirm('Remove custom favicon and use the default?')">
-                                        Remove
-                                    </button>
-                                </form>
+                                <button type="submit" form="favicon-remove-form" class="btn btn-outline-danger btn-sm" onclick="return confirm('Remove custom favicon and use the default?')">
+                                    Remove
+                                </button>
                                 {% endif %}
                             </div>
 
                             <!-- Upload form -->
                             <div style="margin-bottom: 1rem;">
-                                <form method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/upload_favicon" enctype="multipart/form-data" style="display: flex; gap: 0.5rem; align-items: center;">
-                                    <input type="file" name="favicon" accept=".ico,.png,.svg" style="flex: 1;">
-                                    <button type="submit" class="btn btn-secondary btn-sm">Upload</button>
-                                </form>
+                                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                    <input type="file" name="favicon" form="favicon-upload-form" accept=".ico,.png,.svg" style="flex: 1;">
+                                    <button type="submit" form="favicon-upload-form" class="btn btn-secondary btn-sm">Upload</button>
+                                </div>
                             </div>
 
                             <!-- URL form -->
                             <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed #e2e8f0;">
                                 <label style="font-size: 0.875rem; font-weight: 500; margin-bottom: 0.5rem; display: block;">Or provide a URL:</label>
-                                <form method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/update_favicon_url" style="display: flex; gap: 0.5rem; align-items: center;">
-                                    <input type="url" name="favicon_url" value="{{ tenant.favicon_url or '' }}" placeholder="https://example.com/favicon.ico" style="flex: 1; padding: 0.5rem; border: 1px solid #e2e8f0; border-radius: 6px;">
-                                    <button type="submit" class="btn btn-secondary btn-sm">Save URL</button>
-                                </form>
+                                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                    <input type="url" name="favicon_url" form="favicon-url-form" value="{{ tenant.favicon_url or '' }}" placeholder="https://example.com/favicon.ico" style="flex: 1; padding: 0.5rem; border: 1px solid #e2e8f0; border-radius: 6px;">
+                                    <button type="submit" form="favicon-url-form" class="btn btn-secondary btn-sm">Save URL</button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -694,6 +692,15 @@
                     <button type="submit" class="btn btn-primary">Save Account Settings</button>
                 </div>
             </form>
+
+            <!-- The favicon controls sit inside account-settings-form and reach these through form="".
+                 A form nested in a form is dropped by the HTML parser, and the first inner </form>
+                 closes the outer one, leaving the domain field and Save button in no form at all. -->
+            {% if tenant.favicon_url %}
+            <form id="favicon-remove-form" method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/remove_favicon"></form>
+            {% endif %}
+            <form id="favicon-upload-form" method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/upload_favicon" enctype="multipart/form-data"></form>
+            <form id="favicon-url-form" method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/update_favicon_url"></form>
 
             <!-- Access Control (Domain & Email Authorization) -->
             <div class="form-section" style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid #e5e7eb;">
@@ -890,7 +897,7 @@
                     <!-- Fully configured - show success state -->
                     <div class="status-card" style="background: #f0fdf4; border-left: 4px solid #10b981;">
                         <!-- Hidden fields for JS operations -->
-                        <input type="hidden" id="gam_refresh_token" value="{{ adapter_config.get('refresh_token') }}">
+                        <input type="hidden" id="gam_refresh_token" value="">  {# never rendered: a blank token means the stored one #}
                         <input type="hidden" id="gam_network_code" value="{{ adapter_config.get('network_code') }}">
                         <input type="hidden" id="gam_trafficker_id" value="{{ adapter_config.get('trafficker_id') }}">
 
@@ -956,8 +963,8 @@
                             <div style="margin-top: 0.5rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
                                 <label for="gam_refresh_token">Manual OAuth Refresh Token</label>
                                 <input type="text" id="gam_refresh_token" class="form-control"
-                                       value="{{ adapter_config.get('refresh_token', '') if adapter_config else '' }}"
-                                       placeholder="Paste your OAuth refresh token here">
+                                       value=""
+                                       placeholder="{{ 'A token is saved. Paste a new one to replace it.' if adapter_config and adapter_config.get('refresh_token') else 'Paste your OAuth refresh token here' }}">
                                 <small class="form-text text-muted">For advanced users: manually enter a refresh token if you have one.</small>
                                 <button onclick="saveManualToken()" class="btn btn-primary" style="margin-top: 0.5rem;">
                                     Save Token
@@ -1537,14 +1544,14 @@
 
                     <!-- AI Configuration (shown only for ai-powered mode) -->
                     <div id="ai-config-section" style="display: none; margin-top: 1rem;">
-                        {% if not has_gemini_key %}
+                        {% if not ai_enabled %}
                         <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-bottom: 1rem;">
-                            <strong>⚠️ Gemini API Key Required</strong>
-                            <p style="margin: 0.5rem 0 0;">AI review requires a Gemini API key. Please set your key in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
+                            <strong>⚠️ AI Configuration Required</strong>
+                            <p style="margin: 0.5rem 0 0;">AI review requires an AI provider with an API key. Please configure one in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
                         </div>
                         {% else %}
                         <div class="alert alert-success" style="padding: 0.75rem; background: #d1fae5; border: 1px solid #34d399; border-radius: 6px; margin-bottom: 1rem;">
-                            <strong>✅ Gemini API Key Configured</strong>
+                            <strong>✅ AI Configured</strong>
                             <p style="margin: 0.5rem 0 0; font-size: 0.875rem; color: #059669;">AI-powered creative review is enabled.</p>
                         </div>
                         {% endif %}
@@ -1711,10 +1718,10 @@ REJECT - Creative cannot be approved:
                     </div>
 
                     <div id="advertising-policy-config" style="{% if tenant.advertising_policy and tenant.advertising_policy.get('enabled') == False %}display: none;{% endif %}">
-                        {% if not tenant.gemini_api_key %}
+                        {% if not seller_ai_enabled %}
                         <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-bottom: 1rem;">
-                            <strong>⚠️ Gemini API Key Required</strong>
-                            <p style="margin: 0.5rem 0 0;">Advertising policy checks require a Gemini API key to function. Without it, all campaigns will be allowed by default. Please set your key in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
+                            <strong>⚠️ AI Configuration Required</strong>
+                            <p style="margin: 0.5rem 0 0;">Advertising policy checks require your own AI provider and API key to function. Without it, all campaigns will be allowed by default. Please configure one in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
                         </div>
                         {% endif %}
 
@@ -1781,10 +1788,10 @@ REJECT - Creative cannot be approved:
                         <small>When set, AI will use this prompt to rank products based on relevance to the buyer's brief. Leave empty to disable AI ranking and return all products.</small>
                     </div>
 
-                    {% if not has_gemini_key %}
+                    {% if not ai_enabled %}
                     <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-top: 1rem;">
-                        <strong>⚠️ Gemini API Key Required</strong>
-                        <p style="margin: 0.5rem 0 0;">Product ranking requires a Gemini API key. Please set your key in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
+                        <strong>⚠️ AI Configuration Required</strong>
+                        <p style="margin: 0.5rem 0 0;">Product ranking requires an AI provider with an API key. Please configure one in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
                     </div>
                     {% endif %}
 

@@ -226,7 +226,7 @@ class PushNotificationConfigRepository:
         the primary key — not the pre-check — decides the race. This enforces
         a SCOPED invariant: one active admin-registered config per
         (tenant, principal, url). It deliberately does NOT impose DB-wide URL
-        uniqueness: AdCP 3.1.1 keys push_notification_configs by id and is
+        uniqueness: keys push_notification_configs by id and is
         silent on URL uniqueness, so a protocol-path config (buyer-chosen id)
         with the same URL remains legal.
         """

@@ -98,37 +98,7 @@ Then call: window.inventoryProfileEditor.open(profileData)
                         <div id="profileExtractedSizesList" style="margin-top: 0.5rem;"></div>
                     </div>
 
-                    <div class="mb-3">
-                        <div class="btn-group" role="group">
-                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="window.inventoryProfileEditor.selectAllFormats()">
-                                Select All
-                            </button>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="window.inventoryProfileEditor.deselectAllFormats()">
-                                Deselect All
-                            </button>
-                            <button type="button" class="btn btn-sm btn-outline-success" id="profileSelectMatchingSizesBtn" onclick="window.inventoryProfileEditor.selectMatchingSizes()" disabled>
-                                Select Matching Sizes
-                            </button>
-                        </div>
-                    </div>
-
-                    <div id="profileFormatSearchBox" class="mb-3">
-                        <input type="text" id="profileFormatSearchInput" class="form-control" placeholder="Search formats by name, type, or size...">
-                    </div>
-
-                    <div id="profileSelectedFormats" style="margin-bottom: 1rem; padding: 1rem; background: #f0f7ff; border: 1px solid #d0e7ff; border-radius: 4px; min-height: 50px; display: none;">
-                        <div style="font-weight: 600; margin-bottom: 0.5rem; color: #0066cc;">Selected Formats:</div>
-                        <div id="profileSelectedFormatsList" style="display: flex; flex-wrap: wrap; gap: 0.5rem;"></div>
-                    </div>
-
-                    <div id="profileFormatList">
-                        <div id="profileFormatLoading" class="text-center text-muted py-3">
-                            Loading formats from creative agents...
-                        </div>
-                        <div id="profileFormatResults" style="display: none;"></div>
-                    </div>
-
-                    <input type="hidden" id="profileFormats" name="formats">
+                    {% include 'components/format_options_editor.html' %}
 
                     <!-- Section 4: Publisher Properties -->
                     <h5 class="mb-3 mt-4">Authorized Properties *</h5>
@@ -198,8 +168,6 @@ Then call: window.inventoryProfileEditor.open(profileData)
     const scriptRoot = '{{ request.script_root }}' || '';
 
     // State
-    let allFormats = [];
-    let selectedFormats = new Set();
     let currentProfile = null;
     let extractedSizes = new Set();
     let sizeUnitCounts = new Map();
@@ -213,9 +181,6 @@ Then call: window.inventoryProfileEditor.open(profileData)
         save: saveProfile,
         openInventoryPicker: (type, search) => window.inventoryPicker.open(type, search),
         setDefaultProperties: setDefaultProperties,
-        selectAllFormats: selectAllFormats,
-        deselectAllFormats: deselectAllFormats,
-        selectMatchingSizes: selectMatchingSizes,
         extractSizesFromInventory: extractSizesFromInventory,
         config: config
     };
@@ -228,7 +193,7 @@ Then call: window.inventoryProfileEditor.open(profileData)
 
         // Reset form
         document.getElementById('profileForm').reset();
-        selectedFormats.clear();
+        document.getElementById('format_options').value = '';
 
         // Configure Profile ID field based on mode
         const profileIdInput = document.getElementById('profileIdInput');
@@ -246,7 +211,6 @@ Then call: window.inventoryProfileEditor.open(profileData)
         }
 
         // Load formats and properties
-        loadFormats();
         loadAuthorizedProperties();
 
         // Set up search functionality for inventory fields
@@ -302,11 +266,9 @@ Then call: window.inventoryProfileEditor.open(profileData)
             }
         }
 
-        // Populate formats
-        if (data.formats) {
-            data.formats.forEach(format => {
-                selectedFormats.add(format.id);
-            });
+        // Populate the canonical declarations the profile stores
+        if (data.format_options) {
+            document.getElementById('format_options').value = JSON.stringify(data.format_options, null, 2);
         }
 
         // Populate properties mode
@@ -340,8 +302,9 @@ Then call: window.inventoryProfileEditor.open(profileData)
         }
 
         // Validate formats
-        if (selectedFormats.size === 0) {
-            alert('Please select at least one creative format');
+        const formatOptions = document.getElementById('format_options').value.trim();
+        if (!formatOptions) {
+            alert('Please declare at least one canonical format (format_options)');
             return;
         }
 
@@ -382,14 +345,7 @@ Then call: window.inventoryProfileEditor.open(profileData)
             formPayload.append('include_descendants', 'on');
         }
 
-        const formatRefs = Array.from(selectedFormats).map(formatId => {
-            const format = allFormats.find(f => f.format_id === formatId);
-            return {
-                agent_url: format?.agent_url || 'https://creative.adcontextprotocol.org',
-                id: formatId
-            };
-        });
-        formPayload.append('formats', JSON.stringify(formatRefs));
+        formPayload.append('format_options', formatOptions);
         formPayload.append('publisher_properties', JSON.stringify(publisherProperties));
         formPayload.append('property_mode', propertyMode);
 
@@ -403,6 +359,9 @@ Then call: window.inventoryProfileEditor.open(profileData)
             const response = await fetch(url, {
                 method: 'POST',
                 credentials: 'same-origin',
+                // A refusal answers this with a 400 and the reason, rather than a redirect
+                // that fetch would follow to a 200.
+                headers: {'Accept': 'application/json'},
                 body: formPayload
             });
 
@@ -438,125 +397,6 @@ Then call: window.inventoryProfileEditor.open(profileData)
 
     // ==================== FORMATS ====================
 
-    async function loadFormats() {
-        const loadingDiv = document.getElementById('profileFormatLoading');
-        const resultsDiv = document.getElementById('profileFormatResults');
-
-        loadingDiv.style.display = 'block';
-        resultsDiv.style.display = 'none';
-
-        try {
-            const url = `${scriptRoot}/api/formats/list?tenant_id=${config.tenantId}`;
-            console.log('Loading formats from:', url, 'config:', config);
-
-            const response = await fetch(url, {
-                credentials: 'same-origin'
-            });
-
-            console.log('Format response status:', response.status);
-            const data = await response.json();
-            console.log('Format data:', data);
-
-            if (data.error) {
-                throw new Error(data.message || data.error);
-            }
-
-            // Flatten agents object into formats array
-            allFormats = [];
-            for (const [agentUrl, formats] of Object.entries(data.agents || {})) {
-                formats.forEach(fmt => {
-                    // Debug: Log first format to see structure
-                    if (allFormats.length === 0) {
-                        console.log('[loadFormats] First format from API:', fmt);
-                        console.log('[loadFormats] format_id type:', typeof fmt.format_id, fmt.format_id);
-                    }
-                    allFormats.push({...fmt, agent_url: agentUrl});
-                });
-            }
-            renderFormats(allFormats);
-            setupFormatSearch();
-        } catch (error) {
-            loadingDiv.innerHTML = '<div class="alert alert-danger">Error loading formats: ' + error.message + '</div>';
-        }
-    }
-
-    function renderFormats(formats) {
-        const loadingDiv = document.getElementById('profileFormatLoading');
-        const resultsDiv = document.getElementById('profileFormatResults');
-
-        loadingDiv.style.display = 'none';
-        resultsDiv.style.display = 'block';
-
-        if (formats.length === 0) {
-            resultsDiv.innerHTML = '<div style="text-align: center; padding: 2rem; color: #666;">No formats found</div>';
-            return;
-        }
-
-        // Group by category (format type removed in adcp 3.12)
-        const grouped = {};
-        formats.forEach(fmt => {
-            const cat = fmt.category || 'standard';
-            if (!grouped[cat]) {
-                grouped[cat] = [];
-            }
-            grouped[cat].push(fmt);
-        });
-
-        let html = '';
-        for (const [type, typeFormats] of Object.entries(grouped)) {
-            html += `
-                <div style="margin-bottom: 2rem;">
-                    <h6 style="margin-bottom: 1rem; text-transform: capitalize; color: #2c3e50; border-bottom: 1px solid #ddd; padding-bottom: 0.5rem;">${type}</h6>
-                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem;">
-            `;
-
-            typeFormats.forEach(format => {
-                // Use utility function for type-safe format_id extraction
-                const formatIdValue = getFormatId(format);
-                const isSelected = selectedFormats.has(formatIdValue);
-                const checkIcon = isSelected ? '✓ ' : '';
-
-                // Get dimensions display (check both width/height and dimensions field)
-                let dimensionsDisplay = '';
-                if (format.width && format.height) {
-                    dimensionsDisplay = `${format.width}×${format.height}`;
-                } else if (format.dimensions) {
-                    dimensionsDisplay = format.dimensions.replace('x', '×');
-                }
-
-                html += `
-                    <div class="format-card ${isSelected ? 'selected' : ''} format-item"
-                         onclick="window.inventoryProfileEditor.toggleFormat('${formatIdValue}', '${format.name}', '${format.agent_url || ''}')"
-                         style="border: 2px solid ${isSelected ? '#0066cc' : '#e0e0e0'}; border-radius: 4px; padding: 0.75rem; background: ${isSelected ? '#f0f7ff' : '#f9f9f9'}; cursor: pointer; transition: all 0.2s;">
-                        <div style="font-weight: 600; color: #333;">${checkIcon}${format.name}</div>
-                        ${format.description ? `<div style="color: #777; font-size: 0.85rem; margin-top: 0.25rem;">${format.description}</div>` : ''}
-                        ${dimensionsDisplay ? `<div style="color: #666; font-size: 0.85rem; margin-top: 0.25rem;">${dimensionsDisplay}</div>` : ''}
-                    </div>
-                `;
-            });
-
-            html += '</div></div>';
-        }
-
-        resultsDiv.innerHTML = html;
-        updateSelectedFormatsDisplay();
-    }
-
-    function setupFormatSearch() {
-        const searchInput = document.getElementById('profileFormatSearchInput');
-        if (!searchInput) return;
-
-        searchInput.addEventListener('input', function(e) {
-            const query = e.target.value.toLowerCase();
-            const items = document.querySelectorAll('.format-item');
-
-            items.forEach(item => {
-                const text = item.textContent.toLowerCase();
-                item.style.display = text.includes(query) ? 'block' : 'none';
-            });
-        });
-    }
-
     // ==================== INVENTORY SEARCH ====================
 
     function setupInventorySearch() {
@@ -583,53 +423,6 @@ Then call: window.inventoryProfileEditor.open(profileData)
                 }
             });
         }
-    }
-
-    window.inventoryProfileEditor.toggleFormat = function(formatId, formatName, agentUrl) {
-        if (selectedFormats.has(formatId)) {
-            selectedFormats.delete(formatId);
-        } else {
-            selectedFormats.add(formatId);
-        }
-        renderFormats(allFormats); // Re-render to update visual state
-        updateSelectedFormatsDisplay();
-    };
-
-    function updateSelectedFormatsDisplay() {
-        const container = document.getElementById('profileSelectedFormats');
-        const list = document.getElementById('profileSelectedFormatsList');
-
-        if (selectedFormats.size === 0) {
-            container.style.display = 'none';
-            return;
-        }
-
-        container.style.display = 'block';
-        list.innerHTML = Array.from(selectedFormats).map(formatId => {
-            const format = allFormats.find(f => f.format_id === formatId);
-            if (!format) return '';
-
-            return `
-                <span class="badge bg-primary" style="padding: 0.5rem; font-size: 0.9rem;">
-                    ${format.name}
-                    <span onclick="window.inventoryProfileEditor.toggleFormat('${formatId}', '${format.name}', '${format.agent_url || ''}')"
-                          style="cursor: pointer; margin-left: 0.5rem;">×</span>
-                </span>
-            `;
-        }).join('');
-
-        // Update hidden field
-        const formatRefs = [];
-        selectedFormats.forEach(formatId => {
-            const format = allFormats.find(f => f.format_id === formatId);
-            if (format) {
-                formatRefs.push({
-                    agent_url: format.agent_url || 'https://creative.adcontextprotocol.org',
-                    id: formatId
-                });
-            }
-        });
-        document.getElementById('profileFormats').value = JSON.stringify(formatRefs);
     }
 
     // ==================== AUTHORIZED PROPERTIES ====================
@@ -745,7 +538,6 @@ Then call: window.inventoryProfileEditor.open(profileData)
 
         if (adUnitIds.length === 0) {
             document.getElementById('profileExtractedSizesBox').style.display = 'none';
-            document.getElementById('profileSelectMatchingSizesBtn').disabled = true;
             return;
         }
 
@@ -795,67 +587,9 @@ Then call: window.inventoryProfileEditor.open(profileData)
             }).join('');
 
             sizesBox.style.display = 'block';
-            document.getElementById('profileSelectMatchingSizesBtn').disabled = false;
         } else {
             document.getElementById('profileExtractedSizesBox').style.display = 'none';
-            document.getElementById('profileSelectMatchingSizesBtn').disabled = true;
         }
-    }
-
-    function selectMatchingSizes() {
-        console.log('[selectMatchingSizes] Called with extractedSizes:', Array.from(extractedSizes));
-
-        if (extractedSizes.size === 0) {
-            console.log('[selectMatchingSizes] No extracted sizes, returning');
-            return;
-        }
-
-        // Find formats that match the extracted sizes exactly
-        selectedFormats.clear();
-
-        console.log('[selectMatchingSizes] Checking', allFormats.length, 'formats');
-        if (allFormats.length > 0) {
-            console.log('[selectMatchingSizes] Sample format structure:', allFormats[0]);
-        }
-
-        allFormats.forEach(format => {
-            // Check both width/height fields AND dimensions field
-            let formatSize = null;
-
-            if (format.width && format.height) {
-                formatSize = `${format.width}x${format.height}`;
-            } else if (format.dimensions) {
-                // dimensions is a string like "970x250"
-                formatSize = format.dimensions;
-            }
-
-            if (formatSize && extractedSizes.has(formatSize)) {
-                // Use utility function for type-safe format_id extraction
-                const formatIdValue = getFormatId(format);
-                console.log('[selectMatchingSizes] Match found! Format:', formatIdValue, 'Size:', formatSize);
-                selectedFormats.add(formatIdValue);
-            }
-        });
-
-        console.log('[selectMatchingSizes] Selected', selectedFormats.size, 'formats');
-        renderFormats(allFormats);
-        updateSelectedFormatsDisplay();
-    }
-
-    function selectAllFormats() {
-        allFormats.forEach(format => {
-            // Use utility function for type-safe format_id extraction
-            const formatIdValue = getFormatId(format);
-            selectedFormats.add(formatIdValue);
-        });
-        renderFormats(allFormats);
-        updateSelectedFormatsDisplay();
-    }
-
-    function deselectAllFormats() {
-        selectedFormats.clear();
-        renderFormats(allFormats);
-        updateSelectedFormatsDisplay();
     }
 
 })();

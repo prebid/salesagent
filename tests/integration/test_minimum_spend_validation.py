@@ -13,13 +13,13 @@ All tests in this file use float budget format per AdCP v2.2.0 spec:
 - Excessive budgets trigger adapter errors (raises ToolError)
 
 # --- Test Source-of-Truth Audit ---
-# Audited: 2026-03-08
+# Audited: 2026-03-08. test_product_override_enforced removed 2026-10-28: the BDD
+# scenario "Package budget below the pricing option's minimum spend" grades it on every
+# transport, with the pinned code BUDGET_TOO_LOW.
 #
-# SPEC_BACKED (4/7 tests):
+# SPEC_BACKED (3/6 tests):
 #   test_currency_minimum_spend_enforced
 #     — AdCP spec: BUDGET_INSUFFICIENT error code for budget below minimum
-#   test_product_override_enforced
-#     — AdCP spec: BUDGET_INSUFFICIENT + product-level min_spend_per_package
 #   test_minimum_spend_met_success
 #     — AdCP spec: valid budget accepted (no BUDGET_INSUFFICIENT)
 #   test_different_currency_different_minimum
@@ -46,15 +46,16 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import delete, select
 
+from scripts.setup.seed_products import seed_verified_website
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
-    AuthorizedProperty,
     CurrencyLimit,
     GAMInventory,
     MediaBuy,
     Principal,
     Product,
     PropertyTag,
+    Publisher,
     Tenant,
     TenantAuthConfig,
 )
@@ -144,17 +145,9 @@ class TestMinimumSpendValidation:
             )
             session.add(property_tag)
 
-            # Create required AuthorizedProperty (needed for setup validation)
-            authorized_property = AuthorizedProperty(
-                tenant_id="test_minspend_tenant",
-                property_id="test_minspend_property",
-                property_type="website",
-                name="Test Property",
-                identifiers=[{"type": "domain", "value": "example.com"}],
-                publisher_domain="example.com",
-                verification_status="verified",
-            )
-            session.add(authorized_property)
+            # The publisher whose stored adagents.json authorizes the tenant (needed for setup validation)
+            session.flush()
+            seed_verified_website(session, "test_minspend_tenant", "psatest.com", name="Test Property")
 
             # Create principal with both kevel and mock mappings
             principal = Principal.with_token(
@@ -340,7 +333,7 @@ class TestMinimumSpendValidation:
             session.execute(delete(Principal).where(Principal.tenant_id == "test_minspend_tenant"))
             session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == "test_minspend_tenant"))
             session.execute(delete(PropertyTag).where(PropertyTag.tenant_id == "test_minspend_tenant"))
-            session.execute(delete(AuthorizedProperty).where(AuthorizedProperty.tenant_id == "test_minspend_tenant"))
+            session.execute(delete(Publisher).where(Publisher.tenant_id == "test_minspend_tenant"))
             session.execute(delete(TenantAuthConfig).where(TenantAuthConfig.tenant_id == "test_minspend_tenant"))
             session.execute(delete(Tenant).where(Tenant.tenant_id == "test_minspend_tenant"))
             session.commit()
@@ -373,35 +366,6 @@ class TestMinimumSpendValidation:
 
         exc = excinfo.value
         assert exc.error_code == "BUDGET_TOO_LOW"
-
-    async def test_product_override_enforced(self, setup_test_data):
-        """Test that product-specific minimum spend override is enforced."""
-        identity = _account_identity()
-
-        start_time = datetime.now(UTC) + timedelta(days=1)
-        end_time = start_time + timedelta(days=7)
-
-        # Try to create media buy below product override ($5000)
-        # Should fail validation and raise typed AdCPValidationError past _impl boundary.
-        req = CreateMediaBuyRequest(
-            account={"account_id": "acct_test"},
-            brand={"domain": "testbrand.com"},
-            idempotency_key=f"int-key-{uuid.uuid4().hex}",
-            packages=[
-                create_test_package_request(
-                    product_id="prod_high",
-                    budget=3000.0,  # Below $5000 product minimum per AdCP v2.2.0, currency from pricing_option
-                    pricing_option_id=setup_test_data["prod_high"],  # Use actual database-generated ID
-                )
-            ],
-            start_time=start_time.isoformat(),
-            end_time=end_time.isoformat(),
-        )
-        with pytest.raises(AdCPValidationError) as excinfo:
-            await _create_media_buy_impl(req=req, identity=identity)
-
-        exc = excinfo.value
-        assert exc.error_code == "VALIDATION_ERROR"
 
     async def test_lower_override_allows_smaller_spend(self, setup_test_data):
         """Test that lower product override allows smaller spend than currency limit."""

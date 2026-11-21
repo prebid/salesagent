@@ -15,12 +15,21 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ProductModel
+from src.core.database.models import ProductPublisherSelection
 from src.core.database.models import Tenant as TenantModel
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.uow import ProductUoW
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.schemas import Product as ProductSchema
-from tests.factories import PricingOptionFactory
+from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+from tests.factories.product import (
+    FIRST_PUBLISHER_LEADERBOARD_KEY,
+    ONE_AUTHORIZED_PROPERTY,
+    PRODUCT_LOCAL_MREC,
+    TWO_PUBLISHER_PROPERTIES,
+    catalog_first_publisher_leaderboard,
+    default_publisher_selections,
+)
 
 
 def _create_test_tenant(session, unique_id: str) -> TenantModel:
@@ -62,7 +71,7 @@ def _create_test_product(
         format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
         targeting_template={},
         delivery_type=delivery_type,
-        property_tags=["all_inventory"],
+        publisher_selections=default_publisher_selections(session, tenant_id),
         delivery_measurement={"provider": "publisher", "notes": "Test measurement"},
     )
     session.add(product)
@@ -165,7 +174,9 @@ class TestProductRepositoryGetAllForTenant:
             products = repo.list_all()
 
         # Should convert to Pydantic schema without errors
-        schema = convert_product_model_to_schema(products[0])
+        schema = convert_product_model_to_schema(
+            products[0], publisher_properties=products[0].resolve_publisher_properties(ONE_AUTHORIZED_PROPERTY)
+        )
         assert isinstance(schema, ProductSchema)
         assert schema.product_id == f"prod-{uid}"
         assert len(schema.pricing_options) > 0
@@ -349,7 +360,6 @@ class TestProductRepositoryCreate:
                 format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
                 targeting_template={},
                 delivery_type="guaranteed",
-                property_tags=["all_inventory"],
                 delivery_measurement={"provider": "publisher", "notes": "Test"},
             )
             result = uow.products.create(product)
@@ -383,7 +393,6 @@ class TestProductRepositoryCreate:
                     format_ids=[],
                     targeting_template={},
                     delivery_type="guaranteed",
-                    property_tags=[],
                     delivery_measurement={"provider": "publisher", "notes": "Test"},
                 )
                 uow.products.create(product)
@@ -407,7 +416,6 @@ class TestProductRepositoryCreate:
                 format_ids=[],
                 targeting_template={},
                 delivery_type="guaranteed",
-                property_tags=[],
                 delivery_measurement={"provider": "publisher", "notes": "Test"},
             )
             uow.products.create(product)
@@ -493,9 +501,66 @@ class TestProductRepositoryUpdateFields:
         assert fetched.name == "Test Product"
 
 
+#: The rule clause of the common-intersection refusal.
+_INTERSECTION_REFUSAL = "every format option must be accepted by all of them"
+
+
 @pytest.mark.requires_db
-class TestProductRepositoryListAllWithInventory:
-    """ProductRepository.list_all_with_inventory returns products with inventory relationship loaded."""
+class TestProductRepositoryCommonIntersection:
+    """Both write methods refuse a multi-publisher product without placements outside the common intersection.
+
+    core/product.json format_options (v3.2.7): such a product's "format_options MUST therefore
+    be the common intersection accepted across every selected publisher/property scope". An
+    option scoped to the first of two publishers is outside it; the same option on a
+    one-publisher product is inside it, which is the accept control.
+    """
+
+    _CASES = pytest.mark.parametrize(
+        ("publishers", "refused"), [(TWO_PUBLISHER_PROPERTIES, True), (TWO_PUBLISHER_PROPERTIES[:1], False)]
+    )
+
+    @_CASES
+    def test_create(self, factory_session, publishers, refused):
+        tenant = TenantFactory()
+        catalog_first_publisher_leaderboard(tenant)
+        factory_session.commit()
+        product = ProductModel(
+            tenant_id=tenant.tenant_id,
+            product_id="sliced",
+            name="Sliced",
+            format_options=[PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD_KEY],
+            publisher_selections=ProductPublisherSelection.from_selectors(tenant.tenant_id, publishers),
+            targeting_template={},
+            delivery_type="guaranteed",
+            delivery_measurement={"provider": "publisher"},
+        )
+
+        if refused:
+            with pytest.raises(ValueError, match=_INTERSECTION_REFUSAL), ProductUoW(tenant.tenant_id) as uow:
+                uow.products.create(product)
+        else:
+            with ProductUoW(tenant.tenant_id) as uow:
+                assert uow.products.create(product) is product
+
+    @_CASES
+    def test_update_fields(self, factory_session, publishers, refused):
+        product = ProductFactory(format_ids=None, format_options=[PRODUCT_LOCAL_MREC], properties=publishers)
+        catalog_first_publisher_leaderboard(product.tenant)
+        factory_session.commit()
+        authored = [PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD_KEY]
+
+        # pytest.raises OUTSIDE the UoW, so the refusal rolls the unit back as in production.
+        if refused:
+            with pytest.raises(ValueError, match=_INTERSECTION_REFUSAL), ProductUoW(product.tenant_id) as uow:
+                uow.products.update_fields(product.product_id, format_options=authored)
+        else:
+            with ProductUoW(product.tenant_id) as uow:
+                assert uow.products.update_fields(product.product_id, format_options=authored) is not None
+
+
+@pytest.mark.requires_db
+class TestProductRepositoryListForOffer:
+    """ProductRepository.list_for_offer returns products with their relationships loaded."""
 
     def test_returns_products_with_pricing_loaded(self, integration_db):
         """Products returned have pricing_options accessible outside session."""
@@ -508,7 +573,7 @@ class TestProductRepositoryListAllWithInventory:
 
         with get_db_session() as session:
             repo = ProductRepository(session, f"test-tenant-{uid}")
-            products = repo.list_all_with_inventory()
+            products = repo.list_for_offer()
 
         assert len(products) == 1
         product = products[0]
@@ -530,7 +595,7 @@ class TestProductRepositoryListAllWithInventory:
 
         with get_db_session() as session:
             repo_a = ProductRepository(session, tenant_a_id)
-            products_a = repo_a.list_all_with_inventory()
+            products_a = repo_a.list_for_offer()
 
         assert len(products_a) == 1
         assert products_a[0].product_id == f"prod-a-{uid}"
@@ -545,6 +610,6 @@ class TestProductRepositoryListAllWithInventory:
 
         with get_db_session() as session:
             repo = ProductRepository(session, f"test-tenant-{uid}")
-            products = repo.list_all_with_inventory()
+            products = repo.list_for_offer()
 
         assert products == []

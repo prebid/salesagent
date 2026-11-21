@@ -69,12 +69,11 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import repo_root, stage_ast_grep_root, write_ast_grep_probe
+from tests.unit._architecture_helpers import rel, repo_root, stage_ast_grep_root, venv_ast_grep, write_ast_grep_probe
 
 # The rule's id, and the path it is committed at. Both are pinned so that a
 # rule filed under another name fails with a path in the message rather than a
@@ -159,31 +158,6 @@ _KNOWN_BAD = _CREDENTIAL_SHAPES[0][1]
 _CLEAN = 'def build():\n    return {"Content-Type": "application/json"}\n'
 
 
-def _ast_grep_bin() -> Path:
-    """The venv-local ast-grep — exactly what ``uv run ast-grep`` resolves to.
-
-    Resolved next to ``sys.executable`` and NOWHERE ELSE, on purpose. A PATH
-    lookup would find the homebrew binary that is the only copy on this machine
-    today, so this module would pass locally while the ``quality-ci`` line it
-    grades failed in CI with command-not-found — the review finding this
-    resolution exists to close.
-
-    Absence FAILS, it does not skip. ast-grep is declared nowhere in
-    pyproject.toml, and a skip here is the same silent nothing-graded outcome as
-    a ``quality-ci`` line arranged to tolerate the binary's absence. The fix is
-    to declare ``ast-grep-cli`` in the dev group, which is part of the work this
-    module grades.
-    """
-    candidate = Path(sys.executable).parent / "ast-grep"
-    assert candidate.exists(), (
-        f"{candidate} does not exist: ast-grep is not installed in this environment's venv.\n"
-        "Declare `ast-grep-cli` in the pyproject dev group so `uv run ast-grep` resolves — "
-        "the homebrew binary on PATH is deliberately NOT used here, because relying on it "
-        "would let this test pass while the make quality-ci line fails in CI."
-    )
-    return candidate
-
-
 def _scan(
     *paths: str,
     rule_args: tuple[str, ...] = ("--rule", RULE_FILE),
@@ -196,7 +170,7 @@ def _scan(
     file, same output format — so a passing case proves the REAL gate line
     would behave this way, not a lookalike.
     """
-    cmd = [str(_ast_grep_bin()), "scan", *rule_args, *paths, "--json=compact"]
+    cmd = [str(venv_ast_grep()), "scan", *rule_args, *paths, "--json=compact"]
     for glob in globs:
         cmd += ["--globs", glob]
     return subprocess.run(
@@ -342,13 +316,13 @@ class TestLiveTreeAndExemptions:
         directive = re.compile(rf"#\s*ast-grep-ignore:\s*{re.escape(RULE_ID)}\b")
         # This module is excluded: it spells the directive inside string
         # literals as TEST DATA (TestExemptionForm), which is not an exemption.
-        this_module = str(Path(__file__).resolve().relative_to(repo_root()))
+        this_module = rel(Path(__file__).resolve(), repo_root())
         # Probes are excluded here for the same reason the live-tree scan excludes
         # them: a sibling test on another xdist worker writes and removes them, so one
         # can vanish between rglob and read_text -- a FileNotFoundError that read as
         # this test failing on two box runs with nothing else changed.
         found = {
-            str(path.relative_to(repo_root()))
+            rel(path, repo_root())
             for path in (repo_root() / "tests").rglob("*.py")
             if not path.name.startswith(_PROBE_STEM)
             and directive.search(path.read_text(encoding="utf-8", errors="ignore"))
@@ -363,11 +337,11 @@ class TestLiveTreeAndExemptions:
     def test_each_exemption_is_a_real_violation_without_its_suppression(self, staged_root: Path) -> None:
         directive = re.compile(r"#\s*ast-grep-ignore:[^\n]*")
         vacuous: list[str] = []
-        for rel in sorted(_RECORDED_EXEMPTIONS):
-            source = (repo_root() / rel).read_text(encoding="utf-8")
+        for relpath in sorted(_RECORDED_EXEMPTIONS):
+            source = (repo_root() / relpath).read_text(encoding="utf-8")
             probe_path = _probe(staged_root, "tests/unit", directive.sub("", source))
             if not _matches(_scan(probe_path, cwd=staged_root)):
-                vacuous.append(rel)
+                vacuous.append(relpath)
         assert vacuous == [], (
             "these files are exempted but do not violate the rule once their suppression "
             f"comment is removed — the exemption is prose, delete it: {vacuous}"
@@ -386,7 +360,7 @@ class TestExemptionForm:
     """
 
     def test_pinned_version_is_the_one_whose_suppression_was_measured(self) -> None:
-        proc = subprocess.run([str(_ast_grep_bin()), "--version"], capture_output=True, text=True, check=True)
+        proc = subprocess.run([str(venv_ast_grep()), "--version"], capture_output=True, text=True, check=True)
         assert proc.stdout.split()[-1] == _MEASURED_VERSION, (
             f"ast-grep is {proc.stdout.strip()!r}, and suppression parsing was measured on "
             f"{_MEASURED_VERSION}. Re-measure both cases below against the new version before "

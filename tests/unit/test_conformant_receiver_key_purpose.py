@@ -51,8 +51,8 @@ import httpx
 import pytest
 from adcp.signing.errors import (
     WEBHOOK_SIGNATURE_COMPONENTS_INCOMPLETE,
+    WEBHOOK_SIGNATURE_HEADER_MALFORMED,
     WEBHOOK_SIGNATURE_KEY_PURPOSE_INVALID,
-    WEBHOOK_SIGNATURE_REQUIRED,
     SignatureVerificationError,
 )
 
@@ -274,6 +274,15 @@ class TestTheWebhookProfileChecksAreActuallyRun:
         The SDK is explicit that the retag "guarantees webhook routes never leak
         request-signing error strings". Calling the request verifier directly leaks all
         of them, so the shim reports a code no conformant webhook receiver would.
+
+        The expected code is ``webhook_signature_header_malformed``, not
+        ``webhook_signature_required``. adcp 9 (``fix(signing)!``, adcp-client-python
+        #1388, closing #1386) removed ``webhook_signature_required`` because the AdCP
+        3.2.1 webhook error taxonomy defines seventeen codes and that is not one of
+        them; the taxonomy's row is "``Signature`` or ``Signature-Input`` header
+        malformed or one without the other", and an unsigned delivery is its degenerate
+        case. The assertion is unchanged in strength -- equality against one named
+        webhook-family code -- only the code is the taxonomy's.
         """
         captured, jwks = _sign_one_webhook(published_adcp_use="request-signing")
         unsigned = CapturedWebhook(
@@ -284,7 +293,7 @@ class TestTheWebhookProfileChecksAreActuallyRun:
 
         error = _rejection(unsigned, jwks)
 
-        assert error.code == WEBHOOK_SIGNATURE_REQUIRED, (
-            f"an unsigned delivery must be refused with {WEBHOOK_SIGNATURE_REQUIRED!r}; got "
+        assert error.code == WEBHOOK_SIGNATURE_HEADER_MALFORMED, (
+            f"an unsigned delivery must be refused with {WEBHOOK_SIGNATURE_HEADER_MALFORMED!r}; got "
             f"{error.code!r}, a request-family code the webhook taxonomy retags away"
         )

@@ -389,7 +389,6 @@ def seed_targeting_test_tenant(
     Caller is responsible for adding products, pricing options, and committing.
     """
     from tests.factories import (
-        AuthorizedPropertyFactory,
         CurrencyLimitFactory,
         PrincipalFactory,
         PropertyTagFactory,
@@ -437,7 +436,12 @@ def seed_targeting_test_tenant(
             name=principal_name,
             platform_mappings={"mock": {"advertiser_id": "mock_adv_1"}},
         )
-        AuthorizedPropertyFactory(tenant=tenant, tenant_id=tenant_id)
+        # The default publisher (the one create_test_db_product's products name) authorizes the
+        # tenant in its stored adagents.json.
+        from tests.factories.product import DEFAULT_PUBLISHER_DOMAIN
+        from tests.factories.publisher import authorize_publishers
+
+        authorize_publishers(tenant, DEFAULT_PUBLISHER_DOMAIN)
         TenantAuthConfigFactory(tenant=tenant, tenant_id=tenant_id, oidc_enabled=True)
 
 
@@ -473,7 +477,6 @@ def add_targeting_test_product(
             delivery_type="guaranteed",
             targeting_template={},
             implementation_config={},
-            property_tags=["all_inventory"],
             property_targeting_allowed=property_targeting_allowed,
         )
         session.flush()

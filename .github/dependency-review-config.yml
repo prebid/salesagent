@@ -8,3 +8,7 @@ deny-licenses:
   - AGPL-3.0
   - AGPL-3.0-only
   - AGPL-3.0-or-later
+# pylint is GPL-2.0-or-later. It is declared only in the `dev` dependency group, and the
+# image installs with `uv sync --no-dev`, so it is never distributed.
+allow-dependencies-licenses:
+  - pkg:pypi/pylint

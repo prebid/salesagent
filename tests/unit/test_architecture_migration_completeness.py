@@ -29,7 +29,7 @@ from scripts.ci.migration_helpers import (
     iter_migration_trees,
     parse_function,
 )
-from tests.unit._architecture_helpers import iter_call_expressions
+from tests.unit._architecture_helpers import iter_call_expressions, rel
 
 _HOOKS_DIR = Path(__file__).resolve().parents[2] / ".pre-commit-hooks"
 
@@ -193,7 +193,7 @@ class TestMigrationCompleteness:
                 stale.append(f"{name} (file deleted)")
                 continue
 
-            source = path.read_text()
+            source = path.read_text(encoding="utf-8")
             try:
                 tree = ast.parse(source, filename=str(path))
             except SyntaxError:
@@ -215,7 +215,7 @@ class TestMigrationCompleteness:
                 stale.append(name)
                 continue
 
-            source = path.read_text()
+            source = path.read_text(encoding="utf-8")
             try:
                 tree = ast.parse(source, filename=str(path))
             except SyntaxError:
@@ -255,7 +255,7 @@ class TestPrePushHookAgreesWithGuard:
         """
         hook = _load_hook("check_migration_completeness")
         repo_root = Path(__file__).resolve().parents[2]
-        migrations = [str(p.relative_to(repo_root)) for p in get_migration_files()]
+        migrations = [rel(p, repo_root) for p in get_migration_files()]
 
         monkeypatch.setattr(sys, "argv", ["check_migration_completeness.py", *migrations])
         monkeypatch.chdir(repo_root)

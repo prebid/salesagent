@@ -1,4 +1,4 @@
-"""L2 — the 40 AdCP request-signing conformance vectors, through the REAL app.
+"""L2 — the AdCP request-signing conformance vectors, through the REAL app.
 
 #1291 B3 (``salesagent-z6nr.14``), design steps 5-9. The authoritative in-repo
 grading of the verifier: everything before this ticket is plumbing, this is the
@@ -7,7 +7,7 @@ evidence.
 Grading level L2 of three — read this before reading any assertion below
 -----------------------------------------------------------------------
 * **L1** (``tests/unit/test_signing_conformance_signature_base.py`` +
-  ``..._canonicalization.py``) — the signature BASE and the 31 canonicalization
+  ``..._canonicalization.py``) — the signature BASE and the canonicalization
   cases, over the vectors' ORIGINAL untouched URLs, against spec-authored bytes.
 * **L2 (here)** — the 15-check ORDERING, the wire envelope and the error codes.
 * **L3** — B4 (``salesagent-z6nr.15``), black-box, the vectors' own URL space,
@@ -32,7 +32,7 @@ and remains D1's (``salesagent-z6nr.20``).
 Why the URLs — and, since #1721, the BODIES — are transplanted (D-B3-1, settled)
 --------------------------------------------------------------------------------
 The vectors address ``/adcp/<operation>``, which names no row in
-:data:`src.core.tools.registry.TOOLS`. Verbatim, all 40 would 404 in the router and
+:data:`src.core.tools.registry.TOOLS`. Verbatim, every one would 404 in the router and
 "pass" having graded nothing.
 
 Their BODIES are on the same footing now, for a reason that did not exist while the
@@ -125,12 +125,12 @@ would make their signed requests reject with ``request_signature_rate_abuse``.
 Measured disjointness is what makes exact-pair deletes safe: none of those three
 modules uses ``test-ed25519-2026`` — they mint their own keys.
 
-Spec grounding: AdCP 3.1.1 (``adcp==6.6.0``), ``adcontextprotocol/adcp@v3.1.1``:
+Spec grounding, at the tag the installed SDK reports (``adcp.get_adcp_spec_version()``):
 ``docs/building/by-layer/L1/security.mdx`` §"Verifier checklist
-(requests)" (15 checks, in order, short-circuiting) and §"Composition with fallback
-authenticators"; ``docs/reference/url-canonicalization.mdx``. Graded by
-``dist/compliance/3.1.1/universal/signed-requests.yaml``; ``016``/``017``/``020``
-additionally gated on ``dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml``.
+(requests)" (15 checks, in order, short-circuiting), its transport error table, and
+§"Composition with fallback authenticators"; ``docs/reference/url-canonicalization.mdx``.
+Graded by ``dist/compliance/<pin>/universal/signed-requests.yaml``; ``016``/``017``/``020``
+additionally gated on ``dist/compliance/<pin>/test-kits/signed-requests-runner.yaml``.
 
 Covers: salesagent-z6nr.14 (Core Invariant, L2).
 """
@@ -146,10 +146,11 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 import pytest
-from adcp.signing.canonical import build_signature_base, parse_signature_input_header
-from adcp.signing.digest import compute_content_digest_sha256, content_digest_matches
+from adcp.signing.canonical import build_signature_base, parse_signature_input_header, split_structured_field
+from adcp.signing.digest import content_digest_matches
 
 from tests.factories import PrincipalFactory, TenantFactory
+from tests.factories.account import seed_default_account
 from tests.factories.principal import plaintext_token_for
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.app_state import preserved_global_app_state
@@ -176,6 +177,7 @@ from tests.helpers.signing_vectors import (
     VectorPlan,
     load_signing_keys,
     load_signing_vectors,
+    recomputed_digest,
     recomputes_digest,
     transplant_body,
 )
@@ -234,9 +236,61 @@ _POSITIVES = sorted(vid for vid, plan in TRANSPLANT.items() if plan.outcome is O
 _UNROUTED = sorted(vid for vid, plan in TRANSPLANT.items() if not plan.route_named)
 _DRIVEN_POSITIVES = [vid for vid in _POSITIVES if TRANSPLANT[vid].route_named]
 _DRIVEN_NEGATIVES = [vid for vid in _NEGATIVES if TRANSPLANT[vid].route_named]
+#: The vector whose SUBJECT is a posture a 3.2 verifier cannot hold, so it describes an
+#: agent this seller is not.
+#:
+#: ``negative/018`` grades ``request_signature_components_unexpected`` at step 6 — the
+#: refusal a verifier owes when its ``covers_content_digest`` is ``forbidden`` and a
+#: signature covers the digest anyway. Under the 3.2 pin that policy is unadvertisable:
+#: ``allOf`` on ``get-adcp-capabilities-response.json`` fixes the value to ``required``
+#: wherever ``supported`` is true, so there is no conformant 3.2 document in which this
+#: vector's premise holds. The corpus agrees and says why it shipped no 3.2 counterpart:
+#: "``018``, because ``forbidden`` is a legacy-only posture a 3.2 verifier cannot
+#: advertise." The out-of-process runner agrees too — ``018`` is among the vectors it
+#: reports as ``profile_excluded``.
+#:
+#: INAPPLICABLE, not skipped: :func:`test_legacy_digest_policy_vector_is_inapplicable`
+#: asserts the refusal that makes it inapplicable, so this is a graded fact rather than
+#: an absence. Same treatment ``negative/028`` already gets for the protocol-method
+#: namespace this seller refuses to store.
+_PROFILE_INAPPLICABLE = ["negative/018-digest-covered-when-forbidden"]
+
+
+def _advertisable(capability: dict[str, Any]) -> dict[str, Any]:
+    """The vector's capability as a posture a 3.2 seller can actually HOLD.
+
+    Only ``covers_content_digest`` is touched, and only to the one value the pin permits:
+    ``allOf`` on ``get-adcp-capabilities-response.json`` fixes it to ``required`` wherever
+    ``supported`` is true, so a vector declaring the legacy ``either`` describes a posture
+    ``CapabilityDeclarations`` refuses to store. Left verbatim, ``posture_for_tenant``
+    downgrades the refusal to ``UNSUPPORTED_POSTURE`` and the verifier never runs — which
+    graded nothing at all and is what the "a positive that grades nothing" assertions
+    were reporting.
+
+    This REMOVES A CONSTRAINT THE VECTORS' OWN SUBJECT MAKES IRRELEVANT rather than
+    relaxing anything. Every vector still driven under a rewritten policy rejects at the
+    pre-check or at step 1 — ``request_signature_required`` for the two unsigned rows,
+    ``request_signature_header_malformed`` for the six parse rows — and the corpus README
+    says so in as many words when it explains why they got no 3.2 counterpart: the step-1
+    parse vectors "reject before covered components are considered". Step 6 is where the
+    digest policy is read, and none of them reach it.
+
+    The one vector whose outcome DOES depend on the legacy policy is ``negative/018``, and
+    it is not driven through here at all — see :data:`_PROFILE_INAPPLICABLE`. So this
+    function cannot silently convert a policy refusal into a pass: the only row that could
+    have been converted is excluded by name.
+
+    The buckets are NOT normalised. ``required_for`` is what makes the pre-check fire for
+    ``001``/``027``, so it has to stay the vector's own.
+    """
+    return {**capability, "covers_content_digest": "required"}
+
+
 #: 016 owns its own two-submission sequence — see :func:`test_replayed_nonce_vector`.
 _SINGLE_SHOT_NEGATIVES = [
-    vid for vid in _DRIVEN_NEGATIVES if TRANSPLANT[vid].harness_state is not HarnessState.REPLAY_PAIR
+    vid
+    for vid in _DRIVEN_NEGATIVES
+    if TRANSPLANT[vid].harness_state is not HarnessState.REPLAY_PAIR and vid not in _PROFILE_INAPPLICABLE
 ]
 #: Derived, not spelled: the census below asserts the partition, so the id the
 #: two-submission test drives must come from the same table the partition reads.
@@ -310,21 +364,24 @@ def _wire_headers(vector_id: str, token: str | None) -> list[tuple[str, str]]:
     pre-parse gate whose threat form is a REPEATED header line, and a dict collapses
     those (last-wins) before anything can check.
 
-    ``Host`` is synthesised from the wire URL (the vectors ship none — a real client
-    always sends one, and ``_verify_url`` reads ``@authority`` from it).
+    ``Host`` is synthesised from the wire URL only where the vector ships none — a real
+    client always sends one, and the capture reads ``@authority`` from it. Where the vector
+    ships its own (``positive/015``, ``negative/031``) that line IS the graded input and goes
+    on the wire alone: synthesising a second would turn ``031``'s malformed authority into a
+    repeated-``Host`` refusal, a different check.
     ``x-adcp-tenant`` names the tenant for the IPv6 and IDN authorities that name
     none. NEITHER is a covered component in ANY vector, so neither can disturb a
     signature; the same is true of ``Authorization``, which is why the credential can
     be added without re-signing anything on its account.
     """
     plan = TRANSPLANT[vector_id]
-    headers: list[tuple[str, str]] = [
-        ("host", urlsplit(plan.wire_url).netloc),
-        ("x-adcp-tenant", _TENANT_ID),
-    ]
+    shipped = _VECTORS[vector_id]["request"]["headers"]
+    headers: list[tuple[str, str]] = [("x-adcp-tenant", _TENANT_ID)]
+    if not any(name.lower() == "host" for name in shipped):
+        headers.insert(0, ("host", urlsplit(plan.wire_url).netloc))
     if token is not None:
         headers.append(("Authorization", f"Bearer {token}"))
-    headers.extend((name, value) for name, value in _VECTORS[vector_id]["request"]["headers"].items())
+    headers.extend(shipped.items())
     return headers
 
 
@@ -338,17 +395,24 @@ def _redigested_headers(vector_id: str, headers: list[tuple[str, str]]) -> list[
     """
     if not recomputes_digest(vector_id):
         return headers
-    digest = compute_content_digest_sha256(transplant_body(vector_id))
-    return [(name, digest if name.lower() == "content-digest" else value) for name, value in headers]
+    body = transplant_body(vector_id)
+    return [
+        (name, recomputed_digest(value, body) if name.lower() == "content-digest" else value) for name, value in headers
+    ]
 
 
 def _resigned_headers(vector_id: str, headers: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    """Recompute ONLY the ``Signature`` value for the transplanted URL.
+    """Recompute ONLY the ``sig1`` member of ``Signature`` for the transplanted URL.
 
     ``Signature-Input`` carries component NAMES and params, never the URL, so it stays
     byte-identical — which is what preserves every negative's mutation (wrong tag,
     missing expires/nonce, unquoted param, duplicate label, bad alg, over-long window)
     and every vector's ``keyid``/``nonce``.
+
+    Every OTHER ``Signature`` member goes on the wire as shipped. ``positive/013``'s whole
+    subject is a second, well-formed, non-verifying ``sig2`` that the verifier must ignore;
+    replacing the header wholesale would drop it and leave the row green over a request
+    carrying one label.
     """
     plan = TRANSPLANT[vector_id]
     if plan.resigned is None:
@@ -358,9 +422,24 @@ def _resigned_headers(vector_id: str, headers: list[tuple[str, str]]) -> list[tu
     base = build_signature_base(
         _VECTORS[vector_id]["request"]["method"], plan.wire_url, lowered, parsed[VERIFIED_LABEL]
     )
+    signed = _sign_base(plan.resigned, base)
     return [
-        (name, _sign_base(plan.resigned, base) if name.lower() == "signature" else value) for name, value in headers
+        (name, _with_verified_member(value, signed) if name.lower() == "signature" else value)
+        for name, value in headers
     ]
+
+
+def _signature_members(value: str) -> list[str]:
+    """The ``Signature`` dictionary's members, as written."""
+    return [member.strip() for member in split_structured_field(value, ",")]
+
+
+def _with_verified_member(value: str, signed: str) -> str:
+    """*value* with its one ``sig1`` member replaced by *signed*, every other member kept."""
+    members = _signature_members(value)
+    verified = [member for member in members if member.split("=", 1)[0] == VERIFIED_LABEL]
+    assert len(verified) == 1, f"re-signing needs exactly one {VERIFIED_LABEL} member: {members}"
+    return ", ".join(signed if member in verified else member for member in members)
 
 
 def _wire_request(vector_id: str, token: str | None) -> tuple[list[tuple[str, str]], bytes]:
@@ -429,6 +508,54 @@ def _seed_tenant() -> Any:
     vector would grade the refusal path instead of the checklist.
     """
     return TenantFactory(tenant_id=_TENANT_ID, subdomain="seller", virtual_host=_AGENT_HOST)
+
+
+def _account_natural_keys_named_by_vectors() -> set[tuple[str, str | None, bool | None]]:
+    """Every ``(brand_domain, operator, sandbox)`` the vendored vector bodies name.
+
+    DERIVED from the corpus, never spelled here. A re-vendor added an ``account`` to these
+    bodies that the earlier corpus did not carry, and a literal copy would have to be
+    re-checked by hand at the next re-vendor -- whereas a derivation follows it. A vector
+    whose body carries no account contributes nothing.
+    """
+    keys: set[tuple[str, str | None, bool | None]] = set()
+    for vector in _VECTORS.values():
+        raw = vector.get("request", {}).get("body") or ""
+        try:
+            body = json.loads(raw) if isinstance(raw, str) else raw
+        except json.JSONDecodeError:  # a vector whose body is deliberately not JSON
+            continue
+        account = body.get("account") if isinstance(body, dict) else None
+        if not isinstance(account, dict):
+            continue
+        domain = (account.get("brand") or {}).get("domain")
+        if domain:
+            keys.add((domain, account.get("operator"), account.get("sandbox")))
+    return keys
+
+
+def _seed_accounts_named_by_vectors(principal_id: str) -> None:
+    """The accounts the vector bodies reference, each with the grant that exposes it.
+
+    Without these every vector carrying an ``account`` is refused ACCOUNT_NOT_FOUND by
+    ``create_media_buy`` BEFORE the verifier runs -- so a negative grades the wrong
+    refusal and a positive grades nothing at all, which is what the
+    "the verifier never ran" assertions report.
+
+    The GRANT is the half that is easy to miss: account resolution is scoped to the
+    caller's accessible set (#1417), so a row without its ``AgentAccountAccess`` join
+    fails ACCOUNT_NOT_FOUND *identically* to no row. ``seed_default_account`` owns both
+    halves, which is why this calls it rather than inserting here.
+    """
+    for brand_domain, operator, sandbox in sorted(_account_natural_keys_named_by_vectors()):
+        seed_default_account(
+            _TENANT_ID,
+            principal_id,
+            # Derived from the key, so re-seeding is idempotent and two ids cannot
+            # collide on one natural key.
+            account_id=f"acc-vec-{brand_domain.replace('.', '-')}",
+            natural_key=(brand_domain, operator, sandbox),
+        )
 
 
 def _seed_principal(tenant: Any) -> str:
@@ -506,8 +633,8 @@ def _frozen_verifier_clock(reference_now: float) -> Iterator[None]:
     """Make the verifier read the vector's own ``reference_now`` as the wall clock.
 
     ``_run_verifier`` passes ``now=time.time()`` (no injection seam), and every vector
-    is signed for 2026-04-18T14:00:00Z — the PAST — so without this every one of the
-    40 fails step 5 as ``request_signature_window_invalid``.
+    is signed for 2026-04-18T14:00:00Z — the PAST — so without this every one of them
+    fails step 5 as ``request_signature_window_invalid``.
 
     MEASURED CORRECTION to the B3 design, which specified ``freezegun``: freezegun
     freezes time only for the thread that entered it, and the boundary runs
@@ -579,12 +706,17 @@ def _vector_case(vector_id: str) -> Iterator[tuple[BareIntegrationEnv, str | Non
     with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
         tenant = _seed_tenant()
         token = _seed_principal(tenant) if plan.credential is Credential.PRINCIPAL_TOKEN else None
+        if token is not None:
+            # Tied to the principal because the grant has to name one. The three vectors
+            # that present no token resolve no principal and so could not reach account
+            # resolution anyway -- they are refused on the credential first.
+            _seed_accounts_named_by_vectors(_PRINCIPAL_ID)
         _forget(env, pairs)
         if plan.harness_state is HarnessState.CAP_OVERRIDE:
             _claim(env, pairs[-_RATE_ABUSE_CAP:])
         try:
             with (
-                declared_posture(tenant_id=_TENANT_ID, **vector["verifier_capability"]),
+                declared_posture(tenant_id=_TENANT_ID, **_advertisable(vector["verifier_capability"])),
                 counterparty_key(_jwks_for(vector)),
                 _config_for(plan),
                 _frozen_verifier_clock(vector["reference_now"]),
@@ -676,7 +808,7 @@ def _route_name_for(vector_id: str) -> str:
 def test_every_row_names_the_route_the_plan_claims(vector_id) -> None:
     """The plan's ``route_named`` / ``expected_operation`` match the REAL route table.
 
-    All 40 rows, not just the ``/api/v1`` ones: ``negative/028``'s ``POST /mcp`` is in
+    Every row, not just the ``/api/v1`` ones: ``negative/028``'s ``POST /mcp`` is in
     the table's scope precisely BECAUSE it names no registry route — that is what puts
     it on the unrouted side.
 
@@ -794,8 +926,8 @@ def test_replayed_nonce_vector(integration_db, conformance_app) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_all_forty_vectors_are_accounted_for() -> None:
-    """12 positive + 28 negative, each driven by exactly one test above. 0 skipped.
+def test_every_vector_is_accounted_for() -> None:
+    """Every positive and negative, each driven by exactly one test above. 0 skipped.
 
     The census is what stops a row from going quiet. Every vector is in exactly one of
     three disjoint groups, and each group names the test that drives it:
@@ -805,8 +937,8 @@ def test_all_forty_vectors_are_accounted_for() -> None:
     :func:`test_unrouted_rows_never_reach_the_verifier`. The counts are LITERAL so that
     a row moving between groups has to be moved here too, with a reason.
     """
-    assert len(_POSITIVES) == 12, _POSITIVES
-    assert len(_NEGATIVES) == 28, _NEGATIVES
+    assert len(_POSITIVES) == 15, _POSITIVES
+    assert len(_NEGATIVES) == 32, _NEGATIVES
     assert set(_POSITIVES) | set(_NEGATIVES) == set(_VECTORS)
 
     assert _UNROUTED == [
@@ -817,10 +949,51 @@ def test_all_forty_vectors_are_accounted_for() -> None:
         "positive/010-percent-encoded-slash-preserved",
     ], f"the set of rows that cannot reach the resolver changed: {_UNROUTED}"
 
-    assert len(_DRIVEN_POSITIVES) == 8, _DRIVEN_POSITIVES
-    assert len(_SINGLE_SHOT_NEGATIVES) == 26, "016 runs in its own two-submission test"
-    driven = set(_DRIVEN_POSITIVES) | set(_SINGLE_SHOT_NEGATIVES) | {_REPLAY_PAIR_VECTOR} | set(_UNROUTED)
+    assert len(_DRIVEN_POSITIVES) == 11, _DRIVEN_POSITIVES
+    assert len(_SINGLE_SHOT_NEGATIVES) == 29, "016 runs its own two-submission test; 018 is profile-inapplicable"
+    assert _PROFILE_INAPPLICABLE == ["negative/018-digest-covered-when-forbidden"], (
+        f"the set of vectors whose posture a 3.2 verifier cannot hold changed: {_PROFILE_INAPPLICABLE}"
+    )
+    driven = (
+        set(_DRIVEN_POSITIVES)
+        | set(_SINGLE_SHOT_NEGATIVES)
+        | {_REPLAY_PAIR_VECTOR}
+        | set(_UNROUTED)
+        | set(_PROFILE_INAPPLICABLE)
+    )
     assert driven == set(_VECTORS), f"vectors driven by no test at all: {sorted(set(_VECTORS) - driven)}"
+
+
+@pytest.mark.parametrize("vector_id", _PROFILE_INAPPLICABLE)
+def test_legacy_digest_policy_vector_is_inapplicable(vector_id) -> None:
+    """The vector's premise is a posture this seller cannot advertise — ASSERTED, not skipped.
+
+    ``negative/018`` grades ``request_signature_components_unexpected``, which a verifier
+    owes only while its ``covers_content_digest`` is ``forbidden``. Under the 3.2 pin that
+    value is unadvertisable, so the vector describes an agent this seller is not. An
+    unexplained exclusion is indistinguishable from an oversight, so the thing that MAKES
+    it inapplicable is what gets graded here: the store refuses the posture by name.
+
+    Two assertions, because either alone is weaker than the claim. That the vector still
+    asks for ``forbidden`` is what keeps this test honest if the corpus is re-vendored with
+    a 3.2 premise — it would then be applicable and this test would fail, which is the
+    signal we want. And that the refusal names ``covers_content_digest`` is what
+    distinguishes it from any other CONFIGURATION_ERROR the declaration might earn.
+    """
+    from src.core.exceptions import AdCPConfigurationError
+    from src.core.schemas.capability_declarations import CapabilityDeclarations
+
+    capability = _VECTORS[vector_id]["verifier_capability"]
+    assert capability["covers_content_digest"] == "forbidden", (
+        f"{vector_id} no longer asks for the legacy forbidden policy ({capability}); "
+        "if the corpus gave it a 3.2 premise it is applicable again and belongs back in "
+        "_SINGLE_SHOT_NEGATIVES"
+    )
+    with pytest.raises(AdCPConfigurationError) as refusal:
+        CapabilityDeclarations.from_tenant({"request_signing": dict(capability)})
+    assert refusal.value.field == "capability_declarations.request_signing.covers_content_digest", (
+        f"the declaration was refused for some other reason than its digest policy: {refusal.value.field}"
+    )
 
 
 @pytest.mark.parametrize("vector_id", [vid for vid in _UNROUTED if TRANSPLANT[vid].outcome is Outcome.ACCEPTED])
@@ -891,13 +1064,16 @@ def test_unknown_keyid_vector_resolves_the_counterparty_before_failing(integrati
 
 
 def test_the_transplant_edits_only_what_the_dispatched_operation_forces() -> None:
-    """``Signature`` and, for ``positive/002`` alone, ``Content-Digest``. Nothing else.
+    """The ``sig1`` member of ``Signature`` and, where named, ``Content-Digest``'s values.
 
     ``Signature-Input`` and ``Content-Type`` go on the wire exactly as the vector ships
     them for every row, and so does ``Content-Digest`` except where
     :func:`~tests.helpers.signing_vectors.recomputes_digest` names the row — mutating any
     of them would edit what the vector grades (its digest MISMATCH, its forbidden covered
-    component, its malformed param).
+    component, its malformed param). Where they ARE recomputed, the shape survives: every
+    ``Signature`` member but ``sig1`` is kept (``positive/013``), every ``Content-Digest``
+    algorithm key is kept (``positive/014``), and exactly one ``Host`` line is sent — the
+    vector's own where it ships one (``positive/015``, ``negative/031``).
 
     The BODY is the one thing #1721 forces off verbatim, and this pins both halves of
     that. A row that names no route keeps its bytes, because it 404s before any DTO sees
@@ -926,6 +1102,21 @@ def test_the_transplant_edits_only_what_the_dispatched_operation_forces() -> Non
                 f"{vector_id}: Signature was recomputed but the plan says verbatim — for 017 and 020 "
                 "the placeholder signature IS the step-ordering canary"
             )
+        if plan.resigned is not None:
+            kept = [m for m in _signature_members(original["Signature"]) if not m.startswith(f"{VERIFIED_LABEL}=")]
+            assert [m for m in _signature_members(sent["Signature"]) if m in kept] == kept, (
+                f"{vector_id}: re-signing dropped or rewrote a Signature member other than "
+                f"{VERIFIED_LABEL} — positive/013's sig2 is the thing it grades"
+            )
+        if "Content-Digest" in original:
+            keys = [m.split("=", 1)[0] for m in split_structured_field(sent["Content-Digest"], ",")]
+            assert keys == [m.split("=", 1)[0] for m in split_structured_field(original["Content-Digest"], ",")], (
+                f"{vector_id}: the Content-Digest member set changed — positive/014's two algorithms are "
+                "the thing it grades"
+            )
+        assert [name.lower() for name, _value in headers].count("host") == 1, (
+            f"{vector_id}: the wire request must carry exactly one Host line"
+        )
 
         if not plan.route_named:
             assert body == _VECTORS[vector_id]["request"].get("body", "").encode(), (
@@ -937,4 +1128,7 @@ def test_the_transplant_edits_only_what_the_dispatched_operation_forces() -> Non
             assert content_digest_matches(sent["Content-Digest"], body), (
                 f"{vector_id}: the wire Content-Digest does not describe the wire body, so a "
                 "positive that must PASS the step-11 digest check would fail it"
+            )
+            assert recomputed_digest(sent["Content-Digest"], body) == sent["Content-Digest"], (
+                f"{vector_id}: a Content-Digest member other than sha-256 does not describe the wire body"
             )

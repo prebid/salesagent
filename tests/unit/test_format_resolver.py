@@ -532,7 +532,7 @@ class TestFindFormat:
 
     def test_matches_across_the_two_format_id_classes(self):
         """The subclass and the library type name the same format, so they match."""
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
         from src.core.schemas import FormatId as OurFormatId
@@ -549,7 +549,7 @@ class TestFindFormat:
 
     def test_trailing_slash_on_agent_url_does_not_split_identity(self):
         """A reference built from a str and one built from AnyUrl name one format."""
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 
@@ -558,7 +558,7 @@ class TestFindFormat:
         assert find_format([fmt], LibraryFormatId(agent_url=bare, id=fmt.format_id.id)) is fmt
 
     def test_a_different_id_does_not_match(self):
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 
@@ -567,7 +567,7 @@ class TestFindFormat:
         assert find_format([fmt], other) is None
 
     def test_a_different_agent_url_does_not_match(self):
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 
@@ -587,7 +587,7 @@ class TestFindFormat:
         and the creative is silently written as a static asset. Exactly the failure
         this whole helper exists to prevent.
         """
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 
@@ -598,14 +598,14 @@ class TestFindFormat:
         assert find_format([fmt], parameterized) is fmt
 
     def test_returns_none_for_an_empty_listing(self):
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 
         assert find_format([], LibraryFormatId(agent_url="https://a.example.com", id="display")) is None
 
     def test_returns_the_first_match_in_listing_order(self):
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 
@@ -615,7 +615,7 @@ class TestFindFormat:
         assert find_format([first, second], reference) is first
 
 
-class TestFormatIdentityCanonicalization:
+class TestFormatKeyCanonicalization:
     """agent_url is compared in the spec's canonical form, not a trimmed string.
 
         adcp/_schemas/3.1/core/format-id.json, agent_url: "Callers comparing two
@@ -637,7 +637,7 @@ class TestFormatIdentityCanonicalization:
         ],
     )
     def test_a_reference_matches_despite(self, reference_url, what_the_trim_kept):
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 
@@ -650,10 +650,126 @@ class TestFormatIdentityCanonicalization:
 
     def test_a_genuinely_different_host_still_does_not_match(self):
         """Canonicalizing must not blur two agents together."""
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 
         fmt = _make_format()
         other_agent = LibraryFormatId(agent_url="https://someone-else.example.com", id=fmt.format_id.id)
         assert find_format([fmt], other_agent) is None
+
+
+class TestCanonicalKindForSizeEncodedIds:
+    """``canonical_kind_for`` on an id whose size is encoded in the slug.
+
+    The registry's ``display_image`` mapping carries ``parameter_mappings`` and says in its
+    own note that it exists so "one legacy format definition identif[ies] every size/density
+    combination without retina-specific format ids". So ``display_300x250_image`` is a MEMBER
+    of that mapping, reachable through the registry's parameterized upgrade -- not an id the
+    registry declines to cover. Matching the glob against the raw slug alone misses it, and
+    the kind then has to come from somewhere, which is the one thing the sixth normative step
+    forbids: the function fails closed instead.
+
+    That is not an abstract gap. ``display_300x250_image`` is what this repo SEEDS --
+    ``database.py`` writes it into the demo tenant's ``auto_approve_format_ids`` and into
+    ``prod_1``'s formats, and both admin paths default to it -- so the refusal lands on a
+    tenant created by the project's own bootstrap (salesagent-iz7dm).
+    """
+
+    @pytest.mark.parametrize(
+        ("format_id", "kind", "why"),
+        [
+            ("display_300x250_image", "image", "upgrades onto display_image, which the glob maps"),
+            ("display_728x90_image", "image", "same template, different size"),
+            ("display_300x250", "image", "the glob matches the raw slug: unchanged by the fallback"),
+            ("display_image", "image", "the template itself"),
+            ("video_640x480", "video_hosted", "the mirror case: glob resolves, upgrade adds nothing"),
+            ("display_300x250_image_2x", "image", "has its own literal glob entry"),
+        ],
+    )
+    def test_a_size_encoded_id_projects_through_the_registry_upgrade(self, format_id, kind, why):
+        from src.core.format_resolver import canonical_kind_for
+
+        assert canonical_kind_for(format_id) == kind, why
+
+    @pytest.mark.parametrize(
+        ("agent_url", "slug", "kind"),
+        [
+            ("https://creative.adcontextprotocol.org", "display_300x250_image", "image"),
+            ("https://peer-agent.example.com", "display_300x250_image", "display_tag"),
+            ("https://peer-agent.example.com", "display_300x250", "display_tag"),
+        ],
+        ids=["standard-agent-glob-before-structural", "peer-agent-structural", "peer-agent-glob-named-id-structural"],
+    )
+    def test_an_unannotated_declaration_reaches_the_glob_before_the_structural_entry(self, agent_url, slug, kind):
+        """Supplying the declaration cannot let step 4 answer ahead of step 3.
+
+        A v1 image format with no ``canonical`` has the standard ``image`` + ``url`` shape,
+        which the registry's structural ``{asset_types: [url]}`` entry also matches
+        (registries/v1-canonical-mapping.json at the pin, "Resolution order" steps 3 and 4).
+        At the standard agent the size-encoded id is a member of the ``display_image`` glob
+        through ``upgrade_legacy_format_id``, so the declared answer must equal the id-only
+        one. Projecting the raw id first answered ``display_tag`` with the declaration and
+        ``image`` without it.
+
+        The peer rows are the control, and they differ only in the agent: the registry's globs
+        and the SDK's upgrade are the standard agent's namespace alone, so at a peer step 3 is
+        not consulted and the structural entry is the step that answers. The last row names an
+        id a literal glob DOES match (``display_300x250`` -> ``image``), which is what separates
+        "step 3 is skipped at a peer" from "the peer's slug happens to match no glob".
+        """
+        from src.core.format_resolver import canonical_kind_for
+        from tests.factories.format import FormatFactory, FormatIdFactory, make_asset
+
+        format_id = FormatIdFactory(agent_url=agent_url, id=slug)
+        declaration = FormatFactory(
+            format_id=format_id,
+            assets=[make_asset("image", asset_id="image_0"), make_asset("url", asset_id="url_1")],
+            canonical=None,
+        )
+
+        assert canonical_kind_for(format_id, spec=declaration) == kind
+
+    @pytest.mark.parametrize(
+        ("asset_type", "requirements", "kind"),
+        [
+            ("vast", {"vast_version": "4.2"}, "video_vast"),
+            ("vast", {"vast_versions": ["3.0"]}, "video_vast"),
+            ("daast", {"daast_version": "1.0"}, "audio_daast"),
+            ("vast", None, None),
+        ],
+        ids=["vast-4-singular", "vast-3-listed", "daast-1-singular", "vast-no-version-fails-closed"],
+    )
+    def test_a_peer_slot_declaring_its_version_reaches_the_versioned_structural_entry(
+        self, asset_type, requirements, kind
+    ):
+        """Step 4 at a peer reads the slot's VAST/DAAST version, not only its asset type.
+
+        registries/v1-canonical-mapping.json at the pin matches a structural entry "against
+        the format's slot shape, asset types, and version constraints", and its ``vast`` and
+        ``daast`` entries each require a version (``>=4.0``, ``3.x``/``2.x``, ``1.0``/``1.1``).
+        A peer's id reaches a kind only through its declaration, so a matcher handed the asset
+        types alone refused every peer VAST and DAAST format. The version-less row is the
+        control: with no version stated no versioned entry matches, and nothing else does.
+        """
+        from src.core.format_resolver import canonical_kind_for
+        from tests.factories.format import FormatFactory, FormatIdFactory, make_asset
+
+        format_id = FormatIdFactory(agent_url="https://peer-agent.example.com", id="acme_preroll")
+        slot = {"requirements": requirements} if requirements is not None else {}
+        declaration = FormatFactory(
+            format_id=format_id, assets=[make_asset(asset_type, asset_id="slot_0", **slot)], canonical=None
+        )
+
+        if kind is None:
+            with pytest.raises(ValueError, match="no canonical projection"):
+                canonical_kind_for(format_id, spec=declaration)
+        else:
+            assert canonical_kind_for(format_id, spec=declaration) == kind
+
+    def test_an_id_the_registry_cannot_reach_at_all_still_fails_closed(self):
+        """The fallback must not become a guess: an unknown slug has no kind to project to."""
+        from src.core.format_resolver import canonical_kind_for
+
+        with pytest.raises(ValueError, match="no canonical projection"):
+            canonical_kind_for("publisher_bespoke_takeover_unit")

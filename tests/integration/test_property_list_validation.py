@@ -70,7 +70,7 @@ class TestBasePropertiesPublisherTags:
             base_properties=[
                 {
                     "selection_type": "publisher_tags",
-                    "publisher_domain": "example.com",
+                    "publisher_domain": "psatest.com",
                     "tags": ["sports"],
                 }
             ],
@@ -130,7 +130,7 @@ class TestBasePropertiesPublisherIds:
             base_properties=[
                 {
                     "selection_type": "publisher_ids",
-                    "publisher_domain": "example.com",
+                    "publisher_domain": "psatest.com",
                     "property_ids": ["prop_001", "prop_002"],
                 }
             ],
@@ -163,7 +163,7 @@ class TestBasePropertiesIdentifiers:
                 {
                     "selection_type": "identifiers",
                     "identifiers": [
-                        {"type": "domain", "value": "example.com"},
+                        {"type": "domain", "value": "psatest.com"},
                         {"type": "domain", "value": "news.org"},
                     ],
                 }
@@ -202,7 +202,7 @@ class TestBasePropertiesEmptyArrayRejection:
                 base_properties=[
                     {
                         "selection_type": "publisher_tags",
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "tags": [],
                     }
                 ],
@@ -228,7 +228,7 @@ class TestBasePropertiesEmptyArrayRejection:
                 base_properties=[
                     {
                         "selection_type": "publisher_ids",
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": [],
                     }
                 ],
@@ -304,7 +304,7 @@ class TestBasePropertiesInvalidSelectionType:
                 base_properties=[
                     {
                         "selection_type": "invalid_type",
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "tags": ["sports"],
                     }
                 ],

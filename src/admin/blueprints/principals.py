@@ -185,7 +185,7 @@ def create_principal(tenant_id):
 
         with get_db_session() as db_session:
             # No duplicate-name pre-check: advertiser names are human-readable
-            # labels, not keys. AdCP 3.1.1 attaches uniqueness only to ids
+            # labels, not keys. The spec attaches uniqueness only to ids
             # (core/account.json: name is "Human-readable account name", e.g.
             # "Acme c/o Pinnacle"), and no index backs the tenant+name pair, so a
             # pre-check here read as a guarantee it could not hold under
@@ -504,6 +504,7 @@ def get_gam_advertisers(tenant_id):
                     advertiser_id=None,
                     trafficker_id=tenant.adapter_config.gam_trafficker_id,
                     tenant_id=tenant_id,
+                    tenant_ai_config=None,  # names no order, so no AI configuration is read
                 )
 
                 # Get advertisers (companies) from GAM with filtering support

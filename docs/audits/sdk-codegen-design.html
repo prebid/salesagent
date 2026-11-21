@@ -1,0 +1,290 @@
+<title>SDK Codegen Design Analysis</title>
+<style>
+  :root {
+    --ink: #1a1e24; --muted: #5b6470; --bg: #ffffff; --panel: #f6f7f9;
+    --line: #d9dde3; --accent: #0b5fa5; --good: #1a7f4b; --bad: #b3362c;
+    --warn: #9a6700; --code-bg: #f0f2f5;
+  }
+  body { background: var(--bg); color: var(--ink); font: 16px/1.55 Georgia, 'Times New Roman', serif;
+         max-width: 56rem; margin: 2rem auto 6rem; padding: 0 1.5rem; }
+  h1 { font-size: 1.7rem; line-height: 1.25; border-bottom: 2px solid var(--ink); padding-bottom: .5rem; }
+  h2 { font-size: 1.25rem; margin-top: 2.6rem; border-bottom: 1px solid var(--line); padding-bottom: .3rem; }
+  h3 { font-size: 1.05rem; margin-top: 1.8rem; }
+  p, li { max-width: 52rem; }
+  code, pre { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: .85em; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 3px; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px;
+        padding: .8rem 1rem; overflow-x: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; }
+  th, td { border: 1px solid var(--line); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--panel); font-family: system-ui, sans-serif; font-size: .82rem; }
+  .verdict { font-family: system-ui, sans-serif; font-weight: 600; font-size: .8rem;
+             padding: .1em .5em; border-radius: 10px; white-space: nowrap; }
+  .holds { background: #e2f3e9; color: var(--good); }
+  .breaks { background: #fbe4e1; color: var(--bad); }
+  .partial { background: #fdf0d5; color: var(--warn); }
+  .box { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent);
+         border-radius: 6px; padding: .9rem 1.1rem; margin: 1.2rem 0; }
+  .box.rec { border-left-color: var(--good); }
+  .box.counter { border-left-color: var(--bad); }
+  .meta { color: var(--muted); font-family: system-ui, sans-serif; font-size: .85rem; }
+  .measurement { font-family: system-ui, sans-serif; font-size: .85rem; color: var(--muted); }
+  div.scroll { overflow-x: auto; }
+  a { color: var(--accent); }
+</style>
+
+<h1>Where the generator loses the schema, and where to stop it: a design analysis of <code>adcp</code> type generation</h1>
+<p class="meta">Measured against <code>adcontextprotocol/adcp-client-python</code> at <code>0c7e8b86d</code>
+(v9.0.0-beta.2, spec bundle 3.2), fresh clone, editable install, 2026-10-10. Issues read in full with
+comments: #1409, #1414, #1362, #1359, #1366 (closed). This is a design document; it proposes no code.</p>
+
+<h2>1. The state of play moved before this analysis started</h2>
+<p>The four issues were filed against 8.0.0/9.0.0. Between filing and now, three pull requests merged
+(Oct 4&ndash;6) that resolve or reframe most of the ground:</p>
+<div class="scroll"><table>
+<tr><th>Issue</th><th>Status on current main</th><th>Measurement</th></tr>
+<tr><td>#1362 RootModel wrappers from structural <code>$ref</code>s</td>
+<td><b>Mechanism fixed</b> by #1371 (merged Oct 4): <code>inline_structural_pointer_refs</code> classifies a pointer by the subschema it selects and inlines only what the generator would wrap.</td>
+<td><code>TargetingOverlayInput</code> vs <code>TargetingOverlay</code>: 27/37 fields disagreed at filing; <b>9/37 now</b>, all in the two causes the issue itself excluded (per-module minted element classes, <code>Sequence</code>-vs-<code>list</code> on response models). <code>len()</code>/indexing/iteration work on collection fields. 87 <code>RootModel</code> classes remain in the tree (down from 324), covered by an unwrap pass and a <code>__getattr__</code> proxy.</td></tr>
+<tr><td>#1359 two validators disagree</td>
+<td><b>Largely addressed</b> by #1375 (merged Oct 4): format checkers, strict coercion, and a bundle-derived parity suite (<code>tests/conformance/</code>) that synthesizes a valid payload per tool, mutates every leaf, and classifies each divergence by cause into a declared set (<code>DECLARED</code>, 8 named classes).</td>
+<td>The suite's corpus has one measured hole, below.</td></tr>
+<tr><td>#1366 hand-written <code>.pyi</code> vs runtime <code>create_model</code></td>
+<td><b>Closed</b> by #1392: the stub is deleted, canonical models are real subclasses of generated classes. The repo's design doc now <i>refuses</i> derived stubs and runtime copies outright.</td>
+<td><code>canonical_creative.pyi</code> absent; <code>canonical_creative.py</code> is 1,173 lines of hand-written source inheriting generated bases; <code>create_model</code> appears once (non-public).</td></tr>
+<tr><td>#1409 positional union-arm names</td>
+<td><b>Open.</b> The schema-node naming rule exists (<code>scripts/union_arm_names.py</code> on a branch, measured over all 557 root-level arms), is documented in <code>docs/design/type-generation.md</code>, and is not wired in. Two surface-policy decisions block it.</td>
+<td>Positional naming live at <code>post_generate_fixes.py:5483</code> (<code>f"{self.base}{index}"</code>) over a hand-written 22-row table, with a hardcoded 6-arm permutation for <code>BuildCreativeResponse</code> at :5478. 1,127 numbered classes in the generated tree; 38 on the public surface. <code>Assets9</code>&ndash;<code>Assets13</code>&hellip; confirmed in <code>core/format.py:300</code>.</td></tr>
+<tr><td>#1414 <code>anyOf</code> branch conditions discarded</td>
+<td><b>Open, reproduces on current main.</b> Triage calls it ready-to-implement with a concrete scope.</td>
+<td>Reproduced on 9.0.0-beta.2: the issue's <code>create_media_buy</code> document (packages without <code>budget</code>, no <code>total_budget</code>, no <code>proposal_id</code>) &mdash; <b>the SDK's own bundled validator refuses it; <code>CreateMediaBuyRequest.model_validate</code> accepts it.</b></td></tr>
+</table></div>
+<p>So the design question is not "how to fix four issues" &mdash; it is what mechanism closes the two that
+remain (#1414, #1409) in a way the next schema bump cannot silently reopen, and whether the proposed
+unifying invariant earns its place.</p>
+
+<h2>2. The root-cause hypothesis, tested</h2>
+<p>The hypothesis: <i>generation is lossy at the schema node and the loss is silent; all four issues are
+that one defect.</i> Tested mechanism by mechanism:</p>
+<div class="scroll"><table>
+<tr><th>Issue</th><th>Verdict</th><th>The mechanism, located</th></tr>
+<tr><td>#1409</td><td><span class="verdict holds">HOLDS</span></td>
+<td>Identity loss, silent. The response-variant renderer names arms <code>f"{base}{index}"</code>; the node's <code>title</code>/<code>const</code>/<code>required</code> are never consulted for the name. The repo carries three compensations that each prove the fragility: a patched <code>rglob</code> (<code>run_datamodel_codegen.py</code>) so filesystem order cannot renumber classes; the hardcoded <code>BuildCreativeResponse</code> permutation so an upstream insertion did not move two public names; and <code>restore_format_asset_numbered_aliases</code>, which re-points the stale positional name <code>Assets94</code> by locating the class <b>through its discriminator <code>const</code></b> &mdash; node identity used to prop up positional identity.</td></tr>
+<tr><td>#1414</td><td><span class="verdict holds">HOLDS</span></td>
+<td>Constraint loss, silent, in two cooperating passes. Pre-generation, <code>flatten_root_object_validation_union</code> (hand-listed 8 schemas) deletes the root <code>anyOf</code> so one subclassable model is generated. Post-generation, <code>enforce_root_required_groups</code> re-reads the original schema &mdash; and its extractor <code>_root_required_groups</code> keeps only each arm's top-level <code>required</code>, discarding <code>not</code>, <code>const</code> and nested <code>allOf</code> <i>by documented choice</i> (its docstring: "those narrow an arm further and are not part of its group"). The emitted validator is more permissive than the schema, and nothing records the difference.</td></tr>
+<tr><td>#1362</td><td><span class="verdict partial">HOLDS, DIFFERENT MECHANISM</span></td>
+<td>Not discard but <b>invention</b>: a pointer into a structural position has no name, so the generator minted one and wrapped the selected type. The fix that merged (#1371) is instructive because it is neither a validator nor a guard: it <i>classifies the pointer and eliminates the wrapper before generation</i>, so the wrong type is never constructed. The loss-shape is "origin discarded", cousin to #1409's "identity discarded".</td></tr>
+<tr><td>#1359</td><td><span class="verdict breaks">BREAKS</span></td>
+<td>An aggregate observable, not a mechanism &mdash; and its largest measured component runs the <b>opposite direction</b>. Of 5,995 divergences, 4,604 were <i>schema-accepts-model-refuses</i>, dominated by the bundled runtime validator silently skipping <code>format: uri</code> (8,580 occurrences in the bundle; a bare <code>FormatChecker()</code> enforces none) while the generated models enforce it as <code>AnyUrl</code>. There generation was <i>faithful</i> and the schema-side runtime was the lossy artifact. The coercion class (<code>"yes"</code> &rarr; <code>True</code>) is not a dropped keyword either: the keyword was expressed, into a carrier type whose semantics are wider. Only the optional-vs-nullable conflation and the conditional-subschema class are generation loss.</td></tr>
+</table></div>
+
+<div class="box">
+<b>Verdict: the hypothesis holds for two of the four and names a real family, but the four issues are
+not one defect.</b> The accurate grouping: #1409 and #1414 are the same defect
+(<i>a schema-node keyword that cannot be expressed is silently projected away &mdash; identity to a
+position, a branch condition to a presence check</i>); #1362 was the sibling defect
+(<i>a nameless position silently given an invented type</i>), already fixed by elimination; #1359 is a
+symptom aggregate with at least four causes, two of which are not generation defects at all.
+"Express the keyword or refuse" is the right invariant for the first family. It would have done nothing
+for the bundled validator's missing format checkers, which is a caution against treating it as the one
+principle the SDK needs.</div>
+
+<h3>2.1 One more measurement: why the parity suite did not catch #1414</h3>
+<p>#1375's conformance suite is exactly the "derived on both sides" test the hypothesis asks for
+&mdash; it enumerates the bundle, synthesizes, mutates, and requires every divergence to fall into a
+declared cause class. But its <code>MUTATIONS</code> tuple replaces one leaf <i>value</i> at a time with
+a value of a different JSON type. It never <b>removes a field</b>. Branch membership in an
+<code>anyOf</code> is decided by which fields are <i>present</i>, so the entire #1414 class of
+divergence &mdash; a document that satisfies no branch because of what it omits &mdash; is structurally
+outside the corpus. The suite's six <code>UNREACHABLE</code> tools (whose <code>required</code> sets live
+inside composition branches) are the same blindness seen from the synthesis side. Any fix for #1414 that
+does not also close this corpus hole is a fix the suite cannot defend.</p>
+
+<h2>3. Constraints the repository has already settled</h2>
+<p>These are documented in <code>docs/design/type-generation.md</code> ("What this architecture refuses")
+and in merged decisions; a design that ignores them will be rejected upstream:</p>
+<ul>
+<li><b>The generator is pinned forever.</b> datamodel-code-generator 0.64.0; 0.72.0+ cannot generate the
+tree (measured: multi-arm <code>allOf</code> ref resolution), 0.71.0 drops 44 const defaults and three
+discriminators (measured). Every mechanism must be a schema transform, a post-generation pass, or
+hand-written source inheriting generated output.</li>
+<li><b>#1102 settled the two-artifact boundary:</b> pydantic models are structural application types;
+the bundled schema run at the wire is the conformance authority. <code>AdCPBaseModel</code>'s docstring
+states it. Full model&ndash;schema parity was explicitly declined.</li>
+<li><b>No hand-maintained allowlists that can grow; derived or shrink-only sets only.</b> The repo
+already practices this: the effect manifest (every post-fix records whether it changed the tree, no-ops
+must say why), <code>DECLARED</code> divergence classes, <code>UNREACHABLE</code>/<code>UNMODELLED</code>
+shrink-only sets.</li>
+<li><b>No positional name on the public surface</b> (stated refusal), while renaming 1,127
+module-internal numbered classes as a gate is also refused as beautification.</li>
+<li><b>Refusal is an accepted tool here.</b> <code>_has_bare_ref_root_arm</code> raises;
+transforms carry explicit refusal ceilings; a fix that cannot find its target must raise. The
+"express or refuse" posture is not foreign &mdash; it is the house style, applied unevenly.</li>
+</ul>
+
+<h2>4. Design options</h2>
+
+<h3>Option A &mdash; Widen the projection to the measured shapes, and refuse beyond them</h3>
+<p>For #1414. Three coordinated changes, all in the existing pipeline:</p>
+<ol>
+<li><code>_root_required_groups</code> returns, per arm, the <code>required</code> group <i>plus</i> the
+arm's exclusions (<code>not: {required: [...]}</code> and <code>not: {anyOf: [{required}...]}</code> &mdash;
+the two shapes that occur in the 12 affected models) <i>plus</i> sibling <code>const</code> discriminators
+where present. <code>enforce_root_required_groups</code> emits them: an arm matches only if its group is
+present <b>and</b> none of its excluded fields are.</li>
+<li><b>The refusal:</b> after extracting what step 1 can express, anything <i>left over</i> in an arm
+(a nested <code>allOf</code> item constraint like <code>packages.items</code> requiring
+<code>budget</code>; a cross-file conditional) must either appear in a shrink-only residue set naming
+<i>schema + JSON pointer + keyword</i>, or generation fails. Exactly the manifest pattern the repo
+already runs for fix effects, applied to arm conditions. A spec bump that introduces a new unexpressible
+condition shape goes red instead of silently narrowing the contract.</li>
+<li><b>Close the corpus hole:</b> add field-removal mutations to the parity suite (delete one optional
+leaf at a time from the synthesized payload), so branch-membership divergence is graded over the whole
+bundle. This is what keeps the residue set honest from the behavioral side: an entry that stops being a
+real divergence shows up as removable; a divergence with no entry fails the suite.</li>
+</ol>
+<p><b>What it makes impossible:</b> a <i>new</i> dropped branch condition arriving silently (build fails or
+the residue names it); the suite going green over a model that accepts branch-violating documents.
+<b>What it deliberately does not do:</b> express nested <code>allOf</code> item constraints in the
+root validator. Those belong on the item's own model or in the residue &mdash; the triage reached the
+same line, for the same reason (expressing them means traversing <code>$ref</code> chains across
+generated files in a text-rewriting post-processor).</p>
+<p><b>Cost:</b> moderate. The extractor and emitter change together; ~12 models regenerate; the residue
+set is seeded with today's leftovers (on this bundle: the <code>packages.items</code> constraints and
+the <code>budget_allocation.mode</code> consts that step 1's <code>const</code> handling doesn't reach, if
+any); one <code>enforce_root_required_groups</code> early-return (<code>already += 1</code>) must become
+strip-and-reinject so existing incomplete validators update.
+<b>How it lands:</b> a 3&ndash;4 commit series, each leaving the tree coherent, along the exact scope the
+maintainer's triage already endorsed ("ready-to-implement", with the extension to <code>not.required</code>
+named). Lowest acceptance risk of any option.</p>
+
+<h3>Option B &mdash; Delegate root composition to the bundled schema at validation time</h3>
+<p>Instead of projecting keywords into pydantic, emit one <code>model_validator</code> that evaluates the
+original root <code>anyOf</code>/<code>oneOf</code> subschema &mdash; through the compiled-validator
+machinery the package already ships in <code>adcp.validation</code> &mdash; against the document under
+validation. Zero keyword loss for root compositions, by construction, forever.</p>
+<p><b>What it makes impossible:</b> every divergence class between the model and its root composition,
+including ones no one has thought of, with no per-keyword code and no residue set.
+<b>Feasibility note that surprised me:</b> layering does <i>not</i> forbid it &mdash;
+<code>adcp.types</code> already imports from <code>adcp.validation</code> in four modules
+(<code>versioned.py</code>, <code>aliases.py</code>, &hellip;), and the reverse direction is clean.</p>
+<p><b>Cost, and why it loses:</b> (1) it re-litigates #1102 &mdash; the settled decision is that models
+are structural and the schema is the conformance authority <i>at the wire</i>; moving schema evaluation
+into every <code>model_validate</code> call makes the model a second wire boundary, and the client
+already runs the schema hook on every call. (2) The validator needs a JSON document to grade, so the
+model must re-serialize itself (or retain the raw input) inside validation &mdash; construction cost on
+every instantiation, including server-internal ones that never touch a wire. (3) Failures surface as
+jsonschema pointer paths, not pydantic field errors, splitting the error vocabulary adopters see.
+(4) For <i>construction</i> (keyword arguments, not parsing), the document doesn't exist yet; the
+delegate would grade a round-trip of itself, which can mask author errors the projection would catch
+field-by-field. A permanent-fidelity mechanism that the architecture's own boundary decision argues
+against is not the right trade here.</p>
+
+<h3>Option C &mdash; Delete the root-group validator; the model carries structure only</h3>
+<p>The purist reading of #1102: a partial validator misleads, so emit none; conformance questions go to
+the bundled validator, which is the declared authority anyway.</p>
+<p><b>What it makes impossible:</b> a misleading partial check (nothing partial exists).
+<b>Why it loses:</b> it regresses live protection &mdash; the no-packages-no-budget-no-proposal document
+would then pass the model with <i>no</i> complaint, and the measured downstream failure (#1414's
+<code>BUDGET_TOO_LOW</code> for a budgetless request) returns for every adopter that parses with models
+and runs the schema in default <code>warn</code> mode. The maintainer already chose to have the
+validator. Stated for completeness because "express or refuse" taken literally endorses it; the right
+granularity for the invariant is the <i>emitted check</i> (it must say what it does and do what the arm
+says, with the remainder recorded), not the model.</p>
+
+<h3>Option D &mdash; Wire the union-arm naming rule (for #1409; composes with any of A&ndash;C)</h3>
+<p>The rule exists, is measured over all 557 root-level non-null arms of the pinned bundle (169 named by
+title, 82 by discriminator const, 27 by required set, 278 create no class, 1 refused), and fails closed
+with <code>UnnameableArmError</code>. Wiring it is the one-line swap at <code>class_names</code> plus the
+two decisions the issue names:</p>
+<ul>
+<li><b>The one unnameable arm</b> (<code>get-content-standards-response.json oneOf[0]</code>, no title):
+take it off the flat surface and leave it reachable by domain path until
+<code>adcontextprotocol/adcp#7913</code> lands a title. That is the repo's own "degraded honestly"
+pattern, and it avoids holding the wiring hostage to an upstream edit.</li>
+<li><b>The 38 public numeric-suffixed names:</b> breaking rename behind deprecation aliases
+(old name assigns to new class, warns on import/access &mdash; the <code>Assets94</code> fix is the
+existing precedent, generalized and then deleted). <b>The timing argument is now:</b> the repo is inside
+a 9.0.0 beta window; a rename that ships in 9.0.0 final costs one migration table; the same rename after
+9.0 settles costs a 10.0.</li>
+</ul>
+<p><b>What it makes impossible:</b> a schema insertion or reorder silently changing which node a public
+name means. The hardcoded <code>BuildCreativeResponse</code> permutation and the <code>Assets94</code>
+re-pointing fix both become deletions &mdash; they exist only to compensate positional identity.
+<b>Cost:</b> the deprecation shim and migration table; a generated-tree test (the branch's test grades
+schemas, not output &mdash; the issue itself flags this).
+<b>How it lands:</b> after the residue decision, as its own PR; the maintainer's triage already sequenced
+it (blocked on #1392, which has merged).</p>
+
+<h3>Sub-question: should the canonical/legacy split derive from the schema's <code>deprecated</code> markers?</h3>
+<p><b>No for selection; yes for closure.</b> Measured: <code>deprecated: true</code> does propagate
+(<code>Product.format_ids</code> carries <code>deprecated</code> and warns; 194
+<code>deprecated=True</code> field occurrences in the domains tree) &mdash; but the bundle declares 363
+deprecated top-level properties, and the effect manifest records that the metadata pass cannot reach 282
+of them (hyphenated-directory module mapping). Two consequences: the marker is far <i>wider</i> than the
+legacy-creative-identity concept (deprecation marks many things that stay on canonical models), and its
+propagation is incomplete, so deriving the strip set from it would both over-select and under-select.
+The split's actual selector is a three-key regex
+(<code>_LEGACY_IDENTITY_KEY = r"(^|_)(?:format_ids?|v1_format_ref)($|_)"</code>,
+<code>canonical_creative.py:253</code>). The improvement that fits the house rule ("derive, don't
+declare") is a <b>closure test</b>, not a derived selector: the set of bundle property names the regex
+matches must equal the set of properties whose subschema references the deprecated identity schemas
+(<code>format-id.json</code> and kin). The rule stays readable and hand-owned; a bump that adds a fourth
+legacy identity key or retires one goes red.</p>
+
+<h3>Sub-question: can a consumer that walks type annotations be made safe, rather than warned?</h3>
+<p>Python cannot forbid introspection, so "make it impossible" has to mean <b>make the annotations
+stop lying</b>, not fence the reader. The three lies are: an invented wrapper type (#1362 &mdash;
+eliminated at the source by #1371, 87 wrappers remaining with unwrap passes trending down), a positional
+name whose meaning can move (#1409 &mdash; Option D removes it from the public surface), and a validator
+annotation that implies a contract narrower than the model enforces (#1414 &mdash; Option A plus the
+residue makes the gap enumerable). What remains structurally inexpressible &mdash; conditionals,
+the open <code>format_kind</code> vocabulary &mdash; is invisible in annotations under <i>any</i> design,
+which is why the declared-divergence set and the wire-side schema hook are the correct home for it,
+exactly as #1102 decided. There is no fourth mechanism to invent here; there is finishing the three.</p>
+
+<h2>5. Recommendation</h2>
+<div class="box rec">
+<p><b>Option A for #1414, Option D for #1409, as two independent commit series, in that order of
+urgency.</b> Concretely: extend the group extractor to exclusions and sibling consts; make everything an
+arm carries beyond that either a build failure or a pointer-named entry in a shrink-only residue; add
+field-removal mutations to the conformance corpus so the residue is graded behaviorally; then wire the
+existing naming rule with the unnameable arm demoted to its domain path and the 38 renames shipped behind
+deprecation aliases inside the 9.0 beta window.</p>
+<p>This is a change of kind, not of volume: today the pipeline's posture is "express what fits a field
+declaration, drop the rest silently"; after it, the posture is "express what the measured shapes cover,
+and every drop is either impossible or has a name and a test that notices when it stops being true."
+That is the hypothesis's invariant, applied at the granularity where it is real &mdash; the emitted
+check and the emitted name &mdash; rather than at the slogan level, where it would also demand Option C's
+regression or Option B's re-litigation of a settled boundary.</p></div>
+<div class="box counter">
+<p><b>The strongest argument against this recommendation:</b> it is the <i>third</i> widening of the
+same projection (plain <code>required</code> groups &rarr; this PR's exclusions-and-consts &rarr;
+whatever the next spec version carries), and each widening re-opens "what is expressible" by hand, in a
+7,500-line post-processor that is already the most fragile artifact in the repo. Option B ends the class
+permanently, needs no residue bookkeeping, and the layering it requires already exists. The honest reply
+is that B's cost lands on every model construction forever and contradicts a decision the maintainers
+made deliberately and recently (#1102) &mdash; but if the residue set <i>grows</i> across the next two
+spec bumps instead of shrinking, that is the signal the projection approach has lost, and B (scoped to
+<code>model_validate</code>-from-document paths only, not keyword construction) is the fallback this
+document would then argue for.</p></div>
+
+<h2>6. What I could not verify</h2>
+<ul>
+<li><b>The exact seed contents of the Option A residue set.</b> Deriving it requires running the extended
+extractor over all 42 group-validator schemas; I verified the 12-model blast radius and the
+<code>CreateMediaBuyRequest</code> branch shapes against the issue's table and the extractor source, but
+did not implement the extraction (writing code is out of scope here).</li>
+<li><b>Whether the two response arms the naming rule cannot name on today's bundle are still two.</b>
+The issue's figures (557 arms, 1 refused after upstream #7913) are from the 9.0.0 pin; the rule's branch
+was not re-run against the current rc.7-era bundle.</li>
+<li><b>The 282-property deprecation-metadata shortfall</b> is taken from the effect manifest's recorded
+no-op note plus the 194-occurrence count I measured; I did not enumerate which 282 properties lack the
+marker, so "incomplete propagation" is established in aggregate, not per field.</li>
+<li><b>Maintainer appetite for the 38-name rename inside the 9.0 beta.</b> The versioning argument is
+mine; the triage on #1409 explicitly defers that decision to a human.</li>
+<li><b>#1359's residual divergence count on current main.</b> #1375's suite now grades it continuously;
+I verified the suite's design and its corpus hole, but did not run the full 39k-document sweep to restate
+the post-merge totals.</li>
+</ul>

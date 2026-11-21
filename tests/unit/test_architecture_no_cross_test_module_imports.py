@@ -92,12 +92,6 @@ _ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_mcp_client_util.py", "tests.integration.test_outbound_http"),
     ("tests/integration/test_outbound_error_mapping_parity.py", "tests.integration.test_outbound_http"),
     ("tests/integration/test_webhook_delivery_outcome_contract.py", "tests.integration.test_outbound_http"),
-    # DEFERRED — exporter: tests/helpers/test_tls_material.py, the loopback TLS
-    # material. It lives in a sanctioned helper home but carries a ``test_``
-    # name, so pytest collects it AND three suites import it.
-    ("tests/e2e/_webhook_capture_loopback.py", "tests.helpers.test_tls_material"),
-    ("tests/integration/test_local_http_origin_tls.py", "tests.helpers.test_tls_material"),
-    ("tests/integration/test_protocol_webhook_egress.py", "tests.helpers.test_tls_material"),
     # DEFERRED — exporter: tests/integration/test_admin_ingest_url_policy.py, which
     # owns the admin ingest refusal fixtures.
     ("tests/helpers/webhook_credential_refusal.py", "tests.integration.test_admin_ingest_url_policy"),

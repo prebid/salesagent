@@ -120,6 +120,30 @@ show a storyboard pass), every failure with its last traceback line, and the per
 against each baseline. `scripts/audit/compare_runs.py` is the strict regression gate over the
 same data.
 
+**Every cross-run claim names its two trees, or it is refused.** `run_all_tests.sh` writes
+`test-results/<run>/meta.json` before the first suite — commit, branch, clean-or-dirty, host,
+and the adcp pin AS INSTALLED (`pyproject.toml` declares the release; a locally built SDK
+wheel carries a `+<local>` segment, which is the only thing separating two builds of it).
+Both tools refuse a pair that cannot be attributed, naming which side lacked what:
+
+| Shape | Verdict |
+|-------|---------|
+| Either side carries no `meta.json`, or records no commit | refused, exit 2 — `--allow-unidentified` proceeds and labels every verdict `UNATTRIBUTED` |
+| The two shas have no ancestry relationship | refused, exit 2, **not waivable** — the message names their merge-base, which is the tree a comparable baseline runs on |
+| Either tree was dirty | refused, exit 2, **not waivable** |
+
+The waiver exists for the runs retained from before the field, which carry no identity at
+all; refusing them outright would leave the tool useless on the only data there is. Reaching
+for it on a run made since is reaching past the gate.
+
+**A run on the CI box cannot name its own tree yet.** `cassini run` executes the runner in an
+rsync mirror whose repository cassini creates with `git init` + `git add -A`, so it has no
+commits and `git rev-parse HEAD` fails there (`git rev-parse --is-inside-work-tree` answers
+`true`, which is why that is not the test). With no commit from git the runner reads
+`SA_RUN_COMMIT` / `SA_RUN_BRANCH` / `SA_RUN_TREE`; forwarding those three is one line in
+cassini's `profiles/salesagent.toml` `forward_env` (salesagent-bz8zy). Until it lands, box
+runs record `source: absent` and are refused.
+
 ## Testing Workflow (Before Commit)
 ```bash
 # ALL changes

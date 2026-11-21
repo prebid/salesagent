@@ -32,15 +32,16 @@ Some state is only true when several rows agree: an `Account` plus its `AgentAcc
 join, because resolution is access-scoped; a tenant plus a principal plus a credential whose
 hash matches; the rows a setup gate grades. Those live in one helper —
 [tests/helpers/account_seeding.py](../helpers) for the account pair,
-[tests/utils/tenant_setup.py](../utils) for the checklist rows and `seed_gam_tenant` — and
+[tests/utils/tenant_setup.py](../utils) for the checklist rows, `seed_gam_tenant` and the GAM
+onboarding rows (`onboard_gam`) — and
 every suite calls the same one. Ten hand-rolled copies of a pair, each with its own
 signature, is how one of them comes to seed the row without the join.
 
 ## The gap that forces `session.add()`
 
-15 of 39 ORM models have no factory: `AuditLog`, `Context`, `CreativeReview`, `GAMLineItem`,
+14 of 39 ORM models have no factory: `AuditLog`, `Context`, `CreativeReview`, `GAMLineItem`,
 `GAMOrder`, `IdempotencyAttempt`, `ObjectWorkflowMapping`, `ProductInventoryMapping`,
-`Strategy`, `StrategyState`, `SyncJob`, `TenantManagementConfig`, `WebhookDeliveryLog`,
+`Strategy`, `StrategyState`, `SyncJob`, `TenantManagementConfig`,
 `WebhookDeliveryRecord`, `WorkflowStep`. A test needing one has no option but a raw
 `session.add()`, which is most of the 547 in `tests/integration/`. **Adding the missing
 factory is the fix; the `session.add()` is the symptom.**

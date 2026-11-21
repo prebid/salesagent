@@ -123,39 +123,10 @@ class TestDeliveryPollDiscoverySeeding:
             assert len(principals) == 1
 
 
-@pytest.mark.requires_db
-class TestCreativeFormatsE2EValidation:
-    """set_registry_formats validates against the reference catalog in e2e mode."""
-
-    def test_subset_of_reference_is_noop(self, integration_db):
-        from src.core.format_cache import load_reference_formats
-        from tests.harness.creative_formats import CreativeFormatsEnv
-
-        reference = list(load_reference_formats())
-        with CreativeFormatsEnv(e2e_config=_e2e_config_for_integration_db()) as env:
-            # A subset of the real catalog -> realizable, no exception.
-            env.set_registry_formats(reference[:3])
-
-    def test_empty_catalog_is_unrealizable(self, integration_db):
-        from tests.harness.creative_formats import CreativeFormatsEnv
-
-        with CreativeFormatsEnv(e2e_config=_e2e_config_for_integration_db()) as env:
-            with pytest.raises(E2EUnsupportedSetup) as exc_info:
-                env.set_registry_formats([])
-
-    def test_unknown_format_is_unrealizable_and_named(self, integration_db):
-        from src.core.format_cache import load_reference_formats
-        from src.core.schemas import Format
-        from tests.harness.creative_formats import CreativeFormatsEnv
-
-        # Build a Format with an id not in the reference catalog.
-        bogus = load_reference_formats()[0].model_copy(deep=True)
-        bogus.format_id.id = "totally_made_up_format_xyz"
-        assert isinstance(bogus, Format)
-
-        with CreativeFormatsEnv(e2e_config=_e2e_config_for_integration_db()) as env:
-            with pytest.raises(E2EUnsupportedSetup) as exc_info:
-                env.set_registry_formats([bogus])
+# CreativeFormatsEnv.set_registry_formats has no e2e branch of its own to grade here: it
+# serves the formats from the peer creative agent (on e2e, the compose stack's capture
+# service, which needs the running stack) and points a creative_agents row at it. The
+# UC-005 scenarios grade that on all four transports.
 
 
 # There is nothing here grading set_billing_policy / set_approval_mode against a missing

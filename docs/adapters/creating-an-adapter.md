@@ -28,8 +28,9 @@ identity and capabilities as class attributes:
 
 The base constructor takes `(config, principal, creative_engine, tenant_id)`
 and requires `tenant_id` — every adapter operation is tenant-scoped
-(`src/adapters/base.py:339-345`). There is no `dry_run` parameter: a preview is
-a unit of work that rolls back rather than an adapter mode, as
+(`AdServerAdapter.__init__` in `src/adapters/base.py`). There is no `dry_run`
+parameter: a preview is a unit of work that rolls back rather than an adapter
+mode, as
 [Rules that bind every adapter](#rules-that-bind-every-adapter) restates.
 Validate required configuration in your `__init__` with
 `self._require_config(...)`, which raises `AdCPConfigurationError` with the
@@ -91,8 +92,15 @@ under-report your platform:
   serve snapshots.
 - `get_available_inventory()` — inventory discovery for AI-driven product
   configuration; returns empty inventory by default.
-- `get_creative_formats()` — creative format definitions, for adapters that
-  also act as creative agents.
+- `creative_formats(tenant_id)` — a classmethod returning the `Format`
+  declarations this adapter serves itself, for adapters that also act as
+  creative agents; empty by default. Every format it answers MUST carry
+  `canonical.kind`. An adapter-served format's `agent_url` is a pseudo-URL with
+  no host to fetch a declaration from, and its id is outside
+  `registries/v1-canonical-mapping.json`, so the adapter's own declaration is
+  the only route by which a creative naming the format can be given a
+  `format_kind` — without one, `sync_creatives` refuses every such creative. A
+  format whose canonical kind the adapter cannot name must not be served.
 
 ## Register the adapter
 

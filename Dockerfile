@@ -2,13 +2,13 @@
 # Multi-stage build for smaller image
 # Cache bust: 2026-02-27
 ARG PYTHON_VERSION=3.12
-ARG PYTHON_BASE_DIGEST=sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf
+ARG PYTHON_BASE_DIGEST=sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 # Consumed by BuildKit for reproducible layer timestamps (PR 6 release pipeline).
 ARG SOURCE_DATE_EPOCH=0
 # Canonical uv version: .uv-version (CI reads the file; guard keeps this ARG in sync).
-ARG UV_VERSION=0.11.15
-# Manifest-list digest for uv 0.11.15 (resolves per TARGETPLATFORM; do not pin a single-arch manifest).
-ARG UV_IMAGE_DIGEST=sha256:e590846f4776907b254ac0f44b5b380347af5d90d668138ca7938d1b0c2f98d3
+ARG UV_VERSION=0.13.4
+# Manifest-list digest for uv 0.13.4 (resolves per TARGETPLATFORM; do not pin a single-arch manifest).
+ARG UV_IMAGE_DIGEST=sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b
 
 FROM --platform=$TARGETPLATFORM ghcr.io/astral-sh/uv:${UV_VERSION}@${UV_IMAGE_DIGEST} AS uv
 
@@ -16,7 +16,7 @@ FROM --platform=$TARGETPLATFORM ghcr.io/astral-sh/uv:${UV_VERSION}@${UV_IMAGE_DI
 # binaries lag the latest Go patch, so their embedded stdlib fails the release
 # Trivy gate on freshly-published Go CVEs; building here keeps it current.
 # Digest is the multi-arch manifest list for golang:1.26-trixie (resolves per TARGETPLATFORM).
-FROM golang:1.26-trixie@sha256:68b7145ec43d1820b9a56704554b53d1520aa2a15cb5233e374188a31b2a1bce AS supercronic
+FROM golang:1.26-trixie@sha256:cff05dd6b81c901f2e8249eb6f91c69a60451d0f12c26bfef08e476a85b32d4d AS supercronic
 ENV CGO_ENABLED=0
 RUN go install github.com/aptible/supercronic@v0.2.46
 
@@ -84,7 +84,8 @@ RUN echo 'path-exclude /usr/share/doc/*' > /etc/dpkg/dpkg.cfg.d/01_nodoc && \
 # Install runtime dependencies including nginx (no gcc/libpq-dev/git — build deps stay in builder)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     nginx
@@ -99,11 +100,19 @@ WORKDIR /app
 ARG CACHE_BUST=2026-02-27-GAM-API-BUMP
 RUN echo "Cache bust: $CACHE_BUST"
 
+# Non-root runtime user (D34 — issue #1234 PR 5), created before the COPYs below so
+# they can set ownership with --chown. A `chown -R` in a later RUN would rewrite every
+# file into a new layer, storing /app and /opt/venv in the image twice.
+# The user gets a home directory (-m): the GAM SDK (googleads -> zeep) creates its
+# WSDL cache under $HOME/.cache on its first service call, and a missing home makes
+# every GAM call fail with PermissionError.
+RUN groupadd -r -g 1001 app && useradd -r -m -d /home/app -u 1001 -g app -s /usr/sbin/nologin app
+
 # Copy application code
-COPY . .
+COPY --chown=app:app . .
 
 # Copy pre-built virtual environment from builder stage (contains all compiled deps)
-COPY --from=builder /opt/venv /opt/venv
+COPY --chown=app:app --from=builder /opt/venv /opt/venv
 
 # Copy nginx configs - run_all_services.py selects based on ADCP_MULTI_TENANT
 # Default: single-tenant (path-based routing, localhost upstreams)
@@ -113,7 +122,7 @@ COPY config/nginx/nginx-single-tenant.conf /etc/nginx/nginx-single-tenant.conf
 COPY config/nginx/nginx-multi-tenant.conf /etc/nginx/nginx-multi-tenant.conf
 COPY config/nginx/nginx-development.conf /etc/nginx/nginx-development.conf
 
-# Non-root runtime user (D34 — issue #1234 PR 5)
+# /app itself predates the COPYs (WORKDIR), so it is chowned here, non-recursively.
 # /etc/nginx/nginx.conf is chowned too: run_all_services.py overwrites it at startup
 # with the selected single-/multi-tenant config, and the apt-installed file is
 # root-owned by default — without this, that write fails under the non-root user.
@@ -121,9 +130,9 @@ COPY config/nginx/nginx-development.conf /etc/nginx/nginx-development.conf
 # -P mode never follows a symlink argument into its target, so chowning /var/run only
 # relabels the symlink itself and leaves the real directory (where nginx writes its
 # pidfile) root-owned.
-RUN groupadd -r -g 1001 app && useradd -r -u 1001 -g app -s /usr/sbin/nologin app && \
-    mkdir -p /var/log/nginx /var/run && \
-    chown -R app:app /app /opt/venv /var/log/nginx /var/lib/nginx /run /etc/nginx/nginx.conf
+RUN mkdir -p /var/log/nginx /var/run && \
+    chown app:app /app /opt/venv && \
+    chown -R app:app /var/log/nginx /var/lib/nginx /run /etc/nginx/nginx.conf
 
 # Venv on PATH; PYTHONPATH points at bind-mounted source in dev compose
 ENV PATH="/opt/venv/bin:$PATH"

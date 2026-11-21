@@ -147,6 +147,7 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
                 trafficker_id=adapter_config.gam_trafficker_id or None,
                 audit_logger=None,
                 tenant_id=tenant_id,
+                tenant_ai_config=None,  # names no order, so no AI configuration is read
             )
 
             # Use the sync manager to perform the sync
@@ -516,6 +517,7 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
                 advertiser_id=None,  # Not needed for order discovery
                 trafficker_id=adapter_config.gam_trafficker_id or None,
                 tenant_id=tenant_id,
+                tenant_ai_config=None,  # names no order, so no AI configuration is read
             )
 
             # Perform sync

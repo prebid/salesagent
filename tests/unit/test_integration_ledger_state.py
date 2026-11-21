@@ -24,6 +24,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tests.helpers.ledger import load_ledger_nodeids
+from tests.unit._architecture_helpers import rel
 
 LEDGER = Path(__file__).parent.parent / "integration" / "known_failures.txt"
 
@@ -43,7 +44,7 @@ LEDGER = Path(__file__).parent.parent / "integration" / "known_failures.txt"
 #: template branch is scanned, including the ones that render only under test mode.
 #: ``salesagent-091d8`` asks how a first admin reaches a fresh deployment before SSO exists,
 #: which is a production composition question this scanner never graded.
-CEILING = 41
+CEILING = 39
 
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
@@ -86,8 +87,6 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/integration/test_vendor_egress.py::test_a_dry_run_adapter_holds_no_vendor_client[triton]",
         # Cluster H (salesagent-e30o7.8) — wire and status expectations that drifted
         "tests/integration/test_admin_media_buy_reject_webhook.py::TestAdminMediaBuyRejectWebhook::test_approve_webhook_echoes_buyer_request_context",
-        "tests/integration/test_bdd_dispatch_seam.py::TestCallViaForwardsReqWholeAndTheEnvUnpacksIt::test_a_format_ids_filter_still_reaches_the_tool[mcp]",
-        "tests/integration/test_bdd_dispatch_seam.py::TestCallViaForwardsReqWholeAndTheEnvUnpacksIt::test_a_format_ids_filter_still_reaches_the_tool[rest]",
         "tests/integration/test_create_media_buy_pending_approval_wire.py::test_config_approval_create_emits_submitted_not_confirmed",
         "tests/integration/test_create_media_buy_pending_approval_wire.py::test_submitted_create_replays_verbatim_without_second_workflow_step",
         "tests/integration/test_delivery_poll_behavioral.py::TestPrincipalNotFoundReturnsError::test_principal_not_found_returns_error_in_response",
@@ -135,6 +134,6 @@ def test_every_entry_names_a_collectable_file() -> None:
     repo_root = Path(__file__).parent.parent.parent
     missing = sorted(
         {e.split("::", 1)[0] for e in load_ledger_nodeids(LEDGER)}
-        - {str(p.relative_to(repo_root)) for p in (repo_root / "tests" / "integration").glob("test_*.py")}
+        - {rel(p, repo_root) for p in (repo_root / "tests" / "integration").glob("test_*.py")}
     )
     assert not missing, "ledger entries name files that no longer exist:\n  " + "\n  ".join(missing)

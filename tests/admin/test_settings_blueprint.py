@@ -389,6 +389,34 @@ class TestGeneralSettingsVirtualHostTaken:
         assert refreshed.virtual_host == own_host
 
 
+class TestGeneralSettingsLeavesOtherSectionsAlone:
+    """POST /tenant/<id>/settings/general must not touch flags its form does not carry.
+
+    The account settings form sends only name, subdomain and virtual_host.
+    human_review_required is saved by /business-rules and enable_axe_signals by the
+    Inventory page; treating their absence here as "unchecked" switched a tenant to
+    auto-approve on every account save. The factory defaults human_review_required
+    to False, so the test seeds True explicitly to observe the transition.
+    """
+
+    def test_account_save_keeps_manual_approval_and_axe_signals(self, client, factory_session):
+        tenant = TenantFactory(human_review_required=True, enable_axe_signals=True)
+        _auth_session(client, tenant.tenant_id)
+
+        response = client.post(
+            f"/tenant/{tenant.tenant_id}/settings/general",
+            data={"name": "Renamed Publisher", "subdomain": tenant.subdomain},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302
+        factory_session.expire_all()
+        refreshed = factory_session.get(Tenant, tenant.tenant_id)
+        assert refreshed.name == "Renamed Publisher"
+        assert refreshed.human_review_required is True
+        assert refreshed.enable_axe_signals is True
+
+
 class TestApproximatedDomainTenantOwnership:
     """The three Approximated domain routes must refuse a domain the tenant does not own.
 

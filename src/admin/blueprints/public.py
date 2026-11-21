@@ -11,7 +11,7 @@ from src.admin.blueprints.core import get_tenant_from_hostname
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User
+from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User, UserRole
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.principal import PrincipalRepository
 
@@ -260,7 +260,7 @@ def provision_tenant():
                 tenant_id=tenant_id,
                 email=user_email.lower(),
                 name=user_name,
-                role="admin",
+                role=UserRole.ADMIN,
                 is_active=True,
                 created_at=now,
                 last_login=now,
@@ -303,10 +303,9 @@ def provision_tenant():
 
             # The plaintext token is rendered into THIS response body and stored nowhere.
             # A flash would put it in the signed session cookie, so it would leave the
-            # server in a Set-Cookie header — and in production that cookie is
-            # HTTPONLY=False, SAMESITE="None" and shared across subdomains
-            # (src/admin/app.py:126-136), which makes a flashed credential readable by
-            # any script on the domain and sent on cross-site requests. So there is no
+            # server in a Set-Cookie header — and that cookie is signed, not encrypted,
+            # and in production shared across subdomains (src/admin/app.py), so a flashed
+            # credential is readable by anyone who holds the cookie. So there is no
             # flash, no session stash and no redirect: rendering here is what keeps the
             # credential in the response body alone.
             return render_template("signup_complete.html", tenant=new_tenant, api_token=demo_token)

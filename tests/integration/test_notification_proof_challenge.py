@@ -66,7 +66,7 @@ from typing import Any
 
 import pytest
 from adcp.signing.webhook_signer import WEBHOOK_TAG
-from adcp.types.generated_poc.core.webhook_challenge import WebhookChallenge
+from adcp.types.domains.core.webhook_challenge import WebhookChallenge
 
 from src.core.schemas.account import SyncAccountsRequest
 from tests.factories.request import fresh_idempotency_key
@@ -233,45 +233,21 @@ class TestChallengeIsSignedAndVerifiable:
             f"{response.accounts[0].notification_configs[0]!r}"
         )
 
-    async def test_the_sdk_webhook_verifier_diverges_from_the_pin(self, proof_env):
-        """PINS an SDK divergence, so the workaround above cannot outlive it.
-
-        ``verify_webhook_signature`` demands ``adcp_use == "webhook-signing"`` — the value
-        security.mdx @ v3.1.1 :1438 DEPRECATES — and therefore rejects a conformant
-        ``request-signing`` key with ``webhook_signature_key_purpose_invalid``. Our JWK is
-        right and the SDK is wrong, which is the CLAUDE.md rule landing on a real case: the
-        installed SDK is a cross-check, not the authority.
-
-        Asserted rather than remembered because the failure mode of an undocumented
-        workaround is that it becomes permanent. When the SDK is fixed this test fails,
-        which is the signal to delete both it and the substitution in
-        :func:`tests.helpers.signing.verify_as_conformant_receiver`.
-        """
-        from adcp.signing.errors import SignatureVerificationError
-        from adcp.webhooks import WebhookVerifyOptions, verify_webhook_signature
-
-        _provision_key(proof_env)
-        jwks = _published_jwks(proof_env)
-
-        with capture_outbound_webhooks(responder=echoing_challenge_response()) as captured:
-            await proof_env.call_impl_async(req=_request())
-
-        from adcp.signing.jwks import StaticJwksResolver
-
-        with pytest.raises(SignatureVerificationError) as raised:
-            verify_webhook_signature(
-                method="POST",
-                url=captured[0].url,
-                headers=dict(captured[0].headers),
-                body=captured[0].content,
-                options=WebhookVerifyOptions(jwks_resolver=StaticJwksResolver(jwks)),
-            )
-        assert "adcp_use" in str(raised.value), (
-            "the SDK webhook verifier was expected to reject our conformant request-signing key on "
-            f"its adcp_use check; it failed for a different reason instead: {raised.value}. If it now "
-            "ACCEPTS the key, the divergence is fixed — delete this test and the expected_adcp_use "
-            "substitution in verify_as_conformant_receiver"
-        )
+    # ``test_the_sdk_webhook_verifier_diverges_from_the_pin`` stood here and has been
+    # DELETED, which is the outcome it was built for: it pinned adcp-client-python#1018
+    # (the webhook verifier's ``expected_adcp_use`` accepting only the deprecated
+    # ``webhook-signing``) so the local workaround could not outlive the fix, and its own
+    # assertion message named deletion as the signal. #1018 is CLOSED (COMPLETED
+    # 2026-08-16) and the pinned wheel's ``adcp/signing/webhook_verifier.py`` now builds
+    # ``accepted_adcp_uses=frozenset({ADCP_USE_REQUEST, ADCP_USE_WEBHOOK})`` -- the exact
+    # set security.mdx step 8 (:1478) and the taxonomy row (:1560) mandate -- so the
+    # ``adcp_use`` refusal it asserted is unreachable and the test could never pass again.
+    #
+    # The obligation that OUTLIVES it is graded elsewhere on purpose:
+    # ``tests/unit/test_conformant_receiver_key_purpose.py`` holds the accept-set breadth
+    # two-sided (not narrower, not wider) against the helper, and its module docstring
+    # says why it was kept out of this class -- "bolting it onto a test designed for
+    # deletion would take it out with the tide".
 
 
 class TestChallengeBodyIsConformant:
@@ -307,10 +283,12 @@ class TestChallengeBodyIsConformant:
         # Read off the RAW payload, never off the re-validated model: what a receiver matches
         # is the bytes sent, and asserting against the re-parsed model checks pydantic
         # against itself.
-        assert payload["seller_agent_url"] == f"https://{_AGENT_HOST}/mcp/", (
-            "seller_agent_url must be the PUBLISHED agents[] entry for the registering transport, "
-            "BYTE-FOR-BYTE — a receiver matches it against our brand.json with no canonicalization "
-            f"(security.mdx :1104 step 5); got {payload['seller_agent_url']!r}"
+        assert payload["seller_agent_url"] == f"https://{_AGENT_HOST}/mcp", (
+            "seller_agent_url must be the PUBLISHED agents[] entry for the registering transport. "
+            "A receiver canonicalizes this value and every candidate agents[].url and then requires "
+            "one equal pair (security.mdx key discovery, step 5) — and there 'a trailing slash "
+            "remains significant', so /mcp/ would name a different agent from the /mcp we publish; "
+            f"got {payload['seller_agent_url']!r}"
         )
         assert challenge.account_id == response.accounts[0].account_id, (
             "the challenge must name the account id the account is actually created with, or the "
@@ -383,7 +361,7 @@ class TestFailClosed:
     ``agents[]`` entry shares that origin and that JWKS. It is also not expressible: the
     identity a tool ``_impl`` receives carries no protocol, the transport being a label
     ``invoke_tool`` keeps for its observability record. That the emitted value really is
-    the published ``/mcp/`` entry, byte-for-byte, is graded in
+    the published ``/mcp`` entry, in that one spelling, is graded in
     :meth:`TestChallengeBodyIsConformant.test_body_carries_the_seven_required_fields`.
     """
 

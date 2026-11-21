@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING
 
-from adcp.types.generated_poc.core.business_entity import BusinessEntity
+from adcp.types.domains.core.business_entity import BusinessEntity
 from pydantic import BaseModel
 
 from src.core.schemas.notification import NotificationConfig
@@ -91,7 +91,7 @@ def serialize_governance_agents(
     agents: Iterable[BaseModel | Mapping[str, object]] | None,
 ) -> list[dict[str, object]] | None:
     """Convert GovernanceAgent models to JSON-serializable dicts for DB storage."""
-    from adcp.types.generated_poc.core.account import GovernanceAgent  # TODO: no stable alias in adcp.types
+    from adcp.types.domains.core.account import GovernanceAgent  # TODO: no stable alias in adcp.types
 
     return serialize_typed_list(agents, GovernanceAgent)
 

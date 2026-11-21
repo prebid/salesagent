@@ -50,6 +50,7 @@ def _row():
     """The persisted buy as the update path re-reads it, stamped by an EARLIER update."""
     buy = MagicMock()
     buy.media_buy_id = "mb_resolved"
+    buy.name = None
     buy.tenant_id = "test_tenant"
     buy.principal_id = "test_principal"
     buy.status = "active"

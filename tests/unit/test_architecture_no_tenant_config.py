@@ -12,6 +12,7 @@ from tests.unit._architecture_helpers import (
     find_tenant_config_violations,
     format_failure,
     parse_module,
+    rel,
     repo_root,
     src_python_files,
 )
@@ -29,12 +30,12 @@ def test_no_tenant_config_access() -> None:
     repo = repo_root()
     violations: list[str] = []
     for path in src_python_files(repo):
-        rel = str(path.relative_to(repo))
-        if "test_migration" in rel or "postmortem" in rel or "pre-commit" in rel:
+        rel_path = rel(path, repo)
+        if "test_migration" in rel_path or "postmortem" in rel_path or "pre-commit" in rel_path:
             continue
         tree = parse_module(path)
         for lineno in find_tenant_config_violations(tree):
-            violations.append(f"{rel}:{lineno}")
+            violations.append(f"{rel_path}:{lineno}")
     assert not violations, format_failure(
         summary="Use per-field columns, not tenant.config",
         violations=violations,

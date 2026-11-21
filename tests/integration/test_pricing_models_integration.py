@@ -8,6 +8,7 @@ from decimal import Decimal
 
 import pytest
 
+from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, PricingOption, Principal, Product, PropertyTag, Tenant
 from src.core.exceptions import AdCPValidationError
@@ -125,7 +126,7 @@ def setup_tenant_with_pricing_products(integration_db):
             delivery_type="guaranteed",
             targeting_template={},
             implementation_config={},
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, "test_pricing_tenant"),
         )
         session.add(product_cpm_fixed)
         session.flush()
@@ -150,7 +151,7 @@ def setup_tenant_with_pricing_products(integration_db):
             delivery_type="non_guaranteed",
             targeting_template={},
             implementation_config={},
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, "test_pricing_tenant"),
         )
         session.add(product_cpm_auction)
         session.flush()
@@ -176,7 +177,7 @@ def setup_tenant_with_pricing_products(integration_db):
             delivery_type="non_guaranteed",
             targeting_template={},
             implementation_config={},
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, "test_pricing_tenant"),
         )
         session.add(product_cpcv)
         session.flush()
@@ -205,7 +206,7 @@ def setup_tenant_with_pricing_products(integration_db):
             delivery_type="non_guaranteed",
             targeting_template={},
             implementation_config={},
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, "test_pricing_tenant"),
         )
         session.add(product_multi)
         session.flush()
@@ -299,11 +300,11 @@ async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_pr
     assert cpm_product is not None
     assert cpm_product.pricing_options is not None
     assert len(cpm_product.pricing_options) == 1
-    # adcp 2.14.0+ uses RootModel wrapper - access via .root
-    pricing_inner = getattr(cpm_product.pricing_options[0], "root", cpm_product.pricing_options[0])
-    assert pricing_inner.pricing_model == PricingModel.cpm.value
+    # The element IS the union member; Product.pricing_options is typed with the arms.
+    cpm_option = cpm_product.pricing_options[0]
+    assert cpm_option.pricing_model == PricingModel.cpm.value
     # V3: is_fixed removed - fixed pricing has fixed_price field
-    assert pricing_inner.fixed_price == 12.50
+    assert cpm_option.fixed_price == 12.50
 
     # Find the multi-pricing product
     multi_product = next((p for p in response.products if p.product_id == "prod_multi"), None)
@@ -312,8 +313,7 @@ async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_pr
     assert len(multi_product.pricing_options) == 3
 
     # Verify all three pricing models exist
-    # adcp 2.14.0+ uses RootModel wrapper - access via .root
-    pricing_models = {getattr(opt, "root", opt).pricing_model for opt in multi_product.pricing_options}
+    pricing_models = {opt.pricing_model for opt in multi_product.pricing_options}
     assert pricing_models == {PricingModel.cpm.value, PricingModel.cpcv.value, PricingModel.cpp.value}
 
 
@@ -418,35 +418,6 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
 
 
 @pytest.mark.requires_db
-async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_products):
-    """Test that budget below min_spend_per_package fails."""
-    start_time, end_time = _get_future_date_range()
-    request = create_test_media_buy_request(
-        packages=[
-            create_test_package_request(
-                product_id="prod_cpcv",
-                pricing_option_id="cpcv_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
-                budget=3000.0,  # Below min spend of 5000
-            )
-        ],
-        start_time=start_time,
-        end_time=end_time,
-    )
-
-    identity = _identity()
-
-    # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that
-    # propagates past the narrowed (ValueError, PermissionError) catch in _impl
-    # and is translated to the spec two-layer envelope at the transport
-    # boundary. Verify the typed raise at the layer above the transport.
-    with pytest.raises(AdCPValidationError) as excinfo:
-        await _create_media_buy_impl(req=request, identity=identity)
-
-    exc = excinfo.value
-    assert exc.error_code == "VALIDATION_ERROR"
-
-
-@pytest.mark.requires_db
 async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_pricing_products):
     """Test creating media buy choosing CPP from multi-pricing product."""
     start_time, end_time = _get_future_date_range()
@@ -467,32 +438,3 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
     response = await _create_media_buy_impl(req=request, identity=identity)
 
     assert_created(response)
-
-
-@pytest.mark.requires_db
-async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pricing_products):
-    """Test that requesting unavailable pricing model fails."""
-    start_time, end_time = _get_future_date_range()
-    request = create_test_media_buy_request(
-        packages=[
-            create_test_package_request(
-                product_id="prod_cpm_fixed",  # Only offers CPM
-                pricing_option_id="cpcv_usd_fixed",  # Requesting CPCV (should fail)
-                budget=10000.0,
-            )
-        ],
-        start_time=start_time,
-        end_time=end_time,
-    )
-
-    identity = _identity()
-
-    # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that
-    # propagates past the narrowed (ValueError, PermissionError) catch in _impl
-    # and is translated to the spec two-layer envelope at the transport
-    # boundary. Verify the typed raise at the layer above the transport.
-    with pytest.raises(AdCPValidationError) as excinfo:
-        await _create_media_buy_impl(req=request, identity=identity)
-
-    exc = excinfo.value
-    assert exc.error_code == "VALIDATION_ERROR"

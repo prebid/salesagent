@@ -7,8 +7,8 @@ scattering the same RootModel-unwrapping logic across multiple modules.
 import logging
 from typing import Any
 
-from adcp.types import CreativeAsset
-from adcp.types.generated_poc.creative.list_creatives_response import Creative as LibraryCreative
+from adcp.types.domains.creative.list_creatives_response import Creative as LibraryCreative
+from adcp.types.legacy import LegacyCreativeAsset as CreativeAsset
 from pydantic import TypeAdapter, ValidationError
 
 from src.core.exceptions import AdCPAdapterError
@@ -61,18 +61,22 @@ def _extract_text_from_asset_value(asset: Any) -> str | None:
 
 
 def _extract_message_from_assets(creative: CreativeAsset) -> str | None:
-    """Extract message/brief/prompt from creative assets using role priority.
+    """The generative build's prompt: the first of the prompt roles that carries text.
 
-    Checks 'message', 'brief', 'prompt' roles in priority order.
+    The roles are read in THIS order, whatever order the buyer's ``assets`` map is in:
+    'generation_prompt', then 'message', 'brief', 'prompt'. ``generation_prompt`` is the
+    asset a generative named format declares for its prompt --
+    core/canonical-projection-ref.json (v3.2.7) names it as "a generative entry whose input
+    is ``generation_prompt: text``" -- and a legacy manifest is held to its named format's
+    required assets (``_validation.py``), so a conformant generative item always carries it
+    and another prompt role beside it does not displace it.
     Falls through to inputs[0].context_description if no asset role matches.
     Returns None when no message is found.
     """
     if creative.assets:
-        for role, asset in creative.assets.items():
-            if role in ["message", "brief", "prompt"]:
-                text = _extract_text_from_asset_value(asset)
-                if text:
-                    return text
+        for role in ("generation_prompt", "message", "brief", "prompt"):
+            if text := _extract_text_from_asset_value(creative.assets.get(role)):
+                return text
 
     if creative.inputs:
         inputs = creative.inputs or []
@@ -144,6 +148,15 @@ def _build_creative_data(creative: CreativeAsset, url: str | None) -> dict[str, 
     }
     if creative.assets:
         data["assets"] = creative.assets
+    # Whether ``assets`` on this row is the BUYER's submission or the creative agent's
+    # output. The generative branches overwrite ``data["assets"]`` only when the buyer
+    # provided none, so the two are indistinguishable in the row once written -- and change
+    # detection has to tell them apart. It compares an asset map the buyer submitted and
+    # must not compare one the seller derived, which is re-derived on every sync and would
+    # make ``unchanged`` unreachable. Recording the one bit at the point where it is still
+    # known is what lets a buyer EMPTYING their assets be reported as a change while a
+    # resync that never submitted any stays ``unchanged``.
+    data["assets_are_buyer_submitted"] = bool(creative.assets)
     snippet = getattr(creative, "snippet", None)
     if snippet:
         data["snippet"] = snippet
@@ -156,4 +169,9 @@ def _build_creative_data(creative: CreativeAsset, url: str | None) -> dict[str, 
     provenance = getattr(creative, "provenance", None)
     if provenance is not None:
         data["provenance"] = provenance
+    # The selection lineage the buyer sent, kept whole: list_creatives "returns the exact
+    # current selection lineage while that execution remains current" (sync_creatives.mdx,
+    # v3.2.7), and an upsert that carries none replaces the execution, so its lineage goes.
+    if creative.representation_selection is not None:
+        data["representation_selection"] = creative.representation_selection
     return data

@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>format_kind as the canonical identity — full analysis</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1d21; --muted: #5c6670; --accent: #0b5fff;
+    --border: #d8dee4; --code-bg: #f3f5f7; --head-bg: #f7f9fb;
+    --exec: #0a7a3d; --read: #8a5a00; --warn: #b42318; --dec: #7a2ea0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #15181b; --fg: #e4e8ec; --muted: #9aa4ae; --accent: #6ea8ff;
+      --border: #333a41; --code-bg: #21262b; --head-bg: #1b2025;
+      --exec: #4cc38a; --read: #e0b45c; --warn: #f97066; --dec: #c98aec; }
+  }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif;
+    max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 6rem; }
+  h1 { font-size: 1.6rem; margin-bottom: .2rem; }
+  h2 { font-size: 1.25rem; margin-top: 2.6rem; border-bottom: 2px solid var(--border); padding-bottom: .3rem; }
+  h3 { font-size: 1.05rem; margin-top: 1.8rem; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .86em; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; }
+  pre { background: var(--code-bg); padding: .8rem 1rem; border-radius: 8px; overflow-x: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92em; }
+  th, td { border: 1px solid var(--border); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--head-bg); }
+  .meta { color: var(--muted); font-size: .92em; margin-bottom: 1.4rem; }
+  .tag { display: inline-block; font-size: .72em; font-weight: 700; padding: .05em .45em; border-radius: 4px;
+    border: 1px solid currentColor; vertical-align: middle; margin-right: .25em; }
+  .exec { color: var(--exec); } .read { color: var(--read); }
+  .warn { color: var(--warn); font-weight: 600; }
+  .dec { color: var(--dec); font-weight: 600; }
+  .mech { color: var(--exec); font-weight: 600; }
+  blockquote { border-left: 3px solid var(--accent); margin: 1rem 0; padding: .3rem 1rem; color: var(--muted); }
+  .box { border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 6px;
+    padding: .8rem 1rem; margin: 1rem 0; background: var(--head-bg); }
+  .toc { columns: 2; font-size: .92em; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .small { font-size: .85em; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1><code>format_kind</code> as the canonical identity — full analysis</h1>
+<p class="meta">
+  Analysis only; no production code changed (<code>git diff --stat src/</code> empty at finish).
+  Worktree <code>sa-fkan</code>, branch <code>analysis/format-kind-canonical</code>, HEAD <code>7187926a0</code>
+  (the two prior P0 fixes at <code>eb3f5a746</code> are ancestors — verified by <code>git merge-base --is-ancestor</code>, <span class="tag exec">EXEC</span>).
+  Pin: AdCP spec <strong>3.2.1</strong> via <code>adcp==9.0.0b1+prs1435.1415.1456</code> (<code>pyproject.toml:10</code>).
+  Ticket: salesagent-8qela.3. Date: 2026-10-09.
+</p>
+
+<div class="box">
+<strong>Evidence marking.</strong> Every claim carries
+<span class="tag exec">EXEC</span> (ran in this worktree — a probe through the venv, a <code>git grep</code>, a pinned-schema read through code) or
+<span class="tag read">READ</span> (read the source or a fetched document). Code cites <code>file:line</code> at HEAD <code>7187926a0</code>;
+obligations cite the pinned JSON file or the upstream <code>.mdx</code> (fetched verbatim via <code>gh api … | base64 -d</code>).
+Inventory rows additionally carry <span class="mech">MECHANICAL</span> (the change is a substitution with no open question) or
+<span class="dec">DECISION</span> (a product/design choice must be made first, named in the row).
+</div>
+
+<div class="box">
+<strong>The premise (settled; not re-litigated here).</strong>
+<code>format_kind</code> is THE canonical identifier. <code>format_id</code> cannot be derived from
+<code>format_kind</code> — the mapping does not run that way. The seller therefore ACCEPTS BOTH and RECORDS BOTH,
+and OPERATES ON <code>format_kind</code> everywhere else: acceptance and recording are the only places
+<code>format_id</code> survives as an input; every internal comparison, lookup, filter and persistence decision keys
+on <code>format_kind</code>.
+<br><br>
+One reading note the analysis depends on, because the spec text uses "derive" in the other direction too:
+the migration doc's compatibility projection ("<em>An implementation serving older 3.x peers may derive named formats
+from canonical declarations. Keep the projection one-way</em>", canonical-formats-migration.mdx § Compatibility projection)
+is a <em>lookup of asserted</em> <code>v1_format_ref[]</code> entries riding inside an authored declaration — never a synthesis
+from the kind string. <span class="tag exec">EXEC</span>: at our pin,
+<code>adcp.canonical_formats.project_declaration_to_v1</code> on a declaration carrying
+<code>v1_format_ref</code> returns exactly those references; on a <code>canonical_formats_only: true</code> declaration it
+returns <code>[]</code>. So the premise and the spec agree: a <code>format_id</code> only ever exists because somebody
+<em>asserted</em> it (a buyer on a creative, a seller inside a declaration), and the seller records assertions and
+operates on kinds.
+</div>
+
+<h2 id="toc">Contents</h2>
+<ul class="toc">
+  <li><a href="#summary">0. Summary — where this seller already is</a></li>
+  <li><a href="#state">1. Current state of both identifiers</a></li>
+  <li><a href="#inventory">2. The inventory: every site keyed on format_id</a></li>
+  <li><a href="#boundary">3. The accept-both / record-both boundary</a></li>
+  <li><a href="#persistence">4. Persistence and migration</a></li>
+  <li><a href="#pin">5. What the pin requires, per surface</a></li>
+  <li><a href="#grading">6. What is graded, what is not</a></li>
+  <li><a href="#plan">7. The staged plan</a></li>
+  <li><a href="#risks">8. Risks that would bite</a></li>
+  <li><a href="#priorart">9. Prior art: the three SDK PRs</a></li>
+  <li><a href="#notclaimed">10. Deliberately not claimed</a></li>
+</ul>
+
+<h2 id="summary">0. Summary — where this seller already is</h2>
+
+<p>The surprising finding first: <strong>the creative identity subsystem is already designed on exactly this premise, at
+the type and persistence layers — and no business logic consumes it yet.</strong></p>
+
+<ul>
+<li><span class="tag read">READ</span> <code>CreativeFormatIdentity</code> (src/core/schemas/_base.py:604) documents
+  <code>kind</code> as "THE identity — what logic keys on and what is compared"; the <code>Creative</code> ORM model
+  (src/core/database/models.py:959-983) documents <code>format_kind</code> as "the identity every layer shares" and the
+  deprecated <code>format_id</code> as "a RETAINED BUYER ASSERTION: stored verbatim, echoed to a legacy peer, never what
+  business logic keys on". Four columns (<code>format_kind</code>, <code>format_option_ref</code>,
+  <code>legacy_format_id</code>, <code>legacy_format_key</code>) already record both arms, written by one mapping
+  (src/core/database/repositories/creative.py:62-67) and read by one reader (<code>from_row</code>, _base.py:665-688).</li>
+<li><span class="tag exec">EXEC</span> But <strong>zero comparisons key on the kind today</strong>:
+  <code>git grep</code> for comparisons on <code>identity.kind</code> / <code>.kind ==</code> across <code>src/</code>
+  finds the persistence write (repositories/creative.py:62), the vocabulary membership check
+  (_base.py:811-816), and the wire-arm chooser (<code>wire_format_kind</code>, _base.py:700) — and nothing else.
+  Every comparison, filter, and gate in the seller keys on <code>FormatKey</code> (the canonicalized legacy
+  (agent_url, id) pair) or on bare id strings. The documented design and the operating reality have not met.</li>
+<li><span class="tag read">READ</span> The product side is still inverted (the audit's F4): <code>products.format_ids</code>
+  is the authored, <code>NOT NULL</code> catalog (models.py:385) and <code>format_options</code> is an opaque nullable
+  document nothing authors or derives (models.py:395, product_conversion.py:417-427). A canonical-only product cannot
+  be served (product_conversion.py:408-414 raises on empty <code>effective_format_ids</code>).</li>
+<li><span class="tag exec">EXEC</span> The pin already ships the machinery this stream needs, verified by execution in
+  this worktree's venv: <code>adcp.canonical_formats</code> carries
+  <code>validate_format_kind_in_options</code> / <code>FormatKindNotInClosedSetError</code> (the per-product closed set),
+  <code>project_declaration_to_v1</code> / <code>project_product_to_v1</code> (the compat projection with advisories),
+  and <code>project_v1_format_to_declaration</code> / <code>project_v1_catalog_to_v2</code> (the normative v1→v2 order).
+  <code>adcp.types.ProductFormatDeclaration</code> is a class at this pin. The local seam for the projection already
+  exists too: <code>canonical_kind_for</code> (src/core/format_resolver.py:110-172) runs the two implementable normative
+  steps and fails closed.</li>
+<li><span class="tag exec">EXEC</span> The buyer-side canonical inputs are all <em>accepted and echoed, never operated on</em>:
+  <code>PackageRequest</code> inherits <code>format_ids</code>, <code>format_option_refs</code>, <code>format_kind</code>;
+  <code>Package.echoing</code> carries <code>format_kind</code> and <code>format_option_refs</code> onto the response
+  (probed end to end through the local models); <code>ProductFilters</code> inherits <code>format_kinds</code> and
+  <code>format_option_refs</code>; <code>CreativeFilters</code> inherits <code>format_kinds</code>. A
+  <code>git grep</code> for readers of <code>format_option_refs</code>, <code>\.format_kind</code> on packages,
+  <code>formats_to_provide</code>, <code>formats_pending</code>, or <code>format_kinds</code> across <code>src/</code>
+  returns zero operating sites.</li>
+</ul>
+
+<p><strong>So the work is not "introduce format_kind" — it is (a) finish the one entity where the identity exists but is
+unread, (b) invert the product catalog so declarations exist to key against, and (c) replace every FormatKey-keyed
+gate and filter with kind/declaration-keyed ones, keeping FormatKey only inside the accept/record seams.</strong>
+Section 2 enumerates every site; section 7 orders the work.</p>
+
+<h2 id="state">1. Current state of both identifiers</h2>
+
+<h3>1.1 Where each ENTERS the system</h3>
+<table>
+<tr><th>Surface</th><th>Legacy arm (<code>format_id</code>/<code>format_ids</code>)</th><th>Canonical arm (<code>format_kind</code>/<code>format_option_*</code>)</th><th>Declared vs read</th></tr>
+<tr><td><code>sync_creatives</code></td>
+  <td><code>CreativeAssetRequest.format_id</code> (redeclared optional to make the XOR expressible, src/core/schemas/creative.py:186-195)</td>
+  <td><code>format_kind</code> + <code>format_option_ref</code> (same model; XOR enforced by the <code>mode="before"</code> validator at creative.py:197-238)</td>
+  <td>Both READ: the sync gate carries whichever arm arrived (src/core/tools/creatives/_validation.py:74-81) and
+      <code>creative_identity_of</code> projects the legacy arm (format_resolver.py:173-203). <span class="tag read">READ</span></td></tr>
+<tr><td><code>list_creatives</code></td>
+  <td><code>filters.format_ids</code> — read at src/core/tools/creatives/listing.py:411-412, keyed through <code>format_id_identity</code></td>
+  <td><code>filters.format_kinds</code> — <strong>declared (inherited from <code>core/creative-filters.json</code>), read nowhere</strong></td>
+  <td><span class="tag exec">EXEC</span> <code>CreativeFilters.model_fields</code> carries both; <code>git grep format_kinds src/</code> finds zero readers.</td></tr>
+<tr><td><code>get_products</code></td>
+  <td><code>filters.format_ids</code> — read at src/core/tools/products.py:535-549 (pair-identity since <code>eb3f5a746</code>); <code>filters.standard_formats_only</code> — read at :553-571 via an id-prefix heuristic</td>
+  <td><code>filters.format_kinds</code>, <code>filters.format_option_refs</code> — <strong>declared, read nowhere</strong></td>
+  <td><span class="tag exec">EXEC</span> <code>ProductFilters.model_fields</code> =
+      <code>['format_ids','format_kinds','format_option_refs','standard_formats_only']</code>; only the two legacy ones have readers.</td></tr>
+<tr><td><code>list_creative_formats</code></td>
+  <td><code>format_ids</code>, <code>output_format_ids</code>, <code>input_format_ids</code> — read, pair-identity (src/core/tools/creative_formats.py:261-272, 409-425)</td>
+  <td>None — the pinned request declares no kind filter, consistent with the task being the deprecated surface</td>
+  <td><span class="tag read">READ</span> This surface is <em>supposed</em> to stay legacy-shaped.</td></tr>
+<tr><td><code>create_media_buy</code></td>
+  <td><code>packages[].format_ids</code> — read at src/core/tools/media_buy_create.py:3199-3331 (selection + subset gate) and validated at :1775-1885</td>
+  <td><code>packages[].format_kind</code>, <code>packages[].format_option_refs</code> —
+      <strong>declared, echoed by <code>Package.echoing</code>, operated on nowhere</strong></td>
+  <td><span class="tag exec">EXEC</span> echo probed through the local models; zero operating reads by <code>git grep</code>. (Known upstream as #1789.)</td></tr>
+<tr><td><code>update_media_buy</code></td>
+  <td>Creative-assignment gate keys on product <code>format_ids</code> (src/core/tools/media_buy_update.py:333-355)</td>
+  <td>Nothing canonical read</td>
+  <td><span class="tag read">READ</span></td></tr>
+<tr><td>Admin UI (authoring)</td>
+  <td>Product add/edit author <code>format_ids</code> (src/admin/blueprints/products.py:959, :1462); inventory profiles author <code>format_ids</code> (src/admin/blueprints/inventory_profiles.py:334, :421); tenant config authors <code>auto_approve_format_ids</code> (bare id strings, models.py:96)</td>
+  <td><strong>Nothing.</strong> <code>git grep format_options src/admin/</code> is empty <span class="tag exec">EXEC</span></td>
+  <td>The authoring surface is 100% legacy.</td></tr>
+<tr><td>Setup scripts / factories</td>
+  <td>scripts/setup/*.py seed <code>format_ids</code> and <code>auto_approve_format_ids</code>; <code>ProductFactory</code> seeds <code>format_ids</code></td>
+  <td><code>CreativeFactory</code> can seed the canonical arm since <code>eb3f5a746</code> (tests/factories/creative.py:67-70, 158-172); <strong>no factory seeds <code>format_options</code> on a product</strong></td>
+  <td><span class="tag read">READ</span></td></tr>
+</table>
+
+<h3>1.2 Where each is STORED</h3>
+<table>
+<tr><th>Table / column</th><th>Arm</th><th>Notes</th></tr>
+<tr><td><code>creatives.format_kind</code> (String, nullable), <code>creatives.format_option_ref</code> (JSON)</td><td>canonical</td>
+  <td>Nullable because a legacy reference only has a kind once something projects it; fail-closed is step 6 of the normative order (models.py:964-983). <span class="tag read">READ</span></td></tr>
+<tr><td><code>creatives.legacy_format_id</code> (JSON, verbatim), <code>creatives.legacy_format_key</code> (String, indexed, canonical pair)</td><td>legacy</td>
+  <td>Two columns because echo must be verbatim while comparison must canonicalize (repositories/creative.py:54-67). The already-correct record-both shape. <span class="tag read">READ</span></td></tr>
+<tr><td><code>products.format_ids</code> (JSON, <strong>NOT NULL</strong>, CHECK-constrained shape)</td><td>legacy</td>
+  <td>The authored catalog — the inversion. models.py:385. <span class="tag read">READ</span></td></tr>
+<tr><td><code>products.format_options</code> (JSON, nullable)</td><td>canonical</td>
+  <td>Stored as the document it is; nothing authors or derives it; the wire validates it into <code>ProductFormatDeclaration1..16</code> (models.py:386-395, product_conversion.py:417-427). <span class="tag read">READ</span></td></tr>
+<tr><td><code>inventory_profiles.format_ids</code> (JSON, NOT NULL)</td><td>legacy</td>
+  <td>A SECOND authored legacy catalog: <code>Product.effective_format_ids</code> prefers the profile's (models.py:505-515). No canonical sibling exists. <span class="tag read">READ</span></td></tr>
+<tr><td><code>tenants.auto_approve_format_ids</code> (JSON list of bare id strings)</td><td>legacy (id-only!)</td>
+  <td>An approval decision keyed on the weakest possible spelling — not even the (agent_url, id) pair. models.py:96; read via tenant_context.py:140 and mock_creative_engine.py:17-29. <span class="tag read">READ</span></td></tr>
+<tr><td><code>media_packages.package_config</code> (JSON document)</td><td>legacy inside the document</td>
+  <td>The package document (incl. <code>format_ids</code>) stored whole; <code>_assignments.py</code> reads <code>product_id</code> out of it. No <code>formats_to_provide</code> snapshots are ever written. models.py:1692-1729. <span class="tag read">READ</span></td></tr>
+<tr><td>No <code>creative_formats</code> table</td><td>—</td>
+  <td>Format declarations are fetched from creative agents over AdCP, never stored locally (models.py:364). <span class="tag exec">EXEC</span> (grep)</td></tr>
+</table>
+
+<h3>1.3 Where each is COMPARED (the operating sites — expanded in §2)</h3>
+<p><span class="tag exec">EXEC</span> All of the following key on <code>FormatKey</code> (the canonicalized legacy pair)
+or a bare id string; none keys on <code>format_kind</code>:
+the two create-side creative-vs-product gates (media_buy_create.py:461-508, :3689-3706),
+the update-side gate (media_buy_update.py:333-355),
+the assignment gate (creatives/_assignments.py:254-270),
+the package format-subset gate and dimension merge (media_buy_create.py:3219-3298),
+the repository creative filter (repositories/creative.py:212-221),
+the products filter (products.py:535-549) and the standard-formats prefix heuristic (:553-571),
+the <code>list_creative_formats</code> filters (creative_formats.py:261-272, 409-425),
+the admin product-format validation (admin/blueprints/products.py:779-783, :1385-1389),
+the mock engine auto-approve (mock_creative_engine.py:28-29),
+and the sync-side approval/preview branches (<code>_processing.py:293</code> onward, which branch on the legacy arm's <em>presence</em>).</p>
+
+<h3>1.4 Where each is EMITTED</h3>
+<table>
+<tr><th>Surface</th><th>What goes out</th><th>Site</th></tr>
+<tr><td><code>get_products</code></td><td><code>format_ids</code> always (authored); <code>format_options</code> when stored (validated into the 16-branch union on the way out)</td><td>product_conversion.py:406-427 <span class="tag read">READ</span></td></tr>
+<tr><td><code>list_creatives</code></td><td>Exactly one arm, mirroring the input: <code>wire_format_kind</code> is <code>None</code> whenever a retained assertion exists (_base.py:700-712); <code>format_option_ref</code> emitted from the stored document (listing.py:618-622)</td><td><span class="tag read">READ</span>; round-trip graded since <code>eb3f5a746</code> (§6)</td></tr>
+<tr><td><code>create_media_buy</code> response</td><td><code>format_ids_to_provide=package.format_ids</code> — the DEPRECATED legacy projection, with the canonical <code>formats_to_provide</code> never emitted</td><td>media_buy_create.py:3932 <span class="tag read">READ</span>; <code>git grep formats_to_provide src/</code> empty <span class="tag exec">EXEC</span></td></tr>
+<tr><td>Package echo</td><td><code>format_ids</code>, <code>format_kind</code>, <code>format_option_refs</code> echoed verbatim per the pin's SHOULD</td><td><code>Package.echoing</code> + SELLER_DECIDED (_base.py:2694-2716) <span class="tag exec">EXEC</span> (probed)</td></tr>
+<tr><td>Operator/workflow surfaces</td><td>Approval-workflow and failure dicts carry <code>"format": creative.format_id</code> (None for a canonical creative); Slack/display label prefers the asserted id (<code>CreativeFormatIdentity.label</code>)</td><td>_sync.py:270, :287, :323, :337; _base.py:714-760 <span class="tag read">READ</span></td></tr>
+<tr><td>Delivery</td><td><code>CreativeDeliveryData.format_id</code> (dict | None)</td><td>src/core/schemas/delivery.py:402 <span class="tag read">READ</span></td></tr>
+<tr><td>Adapters outbound</td><td>GAM placeholders sized from <code>format_ids</code> (attributes, then a dimension regex over the id string); Xandr maps id→type strings; mock engine decides approval by id substring</td><td>gam/managers/orders.py:457-604; xandr.py:744-754; mock_creative_engine.py:50-56 <span class="tag read">READ</span></td></tr>
+</table>
+
+<h2 id="inventory">2. The inventory: every site that operates on <code>format_id</code> today and would key on <code>format_kind</code></h2>
+
+<p>Grouped by subsystem. "What it becomes" is written against the premise plus the pinned matching rules
+(formats.mdx § Matching and satisfaction — dimensions exact, ranges contained, slots present, publisher claim both
+halves, <em>kind equality alone insufficient</em>). One consequence of that last rule, stated once so every row can
+rely on it: <strong>"keys on <code>format_kind</code>" operationally means "keys on the resolved declaration" —
+a (<code>format_kind</code>, <code>format_option_id</code>, <code>params</code>) triple — with the bare kind as the
+discriminator that selects candidate declarations.</strong> <code>CreativeFormatIdentity</code> already has that shape
+(<code>kind</code> + <code>option</code>); what is missing everywhere is the declaration to resolve against, which is
+why Group A is the root of the ordering in §7.</p>
+
+<h3>Group A — the product catalog (the inversion; everything else keys against this)</h3>
+<table>
+<tr><th>#</th><th>Site</th><th>What it does today</th><th>What it becomes</th><th>Class</th></tr>
+<tr><td>A1</td><td>models.py:385 (<code>products.format_ids</code> NOT NULL); :395 (<code>format_options</code> nullable)</td>
+  <td>Legacy catalog mandatory, canonical optional</td>
+  <td>Neither NOT NULL; model/repo enforces the pin's root <code>anyOf</code> ("format_ids, format_options, or both"). Migration in §4.</td>
+  <td><span class="mech">MECHANICAL</span> (DDL) + <span class="dec">DECISION</span> (where the anyOf is enforced — precedent at models.py:380 says in code, not DDL)</td></tr>
+<tr><td>A2</td><td>product_conversion.py:408-414</td>
+  <td>Raises when <code>effective_format_ids</code> is empty — a canonical-only product is unservable (audit S2)</td>
+  <td>Requires at least one of the two catalogs; serves the canonical-only shape</td>
+  <td><span class="mech">MECHANICAL</span> once A1 lands</td></tr>
+<tr><td>A3</td><td>product_conversion.py:417-427</td>
+  <td>Carries stored <code>format_options</code> opaquely; never derives <code>format_ids</code></td>
+  <td>For a canonically-authored product, <code>format_ids</code> becomes the DERIVED projection:
+      <code>adcp.canonical_formats.project_product_to_v1</code> (a lookup of each declaration's asserted
+      <code>v1_format_ref[]</code> — <span class="tag exec">EXEC</span>, probed; empty for <code>canonical_formats_only</code>),
+      with the projection's advisories carried as non-fatal <code>errors[]</code> (E1)</td>
+  <td><span class="dec">DECISION</span>: derive at read time vs stamp a derived column; and whether dual-<em>authored</em> products are refused or advised (<code>FORMAT_DECLARATION_DIVERGENT</code>) — the pin says "When both fields are present they MUST describe the same underlying formats" (core/product.json <code>format_ids</code> description)</td></tr>
+<tr><td>A4</td><td>admin/blueprints/products.py:751-783, :959 (add); :1356-1389, :1462 (edit); templates/add_product_gam.html etc.</td>
+  <td>Operators author <code>format_ids</code>, validated bare-id against agent catalogs (<code>{fmt.format_id.id …}</code> at :779, :1385 — still the id-alone over-match the audit called violation 2)</td>
+  <td>Operators author <code>format_options</code> (kind + params + option_id, optional <code>v1_format_ref</code>); <code>format_ids</code> becomes a read-only derived display. The bare-id validation disappears with the surface</td>
+  <td><span class="dec">DECISION</span> — the largest UX chunk; needs its own design (declaration editor). Interim: fix the bare-id validation through <code>format_id_identity</code> independently</td></tr>
+<tr><td>A5</td><td>models.py:505-515 (<code>effective_format_ids</code>), inventory_profiles.py:334, :421, :661-720</td>
+  <td>Profiles are a second authored legacy catalog that overrides the product's</td>
+  <td>Either profiles gain <code>format_options</code> and <code>effective_format_options</code> mirrors the override, or profiles stop carrying formats. Everything that calls <code>effective_format_ids</code> follows the choice</td>
+  <td><span class="dec">DECISION</span></td></tr>
+<tr><td>A6</td><td>services/gam_product_config_service.py:78-119; services/dynamic_pricing_service.py:94-115; services/gam_inventory_service.py:1246-1251</td>
+  <td>Derive creative dimensions by parsing the id string (<code>"display_300x250"</code> → 300×250) or a hand table</td>
+  <td>Read <code>params.width/height</code> off the product's resolved declarations; id-parsing survives only as the legacy-product fallback</td>
+  <td><span class="mech">MECHANICAL</span> once declarations exist; fallback retained for legacy rows</td></tr>
+<tr><td>A7</td><td>services/ai/agents/ranking_agent.py:91; services/dynamic_products.py:309</td>
+  <td>Serialize <code>format_ids</code> strings into prompts/templates</td>
+  <td>Kinds + params (a declaration is strictly more informative for ranking)</td>
+  <td><span class="mech">MECHANICAL</span></td></tr>
+</table>
+
+<h3>Group B — <code>get_products</code> read side</h3>
+<table>
+<tr><th>#</th><th>Site</th><th>What it does today</th><th>What it becomes</th><th>Class</th></tr>
+<tr><td>B1</td><td>products.py:535-549</td>
+  <td><code>filters.format_ids</code>: pair-identity intersection against the product's <em>authored</em> <code>format_ids</code> (correct since <code>eb3f5a746</code>)</td>
+  <td>Code unchanged in form; the data under it becomes the derived projection (A3). A legacy filter is legacy-to-legacy against asserted refs — never projected to a kind and matched on kind, which would over-match (formats.mdx: kind equality proves nothing)</td>
+  <td><span class="mech">MECHANICAL</span> (no change at the site; semantics follow A3)</td></tr>
+<tr><td>B2</td><td>products.py:553-571</td>
+  <td><code>standard_formats_only</code> decided by id-prefix: <code>startswith(("display_","video_","audio_","native_"))</code></td>
+  <td>Keys on the declaration: the pinned filter says "IAB standard formats" (core/product-filters.json) — the natural reading under the canonical model is <code>format_kind != "custom"</code> on every declared option, but the pin nowhere defines "standard" in canonical terms</td>
+  <td><span class="dec">DECISION</span> — needs a spec reading recorded in the PR (the prefix heuristic is unfounded either way)</td></tr>
+<tr><td>B3</td><td>products.py — no site</td>
+  <td><code>filters.format_kinds</code> accepted and silently ignored (audit P1)</td>
+  <td>NEW reader: product matches when any declared option's <code>format_kind</code> is in the filter set (and, for a legacy-only product, when any projected kind via <code>canonical_kind_for</code> matches — <span class="dec">DECISION</span>: whether legacy-only products participate in a canonical filter or are excluded)</td>
+  <td><span class="dec">DECISION</span> on the legacy-product half; the canonical half is <span class="mech">MECHANICAL</span></td></tr>
+<tr><td>B4</td><td>products.py — no site</td>
+  <td><code>filters.format_option_refs</code> accepted and silently ignored</td>
+  <td>NEW reader: <code>FormatOptionIdentity</code> set membership against the product's declared options (the identity type and its one document reader already exist, _base.py:519-593)</td>
+  <td><span class="mech">MECHANICAL</span> once A-group data exists</td></tr>
+</table>
+
+<h3>Group C — media buy (selection, satisfaction, emission)</h3>
+<table>
+<tr><th>#</th><th>Site</th><th>What it does today</th><th>What it becomes</th><th>Class</th></tr>
+<tr><td>C1</td><td>media_buy_create.py:461-508 (pre-validation gate)</td>
+  <td><code>dict[str, FormatKey]</code> per creative vs <code>set[FormatKey]</code> per product; a canonical creative (no legacy key) is UNCONSTRAINED — the comment at :458-460 says so explicitly, "until products carry <code>format_options[]</code>"</td>
+  <td>One satisfaction call per (creative identity, product declarations): kind selects candidate declarations, <code>format_option_ref</code> routes exactly, params grade per formats.mdx; the legacy lane (FormatKey vs declaration's <code>v1_format_ref</code> keys, or vs legacy catalog) remains for legacy pairs</td>
+  <td><span class="dec">DECISION</span> once: the satisfaction function's contract (shared by C2, C4, C5, C6, D-group). After that, each site is <span class="mech">MECHANICAL</span></td></tr>
+<tr><td>C2</td><td>media_buy_create.py:3689-3706 (second gate) + helpers/creative_helpers.py:149-201 (<code>validate_creative_format_against_product</code>)</td>
+  <td>Same comparison, second spelling; canonical creative skipped (<code>if stored_identity.assertion is None: continue</code>)</td>
+  <td>The same one satisfaction function. The two create-side gates existing separately is itself debt the change should collapse (DRY)</td>
+  <td><span class="mech">MECHANICAL</span> after C1's contract</td></tr>
+<tr><td>C3</td><td>media_buy_create.py:3199-3331 (package format selection); :3219-3245 (request ⊆ product subset gate); :3247-3298 (dimension merge over <code>FormatKey</code>)</td>
+  <td>Reads ONLY <code>matching_package.format_ids</code>; subset test over FormatKey sets; merges width/height from the product's legacy entries</td>
+  <td>Resolve ALL THREE selectors the pin declares on a package (<code>format_kind</code>, <code>format_option_refs</code>, legacy <code>format_ids</code>) against the product's declarations: M2 (ref required when multiple same-kind options), <code>CONFLICTING_SELECTORS</code> on disagreeing dual emission, <code>UNSUPPORTED_FEATURE</code> on an unprojectable legacy route (storyboard steps, §6). Dimension merge reads the selected declaration's <code>params</code></td>
+  <td><span class="dec">DECISION</span>: the selector-resolution order and refusal matrix — this is the storyboard's subject and must be designed against its 17 steps, not ad hoc</td></tr>
+<tr><td>C4</td><td>media_buy_update.py:333-355 (assignment gate)</td>
+  <td>FormatKey membership; a canonical creative is REFUSED (<code>creative_identity is None or …</code> → incompatible)</td>
+  <td>The one satisfaction function</td>
+  <td><span class="mech">MECHANICAL</span> after C1 — and note the divergence it fixes (§8 risk 4)</td></tr>
+<tr><td>C5</td><td>creatives/_assignments.py:254-270</td>
+  <td>FormatKey membership; a canonical creative is REFUSED (<code>None in supported_formats</code> → False)</td>
+  <td>The one satisfaction function</td>
+  <td><span class="mech">MECHANICAL</span> after C1</td></tr>
+<tr><td>C6</td><td>media_buy_create.py:1775-1885 (<code>_validate_and_convert_format_ids</code>)</td>
+  <td>ACCEPT-side validation of the legacy selector: agent registered, format exists on the agent</td>
+  <td>Stays — this IS the accept seam for the legacy arm. Gains the projection step (record the kind each accepted reference projects to, or mark it unprojectable) so downstream operates on kinds</td>
+  <td><span class="mech">MECHANICAL</span></td></tr>
+<tr><td>C7</td><td>media_buy_create.py:3932 (<code>format_ids_to_provide=package.format_ids</code>); :3572</td>
+  <td>Emits ONLY the deprecated legacy projection; never <code>formats_to_provide</code></td>
+  <td>Emit <code>formats_to_provide</code> (PackageFormatSnapshot of each selected declaration — pinned <code>required: ["format_kind","params"]</code>, allOf over product-format-declaration.json <span class="tag exec">EXEC</span>) and keep <code>format_ids_to_provide</code> as the derived legacy projection; persist the snapshots in <code>package_config</code> ("the live Product is never substituted for the package snapshot" — core/package.json)</td>
+  <td><span class="dec">DECISION</span>: snapshot persistence shape; emission itself is <span class="mech">MECHANICAL</span> after C3 selects a declaration</td></tr>
+<tr><td>C8</td><td>media_buy_create.py:1086-1139, :3064-3065, :2915 (approval/HITL paths building packages from product <code>format_ids</code>)</td>
+  <td>Rebuild <code>FormatId</code> lists from the product's legacy column for resumed/approved buys</td>
+  <td>Carry the selected declarations (the C7 snapshot) instead of re-deriving legacy lists</td>
+  <td><span class="mech">MECHANICAL</span> after C7</td></tr>
+</table>
+
+<h3>Group D — creatives (sync, listing, approval)</h3>
+<table>
+<tr><th>#</th><th>Site</th><th>What it does today</th><th>What it becomes</th><th>Class</th></tr>
+<tr><td>D1</td><td>_processing.py:293-294 (update path), :703 (create path): <code>creative_format = creative.format_id; if creative_format:</code></td>
+  <td>The approval-mode machinery (auto-approve / ai-powered / require-human) and the preview/validation call run ONLY when the legacy arm is present — a canonical creative silently bypasses approval-mode selection and external validation</td>
+  <td>Branch on the IDENTITY (<code>creative_identity_of(creative)</code>), not on the legacy arm's presence; approval policy applies to every creative</td>
+  <td><span class="dec">DECISION</span>: what external validation a canonical creative gets (M3 — resolve the option ref, slots, dims) and which agent is asked, since a canonical creative names no <code>agent_url</code>. Flagging the bypass itself is independent of that</td></tr>
+<tr><td>D2</td><td>_processing.py:469-510 and :823-860 (preview manifests: <code>{"format_id": format_id_str, …}</code>)</td>
+  <td>Builds legacy-shaped manifests for <code>preview_creative</code>, keyed on the bare id string</td>
+  <td>Canonical manifests (<code>format_kind</code> + <code>format_option_ref</code> + assets) per creative-manifests.mdx; legacy shape only for a legacy creative during the window</td>
+  <td><span class="mech">MECHANICAL</span> in shape; depends on D1's decision for the canonical lane</td></tr>
+<tr><td>D3</td><td>listing.py:407-412, :463 → repositories/creative.py:158-221 (<code>legacy_format_key IN</code> filter)</td>
+  <td><code>filters.format_ids</code> keyed on the indexed legacy column (correct as the legacy lane)</td>
+  <td>Stays as the legacy lane; NEW sibling: <code>filters.format_kinds</code> → <code>Creative.format_kind IN</code> (column exists, unindexed — index decision in §4)</td>
+  <td><span class="mech">MECHANICAL</span></td></tr>
+<tr><td>D4</td><td>mock_creative_engine.py:17-56 (<code>auto_approve_format_ids</code>, video inference by id substring); tenants.<code>auto_approve_format_ids</code>; tenant_context.py:45, :140, :161-166; json_validators.py:84; setup scripts</td>
+  <td>Approval auto-grant keyed on BARE id strings; sub-format inference by substring</td>
+  <td>Policy keys on kinds (e.g. <code>auto_approve_format_kinds</code>), or the legacy column is kept as a legacy-only convenience and a canonical creative is never auto-approved by it</td>
+  <td><span class="dec">DECISION</span> — a tenant-visible config surface; renaming it is an operator-facing change</td></tr>
+<tr><td>D5</td><td>_sync.py:270, :287, :323, :337 (workflow/failure dicts <code>"format": creative.format_id</code>)</td>
+  <td>Operator payloads carry <code>None</code> for a canonical creative</td>
+  <td><code>identity.label</code> (the display accessor that already prefers the most informative spelling)</td>
+  <td><span class="mech">MECHANICAL</span></td></tr>
+<tr><td>D6</td><td>_validation.py:120-186</td>
+  <td>The sync gate: identity read (both arms), vocabulary check, and for the legacy arm an agent-existence walk. Already the correct accept seam</td>
+  <td>Gains the seller-owned vocabulary (V1: thread a real input into <code>supported_kinds</code> — today the pin's 16 is the ceiling, _base.py:783-795) and, per D1's decision, the canonical validation steps</td>
+  <td><span class="dec">DECISION</span> (the vocabulary's real input: tenant column vs AdapterConfig)</td></tr>
+<tr><td>D7</td><td>delivery.py:402; GAM/mock delivery paths</td>
+  <td><code>CreativeDeliveryData.format_id</code> optional dict</td>
+  <td>Carries the identity's wire arm (kind for canonical creatives) — low-stakes, follows the listing precedent</td>
+  <td><span class="mech">MECHANICAL</span></td></tr>
+</table>
+
+<h3>Group E — adapters</h3>
+<table>
+<tr><th>#</th><th>Site</th><th>What it does today</th><th>What it becomes</th><th>Class</th></tr>
+<tr><td>E1</td><td>gam/managers/orders.py:457-604</td>
+  <td>Placeholders from <code>package.format_ids</code>: attributes if present, else a dimension regex over the id string; NATIVE/PIXEL inferred from id substrings (:568, :603); local <code>format_display</code> respelling (:475, the audit's DRY finding)</td>
+  <td>Placeholders from the package's selected declarations' <code>params</code> (width/height/duration are first-class there); id-regex survives only for legacy packages with no declaration</td>
+  <td><span class="mech">MECHANICAL</span> after C7 (the snapshot is the input); the kind→GAM-creative-type mapping is a small <span class="dec">DECISION</span> table (16 kinds → GAM placeholder types)</td></tr>
+<tr><td>E2</td><td>xandr.py:744-754 (<code>_map_creative_format</code> id→"banner"/…); :372-460 (hardcoded <code>format_ids</code> product fixtures)</td>
+  <td>Id-string mapping</td>
+  <td>kind → Xandr type is a direct enum mapping (strictly simpler than today)</td>
+  <td><span class="mech">MECHANICAL</span></td></tr>
+<tr><td>E3</td><td>mock_ad_server.py:1559-1609; broadstreet/adapter.py:775; base.py:708</td>
+  <td>Mock catalogs and docstrings built on <code>format_ids</code></td>
+  <td>Mock adapter grows canonical declarations FIRST (it is what BDD seeds against — §7 stage 0/1)</td>
+  <td><span class="mech">MECHANICAL</span></td></tr>
+</table>
+
+<h3>Group F — surfaces that STAY legacy-keyed on purpose</h3>
+<table>
+<tr><th>Site</th><th>Why it stays</th></tr>
+<tr><td><code>list_creative_formats</code> (creative_formats.py, registry row registry.py:216-218)</td>
+  <td>The deprecated compatibility surface: its pinned request declares only <code>format_ids</code>-shaped filters. It is eventually DERIVED from the canonical catalog (compat projection) and gets a deprecation comment (audit S5/P3), but its comparison key is correctly the legacy pair for its lifetime. <span class="tag read">READ</span></td></tr>
+<tr><td><code>format_id_identity</code> / <code>FormatKey</code> / <code>canonical_agent_url</code> (_base.py:446-511)</td>
+  <td>The legacy lane's comparison form — core/format-id.json's canonicalize-before-compare MUST binds every legacy-to-legacy comparison for as long as legacy references exist (through 4.x on creatives). The premise removes its callers outside the seams, not the helper.</td></tr>
+<tr><td><code>canonical_kind_for</code> / <code>creative_identity_of</code> (format_resolver.py:110-203)</td>
+  <td>The one direction that resolves — this IS the acceptance projection the premise mandates.</td></tr>
+<tr><td>Repository echo columns (<code>legacy_format_id</code>/<code>legacy_format_key</code>) and <code>wire_format_kind</code></td>
+  <td>The record-both/echo-verbatim obligations (L3; the response oneOf).</td></tr>
+</table>
+
+<h2 id="boundary">3. The accept-both / record-both boundary</h2>
+
+<p><strong>Where <code>format_id</code> stops being carried inward, per entity:</strong></p>
+
+<table>
+<tr><th>Entity</th><th>The seam (exists?)</th><th>What crosses it inward</th></tr>
+<tr><td>Creative</td>
+  <td><strong>EXISTS.</strong> Inbound: <code>creative_identity_of</code> (format_resolver.py:173-203) at the sync gate
+      (_validation.py:125). Stored: <code>_identity_columns</code> (repositories/creative.py:54-67). Read-back:
+      <code>CreativeFormatIdentity.from_row</code> (_base.py:665-688) — docstring: "This IS the boundary, and it is the only one."</td>
+  <td><code>CreativeFormatIdentity</code>: kind + option (+ the retained assertion for echo/legacy-lane).
+      <span class="warn">Leaks past the seam today:</span> the <code>_processing.py</code> reads of
+      <code>creative.format_id</code> at :293, :469, :487, :703, :751, :823, :841 and the <code>_sync.py</code> dict builds —
+      rows D1/D2/D5. Those are the sites where the creative half of the premise is unfinished.</td></tr>
+<tr><td>Product</td>
+  <td><strong>DOES NOT EXIST.</strong> <code>product.format_ids</code> is read raw by 12+ consumers
+      (<code>product_format_identities</code> callers, admin, services, adapters). There is no "product format identity"
+      reader; the declaration list IS the thing that should cross inward.</td>
+  <td>To build: the product repository/conversion exposes <em>declarations</em> (authored <code>format_options</code>,
+      or for a legacy product the projections of its asserted <code>format_ids</code> via
+      <code>project_v1_format_to_declaration</code> — <span class="tag exec">EXEC</span>, available at the pin),
+      plus the derived legacy projection for the wire. Group A.</td></tr>
+<tr><td>Package</td>
+  <td><strong>HALF-EXISTS.</strong> Acceptance validation for the legacy selector exists
+      (<code>_validate_and_convert_format_ids</code>); the canonical selectors cross the boundary and die unread;
+      the echo exists (<code>Package.echoing</code>).</td>
+  <td>To build: one selector-resolution step (C3) that turns (<code>format_kind</code> | <code>format_option_refs</code> |
+      legacy <code>format_ids</code>) into selected declarations, after which the package carries snapshots (C7), not ids.</td></tr>
+</table>
+
+<h3>The critical-pattern-#4 implication of "record both"</h3>
+<p><span class="tag read">READ</span> CLAUDE.md pattern #4: <code>Field(exclude=True)</code> strips a field from the
+wire, from persistence AND from the idempotency hash alike — "a field that is off the wire but must persist has no
+spelling on a wire model" and belongs on a repository-owned carrier. The creative subsystem already answers this
+correctly, and the product work must copy the answer, not invent one:</p>
+<ul>
+<li>The verbatim assertion and its comparison key are <strong>ORM columns written by the repository</strong>
+    (<code>legacy_format_id</code>, <code>legacy_format_key</code>), never fields on a wire model. The wire model
+    chooses its single arm via <code>wire_format_kind</code>.</li>
+<li>So "record both" on products means: the authored declarations are the column; the derived legacy projection is
+    either computed at the conversion edge (A3) or a repository-stamped column — in neither case a wire-model field
+    with exclusion tricks. During the 3.x window the projection IS on the wire, so nothing needs hiding at all;
+    the only thing that must not exist is a second <em>authored</em> source.</li>
+<li>Idempotency: the request hash is over the buyer's document, so accepting-and-recording both arms changes no hash;
+    a replayed <code>create_media_buy</code> response stored before C7 will lack <code>formats_to_provide</code> —
+    a known replay-shape seam to note in C7's change, not a blocker.</li>
+</ul>
+
+<h2 id="persistence">4. Persistence and migration</h2>
+
+<table>
+<tr><th>Store</th><th>Today</th><th>Target</th><th>Migration</th></tr>
+<tr><td><code>creatives</code></td>
+  <td>Dual identity already stored (4 columns)</td>
+  <td>Unchanged. Optional: index <code>format_kind</code> when D3's filter lands (the legacy key is indexed; the kind is not — models.py:983 has no index)</td>
+  <td>One structural revision when the index is wanted. No data movement.</td></tr>
+<tr><td><code>products.format_ids</code></td>
+  <td><code>NOT NULL</code> + shape CHECK</td>
+  <td>Nullable (the pin's root <code>anyOf</code> admits canonical-only); CHECK stays for non-null values</td>
+  <td><code>upgrade()</code>: <code>ALTER COLUMN … DROP NOT NULL</code>; <code>downgrade()</code>: <code>SET NOT NULL</code>
+      (fails if canonical-only rows exist — accepted, per the migration rules: structure only, no rescue).</td></tr>
+<tr><td><code>products.format_options</code></td>
+  <td>Nullable JSON, opaque</td>
+  <td>The authored catalog</td>
+  <td>No DDL change needed. <span class="dec">DECISION</span> on a stamping revision for existing rows:
+      deriving <code>format_options</code> from <code>format_ids</code> IS derivable (the normative v1→v2 order,
+      <code>project_v1_format_to_declaration</code>), but the reverse direction of such a stamp is NOT clean — a
+      downgrade cannot tell a stamped declaration from an authored one, so it would null authored data.
+      <strong>Recommendation: no stamp.</strong> Legacy rows stay legacy-only (spec-legal through the 3.x window:
+      "Products MUST carry format_ids, format_options, or both during the 3.x migration window"), and canonical
+      authoring starts at the admin seam. This also avoids mass-asserting <code>v1_format_ref</code> values the
+      operator never asserted.</td></tr>
+<tr><td><code>inventory_profiles.format_ids</code></td>
+  <td>NOT NULL authored legacy catalog</td>
+  <td>Follows the A5 decision (gain <code>format_options</code>, or stop carrying formats)</td>
+  <td>One structural revision, after the decision. Do not bundle with the products revision if the decision lags — but never stack a fix-revision on an unshipped one.</td></tr>
+<tr><td><code>media_packages.package_config</code></td>
+  <td>JSON document; no snapshots</td>
+  <td>Document gains <code>formats_to_provide</code> snapshots (C7)</td>
+  <td>No DDL. Old rows simply lack the key; readers treat absence as "no canonical contract recorded" (true).</td></tr>
+<tr><td><code>tenants.auto_approve_format_ids</code></td>
+  <td>Bare id strings</td>
+  <td>Per D4's decision (likely a sibling <code>auto_approve_format_kinds</code> column; the legacy one kept as the legacy lane)</td>
+  <td>Additive structural revision when decided.</td></tr>
+<tr><td>Vocabulary (V1)</td>
+  <td>None — the pin's 16 kinds are the ceiling (_base.py:783-795, deliberate and documented)</td>
+  <td>A real input per pattern #11 (a tenant column or AdapterConfig row) threaded into <code>supported_kinds</code></td>
+  <td>Additive structural revision when decided.</td></tr>
+</table>
+
+<p><strong>What happens to existing rows</strong>, stated plainly: nothing is rewritten. Legacy products keep serving
+through the legacy lane; legacy creatives keep their retained assertions (an unprojectable one keeps
+<code>format_kind NULL</code> and its assertion stays its only identity — the design already holds that case);
+pre-change packages have no snapshots and are read as such. The only optional data-touching revision considered —
+stamping <code>creatives.format_kind</code> for old legacy rows whose id now projects (both directions derivable:
+upgrade stamps via the registry, downgrade nulls kind where <code>legacy_format_id</code> is non-null, which by the
+XOR can never erase a buyer-declared kind) — is cheap and safe but not required by any stage; file it separately
+if listing-by-kind should cover old rows.</p>
+
+<h2 id="pin">5. What the pin requires, per surface</h2>
+
+<p>All schema quotes read from <code>.venv/lib/python3.12/site-packages/adcp/_schemas/3.2/</code> in this worktree
+(<span class="tag exec">EXEC</span> — loaded as JSON through code, not transcribed); all prose fetched verbatim from
+<code>adcontextprotocol/adcp</code> <code>docs/creative/*.mdx</code> via <code>gh api … | base64 -d</code>
+(<span class="tag read">READ</span>). Note: the ticket's suggested path <code>docs/building/by-layer/L2/creatives.mdx</code>
+does not exist upstream (<span class="tag exec">EXEC</span> — the L2 directory lists five files, none creative);
+the creative spec prose lives in <code>docs/creative/</code>.</p>
+
+<h3>5.1 Products / <code>get_products</code></h3>
+<blockquote><code>core/product.json</code>, root <code>anyOf</code>: a "Named-format product" branch
+(<code>deprecated: true</code>, <code>required: ["format_ids"]</code>) XOR-ish a "Canonical-format product" branch
+(<code>required: ["format_options"]</code>). <code>format_ids</code> description: "Deprecated in AdCP 3.2; removed in
+AdCP 4.0. … Products MUST carry <code>format_ids</code>, <code>format_options</code>, or both during the 3.x migration
+window. New products MUST author canonical <code>format_options[]</code>; sellers MAY additionally project those
+declarations to <code>format_ids</code> for legacy buyers. <strong>When both fields are present they MUST describe the
+same underlying formats</strong>, and buyers MUST prefer <code>format_options</code>. Do not author a new product from
+<code>format_ids</code> alone."</blockquote>
+<p>This single description is the whole Group A obligation: authored canonical, derived legacy, same-formats when dual,
+never author legacy-first. Our state violates the last sentence for every product.</p>
+
+<h3>5.2 Product filters</h3>
+<blockquote><code>core/product-filters.json</code> declares <code>format_kinds</code> ("Filter to products accepting any
+of these canonical format kinds", items <code>$ref</code> canonical-format-kind.json, <code>x-canonicalization: set</code>)
+and <code>format_option_refs</code> ("Filter to products accepting any of these exact publisher- or product-scoped
+canonical format options", items <code>$ref</code> format-option-ref.json); <code>format_ids</code> items <code>$ref</code>
+<code>core/format-id.json</code>, whose <code>agent_url</code> description carries the canonicalize-before-compare MUST
+and which is <code>"deprecated": true</code> at 3.2.</blockquote>
+
+<h3>5.3 Packages / <code>create_media_buy</code> &amp; <code>update_media_buy</code></h3>
+<blockquote><code>core/package.json</code>: <code>format_kind</code> — "Direct canonical selector supplied for this
+package on create_media_buy. Sellers SHOULD echo…"; <code>format_option_refs</code> — "Structured 3.1+ format option
+references… Sellers SHOULD echo…"; <code>format_ids</code> — deprecated, "Sellers SHOULD echo this field whenever the
+request included it, including dual-emission cases where <code>format_option_refs</code> was the winning selector";
+<code>formats_to_provide</code> — "Immutable canonical creative contracts established for this package. Each entry is a
+PackageFormatSnapshot of the selected effective Product format declaration… the live Product is never substituted for
+the package snapshot"; <code>format_ids_to_provide</code>/<code>format_ids_pending</code> — "**DEPRECATED in 3.2.**
+Legacy named-format projection… New sellers emit canonical formats_to_provide declarations."
+<code>core/package-format-snapshot.json</code>: <code>required: ["format_kind","params"]</code>, <code>allOf</code>
+over <code>product-format-declaration.json</code>.</blockquote>
+<p>We echo correctly, operate on none of the selectors, and emit only the deprecated projection (C3/C7).</p>
+
+<h3>5.4 Creatives / <code>sync_creatives</code> &amp; <code>list_creatives</code></h3>
+<blockquote><code>core/creative-asset.json</code>: root <code>oneOf</code> — <code>format_id</code> XOR
+<code>format_kind</code>, the legacy arm <code>deprecated: true</code>. <code>core/format-option-ref.json</code>:
+<code>discriminator: {propertyName: "scope"}</code>, <code>scope</code> required in both arms, the product arm declares
+<code>"publisher_domain": false</code>. <code>core/creative-filters.json</code> (list_creatives): <code>format_ids</code>
+— "Deprecated in AdCP 3.2; removed in AdCP 4.0. Filter legacy named-format creatives. Use <code>format_kinds</code> for
+canonical libraries."; <code>format_kinds</code> — "Filter by canonical format kinds. Returns creatives matching any
+supplied kind."</blockquote>
+<p>And the matching rules that make the bare kind insufficient as a full identity
+(formats.mdx § Matching and satisfaction, fetched verbatim):</p>
+<blockquote>"Canonical compatibility is directional. A creative capability or manifest satisfies a target only when it
+meets every target constraint: Exact dimensions and durations must match. A requested range must be contained within
+the accepted range; overlap is insufficient. Required slots must be present with compatible asset types. An exact
+publisher claim must match both <code>publisher_domain</code> and <code>format_option_id</code>. Equal
+<code>format_kind</code> values alone do not prove compatibility. For a product with multiple included placements, the
+selected format set must cover every placement. A seller must reject or refine a package with an uncovered placement;
+it must not silently remove inventory."</blockquote>
+
+<h3>5.5 The authoring direction and the one-way projection</h3>
+<blockquote>canonical-formats-migration.mdx: "The deprecated fields and task remain parseable during the 3.x
+compatibility window. They are not an alternative authoring model in 3.2: if exposed, they should be projections
+derived from canonical data." § Compatibility projection: "Keep the projection one-way: canonical … → deprecated
+named-format response. Never merge independently authored legacy constraints back into the canonical catalog. That
+creates two sources of truth and makes compatibility decisions ambiguous." § Completion checklist: "Preview, sync,
+library, and delivery paths preserve <code>format_kind</code> and <code>format_option_ref</code>."</blockquote>
+
+<h3>5.6 Where the SDK and the spec disagree</h3>
+<p>No new disagreement found in this pass beyond the two the prior audit filed (the 14-vs-16 kind enum inside
+<code>core/canonical-format-option.json</code>, upstream; <code>FORMAT_NOT_FOUND</code> absent from the 3.2.1 error
+enum, #1847). The SDK helpers probed here (<code>project_*</code>, <code>validate_format_kind_in_options</code>)
+behaved per the spec text in every probe — they remain a cross-check, not the authority.</p>
+
+<h2 id="grading">6. What is graded, what is not</h2>
+
+<p>Method: <code>git grep</code> over <code>tests/bdd/features/</code> plus reading the binders for the hits
+(<span class="tag exec">EXEC</span> for existence/wiring, <span class="tag read">READ</span> for assertion strength).
+No BDD run was performed (§10).</p>
+
+<table>
+<tr><th>Behavior</th><th>Graded?</th><th>Evidence</th></tr>
+<tr><td>Canonical creative round-trip (sync by kind + scoped option ref, listed intact, document valid against the pinned union)</td>
+  <td><strong>YES</strong> (since <code>eb3f5a746</code>)</td>
+  <td>BR-UC-018-list-creatives.feature:1061-1090, two scope rows; steps bound at tests/bdd/test_uc018_list_creatives.py:1769-1830, asserting on the listed wire document AND jsonschema-validating it — not an echo-satisfiable assertion.</td></tr>
+<tr><td><code>get_products</code> legacy filter is pair-identity (foreign agent no-match)</td>
+  <td><strong>YES</strong> (since <code>eb3f5a746</code>)</td>
+  <td>BR-UC-GET-PRODUCTS-format-id-filter.feature — falsifiable in both directions by construction (a seeded product the filter must NOT select).</td></tr>
+<tr><td><code>format_options</code> passthrough on <code>get_products</code></td><td>YES</td>
+  <td>BR-UC-GET-PRODUCTS-format-options.feature, 3 scenarios (audit S4).</td></tr>
+<tr><td>Creative XOR: neither arm refused with keyword <code>oneOf</code></td><td>Half</td>
+  <td>Two UC-006 scenarios grade "neither"; "both arms" is graded nowhere (audit M4).</td></tr>
+<tr><td><code>filters.format_kinds</code> on <code>get_products</code>; <code>filters.format_option_refs</code>; <code>standard_formats_only</code> semantics</td>
+  <td><strong>NO</strong></td><td>No feature line names them <span class="tag exec">EXEC</span>; the behaviors themselves are absent (B2-B4).</td></tr>
+<tr><td><code>filters.format_kinds</code> on <code>list_creatives</code></td><td><strong>NO</strong></td>
+  <td>BR-UC-018:749 names <code>format_kind</code> only as a member of a <code>fields</code>-selector array.</td></tr>
+<tr><td>Package selectors (<code>format_kind</code>, <code>format_option_refs</code>), M2, <code>CONFLICTING_SELECTORS</code>, canonical satisfaction (params/slots/containment), placement coverage (F3)</td>
+  <td><strong>NO</strong> — and the storyboard that grades them is UNWIRED</td>
+  <td>The upstream <code>media_buy_seller/canonical_formats</code> storyboard (17 graded steps, 9 <code>canonical_format_satisfaction</code> checks, 5 error-code checks) has no verdict in <code>docs/test-obligations/storyboard-wireability.yaml</code> — not even <code>untriaged</code> (audit, re-confirmed by grep <span class="tag exec">EXEC</span>).</td></tr>
+<tr><td>Vocabulary refusal (a <code>format_kind</code> outside the supported set), per-product closed set (V2)</td><td><strong>NO</strong></td>
+  <td>No scenario sends an out-of-vocabulary kind; <code>validate_format_kind_in_options</code> has zero callers in <code>src/</code> <span class="tag exec">EXEC</span>.</td></tr>
+<tr><td>Sync-side approval/preview behavior for a canonical creative (the D1 bypass)</td><td><strong>NO</strong></td>
+  <td>The UC-018 round-trip scenario seeds through the factory, so the sync-path approval branch is not what it grades; no UC-006 scenario syncs a canonical creative through the approval modes.</td></tr>
+<tr><td><code>formats_to_provide</code> emission; <code>format_ids_to_provide</code> as a derived projection</td><td><strong>NO</strong></td>
+  <td>No feature names either field <span class="tag exec">EXEC</span>.</td></tr>
+<tr><td>Canonical-only product servable (S2); derived legacy projection (A3); divergence advisory (E1)</td><td><strong>NO</strong></td>
+  <td>Behaviors absent; no scenarios. The storyboard seeds exactly the S2 fixture (<code>get_seeded_v2_only_product</code>).</td></tr>
+<tr><td>The four creative-vs-product gates' treatment of a canonical creative (skip vs refuse divergence, §8 risk 4)</td><td><strong>NO</strong></td>
+  <td>Nothing sends a canonical creative into create/update/assign <span class="tag exec">EXEC</span> (grep over features for a canonical creative reaching those tools).</td></tr>
+</table>
+
+<p class="warn">Treating "no scenario" as a finding equal to "not implemented" (the ticket's instruction): every stage
+in §7 is defined WITH the scenario that grades it, and a stage is not landable without its scenario — that is how the
+inverted direction survived once already.</p>
+
+<h2 id="plan">7. The staged plan</h2>
+
+<p>Ordered; each stage independently landable and gradable. The dependency spine is:
+<em>guards → data exists (products) → one satisfaction function → selectors/emission → periphery</em>.</p>
+
+<table>
+<tr><th>Stage</th><th>Content</th><th>Graded by</th><th>Depends on</th></tr>
+<tr><td><strong>0. Pin the immunity, wire the grader</strong></td>
+  <td>(a) The structural guard from the prior audit's P2: assert the transitive closure of every <code>TOOLS[*].dto</code>
+      and impl return type contains zero <code>adcp.types.canonical_creative.CanonicalBoundaryModel</code> subclasses —
+      ~15 derived lines, fire-probed by annotating one field with <code>adcp.types.ProductFormatDeclaration</code>
+      (which IS <code>canonical_creative.Format</code>). This stream is exactly the change that will be tempted to drop a
+      <code>Legacy*</code> prefix, and the strip silently deletes <code>format_ids</code> from the wire.
+      (b) Triage <code>canonical_formats.yaml</code> in <code>storyboard-wireability.yaml</code> — its 17 steps become
+      the specification for stages 3–4 instead of a design argument.
+      (c) <code>ProductFactory</code> and the mock adapter grow a <code>format_options</code> knob so later stages can seed.</td>
+  <td>The guard's own fire probe; the triage verdict recorded</td>
+  <td>—</td></tr>
+<tr><td><strong>1. A canonical product EXISTS and is servable</strong></td>
+  <td>A1 (migration: <code>format_ids</code> nullable) + A2 (conversion accepts the anyOf) + minimal A4 (admin can author
+      <code>format_options</code> — even a raw JSON editor first; the full declaration editor is its own later change).
+      No derivation yet; a canonical-only product legally serves with no <code>format_ids</code>.</td>
+  <td>NEW scenarios: canonical-only product returned by <code>get_products</code> with its declarations intact and no
+      <code>format_ids</code> key (the storyboard's "Read v2-only format declarations" shape)</td>
+  <td>0</td></tr>
+<tr><td><strong>2. Canonical read-side filters</strong></td>
+  <td>B3 (<code>filters.format_kinds</code>), B4 (<code>filters.format_option_refs</code>), D3
+      (<code>list_creatives filters.format_kinds</code>), B2 (<code>standard_formats_only</code> re-keyed, with the spec
+      reading recorded). Small, independent, each a one-filter change against stage-1 data.</td>
+  <td>One scenario per filter: a catalog holding a product/creative the filter must NOT select (the
+      format-id-filter feature is the falsifiability template)</td>
+  <td>1 (for the product filters); D3 is independent</td></tr>
+<tr><td><strong>3. ONE satisfaction function</strong></td>
+  <td>A new module (shape: <code>satisfies(identity: CreativeFormatIdentity, declarations, *, legacy_catalog) -&gt; verdict</code>)
+      implementing formats.mdx matching: kind discriminates, option ref routes exactly, params grade (exact dims,
+      contained ranges, slots), publisher claim both halves; the legacy lane (FormatKey vs <code>v1_format_ref</code>
+      keys / legacy catalog) inside the same function so the two lanes cannot diverge. Replace ALL FOUR gates with it
+      (C1, C2+creative_helpers, C4, C5) — fixing the skip-vs-refuse divergence in the same change. V2
+      (<code>validate_format_kind_in_options</code>) is this function's closed-set step.</td>
+  <td>Scenarios from the storyboard's satisfaction steps: same-kind-different-params rejected
+      (<code>reject_bare_image_selector_for_fixed_mrec</code> → <code>UNSUPPORTED_FEATURE</code>), contained-range,
+      slot-missing, publisher-claim rows — run against create, update AND assignment paths</td>
+  <td>1 (declarations must exist to satisfy against)</td></tr>
+<tr><td><strong>4. Package selectors and canonical emission</strong></td>
+  <td>C3 (resolve <code>format_kind</code> / <code>format_option_refs</code> / legacy <code>format_ids</code> to selected
+      declarations; M2; <code>CONFLICTING_SELECTORS</code>; <code>UNSUPPORTED_FEATURE</code> on unprojectable legacy
+      routes), C6 (projection recorded at accept), C7 (<code>formats_to_provide</code> snapshots emitted and persisted
+      in <code>package_config</code>; <code>format_ids_to_provide</code> becomes the derived projection), C8.</td>
+  <td>The remaining storyboard steps (<code>create_media_buy_with_canonical_format_option</code>,
+      <code>…direct_canonical_selector</code>, the two conflict rejections); an echo + snapshot readback scenario</td>
+  <td>3</td></tr>
+<tr><td><strong>5. The derived legacy projection and the advisory</strong></td>
+  <td>A3 (<code>get_products</code> derives <code>format_ids</code> from declarations via
+      <code>project_product_to_v1</code> for canonically-authored products; dual-authored products get
+      <code>FORMAT_DECLARATION_DIVERGENT</code> advisory or refusal per the A3 decision), B1 inherits the new data
+      source. Admin <code>format_ids</code> flips to read-only derived display (completing A4).</td>
+  <td>Scenario: canonical product with <code>v1_format_ref</code> serves both fields describing the same formats; a
+      divergent dual-authored fixture produces the advisory on a populated success (the storyboard's
+      <code>get_seeded_divergent_product</code>)</td>
+  <td>1 (independent of 3–4; can land in parallel after 1)</td></tr>
+<tr><td><strong>6. Creative-side completion</strong></td>
+  <td>D1 (approval machinery branches on the identity, not the legacy arm), D2 (canonical preview manifests), D5
+      (labels), D6/V1 (seller-owned vocabulary as a real input), M3's canonical validation steps per the D1 decision.</td>
+  <td>UC-006 scenarios syncing a canonical creative through each approval mode; an out-of-vocabulary kind refused
+      on the wire envelope</td>
+  <td>3 (the validation needs the satisfaction function); D5 anytime</td></tr>
+<tr><td><strong>7. Periphery</strong></td>
+  <td>E1-E3 (adapters read params off snapshots; kind→type mapping tables), A6/A7 (services), D4 (auto-approve by
+      kind decision), D7, A5 (inventory profiles decision), S5 deprecation comment on the
+      <code>list_creative_formats</code> registry row, the admin dead-code deletion (products.py:2006-2032).</td>
+  <td>Per-site; adapter changes graded by the existing adapter suites plus one GAM placeholder-from-params test</td>
+  <td>4 (adapters need snapshots)</td></tr>
+</table>
+
+<h3>What must NOT be attempted in one change</h3>
+<ul>
+<li><strong>The whole inversion as a flag day</strong> — stages 1, 3, 4, 5 each change behavior a buyer can see;
+    landing them together makes the first regression unattributable and un-revertable.</li>
+<li><strong>Dropping any <code>Legacy*</code> base pin while doing schema work</strong> (stage 0's guard exists because
+    this stream is the arming change for the canonical-serializer strip).</li>
+<li><strong>A data-rescue migration</strong> — no stamping <code>format_options</code> from <code>format_ids</code>
+    (§4's recommendation), no backup tables, no conditional rewrites.</li>
+<li><strong>Replacing the four gates one at a time with four local helpers</strong> — the satisfaction function is one
+    module or it is four new spellings (the DRY ratchet will refuse it anyway).</li>
+<li><strong>Touching <code>list_creative_formats</code>'s comparison semantics</strong> — it is the deprecated surface
+    and already correct for its lifetime.</li>
+</ul>
+
+<h2 id="risks">8. The risks that would bite</h2>
+
+<table>
+<tr><th>#</th><th>Risk</th><th>Where / why</th><th>Containment</th></tr>
+<tr><td>1</td><td class="warn">The canonical-serializer strip arms silently</td>
+  <td>One dropped <code>Legacy*</code> prefix (e.g. annotating with <code>adcp.types.ProductFormatDeclaration</code>,
+      which IS <code>canonical_creative.Format</code>) puts a class carrying
+      <code>strip_legacy_creative_identity</code> into the wire chain, and <code>format_ids</code> is then DELETED from
+      responses with no error. The prior audit measured the immunity (0 canonical classes in a 1093-model closure) and
+      named this stream as the change that ends it.</td>
+  <td>Stage 0's guard, landed before any schema edit; fire-probed.</td></tr>
+<tr><td>2</td><td class="warn">Legacy buyers lose products</td>
+  <td>A canonical-only product with no <code>v1_format_ref</code> legally serves an empty legacy projection; a buyer
+      filtering by <code>format_ids</code> or reading only <code>format_ids</code> never sees it. Spec-intended, but it
+      is a seller-visible catalog change the operator must opt into per product.</td>
+  <td>Stage 1 makes it possible, not default; admin authoring decides per product; the derived projection (stage 5)
+      keeps dual-capable products visible to both generations.</td></tr>
+<tr><td>3</td><td class="warn">Code paths assuming non-empty <code>format_ids</code></td>
+  <td>product_conversion.py:408 (raise), GAM placeholders, dynamic pricing size extraction, ranking prompts — each
+      breaks or degrades on a canonical-only product if stage 1 lands without its consumers audited (Group A/E rows).</td>
+  <td>Stage 1's scenario catalog must include one canonical-only product driven through create_media_buy on the mock
+      adapter; the Group A/E rows are the checklist.</td></tr>
+<tr><td>4</td><td class="warn">The gates disagree TODAY about canonical creatives — and flipping them changes buyer-visible behavior in both directions</td>
+  <td><span class="tag read">READ</span> (the boolean logic quoted in §2): create's two gates SKIP a canonical creative
+      (media_buy_create.py:3700 <code>continue</code>; :502 <code>if creative_fmt and …</code>), while the assignment
+      and update gates REFUSE it (<code>None in supported_formats</code> → False at _assignments.py:267-268;
+      <code>creative_identity is None or …</code> at media_buy_update.py:353). So today a canonical creative can be
+      attached at create and cannot be attached by update — stage 3 unifies this, which necessarily changes one of the
+      two behaviors. Which way it unifies for a product with NO declarations is a decision (skip = permissive window,
+      refuse = strict).</td>
+  <td>Decide once at stage 3's design, grade both directions, release-note it.</td></tr>
+<tr><td>5</td><td class="warn">Unprojectable legacy references have no operating identity</td>
+  <td>Under "operate on kind", a legacy creative whose id neither the agent nor the registry projects has
+      <code>kind=None</code> forever (fail-closed is normative). It can only ever match via the legacy lane. If the
+      legacy lane is removed from the satisfaction function (not just demoted), those creatives silently stop matching
+      everything.</td>
+  <td>The satisfaction function keeps the legacy lane as a first-class arm for as long as <code>creative-asset.json</code>
+      keeps the <code>format_id</code> branch (through 4.x); §2 Group F names what stays.</td></tr>
+<tr><td>6</td><td class="warn">The sync approval bypass is load-shaped</td>
+  <td>D1: today a canonical creative skips approval-mode selection — meaning tenants running
+      <code>require-human</code> review can receive canonical creatives that never enter the review workflow.
+      Fixing it (stage 6) will ALSO change throughput for those tenants (creatives that used to sail through start
+      queueing). An unflagged behavioral change for operators.</td>
+  <td>Name it in the stage-6 release note; the approval-mode scenarios grade each mode explicitly.</td></tr>
+<tr><td>7</td><td class="warn">Silently stopping grading</td>
+  <td>Replacing the four gates rewires paths that existing legacy BDD scenarios grade; if a gate's error code or field
+      path changes incidentally, previously-green scenarios will either fail loudly (fine) or — worse — keep passing
+      while asserting a path that no longer runs. The liveness artifact risk from the project memory applies: partial
+      runs overwrite <code>bdd_scenario_liveness.json</code>.</td>
+  <td>Stage 3 keeps codes/fields of the legacy lane byte-identical (the storyboard pins the canonical lane's codes);
+      full-suite runs via the CI box, never partial local BDD runs over shared artifacts.</td></tr>
+<tr><td>8</td><td class="warn">Dual-authored divergence has no detector until stage 5</td>
+  <td>Stage 1 lets operators author <code>format_options</code> while <code>format_ids</code> is still authored — the
+      exact two-sources state the pin's MUST ("same underlying formats") forbids, with E1's advisory not yet built.</td>
+  <td>Interim rule at stage 1: admin refuses saving BOTH fields authored on one product (cheap), relaxed into the
+      advisory at stage 5.</td></tr>
+<tr><td>9</td><td class="warn">Idempotent replays of pre-stage-4 responses</td>
+  <td>A replayed <code>create_media_buy</code> stored before C7 lacks <code>formats_to_provide</code>; a buyer
+      comparing fresh vs replayed shapes sees drift.</td>
+  <td>Known and bounded — the replay contract already returns the stored response; note it in C7's change.</td></tr>
+<tr><td>10</td><td class="warn">Upstream pin defects</td>
+  <td>The 14-member kind enum inside <code>core/canonical-format-option.json</code> (vs 16 in
+      canonical-format-kind.json) will refuse <code>coordinated_placements</code>/<code>seller_rendered_stateful_display</code>
+      declarations if anything validates through that file; already filed upstream per the prior audit.</td>
+  <td>Validate declarations through <code>product-format-declaration.json</code> / the SDK class, never through
+      canonical-format-option.json, until the upstream fix.</td></tr>
+</table>
+
+<h2 id="priorart">9. Prior art: the three SDK PRs</h2>
+<p>All on <code>adcontextprotocol/adcp-client-python</code>; bodies and review threads read
+(<span class="tag exec">EXEC</span> — fetched via <code>gh pr view</code> / the reviews API).</p>
+<ul>
+<li><strong>#1415</strong> (docs, OPEN, reviewer-approved): the seller owns the vocabulary check post-9.0 ("a seller that
+    adds no check has silently stopped validating something the library used to validate for it"), and the TWO rules
+    must not be conflated: the global vocabulary (<code>is_canonical_format_kind</code> — we implement) and the
+    per-product closed set (<code>validate_format_kind_in_options</code> / <code>FormatKindNotInClosedSetError</code> —
+    we do not; stage 3's closed-set step, probed working at our pin). Also: <code>CanonicalFormatKind</code> is a
+    vocabulary to pass, never a type to annotate with — our <code>supported_kinds</code> parameter already complies.
+    The reviewer took no position beyond verifying the claims.</li>
+<li><strong>#1447</strong> (OPEN, approved across four review passes, review-blocked only): keeps
+    <code>ProductFormatDeclaration</code> a class graded from its bundled schema, restores <code>params_as</code> and
+    <code>legacy_format_refs</code>, and documents "Validating a declaration and publishing it as a Format". Directly
+    the type stage 1's authoring seam and stage 3's satisfaction function should consume — <em>and our pin already
+    carries the class shape</em> (<span class="tag exec">EXEC</span>: <code>ProductFormatDeclaration</code> is a class
+    at <code>9.0.0b1+prs1435.1415.1456</code>, and the declaration probe in §0 validated and projected through it).
+    Its serializer commit (<code>19e4b62ee</code>) is the defensively-read scope the prior audit's Q2.5 graded: the
+    <code>False</code> default is output-inert today; the recorded prediction (a future serialize-path reader of the
+    scope flips a dict-shaped declaration's output) should be re-checked at the next SDK bump.</li>
+<li><strong>#1435</strong> (OPEN): keyworded refusals for root required-groups — once landed, our
+    <code>mode="before"</code> XOR validator at creative.py:197-238 becomes removable (a cleanup item inside Group D,
+    not a gap).</li>
+</ul>
+
+<h2 id="notclaimed">10. Deliberately not claimed</h2>
+<ul>
+<li><strong>No BDD or integration run was performed.</strong> Every "graded/ungraded" verdict in §6 is from feature
+    files, binders and ledgers; every behavioral claim about production is from reading the code or probing models and
+    SDK helpers in-process. The three places where only READING backs a behavioral claim worth re-verifying by
+    execution before implementation starts: the four gates' skip-vs-refuse divergence (risk 4 — the booleans are
+    quoted, but a driven request would settle it beyond argument), the D1 approval bypass, and the C8 approval-path
+    package rebuild.</li>
+<li><strong>No DB was brought up</strong> — nothing in this pass needed a driven tool call that the prior audit had not
+    already executed, and the audit's executed round-trips (sync→list canonical, the strip probes) were taken as
+    standing evidence where cited.</li>
+<li><strong>The admin declaration-editor UX is not designed here</strong> — A4 names the seam and the interim
+    (raw JSON editor, bare-id validation fix) only.</li>
+<li><strong>Placement coverage (F3)</strong> is folded into the satisfaction stage but its placement-slice semantics
+    (the multi-publisher eligibility-slice paragraph of formats.mdx) were not decomposed to sites — our
+    <code>Placement.format_ids</code> (src/core/schemas/product.py:55-65, required and narrowed locally) is the input,
+    and the decomposition belongs to stage 3's design.</li>
+<li><strong>Capability declarations (C1/has_creative_library)</strong> are adjacent obligations of the same RFC, not
+    format-identity work; they stay with the audit's own filing trail.</li>
+</ul>
+
+<p class="small">Worktree <code>sa-fkan</code> · branch <code>analysis/format-kind-canonical</code> · HEAD
+<code>7187926a0</code> · pin <code>adcp==9.0.0b1+prs1435.1415.1456</code> (AdCP 3.2.1) · analysis dated 2026-10-09 ·
+ticket salesagent-8qela.3</p>
+
+</body>
+</html>

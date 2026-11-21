@@ -22,6 +22,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas import *
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError
+from src.core.utils.frequency_cap import suppress_cooldown_minutes
 
 
 class Kevel(AdServerAdapter):
@@ -96,17 +97,24 @@ class Kevel(AdServerAdapter):
         if targeting_overlay.audiences_any_of and not self.userdb_enabled:
             unsupported.append("Audience targeting requires UserDB to be enabled (set userdb_enabled=true in config)")
 
-        # Frequency capping validation
-        if targeting_overlay.frequency_cap:
-            if not self.frequency_capping_enabled:
-                unsupported.append(
-                    "Frequency capping requires this feature to be enabled (set frequency_capping_enabled=true in config)"
-                )
-            elif targeting_overlay.frequency_cap.scope == "media_buy":
-                # Kevel doesn't have campaign-level frequency capping, only flight-level
-                unsupported.append(
-                    "Media buy level frequency capping not supported (Kevel only supports package/flight level)"
-                )
+        # Frequency capping validation. A cap reached through a TARGETING OVERLAY is
+        # PACKAGE-scoped by the pin's own definition -- core/frequency-cap.json's
+        # max_impressions: "campaign applies across the owning field's full flight: the
+        # package flight for a targeting overlay, or the MediaBuy flight for a root cap" --
+        # and a package is a Kevel flight, which this adapter supports. So the only question
+        # here is whether capping is enabled at all.
+        #
+        # The second branch this replaces read a non-spec ``FrequencyCap.scope`` whose default
+        # was "media_buy", so it refused EVERY cap a buyer sent while Kevel's flight-level
+        # support sat unused. Kevel's real gap is the pin's ROOT cap,
+        # ``CreateMediaBuyRequest.frequency_cap`` (core/media-buy-frequency-cap.json) -- a
+        # genuinely MediaBuy-level counter shared across packages. This seller reads that
+        # field nowhere yet, so there is no overlay value that can stand in for it and
+        # nothing to refuse here on its behalf.
+        if targeting_overlay.frequency_cap and not self.frequency_capping_enabled:
+            unsupported.append(
+                "Frequency capping requires this feature to be enabled (set frequency_capping_enabled=true in config)"
+            )
 
         return unsupported
 
@@ -252,7 +260,9 @@ class Kevel(AdServerAdapter):
                 "Price": rate,  # Use pricing from pricing option or fallback
                 "StartDate": start_time.isoformat(),
                 "EndDate": end_time.isoformat(),
-                "IsActive": True,
+                # The create-time pause, through the same flag ``pause_package`` flips
+                # below: a flight created with IsActive=false does not deliver.
+                "IsActive": not package.paused,
             }
 
             # Add targeting if provided (from package-level targeting_overlay per AdCP spec)
@@ -261,15 +271,24 @@ class Kevel(AdServerAdapter):
                 if targeting:
                     flight_payload.update(targeting)
 
-                # Add frequency capping if enabled (package level only)
+                # Add frequency capping if enabled. A flight IS the package, and an overlay
+                # cap is package-scoped by the pin's own definition (see
+                # _check_unsupported_features), so there is no level to test -- the
+                # ``scope == "package"`` gate this replaces read a non-spec field that
+                # defaulted to the other value, which is why this branch almost never ran.
                 freq_cap = getattr(package.targeting_overlay, "frequency_cap", None)
                 if freq_cap and self.frequency_capping_enabled:
-                    if getattr(freq_cap, "scope", None) == "package":
+                    # The cap's cooldown, from whichever of the pin's two spellings the buyer
+                    # used. ``None`` for a max_impressions-only cap, which has no cooldown to
+                    # put in FreqCapDuration -- reading suppress_minutes directly raised
+                    # TypeError on exactly that cap.
+                    cooldown_minutes = suppress_cooldown_minutes(freq_cap)
+                    if cooldown_minutes is not None:
                         # Kevel's FreqCap = 1 impression
                         # FreqCapDuration in hours, convert from minutes
                         flight_payload["FreqCap"] = 1
                         flight_payload["FreqCapDuration"] = int(
-                            max(1, freq_cap.suppress_minutes // 60)
+                            max(1, cooldown_minutes // 60)
                         )  # Convert to hours, minimum 1 (int for Kevel API)
                         flight_payload["FreqCapType"] = 1  # 1 = per user (cookie-based)
 
@@ -472,8 +491,6 @@ class Kevel(AdServerAdapter):
                         AffectedPackage(
                             package_id=package_id,
                             paused=not is_resume,
-                            changes_applied=None,
-                            buyer_package_ref=None,
                         )
                     ],
                 )
@@ -525,7 +542,7 @@ class Kevel(AdServerAdapter):
             self.log(f"Error updating Kevel flight: {e}")
             # The same obligation the AdCPAdapterError(internal_detail=e) branch
             # carried is met here, not dropped: ``requests``' text carried the ad
-            # server's URL/response body, which AdCP 3.1.1 transport-errors.mdx
+            # server's URL/response body, which transport-errors.mdx
             # § Security Considerations keeps off the buyer wire. The mapper's
             # messages are fixed first-party sentences naming a role, never an
             # address or a vendor body, and the detail stays in the log line above.

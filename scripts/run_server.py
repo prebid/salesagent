@@ -49,8 +49,10 @@ def main():
 
     import uvicorn
 
+    from src.core.logging_config import uvicorn_logging_kwargs
+
     try:
-        uvicorn.run("src.app:app", host=host, port=port, log_level="info")
+        uvicorn.run("src.app:app", host=host, port=port, **uvicorn_logging_kwargs())
     except KeyboardInterrupt:
         print("\nServer stopped.")
         sys.exit(0)

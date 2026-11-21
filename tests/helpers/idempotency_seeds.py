@@ -46,17 +46,17 @@ def make_active_cached_success(media_buy_id: str = "mb_seeded") -> CreateMediaBu
     deterministic one cannot make two modules disagree; a seeded row's expiry is
     ``record_success``'s own ``ttl``/``now``, not this field.
     """
-    from adcp.server.helpers import valid_actions_for_status
     from adcp.types import MediaBuyStatus
 
     from src.core.errors.codes import ErrorCode
     from src.core.schemas._base import CreateMediaBuySuccess, Error
+    from src.core.tools._media_buy_status import seller_valid_actions
 
     return CreateMediaBuySuccess.sync_success(
         media_buy_id=media_buy_id,
         packages=[],
         status=MediaBuyStatus.active,
-        valid_actions=valid_actions_for_status(MediaBuyStatus.active.value),
+        valid_actions=seller_valid_actions(MediaBuyStatus.active.value),
         errors=[Error.of(ErrorCode.UNSUPPORTED_FEATURE, field="packages[0].targeting_overlay.property_list")],
         confirmed_at=SEEDED_CONFIRMED_AT,
         revision=1,

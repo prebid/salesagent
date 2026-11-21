@@ -53,9 +53,11 @@ class TestFormatFetchTransientErrors:
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
-            # get_format is already an AsyncMock from the env's happy-path
-            # defaults — inject the failure via side_effect (mock-cap guard).
-            env.mock["registry"].return_value.get_format.side_effect = exc
+            # The registry is production's own ReferenceFormatsRegistry, so the fault
+            # goes on the real method: get_format RAISES the typed transient instead of
+            # answering, and fetch_format_spec -> _validation.py -> the per-item handler
+            # below see exactly what they see when the agent returns 429/503.
+            env.fail_format_fetch(exc)
 
             result = env.call_via(
                 transport,

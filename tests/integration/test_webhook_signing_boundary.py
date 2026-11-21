@@ -291,6 +291,15 @@ def _protocol_notification_payload() -> McpWebhookPayload:
             "advertiser_name": _ADVERTISER,
             "adcp_version": "3.1.1",
         },
+        # REQUIRED on core/mcp-webhook-payload.json, and adcp 9 types the parameter
+        # ``str`` where 6.6.0 typed it ``str | None`` — so the SDK now refuses a payload
+        # without one where it used to build a schema-invalid body. A real value is
+        # BUYER-generated, supplied at registration via
+        # ``push_notification_config.operation_id`` and echoed verbatim; the spec forbids
+        # the seller recovering it from the receiver URL. This test models no
+        # registration and grades the SIGNATURE boundary over the payload, so the value
+        # stands in for what a buyer registered rather than asserting an echo.
+        operation_id="op-webhook-boundary-fixture",
     )
 
 

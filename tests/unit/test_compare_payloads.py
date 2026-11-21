@@ -36,7 +36,7 @@ def _write(directory: Path, nodes: dict[str, Any], scope: dict[str, Any] | None 
     payloads.mkdir(parents=True, exist_ok=True)
     run = dict(scope or FULL_SCOPE)
     run.setdefault("collected", len(nodes))
-    (payloads / "bdd_inprocess.json").write_text(json.dumps({"run": run, "nodes": nodes}))
+    (payloads / "bdd_inprocess.json").write_text(json.dumps({"run": run, "nodes": nodes}), encoding="utf-8")
 
 
 @pytest.fixture

@@ -16,7 +16,7 @@ class TestTaskIdCollisionFree:
         import pathlib
 
         handler_path = pathlib.Path(__file__).parent.parent.parent / "src" / "a2a_server" / "adcp_a2a_server.py"
-        return handler_path.read_text()
+        return handler_path.read_text(encoding="utf-8")
 
     def test_task_ids_are_unique(self):
         """task_id must not use len(self.tasks) — collision-prone under concurrency."""
@@ -45,7 +45,7 @@ class TestNoDebugLogs:
         import pathlib
 
         handler_path = pathlib.Path(__file__).parent.parent.parent / "src" / "a2a_server" / "adcp_a2a_server.py"
-        source = handler_path.read_text()
+        source = handler_path.read_text(encoding="utf-8")
         tree = ast.parse(source)
 
         debug_info_lines = []
