@@ -16,9 +16,9 @@
 #   2. Configure SSO in Users & Access
 #   3. Disable Setup Mode once SSO is working
 #
-# Environment variables (optional, via .env file):
+# Environment variables, via .env (required for sign-in; see docs/quickstart.md):
 #   CONDUCTOR_PORT: Change proxy port (default: 8000, useful for multiple worktrees)
-#   CREATE_DEMO_TENANT=true: Create demo tenant with mock adapter
+#   CREATE_DEMO_TENANT has no effect with this file; see docs/quickstart.md
 
 services:
   postgres:

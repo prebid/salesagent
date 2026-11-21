@@ -47,15 +47,12 @@ When complete, services are running at **http://localhost:8000**:
 **Log in:** with Google, as one of the `SUPER_ADMIN_EMAILS` addresses. There is no password login.
 Before you sign in, with either setup, complete the following steps:
 
-1. In `.env`, set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `SUPER_ADMIN_EMAILS`. The
+1. Create the OAuth client and register its two redirect URIs as in
+   [quickstart step 2](../quickstart.md#2-create-a-google-oauth-client).
+2. In `.env`, set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `SUPER_ADMIN_EMAILS`. The
    `OAUTH_*` variables configure another OIDC provider instead. After a manual setup, also set
-   `ENCRYPTION_KEY`, which saving a tenant's SSO client secret needs; `make setup` writes it
-   for you.
-2. Run `docker compose up -d` again so that the server reads them.
-3. Register `http://localhost:8000/admin/auth/google/callback` and
-   `http://localhost:8000/auth/google/callback` as redirect URIs with the OAuth client.
-   [Deployment OAuth](../deployment/environment-variables.md#deployment-oauth) explains why
-   it needs both. If you set a different `CONDUCTOR_PORT`, use that port in place of `8000`.
+   `ENCRYPTION_KEY`; `make setup` writes it for you.
+3. Run `docker compose up -d --force-recreate` so that the server reads them.
 
 ## Manual Setup
 
@@ -69,7 +66,8 @@ cd salesagent
 # 2. Install Python dependencies
 uv sync
 
-# 3. Create .env (optional — defaults work for development)
+# 3. Create .env. Sign-in needs an OAuth client and SUPER_ADMIN_EMAILS in it:
+#    see docs/quickstart.md steps 2-3
 cp .env.template .env
 
 # 4. Install pre-commit hooks
@@ -77,10 +75,10 @@ uvx pre-commit install
 
 # 5. Start Docker services
 docker compose up -d
-
-# 6. Verify health
-curl http://localhost:8000/health
 ```
+
+Then wait for `adcp-server` to report `(healthy)` before the first request, as in
+[quickstart step 4](../quickstart.md#4-start-the-stack).
 
 Migrations run automatically on startup via the `db-init` container. Docker Compose builds from local source, so code changes are reflected immediately.
 
@@ -157,10 +155,8 @@ uv run alembic revision -m "description"
 
 ### Test the MCP interface
 
-```bash
-uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
-uvx adcp http://localhost:8000/mcp/ --auth test-token get_products '{"brief":"video"}'
-```
+Run the script in [quickstart step 7](../quickstart.md#7-connect-an-ai-agent). It needs an
+advertiser token from the Admin UI and the `x-adcp-tenant` header.
 
 ### Type checking
 
@@ -199,7 +195,7 @@ The `.env` file is created from `.env.template` during setup. Key variables:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `CREATE_DEMO_TENANT` | `false` | Creates sample data on first startup |
+| `CREATE_DEMO_TENANT` | `false` | No effect with `docker-compose.yml`; see [About `CREATE_DEMO_TENANT`](../quickstart.md#about-create_demo_tenant) |
 | `ENVIRONMENT` | `development` | `development` = strict validation, `production` = lenient |
 | `CONDUCTOR_PORT` | `8000` | Nginx proxy port |
 

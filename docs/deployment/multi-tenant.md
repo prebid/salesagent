@@ -19,8 +19,8 @@ A request names its tenant in one of two ways:
 2. An `x-adcp-tenant` header carrying the tenant id, for a caller that addresses a tenant directly
    rather than through the host it is served at. The test suites and the CLI use it.
 
-The application refuses a request that names neither, with `CONFIGURATION_ERROR` and recovery
-`terminal`. The deployment cannot tell which seller the request is for, so it answers instead of
+The application refuses a request that names neither, with `TENANT_UNDEFINED` (HTTP 421) and
+recovery `terminal`. The deployment cannot tell which seller the request is for, so it answers instead of
 guessing. No code derives a host from a subdomain: a derived name is a host that nothing serves, and
 publishing one on an agent card sends every client that reads it to an address that does not answer.
 
@@ -37,7 +37,7 @@ flowchart TD
         VH -- yes --> Ten["Tenant resolved"]
         VH -- no --> XH{"x-adcp-tenant header set?"}
         XH -- yes --> Ten
-        XH -- no --> Err["CONFIGURATION_ERROR, recovery terminal"]
+        XH -- no --> Err["TENANT_UNDEFINED (421), recovery terminal"]
     end
 ```
 
@@ -299,13 +299,10 @@ The [request lifecycle](../development/request-lifecycle.md) explains what else 
 
 ## Troubleshooting
 
-### "No tenant context" error
+### "No seller is served at the address this request named" (`TENANT_UNDEFINED`)
 
-- Verify the subdomain or domain is configured for a tenant.
-- Check that the Host header is being passed correctly.
-- For Approximated: the app never reads `Apx-Incoming-Host`, so check the EDGE — that nginx
-  is in front and its `$tenant_host` map folded the vendor header into the `Host` the app
-  received. `/debug/tenant` reports the `Host` that arrived and the tenant it resolved.
+See [No seller is served at the address this request named](../development/troubleshooting.md#no-seller-is-served-at-the-address-this-request-named)
+in the troubleshooting guide.
 
 ### Custom domain not working
 

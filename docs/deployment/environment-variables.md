@@ -28,11 +28,9 @@ For a minimal working deployment:
 ```bash
 # Required
 DATABASE_URL=postgresql://user:password@host:5432/adcp
+ENCRYPTION_KEY=your-fernet-key   # the image entrypoint refuses to start without it; see Security
 
-# Required to store secrets, such as a tenant's SSO client secret
-ENCRYPTION_KEY=your-fernet-key
-
-# Required for the first sign-in: the deployment's OAuth client and a super admin
+# Required for the first sign-in to the Admin UI (there is no password login)
 GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-client-secret
 SUPER_ADMIN_EMAILS=you@example.com
@@ -223,8 +221,8 @@ in every deployment: properties come only from it.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CREATE_DEMO_TENANT` | `false` | **Local testing only.** Creates a "Demo Sales Agent" tenant with the mock adapter. Do NOT use in production. |
-| `CREATE_SAMPLE_DATA` | `false` | Create sample products, media buys, and related records (requires the demo tenant) |
+| `CREATE_DEMO_TENANT` | `false` | Has no effect with `docker-compose.yml` or in single-tenant mode, where the migration step creates the `default` tenant first. The [quickstart](../quickstart.md#about-create_demo_tenant) explains when it applies. Do not use in production. |
+| `CREATE_SAMPLE_DATA` | `false` | Create sample products, media buys, and related records. Applies only where `CREATE_DEMO_TENANT` does |
 
 ### Security
 

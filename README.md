@@ -34,32 +34,18 @@ and for the bump procedure. The pin is enforced by a CI guard
 | I want to... | Start here |
 |--------------|------------|
 | **Deploy my own sales agent** (publisher) | [Quickstart Guide](docs/quickstart.md) |
-| **Evaluate or develop locally** | [Quick Start](#quick-start-evaluation) below |
+| **Evaluate locally** | [Quickstart Guide](docs/quickstart.md) |
+| **Develop the sales agent** | [Getting Started](docs/development/GETTING_STARTED.md) |
 | **Run a multi-tenant platform** | [Deployment Guide](docs/deployment/multi-tenant.md) |
 
 ---
 
-## Quick Start (Evaluation)
+## Quick Start
 
-Try the sales agent locally:
-
-```bash
-# Clone and start
-git clone https://github.com/prebid/salesagent.git
-cd salesagent
-docker compose up -d
-
-# Test the MCP interface
-uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
-uvx adcp http://localhost:8000/mcp/ --auth test-token get_products '{"brief":"video"}'
-```
-
-Access services at http://localhost:8000:
-- **Admin UI:** `/admin` or just click "Log in to Dashboard" (test credentials: `test123`)
-- **MCP Server:** `/mcp/`
-- **A2A Server:** `/a2a`
-
-For production deployment, see the [Quickstart Guide](docs/quickstart.md).
+The [Quickstart Guide](docs/quickstart.md) runs the sales agent locally with Docker Compose,
+from cloning the repository through signing in to the Admin UI and making a first
+`get_products` call from an AI agent. Sign-in is Google OAuth (or another OIDC provider)
+only, so the guide sets up an OAuth client before the first start.
 
 ---
 
@@ -139,13 +125,19 @@ Add to your Claude config (`~/Library/Application Support/Claude/claude_desktop_
   "mcpServers": {
     "adcp": {
       "command": "uvx",
-      "args": ["mcp-remote", "http://localhost:8000/mcp/", "--header", "Authorization: Bearer YOUR_TOKEN"]
+      "args": [
+        "mcp-remote", "http://localhost:8000/mcp/",
+        "--header", "Authorization: Bearer YOUR_TOKEN",
+        "--header", "x-adcp-tenant: default"
+      ]
     }
   }
 }
 ```
 
-Your token is shown once, when the advertiser is created in Admin UI → Advertisers; rotate it there if it is lost.
+`YOUR_TOKEN` is an advertiser's token (see [API Token](docs/user-guide/advertisers.md#api-token)),
+and `default` is the tenant id; [quickstart step 7](docs/quickstart.md#7-connect-an-ai-agent)
+explains why a local call needs both headers.
 
 ---
 
@@ -158,7 +150,7 @@ docker compose logs adcp-server | head -50
 
 **GAM OAuth error?**
 - Verify `GAM_OAUTH_CLIENT_ID` and `GAM_OAUTH_CLIENT_SECRET` in `.env`
-- Restart: `docker compose restart`
+- Recreate the containers so they read `.env` again: `docker compose up -d --force-recreate`
 
 **More help:** [Troubleshooting Guide](docs/development/troubleshooting.md)
 
@@ -259,38 +251,10 @@ a buyer sent it; the only difference between them is the tenant's adapter.
 
 ## Using the MCP Client
 
-```python
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
-
-# Connect to the server
-transport = StreamableHttpTransport(
-    url="http://localhost:8000/mcp/",
-    headers={"Authorization": "Bearer your_token"},
-)
-client = Client(transport=transport)
-
-async with client:
-    # 1. Discover products. Each product carries one or more `pricing_options`.
-    products = await client.tools.get_products(brief="video ads for sports content")
-
-    # 2. Book a media buy. Each package references a product and one of its
-    #    pricing options. `idempotency_key` is REQUIRED (16-255 chars) — reusing
-    #    the same key makes retries safe (returns the original buy, no duplicate).
-    result = await client.tools.create_media_buy(
-        brand="acme.com",                     # domain shorthand for a BrandReference
-        start_time="2026-08-01T00:00:00Z",    # ISO 8601, or "asap"
-        end_time="2026-08-31T23:59:59Z",
-        packages=[
-            {
-                "product_id": "ctv_sports",
-                "pricing_option_id": "cpm_usd",  # from product.pricing_options
-                "budget": 50000,                 # amount in the pricing option's currency
-            }
-        ],
-        idempotency_key="acme-ctv-2026-08-0001",
-    )
-```
+[Quickstart step 7](docs/quickstart.md#7-connect-an-ai-agent) is a runnable first call with
+the fastmcp client: the advertiser token, the `x-adcp-tenant` header and `get_products`. The
+other tools take the request shapes in the
+[AdCP specification](https://github.com/adcontextprotocol/adcp).
 
 ## Project Structure
 
