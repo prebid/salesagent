@@ -22,8 +22,11 @@ from src.core.logging_config import log_safe
 T = TypeVar("T")
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from flask import Response
 
+    from src.core.exceptions import AdCPSalesAgentError
     from src.core.tools.media_buy_create import ApprovalResult
 
 logger = logging.getLogger(__name__)
@@ -684,11 +687,34 @@ def approve_media_buy_through_writer(media_buy_id: str, tenant_id: str, *, appro
     if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES:
         flash(
             f"Media buy approved! Waiting for creative approval before creating in the ad server "
-            f"({approval.error_msg}).",
+            f"({describe_approval_error(approval.error)}).",
             "info",
         )
     elif not approval.ok:
-        logger.error(log_safe(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {approval.error_msg}"))
-        flash(f"Media buy approved but adapter creation failed: {approval.error_msg}", "error")
+        described = describe_approval_error(approval.error)
+        logger.error(log_safe(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {described}"))
+        flash(f"Media buy approved but adapter creation failed: {described}", "error")
 
     return approval
+
+
+def describe_approval_error(error: AdCPSalesAgentError[Any] | None) -> str:
+    """The seller's line for an approval's typed error: its code and message, the field it names, each problem.
+
+    Read off the error, which is the one carrier (``ApprovalResult.error``): a refusal before
+    booking is the object a create answers the buyer with, so the seller sees its code,
+    ``field`` and ``details.problems`` as the buyer would.
+    """
+    from src.core.errors.details import ProblemsDetails
+
+    if error is None:
+        return ""
+    parts = [f"{error.error_code}: {error.message}"]
+    if error.field:
+        parts.append(f"field {error.field}")
+    if isinstance(error.details, ProblemsDetails):
+        parts.extend(
+            f"{problem.subject_type or 'problem'} {problem.subject_id or ''} {problem.code or ''}".strip()
+            for problem in error.details.problems or ()
+        )
+    return "; ".join(parts)

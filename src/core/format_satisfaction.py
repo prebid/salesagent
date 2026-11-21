@@ -84,8 +84,9 @@ WHAT THIS MODULE DOES NOT DO, deliberately:
   track (:func:`_level_shortfalls`). So are ``cta_values`` (:func:`_closed_value_shortfalls`,
   CREATIVE_VALUE_NOT_ALLOWED), a carousel's card count and what it states about each card's
   ``media`` (:func:`_card_media_shortfalls`), and a responsive creative's video duration
-  bounds, logo aspect ratios and image file-size cap, and a native unit's image file-size cap
-  (``max_image_file_size_kb``). Not read: ``om_sdk_required``, which no
+  bounds, logo aspect ratios and image file-size cap, a native unit's image file-size cap
+  (``max_image_file_size_kb``), and a display tag option's ``supported_delivery_types``
+  against its ``display_tag`` asset's ``delivery_type``. Not read: ``om_sdk_required``, which no
   manifest member states (adcontextprotocol/adcp#8627 asks how a seller is meant to validate it).
 """
 
@@ -118,8 +119,6 @@ from pydantic import BaseModel, RootModel, TypeAdapter, ValidationError
 
 from src.core.errors.details import (
     CapabilityRefusalDetails,
-    CreativeManifestDetails,
-    CreativeValueNotAllowedDetails,
     ErrorProblem,
     SelectorConflictDetails,
     SelectorRouteSummary,
@@ -127,12 +126,11 @@ from src.core.errors.details import (
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPConflictingSelectorsError,
-    AdCPCreativeMissingClickUrlError,
-    AdCPCreativeSizeMismatchError,
-    AdCPCreativeValidationFailedError,
-    AdCPCreativeValueNotAllowedError,
+    AdCPSalesAgentError,
+    problems_refusal,
 )
 from src.core.schemas import Format, FormatOptionIdentity, FormatSelector
+from src.core.traffic_carrier import TrafficSize, TrafficSizeRange
 
 logger = logging.getLogger(__name__)
 
@@ -441,10 +439,42 @@ def _plain(value: Any) -> Any:
     return value
 
 
-def _declared_params(declaration: LibraryFormatDeclaration) -> Mapping[str, Any]:
+def declared_params(declaration: LibraryFormatDeclaration) -> Mapping[str, Any]:
     """The constraints one declaration states, as plain values keyed by param name."""
     params = _plain(declaration.params)
     return params if isinstance(params, Mapping) else {}
+
+
+#: The bounds of a responsive size mode, in the order ``TrafficSizeRange`` declares them.
+RANGE_BOUNDS = ("min_width", "max_width", "min_height", "max_height")
+
+
+def size_mode(params: Mapping[str, Any]) -> tuple[tuple[TrafficSize, ...], tuple[TrafficSizeRange, ...]]:
+    """The sizes and the responsive range one option's *params* state, each once.
+
+    ``formats/canonical/display_tag.json`` (AdCP 3.2.7) gives an option one size mode:
+    "Exactly one of ``(width, height)``, ``sizes[]``, or ``min/max_width`` +
+    ``min/max_height``". A fixed size and a list both land in the sizes; stated bounds are the
+    range, an absent bound left out.
+    """
+    sizes: list[TrafficSize] = []
+    if params.get("width") and params.get("height"):
+        sizes.append(TrafficSize(width=int(params["width"]), height=int(params["height"])))
+    sizes.extend(
+        TrafficSize(width=int(size["width"]), height=int(size["height"])) for size in params.get("sizes") or ()
+    )
+    bounds = {bound: int(params[bound]) for bound in RANGE_BOUNDS if params.get(bound)}
+    return tuple(dict.fromkeys(sizes)), (TrafficSizeRange(**bounds),) if bounds else ()
+
+
+def declared_size_mode(declaration: Any) -> tuple[tuple[TrafficSize, ...], tuple[TrafficSizeRange, ...]]:
+    """The sizes and range one declaration (or a package's snapshot of it) states: :func:`size_mode` of its params.
+
+    The one reading of a declaration's size: the creative reader's carrier sizes and the GAM
+    line item's slots both take it, so a creative and its line item cannot disagree on the
+    size a declaration names.
+    """
+    return size_mode(declared_params(declaration))
 
 
 def _option_identity(declaration: LibraryFormatDeclaration) -> FormatOptionIdentity | None:
@@ -612,7 +642,7 @@ def declaration_slot_asset_ids(declaration: LibraryFormatDeclaration, asset_type
     That is what makes consulting this strictly safer than consulting the kind rather than
     a second, divergent answer.
     """
-    slots = _declared_params(declaration).get("slots")
+    slots = declared_params(declaration).get("slots")
     return _slot_asset_ids(tuple(slot for slot in slots or () if isinstance(slot, Mapping)), asset_types)
 
 
@@ -1047,7 +1077,7 @@ def _manifest_shortfalls(declaration: LibraryFormatDeclaration, manifest: Mappin
     required ratio" -- graded on the ratio each rendition was graded at
     (:func:`_coverage_shortfalls`).
     """
-    declared = dict(_declared_params(declaration))
+    declared = dict(declared_params(declaration))
     slots = tuple(_effective_slot(slot, declared) for slot in declared.get("slots") or () if isinstance(slot, Mapping))
     shortfalls = _manifest_slot_shortfalls(slots, manifest)
     primary = _primary_media_slot(slots)
@@ -1168,8 +1198,9 @@ def _set_shortfalls(path: str, member: str, constraint: str, stated: Any, accept
     """*stated*, the asset's ``member``, against the closed set *accepted* a declaration publishes.
 
     The one membership check every such set goes through: a slot's accepted ``widths`` and
-    ``heights``, its ``pixel_ratios``, ``cta_values`` (:data:`_CLOSED_VALUE_CONSTRAINT`) and a
-    card's ``allowed_card_media_asset_types``. The failure is reported at
+    ``heights``, its ``pixel_ratios``, ``cta_values`` (:data:`_CLOSED_VALUE_CONSTRAINT`), a
+    card's ``allowed_card_media_asset_types`` and a display tag's ``supported_delivery_types``
+    (:data:`_DELIVERY_TYPES_CONSTRAINT`). The failure is reported at
     ``assets.<path>.<member>`` under *constraint*. A value the asset does not state, and a set
     the declaration does not publish, are not graded here.
     """
@@ -1238,6 +1269,16 @@ _CARD_MEDIA_TYPES: frozenset[str] = frozenset({"image", "video"})
 #: ``video``") reads the other way; adcontextprotocol/adcp#8629 asks which is intended.
 _DEFAULT_CARD_MEDIA_TYPES: tuple[str, ...] = ("image",)
 
+#: formats/canonical/display_tag.json ``supported_delivery_types``: "Closed set of delivery
+#: types this format option can traffic." A ``display_tag`` asset whose ``delivery_type``
+#: (core/assets/display-tag-asset.json) is outside it is refused under this constraint name,
+#: which no specific creative code claims (:attr:`ManifestShortfall.code`), so it is
+#: ``CREATIVE_VALIDATION_FAILED_GENERIC``. core/representation-rejection.json's
+#: ``unsupported_delivery_type`` is not the code: it is the reason for one candidate of a
+#: CreativeRepresentationSet, and this is one manifest. A declaration publishing no set is not
+#: graded on delivery type.
+_DELIVERY_TYPES_CONSTRAINT = "supported_delivery_types"
+
 
 def _flat_constraint(key: str) -> tuple[str, str]:
     """The slot constraint flat declaration param *key* states, and the role it names.
@@ -1298,6 +1339,9 @@ def _effective_slot(slot: Mapping[str, Any], declared: Mapping[str, Any]) -> dic
     media because a card-asset states no dimensions of its own. A card's ``cta`` is held to
     the declaration's ``cta_values``: card-asset.json, "When the parent format declares
     ``cta_values`` (allowed CTA labels), the per-card ``cta`` MUST be one of those values".
+
+    A ``display_tag`` slot carries the declaration's ``supported_delivery_types``
+    (:data:`_DELIVERY_TYPES_CONSTRAINT`), the set its asset's ``delivery_type`` is held to.
     """
     group = str(slot.get("asset_group_id") or "")
     roles = _slot_roles(group) | {f"asset_{slot.get('asset_type')}"}
@@ -1325,6 +1369,8 @@ def _effective_slot(slot: Mapping[str, Any], declared: Mapping[str, Any]) -> dic
         effective["media"] = media
         if declared.get("cta_values"):
             effective["member_allowed_values"] = {"cta": declared["cta_values"]}
+    if slot.get("asset_type") == "display_tag" and declared.get(_DELIVERY_TYPES_CONSTRAINT):
+        effective[_DELIVERY_TYPES_CONSTRAINT] = declared[_DELIVERY_TYPES_CONSTRAINT]
     return effective
 
 
@@ -1381,7 +1427,9 @@ def _slot_constraint_shortfalls(
       the set. An unstated one is not graded: the pin infers it from "the matched logical
       size", and only the main slot has one. The main slot's set is graded with its size;
     * ``aspect_ratio``, ``widths`` and ``heights`` on a slot other than the main one
-      (:func:`_slot_dimension_shortfalls`).
+      (:func:`_slot_dimension_shortfalls`);
+    * ``supported_delivery_types`` -- a ``display_tag`` asset's ``delivery_type``
+      (:data:`_DELIVERY_TYPES_CONSTRAINT`).
 
     *slots* are effective slots (:func:`_effective_slot`): each carries the flat declaration
     params that name its role, so a limit stated either way is read here once.
@@ -1422,6 +1470,16 @@ def _slot_asset_shortfalls(
         if isinstance(text, str) and _is_number(bound) and len(text) > bound
     )
     shortfalls.extend(_closed_value_shortfalls(path, asset, slot))
+    if asset_type == "display_tag":
+        shortfalls.extend(
+            _set_shortfalls(
+                path,
+                "delivery_type",
+                _DELIVERY_TYPES_CONSTRAINT,
+                _plain(asset.get("delivery_type")),
+                slot.get(_DELIVERY_TYPES_CONSTRAINT),
+            )
+        )
     if not main and asset_type in _DIMENSIONED_ASSET_TYPES:
         shortfalls.extend(_slot_dimension_shortfalls(path, asset, slot))
     if asset_type in _DIMENSIONED_ASSET_TYPES:
@@ -1824,7 +1882,7 @@ def _legacy_route(
     narrowing = [
         declaration
         for declaration in declarations
-        if _legacy_claim_satisfies(str(declaration.format_kind), _declared_params(declaration), kind, projected)
+        if _legacy_claim_satisfies(str(declaration.format_kind), declared_params(declaration), kind, projected)
     ]
     if narrowing:
         return _selecting(narrowing, params, exact=True, manifest=manifest)
@@ -1961,7 +2019,7 @@ def _graded(
     resolved = FormatSatisfaction(satisfied=True, selection=(selected,))
     if params is None:
         return resolved
-    declared = _declared_params(selected)
+    declared = declared_params(selected)
     constraints = _stated_constraints(declared, params) if exact else declared
     if not (failed := _unsatisfied_params(params, constraints)):
         return resolved
@@ -2609,8 +2667,8 @@ def _effective_declaration(
         return _narrowed(selected, accepted) if option == _option_identity(selected) else None
     if str(accepted.format_kind) != str(selected.format_kind):
         return None
-    claim = {key: value for key, value in _declared_params(accepted).items() if value is not None}
-    offered = {key: value for key, value in _declared_params(selected).items() if value is not None}
+    claim = {key: value for key, value in declared_params(accepted).items() if value is not None}
+    offered = {key: value for key, value in declared_params(selected).items() if value is not None}
     inherited = _stated_constraints(offered, claim)
     if "duration_ms_range" in claim and "duration_ms_exact" in offered:
         inherited["duration_ms_exact"] = offered["duration_ms_exact"]
@@ -3340,8 +3398,8 @@ def accepts_legacy_reference(
 def creative_satisfies(creative: Any, contract: Any) -> FormatSatisfaction:
     """Whether a STORED creative satisfies a product's format contract. Every creative gate asks here.
 
-    THE ONE VALIDATOR for a creative against a product, and four gates ask it: the two on the
-    create path, the update path and the ``sync_creatives`` assignment path. Each used to
+    THE ONE VALIDATOR for a creative against a product, and three gates ask it: the create
+    path's pre-adapter gate, the update path and the ``sync_creatives`` assignment path. Each used to
     build the identity and call :func:`satisfies` itself with no manifest, so a canonical
     creative was graded on its kind alone and a same-kind 728x90 creative satisfied a product
     fixing 300x250 -- the fifth rule of ``formats.mdx``, "Equal format_kind values alone do
@@ -3476,13 +3534,7 @@ def creative_refusal(
     field: str | None = None,
     creative_id: str | None = None,
     **entity: Any,
-) -> (
-    AdCPCapabilityNotSupportedError
-    | AdCPCreativeMissingClickUrlError
-    | AdCPCreativeSizeMismatchError
-    | AdCPCreativeValidationFailedError
-    | AdCPCreativeValueNotAllowedError
-):
+) -> AdCPSalesAgentError[Any]:
     """The error to raise for a refused CREATIVE verdict. Every creative gate raises this.
 
     A selection outside the product's closed set, or an option ref it does not publish, is
@@ -3513,20 +3565,16 @@ def creative_refusal(
     The generic code's own text says producers "SHOULD prefer a specific creative code
     whenever one applies", so the error takes a specific code when every shortfall shares
     it. A refusal mixing kinds takes the generic code, and each ``problems[]`` entry still
-    carries the specific code of its own shortfall.
+    carries the specific code of its own shortfall. That selection is
+    ``exceptions.problems_refusal``, the one an ad server's pre-booking refusals take too.
 
     ``problems[]`` carries each shortfall as values -- the manifest path, what the asset
     states, what the declaration accepts -- under the code it is an instance of.
     """
     if verdict.refusal not in _CREATIVE_REFUSALS and not verdict.shortfalls:
         return canonical_refusal(verdict, field=field, creative_id=creative_id, **entity)
-    codes = {shortfall.code for shortfall in verdict.shortfalls}
-    common = next(iter(codes)) if len(codes) == 1 else None
-    values: dict[str, Any] = {
-        "creative_id": creative_id,
-        "rejected_value": verdict.rejected_value,
-        "accepted_values": list(verdict.accepted_values),
-        "problems": [
+    return problems_refusal(
+        [
             ErrorProblem(
                 code=shortfall.code,
                 subject_type="creative",
@@ -3536,22 +3584,13 @@ def creative_refusal(
                 accepted_values=list(shortfall.accepted_values),
             )
             for shortfall in verdict.shortfalls
-        ]
-        or None,
+        ],
+        field=field,
+        creative_id=creative_id,
+        rejected_value=verdict.rejected_value,
+        accepted_values=list(verdict.accepted_values),
         **entity,
-    }
-    if common is ErrorCode.CREATIVE_VALUE_NOT_ALLOWED:
-        offending = verdict.shortfalls[0]
-        return AdCPCreativeValueNotAllowedError(
-            details=CreativeValueNotAllowedDetails(**values, allowed_values=list(offending.accepted_values)),
-            field=offending.field,
-        )
-    details = CreativeManifestDetails(**values)
-    if common is ErrorCode.CREATIVE_SIZE_MISMATCH:
-        return AdCPCreativeSizeMismatchError(details=details, field=field)
-    if common is ErrorCode.CREATIVE_MISSING_CLICK_URL:
-        return AdCPCreativeMissingClickUrlError(details=details, field=field)
-    return AdCPCreativeValidationFailedError(details=details, field=field)
+    )
 
 
 def require_covered(

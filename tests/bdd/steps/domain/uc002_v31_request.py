@@ -20,6 +20,8 @@ from typing import Any
 from pytest_bdd import given, parsers, then
 
 from tests.bdd.steps._outcome_helpers import WIRE_MISSING, wire_absent, wire_field, wire_lookup
+from tests.bdd.steps.generic._creative_seeding import store_package_creative
+from tests.factories.creative_asset import LIBRARY_IMAGE_FORMAT, library_image_assets
 
 # ═══════════════════════════════════════════════════════════════════════
 # Idempotency: prior state under the request's key
@@ -163,13 +165,10 @@ def given_request_producing_condition(ctx: dict, condition: str) -> None:
     The base request has a future flight and no creatives. "creatives present" assigns an
     approved library creative to the package; "asap" moves the flight start to now.
     """
-    from tests.bdd.steps.generic.given_media_buy import _add_creative_ids_to_package, _create_approved_creative
-
     assert condition in _STATUS_CONDITIONS, f"unknown condition {condition!r}; expected one of {_STATUS_CONDITIONS}"
     kwargs = _create_request(ctx)
     if condition.startswith("creatives present"):
-        creative = _create_approved_creative(ctx, "cr-status-values-001")
-        _add_creative_ids_to_package(ctx, [creative.creative_id])
+        store_package_creative(ctx, "cr-status-values-001", library_image_assets(), fmt=LIBRARY_IMAGE_FORMAT)
     if condition.endswith("asap flight"):
         kwargs["start_time"] = "asap"
 

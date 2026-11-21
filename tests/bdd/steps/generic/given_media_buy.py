@@ -25,13 +25,20 @@ from tests.bdd.steps.generic._create_request import (
     build_create_request_kwargs,
     pricing_option_id,
 )
+from tests.bdd.steps.generic._creative_seeding import store_creative, store_package_creative
 from tests.bdd.steps.generic.given_config import attach_push_notification_config
 from tests.factories import (
     CurrencyLimitFactory,
     PricingOptionFactory,
     ProductFactory,
 )
-from tests.factories.creative_asset import build_assets, image_spec, named_format_assets
+from tests.factories.creative_asset import (
+    LIBRARY_IMAGE_FORMAT,
+    build_assets,
+    image_spec,
+    library_image_assets,
+    named_format_assets,
+)
 from tests.factories.malformed import malformed
 from tests.factories.mint import mint
 from tests.factories.request import CreativeAssetRequestFactory
@@ -499,7 +506,6 @@ def _set_max_daily_package_spend(ctx: dict, amount: int) -> None:
 
     Shared helper for both the parameterized and bare 'configured' steps.
     """
-    from decimal import Decimal
 
     from sqlalchemy import select
 
@@ -721,7 +727,6 @@ def given_packages_valid_pricing(ctx: dict) -> None:
     """
     from sqlalchemy import select
 
-    from src.core.database.models import PricingOption
     from tests.bdd.steps._harness_db import db_session
 
     kwargs = ctx.get("request_kwargs")
@@ -2115,45 +2120,6 @@ def _add_creative_ids_to_package(ctx: dict, creative_ids: list[str]) -> None:
     pkg["creative_ids"] = existing
 
 
-def _create_approved_creative(
-    ctx: dict,
-    creative_id: str,
-    fmt: str = "display_300x250_image",
-    asset_key: str = "banner_image",
-    principal: Any = None,
-) -> Any:
-    """Create an approved Creative in the DB and return it.
-
-    Uses CreativeFactory with the tenant from harness context, owned by *principal*
-    (the harness's principal when not given).
-
-    THE FORMAT AND THE ASSET KEY MOVE TOGETHER and are not independent defaults. The
-    previous pair -- ``display_300x250`` keyed ``primary`` -- named the harness's own
-    format-spec STUB: the id is absent from the pinned capture, and ``primary`` was the
-    stub's asset_id. With the stub gone, both halves have to come from the capture, which
-    declares ``banner_image`` (image, required) and ``click_url`` (url, required) for
-    ``display_300x250_image``.
-
-    Only ``banner_image`` is seeded, which is survivable TODAY and is worth saying why:
-    nothing validates a creative's assets against the resolved spec, so a missing required
-    ``click_url`` costs nothing here. That gap is #767; when it lands, this default needs
-    the url asset too. The pre-existing ``cr-upload-ok`` call site made the same trade.
-    """
-    from tests.factories.creative import CreativeFactory
-
-    env = ctx["env"]
-    creative = CreativeFactory(
-        creative_id=creative_id,
-        tenant=ctx["tenant"],
-        principal=principal if principal is not None else ctx["principal"],
-        format=fmt,
-        approved=True,
-        data={"assets": {asset_key: {"url": "https://example.com/banner.png", "width": 300, "height": 250}}},
-    )
-    env._commit_factory_data()
-    return creative
-
-
 def _add_inline_creatives(
     ctx: dict,
     count: int = 1,
@@ -2192,7 +2158,7 @@ def inline_creative_payload(
         name=f"Inline Creative {number}",
         format_id={"agent_url": agent_url, "id": fmt_id},
         # Every asset the CAPTURE requires for this format, keyed by its asset_id, not by
-        # the deleted stub's ``primary``. See _create_approved_creative.
+        # the deleted stub's ``primary``. See ``library_image_assets``.
         assets=named_format_assets(fmt_id, media_url=f"https://example.com/banner-{number}.png"),
     )
 
@@ -2247,7 +2213,13 @@ def given_other_principal_holds_inline_creative_id(ctx: dict) -> None:
     from tests.factories.principal import PrincipalFactory
 
     creative_id = _ensure_request_defaults(ctx)["packages"][0]["creatives"][0]["creative_id"]
-    _create_approved_creative(ctx, creative_id, principal=PrincipalFactory(tenant=ctx["tenant"]))
+    store_creative(
+        ctx,
+        creative_id,
+        library_image_assets(),
+        fmt=LIBRARY_IMAGE_FORMAT,
+        principal=PrincipalFactory(tenant=ctx["tenant"]),
+    )
 
 
 @given(parsers.parse("the creative scenario is {partition}"))
@@ -2266,8 +2238,7 @@ def given_creative_partition(ctx: dict, partition: str) -> None:
 
     elif partition == "assignments_only":
         # Reference an existing approved creative via creative_ids
-        creative = _create_approved_creative(ctx, "cr-assign-001")
-        _add_creative_ids_to_package(ctx, [creative.creative_id])
+        store_package_creative(ctx, "cr-assign-001", library_image_assets(), fmt=LIBRARY_IMAGE_FORMAT)
 
     elif partition == "uploads_only":
         # Inline creative objects on the package (no library references)
@@ -2275,21 +2246,18 @@ def given_creative_partition(ctx: dict, partition: str) -> None:
 
     elif partition == "both_paths":
         # Both library references AND inline uploads
-        creative = _create_approved_creative(ctx, "cr-both-001")
-        _add_creative_ids_to_package(ctx, [creative.creative_id])
+        store_package_creative(ctx, "cr-both-001", library_image_assets(), fmt=LIBRARY_IMAGE_FORMAT)
         _add_inline_creatives(ctx, count=1)
 
     elif partition == "assignment_with_weight_zero":
         # Approved creative referenced by ID — weight=0 is an assignment-level
         # attribute applied post-creation; validation should still pass.
-        creative = _create_approved_creative(ctx, "cr-weight0-001")
-        _add_creative_ids_to_package(ctx, [creative.creative_id])
+        store_package_creative(ctx, "cr-weight0-001", library_image_assets(), fmt=LIBRARY_IMAGE_FORMAT)
 
     elif partition == "assignment_with_placement_targeting":
         # Approved creative referenced by ID — placement targeting is an
         # assignment-level attribute; validation should still pass.
-        creative = _create_approved_creative(ctx, "cr-placement-001")
-        _add_creative_ids_to_package(ctx, [creative.creative_id])
+        store_package_creative(ctx, "cr-placement-001", library_image_assets(), fmt=LIBRARY_IMAGE_FORMAT)
 
     # ── Invalid partitions ──
     elif partition == "creative_not_found":
@@ -2298,24 +2266,11 @@ def given_creative_partition(ctx: dict, partition: str) -> None:
 
     elif partition == "format_mismatch":
         # Creative with format that doesn't match the product's supported formats
-        creative = _create_approved_creative(ctx, "cr-badfmt-001", fmt="video_1280x720")
-        _add_creative_ids_to_package(ctx, [creative.creative_id])
+        store_package_creative(ctx, "cr-badfmt-001", library_image_assets(), fmt="video_1280x720")
 
     elif partition == "missing_required_assets":
         # Creative exists but has empty assets (validation should reject)
-        from tests.factories.creative import CreativeFactory
-
-        env = ctx["env"]
-        creative = CreativeFactory(
-            creative_id="cr-noassets-001",
-            tenant=ctx["tenant"],
-            principal=ctx["principal"],
-            format="display_300x250",
-            approved=True,
-            data={},  # No assets
-        )
-        env._commit_factory_data()
-        _add_creative_ids_to_package(ctx, [creative.creative_id])
+        store_package_creative(ctx, "cr-noassets-001", None, fmt="display_300x250")
 
     elif partition == "exceeds_max_creatives":
         # 101 inline creatives — exceeds the spec limit of 100
@@ -2338,8 +2293,7 @@ def given_creative_boundary(ctx: dict, config: str) -> None:
 
     elif config == "assignment cr-001":
         # Single library creative reference
-        creative = _create_approved_creative(ctx, "cr-001")
-        _add_creative_ids_to_package(ctx, [creative.creative_id])
+        store_package_creative(ctx, "cr-001", library_image_assets(), fmt=LIBRARY_IMAGE_FORMAT)
 
     elif config == "upload with format":
         # Single inline creative with proper format matching product
@@ -2351,13 +2305,11 @@ def given_creative_boundary(ctx: dict, config: str) -> None:
 
     elif config == "wrong format":
         # Creative with mismatched format
-        creative = _create_approved_creative(ctx, "cr-wrongfmt", fmt="video_1280x720")
-        _add_creative_ids_to_package(ctx, [creative.creative_id])
+        store_package_creative(ctx, "cr-wrongfmt", library_image_assets(), fmt="video_1280x720")
 
     elif config == "weight=0":
         # Creative reference — weight=0 (paused) is valid boundary
-        creative = _create_approved_creative(ctx, "cr-w0")
-        _add_creative_ids_to_package(ctx, [creative.creative_id])
+        store_package_creative(ctx, "cr-w0", library_image_assets(), fmt=LIBRARY_IMAGE_FORMAT)
         # SPEC-PRODUCTION GAP: create_media_buy uses creative_ids (no weight param).
         # The actual weight is set during _sync_creatives at default=100.
         # Weight=0 (paused) cannot be set at creation time — production always
@@ -2366,8 +2318,7 @@ def given_creative_boundary(ctx: dict, config: str) -> None:
 
     elif config == "weight=100":
         # Creative reference — weight=100 (max rotation) is valid boundary
-        creative = _create_approved_creative(ctx, "cr-w100")
-        _add_creative_ids_to_package(ctx, [creative.creative_id])
+        store_package_creative(ctx, "cr-w100", library_image_assets(), fmt=LIBRARY_IMAGE_FORMAT)
         # Store the expected weight for boundary verification.
 
     elif config == "101 uploads":
@@ -2425,8 +2376,7 @@ def given_creative_format_mismatch(ctx: dict) -> None:
     auto path; the live-server default (human_review_required=True) would take
     the PENDING path, which emits VALIDATION_ERROR for the same condition.
     """
-    creative = _create_approved_creative(ctx, "cr-fmt-mismatch", fmt="video_1280x720")
-    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    store_package_creative(ctx, "cr-fmt-mismatch", library_image_assets(), fmt="video_1280x720")
     _seed_auto_approval(ctx)
 
 
@@ -2536,18 +2486,24 @@ def given_request_inline_creatives_valid(ctx: dict) -> None:
     # the live server resolves formats from the 54-format fixture under
     # ADCP_TESTING, so a synthetic id dies CREATIVE_REJECTED before the upload
     # this scenario tests. display_300x250_image's asset_id is banner_image.
-    creative = _create_approved_creative(ctx, "cr-upload-ok", fmt="display_300x250_image", asset_key="banner_image")
-    _add_creative_ids_to_package(ctx, [creative.creative_id])
-    # The default product only accepts display_300x250 — add the real format so
-    # the creative-vs-product compat check passes on the server DB too.
+    store_package_creative(ctx, "cr-upload-ok", library_image_assets(), fmt=LIBRARY_IMAGE_FORMAT)
+    accept_on_default_product(ctx, "display_300x250_image")
+
+
+def accept_on_default_product(ctx: dict, format_id: str) -> None:
+    """Add the reference agent's legacy *format_id* to the default product's ``format_ids``, then auto-approve.
+
+    The default product only accepts ``display_300x250``, so a creative in another catalog
+    format needs the product to name it or the creative-vs-product check refuses the buy on
+    the server DB too. Auto-approval is seeded so the create takes the synchronous path.
+    """
     product = ctx.get("default_product")
     if product is not None:
-        env = ctx["env"]
         product.format_ids = [
             *(product.format_ids or []),
-            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": format_id},
         ]
-        env._commit_factory_data()
+        ctx["env"]._commit_factory_data()
     _seed_auto_approval(ctx)
 
 
@@ -2604,29 +2560,13 @@ def given_request_canonical_creative_with_clickthrough(ctx: dict, signal: str) -
     only the deprecated arm -- without it the buy is refused UNSUPPORTED_FEATURE before any
     upload, and the scenario would grade the closed set instead of the clickthrough.
     """
-    from tests.factories.creative import CreativeFactory
-    from tests.factories.creative_asset import build_assets, image_spec, url_spec
+    from tests.factories.creative_asset import url_spec
 
     assert signal in _CLICK_SIGNALS, f"unknown click signal {signal!r}; known: {sorted(_CLICK_SIGNALS)}"
     asset_key, url_type = _CLICK_SIGNALS[signal]
 
-    _ensure_request_defaults(ctx)
-    env = ctx["env"]
-    creative = CreativeFactory(
-        creative_id="cr-canonical-click",
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        canonical_kind="image",
-        approved=True,
-        data={
-            "assets": build_assets(
-                image_spec("image_main"),
-                url_spec(asset_key, url=CANONICAL_CLICK_URL, url_type=url_type),
-            )
-        },
-    )
-    env._commit_factory_data()
-    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    assets = build_assets(image_spec("image_main"), url_spec(asset_key, url=CANONICAL_CLICK_URL, url_type=url_type))
+    store_package_creative(ctx, "cr-canonical-click", assets, kind="image")
     _publish_on_default_product(ctx, {"format_kind": "image", "params": {"width": 300, "height": 250}})
 
 
@@ -2639,21 +2579,10 @@ def given_request_canonical_audio_creative(ctx: dict) -> None:
     and including one would supply dimensions and so hide the obligation under test. An
     audio asset has no width or height, and the buy must be accepted anyway.
     """
-    from tests.factories.creative import CreativeFactory
-    from tests.factories.creative_asset import asset_spec, build_assets
+    from tests.factories.creative_asset import asset_spec
 
-    _ensure_request_defaults(ctx)
-    env = ctx["env"]
-    creative = CreativeFactory(
-        creative_id="cr-canonical-audio",
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        canonical_kind="audio_hosted",
-        approved=True,
-        data={"assets": build_assets(asset_spec("audio_main", "audio", url="https://cdn.example.com/spot.mp3"))},
-    )
-    env._commit_factory_data()
-    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    assets = build_assets(asset_spec("audio_main", "audio", url="https://cdn.example.com/spot.mp3"))
+    store_package_creative(ctx, "cr-canonical-audio", assets, kind="audio_hosted")
     _publish_on_default_product(ctx, {"format_kind": "audio_hosted", "params": {}})
 
 
@@ -2680,20 +2609,8 @@ def given_request_product_renames_the_media_slot(ctx: dict) -> None:
     demonstration: every other way the seller could find a media asset is excluded by the
     name, so the scenario reddens unless the product declaration was actually consulted.
     """
-    from tests.factories.creative import CreativeFactory
-
-    _ensure_request_defaults(ctx)
-    env = ctx["env"]
-    creative = CreativeFactory(
-        creative_id="cr-product-renamed-slot",
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        canonical_kind="image",
-        approved=True,
-        data={"assets": build_assets(image_spec(PRODUCT_RENAMED_MEDIA_SLOT))},
-    )
-    env._commit_factory_data()
-    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    assets = build_assets(image_spec(PRODUCT_RENAMED_MEDIA_SLOT))
+    store_package_creative(ctx, "cr-product-renamed-slot", assets, kind="image")
     _declare_renamed_media_slot(ctx)
 
 
@@ -3350,14 +3267,13 @@ def given_request_passes_validation(ctx: dict) -> None:
     Includes creative_ids with matching DB records so scenarios that test
     creative assignment persistence (INV-020-1) have actual creatives.
 
-    Through ``_create_approved_creative``, so the creative carries a format the pinned
+    Through ``library_image_assets``, so the creative carries a format the pinned
     capture SERVES and the product accepts. It was hand-built on ``display_300x250``, an id
     absent from the capture, so the create's format resolution refused it and a request this
     sentence calls valid failed validation (``given_adapter_error`` strips the ids for
     exactly that reason).
     """
-    creative = _create_approved_creative(ctx, "cr-all-validation")
-    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    store_package_creative(ctx, "cr-all-validation", library_image_assets(), fmt=LIBRARY_IMAGE_FORMAT)
 
 
 @given("a create_media_buy request that fails validation")

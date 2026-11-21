@@ -11,7 +11,7 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, overload
 
@@ -33,6 +33,7 @@ from src.core.errors.details import (
     CreativeValueNotAllowedDetails,
     EntityRefDetails,
     ErrorDetails,
+    ErrorProblem,
     InvalidStateDetails,
     PricingValidationDetails,
     ProductRefDetails,
@@ -424,6 +425,11 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
         itself and silently keep its parent's status.
         """
         return CODE_TABLE[self._error_code].status
+
+    @property
+    def envelope_only(self) -> bool:
+        """Whether this error fails the whole request rather than one item, derived like ``message``."""
+        return CODE_TABLE[self._error_code].envelope_only
 
     def __str__(self) -> str:
         return self.message
@@ -1882,6 +1888,65 @@ def adcp_error_for(exc: Exception, field: str | None = None, *, document: Any = 
     if isinstance(exc, PermissionError):
         return AdCPAuthorizationError()
     return AdCPInternalError()
+
+
+def problems_refusal(
+    problems: Sequence[ErrorProblem], *, field: str | None = None, **values: Any
+) -> AdCPSalesAgentError[Any]:
+    """The one error a set of classified problems is answered with. Every refusal built from problems is.
+
+    A check classifies what it refuses as ``ErrorProblem`` values -- a creative manifest's
+    shortfalls (``format_satisfaction.creative_refusal``), an ad server's pre-booking refusals
+    (``AdServerAdapter.validate_media_buy_request``) -- and this picks the class, so the choice
+    exists once, for core and for every adapter:
+
+    * Problems that are all about creatives take the class of the code they all share:
+      ``CREATIVE_SIZE_MISMATCH``, ``CREATIVE_MISSING_CLICK_URL``, ``CREATIVE_VALUE_NOT_ALLOWED``,
+      ``UNSUPPORTED_FEATURE`` or ``CONFIGURATION_ERROR``. Otherwise -- a mix of kinds, a shared
+      code with no class of its own, or no problem at all -- they take
+      ``CREATIVE_VALIDATION_FAILED_GENERIC``, "the producer cannot classify the failure with a
+      more specific standard code" and "Producers SHOULD prefer a specific creative code
+      whenever one applies" (enums/error-code.json). A refusal mixing kinds takes the generic
+      code, and each ``problems[]`` entry still carries the specific code of its own shortfall.
+    * Problems about anything else (a package's pricing model, the flight) are
+      ``VALIDATION_ERROR``, "violates business rules beyond schema validation", with every
+      problem listed.
+
+    ``CREATIVE_VALUE_NOT_ALLOWED``'s entry says the seller "MUST set ``error.field`` to the
+    offending asset's path within the manifest" and "SHOULD include the format's
+    ``allowed_values`` array in ``error.details.allowed_values``", so *field* is replaced by the
+    first problem's path and its accepted set travels in ``allowed_values``.
+
+    *values* are the details' entity ids and canonical rejection-set keys (``creative_id``,
+    ``product_id``, ``rejected_value``, ``accepted_values``), passed through.
+
+    Every problem rides one error. ``core/error.json``'s rule for a mix -- "sellers MUST emit
+    separate error objects or omit buyer_reason rather than select a misleading single class"
+    -- is about ``buyer_reason``, which this seller does not emit.
+    """
+    listed = list(problems) or None
+    codes = {problem.code for problem in problems}
+    common = next(iter(codes)) if len(codes) == 1 else None
+    if not all(problem.subject_type == "creative" for problem in problems):
+        return AdCPValidationError(details=ValidationDetails(problems=listed, **values), field=field)
+    if common == ErrorCode.CREATIVE_VALUE_NOT_ALLOWED:
+        offending = problems[0]
+        return AdCPCreativeValueNotAllowedError(
+            details=CreativeValueNotAllowedDetails(
+                **values, problems=listed, allowed_values=list(offending.accepted_values or ())
+            ),
+            field=offending.field,
+        )
+    if common == ErrorCode.CONFIGURATION_ERROR:
+        return AdCPConfigurationError(details=ConfigurationDetails(**values, problems=listed), field=field)
+    if common == ErrorCode.UNSUPPORTED_FEATURE:
+        return AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(**values, problems=listed), field=field)
+    details = CreativeManifestDetails(**values, problems=listed)
+    if common == ErrorCode.CREATIVE_SIZE_MISMATCH:
+        return AdCPCreativeSizeMismatchError(details=details, field=field)
+    if common == ErrorCode.CREATIVE_MISSING_CLICK_URL:
+        return AdCPCreativeMissingClickUrlError(details=details, field=field)
+    return AdCPCreativeValidationFailedError(details=details, field=field)
 
 
 # ---------------------------------------------------------------------------

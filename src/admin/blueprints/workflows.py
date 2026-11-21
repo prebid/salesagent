@@ -6,7 +6,7 @@ import logging
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
-from src.admin.utils import approve_media_buy_through_writer, require_tenant_access
+from src.admin.utils import approve_media_buy_through_writer, describe_approval_error, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context
@@ -198,7 +198,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                         return jsonify({"success": True}), 200
 
                     if not approval.ok:
-                        return jsonify({"success": False, "error": approval.error_msg}), 500
+                        return jsonify({"success": False, "error": describe_approval_error(approval.error)}), 500
 
                     logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
                     flash("Workflow step approved and media buy created successfully", "success")

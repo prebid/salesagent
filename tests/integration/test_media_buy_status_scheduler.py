@@ -28,12 +28,16 @@ from src.core.database.models import (
 from src.core.database.repositories import MediaBuyRepository
 from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
 from tests.factories import stamp_format_identity
+from tests.factories.media_buy import bare_package_row
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
     read_media_buy_state,
 )
 from tests.utils.database_helpers import add_product_prerequisites, vhost_for
+
+#: The one package every buy here holds, and the one each creative is assigned to.
+_PACKAGE_ID = "default_package"
 
 
 def _create_test_tenant(tenant_id: str = "test_tenant") -> str:
@@ -116,6 +120,8 @@ def _create_media_buy(
             raw_request={},  # Required field
         )
         session.add(media_buy)
+        # An assignment's package is a foreign key to the buy's own package rows.
+        media_buy.packages.append(bare_package_row(media_buy_id, _PACKAGE_ID))
         session.commit()
 
     return media_buy_id
@@ -160,7 +166,7 @@ def _create_creative_assignment(
             principal_id=principal_id,
             media_buy_id=media_buy_id,
             creative_id=creative_id,
-            package_id="default_package",  # Required field
+            package_id=_PACKAGE_ID,
         )
         session.add(assignment)
         session.commit()

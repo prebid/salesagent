@@ -16,14 +16,27 @@ creation process:
 """
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from src.adapters.broadstreet.client import BroadstreetClient
 from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES, get_template_info
 from src.core.exceptions import AdCPConfigurationError
+from src.core.traffic_carrier import CreativeToTraffic, HtmlRepresentation
 
 logger = logging.getLogger(__name__)
+
+
+def _inline_html(asset: Mapping[str, Any]) -> str | None:
+    """The markup of the creative core read for this asset, when it is inline HTML; else None.
+
+    ``core/assets/html-asset.json`` (AdCP 3.2.7) carries the markup in ``content``. Read off the
+    carrier, the one place core puts what a creative serves.
+    """
+    carrier = asset.get("creative")
+    if isinstance(carrier, CreativeToTraffic) and isinstance(carrier.representation, HtmlRepresentation):
+        return carrier.representation.content
+    return None
 
 
 # Map AdCP format types to Broadstreet ad types
@@ -117,7 +130,7 @@ class BroadstreetAdvertisementManager:
             return FORMAT_TO_AD_TYPE[format_type]
 
         # Check for HTML content
-        if asset.get("html") or asset.get("snippet"):
+        if asset.get("html") or _inline_html(asset):
             return "html"
 
         # Check for image URL
@@ -148,8 +161,8 @@ class BroadstreetAdvertisementManager:
         params: dict[str, Any] = {}
 
         if ad_type == "html":
-            # HTML ad - use html or snippet content
-            html_content = asset.get("html") or asset.get("snippet", "")
+            # HTML ad - its html, else the carrier's inline HTML
+            html_content = asset.get("html") or _inline_html(asset)
             if html_content:
                 params["html"] = html_content
             elif asset.get("media_url"):

@@ -24,9 +24,12 @@ TENANT and so stays with whoever creates it: pass it to ``TenantFactory`` /
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
+
+if TYPE_CHECKING:
+    from src.core.config import GamSuiteNetwork
 
 
 def seed_gam_tenant(
@@ -65,31 +68,57 @@ def seed_gam_tenant(
     return tenant
 
 
-def onboard_gam(tenant: Any, *, trafficker_id: str) -> Any:
+def onboard_gam(
+    tenant: Any,
+    *,
+    trafficker_id: str | None,
+    network: GamSuiteNetwork | None = None,
+    name_prefix: str | None = None,
+) -> Any:
     """Leave *tenant* with the rows GAM onboarding in the Admin UI writes, and return the config.
 
     The one writer of that fact: ``tenant.ad_server``, which the setup checklist reads, and
-    the tenant's ``AdapterConfig`` row, which adapter selection reads. *tenant* must have no
-    ``AdapterConfig`` yet; a second one fails on the primary key.
+    the tenant's ``AdapterConfig`` row, which adapter selection reads. A mock ``AdapterConfig``
+    the tenant already has is replaced (the relationship's delete-orphan turns the two writes
+    into one update).
 
-    ``gam_refresh_token`` is what makes the adapter CONSTRUCTIBLE: it builds its
+    Without *network* the tenant is onboarded to the stand-in network every in-process caller
+    builds: ``gam_refresh_token`` is what makes the adapter CONSTRUCTIBLE (it builds its
     credentials in ``__init__`` and refuses a config carrying no
-    key_file/service_account_json/refresh_token (``google_ad_manager.py:176``). Every caller
-    stands in Google's client, so the value only has to be present.
+    key_file/service_account_json/refresh_token), and the stand-in answers to any network
+    code. With *network*, the configured GAM network the suite books against, the tenant is onboarded to it by
+    service account (``scripts/gam_prerequisites_check.adapter_config_columns``), and the key is stored
+    encrypted, as the column stores it. *trafficker_id* ``None`` is no trafficker, which the
+    adapter resolves to the service account's own user. *name_prefix* leads every order and
+    line item name the seller gives GAM (the seller's naming templates), so a run's objects on
+    a shared network are its own.
 
     The caller binds the factories to its session (an env does so on entry; otherwise wrap
     the call in ``bind_factories_to_session``).
     """
+    from scripts.gam_prerequisites_check import adapter_config_columns
+    from src.core.utils.naming import DEFAULT_ORDER_NAME_TEMPLATE
     from tests.factories import AdapterConfigFactory
 
-    tenant.ad_server = "google_ad_manager"
-    return AdapterConfigFactory(
-        tenant=tenant,
-        adapter_type="google_ad_manager",
-        gam_network_code="123456",
-        gam_trafficker_id=trafficker_id,
-        gam_refresh_token="test_refresh_token",
+    network_columns: dict[str, Any] = (
+        adapter_config_columns(network)
+        if network is not None
+        else {
+            "adapter_type": "google_ad_manager",
+            "gam_network_code": "123456",
+            "gam_refresh_token": "test_refresh_token",
+        }
     )
+    names: dict[str, str] = (
+        {
+            "gam_order_name_template": f"{name_prefix} {DEFAULT_ORDER_NAME_TEMPLATE}",
+            "gam_line_item_name_template": f"{name_prefix} {{product_name}}",
+        }
+        if name_prefix
+        else {}
+    )
+    tenant.ad_server = "google_ad_manager"
+    return AdapterConfigFactory(tenant=tenant, gam_trafficker_id=trafficker_id, **network_columns, **names)
 
 
 def seed_setup_checklist_rows(session: Any, tenant: Any) -> None:

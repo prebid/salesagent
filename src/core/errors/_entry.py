@@ -86,6 +86,10 @@ class CodeEntry:
     #: and the 9 platform codes declare nothing. Only a code whose family changes how it
     #: reaches the buyer says so.
     group: CodeGroup = CodeGroup.GENERAL
+    #: The pin's "Wire placement" rule binds the code to the transport-level failure markers
+    #: (``enums/error-code.json``, ``enumDescriptions``), so it may not sit on one item of a
+    #: success artifact (a ``creatives[].errors`` entry). Read by the sync assignment push.
+    envelope_only: bool = False
 
     def __post_init__(self) -> None:
         if not self.suggestion or not self.message:

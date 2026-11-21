@@ -19,8 +19,10 @@
 # Google's SOAP client and report download stood in. The buyer observes the outcome on the
 # get_media_buy_delivery response.
 #
-# Transports: a2a, mcp and rest. The live server has no stand-in GAM network, so the setup
-# declares itself unrealizable on e2e (GamSellerMixin.sell_through_gam).
+# Transports: a2a, mcp and rest. On e2e the tenant
+# sells on the GAM network the environment configures, and each GAM Then reads it back
+# (tests/harness/gam_network.py); a Given the configured network cannot be made into
+# declares that with its own reason (GamSellerMixin).
 #
 # @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/media-buy/get-media-buy-delivery-response.json
 # @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/pricing-options/cpm-option.json pointer=/properties/pricing_option_id

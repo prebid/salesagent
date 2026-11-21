@@ -31,8 +31,10 @@
 # the booking in-process: the real GoogleAdManager adapter runs, and only Google's SOAP client
 # is stood in.
 #
-# Transports: a2a, mcp and rest. The live server has no stand-in GAM network, so the setup
-# declares itself unrealizable on e2e (GamSellerMixin.sell_through_gam).
+# Transports: a2a, mcp and rest. On e2e the tenant
+# sells on the GAM network the environment configures, and each GAM Then reads it back
+# (tests/harness/gam_network.py); a Given the configured network cannot be made into
+# declares that with its own reason (GamSellerMixin).
 #
 # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
 # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/pricing-models.mdx
@@ -121,11 +123,13 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
     # 425 at 12.00 buys 35416.67 impressions: the volume is floored, so it never costs more
     # than the budget, and a DAILY goal floors the spread over 14 days (2529.76).
     # WEEKLY is not a goal type GAM accepts on PRICE_PRIORITY, so the type's LIFETIME goal is booked.
+    # A NONE goal has no units: GAM stores -1 for it, whatever was sent (read back on the network in
+    # run f1df24a0; Google's v202602 docs say nothing about units under NONE).
     Examples:
       | configured | budget | bid   | micros   | goalType | units  |
       | LIFETIME   | 560    | 4.00  | 4000000  | LIFETIME | 140000 |
       | DAILY      | 560    | 4.00  | 4000000  | DAILY    | 10000  |
-      | NONE       | 425    | 12.00 | 12000000 | NONE     | 35416  |
+      | NONE       | 425    | 12.00 | 12000000 | NONE     | -1     |
       | DAILY      | 425    | 12.00 | 12000000 | DAILY    | 2529   |
       | WEEKLY     | 560    | 4.00  | 4000000  | LIFETIME | 140000 |
 
@@ -144,18 +148,19 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
     Then the response should succeed
     And Google Ad Manager received these line items, in package order:
       | lineItemType | priority   | costType   | costPerUnitMicros | goalType   | unitType   | units |
-      | <type>       | <priority> | <costType> | 12000000          | <goalType> | <unitType> | 35000 |
+      | <type>       | <priority> | <costType> | 12000000          | <goalType> | <unitType> | <units> |
 
+    # A NONE goal has no units, which GAM stores as -1 (see the outline above).
     Examples:
-      | delivery       | option            | model | settings                          | type           | priority | costType | goalType | unitType             |
-      | guaranteed     | cpm_usd_standard  | cpm   | {}                                | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          |
-      | guaranteed     | cpm_usd_standard  | cpm   | {"primary_goal_type": "DAILY"}    | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          |
-      | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "NETWORK"}     | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          |
-      | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "SPONSORSHIP"} | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          |
-      | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "HOUSE"}       | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          |
-      | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "BULK"}        | BULK           | 12       | CPM      | LIFETIME | IMPRESSIONS          |
-      | guaranteed     | vcpm_usd_standard | vcpm  | {}                                | STANDARD       | 8        | VCPM     | LIFETIME | VIEWABLE_IMPRESSIONS |
-      | non-guaranteed | cpm_usd_standard  | cpm   | {"line_item_type": "NETWORK"}     | PRICE_PRIORITY | 12       | CPM      | NONE     | IMPRESSIONS          |
+      | delivery       | option            | model | settings                          | type           | priority | costType | goalType | unitType             | units |
+      | guaranteed     | cpm_usd_standard  | cpm   | {}                                | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          | 35000 |
+      | guaranteed     | cpm_usd_standard  | cpm   | {"primary_goal_type": "DAILY"}    | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          | 35000 |
+      | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "NETWORK"}     | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          | 35000 |
+      | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "SPONSORSHIP"} | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          | 35000 |
+      | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "HOUSE"}       | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          | 35000 |
+      | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "BULK"}        | BULK           | 12       | CPM      | LIFETIME | IMPRESSIONS          | 35000 |
+      | guaranteed     | vcpm_usd_standard | vcpm  | {}                                | STANDARD       | 8        | VCPM     | LIFETIME | VIEWABLE_IMPRESSIONS | 35000 |
+      | non-guaranteed | cpm_usd_standard  | cpm   | {"line_item_type": "NETWORK"}     | PRICE_PRIORITY | 12       | CPM      | NONE     | IMPRESSIONS          | -1    |
 
   @T-UC-002-local-gam-type-flat-rate @extension
   Scenario Outline: A flat-rate package books the product's configured type when that type can sell it at a fixed price

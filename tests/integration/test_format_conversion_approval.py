@@ -23,6 +23,7 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
+from src.core.errors.codes import ErrorCode
 from src.core.tools.media_buy_create import ApprovalOutcome
 from tests.factories import MediaPackageFactory, PricingOptionFactory
 from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID as ACCOUNT_ID
@@ -45,18 +46,26 @@ def create_media_package(media_buy_id: str, package_id: str) -> None:
         MediaPackageFactory(media_buy=media_buy, package_id=package_id)
 
 
-def _assert_approval_failed(result, because: str) -> str:
-    """Assert the approval FAILED (not merely "not ok"), and hand back its message.
+def _assert_approval_failed(result, because: str):
+    """Assert the approval FAILED on the stored package, and hand back its error and the lowercased cause.
 
     ``not result.ok`` is too weak to grade these: it is also true when the buy is HELD
     on unapproved creatives, so a bare boolean would let one of these tests pass for a
-    reason that has nothing to do with the format under test. Each caller then asserts
-    what its own message must say, against the lowercased text returned here.
+    reason that has nothing to do with the format under test. The refusal is the typed
+    error the approval carries (``ApprovalResult.error``): a seller-side store defect,
+    CONFIGURATION_ERROR, about the stored package. Each caller then asserts the stored field
+    it names and what the cause it caught (``internal_detail``) says, against the lowercased
+    text returned here.
     """
     assert result.outcome is ApprovalOutcome.FAILED, (
-        f"approval with {because} should have FAILED, got {result.outcome} ({result.error_msg})"
+        f"approval with {because} should have FAILED, got {result.outcome} ({result.error!r})"
     )
-    return (result.error_msg or "").lower()
+    error = result.error
+    assert error is not None and error.error_code == ErrorCode.CONFIGURATION_ERROR, (
+        f"approval with {because} should fail as the stored package's CONFIGURATION_ERROR, got {error!r}"
+    )
+    assert error.details.package_id == "pkg_1", f"the refusal names no package: {error.details!r}"
+    return error, str(error.internal_detail or "").lower()
 
 
 @pytest.fixture
@@ -253,7 +262,7 @@ class TestFormatConversionApproval:
         # Execute approval
         result = run_approval(media_buy_id, test_tenant)
 
-        assert result.ok, f"Approval should succeed: {result.error_msg}"
+        assert result.ok, f"Approval should succeed: {result.error!r}"
 
         # Cleanup
         with get_db_session() as session:
@@ -357,9 +366,9 @@ class TestFormatConversionApproval:
         # Execute approval - should fail
         result = run_approval(media_buy_id, test_tenant)
 
-        message = _assert_approval_failed(result, "missing agent_url")
+        error, message = _assert_approval_failed(result, "missing agent_url")
         assert "agent_url" in message
-        assert "format validation failed" in message
+        assert error.field == "format_ids[0]"
 
         # Cleanup
         with get_db_session() as session:
@@ -461,7 +470,8 @@ class TestFormatConversionApproval:
         # Execute approval - should fail
         result = run_approval(media_buy_id, test_tenant)
 
-        message = _assert_approval_failed(result, "empty agent_url")
+        error, message = _assert_approval_failed(result, "empty agent_url")
+        assert error.field == "format_ids[0]"
         assert "agent_url" in message
 
         # Cleanup
@@ -564,7 +574,8 @@ class TestFormatConversionApproval:
         # Execute approval - should fail
         result = run_approval(media_buy_id, test_tenant)
 
-        message = _assert_approval_failed(result, "non-HTTP URL")
+        error, message = _assert_approval_failed(result, "non-HTTP URL")
+        assert error.field == "format_ids[0]"
         assert "agent_url" in message
         assert "http" in message
 
@@ -670,9 +681,10 @@ class TestFormatConversionApproval:
         # Execute approval - should fail
         result = run_approval(media_buy_id, test_tenant)
 
-        message = _assert_approval_failed(result, "missing format_id")
-        # Error message varies: "no valid formats" or "format validation failed"
-        assert "format" in message or "id" in message
+        error, message = _assert_approval_failed(result, "missing format_id")
+        # The format at index 0 fails validation, and its cause names the missing id.
+        assert error.field == "format_ids[0]"
+        assert "id" in message
 
         # Cleanup
         with get_db_session() as session:
@@ -774,7 +786,7 @@ class TestFormatConversionApproval:
         # Execute approval
         result = run_approval(media_buy_id, test_tenant)
 
-        assert result.ok, f"Approval should succeed: {result.error_msg}"
+        assert result.ok, f"Approval should succeed: {result.error!r}"
 
         # Cleanup
         with get_db_session() as session:
@@ -876,7 +888,8 @@ class TestFormatConversionApproval:
         # Execute approval - should fail
         result = run_approval(media_buy_id, test_tenant)
 
-        message = _assert_approval_failed(result, "missing id/format_id")
+        error, message = _assert_approval_failed(result, "missing id/format_id")
+        assert error.field == "format_ids[0]"
         assert "id" in message
 
         # Cleanup
@@ -974,8 +987,9 @@ class TestFormatConversionApproval:
         # Execute approval - should fail
         result = run_approval(media_buy_id, test_tenant)
 
-        message = _assert_approval_failed(result, "empty formats")
-        assert "no valid formats" in message
+        error, _message = _assert_approval_failed(result, "empty formats")
+        # No valid format, and no cause: nothing was caught, the package has none.
+        assert (error.field, error.internal_detail) == ("format_ids", None)
 
         # Cleanup
         with get_db_session() as session:
@@ -1088,7 +1102,7 @@ class TestFormatConversionApproval:
         # Execute approval - should succeed
         result = run_approval(media_buy_id, test_tenant)
 
-        assert result.ok, f"Approval should succeed with mixed formats: {result.error_msg}"
+        assert result.ok, f"Approval should succeed with mixed formats: {result.error!r}"
         # Success returns (True, None), so no message to check
 
         # Cleanup
@@ -1186,8 +1200,8 @@ class TestFormatConversionApproval:
         # Execute approval - should fail
         result = run_approval(media_buy_id, test_tenant)
 
-        message = _assert_approval_failed(result, "unknown format type")
-        assert "unknown format type" in message or "format validation failed" in message
+        error, _message = _assert_approval_failed(result, "unknown format type")
+        assert error.field == "format_ids[0]"
 
         # Cleanup
         with get_db_session() as session:

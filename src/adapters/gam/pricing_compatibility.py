@@ -223,12 +223,16 @@ class PricingCompatibility:
         """The goal units for a planned line item, from the package's lifetime volume.
 
         A share-of-voice type books 100 (percent of impressions); ``select_line_item_type``
-        books those types only for flat rate, whose price is fixed. A DAILY goal on a count
-        type is the lifetime volume spread over the flight's days. Otherwise (LIFETIME, NONE)
-        the lifetime volume. It converts a volume it is given; it computes none.
+        books those types only for flat rate, whose price is fixed. A NONE goal has no units,
+        and books -1: GAM stores -1 for a NONE goal whatever it is sent (read back on a real
+        network; Google's v202602 docs say nothing about ``Goal.units`` under NONE). A DAILY
+        goal on a count type is the lifetime volume spread over the flight's days. A LIFETIME
+        goal is the lifetime volume. It converts a volume it is given; it computes none.
         """
         if plan.line_item_type in SHARE_OF_VOICE_TYPES:
             return 100
+        if plan.goal_type == "NONE":
+            return -1
         if plan.goal_type == "DAILY":
             return lifetime_units // flight_days
         return lifetime_units

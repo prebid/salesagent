@@ -248,7 +248,9 @@ def adcp_pin() -> dict:
     }
 
 
-def document(identity: Identity, run: pathlib.Path, adcp: dict | None, host: str, now: str) -> dict:
+def document(
+    identity: Identity, run: pathlib.Path, adcp: dict | None, host: str, now: str, gam_network: str | None = None
+) -> dict:
     """The ``meta.json`` payload."""
     return {
         "schema": SCHEMA,
@@ -262,6 +264,9 @@ def document(identity: Identity, run: pathlib.Path, adcp: dict | None, host: str
         "source": identity.source,
         "unidentified_because": identity.unidentified_because,
         "adcp": adcp,
+        # The GAM network the run books against, as run_all_tests.sh's preflight stated it
+        # ("not configured", "configured, network <code>", ...); null when nobody said.
+        "gam_network": gam_network,
     }
 
 
@@ -293,13 +298,18 @@ def read(run: pathlib.Path) -> Identity | None:
     )
 
 
+def _short(commit: str | None) -> str:
+    """*commit*'s first 12 characters, the way every message here names a tree; a record with none says so."""
+    return commit[:12] if commit else "(no commit recorded)"
+
+
 def describe(identity: Identity | None) -> str:
     """One line naming the tree, for a header. Never a claim the record cannot support."""
     if identity is None or not identity.identified:
         return "IDENTITY UNKNOWN"
     where = identity.branch or ("detached" if identity.detached else "branch unrecorded")
     pin = (identity.adcp or {}).get("distribution") or "adcp unrecorded"
-    return f"{identity.commit[:12]} ({where}, {identity.tree or 'tree unrecorded'}, {pin})"
+    return f"{_short(identity.commit)} ({where}, {identity.tree or 'tree unrecorded'}, {pin})"
 
 
 def unidentified(label: str, run: pathlib.Path, identity: Identity | None) -> str | None:
@@ -318,7 +328,7 @@ def unidentified(label: str, run: pathlib.Path, identity: Identity | None) -> st
 def dirty(label: str, identity: Identity) -> str | None:
     """Why *label*'s tree is not identified by its commit, or ``None``."""
     if identity.tree == "dirty":
-        return f"{label} ran on a DIRTY tree at {identity.commit[:12]}: its commit does not identify what was graded"
+        return f"{label} ran on a DIRTY tree at {_short(identity.commit)}: its commit does not identify what was graded"
     return None
 
 
@@ -355,7 +365,7 @@ def ancestry(
     if baseline.commit == new.commit:
         return None
     unknown = [
-        f"{label} commit {identity.commit[:12]} is not in this repository (fetch it, or run from a checkout that has it)"
+        f"{label} commit {_short(identity.commit)} is not in this repository (fetch it, or run from a checkout that has it)"
         for label, identity in ((base_label, baseline), (new_label, new))
         if not _known_commit(root, identity.commit or "")
     ]
@@ -367,8 +377,8 @@ def ancestry(
     base = _git(root, "merge-base", baseline.commit or "", new.commit or "")
     where = f" Their merge-base is {base[:12]}; a baseline run on that tree is the comparable one." if base else ""
     return (
-        f"{base_label} {baseline.commit[:12]} ({baseline.branch or 'detached'}) and "
-        f"{new_label} {new.commit[:12]} ({new.branch or 'detached'}) have NO ancestry relationship — "
+        f"{base_label} {_short(baseline.commit)} ({baseline.branch or 'detached'}) and "
+        f"{new_label} {_short(new.commit)} ({new.branch or 'detached'}) have NO ancestry relationship — "
         f"neither tree contains the other, so a per-nodeid delta between them attributes "
         f"every difference between two divergent branches to the subject.{where}"
     )
@@ -492,6 +502,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commit", default="", help="the sha the invoker asserts this run graded")
     parser.add_argument("--branch", default="", help="the branch the invoker asserts")
     parser.add_argument("--tree", default="", help="'clean' or 'dirty', as the invoker found it")
+    parser.add_argument(
+        "--gam-network", default="", help="the GAM network the run books against, as its preflight stated it"
+    )
     args = parser.parse_args(argv)
 
     if args.adcp:
@@ -512,6 +525,7 @@ def main(argv: list[str] | None = None) -> int:
         pin if isinstance(pin, dict) else None,
         socket.gethostname(),
         datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
+        args.gam_network or None,
     )
     args.write.mkdir(parents=True, exist_ok=True)
     (args.write / IDENTITY_FILE).write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")

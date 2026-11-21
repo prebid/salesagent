@@ -7,6 +7,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import (
     LimitedResult,
     approve_media_buy_through_writer,
+    describe_approval_error,
     execute_limited,
     get_custom_targeting_mappings,
     get_tenant_config_from_db,
@@ -23,6 +24,7 @@ from src.admin.utils.helpers import (
 
 __all__ = [
     "approve_media_buy_through_writer",
+    "describe_approval_error",
     # Decorator
     "log_admin_action",
     # Auth/authorization functions

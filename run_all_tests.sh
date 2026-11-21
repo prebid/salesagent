@@ -37,6 +37,7 @@
 #   ./run_all_tests.sh unit,integration         # explicit suite list
 #   ./run_all_tests.sh quick                    # no-Docker unit+integration (delegates to host runner)
 #   ./run_all_tests.sh ci tests/path -k name    # targeted run (delegates to host runner)
+#   ./run_all_tests.sh --skip-gam-preflight ... # any of the above, without the GAM configuration preflight
 set -euo pipefail
 
 COMPOSE_FILE="docker-compose.e2e.yml"
@@ -177,6 +178,10 @@ echo "Parallelism: docker_mem=${_docker_mem_gb}GB cores=${_cores} -> unit=$UNIT_
 # verbatim host runner that already implements them (DRY, single source).
 ALL_SUITES="unit,integration,bdd,admin,e2e,ui,quality,storyboard,collection"
 DELEGATE=0
+# --skip-gam-preflight, first if given: run the suites without the GAM configuration
+# preflight below. GAM_SUITE_PREFLIGHT_SKIP=1 says the same as a standing setting.
+_gam_preflight_skip=""
+if [ "${1:-}" = "--skip-gam-preflight" ]; then _gam_preflight_skip="--skip"; shift; fi
 case "${1:-ci}" in
     quick) DELEGATE=1 ;;
     ci) if [ -n "${2:-}" ]; then DELEGATE=1; else SUITES="$ALL_SUITES"; fi ;;
@@ -259,7 +264,51 @@ RESULTS_DIR="test-results/innet_$(date -u +%d%m%y_%H%M)"
 PAYLOAD_SUBDIR="payloads"
 # Kept in step with scripts/audit/run_report.py's STORYBOARD_SUBDIR.
 STORYBOARD_SUBDIR="storyboard"
+
+# GAM configuration preflight, before Docker or any suite starts. The e2e and bdd legs
+# run the GAM tests against the Google Ad Manager network the environment configures
+# (ToolingSettings.gam_suite_network). An environment with no GAM setting at all configures
+# no network: "GAM: not configured" is printed and the run goes on, and the GAM tests
+# declare themselves unsupported. That one answer needs no uv (the CI in-network job installs
+# none), so with no non-empty GAM_* variable in the environment it is printed here; the
+# preflight's settings are read from the environment alone, by case-insensitive name, with an
+# empty value counting as unset, so it could answer nothing else. Any non-empty GAM_* variable
+# hands the decision to the preflight, which needs uv.
+# A partial or broken configuration fails here, with every failing check named, instead of an
+# hour later as GAM failures. Read-only: it creates nothing in GAM. --skip-gam-preflight (or GAM_SUITE_PREFLIGHT_SKIP=1) runs the
+# suites anyway; the skip is printed and kept in the run's gam_preflight.log, and the GAM
+# tests then fail where they fail. RUN_ALL_TESTS_STOP_AFTER_GAM_PREFLIGHT exits 0 right
+# after this stage: the seam that proves the gate without starting a stack.
+_gam_preflight_log="$(mktemp)"
+case ",$SUITES," in
+    *,e2e,*|*,bdd,*|*,bdd_e2e,*)
+        # A count, so no value is captured; -c reads all of env, so pipefail sees no SIGPIPE.
+        if [ "$(env | grep -ci '^GAM_[^=]*=.' || true)" = 0 ]; then
+            # scripts/gam_prerequisites_check.py's NOT_CONFIGURED, verbatim.
+            echo "GAM: not configured" | tee "$_gam_preflight_log"
+        elif ! command -v uv >/dev/null 2>&1; then
+            echo "GAM preflight FAILED: uv is not on PATH, and the GAM_* settings in this environment need it to be checked (install uv)" | tee "$_gam_preflight_log"
+            exit 1
+        elif ! UV_FROZEN=1 uv run --quiet python scripts/gam_prerequisites_check.py --suite-network ${_gam_preflight_skip:+"$_gam_preflight_skip"} \
+            2>&1 | tee "$_gam_preflight_log"; then
+            echo "GAM preflight FAILED: configure the settings named above, or pass --skip-gam-preflight (GAM_SUITE_PREFLIGHT_SKIP=1) to run the suites anyway"
+            exit 1
+        fi
+        ;;
+    *) echo "GAM: not checked, this run selects no GAM leg (e2e, bdd, bdd_e2e)" | tee "$_gam_preflight_log" ;;
+esac
+# The GAM network this run books against, as the preflight's "GAM: ..." line states it: kept
+# in meta.json (run_identity --gam-network) and repeated as the run's last line.
+_gam_network="$(sed -n 's/^GAM: //p' "$_gam_preflight_log" | head -1)"
+echo "GAM network: ${_gam_network:-unknown}"
+if [ -n "${RUN_ALL_TESTS_STOP_AFTER_GAM_PREFLIGHT:-}" ]; then
+    rm -f "$_gam_preflight_log"
+    echo "Stopping after the GAM preflight (RUN_ALL_TESTS_STOP_AFTER_GAM_PREFLIGHT)"
+    exit 0
+fi
+
 mkdir -p "$RESULTS_DIR"
+mv "$_gam_preflight_log" "$RESULTS_DIR/gam_preflight.log"
 # The storyboard suite publishes the runner's per-protocol summary to
 # test-results/storyboard_summary_<protocol>.json (tests/storyboard/test_storyboard_conformance.py,
 # _publish_summary) -- ONE path, overwritten by every run. Clear the previous run's copies
@@ -347,7 +396,8 @@ _adcp_pin="$(dc run --rm --no-deps -T tests python -m scripts.audit.run_identity
 # cassini forwards them from the client, where .git exists -- and are empty otherwise, which
 # run_identity records as an absent identity rather than guessing one.
 python3 -m scripts.audit.run_identity --write "$RESULTS_DIR" --adcp-json "$_adcp_pin" \
-    --commit "${SA_RUN_COMMIT:-}" --branch "${SA_RUN_BRANCH:-}" --tree "${SA_RUN_TREE:-}"
+    --commit "${SA_RUN_COMMIT:-}" --branch "${SA_RUN_BRANCH:-}" --tree "${SA_RUN_TREE:-}" \
+    --gam-network "${_gam_network:-unknown}"
 
 # Pre-create logs/ group-writable + setgid BEFORE anything else touches the
 # bind mount: adcp-server bind-mounts .:/app and creates logs/audit.log at
@@ -1042,4 +1092,5 @@ else
     rm -f "$audit_log"
 fi
 
+echo "GAM network: ${_gam_network:-unknown}"
 exit $RC

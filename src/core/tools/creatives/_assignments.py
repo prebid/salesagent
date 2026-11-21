@@ -474,11 +474,15 @@ def _process_assignments(
                     assigned.remove(package_id)
                     errors[package_id] = f"The ad server did not accept creative {creative_id} for package {package_id}"
                 index = next(i for i, r in enumerate(results) if r.creative_id == creative_id)
-                if creative_id in referenced_only and not assigned:
+                cause = failure.error or AdCPValidationError(details=ValidationDetails(creative_id=creative_id))
+                if creative_id in referenced_only and not assigned and not cause.envelope_only:
                     # Nothing of a referenced creative was assigned. core/error.json: correctable
-                    # is "fix the request and resend", so the ad server's own fault keeps its
-                    # code; the adapter's own refusal (a size) has no error and is the buyer's.
-                    cause = failure.error or AdCPValidationError(details=ValidationDetails(creative_id=creative_id))
+                    # is "fix the request and resend", so a typed refusal keeps its code (the GAM
+                    # plan's CREATIVE_SIZE_MISMATCH for a kind-carrying creative); an asset the
+                    # adapter failed without one is the buyer's VALIDATION_ERROR. An envelope-only
+                    # code (the GAM plan's CONFIGURATION_ERROR when no size the product accepts
+                    # is placed) cannot sit on the entry and cannot fail a request that has
+                    # committed, so the package's assignment_errors message is its whole report.
                     results[index] = _failed_sync_result(creative_id, cause)
                 results[index].assigned_to = assigned or None
                 results[index].assignment_errors = errors

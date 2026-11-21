@@ -83,8 +83,9 @@ class TestExecuteApprovedPendingReviewFilter:
         assert result.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES, (
             f"a pending_review creative must hold the buy, got {result}"
         )
-        assert "cre_pending" in (result.error_msg or ""), (
-            f"the held result must name the creative that is holding it: {result.error_msg!r}"
+        held_by = [problem.subject_id for problem in result.error.details.problems] if result.error else []
+        assert held_by == ["cre_pending"], (
+            f"the held result must name the creative that is holding it: {result.error!r}"
         )
         # The whole point of holding: nothing is created in the ad server. Asserting on
         # the BOUNDARY rather than on the creative upload is what makes this real — the

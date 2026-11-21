@@ -79,6 +79,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_v31_request",
     "tests.bdd.steps.domain.uc002_v31_proposal_targeting",
     "tests.bdd.steps.domain.uc002_invariants",
+    "tests.bdd.steps.domain.uc002_creative_kind",
     "tests.bdd.steps.domain.gam_seller",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
@@ -491,6 +492,12 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: UC-003 ext-t — invoice_recipient authorization (BR-RULE-214) not implemented;
     # production accepts the override without an authorization check, so no VALIDATION_ERROR is raised.
     "T-UC-003-ext-t": "invoice_recipient authorization not implemented (BR-RULE-214) — production gap",
+    # FIXME(#2636): the GAM adapter's pause and resume never reach Google Ad Manager.
+    # OrdersManager._update_line_item_status writes LineItem.status and sends updateLineItems;
+    # Ad Manager API v202602 marks LineItemSummary.status "This attribute is readonly", so the
+    # line item is not paused. Strict on every transport (e2e_rest also through its ledger
+    # line): the scenario reports XPASS when #2636 lands and graduates then.
+    "T-UC-002-local-gam-pause": "GAM pause writes the readonly LineItem.status; #2636",
     # ── create_media_buy and update_media_buy disagree (#2483) ──
     # Each scenario states, on update_media_buy, work create_media_buy already does. Neither
     # tool is patched alone: #2483 moves both onto shared services, and each entry
@@ -3108,8 +3115,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # new failure is a LIBRARY-REFERENCE row — assignments_only,
             # assignment_with_weight_zero, assignment_with_placement_targeting, "assignment
             # cr-001", weight=0, weight=100. The cause is symmetrical to the one above: those
-            # rows seed their creative through given_media_buy._create_approved_creative,
-            # whose default fmt is the BARE id, so moving only the product inverts the
+            # rows seeded their creative through given_media_buy._create_approved_creative (now
+            # _creative_seeding.store_package_creative), whose default fmt was then the BARE id,
+            # so moving only the product inverts the
             # product-vs-creative compatibility check for every one of them.
             #
             # THOSE SIX ROW LABELS ARE EXACTLY THE SIX THAT FAIL ON e2e_rest, which nobody
@@ -5744,8 +5752,6 @@ def e2e_stack():
     server_host = os.environ.get("E2E_SERVER_HOST")
     worker = os.environ.get("PYTEST_XDIST_WORKER")  # e.g. "gw3"
     if os.environ.get("E2E_PER_WORKER") == "1" and worker and worker.startswith("gw"):
-        import re
-
         # Server containers are named "<project>-server-gwN" (globally-unique so
         # parallel worktrees don't collide) and reachable by that name on the
         # compose network. Hit the server directly on :8080 (SKIP_NGINX).
@@ -6651,6 +6657,8 @@ _UC006_WIRED_SCENARIOS = frozenset(
         # delete_missing and active delivery: plain syncs CreativeSyncEnv serves on every transport.
         "T-UC-006-local-delete-missing-active-delivery",
         "T-UC-006-local-delete-missing-not-delivering",
+        # A creative agent's preview stays out of the stored creative: plain syncs, create and update.
+        "T-UC-006-local-preview-kept-out-of-creative",
         # The format/validation error paths, corrected to the pinned enum (INVALID_REQUEST
         # for schema violations at the request, REFERENCE_NOT_FOUND / VALIDATION_ERROR on
         # the creative's entry, SERVICE_UNAVAILABLE for an agent that does not answer) and
@@ -7256,6 +7264,9 @@ ENV_ROUTES: list[EnvRoute] = [
                 # request the Givens built. The row claims that feature's tag prefix once, so
                 # a new GAM scenario joins it without editing this predicate.
                 or any(t.startswith("T-UC-002-local-gam-") for t in m)
+                # local-uc002-creative-kind-reaches-adapter.feature, for the same reason:
+                # the create chain and the create dispatch, claimed by its tag prefix once.
+                or any(t.startswith("T-UC-002-local-creative-kind-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
