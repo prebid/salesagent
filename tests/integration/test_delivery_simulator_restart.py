@@ -12,7 +12,9 @@ from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Principal, PushNotificationConfig, Tenant
 from src.services.delivery_simulator import delivery_simulator
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import plaintext_token_for
+from tests.utils.database_helpers import bind_factories_to_session
 
 pytestmark = [pytest.mark.integration]
 
@@ -54,9 +56,13 @@ class TestDeliverySimulatorRestart:
                 name="Test Principal",
                 platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},
             )
+            principal_id = principal.principal_id
             session.add(principal)
             session.commit()
-            yield principal.principal_id
+            with bind_factories_to_session(session):
+                seed_default_account(test_tenant, principal_id)
+
+            yield principal_id
 
     @pytest.fixture
     def test_product(self, test_tenant):
@@ -126,6 +132,7 @@ class TestDeliverySimulatorRestart:
         with get_db_session() as session:
             for i in range(3):
                 media_buy = MediaBuy(
+                    account_id=DEFAULT_TEST_ACCOUNT_ID,
                     tenant_id=test_tenant,
                     media_buy_id=f"buy_restart_test_{i}",
                     principal_id=test_principal,
@@ -191,6 +198,7 @@ class TestDeliverySimulatorRestart:
             session.add(principal_no_webhook)
 
             media_buy = MediaBuy(
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
                 tenant_id=test_tenant,
                 media_buy_id=media_buy_id,
                 principal_id="principal_no_webhook",
@@ -238,6 +246,7 @@ class TestDeliverySimulatorRestart:
             # Create 5 media buys for same principal (should all use same webhook config)
             for i in range(5):
                 media_buy = MediaBuy(
+                    account_id=DEFAULT_TEST_ACCOUNT_ID,
                     tenant_id=test_tenant,
                     media_buy_id=f"buy_cardinality_{i}",
                     principal_id=test_principal,

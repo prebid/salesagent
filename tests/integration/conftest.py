@@ -20,6 +20,7 @@ from src.admin.app import create_app
 # Registers the ci-test tenant/principal fixture for this package. Imported by
 # name rather than star-imported: the one star import in tests/conftest.py is an
 # allowlisted exception, not the pattern.
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
 from tests.helpers.ledger import load_ledger_nodeids
 from tests.helpers.postgres_admin import drop_database
 from tests.integration.conftest_ci_seed import ci_test_principal  # noqa: F401
@@ -57,6 +58,7 @@ def cleanup_tenant(tenant_id: str) -> None:
 def make_media_buy(tenant_id: str, principal_id: str, media_buy_id: str, **kwargs) -> MediaBuy:
     """Helper to construct a MediaBuy ORM object with required fields."""
     defaults = {
+        "account_id": DEFAULT_TEST_ACCOUNT_ID,
         "order_name": f"Order {media_buy_id}",
         "advertiser_name": "Test Advertiser",
         "start_date": date(2026, 1, 1),

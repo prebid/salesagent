@@ -29,6 +29,7 @@ from sqlalchemy import text
 from tests.integration.migration_helpers import (
     run_alembic_downgrade,
     run_alembic_upgrade,
+    seed_principal,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -83,19 +84,6 @@ def _delete_rule(engine) -> str | None:
         ).scalar()
 
 
-def _seed_principal(engine) -> None:
-    """One principal in this module's tenant. Raw SQL: no ORM, so no ORM cascade."""
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO principals "
-                "(tenant_id, principal_id, name, platform_mappings, token_hash, token_prefix) "
-                "VALUES (:tid, :pid, 'Migration Cascade Advertiser', '{}'::jsonb, :hash, 'mig_')"
-            ),
-            {"tid": _TENANT, "pid": _PRINCIPAL, "hash": "0" * 64},
-        )
-
-
 def _counts(engine) -> tuple[int, int]:
     """(tenant rows, principal rows) for this module's tenant, counted in SQL."""
     with engine.connect() as conn:
@@ -137,7 +125,7 @@ class TestDeletingATenantDeletesItsPrincipals:
         """
         engine, db_url = at_previous
         run_alembic_upgrade(db_url, _REVISION)
-        _seed_principal(engine)
+        seed_principal(engine, tenant_id=_TENANT, principal_id=_PRINCIPAL, name="Migration Cascade Advertiser")
         assert _counts(engine) == (1, 1), "seed did not land"
 
         with engine.begin() as conn:
@@ -154,7 +142,7 @@ class TestDeletingATenantDeletesItsPrincipals:
         from sqlalchemy.exc import IntegrityError
 
         engine, _ = at_previous
-        _seed_principal(engine)
+        seed_principal(engine, tenant_id=_TENANT, principal_id=_PRINCIPAL, name="Migration Cascade Advertiser")
 
         with pytest.raises(IntegrityError, match=_CONSTRAINT):
             with engine.begin() as conn:

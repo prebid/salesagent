@@ -12,11 +12,13 @@ from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from tests.factories import stamp_format_identity
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
     read_media_buy_state,
 )
+from tests.utils.database_helpers import bind_factories_to_session
 
 #: The format the seeded creatives carry. Pure scenery for these tests -- they grade which
 #: ASSIGNMENT rows an update writes, and never read the format -- but it still has to be a
@@ -64,6 +66,8 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
         )
         session.add(principal)
         session.flush()  # Ensure principal exists before creating creatives
+        with bind_factories_to_session(session):
+            seed_default_account("test_tenant", "test_principal")
 
         # Create product
         product = Product(
@@ -80,6 +84,7 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
 
         # Create media buy
         media_buy = MediaBuy(
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
             media_buy_id="test_buy_123",
             tenant_id="test_tenant",
             principal_id="test_principal",
@@ -221,6 +226,8 @@ def test_creative_assignments_with_weights(integration_db):
         )
         session.add(principal)
         session.flush()
+        with bind_factories_to_session(session):
+            seed_default_account("test_tenant", "test_principal")
 
         # Create product
         product = Product(
@@ -237,6 +244,7 @@ def test_creative_assignments_with_weights(integration_db):
 
         # Create media buy
         media_buy = MediaBuy(
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
             media_buy_id="test_buy_weights",
             tenant_id="test_tenant",
             principal_id="test_principal",
@@ -377,6 +385,8 @@ def test_creative_assignments_replaces_all(integration_db):
         )
         session.add(principal)
         session.flush()
+        with bind_factories_to_session(session):
+            seed_default_account("test_tenant", "test_principal")
 
         product = Product(
             product_id="test_product",
@@ -391,6 +401,7 @@ def test_creative_assignments_replaces_all(integration_db):
         session.add(product)
 
         media_buy = MediaBuy(
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
             media_buy_id="test_buy_replace",
             tenant_id="test_tenant",
             principal_id="test_principal",
