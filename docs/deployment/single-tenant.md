@@ -106,10 +106,10 @@ cd salesagent
 cp .env.template .env
 # Edit .env with your configuration
 docker compose up -d
-
-# Verify
-curl http://localhost:8000/health
 ```
+
+Wait for `adcp-server` to report `(healthy)` before the first request; see
+[quickstart step 4](../quickstart.md#4-start-the-stack).
 
 ## Services and ports
 

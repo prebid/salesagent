@@ -292,13 +292,8 @@ The [request lifecycle](../development/request-lifecycle.md) explains what else 
 
 ### "No seller is served at the address this request named" (`TENANT_UNDEFINED`)
 
-Earlier releases reported this as `CONFIGURATION_ERROR` "no tenant context".
-
-- Verify the subdomain or domain is configured for a tenant.
-- Check that the Host header is being passed correctly.
-- For Approximated: the app never reads `Apx-Incoming-Host`, so check the EDGE — that nginx
-  is in front and its `$tenant_host` map folded the vendor header into the `Host` the app
-  received. `/debug/tenant` reports the `Host` that arrived and the tenant it resolved.
+See [No seller is served at the address this request named](../development/troubleshooting.md#no-seller-is-served-at-the-address-this-request-named)
+in the troubleshooting guide.
 
 ### Custom domain not working
 

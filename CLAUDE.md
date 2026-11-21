@@ -352,8 +352,8 @@ The Prebid Sales Agent is a Python application with the following components:
 
 ### Run locally
 Migrations run automatically on container startup. The local-run walkthrough, access points, and
-OAuth sign-in setup (there is no password login) are in [docs/quickstart.md](docs/quickstart.md); MCP client usage and the
-`uvx adcp ... list_tools` smoke test are in `.claude/rules/patterns/mcp-patterns.md`.
+OAuth sign-in setup (there is no password login) are in [docs/quickstart.md](docs/quickstart.md). The one MCP smoke
+test is quickstart step 7 (advertiser token plus `x-adcp-tenant`); `.claude/rules/patterns/mcp-patterns.md` points to it.
 
 ### Testing
 Test orchestration uses **tox** (with tox-uv): `uv tool install tox --with tox-uv`.
@@ -444,10 +444,10 @@ Follow these rules:
 
 ## Configuration
 
-Local settings and secrets live in `.env` (copied from `.env.template`): `docker-compose.yml`
-reads `.env` only, and does not read `.env.secrets`. A working stack needs the Google OAuth
-client, `SUPER_ADMIN_EMAILS` and `ENCRYPTION_KEY` there; see [docs/quickstart.md](docs/quickstart.md).
-Only `docker-compose.multi-tenant.yml` also reads `.env.secrets`.
+Local settings and secrets live in `.env` (copied from `.env.template`). A working stack needs
+the Google OAuth client, `SUPER_ADMIN_EMAILS` and `ENCRYPTION_KEY` there; see
+[docs/quickstart.md](docs/quickstart.md). Other compose files and production:
+[docs/security.md § Which file holds secrets](docs/security.md#which-file-holds-secrets).
 [docs/deployment/environment-variables.md](docs/deployment/environment-variables.md) documents
 every variable — read it before touching credentials or auth configuration.
 

@@ -45,6 +45,9 @@ When complete, services are running at **http://localhost:8000**:
 | Health Check | http://localhost:8000/health |
 
 **Log in:** with Google, as one of the `SUPER_ADMIN_EMAILS` addresses. There is no password login.
+`make setup` generates `ENCRYPTION_KEY` but not the OAuth client: add it and
+`SUPER_ADMIN_EMAILS` to `.env` as in [quickstart steps 2-3](../quickstart.md#2-create-a-google-oauth-client),
+then run `docker compose up -d --force-recreate`.
 
 ## Manual Setup
 
@@ -67,10 +70,10 @@ uvx pre-commit install
 
 # 5. Start Docker services
 docker compose up -d
-
-# 6. Verify health
-curl http://localhost:8000/health
 ```
+
+Then wait for `adcp-server` to report `(healthy)` before the first request, as in
+[quickstart step 4](../quickstart.md#4-start-the-stack).
 
 Migrations run automatically on startup via the `db-init` container. Docker Compose builds from local source, so code changes are reflected immediately.
 
@@ -147,10 +150,8 @@ uv run alembic revision -m "description"
 
 ### Test the MCP interface
 
-```bash
-uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
-uvx adcp http://localhost:8000/mcp/ --auth test-token get_products '{"brief":"video"}'
-```
+Run the script in [quickstart step 7](../quickstart.md#7-connect-an-ai-agent). It needs an
+advertiser token from the Admin UI and the `x-adcp-tenant` header.
 
 ### Type checking
 

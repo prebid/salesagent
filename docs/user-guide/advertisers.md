@@ -6,25 +6,28 @@ Advertisers (also called "principals") are the entities that can access your MCP
 
 ### Via Admin UI
 
-1. Navigate to **Advertisers** in the Admin UI
+1. Open **Settings > Advertisers** in the Admin UI
 2. Click **Add Advertiser**
 3. Enter advertiser details:
-   - **Name**: Display name
-   - **Contact Email**: For notifications
-   - **GAM Advertiser ID** (if using GAM): Links to existing GAM advertiser
+   - **Advertiser ID**: A unique identifier, lowercase with underscores
+   - **Advertiser Name**: The name shown in reports
+   - **GAM Advertiser** (only when the tenant uses GAM): Links to an existing GAM advertiser
 
 ### API Token
 
 Each advertiser gets a unique API token, sent as `Authorization: Bearer <token>` on every
-transport. The server stores only a hash of it, so the token is shown exactly once, when the
-advertiser is created. The advertisers list shows the first characters of each token so you
-can tell them apart, never the whole token.
+transport. The server stores only a hash of it, so the token is shown once: in the
+confirmation message after you create the advertiser. Copy it then. The **Current
+Advertisers** list shows the first characters of each token so you can tell them apart,
+never the whole token.
 
 If a token is lost or compromised, rotate it:
 
-1. Go to **Advertisers** > select advertiser
-2. Click **Rotate token**
-3. Copy the new token now; it is not shown again, and the old one stops working at once
+1. Open **Settings > Advertisers**
+2. In the advertiser's row, click the rotate button (🔄) next to the token in the
+   **Access Token** column, and confirm
+3. Copy the new token from the dialog now; it is not shown again, and the old one stops
+   working at once
 
 ## Platform Mappings
 
@@ -57,20 +60,9 @@ They cannot access other advertisers' data or system configuration.
 
 ## MCP Client Configuration
 
-Advertisers connect via MCP using their token:
-
-```python
-from fastmcp.client import Client, StreamableHttpTransport
-
-transport = StreamableHttpTransport(
-    url="https://your-domain.com/mcp/",
-    headers={"Authorization": "Bearer advertiser-api-token"}
-)
-
-async with Client(transport=transport) as client:
-    # Advertiser can now call MCP tools
-    products = await client.call_tool("get_products", {})
-```
+Advertisers connect via MCP with their token in `Authorization: Bearer <token>` and a
+request that names the tenant. [Quickstart step 7](../quickstart.md#7-connect-an-ai-agent)
+has a runnable first call.
 
 ## Notifications
 

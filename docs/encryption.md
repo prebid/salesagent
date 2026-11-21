@@ -50,10 +50,8 @@ uv run python scripts/generate_encryption_key.py
 
 ### 2. Configure Environment
 
-Add the generated key to the file your compose file reads: `.env` for `docker-compose.yml`
-(the local stack), or `.env.secrets` for `docker-compose.multi-tenant.yml`. See
-[Which file holds secrets](security.md#which-file-holds-secrets). In production, set it
-through your platform's secret store.
+Add the generated key to `.env` for the local stack. For other compose files and
+production, see [Which file holds secrets](security.md#which-file-holds-secrets).
 
 ```bash
 # .env
@@ -172,7 +170,7 @@ The downgrade:
 
 - **Environment Variable**: Set `ENCRYPTION_KEY` in the file your compose file reads (see [Which file holds secrets](security.md#which-file-holds-secrets))
 - **Secrets Manager**: Use cloud secrets manager in production (AWS Secrets Manager, GCP Secret Manager, Azure Key Vault)
-- **Never Commit**: `.env` and `.env.secrets` are both in `.gitignore`; keep it that way
+- **Never Commit**: keep the env files out of git; [Which file holds secrets](security.md#which-file-holds-secrets) lists which ones `.gitignore` covers
 - **Backup**: Store backup in secure offline location
 
 ### Key Rotation
@@ -261,7 +259,7 @@ Test coverage:
 
 **Solution**:
 1. Generate key: `python scripts/generate_encryption_key.py`
-2. Add `ENCRYPTION_KEY=<key>` to `.env` (`.env.secrets` only with `docker-compose.multi-tenant.yml`)
+2. Add `ENCRYPTION_KEY=<key>` to `.env` (see [Which file holds secrets](security.md#which-file-holds-secrets))
 3. Recreate the containers: `docker compose up -d --force-recreate`
 
 ### "Invalid encrypted data or wrong encryption key"

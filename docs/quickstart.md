@@ -24,11 +24,8 @@ cp .env.template .env
 
 `docker compose` reads `.env` from the repository root (the directory holding
 `docker-compose.yml`). Both the `db-init` and `adcp-server` services load it with
-`env_file`, so every setting below goes in `.env`.
-
-`docker-compose.yml` does not read `.env.secrets`. Only `docker-compose.multi-tenant.yml`
-loads that file, so with the default compose file, values written to `.env.secrets` never
-reach the application. `.env` is listed in `.gitignore`.
+`env_file`, so every setting below, secrets included, goes in `.env`. For other compose
+files and production, see [Which file holds secrets](security.md#which-file-holds-secrets).
 
 ## 2. Create a Google OAuth client
 
@@ -166,11 +163,8 @@ To get an agent to the point of seeing products:
 3. **Products**: **Settings > Products > Create Product**, selecting the publisher's
    properties. `get_products` returns an empty list until the tenant has at least one
    product. See the [products guide](user-guide/products.md).
-4. **An advertiser and its token**: **Settings > Advertisers > Add Advertiser**. The API
-   token is shown once, in the confirmation message after you create the advertiser. The
-   server keeps only a hash, so copy it then. If you lose it, use the rotate button next to
-   the advertiser in the list; that issues a new token, shown once, and the old one stops
-   working. See the [advertisers guide](user-guide/advertisers.md).
+4. **An advertiser and its token**: **Settings > Advertisers > Add Advertiser**. Copy the
+   API token when it is shown; see [API Token](user-guide/advertisers.md#api-token).
 
 To configure SSO for the tenant (so that sign-in no longer depends on the deployment-wide
 OAuth client), use **Users & Access**; see the [SSO Setup Guide](user-guide/sso-setup.md).
@@ -234,10 +228,11 @@ async def main():
 asyncio.run(main())
 ```
 
-Run it with uv, which supplies the `fastmcp` client:
+Run it with uv. You are still inside the clone; `--no-project` stops uv from installing the
+repository's own dependencies there:
 
 ```bash
-uv run --with fastmcp python first_call.py
+uv run --no-project --with fastmcp python first_call.py
 ```
 
 With Python and `pip install fastmcp` instead, run `python first_call.py`.

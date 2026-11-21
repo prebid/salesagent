@@ -312,9 +312,9 @@ flowchart TD
 
 The page says "Authentication not configured" when the application has no
 OAuth client. Check that `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (or the
-`OAUTH_*` variables) are in `.env`; `docker-compose.yml` does not read
-`.env.secrets`. Then recreate the containers and check that the value
-arrived:
+`OAUTH_*` variables) are in `.env` (see
+[Which file holds secrets](../security.md#which-file-holds-secrets)). Then
+recreate the containers and check that the value arrived:
 
 ```bash
 docker compose up -d --force-recreate
@@ -384,16 +384,30 @@ The agent's request named no tenant this deployment serves. The error code is
   header.
 - Check that the tenant exists: `docker compose logs db-init` shows the
   migrations completing and "Default tenant ready".
-- Behind a custom domain, check the tenant's **Custom Domain** in the Admin
-  UI. The [multi-tenant guide](../deployment/multi-tenant.md) describes how a
-  request names its tenant.
+- Behind a custom domain or subdomain, check the tenant's **Custom Domain** in
+  the Admin UI (stored as `virtual_host`), and that the proxy in front passes
+  the original `Host` header through. The
+  [multi-tenant guide](../deployment/multi-tenant.md) describes how a request
+  names its tenant.
+- Behind Approximated: the app never reads `Apx-Incoming-Host`, so check the
+  edge: that nginx is in front and its `$tenant_host` map folded the vendor
+  header into the `Host` the app received.
+- On a deployment with `ADCP_TESTING=true` (the only one that mounts the debug
+  routes), `/debug/tenant` reports the `Host` that arrived and the tenant it
+  resolved.
 
 ### Agent calls are refused with `AUTH_MISSING`
 
 The call had no `Authorization: Bearer <token>` header. `get_products` needs
 one too unless the tenant's **Brand Context Requirement** (**Settings >
 Policies & Workflows**) is set to "Public". Create an advertiser in the Admin
-UI to get a token.
+UI to get a token (see
+[API Token](../user-guide/advertisers.md#api-token)).
+
+The `adcp` command-line client (`uvx adcp ... --auth <token>`) sends its token
+in an `x-adcp-auth` header, which this server does not read, so its calls get
+`AUTH_MISSING` too. Use the fastmcp script in
+[quickstart step 7](../quickstart.md#7-connect-an-ai-agent) instead.
 
 ### Rejected with a valid token
 
@@ -415,10 +429,9 @@ order.
 
 ### Invalid token for the MCP API
 
-Get the token from the Admin UI: open the **Advertisers** tab and copy the API
-token. The database holds only a hash of each token
-(`principals.token_hash`), so you cannot read a lost token back. Rotate it
-from the advertiser's row in the Admin UI and copy the token it shows.
+The database holds only a hash of each token (`principals.token_hash`), so a
+lost token cannot be read back from the Admin UI or the database. Rotate it
+as described in [API Token](../user-guide/advertisers.md#api-token).
 
 ### A2A authentication failed
 
@@ -427,6 +440,7 @@ Send the token as a Bearer token in the `Authorization` header:
 ```bash
 curl -X POST http://localhost:8000/a2a \
   -H "Authorization: Bearer ${ADCP_AUTH_TOKEN}" \
+  -H "x-adcp-tenant: default" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "method": "message/send", ...}'
 ```
@@ -435,11 +449,9 @@ curl -X POST http://localhost:8000/a2a \
 
 ### Tool not found
 
-List the tools the server actually registers:
-
-```bash
-uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
-```
+List the tools the server actually registers: run the script from
+[quickstart step 7](../quickstart.md#7-connect-an-ai-agent) with its
+`call_tool` line replaced by `print(await client.list_tools())`.
 
 If a tool is missing, check its registration in `src/core/main.py` and its
 implementation under `src/core/tools/`:
@@ -573,8 +585,8 @@ authentication.
    docker compose exec adcp-server env | grep GAM_OAUTH
    ```
 
-2. If missing, add them to `.env` (`docker-compose.yml` does not read
-   `.env.secrets`), then run `docker compose up -d --force-recreate`:
+2. If missing, add them to `.env` (see
+   [Which file holds secrets](../security.md#which-file-holds-secrets)):
 
    ```bash
    GAM_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
@@ -586,10 +598,10 @@ authentication.
    create an OAuth 2.0 client ID of type Web application and add the redirect
    URI `http://localhost:8000/admin/auth/gam/callback`.
 
-4. Restart the services:
+4. Recreate the containers so they read `.env` again (`restart` does not):
 
    ```bash
-   docker compose restart
+   docker compose up -d --force-recreate
    ```
 
 5. Verify the configuration:
