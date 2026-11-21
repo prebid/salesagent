@@ -12,7 +12,7 @@ own transports, its own env, and its own `ctx` key.
 | Parametrized over | `Transport.A2A`, `Transport.MCP`, `Transport.REST`, plus the e2e members when `BDD_E2E_ENABLED=true` (`pytest_generate_tests` in `tests/bdd/conftest.py`) | `AdminTransport.INTEGRATION`, plus `AdminTransport.E2E` when `BDD_E2E_ENABLED=true` (the `T-ADMIN-` branch of `pytest_generate_tests`) |
 | Caller identity | A credential headers dict; production's resolver builds the identity from it | A Flask session cookie, set through the env's `authenticate()` |
 | What a Then reads | The wire envelope, through the guarded helpers in `tests/bdd/steps/_outcome_helpers.py` | The `AdminResponse` the When stored under `ctx["admin_page"]` |
-| Harness | A domain `IntegrationEnv` subclass | `AdminAccountEnv` (`tests/harness/admin_accounts.py`) |
+| Harness | A domain `IntegrationEnv` subclass | `AdminAccountEnv` (`tests/harness/admin_accounts.py`), or a domain env that sends its admin requests through `AdminClient` |
 
 `AdminTransport` is a `StrEnum` and is deliberately **not** a member of
 `tests.harness.transport.Transport` (see its docstring in
@@ -27,18 +27,28 @@ raises loudly instead of dispatching somewhere wrong.
 ```
 tests/bdd/
 ├── features/
-│   └── BR-ADMIN-ACCOUNTS.feature    # Gherkin scenarios
+│   ├── BR-ADMIN-ACCOUNTS.feature                      # account pages
+│   ├── BR-ADMIN-INVENTORY-PROFILES.feature            # inventory-profile modal
+│   ├── BR-ADMIN-INVENTORY-PROFILE-publishers.feature  # inventory-profile and product forms
+│   └── local-publisher-authorization.feature          # publisher pages
 ├── steps/domain/
-│   └── admin_accounts.py            # step definitions
-├── test_admin_accounts.py           # scenarios() binding
-└── conftest.py                      # T-ADMIN- parametrization, marker, ENV_ROUTES row
+│   ├── admin_accounts.py                # account steps and the shared admin page steps
+│   ├── admin_inventory_profiles.py      # inventory-profile and product form steps
+│   └── publisher_authorization.py       # publisher steps
+├── test_admin_accounts.py               # scenarios() bindings, one module per feature
+├── test_admin_inventory_profiles.py
+├── test_admin_inventory_profile_publishers.py
+├── test_local_publisher_authorization.py
+└── conftest.py                          # T-ADMIN- parametrization, marker, ENV_ROUTES rows
 
 tests/harness/
 ├── admin_client.py                  # AdminClient, AdminResponse: the two transports, once
-└── admin_accounts.py                # AdminTransport, AdminAccountEnv
+├── admin_accounts.py                # AdminTransport, AdminAccountEnv
+├── admin_inventory_profile.py       # AdminInventoryProfileEnv
+└── publisher_authorization.py       # PublisherAuthorizationEnv
 
 tests/helpers/
-└── admin_session.py                 # admin_auth_session() for the Flask client
+└── admin_session.py                 # admin_test_app(), admin_auth_session(), authenticate_http_session()
 ```
 
 ## Add an admin feature
