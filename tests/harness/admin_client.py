@@ -132,15 +132,20 @@ class AdminClient:
         """The scheme and host requests are sent to, as a browser's ``Referer`` names a page."""
         return self._base_url or _IN_PROCESS_ORIGIN
 
-    def authenticate(self, tenant_id: str, *, tenant_user: str | None = None) -> None:
-        """State an authenticated super-admin session for *tenant_id*, or *tenant_user*'s session."""
+    def authenticate(self, tenant_id: str, *, tenant_user: str | None = None, auth_method: str | None = None) -> None:
+        """State an authenticated super-admin session for *tenant_id*, or *tenant_user*'s session.
+
+        *auth_method* is how the session says its user signed in (``oidc`` for SSO).
+        """
         if self._flask_client is not None:
             if tenant_user is not None:
-                tenant_user_session(self._flask_client, tenant_user, tenant_id=tenant_id)
+                tenant_user_session(self._flask_client, tenant_user, tenant_id=tenant_id, auth_method=auth_method)
             else:
-                admin_auth_session(self._flask_client, tenant_id)
+                admin_auth_session(self._flask_client, tenant_id, auth_method=auth_method)
         else:
-            authenticate_http_session(self._http, self._base_url or "", tenant_id, tenant_user=tenant_user)
+            authenticate_http_session(
+                self._http, self._base_url or "", tenant_id, tenant_user=tenant_user, auth_method=auth_method
+            )
 
     def clear_auth(self) -> None:
         """Drop the admin session, so the next request arrives anonymous."""

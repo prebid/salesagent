@@ -141,9 +141,9 @@ class AdminAccountEnv:
 
     # ── Auth ──────────────────────────────────────────────────────────────
 
-    def authenticate(self, tenant_id: str | None = None) -> None:
-        """Set up authenticated admin session."""
-        self.client.authenticate(tenant_id or self._tenant_id)
+    def authenticate(self, tenant_id: str | None = None, *, auth_method: str | None = None) -> None:
+        """Set up authenticated admin session; *auth_method* ``oidc`` states an SSO sign-in."""
+        self.client.authenticate(tenant_id or self._tenant_id, auth_method=auth_method)
 
     def authenticate_as_tenant_user(self, email: str) -> None:
         """Make *email* an active admin user of this tenant, unless it is one, and state its session.
@@ -683,12 +683,13 @@ class AdminAccountEnv:
 
     # ── API callers, the business-rules fetch, sync jobs (BR-ADMIN-UNEXPECTED-ERRORS) ──
 
-    def seed_tenant(self, *, gam: bool = False, ad_server: str | None = "mock") -> str:
+    def seed_tenant(self, *, gam: bool = False, ad_server: str | None = "mock", **columns: Any) -> str:
         """Store a tenant of its own, for a scenario whose fault or write must not reach the shared one.
 
         With *gam*, the tenant is onboarded to Google Ad Manager (:meth:`onboard_gam`), so the
         sync API builds its adapter without calling Google. *ad_server* is the tenant's adapter;
-        ``None`` is a tenant that has chosen none. Returns the tenant id.
+        ``None`` is a tenant that has chosen none. *columns* are further ``Tenant`` columns.
+        Returns the tenant id.
         """
         import uuid
 
@@ -697,7 +698,10 @@ class AdminAccountEnv:
         tenant_id = f"bdd_admin_{uuid.uuid4().hex[:10]}"
         with self._factory_session():
             TenantFactory(
-                tenant_id=tenant_id, virtual_host=f"{tenant_id.replace('_', '-')}.example.com", ad_server=ad_server
+                tenant_id=tenant_id,
+                virtual_host=f"{tenant_id.replace('_', '-')}.example.com",
+                ad_server=ad_server,
+                **columns,
             )
         if gam:
             self.onboard_gam(tenant_id=tenant_id)
@@ -734,6 +738,10 @@ class AdminAccountEnv:
         return self.client.request(
             "get", f"/api/sync/status/{sync_id}", headers={"X-API-Key": self._stored_api_key("api_key")}
         )
+
+    def fetch_tenant_route(self, tenant_id: str, path: str, body: dict[str, Any] | None = None) -> AdminResponse:
+        """POST *body* (none: ``{}``) to *tenant_id*'s ``/tenant/<id>/<path>``, as its page's script does with fetch()."""
+        return self.client.request("post", f"/tenant/{tenant_id}/{path}", json=body or {})
 
     def post_ai_connection_test(self, body: Any) -> AdminResponse:
         """POST *body* as JSON to this tenant's AI connection test, as the settings page does with fetch()."""

@@ -166,8 +166,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     # landing fixed — it asks core.get_tenant_from_hostname instead of selecting tenants
     ("src/admin/blueprints/public.py", "provision_tenant"),
     ("src/admin/blueprints/public.py", "signup_complete"),
-    ("src/admin/blueprints/settings.py", "get_approximated_token"),
-    ("src/admin/blueprints/settings.py", "register_approximated_domain"),
     ("src/admin/blueprints/settings.py", "test_ai_connection"),
     ("src/admin/blueprints/settings.py", "update_adapter"),
     ("src/admin/blueprints/settings.py", "update_ai"),

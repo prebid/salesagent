@@ -443,13 +443,6 @@ def then_json_key_value(ctx: dict, key: str, value: str) -> None:
     assert data[key] == value, f"Expected {key}='{value}', got '{data.get(key)}'"
 
 
-@then(parsers.parse('the JSON response has "{key}" containing "{substring}"'))
-def then_json_key_contains(ctx: dict, key: str, substring: str) -> None:
-    """Assert JSON response key contains a substring."""
-    data = _require_admin_page(ctx).get_json()
-    assert substring in str(data.get(key, "")), f"Expected {key} to contain '{substring}', got '{data.get(key)}'"
-
-
 @then(parsers.parse('the "{field}" control is not editable'))
 def then_control_is_not_editable(ctx: dict, field: str) -> None:
     """Assert the form control for *field* is rendered disabled or readonly.
