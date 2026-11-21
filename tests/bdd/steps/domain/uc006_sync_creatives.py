@@ -3501,14 +3501,18 @@ def given_creative_reaching_the_agent(ctx: dict, creative_state: str, format_kin
     dimensions is the only shape that reaches every site. ``static`` here means
     agent-served but non-generative -- ``output_format_ids`` empty is precisely
     what sends production down the preview branch instead of the build branch.
+    ``text-only`` is static too, on the format whose only required asset is text, so
+    the creative carries no media url and no size of its own.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
 
-    generative = format_kind == "generative"
-    fmt = env.configure_agent_served_creative(
-        generative=generative, format_id=_CATALOG_GENERATIVE_FORMAT_ID if generative else _CATALOG_FORMAT_ID
-    )
+    format_id = {
+        "generative": _CATALOG_GENERATIVE_FORMAT_ID,
+        "static": _CATALOG_FORMAT_ID,
+        "text-only": _CATALOG_TEXT_ONLY_FORMAT_ID,
+    }[format_kind]
+    fmt = env.configure_agent_served_creative(generative=format_kind == "generative", format_id=format_id)
 
     creative_id = f"creative-{creative_state}-{format_kind}-001"
     ctx.setdefault("creatives", []).append(
@@ -4890,6 +4894,45 @@ def then_creative_created_with_trackers_stored(ctx: dict) -> None:
     assert_assets(_stored_assets_for_last_creative(ctx), *ctx["tracker_specs"])
 
 
+@given(
+    parsers.parse('the creative agent previews every creative as its page "{preview_url}", sized {width:d}x{height:d}')
+)
+def given_agent_previews_as_page(ctx: dict, preview_url: str, width: int, height: int) -> None:
+    """The creative agent answers every preview with one render of *preview_url*, sized *width* by *height*.
+
+    The pinned single preview (``single_preview_document``) naming that page and size: what a
+    seller that copied a preview onto the creative would copy. After the Given that configures
+    the served format, whose default answer this replaces, on every transport.
+    """
+    from tests.e2e.webhook_capture_service import PEER_PREVIEW_TOOL
+    from tests.helpers.peer_creative_agent import single_preview_document
+
+    ctx["env"].answer_creative_agent(
+        PEER_PREVIEW_TOOL, single_preview_document("agent-served", preview_url=preview_url, dimensions=(width, height))
+    )
+    ctx["agent_preview"] = (preview_url, width, height)
+
+
+@then("the stored creative keeps the preview and carries neither its page nor its size")
+def then_preview_kept_out_of_creative(ctx: dict) -> None:
+    """The row keeps the agent's answer under ``preview_response`` and nowhere else.
+
+    The row is the only observable: sync-creatives-response.json's per-creative entry
+    carries no url or size. The answer kept under ``preview_response`` naming the page is
+    the control: a seller that never received the preview would also store none of it.
+    """
+    page, width, height = ctx["agent_preview"]
+    data = _stored_data_for_last_creative(ctx)
+    preview = data.pop("preview_response", None)
+    assert page in json.dumps(preview, default=str), f"the stored creative kept no preview naming {page!r}: {preview!r}"
+    assert page not in json.dumps(data, default=str), (
+        f"the preview page {page!r} was written into the creative: {data!r}"
+    )
+    assert data.get("width") != width and data.get("height") != height, (
+        f"the preview's size {width}x{height} was written into the creative: {data!r}"
+    )
+
+
 @given("a creative with a known format_id whose agent returns no preview and that carries no media url")
 def given_creative_no_preview_no_media_url(ctx: dict) -> None:
     """A text-only creative on a format the agent serves, answered with zero previews.
@@ -5642,8 +5685,8 @@ def then_existing_data_preserved(ctx: dict) -> None:
             )
 
 
-def _stored_assets_for_last_creative(ctx: dict) -> dict:
-    """Fetch the last synced creative's stored ``data['assets']`` from the DB."""
+def _stored_data_for_last_creative(ctx: dict) -> dict:
+    """Fetch the last synced creative's stored ``data`` from the DB."""
     from sqlalchemy import select
 
     from src.core.database.models import Creative as CreativeModel
@@ -5655,7 +5698,12 @@ def _stored_assets_for_last_creative(ctx: dict) -> dict:
             select(CreativeModel).filter_by(creative_id=creative_id, tenant_id=env._tenant_id)
         ).first()
         assert db_creative is not None, f"Creative {creative_id} not found in DB"
-        return (db_creative.data or {}).get("assets", {})
+        return dict(db_creative.data or {})
+
+
+def _stored_assets_for_last_creative(ctx: dict) -> dict:
+    """Fetch the last synced creative's stored ``data['assets']`` from the DB."""
+    return _stored_data_for_last_creative(ctx).get("assets", {})
 
 
 @then("the user-provided assets should be preserved")

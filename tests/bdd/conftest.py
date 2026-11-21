@@ -6651,6 +6651,8 @@ _UC006_WIRED_SCENARIOS = frozenset(
         # delete_missing and active delivery: plain syncs CreativeSyncEnv serves on every transport.
         "T-UC-006-local-delete-missing-active-delivery",
         "T-UC-006-local-delete-missing-not-delivering",
+        # A creative agent's preview stays out of the stored creative: plain syncs, create and update.
+        "T-UC-006-local-preview-kept-out-of-creative",
         # The format/validation error paths, corrected to the pinned enum (INVALID_REQUEST
         # for schema violations at the request, REFERENCE_NOT_FOUND / VALIDATION_ERROR on
         # the creative's entry, SERVICE_UNAVAILABLE for an agent that does not answer) and
