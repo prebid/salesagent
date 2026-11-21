@@ -17,6 +17,42 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from typing import Any
 
+from adcp.types._generated import MediaChannel
+
+#: Labels for the admin picker where title-casing the value is unreadable ("Olv", "Dooh");
+#: every other member title-cases its value. Keyed by member, so mypy refuses a non-member.
+MEDIA_CHANNEL_LABELS: dict[MediaChannel, str] = {
+    MediaChannel.olv: "OLV (Online Video)",
+    MediaChannel.ctv: "CTV (Connected TV)",
+    MediaChannel.dooh: "DOOH (Digital Out-of-Home)",
+    MediaChannel.ooh: "OOH (Out-of-Home)",
+    MediaChannel.linear_tv: "Linear TV",
+}
+
+
+def media_channel_options() -> list[tuple[str, str]]:
+    """``(value, label)`` per ``MediaChannel`` member, in enum order, for the admin channel picker.
+
+    The picker iterates this list, so it holds no channel literal of its own and cannot
+    offer a value the enum does not have (GH #1532).
+    """
+    return [
+        (member.value, MEDIA_CHANNEL_LABELS.get(member) or member.value.replace("_", " ").title())
+        for member in MediaChannel
+    ]
+
+
+def parse_media_channels(values: Iterable[str]) -> list[str]:
+    """The channel values an admin form posted, each a ``MediaChannel`` member, de-duplicated.
+
+    Raises ``ValueError`` naming the first non-member. A non-member can only come from a
+    form rendered before the picker became enum-driven or from a crafted request, and both
+    are told to reload rather than translated: an alias table here would be a second channel
+    vocabulary beside the enum. Order is kept; duplicates go (``Product.channels`` is
+    ``uniqueItems`` in the pinned schema).
+    """
+    return list(dict.fromkeys(MediaChannel(value).value for value in values))
+
 
 def effective_channel_names(declared: Iterable[Any] | None, *, adapter_defaults: Sequence[str]) -> set[str]:
     """The lowercase channel names a product effectively offers.

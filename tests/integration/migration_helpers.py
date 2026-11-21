@@ -191,6 +191,49 @@ def seed_account(
         )
 
 
+def seed_product(engine, *, tenant_id: str, product_id: str, channels: list[str] | None) -> None:
+    """Insert a products row directly -- a migration's subject is rows, not callers.
+
+    Raw SQL for the same reason as :func:`seed_account`: the channel-repair revision's
+    subject is a string the admin picker could once write and the enum-typed read path
+    refuses, so no factory can produce it. Column list as the delivery-measurement
+    migration test seeds it; ``'[]'`` satisfies the format_ids validator (zero iterations),
+    ``property_tags`` satisfies ``ck_product_authorization``, server defaults cover the rest.
+    ``channels=None`` writes SQL NULL, what production stores for "no channels declared".
+    """
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO products (tenant_id, product_id, name, description, delivery_type, "
+                "format_ids, targeting_template, property_tags, channels) "
+                "VALUES (:tid, :pid, :name, 'test', 'guaranteed', '[]'::jsonb, '{}'::jsonb, "
+                "'[\"all_inventory\"]'::jsonb, CAST(:channels AS jsonb))"
+            ),
+            {
+                "tid": tenant_id,
+                "pid": product_id,
+                "name": f"Product {product_id}",
+                "channels": None if channels is None else json.dumps(channels),
+            },
+        )
+
+
+def row_xmins(engine, *, table: str, key_column: str, tenant_id: str) -> dict[str, str]:
+    """Per-row ``xmin`` -- the transaction that last wrote the row -- keyed by *key_column*.
+
+    PostgreSQL bumps it on ANY update, including a rewrite of a row to itself, which is
+    what makes this the only assertion that can tell "issued no statement" apart from
+    "churned every row back to the same value". *table* and *key_column* are identifiers
+    from a fixed call site, hence interpolated; the tenant stays a bind.
+    """
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(f"SELECT {key_column} AS key, xmin::text AS xmin FROM {table} WHERE tenant_id = :tid"),
+            {"tid": tenant_id},
+        ).all()
+    return {row.key: row.xmin for row in rows}
+
+
 def _json_or_null(value: Any) -> str | None:
     return None if value is None else json.dumps(value)
 
