@@ -6,7 +6,7 @@ Signing Key" setup task, which ``templates/setup_checklist.html`` renders only w
 task is incomplete. Once a key could sign, nothing linked to the page where keys are
 revoked and rotated.
 
-Each test signs in as an ordinary tenant admin (``tenant_user_session``), not a super
+The test signs in as an ordinary tenant admin (``tenant_user_session``), not a super
 admin, because the links are for tenant operators. Every page is fetched over HTTP at the
 URL ``url_for`` builds for its endpoint, and every link is read from the ``<a>`` tags of
 the rendered page.
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pytest
 from flask import url_for
+from werkzeug.test import TestResponse
 
 from tests.factories import SigningKeyFactory, TenantFactory, UserFactory
 from tests.helpers.admin_session import tenant_user_session
@@ -30,11 +31,20 @@ def _url(client, endpoint: str, **values: str) -> str:
         return url_for(endpoint, **values)
 
 
-def _links(client, page_validator, url: str) -> list[str]:
-    """The ``<a>`` hrefs of the page at ``url``, which must render without a redirect."""
+def _get_ok(client, url: str) -> TestResponse:
+    """GET ``url``, which must render without a redirect.
+
+    No redirect is followed: a route that sent this session to the login page would
+    answer 302 here, not the 200 the rendered login page gives.
+    """
     response = client.get(url)
     assert response.status_code == 200, (url, response.status_code)
-    return page_validator(response).get_links()
+    return response
+
+
+def _links(client, page_validator, url: str) -> list[str]:
+    """The ``<a>`` hrefs of the page at ``url``, which must render without a redirect."""
+    return page_validator(_get_ok(client, url)).get_links()
 
 
 def _signed_in_tenant_admin(client):
@@ -69,28 +79,15 @@ class TestSettingsNavigationLinks:
             )
             assert checklist_links_signing_keys is not with_signing_key
 
-            settings = _links(
-                admin_client, page_validator, _url(admin_client, "tenants.tenant_settings", tenant_id=tenant_id)
+            # The pages are reached from the dashboard: it links Settings, and Settings
+            # links both pages, whatever the task's state.
+            dashboard = _links(
+                admin_client, page_validator, _url(admin_client, "tenants.dashboard", tenant_id=tenant_id)
             )
+            settings_url = _url(admin_client, "tenants.tenant_settings", tenant_id=tenant_id)
+            assert settings_url in dashboard
 
-        assert signing_keys in settings
-        assert accounts in settings
-
-    def test_both_pages_are_reachable_from_the_dashboard(self, admin_client, factory_session, page_validator):
-        tenant = _signed_in_tenant_admin(admin_client)
-        tenant_id = tenant.tenant_id
-        settings = _url(admin_client, "tenants.tenant_settings", tenant_id=tenant_id)
-
-        dashboard_links = _links(
-            admin_client, page_validator, _url(admin_client, "tenants.dashboard", tenant_id=tenant_id)
-        )
-        assert settings in dashboard_links
-
-        settings_links = _links(admin_client, page_validator, settings)
-        for endpoint in ("accounts.list_accounts", "signing_keys.list_signing_keys"):
-            href = _url(admin_client, endpoint, tenant_id=tenant_id)
-            assert href in settings_links
-            # No redirect is followed: a route that sent this session to the login page
-            # would answer 302 here, not the 200 the rendered login page gives.
-            response = admin_client.get(href)
-            assert response.status_code == 200, (href, response.status_code)
+            settings = _links(admin_client, page_validator, settings_url)
+            for target in (signing_keys, accounts):
+                assert target in settings
+                _get_ok(admin_client, target)
