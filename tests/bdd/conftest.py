@@ -101,6 +101,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.admin_inventory_profiles",
+    "tests.bdd.steps.domain.admin_signing_keys",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
     "tests.bdd.steps.domain.uc_get_products_publisher_domain",
@@ -6111,6 +6112,17 @@ def _build_admin_inventory_profile_env(e2e_config: object | None) -> AbstractCon
     return AdminInventoryProfileEnv(e2e_config=e2e_config)
 
 
+def _build_admin_signing_keys_env(e2e_config: object | None) -> AbstractContextManager:
+    """A tenant with one signing key in a seeded state, and the operator's two pages (#2288).
+
+    The admin requests follow the env's own transport: in process without ``e2e_config``,
+    over the live stack with it.
+    """
+    from tests.harness.admin_signing_keys import AdminSigningKeysEnv
+
+    return AdminSigningKeysEnv(e2e_config=e2e_config)
+
+
 def _build_capabilities_env(e2e_config: object | None) -> AbstractContextManager:
     """UC-010 get_adcp_capabilities. Named rather than ``_env(...)``-generated so
     the parked/wired/not-wired rows below — and ``_uc010_dormancy_rows()`` above —
@@ -7027,6 +7039,15 @@ ENV_ROUTES: list[EnvRoute] = [
         # factories or products.
         when=lambda m: "admin_inventory_profile" in m,
         env_builder=_build_admin_inventory_profile_env,
+    ),
+    EnvRoute(
+        tag="admin-signing-keys",
+        # BR-ADMIN-SIGNING-KEYS (#2288): the signing-keys page and the setup checklist for a
+        # key in each seeded state. Its T-ADMIN- tags parametrize it over the admin
+        # transports, and this row claims it before the ADMIN bucket, whose AdminAccountEnv
+        # has no factories.
+        when=lambda m: "admin_signing_keys" in m,
+        env_builder=_build_admin_signing_keys_env,
     ),
     EnvRoute(
         tag="get-products-format-options",

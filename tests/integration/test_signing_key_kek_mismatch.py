@@ -1,10 +1,11 @@
-"""salesagent-dn4i -- _private_half_is_resolvable must ATTEMPT A DECRYPT.
+"""salesagent-dn4i -- _private_half_unresolvable_because must ATTEMPT A DECRYPT.
 
 Core Invariant under test: a tenant's KeyBacking.signs must be True only when
 THIS deployment can actually open the key's private half -- never merely
 because SOME passphrase is configured.
 
-``_private_half_is_resolvable`` (src/core/signing/posture.py) once returned True as
+``_private_half_unresolvable_because`` (src/core/signing/posture.py; formerly
+``_private_half_is_resolvable``) once returned True as
 soon as ANY passphrase was configured, regardless of whether it was the RIGHT one
 for a given row -- it never attempted a decrypt, so a rotated or per-environment
 KEK made the wire say ``supported: true`` while every delivery raised. It now

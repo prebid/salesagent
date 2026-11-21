@@ -308,6 +308,45 @@ def deployment_kek(monkeypatch: Any, name: str = TEST_KEK_VARIABLE) -> Iterator[
     yield
 
 
+#: docker-compose.e2e.yml's app service, whose environment names the ONE KEK the live
+#: server container holds.
+_STACK_SERVICE = "adcp-server"
+
+
+def hold_stack_kek(guard: Any) -> bytes:
+    """Make this process hold the KEK docker-compose.e2e.yml gives the live server; return it.
+
+    In-process transports resolve a key in THIS process, the e2e ones in the live server
+    container, which only ever holds compose's value. With both holding the same KEK, a
+    key encrypted under it opens on every transport, and one encrypted under anything
+    else opens on none. The value is read out of compose rather than written here, so the
+    two cannot drift (salesagent-dn4i).
+
+    *guard* is the env's cleanup registry (``BaseTestEnv._guard``): both patches are
+    undone at teardown. The ``Settings`` object carrying ``key_passphrase_env`` is a
+    process global already built by the time a Given runs, so it is dropped to make
+    ``get_settings()`` re-read the environment. The passphrase itself needs no reset:
+    ``SigningSettings.key_passphrase`` resolves it on every use.
+    """
+    import os
+    from pathlib import Path
+
+    import yaml
+
+    compose_path = Path(__file__).resolve().parents[2] / "docker-compose.e2e.yml"
+    service_env = yaml.safe_load(compose_path.read_text(encoding="utf-8"))["services"][_STACK_SERVICE]["environment"]
+    kek_pointer = service_env["ADCP_SIGNING_KEY_PASSPHRASE_ENV"]
+    kek_value = service_env[kek_pointer]
+
+    for label, patcher in (
+        ("kek_env", patch.dict(os.environ, {"ADCP_SIGNING_KEY_PASSPHRASE_ENV": kek_pointer, kek_pointer: kek_value})),
+        ("settings_cache", patch("src.core.config._settings", None)),
+    ):
+        patcher.start()
+        guard(f"patch:signing_{label}", patcher.stop)
+    return str(kek_value).encode()
+
+
 @contextmanager
 def verifier_disabled() -> Iterator[None]:
     """Run the block with inbound signature verification off, as the kill switch does.
