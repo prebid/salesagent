@@ -3,7 +3,7 @@
 # Both ./run_all_tests.sh and .github/workflows/ci.yml call this script, so
 # the list cannot drift between local and CI.
 #
-# Active suppressions: none (see scripts/security-ignored-vulns.sh).
+# Active suppressions: listed in scripts/security-ignored-vulns.sh.
 #
 # Previously ignored, now resolved (kept here as a record):
 #
