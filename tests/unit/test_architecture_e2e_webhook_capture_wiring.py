@@ -47,7 +47,9 @@ reason its own ticket does not own is a guard people learn to ignore.
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
+import subprocess
 
 import pytest
 
@@ -410,6 +412,15 @@ _STACK_ENTRY_POINTS = ("run_all_tests.sh", "scripts/test-stack.sh")
 _SUBNET_ALLOCATOR = "scripts/dev/alloc-e2e-subnet.sh"
 
 
+def _file_mode(relative: str) -> int:
+    """The mode the entry points see. NTFS has no execute bit, so on Windows read the
+    mode git records for the file (``100755`` or ``100644``) instead."""
+    if os.name == "nt":
+        staged = subprocess.check_output(["git", "ls-files", "--stage", "--", relative], cwd=repo_root(), text=True)
+        return int(staged.split()[0], 8) if staged else 0
+    return (repo_root() / relative).stat().st_mode
+
+
 @pytest.mark.arch_guard
 def test_a_subnet_allocator_exists_and_is_executable() -> None:
     """Templating the subnet without shipping an allocator just moves the collision.
@@ -430,9 +441,10 @@ def test_a_subnet_allocator_exists_and_is_executable() -> None:
             "back to the shared compose default."
         ),
     )
-    assert allocator.stat().st_mode & 0o111, format_failure(
+    mode = _file_mode(_SUBNET_ALLOCATOR)
+    assert mode & 0o111, format_failure(
         summary=f"{_SUBNET_ALLOCATOR} is not executable",
-        violations=[f"{_SUBNET_ALLOCATOR}: mode {allocator.stat().st_mode & 0o777:o}"],
+        violations=[f"{_SUBNET_ALLOCATOR}: mode {mode & 0o777:o}"],
         fix_hint="chmod +x it — the entry points invoke it directly.",
     )
 

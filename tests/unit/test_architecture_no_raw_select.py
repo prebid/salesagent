@@ -197,8 +197,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/users.py", "disable_setup_mode"),
     ("src/admin/blueprints/users.py", "enable_setup_mode"),
     ("src/admin/blueprints/users.py", "list_users"),
-    ("src/admin/blueprints/users.py", "toggle_user"),
-    ("src/admin/blueprints/users.py", "update_role"),
     ("src/admin/blueprints/workflows.py", "list_workflows"),  # select(Tenant) — no tenant repo yet
     ("src/admin/blueprints/workflows.py", "review_workflow_step"),  # select(Context) — context lookup
     # ── Alias-hidden, now visible (#2128) ──

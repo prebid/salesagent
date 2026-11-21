@@ -29,6 +29,7 @@ from tests.unit._architecture_helpers import (
     REPO_ROOT,
     handles_integrity_error,
     parse_module,
+    rel,
     src_python_files,
     structural_guard_marker_re,
 )
@@ -82,7 +83,7 @@ def test_every_integrity_recovery_names_its_constraint():
         if "IntegrityError" not in source:
             continue
         for lineno in find_unnarrowed_integrity_handlers(parse_module(path), source):
-            violations.append(f"{path.relative_to(REPO_ROOT).as_posix()}:{lineno}")
+            violations.append(f"{rel(path)}:{lineno}")
     assert not violations, (
         "Unnarrowed `except IntegrityError` — this handler also catches FK, CHECK and PK "
         "violations and will report them as whatever collision it expects (#1721). Narrow it "

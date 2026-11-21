@@ -20,6 +20,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _BANNED = {"ValueError", "Exception"}
@@ -28,14 +30,14 @@ _BANNED = {"ValueError", "Exception"}
 ALLOWLIST: set[tuple[str, str]] = set()
 
 
-def _scan_source_text(rel: str, text: str) -> list[tuple[str, str, int]]:
+def _scan_source_text(rel_path: str, text: str) -> list[tuple[str, str, int]]:
     hits: list[tuple[str, str, int]] = []
     for node in ast.walk(ast.parse(text)):
         if not (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)):
             continue
         func = node.exc.func
         if isinstance(func, ast.Name) and func.id in _BANNED:
-            hits.append((rel, func.id, node.lineno))
+            hits.append((rel_path, func.id, node.lineno))
     return hits
 
 
@@ -46,15 +48,15 @@ def _creative_modules() -> list[Path]:
 def _scan() -> list[tuple[str, str, int]]:
     hits: list[tuple[str, str, int]] = []
     for path in _creative_modules():
-        rel = str(path.relative_to(REPO_ROOT))
-        hits.extend(_scan_source_text(rel, path.read_text()))
+        rel_path = rel(path, REPO_ROOT)
+        hits.extend(_scan_source_text(rel_path, path.read_text(encoding="utf-8")))
     return hits
 
 
 class TestCreativeInputRaiseGuard:
     def test_scope_is_nonempty(self):
         """The glob must keep matching the GAM creatives manager (guard not vacuous)."""
-        assert any("gam/managers/creatives.py" in str(p) for p in _creative_modules())
+        assert any("gam/managers/creatives.py" in p.as_posix() for p in _creative_modules())
 
     def test_no_bare_raises_in_adapter_creative_modules(self):
         violations = [v for v in _scan() if (v[0], v[1]) not in ALLOWLIST]

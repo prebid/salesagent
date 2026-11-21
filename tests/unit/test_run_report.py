@@ -34,11 +34,11 @@ def _write_run(
                 for nodeid, (outcome, reason) in tests.items()
             ]
         }
-        (directory / f"{suite}.json").write_text(json.dumps(payload))
+        (directory / f"{suite}.json").write_text(json.dumps(payload), encoding="utf-8")
     for protocol, summary in (storyboard or {}).items():
         dest = directory / STORYBOARD_SUBDIR / f"summary_{protocol}.json"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(json.dumps(summary))
+        dest.write_text(json.dumps(summary), encoding="utf-8")
     return directory
 
 
@@ -139,7 +139,8 @@ def test_the_reason_comes_from_the_failing_phase_not_the_xdist_banner(tmp_path: 
                     }
                 ]
             }
-        )
+        ),
+        encoding="utf-8",
     )
     text = _render(run)
     assert "t.py::test_red\n        E   AssertionError: 1 != 2" in text
@@ -388,12 +389,14 @@ def test_creative_agent_429s_are_counted_and_the_tests_that_saw_one_are_named(tm
                     {"nodeid": "t.py::test_green", "outcome": "passed", "call": {"stderr": limited}},
                 ]
             }
-        )
+        ),
+        encoding="utf-8",
     )
     (run / "containers").mkdir()
     (run / "containers" / "sa-1-tls-proxy-1.log").write_text(
         '1.2.3.4 - - [x] "POST /api/creative-agent/mcp HTTP/1.1" 429 108 "-"\n'
-        '1.2.3.4 - - [x] "POST /api/creative-agent/mcp HTTP/1.1" 200 512 "-"\n'
+        '1.2.3.4 - - [x] "POST /api/creative-agent/mcp HTTP/1.1" 200 512 "-"\n',
+        encoding="utf-8",
     )
     out = io.StringIO()
     report(run, {}, limit=5, out=out)

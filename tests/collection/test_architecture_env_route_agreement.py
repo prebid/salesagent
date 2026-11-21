@@ -51,7 +51,7 @@ from typing import Any
 import pytest
 
 from tests._collection_manifest import in_process_bdd_rows
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, repo_root
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, rel, repo_root
 from tests.unit._liveness_contract_pins import (
     DERIVATION_ACCESSOR,
     FIX_HINT,
@@ -206,7 +206,7 @@ def _one_marker_set(scenario_id: str, marker_sets: frozenset[frozenset[str]]) ->
 )
 def test_both_resolvers_agree_for_every_collected_scenario(module: str, tmp_path: Path) -> None:
     """The direct fix for the measured disagreement, scenario by scenario."""
-    relative = str(Path(module).relative_to(repo_root()))
+    relative = rel(Path(module), repo_root())
     scenarios = _scenarios_by_module().get(relative, {})
     if relative in _MODULES_WITHOUT_SCENARIO_IDENTITY:
         assert scenarios == {}, (

@@ -870,6 +870,19 @@ class Principal(Base, JSONValidatorMixin):
         return resolve_adapter_id(self.platform_mappings, adapter_name)
 
 
+class UserRole(StrEnum):
+    """The roles a tenant ``User`` may hold, from least to most access.
+
+    The one list of roles: the ``users.role`` check constraint, the admin UI's role
+    pickers and ``role_permits`` (src/admin/utils/helpers.py) all read it. ``StrEnum``,
+    so a member compares equal to the string stored in the column.
+    """
+
+    VIEWER = "viewer"
+    MANAGER = "manager"
+    ADMIN = "admin"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -889,7 +902,8 @@ class User(Base):
     tenant = relationship("Tenant", back_populates="users")
 
     __table_args__ = (
-        CheckConstraint("role IN ('admin', 'manager', 'viewer')"),
+        # Sorted, so the SQL is the same text the migrations created: role IN ('admin', 'manager', 'viewer').
+        CheckConstraint(f"role IN ({', '.join(repr(str(role)) for role in sorted(UserRole))})"),
         UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),  # Unique per tenant
         Index("idx_users_tenant", "tenant_id"),
         Index("idx_users_email", "email"),

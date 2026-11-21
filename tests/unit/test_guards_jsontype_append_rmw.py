@@ -19,6 +19,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: JSONType collections with concurrent-append semantics.
@@ -30,8 +32,8 @@ ALLOWLIST: set[tuple[str, str]] = set()
 
 def _scan_file(path: Path) -> list[tuple[str, str, int]]:
     """(rel_path, form, lineno) per violation in one file."""
-    tree = ast.parse(path.read_text())
-    rel = str(path.relative_to(REPO_ROOT))
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    relpath = rel(path, REPO_ROOT)
     hits: list[tuple[str, str, int]] = []
     for node in ast.walk(tree):
         # obj.<col>.append(...) — skip `self.<col>` (in-memory model methods;
@@ -45,7 +47,7 @@ def _scan_file(path: Path) -> list[tuple[str, str, int]]:
         ):
             receiver = node.func.value.value
             if not (isinstance(receiver, ast.Name) and receiver.id == "self"):
-                hits.append((rel, f".{node.func.value.attr}.append", node.lineno))
+                hits.append((relpath, f".{node.func.value.attr}.append", node.lineno))
         # flag_modified(x, "comments") — the in-place-append-then-flag shape.
         if (
             isinstance(node, ast.Call)
@@ -55,7 +57,7 @@ def _scan_file(path: Path) -> list[tuple[str, str, int]]:
             and isinstance(node.args[1], ast.Constant)
             and node.args[1].value in _APPEND_COLLECTIONS
         ):
-            hits.append((rel, f"flag_modified:{node.args[1].value}", node.lineno))
+            hits.append((relpath, f"flag_modified:{node.args[1].value}", node.lineno))
     return hits
 
 
@@ -86,7 +88,7 @@ class TestGuardMetaTests:
     def _scan_source(self, source: str) -> list[tuple[str, str, int]]:
         import tempfile
 
-        with tempfile.NamedTemporaryFile("w", suffix=".py", dir=REPO_ROOT, delete=False) as fh:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".py", dir=REPO_ROOT, delete=False) as fh:
             fh.write(source)
             tmp = Path(fh.name)
         try:

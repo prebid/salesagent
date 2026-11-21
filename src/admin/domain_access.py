@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import Tenant, User
+from src.core.database.models import Tenant, User, UserRole
 from src.core.database.repositories.tenant_config import (
     AddOutcome,
     AuthorizedListColumn,
@@ -143,7 +143,7 @@ def find_tenants_by_user_record(email: str) -> list[Tenant]:
         return list(tenants)
 
 
-def ensure_user_in_tenant(email: str, tenant_id: str, role: str = "admin", name: str = None) -> User:
+def ensure_user_in_tenant(email: str, tenant_id: str, role: str = UserRole.ADMIN, name: str = None) -> User:
     """
     Create or update user record in tenant.
 

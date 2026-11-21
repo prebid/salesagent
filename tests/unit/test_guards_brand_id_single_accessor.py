@@ -35,6 +35,7 @@ from tests.unit._architecture_helpers import (
     REPO_ROOT,
     assert_detector_catches_ast_snippets,
     parse_module,
+    rel,
     src_python_files,
 )
 
@@ -88,11 +89,11 @@ def find_brand_id_attribute_reads(tree: ast.Module) -> list[int]:
 def test_brand_id_is_read_only_through_the_shared_accessor():
     violations: list[str] = []
     for path in src_python_files(REPO_ROOT):
-        rel = path.relative_to(REPO_ROOT).as_posix()
-        if rel == ACCESSOR_MODULE:
+        rel_path = rel(path)
+        if rel_path == ACCESSOR_MODULE:
             continue
         for lineno in find_brand_id_attribute_reads(parse_module(path)):
-            violations.append(f"{rel}:{lineno}")
+            violations.append(f"{rel_path}:{lineno}")
     assert not violations, (
         "brand_id read outside the shared accessor. BrandId is a RootModel[str] whose "
         "str() is \"root='x'\", and brand_id is a component of the account natural key "

@@ -26,6 +26,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 BDD_ROOT = Path(__file__).resolve().parents[1] / "bdd"
 
 #: ``call_via`` is matched on the METHOD NAME ALONE, whatever the receiver is called.
@@ -85,10 +87,10 @@ def _dispatch_sites() -> list[tuple[str, str]]:
     sites: list[tuple[str, str]] = []
     for path in sorted(BDD_ROOT.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        rel = path.relative_to(BDD_ROOT).as_posix()
+        rel_path = rel(path, BDD_ROOT)
         for function in _enclosing_functions(tree):
             if any(_reaches_transport(node) for node in ast.walk(function)):
-                sites.append((rel, function.name))
+                sites.append((rel_path, function.name))
     return sites
 
 

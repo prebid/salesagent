@@ -23,7 +23,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests.unit._architecture_helpers import repo_root
+from tests.unit._architecture_helpers import rel, repo_root
 
 _SRC_DIR = repo_root() / "src"
 
@@ -66,12 +66,12 @@ class TestNoBareShadowedImportsInSrc:
         violations: list[str] = []
         for path in sorted(_SRC_DIR.rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            rel = str(path.relative_to(repo_root()))
+            rel_path = rel(path, repo_root())
             for lineno, module in find_bare_shadowed_imports(tree, basenames):
-                if (rel, lineno) in ALLOWLIST:
+                if (rel_path, lineno) in ALLOWLIST:
                     continue
                 violations.append(
-                    f"{rel}:{lineno}: bare 'from {module} import ...' shadows a real src/ module — "
+                    f"{rel_path}:{lineno}: bare 'from {module} import ...' shadows a real src/ module — "
                     f"use its absolute 'src.<package>.{module}' import path (CLAUDE.md import convention)"
                 )
         assert not violations, "Bare imports shadowing real src/ modules found:\n" + "\n".join(violations)

@@ -20,6 +20,7 @@ from sqlalchemy import select
 from src.core.config import RuntimeSettings
 from src.core.database.database_session import _pydantic_json_serializer, get_db_session
 from src.core.database.models import AuditLog
+from src.core.logging_config import LineSafeFormatter
 
 # Directory holding the FILE BACKUP of the audit trail. The database is the
 # audit authority (see the module docstring); these files are a secondary sink.
@@ -110,11 +111,11 @@ DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # Set up file handler for backup
 audit_handler = _LazyDirFileHandler(LOG_DIR / "audit.log", delay=True)
-audit_handler.setFormatter(logging.Formatter(LOG_FORMAT, DATE_FORMAT))
+audit_handler.setFormatter(LineSafeFormatter(LOG_FORMAT, DATE_FORMAT))
 
 # Set up error handler
 error_handler = _LazyDirFileHandler(LOG_DIR / "error.log", delay=True)
-error_handler.setFormatter(logging.Formatter(LOG_FORMAT, DATE_FORMAT))
+error_handler.setFormatter(LineSafeFormatter(LOG_FORMAT, DATE_FORMAT))
 error_handler.setLevel(logging.ERROR)
 
 # Create audit logger
@@ -122,13 +123,7 @@ audit_logger = logging.getLogger("adcp.audit")
 audit_logger.setLevel(logging.INFO)
 audit_logger.addHandler(audit_handler)
 audit_logger.addHandler(error_handler)
-
-# In development, also log to console for debugging
-# In production, the root logger already handles console output with JSON formatting
-if not _runtime.structured_logging:
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(logging.Formatter(LOG_FORMAT, DATE_FORMAT))
-    audit_logger.addHandler(console_handler)
+# No console handler: records propagate to the root handler, which writes them once.
 
 
 # Budget above (strictly greater than) this value triggers a high-value Slack alert

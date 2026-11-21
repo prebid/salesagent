@@ -796,7 +796,7 @@ class ToolingSettings(BaseSettings):
         credential = (
             self.gam_service_account_json.get_secret_value()
             if self.gam_service_account_json is not None
-            else Path(str(key_file)).read_text()
+            else Path(str(key_file)).read_text(encoding="utf-8")
         )
         return GamSuiteNetwork(
             service_account_json=credential,

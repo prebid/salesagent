@@ -282,7 +282,7 @@ def read(run: pathlib.Path) -> Identity | None:
     """
     path = run / IDENTITY_FILE
     try:
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(raw, dict):
@@ -528,7 +528,7 @@ def main(argv: list[str] | None = None) -> int:
         args.gam_network or None,
     )
     args.write.mkdir(parents=True, exist_ok=True)
-    (args.write / IDENTITY_FILE).write_text(json.dumps(payload, indent=1) + "\n")
+    (args.write / IDENTITY_FILE).write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
     print(f"{args.write / IDENTITY_FILE}: {describe(read(args.write))}")
     if identity.source != "git":
         # Loud, not fatal. A run that cannot name its tree should still run; what

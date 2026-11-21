@@ -173,7 +173,7 @@ def find_unguarded_modules(tools_dir: Path | None = None, root: Path | None = No
     scan_dir = tools_dir if tools_dir is not None else scan_root / "src" / "core" / "tools"
     violations: list[str] = []
     for path in sorted(scan_dir.rglob("*.py")):
-        relpath = rel(path) if root is None else str(path.relative_to(scan_root))
+        relpath = rel(path) if root is None else rel(path, scan_root)
         if relpath in CORRECT_DESIGN_NO_GATE:
             continue
         tree = parse_module(path)
