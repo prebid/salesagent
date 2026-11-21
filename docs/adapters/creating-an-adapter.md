@@ -28,8 +28,9 @@ identity and capabilities as class attributes:
 
 The base constructor takes `(config, principal, creative_engine, tenant_id)`
 and requires `tenant_id` — every adapter operation is tenant-scoped
-(`src/adapters/base.py:339-345`). There is no `dry_run` parameter: a preview is
-a unit of work that rolls back rather than an adapter mode, as
+(`AdServerAdapter.__init__` in `src/adapters/base.py`). There is no `dry_run`
+parameter: a preview is a unit of work that rolls back rather than an adapter
+mode, as
 [Rules that bind every adapter](#rules-that-bind-every-adapter) restates.
 Validate required configuration in your `__init__` with
 `self._require_config(...)`, which raises `AdCPConfigurationError` with the
