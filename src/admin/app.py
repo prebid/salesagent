@@ -46,8 +46,6 @@ from src.core.domain_config import (
 )
 from src.core.operator_errors import best_effort
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
