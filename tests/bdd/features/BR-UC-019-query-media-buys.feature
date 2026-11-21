@@ -860,7 +860,7 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with returned wire status "<status>"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
-    And the media buy "mb-001" valid_actions should equal <expected_actions>
+    And the media buy "mb-001" valid_actions set should equal <expected_actions>
     # BR-RULE-290: valid_actions deterministically derived from wire status via MEDIA_BUY_STATE_MACHINE
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
