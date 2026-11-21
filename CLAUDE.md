@@ -13,6 +13,7 @@ This guide surfaces the repository-specific rules for the Prebid Sales Agent cod
 - **Database changes**: Reach the data through a repository inside a Unit of Work → Use `JSONType` for JSON columns → Create migration with `alembic revision`
 - **Any feature or bug fix**: TDD — the failing test comes first, and every change is gated by `make quality` (full cycles in `.claude/rules/workflows/tdd-workflow.md` and `bug-reporting.md`)
 - **Refactorings**: additionally run `tox -e integration` and verify imports with `uv run python -c "from module import thing"` — pre-commit hooks can't catch import errors
+- **Scope and review**: one outcome per pull request; a review grades what the change writes or touches and files the rest as follow-up issues ([engineering-standards.md § Keep the change to that outcome](docs/development/engineering-standards.md#keep-the-change-to-that-outcome), [§ Review the change](docs/development/engineering-standards.md#review-the-change))
 
 ### Key files to know
 - `src/core/main.py` — MCP server and tool registration
@@ -28,7 +29,7 @@ This guide surfaces the repository-specific rules for the Prebid Sales Agent cod
 
 **DRY is a correctness requirement, equivalent to type safety or test integrity — not "premature optimization," and not "refactoring beyond what was asked."**
 
-- If you write a block of logic that is structurally similar to a block already in the codebase (same pattern, different variables), you **MUST** extract a shared helper function
+- If you write a block of logic that is structurally similar to a block already in the codebase (same pattern, different variables), you **MUST** extract a shared helper function. Pre-existing duplicates elsewhere are paid down through `.duplication-baseline`, not folded into an unrelated change.
 - If you are asked to refactor duplicated code, that is a **bug fix**, not an "improvement"
 - **NEVER** cite "avoid over-engineering" or "keep it simple" to justify leaving duplicated logic in place
 - Duplicated code is a defect. It means the next person who fixes a bug in one copy misses the other copy, and it has caused real bugs in this codebase
