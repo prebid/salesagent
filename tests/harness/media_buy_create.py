@@ -549,6 +549,9 @@ class MediaBuyCreateEnv(
         mock_adapter.associate_creatives.return_value = None
         mock_adapter.manual_approval_required = False
         mock_adapter.manual_approval_operations = []
+        # What the mock ad server declares, not a MagicMock answering truthy for every flag:
+        # core reads the adapter's capabilities to decide what it does before booking.
+        mock_adapter.capabilities = MockAdServer.capabilities
         self.mock["adapter"].return_value = mock_adapter
 
         # The audit logger is NOT patched: it is our own code, and the audit trail it writes

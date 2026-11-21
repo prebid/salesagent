@@ -166,6 +166,8 @@ class AdapterCapabilities:
 
     # Creatives: sync_creatives pushes an approved creative assigned to a booked package
     supports_creative_trafficking: bool = False
+    # Creatives: its ad server takes an html5 creative's zip bytes, which core fetches before booking
+    uploads_html5_bundles: bool = False
 
 
 class BaseConnectionConfig(BaseModel):

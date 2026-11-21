@@ -130,6 +130,25 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     And Google Ad Manager created that creative at size 300x250
     And Google Ad Manager associated that creative with the line item it created, at its own size
 
+  # GAM never fetches the bundle; the seller does, and hands GAM its bytes. So a bundle the
+  # seller cannot fetch is the buyer's to fix, found before anything is booked, never after the
+  # order and line items are written. AdCP 3.2.7 enums/error-code.json
+  # CREATIVE_VALIDATION_FAILED_GENERIC: "The creative failed buyer-correctable validation, but
+  # the producer cannot classify the failure with a more specific standard code ... Recovery:
+  # correctable (correct the buyer-visible validation problem and resubmit the creative)." No
+  # code names a creative asset the seller cannot fetch: CREATIVE_INACCESSIBLE is a creative
+  # governance agent's failure to retrieve assets. The request names the creative at
+  # packages[0].creative_ids[0].
+  @T-UC-002-local-gam-creative-html5-bundle-unreachable @extension
+  Scenario: An html5 creative whose bundle URL does not answer is refused before booking, and GAM holds no order
+    Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "html5", "format_option_id": "html5_300x250", "params": {"width": 300, "height": 250}}]}'
+    And the package references the buyer's approved html5 creative "cr-bundle-silent" bundled by a bundle host that does not answer, with backup image "https://cdn.example.com/backup.png"
+    When the Buyer Agent sends the create_media_buy request
+    Then the request is refused on the wire with code "CREATIVE_VALIDATION_FAILED_GENERIC" recovery "correctable" naming field "packages[0].creative_ids[0]"
+    And no media buy is persisted for the tenant
+    And Google Ad Manager received no order and no line item
+    And Google Ad Manager created no creative
+
   # A GAM creative has one size for life. The first size the option declares that a line item
   # placeholder takes is the creative's; the association carries every declared size a
   # placeholder takes, the creative's own among them, because its sizes "override" Creative.size.

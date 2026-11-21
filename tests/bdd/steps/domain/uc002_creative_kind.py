@@ -186,7 +186,8 @@ def given_display_tag_creative(
 @given(
     parsers.re(
         r'the package references the buyer\'s approved html5 creative "(?P<creative_id>[^"]+)" bundled '
-        r'(?:at "(?P<bundle_url>[^"]+)"|by (?P<hosted>the buyer\'s bundle host)|with no url), '
+        r'(?:at "(?P<bundle_url>[^"]+)"|by (?P<hosted>the buyer\'s bundle host)'
+        r"|by (?P<silent>a bundle host that does not answer)|with no url), "
         r'with backup image "(?P<backup_url>[^"]+)"(?:, sized (?P<width>\d+)x(?P<height>\d+))?$'
     )
 )
@@ -195,6 +196,7 @@ def given_html5_bundle_creative(
     creative_id: str,
     bundle_url: str | None,
     hosted: str | None,
+    silent: str | None,
     backup_url: str,
     width: str | None,
     height: str | None,
@@ -202,12 +204,15 @@ def given_html5_bundle_creative(
     """A canonical ``html5`` creative: slots ``html5_bundle`` (zip) and ``backup_image`` (formats/canonical/html5.json).
 
     The zip is at *bundle_url*; or served by the buyer's bundle host (``serve_html5_bundle``),
-    its bytes kept to compare with what the ad server receives; or it names no ``url``, the
-    member core/assets/zip-asset.json requires. The backup image is 300x250 unless sized.
+    its bytes kept to compare with what the ad server receives; or at a host that does not
+    answer (``serve_html5_bundle(None)``); or it names no ``url``, the member
+    core/assets/zip-asset.json requires. The backup image is 300x250 unless sized.
     """
     if hosted is not None:
         ctx["html5_bundle"] = html5_zip_bundle()
         bundle_url = ctx["env"].serve_html5_bundle(ctx["html5_bundle"])
+    elif silent is not None:
+        bundle_url = ctx["env"].serve_html5_bundle(None)
     size = {} if width is None else {"backup_width": int(width), "backup_height": int(str(height))}
     assets = build_assets(*html5_bundle_specs(bundle_url, backup_url=backup_url, **size))
     store_package_creative(ctx, creative_id, assets, kind="html5")

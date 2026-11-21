@@ -13,7 +13,6 @@ from typing import Any
 from src.core.errors.details import ErrorProblem
 from src.core.exceptions import AdCPSalesAgentError, problems_refusal
 from src.core.schemas import AssetStatus
-from src.core.security.outbound_http import CounterpartyUrl, send
 from src.core.traffic_carrier import AdapterCreativeAsset, PackageAssignmentDict
 
 from ..creative_plan import (
@@ -259,17 +258,9 @@ class GAMCreativesManager:
         return {line_item_id: plan for line_item_id, plan in plans.items() if isinstance(plan, GamCreativePlan)}
 
     def _planned_creative(self, asset: AdapterCreativeAsset, plan: GamCreativePlan) -> dict[str, Any]:
-        """The planned GAM creative, with the advertiser and name this manager owns, and an html5 bundle's bytes.
-
-        The bundle is fetched from the buyer's host through the egress seam. The URL is the
-        buyer's, so a refused or failed fetch raises the seam's own typed error.
-        """
-        creative = plan.creative
-        if plan.html5_bundle_url is not None:
-            bundle = send(plan.html5_bundle_url, method="GET", provenance=CounterpartyUrl()).content
-            creative = plan.with_html5_bundle(bundle)
+        """The planned GAM creative, with the advertiser and name this manager owns."""
         return {
-            **creative,
+            **plan.creative,
             "advertiserId": self.advertiser_id,
             "name": asset.get("name", f"AdCP Creative {asset['creative_id']}"),
         }

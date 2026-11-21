@@ -166,12 +166,14 @@ def _hold_on_the_configured_network(self: Any, gam_id: str, image_url: str) -> s
 _BUNDLE_HOST = "pub-psatest.com"
 
 
-def _serve_from_the_publisher_origin(self: Any, bundle: bytes) -> str:
+def _serve_from_the_publisher_origin(self: Any, bundle: bytes | None) -> str:
     """``serve_html5_bundle`` on e2e: the bundle is a file ``publisher-origin`` serves, at a per-scenario path.
 
     ``publisher-origin`` serves a dialer only the files written under that dialer's address,
     and two processes fetch the bundle: the live server, on create, and this process, on a
-    seller's approval it runs itself. So the file is written under both addresses.
+    seller's approval it runs itself. So the file is written under both addresses. With no
+    *bundle* nothing is written, and the path answers 404 (``publisher_authorization.py``): the
+    seller fetches no bundle there either.
     """
     import shutil
     import socket
@@ -182,10 +184,11 @@ def _serve_from_the_publisher_origin(self: Any, bundle: bytes) -> str:
     self._reach_the_bundle_host()
     key = uuid.uuid4().hex
     runner_files = PUBLISHER_FILES_DIR / socket.gethostbyname(socket.gethostname())
-    for files in (self._registered_server_files(), runner_files):
-        bundle_file = files / _BUNDLE_HOST / "bundles" / key / "bundle.zip"
-        bundle_file.parent.mkdir(parents=True, exist_ok=True)
-        bundle_file.write_bytes(bundle)
+    if bundle is not None:
+        for files in (self._registered_server_files(), runner_files):
+            bundle_file = files / _BUNDLE_HOST / "bundles" / key / "bundle.zip"
+            bundle_file.parent.mkdir(parents=True, exist_ok=True)
+            bundle_file.write_bytes(bundle)
     self._guard("html5 bundle at this runner's address", lambda: shutil.rmtree(runner_files, ignore_errors=True))
     return f"https://{_BUNDLE_HOST}/bundles/{key}/bundle.zip"
 
@@ -628,16 +631,20 @@ class GamSellerMixin:
         self._guard("html5 bundle egress hatch", hatch.stop)
 
     @realize_e2e(_serve_from_the_publisher_origin)
-    def serve_html5_bundle(self, bundle: bytes) -> str:
+    def serve_html5_bundle(self, bundle: bytes | None) -> str:
         """Serve *bundle* as a zip from a loopback origin over TLS; return its URL.
 
         The buyer's bundle host, which the seller fetches the bundle from (``_reach_the_bundle_host``).
+        With no *bundle* the host does not answer: it closes every connection before a status line.
         """
         from tests.helpers.tls_material import start_tls_origin
 
         self._reach_the_bundle_host()
         origin = start_tls_origin(self._guard, "html5 bundle origin")
-        origin.respond_with(200, body=bundle, content_type="application/zip")
+        if bundle is None:
+            origin.close_without_responding()
+        else:
+            origin.respond_with(200, body=bundle, content_type="application/zip")
         return f"{origin.base_url}/bundle.zip"
 
     @realize_e2e(_a_network_asset_is_held)

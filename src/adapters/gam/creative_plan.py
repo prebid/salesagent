@@ -26,9 +26,9 @@ GAM facts are Ad Manager API v202602 (googleads 49.0.0 defaults to it):
   at plan time (``GamRefusalReason.NO_CLICKTHROUGH``).
 
 The plan leaves out ``advertiserId`` and ``name``: the creatives manager owns both, as it does
-today. It also leaves out the html5 bundle's bytes: the manager fetches ``html5_bundle_url``
-through ``src.core.security.outbound_http.asend`` and fills them with
-:meth:`GamCreativePlan.with_html5_bundle`.
+today. An html5 bundle's bytes come on the carrier (``Html5BundleRepresentation.bundle``): core
+fetches the bundle from the buyer's host before anything is booked, so neither the plan nor the
+upload fetches anything.
 """
 
 from __future__ import annotations
@@ -62,18 +62,11 @@ class GamCreativePlan:
 
     ``creative`` is the GAM ``Creative`` without ``advertiserId`` and ``name``.
     ``lica_sizes`` are GAM ``Size`` objects for ``LineItemCreativeAssociation.sizes``, the
-    creative's own size first; empty means the association states none. ``html5_bundle_url`` is set for an ``Html5Creative``
-    only: its zip bytes are not in ``creative`` until :meth:`with_html5_bundle` fills them.
+    creative's own size first; empty means the association states none.
     """
 
     creative: dict[str, Any]
     lica_sizes: tuple[dict[str, int], ...] = ()
-    html5_bundle_url: str | None = None
-
-    def with_html5_bundle(self, bundle: bytes) -> dict[str, Any]:
-        """The ``Html5Creative`` with the fetched zip *bundle* as its ``html5Asset.assetByteArray``."""
-        assert self.html5_bundle_url is not None, "only an Html5Creative plan carries a bundle to fill"
-        return {**self.creative, "html5Asset": {**self.creative["html5Asset"], "assetByteArray": bundle}}
 
 
 class GamRefusalReason(StrEnum):
@@ -196,7 +189,6 @@ def plan_gam_creative(
     lica_sizes = candidates if others else ()
 
     creative: dict[str, Any] = {"size": size}
-    bundle_url = None
     if isinstance(representation, InlineMarkupRepresentation):
         creative.update(xsi_type="ThirdPartyCreative", snippet=representation.markup)
     elif isinstance(representation, HtmlRepresentation):
@@ -213,8 +205,11 @@ def plan_gam_creative(
             destinationUrl=representation.clickthrough_url,
         )
     elif isinstance(representation, Html5BundleRepresentation):
-        creative.update(xsi_type="Html5Creative", html5Asset={"fileName": f"{ctt.creative_id}.zip"})
-        bundle_url = representation.url
+        assert representation.bundle is not None, "core fetches an html5 bundle before GAM is handed its carrier"
+        creative.update(
+            xsi_type="Html5Creative",
+            html5Asset={"fileName": f"{ctt.creative_id}.zip", "assetByteArray": representation.bundle},
+        )
     elif not ctt.clickthrough_url:
         return GamCreativeRefusal(ctt.creative_id, GamRefusalReason.NO_CLICKTHROUGH)
     else:
@@ -226,7 +221,7 @@ def plan_gam_creative(
 
     if ctt.impression_tracker_urls:
         creative["thirdPartyImpressionTrackingUrls"] = substitute_tracking_urls(list(ctt.impression_tracker_urls))
-    return GamCreativePlan(creative=creative, lica_sizes=lica_sizes, html5_bundle_url=bundle_url)
+    return GamCreativePlan(creative=creative, lica_sizes=lica_sizes)
 
 
 def plan_or_refuse(
