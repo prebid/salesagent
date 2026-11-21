@@ -475,6 +475,11 @@
             <span>Integrations</span>
         </a>
 
+        <a class="settings-nav-item" href="{{ url_for('signing_keys.list_signing_keys', tenant_id=tenant.tenant_id) }}">
+            <span class="settings-nav-icon">🔑</span>
+            <span>Signing Keys</span>
+        </a>
+
         <div class="settings-nav-separator"></div>
 
         <a class="settings-nav-item" data-section="publishers">
@@ -497,6 +502,11 @@
         <a class="settings-nav-item" data-section="advertisers">
             <span class="settings-nav-icon">👥</span>
             <span>Advertisers</span>
+        </a>
+
+        <a class="settings-nav-item" href="{{ url_for('accounts.list_accounts', tenant_id=tenant.tenant_id) }}">
+            <span class="settings-nav-icon">🧾</span>
+            <span>Buyer Accounts</span>
         </a>
 
         {% if not single_tenant_mode %}
