@@ -2,8 +2,8 @@
 
 Steps for the routes that take ``<tenant_id>`` from the URL. The harness
 (``AdminTenantScopingEnv``) is provided by the ``_harness_env`` fixture in
-tests/bdd/conftest.py. The generic admin Then steps (``the page returns status``,
-``the JSON response has "key" as "value"``) come from
+tests/bdd/conftest.py. The generic admin steps (``the caller is not authenticated``,
+``the page returns status``, ``the JSON response has "key" as "value"``) come from
 tests/bdd/steps/domain/admin_accounts.py and read the same ``ctx["admin_page"]`` key.
 
 """
@@ -15,7 +15,12 @@ from typing import TYPE_CHECKING
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.domain.admin_accounts import _require_admin_page
-from tests.harness.admin_tenant_scoping import ACTIVE_BUY_BUDGET, expected_suggestions_body, redirect_path
+from tests.harness.admin_tenant_scoping import (
+    ACTIVE_BUY_BUDGET,
+    REDIRECTS,
+    expected_suggestions_body,
+    redirect_path,
+)
 
 if TYPE_CHECKING:
     from tests.harness.admin_tenant_scoping import AdminTenantScopingEnv
@@ -31,16 +36,10 @@ def _env(ctx: dict) -> AdminTenantScopingEnv:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-@given("a target tenant with one catalogue product and one active media buy")
+@given("a target tenant with one catalogue product, one active media buy and an active member")
 def given_target_tenant(ctx: dict) -> None:
-    """Seed the tenant every scenario reads; the harness snapshots its state."""
+    """Seed the tenant every scenario reads. Its member is somebody other than the caller."""
     _env(ctx).seed_target_tenant()
-
-
-@given("the caller is not authenticated")
-def given_caller_anonymous(ctx: dict) -> None:
-    """Drop any session."""
-    _env(ctx).clear_auth()
 
 
 @given("the caller is an active member of a different tenant")
@@ -61,6 +60,12 @@ def given_caller_active_member(ctx: dict) -> None:
     _env(ctx).login_with_target_membership(is_active=True)
 
 
+@given("the caller is a super admin of a different tenant with no membership in the target tenant")
+def given_caller_super_admin_elsewhere(ctx: dict) -> None:
+    """Logged in as a super admin at another tenant; the target holds no User row for the caller."""
+    _env(ctx).login_as_super_admin_of_other_tenant()
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # WHEN steps
 # ═══════════════════════════════════════════════════════════════════════════
@@ -77,31 +82,22 @@ def when_caller_sends(ctx: dict, method: str, route: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-@then("the page redirects to the login page of the target tenant")
-def then_redirect_to_tenant_login(ctx: dict) -> None:
-    """The tenant login page, not the generic /login require_auth sends to and not the handler's own redirect."""
+@then(parsers.parse("the page redirects to the {page} of the target tenant"))
+def then_redirect_to_tenant_page(ctx: dict, page: str) -> None:
+    """A 302 to the named page of the target tenant, by the ``REDIRECTS`` table beside the routes."""
     response = _require_admin_page(ctx)
     assert response.status_code == 302, f"Expected 302, got {response.status_code}"
     path = redirect_path(response)
-    expected = f"/tenant/{_env(ctx).target.tenant_id}/login"
-    assert path == expected, f"Expected redirect to {expected}, got {path}"
-
-
-@then("the page redirects to the policy page of the target tenant")
-def then_redirect_to_policy_index(ctx: dict) -> None:
-    """policy.rules keeps its redirect to policy.index for an authorized member."""
-    response = _require_admin_page(ctx)
-    assert response.status_code == 302, f"Expected 302, got {response.status_code}"
-    path = redirect_path(response)
-    expected = f"/tenant/{_env(ctx).target.tenant_id}/policy/"
+    expected = REDIRECTS[page].format(tenant_id=_env(ctx).target.tenant_id)
     assert path == expected, f"Expected redirect to {expected}, got {path}"
 
 
 @then("the target tenant's stored data is unchanged")
 def then_target_unchanged(ctx: dict) -> None:
-    """A rejected request leaves the tenant's products, media buys and policy settings as seeded."""
+    """A rejected request leaves the tenant holding the rows and the policy settings the request found."""
     env = _env(ctx)
-    assert env.target_state() == env.seeded_state, f"Target tenant state changed from {env.seeded_state!r}"
+    before, after = env.state_before_request, env.target_state()
+    assert after == before, f"The request changed the target tenant: {before!r} became {after!r}"
 
 
 @then("the revenue chart lists the target tenant's active media buy")

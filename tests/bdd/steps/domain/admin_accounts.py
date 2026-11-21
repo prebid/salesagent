@@ -108,6 +108,7 @@ def given_tenant_has_keyed_account(ctx: dict, name: str, domain: str, operator: 
 
 
 @given("the admin user is not authenticated")
+@given("the caller is not authenticated")
 def given_admin_not_authenticated(ctx: dict) -> None:
     """Clear any existing authentication."""
     env = _env(ctx)

@@ -13,120 +13,86 @@ inherited unchanged, and the harness lifecycle guard
 one hand-rolled ``__enter__``/``__exit__`` home to ``AdminAccountEnv``, so a second admin
 env inherits that lifecycle instead of restating it.
 
-The caller's session is STATED on both transports (``AdminClient.state_session``), in
-the shape an OIDC login writes for a non-admin: a ``user`` email and a HOME tenant that is
-never the target, with no ``test_user`` key. ``require_tenant_access`` therefore takes its
-real branch, and the target tenant's ``User`` row is the only thing that decides the
-outcome, so a rejection here is the real membership check, on the same branch of the
-decorator in-process as on the stack.
+The caller's session is STATED on both transports (``AdminClient.state_session``), with the
+keys an OIDC login writes for a non-admin (``member_session_payload``): ``user`` as a bare
+email and a HOME tenant that is never the target, with no ``test_user`` key.
+``require_tenant_access`` therefore takes its real branch, and the target tenant's ``User``
+row is the only thing that decides the outcome, so a rejection here is the real membership
+check, on the same branch of the decorator in-process as on the stack.
 
-In process the caller can also sign in through the two single-sign-on paths production
-uses, OIDC and Google OAuth (``login=`` on ``integration()``). Those drive the real login
-and callback routes with only the identity provider's two network calls stubbed, and no
-``test_user`` key ever enters the session. Both write ``session["user"]`` as a plain email string and set no
-``session["role"]`` — the session shape #2204 is about.
-
-The module-level helpers (route table, case expansion, seeding, state snapshot, assertion
-helpers) are shared by the contract classes in
-``tests/helpers/admin_tenant_scoping_contract.py`` and the BDD steps, so the three layers
-grade one contract.
+The contract itself is stated once, in ``tests/bdd/features/BR-ADMIN-TENANT-SCOPING.feature``,
+and runs on both transports through the ``admin-tenant-scoping`` row of ``ENV_ROUTES`` in
+tests/bdd/conftest.py. The step definitions in tests/bdd/steps/domain/admin_tenant_scoping.py
+read the redirect table, the buy's budget and the expected-body builders from this module;
+seeding and read-backs are methods of the env.
 """
 
 from __future__ import annotations
 
-import os
-import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack
 from decimal import Decimal
-from typing import Any, Literal, NamedTuple
-from unittest import mock
-from urllib.parse import parse_qs, urlsplit
+from typing import Any, NamedTuple
+from urllib.parse import urlsplit
 
-from authlib.integrations.flask_client import FlaskOAuth2App
-from sqlalchemy.orm import Session
-
-from src.core.config import load_settings
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant
+from src.core.database.models import Tenant, UserRole
 from src.services.default_products import get_default_products
-from tests.factories import MediaBuyFactory, ProductFactory, TenantAuthConfigFactory, TenantFactory, UserFactory
+from tests.factories import MediaBuyFactory, ProductFactory, TenantFactory, UserFactory
+from tests.factories.mint import mint_id
 from tests.harness.admin_accounts import AdminAccountEnv
 from tests.harness.admin_client import AdminResponse
-from tests.helpers.admin_session import member_session_payload
-from tests.utils.database_helpers import bound_factory_session
+from tests.helpers.admin_session import member_session_payload, no_configured_super_admins
+from tests.utils.database_helpers import bound_factory_session, delete_tenant, tenant_row_counts
 
 #: The non-admin identity the scenarios log in as. Both transports use the same address
 #: so they grade identical ``User`` rows.
 MEMBER_EMAIL = "test_tenant_user@example.com"
+#: Somebody else, who IS an active member of the target tenant in every scenario. Without
+#: this row a lookup that forgot the caller's email would still find nobody, and a refusal
+#: would prove nothing about whose membership was checked.
+OTHER_MEMBER_EMAIL = "target_tenant_member@example.com"
+#: The role every seeded membership holds: the least one that may send every method in
+#: ``ROUTES``, because ``role_permits`` asks ``manager`` for a write. A refusal is then the
+#: membership check's and never the role check's, which
+#: tests/integration/test_admin_role_enforcement.py grades.
+MEMBER_ROLE = UserRole.MANAGER
 ACTIVE_BUY_BUDGET = Decimal("1500.00")
 #: Any numeric id passes ``validate_numeric_id``; the handlers stop before they would use it.
 GAM_ADVERTISER_ID = "12345"
-
-#: How the caller signs in. ``stated`` runs on both transports; the two single-sign-on
-#: paths run in process only (the stack has no identity provider).
-Login = Literal["stated", "oidc", "google"]
-SSO_LOGINS: tuple[Login, ...] = ("oidc", "google")
 
 
 class TenantScopedRoute(NamedTuple):
     path: str
     methods: tuple[str, ...]
-    api_mode: bool  # JSON 401/403 from require_tenant_access(api_mode=True); else redirect / abort(403)
 
 
 _GAM_API = "/api/tenant/{tenant_id}"
 
 #: The routes of #2203 and #2204, keyed by the name the Gherkin scenarios use.
 ROUTES: dict[str, TenantScopedRoute] = {
-    "revenue chart API": TenantScopedRoute("/api/tenant/{tenant_id}/revenue-chart", ("GET",), True),
-    "products API": TenantScopedRoute("/api/tenant/{tenant_id}/products", ("GET",), True),
-    "product suggestions API": TenantScopedRoute("/api/tenant/{tenant_id}/products/suggestions", ("GET",), True),
-    "policy rules page": TenantScopedRoute("/tenant/{tenant_id}/policy/rules", ("GET", "POST"), False),
-    "GAM reporting API": TenantScopedRoute(f"{_GAM_API}/gam/reporting", ("GET",), True),
+    "revenue chart API": TenantScopedRoute("/api/tenant/{tenant_id}/revenue-chart", ("GET",)),
+    "products API": TenantScopedRoute("/api/tenant/{tenant_id}/products", ("GET",)),
+    "product suggestions API": TenantScopedRoute("/api/tenant/{tenant_id}/products/suggestions", ("GET",)),
+    "policy rules page": TenantScopedRoute("/tenant/{tenant_id}/policy/rules", ("GET", "POST")),
+    "GAM reporting API": TenantScopedRoute(f"{_GAM_API}/gam/reporting", ("GET",)),
     "GAM advertiser summary API": TenantScopedRoute(
-        f"{_GAM_API}/gam/reporting/advertiser/{{advertiser_id}}/summary", ("GET",), True
+        f"{_GAM_API}/gam/reporting/advertiser/{{advertiser_id}}/summary", ("GET",)
     ),
-    "GAM principal reporting API": TenantScopedRoute(
-        f"{_GAM_API}/principals/{{principal_id}}/gam/reporting", ("GET",), True
-    ),
-    "GAM country breakdown API": TenantScopedRoute(f"{_GAM_API}/gam/reporting/countries", ("GET",), True),
-    "GAM ad unit breakdown API": TenantScopedRoute(f"{_GAM_API}/gam/reporting/ad-units", ("GET",), True),
+    "GAM principal reporting API": TenantScopedRoute(f"{_GAM_API}/principals/{{principal_id}}/gam/reporting", ("GET",)),
+    "GAM country breakdown API": TenantScopedRoute(f"{_GAM_API}/gam/reporting/countries", ("GET",)),
+    "GAM ad unit breakdown API": TenantScopedRoute(f"{_GAM_API}/gam/reporting/ad-units", ("GET",)),
     "GAM principal summary API": TenantScopedRoute(
-        f"{_GAM_API}/principals/{{principal_id}}/gam/reporting/summary", ("GET",), True
+        f"{_GAM_API}/principals/{{principal_id}}/gam/reporting/summary", ("GET",)
     ),
 }
 
-_NOT_GAM = {"error": "GAM reporting is only available for tenants using Google Ad Manager"}
-_NO_GAM_ADVERTISER = {"error": "Principal does not have a GAM advertiser ID configured"}
-
-#: The first answer each GAM reporting handler gives once the guard lets the caller through.
-#: The target runs the mock adapter, so the tenant routes stop at the ad-server check and the
-#: principal routes at the principal's missing GAM advertiser id: the caller reached the
-#: handler, and no GAM call was made.
-GAM_ADMITTED: dict[str, tuple[int, dict[str, str]]] = {
-    "GAM reporting API": (400, _NOT_GAM),
-    "GAM advertiser summary API": (400, _NOT_GAM),
-    "GAM principal reporting API": (400, _NO_GAM_ADVERTISER),
-    "GAM country breakdown API": (400, _NOT_GAM),
-    "GAM ad unit breakdown API": (400, _NOT_GAM),
-    "GAM principal summary API": (400, _NO_GAM_ADVERTISER),
+#: Where a scenario may say a route redirected to, keyed by the name the Gherkin uses. The
+#: login page is the TENANT's, not the generic ``/login`` ``require_auth`` sends to; the
+#: policy page is where ``policy.rules`` sends an authorized member.
+REDIRECTS: dict[str, str] = {
+    "login page": "/tenant/{tenant_id}/login",
+    "policy page": "/tenant/{tenant_id}/policy/",
 }
-GAM_ROUTE_NAMES: tuple[str, ...] = tuple(GAM_ADMITTED)
-
-
-#: ``pytest.mark.parametrize`` argnames for the rows ``route_cases()`` returns.
-ROUTE_CASE_PARAMS = "method,route,api_mode"
-
-
-def route_cases() -> tuple[list[str], list[tuple[str, str, bool]]]:
-    """``(ids, rows)`` for ``parametrize(ROUTE_CASE_PARAMS, rows, ids=ids)``: one row per route and method."""
-    cases = [
-        (f"{name}-{method}", (method, name, route.api_mode))
-        for name, route in ROUTES.items()
-        for method in route.methods
-    ]
-    return [case[0] for case in cases], [case[1] for case in cases]
 
 
 class TargetTenant(NamedTuple):
@@ -136,48 +102,19 @@ class TargetTenant(NamedTuple):
     products_payload: list[dict[str, str]]
 
 
-def unique_id(prefix: str) -> str:
-    """A collision-free id: the e2e stack DB persists across runs, so factory sequences would repeat."""
-    return f"{prefix}_{uuid.uuid4().hex[:10]}"
+class TenantState(NamedTuple):
+    """What a request can change for a tenant: how many rows it holds per table, and its policy settings."""
+
+    row_counts: dict[str, int]
+    policy_settings: Any
 
 
-def seed_target_tenant(session: Session) -> TargetTenant:
-    """A tenant with one catalogue product and one active media buy. Factories must be bound to ``session``."""
-    tenant = TenantFactory(tenant_id=unique_id("scope"))
-    product = ProductFactory(tenant=tenant, product_id=unique_id("prod"))
-    buy = MediaBuyFactory(
-        tenant=tenant,
-        media_buy_id=unique_id("mb"),
-        status="active",
-        budget=ACTIVE_BUY_BUDGET,
-        # Only the principal id is set: PrincipalFactory derives token_hash/token_prefix
-        # from it (tests/factories/principal.py), so a unique id is a unique credential.
-        principal__principal_id=unique_id("principal"),
-    )
-    products_payload = [
-        {
-            "product_id": product.product_id,
-            "name": product.name,
-            "description": product.description,
-            "delivery_type": product.delivery_type,
-        }
-    ]
-    return TargetTenant(tenant.tenant_id, buy.principal.principal_id, buy.principal.name, products_payload)
+def _seed_member(tenant: Tenant, email: str, *, is_active: bool = True) -> None:
+    """A ``User`` row for *email* in *tenant*, holding ``MEMBER_ROLE``. Call it inside ``bound_factory_session()``."""
+    UserFactory(tenant=tenant, user_id=mint_id("user"), email=email, role=MEMBER_ROLE, is_active=is_active)
 
 
-def tenant_state(session: Session, tenant_id: str) -> tuple:
-    """Everything the handlers under test can reach for a tenant, read fresh from the DB."""
-    session.expire_all()
-    tenant = session.get(Tenant, tenant_id)
-    assert tenant is not None
-    return (
-        sorted(product.product_id for product in tenant.products),
-        sorted(buy.media_buy_id for buy in tenant.media_buys),
-        tenant.policy_settings,
-    )
-
-
-def redirect_path(response: Any) -> str:
+def redirect_path(response: AdminResponse) -> str:
     """Path of a redirect's Location, without the ``next`` query the login page carries."""
     return urlsplit(response.headers["Location"]).path
 
@@ -214,112 +151,39 @@ def expected_suggestions_body() -> dict[str, Any]:
     }
 
 
-def assert_anonymous_rejected(response: Any, api_mode: bool, tenant_id: str) -> None:
-    """What ``require_tenant_access`` answers when there is no session.
-
-    For the HTML route the target path is pinned on purpose: ``require_auth`` sends anonymous
-    callers to the generic ``/login``, and with no decorator at all the handler's own redirect
-    to ``policy.index`` would answer. Only the tenant login page means the tenant check ran.
-    """
-    if api_mode:
-        assert response.status_code == 401
-        assert response.get_json() == {"error": "Authentication required"}
-        return
-    assert response.status_code == 302
-    assert redirect_path(response) == f"/tenant/{tenant_id}/login"
-
-
-def assert_membership_rejected(response: Any, api_mode: bool) -> None:
-    """What ``require_tenant_access`` answers when the session user is not an active member."""
-    assert response.status_code == 403
-    if api_mode:
-        assert response.get_json() == {"error": "Access denied"}
-
-
-#: The discovery document a real provider serves; only the two endpoints authlib reads.
-_PROVIDER_METADATA = {
-    "issuer": "https://idp.test",
-    "authorization_endpoint": "https://idp.test/authorize",
-    "token_endpoint": "https://idp.test/token",
-}
-
-
-@contextmanager
-def _stubbed_identity_provider() -> Iterator[None]:
-    """Answer authlib's two network calls: the discovery document and the token exchange.
-
-    The token carries ``userinfo`` and no ``id_token``, so authlib skips the JWKS fetch.
-    Everything else — the ``state`` authlib stored at login, the ``User`` lookup, the
-    ``is_active`` check and the session writes — runs as in production.
-    """
-    token = {
-        "access_token": "test-access-token",
-        "token_type": "Bearer",
-        "userinfo": {"email": MEMBER_EMAIL, "name": "Tenant Member"},
-    }
-    with (
-        mock.patch.object(FlaskOAuth2App, "load_server_metadata", return_value=_PROVIDER_METADATA),
-        mock.patch.object(FlaskOAuth2App, "fetch_access_token", return_value=token),
-    ):
-        yield
-
-
-def _authorization_state(response: Any) -> str:
-    """The ``state`` the login route put on its redirect to the provider."""
-    assert response.status_code == 302, f"login did not redirect to the provider: {response.status_code}"
-    location = response.headers["Location"]
-    assert location.startswith(_PROVIDER_METADATA["authorization_endpoint"]), location
-    return parse_qs(urlsplit(location).query)["state"][0]
-
-
 class AdminTenantScopingEnv(AdminAccountEnv):
     """Test environment for the tenant-scoping scenarios of #2203 and #2204.
 
     Same two transports as ``AdminAccountEnv``; adds the target tenant, the three caller
-    memberships (elsewhere / inactive here / active here), the routes, and — in process —
-    the choice of login path.
+    memberships (elsewhere / inactive here / active here), a super admin of another tenant,
+    and the routes.
     """
 
-    def __init__(self, *, mode: str = "integration", base_url: str | None = None, login: Login = "stated") -> None:
+    def __init__(self, *, mode: str = "integration", base_url: str | None = None) -> None:
         super().__init__(mode=mode, base_url=base_url)
-        assert login == "stated" or mode == "integration", f"{login} login needs an identity provider; e2e has none"
-        self._login = login
         self._target: TargetTenant | None = None
-        self._state: tuple | None = None
+        self._state_before_request: TenantState | None = None
+        self._cleanups = ExitStack()
 
-    @classmethod
-    @contextmanager
-    def integration(
-        cls, *, login: Login = "stated", super_admin_email: str | None = None
-    ) -> Iterator[AdminTenantScopingEnv]:
-        """The in-process env, with no ambient super-admin grant for the member identity.
+    def _setup(self) -> None:
+        """No ambient super-admin grant for the member identity, on the app in this process."""
+        super()._setup()
+        self._cleanups.enter_context(no_configured_super_admins())
 
-        ``MEMBER_EMAIL`` lives at ``example.com``; an inherited ``SUPER_ADMIN_DOMAINS=example.com``
-        would turn every rejection case into a super-admin pass, and Google login reads the
-        singular ``SUPER_ADMIN_DOMAIN`` the same way. The stack's environment is the server's own
-        (docker-compose.e2e.yml forwards ``SUPER_ADMIN_EMAILS`` only), so this is the one transport
-        the test process controls, and both places that build the in-process env
-        (tests/admin/conftest.py, tests/bdd/conftest.py) come through here.
+    def _cleanup(self) -> None:
+        """Delete the tenants this env created, with their rows, and restore the settings.
 
-        The app is composed from the current settings object (``admin_test_app``), so the
-        settings are reloaded from the patched environment before the env is entered.
-        ``super_admin_email`` grants super-admin through ``SUPER_ADMIN_EMAILS``, a setting a
-        deployment sets and ``is_super_admin`` reads; nothing about the session is forged.
+        The e2e stack's database outlives the scenario, so a tenant left there stays for
+        every later run.
         """
-        with mock.patch.dict(os.environ):
-            os.environ.pop("SUPER_ADMIN_DOMAINS", None)
-            os.environ.pop("SUPER_ADMIN_DOMAIN", None)
-            if login == "google":
-                # The generic OAUTH_* settings take precedence over GOOGLE_* (auth.get_oauth_config).
-                for name in ("OAUTH_DISCOVERY_URL", "OAUTH_CLIENT_ID", "OAUTH_CLIENT_SECRET"):
-                    os.environ.pop(name, None)
-                os.environ["GOOGLE_CLIENT_ID"] = "test-client.apps.googleusercontent.com"
-                os.environ["GOOGLE_CLIENT_SECRET"] = "test-client-secret"
-            if super_admin_email is not None:
-                os.environ["SUPER_ADMIN_EMAILS"] = super_admin_email
-            load_settings()
-            with cls(mode="integration", login=login) as env:
-                yield env
+        with self._cleanups:
+            super()._cleanup()
+
+    def _new_tenant_id(self, prefix: str) -> str:
+        """A unique tenant id whose deletion is registered before the tenant exists."""
+        tenant_id = mint_id(prefix)
+        self._cleanups.callback(delete_tenant, tenant_id)
+        return tenant_id
 
     # ── Target tenant ─────────────────────────────────────────────────────
 
@@ -329,20 +193,45 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         return self._target
 
     def seed_target_tenant(self) -> TargetTenant:
-        with bound_factory_session() as session:
-            self._target = seed_target_tenant(session)
-        self._state = self.target_state()
+        """A tenant with one catalogue product, one active media buy and an active member who is not the caller."""
+        with bound_factory_session():
+            tenant = TenantFactory(tenant_id=self._new_tenant_id("scope"))
+            product = ProductFactory(tenant=tenant, product_id=mint_id("prod"))
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                media_buy_id=mint_id("mb"),
+                status="active",
+                budget=ACTIVE_BUY_BUDGET,
+                # Only the principal id is set: PrincipalFactory derives token_hash/token_prefix
+                # from it (tests/factories/principal.py), so a unique id is a unique credential.
+                principal__principal_id=mint_id("principal"),
+            )
+            _seed_member(tenant, OTHER_MEMBER_EMAIL)
+            products_payload = [
+                {
+                    "product_id": product.product_id,
+                    "name": product.name,
+                    "description": product.description,
+                    "delivery_type": product.delivery_type,
+                }
+            ]
+            self._target = TargetTenant(
+                tenant.tenant_id, buy.principal.principal_id, buy.principal.name, products_payload
+            )
         return self._target
 
-    def target_state(self) -> tuple:
+    def target_state(self) -> TenantState:
+        """The target tenant's state now, read from the database."""
         with get_db_session() as session:
-            return tenant_state(session, self.target.tenant_id)
+            tenant = session.get(Tenant, self.target.tenant_id)
+            assert tenant is not None
+            return TenantState(tenant_row_counts(session, tenant.tenant_id), tenant.policy_settings)
 
     @property
-    def seeded_state(self) -> tuple:
-        """The target tenant's state as seeded; compare ``target_state()`` against it after a rejection."""
-        assert self._state is not None, "seed_target_tenant() has not run"
-        return self._state
+    def state_before_request(self) -> TenantState:
+        """The target tenant's state as ``send()`` found it; compare ``target_state()`` against it after a rejection."""
+        assert self._state_before_request is not None, "send() has not run"
+        return self._state_before_request
 
     # ── Caller memberships ────────────────────────────────────────────────
 
@@ -355,74 +244,32 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         home_tenant_id = self._new_home_tenant(with_member=False)
         with bound_factory_session() as session:
             target = session.get(Tenant, self.target.tenant_id)
-            UserFactory(tenant=target, user_id=unique_id("user"), email=MEMBER_EMAIL, is_active=is_active)
+            _seed_member(target, MEMBER_EMAIL, is_active=is_active)
         self._authenticate_member(home_tenant_id)
 
-    def _new_home_tenant(self, *, with_member: bool) -> str:
-        """A tenant the session is logged in against. Never the target, so the bypass cannot fire.
+    def login_as_super_admin_of_other_tenant(self) -> None:
+        """A super admin signed in at a fresh home tenant, with no row in the target (#2204, AC4 as amended).
 
-        The single-sign-on callbacks admit only a user with an active row in the tenant they log
-        into, so those paths always get one. The home tenant authorizes no email domain, so no
-        login path can reach a tenant through ``authorized_domains`` instead of a ``User`` row.
+        The session carries the two keys ``is_super_admin()`` caches after a configured super
+        admin's first check (``_cache_admin_status`` in ``src/admin/utils/helpers.py``), so the
+        grant reads the same on both transports without touching the stack's
+        ``SUPER_ADMIN_EMAILS``.
         """
+        home_tenant_id = self._new_home_tenant(with_member=True)
+        payload = member_session_payload(MEMBER_EMAIL, home_tenant_id)
+        self.client.state_session({**payload, "is_super_admin": True, "admin_email": MEMBER_EMAIL})
+
+    def _new_home_tenant(self, *, with_member: bool) -> str:
+        """A tenant the session is logged in against. Never the target, so the bypass cannot fire."""
         with bound_factory_session():
-            home = TenantFactory(tenant_id=unique_id("home"), authorized_domains=[])
-            if with_member or self._login != "stated":
-                UserFactory(tenant=home, user_id=unique_id("user"), email=MEMBER_EMAIL)
-            if self._login == "oidc":
-                TenantAuthConfigFactory(tenant=home, oidc_enabled=True)
+            home = TenantFactory(tenant_id=self._new_tenant_id("home"))
+            if with_member:
+                _seed_member(home, MEMBER_EMAIL)
             return home.tenant_id
 
     def _authenticate_member(self, login_tenant_id: str) -> None:
-        """Sign the non-admin member in against ``login_tenant_id`` (never the target)."""
-        if self._login == "oidc":
-            self._login_via_oidc(login_tenant_id)
-        elif self._login == "google":
-            self._login_via_google(login_tenant_id)
-        else:
-            self.client.state_session(member_session_payload(MEMBER_EMAIL, login_tenant_id))
-
-    def _login_via_oidc(self, tenant_id: str) -> None:
-        """Sign in through the tenant's OIDC login and callback; ``oidc.py`` writes the session."""
-        with _stubbed_identity_provider():
-            login = self._flask.get(f"/auth/oidc/login/{tenant_id}")
-            callback = self._flask.get(f"/auth/oidc/callback?code=test-code&state={_authorization_state(login)}")
-        assert callback.status_code == 302 and redirect_path(callback) == f"/tenant/{tenant_id}", (
-            f"OIDC callback did not sign the member in: {callback.status_code} {callback.headers.get('Location')}"
-        )
-        self._assert_sso_session(tenant_id, auth_method="oidc")
-
-    def _login_via_google(self, tenant_id: str) -> None:
-        """Sign in through Google OAuth at ``tenant_id``, choosing that tenant if asked to pick one."""
-        with _stubbed_identity_provider():
-            login = self._flask.get(f"/tenant/{tenant_id}/auth/google")
-            callback = self._flask.get(f"/auth/google/callback?code=test-code&state={_authorization_state(login)}")
-        assert callback.status_code == 302, f"Google callback failed: {callback.status_code}"
-        if redirect_path(callback) == "/auth/select-tenant":
-            callback = self._flask.post("/auth/select-tenant", data={"tenant_id": tenant_id})
-        assert callback.status_code == 302 and redirect_path(callback) == f"/tenant/{tenant_id}", (
-            f"Google login did not land on the tenant: {callback.status_code} {callback.headers.get('Location')}"
-        )
-        self._assert_sso_session(tenant_id, auth_method=None)
-
-    def _assert_sso_session(self, tenant_id: str, *, auth_method: str | None) -> None:
-        """The session production writes for an ordinary single-sign-on user: a str user and no role."""
-        with self._flask.session_transaction() as sess:
-            session = dict(sess)
-        assert session["user"] == MEMBER_EMAIL, session.get("user")
-        assert session["tenant_id"] == tenant_id
-        assert session.get("auth_method") == auth_method
-        forbidden = {"role", "test_user", "test_user_role", "test_tenant_id"} & session.keys()
-        assert not forbidden, f"SSO session carries {sorted(forbidden)}"
-        # Google login asks is_super_admin(), which caches its False verdict in the session.
-        assert not session.get("is_super_admin"), "SSO member is a super-admin"
-
-    @property
-    def _flask(self) -> Any:
-        """The in-process Flask test client; the single-sign-on drivers need its cookie jar."""
-        flask_client = self.client._flask_client
-        assert flask_client is not None, "single-sign-on login runs in process only"
-        return flask_client
+        """State a non-admin session for ``MEMBER_EMAIL`` against ``login_tenant_id`` (never the target)."""
+        self.client.state_session(member_session_payload(MEMBER_EMAIL, login_tenant_id))
 
     # ── Requests ──────────────────────────────────────────────────────────
 
@@ -432,4 +279,6 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         path = route.path.format(
             tenant_id=self.target.tenant_id, principal_id=self.target.principal_id, advertiser_id=GAM_ADVERTISER_ID
         )
+        # Read here, not at seeding: a Given after the Background adds the caller's own row.
+        self._state_before_request = self.target_state()
         return self.client.request(method, path, data={} if method == "POST" else None)

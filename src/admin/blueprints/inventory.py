@@ -342,6 +342,7 @@ def inventory_browser(tenant_id):
     )
 
 
+# FIXME(#2233): inline session["tenant_id"] compare stands in for require_tenant_access.
 @inventory_bp.route("/tenant/<tenant_id>/orders")
 @require_auth()
 def orders_browser(tenant_id):
@@ -514,6 +515,7 @@ def get_order_details(tenant_id, order_id):
         return jsonify({"error": str(e)}), 500
 
 
+# FIXME(#2233): inline session["tenant_id"] compare stands in for require_tenant_access.
 @inventory_bp.route("/tenant/<tenant_id>/check-inventory-sync")
 @require_auth()
 def check_inventory_sync(tenant_id):
@@ -556,6 +558,7 @@ def check_inventory_sync(tenant_id):
         return jsonify({"error": str(e)}), 500
 
 
+# FIXME(#2233): inline session["role"] check stands in for require_tenant_access.
 @inventory_bp.route("/tenant/<tenant_id>/analyze-ad-server")
 @require_auth()
 def analyze_ad_server_inventory(tenant_id):

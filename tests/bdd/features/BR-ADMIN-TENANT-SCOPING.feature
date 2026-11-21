@@ -22,12 +22,16 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
   # The caller's session is always held against a tenant that is NOT the target,
   # so the target tenant's membership row is the only thing that decides.
   #
+  # Every membership row holds the manager role, the least role that may send POST
+  # (role_permits in src/admin/utils/helpers.py), so the role check decides no outcome
+  # here. tests/integration/test_admin_role_enforcement.py grades what each role may do.
+  #
   # Transports (both run here, chosen at collection like BR-ADMIN-ACCOUNTS):
   #   - integration: Flask test_client (in-process, no Docker)
   #   - e2e: requests.Session against Docker stack (full deployment)
 
   Background:
-    Given a target tenant with one catalogue product and one active media buy
+    Given a target tenant with one catalogue product, one active media buy and an active member
 
   @T-ADMIN-SCOPE-001 @auth @edge-case
   Scenario Outline: Anonymous callers of the tenant APIs receive JSON 401
@@ -162,6 +166,26 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
     # The target runs the mock adapter, so each handler's first answer is its own refusal
     # to report: an answer only a caller the guard let through can see.
     Given the caller is an active member of the target tenant
+    When the caller sends GET to the <route> of the target tenant
+    Then the page returns status 400
+    And the JSON response has "error" as "<error>"
+
+    Examples:
+      | route                       | error                                                               |
+      | GAM reporting API           | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM advertiser summary API  | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM principal reporting API | Principal does not have a GAM advertiser ID configured              |
+      | GAM country breakdown API   | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM ad unit breakdown API   | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM principal summary API   | Principal does not have a GAM advertiser ID configured              |
+
+  @T-ADMIN-SCOPE-012 @auth @main-flow
+  Scenario Outline: A super admin of another tenant reaches the GAM reporting handlers
+    # docs/security.md: super admins have full access to all tenants. The maintainer amended
+    # #2204's AC4 to keep that access and pin it with a test
+    # (https://github.com/prebid/salesagent/issues/2204#issuecomment-5712126259).
+    # T-ADMIN-SCOPE-003 refuses the same caller without the grant.
+    Given the caller is a super admin of a different tenant with no membership in the target tenant
     When the caller sends GET to the <route> of the target tenant
     Then the page returns status 400
     And the JSON response has "error" as "<error>"

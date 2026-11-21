@@ -11,10 +11,7 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlparse
 
 import pytest
@@ -31,29 +28,6 @@ from scripts.setup.init_database_ci import CI_TEST_TOKEN
 
 # Import contract validation - this automatically validates tool calls at test collection time
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
-from tests.utils.database_helpers import production_db_pointed_at
-
-
-@contextmanager
-def admin_stack_env(ports: dict[str, int], build_env: Callable[[str], AbstractContextManager]) -> Iterator[Any]:
-    """Run an admin harness env against the running Docker stack.
-
-    Builds the stack's admin address and hands it to ``build_env``: the env is TOLD its
-    address and never discovers one. Through ``production_db_pointed_at`` it also points
-    ``DATABASE_URL`` plus the cached engine at the SERVER's ``/adcp`` Postgres for the
-    env's lifetime, so the harness's DB reads and factory writes land in the database the
-    HTTP server reads. In-network the runner exports ``E2E_DATABASE_URL``
-    (postgres:5432/adcp, no host port); on the host path the URL is built from the
-    published port. Everything is restored on exit, including on failure.
-    """
-    db_host = os.environ.get("ADCP_TEST_DB_HOST", "localhost")
-    db_port = os.environ.get("ADCP_TEST_DB_PORT", str(ports["postgres_port"]))
-    url = os.environ.get("E2E_DATABASE_URL") or (
-        f"postgresql://adcp_user:secure_password_change_me@{db_host}:{db_port}/adcp"
-    )
-    base_url = f"http://{e2e_host()}:{ports['admin_port']}"
-    with production_db_pointed_at(url), build_env(base_url) as env:
-        yield env
 
 
 def e2e_host() -> str:

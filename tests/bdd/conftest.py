@@ -6060,65 +6060,6 @@ def _build_uc003_storyboard_generic_client_env(e2e_config: object | None) -> Abs
     return BareIntegrationEnv(e2e_config=e2e_config)
 
 
-def _build_admin_env(e2e_config: object | None) -> AbstractContextManager:
-    """Both transports BR-ADMIN-ACCOUNTS.feature declares, chosen at collection.
-
-    ``pytest_generate_tests`` parametrizes ADMIN scenarios over
-    ``AdminTransport.INTEGRATION`` plus ``AdminTransport.E2E`` (when
-    ``BDD_E2E_ENABLED=true``), and the ``ctx`` fixture stashes ``e2e_config``
-    for the ``e2e_``-prefixed one. ADMIN is never parametrized under ``e2e_rest``,
-    but ``AdminTransport.E2E`` (``"e2e_admin"``) DOES carry the ``e2e_`` prefix the
-    ``ctx`` fixture keys on, so ``e2e_config`` is not always ``None`` here: pinning
-    ``mode="integration"`` would run the Flask test_client while the node id claims
-    the live stack, silently grading 13 scenarios on one transport. The env is TOLD
-    its transport and, over e2e, the per-worker address ``e2e_stack`` synthesised —
-    it discovers neither.
-
-    The admin builders (this one and ``_build_admin_tenant_scoping_env``) are
-    the only ones that pass ``base_url=`` instead of ``e2e_config=``, and the
-    asymmetry is deliberate: the admin UI is an HTML form surface, not an AdCP
-    tool surface, so the env needs the ADDRESS and nothing else from
-    ``E2EConfig``. Handing it the whole object would pull an AdCP-shaped
-    dependency into a surface that has no AdCP protocol — the same reason
-    ``AdminTransport`` is not a member of the ``Transport`` enum (see its
-    docstring). A census asking "does every builder here receive e2e_config?"
-    will flag both lines; that flag is expected. What actually must hold — no
-    branch pins its own DB scope — is machine-checked by
-    ``tests/unit/test_bdd_admin_transport_parametrization.py``
-    ``::test_harness_env_never_pins_its_db_scope``, not by that heuristic.
-    """
-    from tests.harness.admin_accounts import AdminAccountEnv
-
-    mode = "e2e" if e2e_config is not None else "integration"
-    base_url = e2e_config.base_url if e2e_config is not None else None  # type: ignore[attr-defined]
-    return AdminAccountEnv(mode=mode, base_url=base_url)
-
-
-def _build_admin_tenant_scoping_env(e2e_config: object | None) -> AbstractContextManager:
-    """Both admin transports for the T-ADMIN-SCOPE-* scenarios (#2203), chosen at collection.
-
-    The scenarios carry the ``T-ADMIN-`` prefix, so ``pytest_generate_tests``
-    parametrizes them over ``AdminTransport.INTEGRATION`` plus
-    ``AdminTransport.E2E`` exactly as it does the ``_build_admin_env``
-    scenarios, and the same trap applies: ignoring ``e2e_config`` runs the Flask
-    test_client while the node id claims the live stack. The env is TOLD its
-    transport and, over e2e, the per-worker address ``e2e_stack`` synthesised —
-    as ``base_url=``, for the reason ``_build_admin_env`` gives.
-
-    In process the env comes through ``AdminTenantScopingEnv.integration()``,
-    which removes ``SUPER_ADMIN_DOMAINS`` for the scenario so the member identity
-    is not an ambient super-admin. Over e2e the server's own environment governs
-    (``docker-compose.e2e.yml`` forwards ``SUPER_ADMIN_EMAILS`` only), and
-    ``_run_env_route`` has already entered ``_db_scope_for``, so the harness's
-    factory writes land in the server's database.
-    """
-    from tests.harness.admin_tenant_scoping import AdminTenantScopingEnv
-
-    if e2e_config is None:
-        return AdminTenantScopingEnv.integration()
-    return AdminTenantScopingEnv(mode="e2e", base_url=e2e_config.base_url)  # type: ignore[attr-defined]
-
-
 def _build_product_env(e2e_config: object | None) -> AbstractContextManager:
     """Shared by COMPAT and UC-GET-PRODUCTS — both are read-only product listing."""
     from tests.harness.product import ProductEnv
@@ -6367,15 +6308,56 @@ def _seed_delivery_poll(ctx: dict, env: object) -> None:
     ctx[f"db_principal_{env._principal_id}"] = principal
 
 
+def _harness_class(factory_path: str) -> Callable[..., AbstractContextManager]:
+    """The harness class at dotted *factory_path*, imported when a builder runs rather than with this conftest."""
+    import importlib
+
+    module_name, _, class_name = factory_path.rpartition(".")
+    return getattr(importlib.import_module(module_name), class_name)
+
+
 def _env(factory_path: str, **kwargs: object) -> Callable[[object | None], AbstractContextManager]:
     """Build an env_builder that imports its harness lazily, as the branches did."""
 
     def _builder(e2e_config: object | None) -> AbstractContextManager:
-        import importlib
+        return _harness_class(factory_path)(e2e_config=e2e_config, **kwargs)
 
-        module_name, _, class_name = factory_path.rpartition(".")
-        env_cls = getattr(importlib.import_module(module_name), class_name)
-        return env_cls(e2e_config=e2e_config, **kwargs)
+    return _builder
+
+
+def _admin_env_builder(factory_path: str) -> Callable[[object | None], AbstractContextManager]:
+    """Build the env_builder of an ``AdminAccountEnv`` subclass, on the transport chosen at collection.
+
+    ``pytest_generate_tests`` parametrizes a ``T-ADMIN-`` scenario over
+    ``AdminTransport.INTEGRATION`` plus ``AdminTransport.E2E`` (when
+    ``BDD_E2E_ENABLED=true``), and the ``ctx`` fixture stashes ``e2e_config``
+    for the ``e2e_``-prefixed one. ADMIN is never parametrized under ``e2e_rest``,
+    but ``AdminTransport.E2E`` (``"e2e_admin"``) DOES carry the ``e2e_`` prefix the
+    ``ctx`` fixture keys on, so ``e2e_config`` is not always ``None`` here: pinning
+    ``mode="integration"`` would run the Flask test_client while the node id claims
+    the live stack, silently grading the scenario on one transport. The env is TOLD
+    its transport and, over e2e, the per-worker address ``e2e_stack`` synthesised —
+    it discovers neither.
+
+    These builders are the only ones that pass ``base_url=`` instead of
+    ``e2e_config=``, and the asymmetry is deliberate: the admin UI is an HTML form
+    surface, not an AdCP tool surface, so the env needs the ADDRESS and nothing
+    else from ``E2EConfig``. Handing it the whole object would pull an AdCP-shaped
+    dependency into a surface that has no AdCP protocol — the same reason
+    ``AdminTransport`` is not a member of the ``Transport`` enum (see its
+    docstring). A census asking "does every builder here receive e2e_config?"
+    will flag this one; that flag is expected. What actually must hold — no
+    branch pins its own DB scope — is machine-checked by
+    ``tests/unit/test_bdd_admin_transport_parametrization.py``
+    ``::test_harness_env_never_pins_its_db_scope``, not by that heuristic. Over e2e
+    ``_run_env_route`` has already entered ``_db_scope_for``, so the env's factory
+    writes land in the server's database.
+    """
+
+    def _builder(e2e_config: object | None) -> AbstractContextManager:
+        mode = "e2e" if e2e_config is not None else "integration"
+        base_url = e2e_config.base_url if e2e_config is not None else None  # type: ignore[attr-defined]
+        return _harness_class(factory_path)(mode=mode, base_url=base_url)
 
     return _builder
 
@@ -6460,7 +6442,7 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
     # seed serves every scenario. ADMIN has one (T-ADMIN-SCOPE-* takes its own
     # harness) and UC-019 has one (@post-create-poll needs create + list in a
     # single scenario), so their bucket rows are the remainder.
-    "ADMIN": EnvRoute(tag="ADMIN", env_builder=_build_admin_env),
+    "ADMIN": EnvRoute(tag="ADMIN", env_builder=_admin_env_builder("tests.harness.admin_accounts.AdminAccountEnv")),
     "COMPAT": EnvRoute(tag="COMPAT", env_builder=_build_product_env),
     # UC-001 is get_products discovery, so it takes the SAME env as
     # UC-GET-PRODUCTS. It had no row at all until now, which meant a
@@ -6768,7 +6750,7 @@ ENV_ROUTES: list[EnvRoute] = [
     EnvRoute(
         tag="admin-tenant-scoping",
         when=lambda m: any(t.startswith("T-ADMIN-SCOPE-") for t in m),
-        env_builder=_build_admin_tenant_scoping_env,
+        env_builder=_admin_env_builder("tests.harness.admin_tenant_scoping.AdminTenantScopingEnv"),
     ),
     # ── @ctxecho (local context-echo-on-every-outcome feature) ──────────────
     # Same reason the @egress rows below are UNSCOPED `when` rows: these
