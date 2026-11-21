@@ -60,8 +60,8 @@ table](request-lifecycle.md#where-does-my-change-go) in the request lifecycle.
 controller: it reads who is calling off the identity and delegates. The work
 belongs in a service function that takes an already-resolved caller.
 `update_media_buy` uploads a package's inline creatives by calling the service,
-`sync_creatives` (`src/core/tools/media_buy_update.py:945`), and not
-`_sync_creatives_impl` — calling the other controller re-runs an auth check
+`sync_creatives`, from `_update_media_buy_impl` (`src/core/tools/media_buy_update.py`),
+and not `_sync_creatives_impl` — calling the other controller re-runs an auth check
 that already passed and drags the outer request's `idempotency_key` into a
 function with no business seeing it. `sync_creatives` is the one extracted
 service; extract the next one when a second tool needs it.
