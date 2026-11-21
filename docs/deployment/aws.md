@@ -408,7 +408,7 @@ Each of these came up in the verified run.
 - **Memory**: the app used about 1.25 GB of its 2 GB at idle; a 1 GB task is too small. The
   creative agent used about 600 MB of 1 GB.
 - **MCP streaming** holds responses open; the ALB idle timeout is 300 seconds instead of 60.
-- **The ALB's HTTP-to-HTTPS redirect** includes `:443` in the `Location` header. Harmless.
+- **The ALB's HTTP-to-HTTPS redirect** includes port 443 in the `Location` header. Harmless.
 - **Wildcard DNS sends every name under the domain to the app.** A name that is no
   tenant's `virtual_host` gets an error response from the app, not a tenant.
 
