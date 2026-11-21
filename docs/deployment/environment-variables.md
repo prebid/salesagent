@@ -29,11 +29,19 @@ For a minimal working deployment:
 # Required
 DATABASE_URL=postgresql://user:password@host:5432/adcp
 
+# Required to store secrets, such as a tenant's SSO client secret
+ENCRYPTION_KEY=your-fernet-key
+
+# Required for the first sign-in: the deployment's OAuth client and a super admin
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
+SUPER_ADMIN_EMAILS=you@example.com
+
 # Optional - AI features
 GEMINI_API_KEY=your-key
 ```
 
-Authentication is configured **per-tenant** in the Admin UI. No OAuth environment variables are required.
+After the first sign-in, each tenant configures its own SSO in the Admin UI. See [Authentication](#authentication).
 
 ## Authentication
 
@@ -59,35 +67,51 @@ It grants no credentials of its own — the first administrator signs in with th
 deployment's own OAuth (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` or the generic
 `OAUTH_*` variables) plus `SUPER_ADMIN_EMAILS`.
 
-Once SSO is configured and tested, disable Setup Mode from the Users & Access page. After that, only SSO authentication works for that tenant.
+Once SSO is configured and tested, sign in through **Sign in with SSO** and disable Setup Mode from the Users & Access page. After that, **Sign in with SSO** works only while the tenant's SSO is enabled.
 
-### Legacy: global test mode
+### Deployment OAuth
 
-| Variable | Default | Description |
-|----------|---------|-------------|
+These variables configure the deployment's own OAuth client. The Admin UI signs people in through it unless a tenant's own SSO handles the sign-in. The first administrator of a tenant in Setup Mode signs in through it, and per-tenant SSO doesn't replace it.
 
-### Legacy: environment variable OAuth
-
-These variables configure a **global** OAuth provider shared by all tenants. For new deployments, use per-tenant SSO configuration instead.
+The following variables configure the client:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GOOGLE_CLIENT_ID` | - | Google OAuth client ID (legacy) |
-| `GOOGLE_CLIENT_SECRET` | - | Google OAuth client secret (legacy) |
-| `OAUTH_DISCOVERY_URL` | - | OIDC discovery URL (legacy) |
-| `OAUTH_CLIENT_ID` | - | OAuth client ID (legacy) |
-| `OAUTH_CLIENT_SECRET` | - | OAuth client secret (legacy) |
-| `OAUTH_SCOPES` | `openid email profile` | OAuth scopes to request |
-| `OAUTH_PROVIDER` | `google` | Provider name for display |
+| `OAUTH_DISCOVERY_URL` | - | OIDC discovery URL of the provider |
+| `OAUTH_CLIENT_ID` | - | OAuth client ID |
+| `OAUTH_CLIENT_SECRET` | - | OAuth client secret |
+| `OAUTH_SCOPES` | `openid email profile` | Scopes to request with the `OAUTH_*` credentials |
+| `OAUTH_PROVIDER` | `google` | Provider name. Without `OAUTH_DISCOVERY_URL`, `google` or `microsoft` selects that provider's discovery URL |
+| `GOOGLE_CLIENT_ID` | - | Google OAuth client ID, read when the `OAUTH_*` credentials don't form a complete configuration |
+| `GOOGLE_CLIENT_SECRET` | - | Google OAuth client secret, read with `GOOGLE_CLIENT_ID` |
+| `GOOGLE_OAUTH_REDIRECT_URI` | - | Callback URL that the deployment's sign-in sends to the provider. Register the same URL with the OAuth client |
 
-### Legacy: super admin access control
+The Admin UI uses the first complete configuration in the following order:
+
+1. `OAUTH_DISCOVERY_URL`, `OAUTH_CLIENT_ID`, and `OAUTH_CLIENT_SECRET`
+2. `OAUTH_CLIENT_ID` and `OAUTH_CLIENT_SECRET`, with `OAUTH_PROVIDER` set to `google` or `microsoft`
+3. `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, the older Google-only spelling
+4. A `client_secret.json` file of Google OAuth credentials in the application's root directory
+
+Without `GOOGLE_OAUTH_REDIRECT_URI`, the global sign-in builds the callback URL from the
+request's host, under `/admin` in production unless `SKIP_NGINX` is set. In production, a
+tenant's sign-in uses `https://<SALES_AGENT_DOMAIN>/admin/auth/google/callback`. Outside
+production, a tenant's sign-in ignores the setting and uses the request's host.
+
+### Super admin access control
+
+A super admin reaches every tenant in the Admin UI. The following variables name the super admins:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SUPER_ADMIN_EMAILS` | - | Comma-separated super admin emails. **Deprecated - use per-tenant user management.** |
-| `SUPER_ADMIN_DOMAINS` | - | Comma-separated domains for admin access. **Deprecated.** |
+| `SUPER_ADMIN_EMAILS` | - | Comma-separated super admin emails |
+| `SUPER_ADMIN_DOMAINS` | - | Comma-separated email domains whose users are super admins |
 
-> **Note**: Per-tenant SSO configuration replaces `SUPER_ADMIN_EMAILS`. Users are managed per-tenant on the Users & Access page, with authorized emails and domains configured per-tenant.
+The Admin UI checks these variables before the `super_admin_emails` and `super_admin_domains` rows of the `TenantManagementConfig` table. For the full order, see [Super admin check](../security.md#super-admin-check).
+
+`scripts/setup/init_database.py` copies these variables into those two rows when you run it. The script prefers `TENANT_MANAGEMENT_EMAILS` over `SUPER_ADMIN_EMAILS`, and `TENANT_MANAGEMENT_DOMAINS` over `SUPER_ADMIN_DOMAINS`, when they are set.
+
+> **Note**: Per-tenant SSO and the **Users & Access** page control who reaches one tenant. Neither grants super admin access.
 
 ---
 
@@ -166,7 +190,7 @@ For GAM adapter integration:
 | `ADCP_MULTI_TENANT` | `false` | Enable multi-tenant mode, where the `Host` selects the tenant |
 | `SALES_AGENT_DOMAIN` | - | Base domain for tenant subdomains (for example, `sales-agent.example.com`). Also scopes session cookies across subdomains. |
 | `ADMIN_DOMAIN` | - | Domain where the Admin UI is accessible (for example, `admin.sales-agent.example.com`) |
-| `SUPER_ADMIN_DOMAIN` | - | Email domain whose users get super admin access |
+| `SUPER_ADMIN_DOMAIN` | - | Email domain that sign-in treats as super admin. The access checks ignore it, so grant super admin access with `SUPER_ADMIN_DOMAINS`, as [Super admin access control](#super-admin-access-control) describes. The **Account** section of the settings page refuses to authorize this domain or an address in it; the **Users & Access** page does not check it |
 | `TLS_ASK_ENABLED` | `false` | Mount `GET /tls/ask`, the endpoint an on-demand TLS proxy (Caddy) asks before issuing a certificate for a host. Off, the path answers 404. Needed only behind such a proxy; see [Caddy on-demand TLS](multi-tenant.md#caddy-on-demand-tls-no-wildcard-certificate). |
 
 ### SSO requirements by deployment mode
@@ -206,7 +230,8 @@ in every deployment: properties come only from it.
 |----------|---------|-------------|
 | `ENCRYPTION_KEY` | - | Fernet key for encrypting stored secrets (OIDC client secrets, API keys, GAM service account JSON and GAM OAuth refresh tokens). The application refuses to encrypt or decrypt without it, so every deployment with a GAM tenant needs it, whichever GAM authentication method the tenant uses. The database migration that encrypts existing GAM refresh tokens stops if they exist and this is not set. Keep it stable: changing it makes the stored secrets unreadable. Generate with `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` |
 | `FLASK_SECRET_KEY` | auto-generated at startup | Flask session secret. Set it explicitly so sessions survive restarts and work across multiple processes. |
-| `WEBHOOK_SECRET` | - | Secret for verifying incoming webhooks |
+| `SYNC_API_KEY` | - | Key that the Inventory Sync API accepts in the `X-API-Key` header. When unset, the API accepts the key stored in the database. See [Tenant Management API and Inventory Sync API](../operations/admin-apis.md) |
+| `TENANT_MANAGEMENT_API_KEY` | - | Key that the Tenant Management API accepts in the `X-Tenant-Management-API-Key` header. See [Tenant Management API and Inventory Sync API](../operations/admin-apis.md) |
 
 ---
 
@@ -226,7 +251,6 @@ in every deployment: properties come only from it.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FLASK_DEBUG` | `0` | Enable Flask debug mode |
-| `FLASK_ENV` | `production` | Flask environment |
 | `ADCP_TESTING` | `false` | A test deployment. Selects, at composition: the reference-formats creative registry (no creative agent is dialled), the debug and reset routes, loopback webhook targets, the mock ad server's seeded delivery rows, the setup checklist counting the mock adapter as configured, and relaxed brand validation in `get_products`. Each is a named property on the settings; nothing reads the flag itself. |
 
 ### Service startup
@@ -236,6 +260,7 @@ in every deployment: properties come only from it.
 | `ADCP_SALES_PORT` | `8080` | Port the unified application listens on (nginx proxies to it) |
 | `ADCP_SALES_HOST` | `0.0.0.0` | Bind address for `scripts/run_server.py` (production always binds all interfaces) |
 | `SKIP_NGINX` | `false` | Skip nginx in deployment scripts |
+| `ADMIN_SERVER_TYPE` | `waitress` | Server that the standalone Admin UI entry point `src/admin/server.py` starts: `waitress`, `werkzeug`, or `uvicorn`. The unified application does not read it |
 | `SKIP_CRON` | `false` | Skip cron job scheduling. The scheduled GAM inventory sync authenticates with `SYNC_API_KEY` and exits with an error when it is unset |
 
 Every variable above is read once, by `src/core/config.py`, when a process is composed; an
@@ -257,11 +282,12 @@ Set these through your platform's secret store (for example, `fly secrets set`) 
 - `ENCRYPTION_KEY`
 - `GAM_OAUTH_CLIENT_ID`, `GAM_OAUTH_CLIENT_SECRET` (for GAM integration)
 - `GOOGLE_APPLICATION_CREDENTIALS_JSON` (for GAM service accounts)
+- `OAUTH_CLIENT_SECRET` or `GOOGLE_CLIENT_SECRET` (for the deployment's own sign-in)
 - `APPROXIMATED_API_KEY`
-- `WEBHOOK_SECRET`
 - `FLASK_SECRET_KEY`
+- `SYNC_API_KEY`, `TENANT_MANAGEMENT_API_KEY` (for the Admin UI's two key-authenticated APIs)
 
-> **Note**: Admin OAuth credentials (`GOOGLE_CLIENT_ID` and the other legacy OAuth variables) are configured per-tenant in the Admin UI instead of environment variables.
+> **Note**: Each tenant's own SSO credentials live in the database, encrypted with `ENCRYPTION_KEY`. You enter them on the Users & Access page.
 
 ### Non-sensitive configuration
 

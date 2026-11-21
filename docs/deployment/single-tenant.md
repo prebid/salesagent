@@ -35,7 +35,7 @@ The [architecture guide](../development/architecture.md#deployment-topology) sho
 
 - Docker and Docker Compose (or your cloud platform's container service)
 - PostgreSQL database (required)
-- OAuth credentials from your identity provider (Google, Microsoft, Okta, or another OIDC provider) - configured in the Admin UI
+- OAuth credentials from your identity provider (Google, Microsoft, Okta, or another OIDC provider) for the deployment's own sign-in, set in environment variables
 
 ## Docker images
 
@@ -84,10 +84,14 @@ Each release publishes a full version tag plus rolling major and major.minor tag
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | For sign-in | The deployment's own OAuth client. `OAUTH_DISCOVERY_URL`, `OAUTH_CLIENT_ID`, and `OAUTH_CLIENT_SECRET` configure any OIDC provider instead |
+| `SUPER_ADMIN_EMAILS` | For sign-in | Comma-separated super admin addresses. `SUPER_ADMIN_DOMAINS` names whole email domains instead |
+| `ENCRYPTION_KEY` | Yes | Fernet key that encrypts stored secrets, such as a tenant's SSO client secret |
+| `FLASK_SECRET_KEY` | Yes | Long random value that signs session cookies |
 | `CREATE_DEMO_TENANT` | No | Set to `true` for initial setup with demo data |
 | `GEMINI_API_KEY` | No | For AI-powered creative review |
 
-Authentication is configured **per-tenant** in the Admin UI (Users & Access page). No OAuth environment variables are required.
+The first sign-in uses the deployment's own OAuth client and a super admin address. After it, each tenant configures its own SSO on the **Users & Access** page.
 
 For a complete list including GAM integration and all optional settings, see the **[environment variables reference](environment-variables.md)**.
 
@@ -159,14 +163,26 @@ which lets you complete an OIDC login for it before its SSO is switched on.
 Sign in with the deployment's own OAuth — set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
 (or the generic `OAUTH_*` variables) and put your address in `SUPER_ADMIN_EMAILS`.
 
+On the Docker Compose stack, the Admin UI answers under `/admin/` and at the root, and the
+callback follows the path that the sign-in starts from. Before you sign in, register both of
+the following redirect URIs with that OAuth client:
+
+- `http://localhost:8000/admin/auth/google/callback`
+- `http://localhost:8000/auth/google/callback`
+
 **To complete setup:**
 
 1. Log in with Google as a `SUPER_ADMIN_EMAILS` address.
-2. Go to **Users & Access**.
+2. In **Settings > Account**, set **Custom Domain** to the host where you open the Admin UI,
+   for example `localhost:8000`. Then go to **Users & Access**, which builds the SSO redirect
+   URI from that field.
 3. Configure your SSO provider (Google, Microsoft, or a custom OIDC provider).
 4. **Add yourself**: Add your email OR your domain to Allowed Domains.
 5. Click **Test Connection** - SSO is automatically enabled on success.
-6. Click **Disable Setup Mode** to require SSO for all users.
+6. Sign out, then sign in again with **Sign in with SSO**. If the header shows no **Logout**
+   link, open `/admin/logout` to sign out.
+7. Click **Disable Setup Mode**. After this, **Sign in with SSO** works only while the
+   tenant's SSO is enabled.
 
 See the [SSO setup guide](../user-guide/sso-setup.md) for detailed provider-specific instructions.
 
@@ -186,9 +202,11 @@ This creates a "Demo Sales Agent" tenant with a mock adapter, sample currencies,
 SSO is configured per-tenant in the Admin UI:
 
 1. Log in with Google as a `SUPER_ADMIN_EMAILS` address.
-2. Go to the **Users & Access** page.
+2. In **Settings > Account**, set **Custom Domain** to the host where you open the Admin UI,
+   for example `localhost:8000`. Then go to the **Users & Access** page, which builds the SSO
+   redirect URI from that field.
 3. Configure your identity provider (Google, Microsoft, or any OIDC provider as Custom OIDC).
-4. Copy the **Redirect URI** shown and add it to your provider's allowed redirect URIs.
+4. Copy the **Required Redirect URI** shown and add it to your provider's allowed redirect URIs.
 5. **Add yourself**: Add your email as a user OR add your domain to Allowed Domains.
 6. Click **Save Configuration**, then **Test Connection** - SSO is automatically enabled on success.
 7. **Disable Setup Mode** once SSO is working.
@@ -200,7 +218,8 @@ See the [SSO setup guide](../user-guide/sso-setup.md) for detailed provider-spec
 1. Deploy to your cloud platform (see [walkthroughs](walkthroughs/)).
 2. Point your domain's DNS to your deployment.
 3. In the Admin UI, go to **Settings > Account** and set the **Custom Domain** field.
-4. Update your OAuth redirect URI to include the custom domain.
+4. Register `https://<custom domain>/admin/auth/google/callback` and `https://<custom domain>/auth/google/callback` with the deployment's OAuth client. In production, register only the first, and set `SALES_AGENT_DOMAIN` to the custom domain.
+5. If the tenant uses SSO, add the **Required Redirect URI** that **Users & Access** then shows to your SSO provider.
 
 ## Health monitoring
 
