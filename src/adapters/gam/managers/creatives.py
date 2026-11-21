@@ -186,7 +186,11 @@ class GAMCreativesManager:
                     asset,
                     lica_service,
                     placement_targeting_map,
-                    lica_sizes=self._lica_sizes_by_line_item(plans, plan.creative["size"]),
+                    # A creative GAM held before this push may have been created at another
+                    # package's size, so every association states its own.
+                    lica_sizes=self._lica_sizes_by_line_item(
+                        plans, None if asset.get("platform_creative_id") else plan.creative["size"]
+                    ),
                 )
                 # Content that changed was held from serving while it was under review
                 # (``set_creative_serving``); its approval is what this push carries.
@@ -267,12 +271,14 @@ class GAMCreativesManager:
 
     @staticmethod
     def _lica_sizes_by_line_item(
-        plans: Mapping[str, GamCreativePlan], creative_size: dict[str, int]
+        plans: Mapping[str, GamCreativePlan], creative_size: dict[str, int] | None
     ) -> dict[str, list[dict[str, int]]]:
         """Per line item, the sizes its own plan serves the creative at.
 
         A line item left with only the creative's own size states none, as the plan does for a
-        creative with one candidate size.
+        creative with one candidate size. *creative_size* ``None`` is a size this push does not
+        know, so every line item states its sizes: they "override the value set for
+        Creative.size" (Ad Manager API v202602), whatever size GAM created the creative at.
         """
         by_line_item = {}
         for line_item_id, plan in plans.items():

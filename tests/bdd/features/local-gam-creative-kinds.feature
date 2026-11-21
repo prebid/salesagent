@@ -335,8 +335,13 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
   # enums/error-code.json CREATIVE_SIZE_MISMATCH asks for "a size accepted by every selected
   # package that may serve it". LineItemCreativeAssociation.sizes "Overrides the value set for
   # Creative.size", so what a line item serves is its association's sizes, else the creative's.
+  #
+  # The create books the buy on an auto-approving seller, and the seller's approval books it
+  # otherwise. Both push the creative to GAM, so both are graded: on create the creative was
+  # pushed once per package, and the second package's line item served it at the first
+  # package's size (BG-01, PR #2582 review).
   @T-UC-002-local-gam-creative-two-packages-own-sizes @extension
-  Scenario: A creative on two packages whose products accept different sizes serves on each package's line item only at the sizes that package's product accepts
+  Scenario Outline: A creative on two packages whose products accept different sizes serves on each package's line item only at the sizes that package's product accepts - <approval>
     Given the seller's guaranteed products have pricing options:
       | product_id | pricing_option_id | pricing_model | fixed_price | floor_price |
       | prod_a     | cpm_usd_a         | cpm           | 12.00       |             |
@@ -344,20 +349,23 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
     And Google Ad Manager sells product "prod_a" with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_300x250", "params": {"width": 300, "height": 250, "supported_delivery_types": ["tag_url"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}]}', with product settings '{"creative_placeholders": [{"width": 300, "height": 250}, {"width": 728, "height": 90}]}'
     And Google Ad Manager sells product "prod_b" with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_728x90", "params": {"width": 728, "height": 90, "supported_delivery_types": ["tag_url"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}]}', with product settings '{"creative_placeholders": [{"width": 728, "height": 90}]}'
-    And the tenant requires manual approval
+    And the tenant approval mode is <approval>
     And the buyer's packages, over a 14-day flight, are:
       | product_id | pricing_option_id | budget | bid_price |
       | prod_a     | cpm_usd_a         | 600    |           |
       | prod_b     | cpm_usd_b         | 420    |           |
     And the package references the buyer's approved display_tag creative "cr-both" carrying the tag URL "https://ads.example.com/tag.js?slot=5"
     And creative "cr-both" is named on every package of the request
-    When the Buyer Agent sends the create_media_buy request
-    Then the response status should be "submitted"
-    When the seller approves the media buy
-    Then the seller's approval books the media buy
+    When the Buyer Agent sends the create_media_buy request, which the seller books <booked>
+    Then the response status should be "<status>"
     And Google Ad Manager created one third-party creative for advertiser "3000001" whose snippet is '<script src="https://ads.example.com/tag.js?slot=5"></script>' and which names no image URL
     And Google Ad Manager serves that creative on the "prod_a" package's line item at sizes "300x250" only
     And Google Ad Manager serves that creative on the "prod_b" package's line item at sizes "728x90" only
+
+    Examples:
+      | approval      | booked          | status    |
+      | manual        | on approving it | submitted |
+      | auto-approval | at once         | completed |
 
   # F1 (PR #2582 review): the seller's approval of a held buy pushes through a second reader and
   # a second GAM plan, and only its refusal was graded on GAM. A display_tag creative, and an

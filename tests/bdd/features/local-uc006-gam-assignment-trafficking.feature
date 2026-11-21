@@ -16,6 +16,8 @@
 #   operation without applying it".
 # - core/assets/html-asset.json: "Inline HTML content asset", the markup in `content`. GAM
 #   serves markup as a ThirdPartyCreative's `snippet`.
+# - formats/canonical/display_tag.json `sizes`: "The buyer's third-party tag must render at one
+#   of the listed sizes; the seller picks which size to request at impression time."
 # Ungraded by the storyboard runner.
 #
 # Transports: a2a, mcp and rest with the real GoogleAdManager adapter over a stand-in SOAP
@@ -27,6 +29,7 @@
 # @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/sync_creatives.mdx
 # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json
 # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/display_tag.json
 Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its booked line items (local)
 
   Background:
@@ -387,6 +390,23 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     Then creative "cr-banner" is assigned to package "pkg-banner-b"
     And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
     And Google Ad Manager associated that creative with line items "5000001, 5000002"
+
+  # A display_tag creative takes its size from the line item it serves on (display_tag.json
+  # `sizes`, quoted above), so GAM created it at the first package's size.
+  # LineItemCreativeAssociation.sizes "Overrides the value set for Creative.size", so the second
+  # package's association states its own size; one stating none serves the creative at the
+  # first package's size (BG-01, PR #2582 review).
+  @T-UC-006-local-gam-held-creative-other-size
+  Scenario: A creative GAM holds at one package's size is placed on a package of another size at that package's size
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000009" whose package "pkg-tag-banner" is line item "5000011" accepting 300x250 and package "pkg-tag-leader" is line item "5000012" accepting 728x90, on a product selling '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_multi", "params": {"sizes": [{"width": 300, "height": 250}, {"width": 728, "height": 90}], "supported_delivery_types": ["tag_url"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}]}'
+    And the buyer's creative "cr-tag", approved, a display_tag carrying the tag URL "https://ads.example.com/tag.js?slot=9", is assigned to package "pkg-tag-banner" of the live media buy
+    When the Buyer Agent references library creative "cr-tag", without resending it, assigned to package "pkg-tag-banner"
+    Then creative "cr-tag" is assigned to package "pkg-tag-banner"
+    When the Buyer Agent references library creative "cr-tag", without resending it, assigned to package "pkg-tag-leader"
+    Then creative "cr-tag" is assigned to package "pkg-tag-leader"
+    And Google Ad Manager created that creative at size 300x250
+    And Google Ad Manager serves that creative on line item "5000011" at sizes "300x250" only
+    And Google Ad Manager serves that creative on line item "5000012" at sizes "728x90" only
 
   @T-UC-006-local-gam-dry-run-stays-local
   Scenario: A dry-run sync of an assignment sends nothing to GAM

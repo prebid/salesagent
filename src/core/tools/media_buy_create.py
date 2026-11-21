@@ -90,6 +90,8 @@ def _package_assignments_by_creative(
 
     *carriers* are the creatives as :func:`_read_for_packages` read them for each package, so
     each assignment hands the adapter the creative its own package's product resolved to.
+    Create, approval and push all group through here, so each creative reaches the adapter in
+    one asset carrying all its packages, whichever path pushes it.
     """
     line_items = {p.package_id: stored_line_item_id(p) for p in packages}
     by_creative: dict[str, list[PackageAssignmentDict]] = {}
@@ -4418,6 +4420,8 @@ async def _create_media_buy_impl(
                             field=PACKAGES_FIELD,
                         )
 
+                # The assignments of the creatives cleared to serve, pushed once all are written
+                pushed: list[CreativeAssignment] = []
                 for i, package in enumerate(req.packages):
                     pkg_cids = _get_creative_ids(package)
                     if pkg_cids:
@@ -4435,8 +4439,6 @@ async def _create_media_buy_impl(
                             logger.error(error_msg)
                             raise AdCPAdapterError()
 
-                        # The package's line item, as the adapter mapped it
-                        platform_line_item_id = (response.platform_line_item_ids or {}).get(response_package_id)
                         inline_ids = _inline_creative_ids(package)
 
                         for creative_id in pkg_cids:
@@ -4450,68 +4452,56 @@ async def _create_media_buy_impl(
                                 )
                                 continue
 
-                            if creative.status == "pending_review":
-                                # Hold back until the creative is approved; the DB assignment below
-                                # ensures approve_creative can find it for retroactive push
-                                logger.info(
-                                    log_safe(f"[AUTO-APPROVAL] Holding back creative {creative_id} (pending_review)")
-                                )
-                            else:
-                                # Upload to GAM via shared asset helper
-                                try:
-                                    # The creative as the pre-adapter gate read it for THIS
-                                    # package's product: the carrier the adapter's check
-                                    # approved is the one it is handed.
-                                    asset = _build_adapter_asset_from_creative(
-                                        creative,
-                                        [
-                                            {
-                                                "package_id": response_package_id,
-                                                "weight": 100,
-                                                "platform_line_item_id": platform_line_item_id,
-                                                "creative": carriers[(packages[i].package_id, creative_id)],
-                                            }
-                                        ],
-                                    )
-
-                                    upload_result = adapter.add_creative_assets(
-                                        response.media_buy_id if response.media_buy_id else "",
-                                        [asset],
-                                        datetime.now(UTC),
-                                    )
-                                    logger.info(
-                                        log_safe(
-                                            f"Successfully uploaded creative {creative_id} to GAM: {upload_result}"
-                                        )
-                                    )
-
-                                    # FIXME(#1566): the status is not read, so a creative the ad server
-                                    # reports failed is dropped and the response carries no signal.
-                                    if upload_result and len(upload_result) > 0:
-                                        uploaded_status = upload_result[0]
-                                        merged_data = _apply_creative_enrichment(creative, uploaded_status)
-                                        if merged_data is not None:
-                                            CreativeRepository(session, tenant.tenant_id).update_data(
-                                                creative, merged_data
-                                            )
-                                except AdCPSalesAgentError:
-                                    raise
-                                except Exception as upload_error:
-                                    logger.error(
-                                        log_safe(f"Failed to upload creative {creative_id} to GAM: {upload_error}")
-                                    )
-                                    raise AdCPAdapterError() from upload_error
-
-                            # Create database assignment
-                            creative_uow.assignments.create(
+                            assignment = creative_uow.assignments.create(
                                 media_buy_id=response.media_buy_id,
                                 package_id=response_package_id,
                                 creative_id=creative_id,
                                 principal_id=principal_id,
                                 inline=creative_id in inline_ids,
                             )
+                            if creative.status == "pending_review":
+                                # Hold back until the creative is approved; the assignment row
+                                # ensures approve_creative can find it for retroactive push
+                                logger.info(
+                                    log_safe(f"[AUTO-APPROVAL] Holding back creative {creative_id} (pending_review)")
+                                )
+                            else:
+                                pushed.append(assignment)
 
                         session.flush()
+
+                # Each creative once, with every package it is assigned to and the carrier the
+                # pre-adapter gate read for that package's product, as approval and push hand it:
+                # a creative on two packages is created once and each line item states its own sizes.
+                if pushed:
+                    assert creative_uow.media_buys is not None
+                    buy_packages = creative_uow.media_buys.get_packages(response.media_buy_id or "")
+                    assets = [
+                        _build_adapter_asset_from_creative(creatives_by_id[creative_id], package_assignments)
+                        for creative_id, package_assignments in _package_assignments_by_creative(
+                            pushed, buy_packages, carriers
+                        ).items()
+                    ]
+                    try:
+                        upload_result = adapter.add_creative_assets(
+                            response.media_buy_id if response.media_buy_id else "", assets, datetime.now(UTC)
+                        )
+                        logger.info(log_safe(f"Uploaded {len(assets)} creatives to the ad server: {upload_result}"))
+
+                        # FIXME(#1566): the status is not read, so a creative the ad server
+                        # reports failed is dropped and the response carries no signal.
+                        for uploaded_status in upload_result or []:
+                            creative = creatives_by_id.get(uploaded_status.creative_id or "")
+                            if creative is None:
+                                continue
+                            merged_data = _apply_creative_enrichment(creative, uploaded_status)
+                            if merged_data is not None:
+                                CreativeRepository(session, tenant.tenant_id).update_data(creative, merged_data)
+                    except AdCPSalesAgentError:
+                        raise
+                    except Exception as upload_error:
+                        logger.error(log_safe(f"Failed to upload creatives to the ad server: {upload_error}"))
+                        raise AdCPAdapterError() from upload_error
 
         # Per (media-buy/package-request.json) creatives live on each PackageRequest, not at
         # request level. Inline creative submission to the adapter happens via the

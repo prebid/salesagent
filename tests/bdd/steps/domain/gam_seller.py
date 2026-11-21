@@ -532,6 +532,25 @@ def when_seller_approves_media_buy(ctx: dict) -> None:
     ctx["approval_result"] = ctx["env"].approve_pending_media_buy()
 
 
+@when(
+    parsers.re(
+        r"the Buyer Agent sends the create_media_buy request, which the seller books (?P<booked>at once|on approving it)$"
+    )
+)
+def when_create_booked(ctx: dict, booked: str) -> None:
+    """The buyer's create, then the seller's approval of the buy when the seller books it on approving it.
+
+    The create every scenario sends and the approval "the seller approves the media buy" runs,
+    so one outline grades a GAM invariant on both paths that push creatives at booking: the
+    auto-approved create and the seller's approval. Which path books the buy is the row's.
+    """
+    from tests.bdd.steps.domain.uc002_create_media_buy import when_send_create_media_buy
+
+    when_send_create_media_buy(ctx)
+    if booked == "on approving it":
+        when_seller_approves_media_buy(ctx)
+
+
 def _orders_created(ctx: dict) -> list[Any]:
     """The orders the stand-in GAM network created, each carrying the id it assigned."""
     return ctx["env"].gam_objects_created("OrderService", "createOrders")
@@ -1006,28 +1025,32 @@ def _size_counts(sizes: list[Any]) -> Counter[tuple[int, int]]:
 
 
 @then(
-    parsers.parse(
-        'Google Ad Manager serves that creative on the "{product_id}" package\'s line item at sizes "{sizes}" only'
+    parsers.re(
+        r"Google Ad Manager serves that creative on "
+        r'(?:the "(?P<product_id>[^"]+)" package\'s line item|line item "(?P<line_item>\d+)") '
+        r'at sizes "(?P<sizes>[^"]+)" only$'
     )
 )
-def then_gam_serves_creative_on_package_line_item_at(ctx: dict, product_id: str, sizes: str) -> None:
-    """On the line item of the package on *product_id*, the one creative GAM created serves at exactly *sizes*.
+def then_gam_serves_creative_on_package_line_item_at(
+    ctx: dict, product_id: str | None, line_item: str | None, sizes: str
+) -> None:
+    """On the line item of *product_id*'s package, or on *line_item*, the one creative GAM created serves at *sizes*.
 
     Ad Manager API v202602 ``LineItemCreativeAssociation.sizes``: "Overrides the value set for
     Creative.size". So the sizes a creative serves at on a line item are its association's
     ``sizes``, or the creative's own ``size`` when the association states none. One
-    association of the creative on that line item.
+    association of the creative on that line item. A buy GAM created names the line item by
+    its package's product; a buy the scenario booked names it by the id it stated.
     """
     (creative,) = _creatives_created(ctx)
-    line_item_id = str(_line_item_for(ctx, product_id)["id"])
+    line_item_id = line_item or str(_line_item_for(ctx, str(product_id))["id"])
     served = [
         list(a.get("sizes") or [creative["size"]])
         for a in _licas_created(ctx)
         if (str(a["creativeId"]), str(a["lineItemId"])) == (str(creative["id"]), line_item_id)
     ]
     assert served == [parse_sizes(sizes)], (
-        f"expected creative {creative['id']} to serve at {sizes} on the {product_id!r} package's line item "
-        f"{line_item_id}; GAM serves it at {served}"
+        f"expected creative {creative['id']} to serve at {sizes} on line item {line_item_id}; GAM serves it at {served}"
     )
 
 
