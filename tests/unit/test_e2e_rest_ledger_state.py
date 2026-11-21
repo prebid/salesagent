@@ -73,6 +73,9 @@ from tests.helpers.ledger import load_ledger_nodeids
 # comparison.
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
+        # Added for prebid/salesagent#2645 (approval books line items in database order),
+        # non-strict because it is intermittent.
+        "tests/bdd/test_local_gam_line_item_goal.py::test_a_buy_the_seller_approves_books_each_packages_budget_at_the_price_of_the_option_it_selected[e2e_rest]",
         # Added for prebid/salesagent#2636 (GAM pause writes the readonly LineItem.status):
         # the scenario is strict-xfailed on every transport, e2e_rest also here.
         "tests/bdd/test_local_gam_seller.py::test_a_buyer_who_pauses_an_active_buy_booked_in_gam_leaves_its_line_item_paused_in_gam[e2e_rest]",
