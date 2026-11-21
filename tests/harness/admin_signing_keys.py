@@ -24,7 +24,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from tests.harness._base import BareIntegrationEnv
 from tests.harness.admin_client import AdminOperatorMixin
@@ -104,15 +104,20 @@ def status_cell(page: BeautifulSoup, kid: str) -> str:
     raise AssertionError(f"the signing-keys page lists no row for {kid!r}")
 
 
+def _warning(page: BeautifulSoup) -> Tag | None:
+    """The warning above the signing-keys table, or ``None`` when there is none."""
+    return page.select_one(".kek-warning")
+
+
 def warning_text(page: BeautifulSoup) -> str | None:
     """The text of the warning above the signing-keys table, or ``None`` when there is none."""
-    banner = page.select_one(".kek-warning")
+    banner = _warning(page)
     return None if banner is None else " ".join(banner.get_text().split())
 
 
 def warning_runbook_link(page: BeautifulSoup) -> str | None:
     """The runbook link in the warning, or ``None`` when there is no warning."""
-    banner = page.select_one(".kek-warning")
+    banner = _warning(page)
     link = None if banner is None else banner.find("a")
     return None if link is None else str(link.get("href"))
 

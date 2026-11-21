@@ -63,6 +63,21 @@ def _keygen_alg_or_default(alg: str) -> Literal["ed25519", "es256"]:
         return keygen_alg(_DEFAULT_ALG)
 
 
+def _mint_profile(obj: Any) -> tuple[Literal["ed25519", "es256"], str]:
+    """The keygen ``(alg, purpose)`` a row's keypair is minted with.
+
+    Falls back to the profile defaults for deliberately-invalid values (the
+    CHECK-constraint tests in ``tests/integration/test_signing_key_repository.py``
+    build rows with an off-profile ``alg`` or ``purpose`` on purpose — keygen must
+    not raise before the DB gets a chance to reject). The one normalisation both of
+    a row's possible public halves share, so a ``material_changed`` row differs from
+    its PEM in key material only, never in alg or purpose as well.
+    """
+    alg = _keygen_alg_or_default(obj.alg)
+    purpose = obj.purpose if obj.purpose in _SDK_PURPOSES else REQUEST_SIGNING
+    return alg, purpose
+
+
 #: One minted keypair per row, memoised so the two halves below come from the
 #: SAME mint. Two ``generate_signing_keypair`` calls would publish one key's JWK
 #: beside another key's PEM — precisely the disagreement the tripwire exists to
@@ -73,15 +88,8 @@ _MINTED: dict[tuple[str, str, str, bytes], tuple[bytes, dict[str, Any]]] = {}
 
 
 def _keypair_for(obj: Any) -> tuple[bytes, dict[str, Any]]:
-    """Mint (or recall) a real keypair matching the row's kid/alg/purpose.
-
-    Falls back to the profile defaults for deliberately-invalid values (the
-    CHECK-constraint tests in ``tests/integration/test_signing_key_repository.py``
-    build rows with an off-profile ``alg`` or ``purpose`` on purpose — keygen must
-    not raise before the DB gets a chance to reject).
-    """
-    alg = _keygen_alg_or_default(obj.alg)
-    purpose = obj.purpose if obj.purpose in _SDK_PURPOSES else REQUEST_SIGNING
+    """Mint (or recall) a real keypair matching the row's kid and :func:`_mint_profile`."""
+    alg, purpose = _mint_profile(obj)
     key = (obj.kid, alg, purpose, obj.passphrase)
     if key not in _MINTED:
         _MINTED[key] = generate_signing_keypair(alg=alg, kid=obj.kid, purpose=purpose, passphrase=obj.passphrase)
@@ -95,8 +103,7 @@ def _public_jwk_for(obj: Any) -> dict[str, Any]:
 
 def _foreign_public_jwk_for(obj: Any) -> dict[str, Any]:
     """A public JWK for the row's kid from a SECOND keypair, which its private half does not derive."""
-    alg = _keygen_alg_or_default(obj.alg)
-    purpose = obj.purpose if obj.purpose in _SDK_PURPOSES else REQUEST_SIGNING
+    alg, purpose = _mint_profile(obj)
     return generate_signing_keypair(alg=alg, kid=obj.kid, purpose=purpose)[1]
 
 

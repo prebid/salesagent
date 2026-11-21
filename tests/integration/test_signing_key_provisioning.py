@@ -109,6 +109,7 @@ from tests.harness._base import BareIntegrationEnv
 from tests.helpers.signing import (
     REQUEST_SIGNING,
     SIGNATURE_BASE,
+    install_kek,
     just_after_provisioning,
     resolve_provider,
     signing_key_repo,
@@ -979,9 +980,7 @@ class TestComposeProvisionsWithNoOperatorAction:
             f"variable means renaming it in both places; got {sorted(template)}"
         )
         # Exactly the template pair, and nothing this suite would otherwise leave behind.
-        monkeypatch.setenv(_KEK_POINTER_SETTING, kek_variable)
-        monkeypatch.setenv(kek_variable, template[kek_variable])
-        _drop_cached_settings(monkeypatch)
+        install_kek(monkeypatch, kek_variable, template[kek_variable])
 
         _provision_via_ops_script(tenant.tenant_id)
 
