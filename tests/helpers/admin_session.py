@@ -9,7 +9,8 @@ writers REPLACE the session the client held:
 
 What is stated is a payload: a super admin's (:func:`admin_session_payload`) or an ordinary
 member's (:func:`member_session_payload`). :func:`admin_auth_session` and
-:func:`authenticate_http_session` state the super admin's on their transport.
+:func:`authenticate_http_session` state the super admin's on their transport, and
+:func:`tenant_user_session` states a tenant user by email alone on the Flask client.
 :func:`no_configured_super_admins` is the other half of stating a member: it keeps the
 deployment's own configuration from promoting that member.
 
@@ -217,10 +218,10 @@ def tenant_user_session(client: Any, email: str, *, auth_method: str | None = No
     do; a super admin passes every check and proves nothing there. Pass
     ``auth_method='oidc'`` for routes that require an SSO sign-in.
     """
-    with client.session_transaction() as sess:
-        sess["user"] = {"email": email}
-        if auth_method is not None:
-            sess["auth_method"] = auth_method
+    payload: dict[str, Any] = {"user": {"email": email}}
+    if auth_method is not None:
+        payload["auth_method"] = auth_method
+    state_flask_session(client, payload)
 
 
 def admin_auth_session(client: FlaskClient, tenant_id: str, *, auth_method: str | None = None) -> None:

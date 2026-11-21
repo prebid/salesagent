@@ -1,19 +1,22 @@
-"""``AdminClient`` states a session in one place, and stating one replaces the one held."""
+"""A session is stated through one writer per transport, and stating one replaces the one held."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 
 from tests.harness.admin_client import AdminClient
-from tests.helpers.admin_session import member_session_payload
+from tests.helpers.admin_session import member_session_payload, tenant_user_session
+
+_MEMBER = member_session_payload("member@example.com", "home")
 
 
 @pytest.mark.parametrize(
     "state",
     [
-        lambda client: client.state_session(member_session_payload("member@example.com", "home")),
+        lambda client: client.state_session(_MEMBER),
         lambda client: client.authenticate("tenant_a"),
     ],
     ids=["state_session", "authenticate"],
@@ -31,16 +34,28 @@ def test_stating_a_session_over_http_replaces_the_cookie_the_server_wrote(state:
         client.close()
 
 
-def test_stating_a_session_in_process_replaces_the_session_the_client_held() -> None:
+@pytest.mark.parametrize(
+    ("state", "stated"),
+    [
+        (lambda client: client.state_session(_MEMBER), _MEMBER),
+        (
+            lambda client: tenant_user_session(client._flask_client, "member@example.com"),
+            {"user": {"email": "member@example.com"}},
+        ),
+    ],
+    ids=["state_session", "tenant_user_session"],
+)
+def test_stating_a_session_in_process_replaces_the_session_the_client_held(
+    state: Callable[[AdminClient], None], stated: dict[str, Any]
+) -> None:
     """A member stated over a super-admin session keeps none of its keys, ``is_super_admin`` least of all."""
     client = AdminClient(None)
     try:
         client.authenticate("tenant_a")
-        payload = member_session_payload("member@example.com", "home")
 
-        client.state_session(payload)
+        state(client)
 
         with client._flask_client.session_transaction() as session:
-            assert dict(session) == payload
+            assert dict(session) == stated
     finally:
         client.close()
