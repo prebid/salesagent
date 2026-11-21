@@ -24,7 +24,9 @@ directory and what the gaps cost.
   that derives one from the other invents a shape constraint on the id, which then needs
   normalization, a rule, and workarounds — and the bug that started it was two derivations of
   one value disagreeing.
-- **`mint()` RECORDS a value as test-generated; it does not generate one.**
+- **`mint()` RECORDS a value as test-generated; it does not generate one.** `mint_id(prefix)`
+  does both. It is the one place a `<prefix>_<hex>` id is generated, for a row in a database
+  that outlives the test, such as the e2e stack's.
 
 ## Multi-row facts belong in a seeder, not in each caller
 

@@ -28,7 +28,6 @@ seeding and read-backs are methods of the env.
 
 from __future__ import annotations
 
-import uuid
 from contextlib import ExitStack
 from decimal import Decimal
 from typing import Any, NamedTuple
@@ -38,7 +37,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, UserRole
 from src.services.default_products import get_default_products
 from tests.factories import MediaBuyFactory, ProductFactory, TenantFactory, UserFactory
-from tests.factories.mint import mint
+from tests.factories.mint import mint_id
 from tests.harness.admin_accounts import AdminAccountEnv
 from tests.harness.admin_client import AdminResponse
 from tests.helpers.admin_session import member_session_payload, no_configured_super_admins
@@ -94,14 +93,9 @@ class TenantState(NamedTuple):
     policy_settings: Any
 
 
-def _unique_id(prefix: str) -> str:
-    """A collision-free id: the e2e stack DB persists across runs, so factory sequences would repeat."""
-    return mint(f"{prefix}_{uuid.uuid4().hex[:10]}")
-
-
 def _seed_member(tenant: Tenant, email: str, *, is_active: bool = True) -> None:
     """A ``User`` row for *email* in *tenant*, holding ``MEMBER_ROLE``. Call it inside ``bound_factory_session()``."""
-    UserFactory(tenant=tenant, user_id=_unique_id("user"), email=email, role=MEMBER_ROLE, is_active=is_active)
+    UserFactory(tenant=tenant, user_id=mint_id("user"), email=email, role=MEMBER_ROLE, is_active=is_active)
 
 
 def redirect_path(response: AdminResponse) -> str:
@@ -170,7 +164,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
 
     def _new_tenant_id(self, prefix: str) -> str:
         """A unique tenant id whose deletion is registered before the tenant exists."""
-        tenant_id = _unique_id(prefix)
+        tenant_id = mint_id(prefix)
         self._cleanups.callback(delete_tenant, tenant_id)
         return tenant_id
 
@@ -185,15 +179,15 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         """A tenant with one catalogue product, one active media buy and an active member who is not the caller."""
         with bound_factory_session():
             tenant = TenantFactory(tenant_id=self._new_tenant_id("scope"))
-            product = ProductFactory(tenant=tenant, product_id=_unique_id("prod"))
+            product = ProductFactory(tenant=tenant, product_id=mint_id("prod"))
             buy = MediaBuyFactory(
                 tenant=tenant,
-                media_buy_id=_unique_id("mb"),
+                media_buy_id=mint_id("mb"),
                 status="active",
                 budget=ACTIVE_BUY_BUDGET,
                 # Only the principal id is set: PrincipalFactory derives token_hash/token_prefix
                 # from it (tests/factories/principal.py), so a unique id is a unique credential.
-                principal__principal_id=_unique_id("principal"),
+                principal__principal_id=mint_id("principal"),
             )
             _seed_member(tenant, OTHER_MEMBER_EMAIL)
             products_payload = [

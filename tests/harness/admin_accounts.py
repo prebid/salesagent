@@ -215,13 +215,11 @@ class AdminAccountEnv:
         duplicate key should fail loudly here rather than quietly produce a database
         the buyer's ``sync_accounts`` could never have created.
         """
-        import uuid
-
         from src.core.database.repositories.uow import AccountUoW
         from tests.factories.account import AccountFactory
-        from tests.factories.mint import mint
+        from tests.factories.mint import mint_id
 
-        account_id = mint(f"acc_{uuid.uuid4().hex[:12]}")
+        account_id = mint_id("acc")
 
         with AccountUoW(self._tenant_id) as uow:
             assert uow.accounts is not None
