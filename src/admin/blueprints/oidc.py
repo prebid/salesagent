@@ -174,8 +174,8 @@ def disable(tenant_id: str):
     )
 
 
-# FIXME(#2256): no membership check, and the callback this starts sets oidc_enabled on the tenant.
 @oidc_bp.route("/test/<tenant_id>")
+@require_tenant_access()
 def test_initiate(tenant_id: str):
     """Initiate a test OAuth flow.
 

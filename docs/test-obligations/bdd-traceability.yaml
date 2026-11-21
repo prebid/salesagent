@@ -7360,6 +7360,12 @@ mappings:
       upstream_refs: []
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-ADMIN-SCOPE-011"
+      adcp_feature: "BR-ADMIN-TENANT-SCOPING.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-ADMIN-PUBAUTH-sync"
       adcp_feature: "local-publisher-authorization.feature"
       obligation_id: null

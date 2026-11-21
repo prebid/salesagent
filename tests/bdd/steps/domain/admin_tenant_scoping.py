@@ -1,6 +1,6 @@
 """BDD step definitions for BR-ADMIN-TENANT-SCOPING: tenant-scoped admin routes (#2203).
 
-Steps for the four routes that take ``<tenant_id>`` from the URL. The harness
+Steps for the five routes that take ``<tenant_id>`` from the URL. The harness
 (``AdminTenantScopingEnv``) is provided by the ``_harness_env`` fixture in
 tests/bdd/conftest.py. The generic admin steps (``the caller is not authenticated``,
 ``the page returns status``, ``the JSON response has "key" as "value"``) come from
@@ -67,7 +67,7 @@ def given_caller_active_member(ctx: dict) -> None:
 
 @when(parsers.parse("the caller sends {method} to the {route} of the target tenant"))
 def when_caller_sends(ctx: dict, method: str, route: str) -> None:
-    """Send one request to one of the four routes, for the target tenant's id."""
+    """Send one request to one of the routes in ``ROUTES``, for the target tenant's id."""
     ctx["admin_page"] = _env(ctx).send(method, route)
 
 

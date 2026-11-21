@@ -4,14 +4,15 @@
 Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
   As a publisher operating one tenant
   I want every admin route that names my tenant in its URL to check that the caller belongs to it
-  So that a logged-in user of another tenant cannot read my revenue, catalogue or policy pages
+  So that a user of another tenant cannot read my revenue, catalogue or policy pages, or start a sign-in test on my tenant
 
   # A route that takes <tenant_id> from the URL must prove the caller belongs to
   # that tenant. Four admin routes carried only require_auth(), which checks that
-  # somebody is logged in. The one component that proves membership is require_tenant_access
+  # somebody is logged in, and the OIDC test route carried no check at all. The one
+  # component that proves membership is require_tenant_access
   # (src/admin/utils/helpers.py); every outcome below is that decorator's contract:
   #   - anonymous        -> JSON 401 on the three api_mode routes, redirect to the
-  #                         tenant login page on the HTML route
+  #                         tenant login page on the two HTML routes
   #   - non-member       -> 403 (JSON {"error": "Access denied"} on the API routes)
   #   - inactive member  -> 403, same shape
   #   - active member    -> today's behaviour, same status and body
@@ -46,16 +47,17 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
       | product suggestions API |
 
   @T-ADMIN-SCOPE-002 @auth @edge-case
-  Scenario Outline: Anonymous callers of the policy rules page are sent to the tenant login
+  Scenario Outline: Anonymous callers of the tenant pages are sent to the tenant login
     Given the caller is not authenticated
-    When the caller sends <method> to the policy rules page of the target tenant
+    When the caller sends <method> to the <route> of the target tenant
     Then the page redirects to the login page of the target tenant
     And the target tenant's stored data is unchanged
 
     Examples:
-      | method |
-      | GET    |
-      | POST   |
+      | method | route             |
+      | GET    | policy rules page |
+      | POST   | policy rules page |
+      | GET    | OIDC test page    |
 
   @T-ADMIN-SCOPE-003 @auth @edge-case
   Scenario Outline: A member of another tenant receives JSON 403 from the tenant APIs
@@ -72,16 +74,17 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
       | product suggestions API |
 
   @T-ADMIN-SCOPE-004 @auth @edge-case
-  Scenario Outline: A member of another tenant receives 403 from the policy rules page
+  Scenario Outline: A member of another tenant receives 403 from the tenant pages
     Given the caller is an active member of a different tenant
-    When the caller sends <method> to the policy rules page of the target tenant
+    When the caller sends <method> to the <route> of the target tenant
     Then the page returns status 403
     And the target tenant's stored data is unchanged
 
     Examples:
-      | method |
-      | GET    |
-      | POST   |
+      | method | route             |
+      | GET    | policy rules page |
+      | POST   | policy rules page |
+      | GET    | OIDC test page    |
 
   @T-ADMIN-SCOPE-005 @auth @edge-case
   Scenario Outline: An inactive membership in the target tenant receives JSON 403 from the tenant APIs
@@ -98,16 +101,17 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
       | product suggestions API |
 
   @T-ADMIN-SCOPE-006 @auth @edge-case
-  Scenario Outline: An inactive membership in the target tenant receives 403 from the policy rules page
+  Scenario Outline: An inactive membership in the target tenant receives 403 from the tenant pages
     Given the caller's membership in the target tenant is inactive
-    When the caller sends <method> to the policy rules page of the target tenant
+    When the caller sends <method> to the <route> of the target tenant
     Then the page returns status 403
     And the target tenant's stored data is unchanged
 
     Examples:
-      | method |
-      | GET    |
-      | POST   |
+      | method | route             |
+      | GET    | policy rules page |
+      | POST   | policy rules page |
+      | GET    | OIDC test page    |
 
   @T-ADMIN-SCOPE-007 @auth @main-flow
   Scenario: An active member reads the tenant's revenue chart
@@ -140,3 +144,11 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
       | method |
       | GET    |
       | POST   |
+
+  # The seeded tenant has no OIDC configuration, so what the route answers a caller it
+  # admits is its "not configured" redirect to the tenant settings.
+  @T-ADMIN-SCOPE-011 @auth @main-flow
+  Scenario: An active member is redirected from the OIDC test page to the tenant settings
+    Given the caller is an active member of the target tenant
+    When the caller sends GET to the OIDC test page of the target tenant
+    Then the page redirects to the settings page of the target tenant

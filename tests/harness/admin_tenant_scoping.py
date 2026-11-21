@@ -1,10 +1,10 @@
-"""Admin tenant-scoping harness for the four routes of prebid/salesagent#2203.
+"""Admin tenant-scoping harness for the four routes of prebid/salesagent#2203 and the OIDC test route.
 
 Drives ``GET /api/tenant/<tenant_id>/revenue-chart``, ``GET /api/tenant/<tenant_id>/products``,
-``GET /api/tenant/<tenant_id>/products/suggestions`` and ``GET,POST /tenant/<tenant_id>/policy/rules``
-on the two admin transports ``AdminAccountEnv`` already provides — Flask ``test_client``
-(integration) and ``requests.Session`` against the Docker stack (e2e) — and seeds the
-tenants, memberships, catalogue and media buys the scenarios grade.
+``GET /api/tenant/<tenant_id>/products/suggestions``, ``GET,POST /tenant/<tenant_id>/policy/rules``
+and ``GET /auth/oidc/test/<tenant_id>`` on the two admin transports ``AdminAccountEnv`` already
+provides — Flask ``test_client`` (integration) and ``requests.Session`` against the Docker
+stack (e2e) — and seeds the tenants, memberships, catalogue and media buys the scenarios grade.
 
 Subclasses ``AdminAccountEnv`` rather than extracting a base: the transport plumbing is
 inherited unchanged, and the harness lifecycle guard
@@ -63,20 +63,23 @@ class TenantScopedRoute(NamedTuple):
     methods: tuple[str, ...]
 
 
-#: The four routes of #2203, keyed by the name the Gherkin scenarios use.
+#: The four routes of #2203 and the OIDC test route, keyed by the name the Gherkin scenarios use.
 ROUTES: dict[str, TenantScopedRoute] = {
     "revenue chart API": TenantScopedRoute("/api/tenant/{tenant_id}/revenue-chart", ("GET",)),
     "products API": TenantScopedRoute("/api/tenant/{tenant_id}/products", ("GET",)),
     "product suggestions API": TenantScopedRoute("/api/tenant/{tenant_id}/products/suggestions", ("GET",)),
     "policy rules page": TenantScopedRoute("/tenant/{tenant_id}/policy/rules", ("GET", "POST")),
+    "OIDC test page": TenantScopedRoute("/auth/oidc/test/{tenant_id}", ("GET",)),
 }
 
 #: Where a scenario may say a route redirected to, keyed by the name the Gherkin uses. The
 #: login page is the TENANT's, not the generic ``/login`` ``require_auth`` sends to; the
-#: policy page is where ``policy.rules`` sends an authorized member.
+#: policy page is where ``policy.rules`` sends an authorized member, and the settings page
+#: is where ``oidc.test_initiate`` sends one when the tenant has no OIDC configuration.
 REDIRECTS: dict[str, str] = {
     "login page": "/tenant/{tenant_id}/login",
     "policy page": "/tenant/{tenant_id}/policy/",
+    "settings page": "/tenant/{tenant_id}/settings",
 }
 
 
@@ -139,7 +142,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
     """Test environment for the tenant-scoping scenarios of #2203.
 
     Same two transports as ``AdminAccountEnv``; adds the target tenant, the three caller
-    memberships (elsewhere / inactive here / active here) and the four routes.
+    memberships (elsewhere / inactive here / active here) and the five routes.
     """
 
     def __init__(self, *, mode: str = "integration", base_url: str | None = None) -> None:

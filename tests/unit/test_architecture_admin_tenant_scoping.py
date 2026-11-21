@@ -65,17 +65,12 @@ _INLINE_DEAD_ROLE_CHECK = Debt(2233, "inline session['role'] viewer/tenant_admin
 _INLINE_SESSION_TENANT_CHECK = Debt(2233, "inline session['tenant_id'] == tenant_id compare instead of the decorator")
 _PR_2075 = Debt(2075, "that PR adds require_tenant_access(api_mode=True) to publisher partners; remove when it merges")
 _ISSUE_2204 = Debt(2204, "the module-local bare @require_auth in gam_reporting_api has to be removed first")
-_OIDC_TEST = Debt(
-    2256,
-    "no check at all on a route the logged-in users page calls; its callback sets oidc_enabled on the tenant in the URL",
-)
 
 # (endpoint, rule) -> why nothing in its wrapper chain authorizes the caller. Only ever shrinks.
 EXEMPT: dict[tuple[str, str], LoginEntry | Debt] = {
     ("auth.tenant_login", "/tenant/<tenant_id>/login"): _LOGIN_ENTRY,
     ("auth.tenant_google_auth", "/tenant/<tenant_id>/auth/google"): _LOGIN_ENTRY,
     ("oidc.login", "/auth/oidc/login/<tenant_id>"): _LOGIN_ENTRY,
-    ("oidc.test_initiate", "/auth/oidc/test/<tenant_id>"): _OIDC_TEST,
     ("policy.index", "/tenant/<tenant_id>/policy/"): _INLINE_DEAD_ROLE_CHECK,
     ("policy.update", "/tenant/<tenant_id>/policy/update"): _INLINE_DEAD_ROLE_CHECK,
     ("policy.review_task", "/tenant/<tenant_id>/policy/review/<task_id>"): _INLINE_DEAD_ROLE_CHECK,
