@@ -48,14 +48,11 @@
     </button>
 </form>
 
-{% if active_key_unopenable %}
+{% if active_key_fault %}
 <div class="kek-warning" role="alert">
-    <strong>Key {{ active_kid }} is active, but this deployment cannot decrypt it, so this seller is not signing.</strong>
-    The key encryption key (KEK) is missing or is not the one the key was provisioned under.
-    <strong>Restore the KEK. Do not re-mint.</strong>
-    Provisioning a replacement publishes a second key and strands this one, which is the key
-    counterparties already trust.
-    <a href="https://github.com/prebid/salesagent/blob/main/docs/operations/signing-key-runbook.md#a-key-minted-under-a-kek-that-was-later-unset"
+    <strong>Key {{ active_kid }} is active, but this deployment cannot sign with it, so this seller is not signing.</strong>
+    <span class="kek-advice">{{ active_key_fault.advice }}</span>
+    <a href="https://github.com/prebid/salesagent/blob/main/docs/operations/signing-key-runbook.md#{{ active_key_fault.runbook_anchor }}"
        target="_blank" rel="noopener">Signing key runbook</a>
 </div>
 {% endif %}
@@ -81,8 +78,8 @@
             <td>
                 {% if key.revoked_at %}
                 <span class="status-badge status-revoked">revoked {{ key.revoked_at }}</span>
-                {% elif key.kid == active_kid and active_key_unopenable %}
-                <span class="status-badge status-revoked">active, cannot be decrypted</span>
+                {% elif key.kid == active_kid and active_key_fault %}
+                <span class="status-badge status-revoked">active, cannot sign</span>
                 {% elif key.kid == active_kid %}
                 <span class="status-badge status-active">signing</span>
                 {% else %}

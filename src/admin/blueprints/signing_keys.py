@@ -56,7 +56,8 @@ def list_signing_keys(tenant_id: str) -> ResponseReturnValue:
 
     The active key's badge comes from ``signing_key_backed`` — the derivation the
     signer and the setup checklist read — so a key in its active window that this
-    deployment cannot decrypt is shown as not signing (#2288).
+    deployment cannot sign with is shown as not signing, with the advice for its
+    cause that the checklist shows too (#2288).
     """
     now = datetime.now(UTC)
     with SigningKeyUoW(tenant_id) as uow:
@@ -69,7 +70,7 @@ def list_signing_keys(tenant_id: str) -> ResponseReturnValue:
             tenant_id=tenant_id,
             keys=published,
             active_kid=backing.active_kid,
-            active_key_unopenable=backing.active_key_unopenable,
+            active_key_fault=backing.active_key_fault,
             algorithms=SIGNING_ALG_VALUES,
         )
 

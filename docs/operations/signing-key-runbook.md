@@ -235,7 +235,9 @@ activation.
 ### A key minted under a KEK that was later unset
 
 The private PEM on a `db:` row is ciphertext. Remove the KEK from the environment and it
-becomes a key nobody can open — while its public half is still published.
+becomes a key nobody can open — while its public half is still published. The same holds
+when the deployment holds a different KEK from the one the key was minted under (a rotated
+secret, or another environment's value).
 
 The agent handles this honestly rather than optimistically: the tenant reports
 `webhook_signing.supported: false` rather than advertising `true` and raising on every
@@ -246,6 +248,20 @@ gap.
 **Recovery: restore the KEK. Do not re-mint.** Re-minting publishes a second JWK and
 strands the first — you will have two published keys, one of which nobody can use, and
 the one already trusted by counterparty caches is the stranded one.
+
+The signing-keys page and the setup checklist name the cause: no KEK configured, or a KEK
+that does not open the key.
+
+### A key whose private half no longer matches its published key
+
+Before a key signs, its private half is loaded and the public JWK is derived from it again
+and compared with the JWK the row publishes. When they differ, the key decrypts under the
+right KEK but its stored material has changed (an edited or partly restored row, for
+example). Every counterparty would reject its signatures, so the agent does not sign with
+it and reports `webhook_signing.supported: false`.
+
+**Recovery: rotate.** Restoring the KEK does not help, because the KEK is not the problem.
+Provision a replacement and revoke this key, as in [Rotation](#rotation).
 
 ## Not covered yet
 

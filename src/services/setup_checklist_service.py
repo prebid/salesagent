@@ -1108,22 +1108,20 @@ class SetupChecklistService:
         telling an operator that is "configured" is the dishonest half of the
         distinction the two selectors exist to keep apart.
 
-        A key that is active but cannot be decrypted gets its own advice (#2288).
-        The runbook's recovery for that state is "restore the KEK, do not re-mint":
-        a replacement publishes a second JWK and strands the one counterparties
-        already trust, so "provision a replacement" is only for a published key
-        outside its active window.
+        An active key that cannot sign gets the advice for its cause (#2288), from
+        :attr:`~src.core.signing.posture.ActiveKeyFault.advice`, the text the
+        signing-keys page shows too. A KEK fault must not be told "provision a
+        replacement": that publishes a second JWK and strands the one counterparties
+        already trust. That advice is only for a published key outside its active
+        window.
 
         One builder for both enumeration paths (per-tenant and bulk) so the two
         cannot disagree about the task's key, name or done-ness.
         """
         if key_backing.signs:
             details = "Signing key provisioned and published"
-        elif key_backing.active_key_unopenable:
-            details = (
-                f"Active key {key_backing.active_kid} cannot be decrypted: the key encryption key (KEK) "
-                "is missing or is not the one the key was provisioned under. Restore the KEK. Do not re-mint."
-            )
+        elif key_backing.active_key_fault is not None:
+            details = f"Active key {key_backing.active_kid} cannot sign. {key_backing.active_key_fault.advice}"
         elif key_backing.publishes:
             details = "Published key is revoked or not yet active — provision a replacement"
         else:
