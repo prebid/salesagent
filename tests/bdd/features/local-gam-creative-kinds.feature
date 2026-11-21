@@ -94,11 +94,11 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
   @T-UC-002-local-gam-creative-macros @extension
   Scenario Outline: A creative's AdCP macros reach GAM in GAM's spelling in its tracker and landing page, and byte for byte inside a display tag
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '<product_formats>'
-    And the package references the buyer's approved <creative>, with impression tracker "https://track.example.com/imp?cb={CACHEBUSTER}"
+    And the package references the buyer's approved <creative>, with impression tracker "https://prebid.org/imp?cb={CACHEBUSTER}"
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And Google Ad Manager created one <gam_creative>
-    And Google Ad Manager tracks that creative's impressions at exactly "https://track.example.com/imp?cb=%%CACHEBUSTER%%"
+    And Google Ad Manager tracks that creative's impressions at exactly "https://prebid.org/imp?cb=%%CACHEBUSTER%%"
 
     Examples:
       | representation  | product_formats | creative | gam_creative |
