@@ -846,12 +846,25 @@ def _line_item_created(ctx: dict) -> Any:
     return line_items[0]
 
 
+def _assert_holds_exactly(held: list[Any], expected: list[Any], what: str) -> None:
+    """GAM holds exactly *expected* of *what*, compared as a multiset (``collections.Counter``).
+
+    A missing, extra or repeated item fails and their order does not. A real network does not
+    answer in the order the seller created things: read back in id order, run 025d613f held a
+    creative on line items "5000001,5000002" as [5000002, 5000001], and run f18f96f3 held the
+    creatives "ready.png, held.png", created in that order, as [held.png, ready.png].
+    """
+    assert Counter(held) == Counter(expected), (
+        f"expected GAM to hold {what} {sorted(expected)}; it holds {sorted(held)}"
+    )
+
+
 def _assert_creatives_created(ctx: dict, expected: list[tuple[str, str, str | None, str | None]]) -> None:
-    """GAM created exactly *expected*: (type, advertiser id, image URL, snippet) of each creative, in order."""
+    """GAM created exactly *expected*: (type, advertiser id, image URL, snippet) of each creative, in any order."""
     created = [
         (c["xsi_type"], str(c["advertiserId"]), c.get("imageUrl"), c.get("snippet")) for c in _creatives_created(ctx)
     ]
-    assert created == expected, f"expected GAM to create {expected}; it created {created}"
+    _assert_holds_exactly(created, expected, "the creatives")
 
 
 @then(
@@ -904,7 +917,7 @@ def then_one_order_without_flight(ctx: dict) -> None:
     )
 )
 def then_gam_created_image_creatives(ctx: dict, advertiser_id: str, urls: str) -> None:
-    """GAM holds exactly these creatives from this scenario, in order: images for the advertiser, showing the URLs."""
+    """GAM holds exactly these creatives from this scenario: images for the advertiser, showing the URLs."""
     _assert_creatives_created(
         ctx, [("ImageRedirectCreative", advertiser_id, url.strip(), None) for url in urls.split(",")]
     )
@@ -1167,18 +1180,11 @@ def _associations(ctx: dict) -> list[tuple[str, str]]:
 
 @then(parsers.re(r'Google Ad Manager associated that creative with line items "(?P<line_items>[^"]+)"$'))
 def then_gam_associated_with_line_items(ctx: dict, line_items: str) -> None:
-    """GAM holds the one creative it created on exactly these line items, each once.
-
-    A set: the associations are compared as a multiset (``collections.Counter``), so a missing,
-    extra or repeated association fails and their order does not. A real network does not keep
-    the order the seller created them in: read back in run 025d613f, a creative on line items
-    "5000001,5000002" was held as [5000002, 5000001].
-    """
+    """GAM holds the one creative it created on exactly these line items, each once, in any order."""
     created = _creatives_created(ctx)
     assert len(created) == 1, f"'that creative' names one creative; GAM created {len(created)}"
-    expected = Counter((str(created[0]["id"]), line_item.strip()) for line_item in line_items.split(","))
-    held = Counter(_associations(ctx))
-    assert held == expected, f"expected GAM to hold {sorted(expected)}; it holds {sorted(held.elements())}"
+    expected = [(str(created[0]["id"]), line_item.strip()) for line_item in line_items.split(",")]
+    _assert_holds_exactly(_associations(ctx), expected, "the associations")
 
 
 @then(parsers.parse('Google Ad Manager associated that creative with line item "{line_item}" at weight {weight:d}'))
