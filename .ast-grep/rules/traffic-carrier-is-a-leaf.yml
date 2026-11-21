@@ -1,0 +1,36 @@
+# The traffic carrier imports no module of this repository.
+#
+# `src/core/traffic_carrier.py` is shared by the creative reader
+# (`src/core/creative_to_traffic.py`) and every ad server adapter. The reader reaches
+# `src.adapters` through `src.core.helpers`, and the adapters import the carrier, so a carrier
+# that imports any `src` module can close that cycle again: with the carrier inside the reader's
+# module, importing the reader first raised a circular ImportError, and it worked only where
+# something had imported `src.adapters` before it. The carrier depends on `adcp`, `pydantic`
+# and the standard library alone.
+#
+# WHY AST-GREP AND NOT RUFF. TID251 bans a NAME everywhere and exempts files through
+# per-file-ignores, so every ruff config here states "importable only from these files". This
+# rule is the inverse, "this one file imports nothing from src", which a rule's `files:` scope
+# states directly.
+id: traffic-carrier-is-a-leaf
+language: Python
+severity: error
+message: >-
+  src/core/traffic_carrier.py is a leaf: it imports only adcp, pydantic and the standard
+  library. Importing a src module from it can reintroduce the circular import between the
+  creative reader and the adapters.
+files:
+  - "src/core/traffic_carrier.py"
+rule:
+  any:
+    - kind: import_statement
+      has:
+        stopBy: end
+        kind: dotted_name
+        regex: ^src(\.|$)
+    - kind: import_from_statement
+      has:
+        field: module_name
+        any:
+          - kind: relative_import
+          - regex: ^src(\.|$)

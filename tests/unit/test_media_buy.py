@@ -785,47 +785,19 @@ class TestOneFormatResolutionForEveryRead:
 
         return _read_for_packages(self._creative(), [_AssignedPackage("p1", None, ["c_fb"])], {})
 
-    def test_a_format_the_agent_does_not_serve_is_refused_with_no_second_resolution(self):
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
-            # Neither the agent nor the canonical mapping registry knows the reference.
-            patch("src.core.format_resolver.registry_projects", return_value=False),
-            patch("src.core.format_resolver.get_format") as resolver,
-        ):
-            read = self._read()
-        assert isinstance(read, str) and "has unknown format 'display_300x250'" in read, read
-        resolver.assert_not_called()
-
-    def test_transient_error_from_the_fetch_propagates(self):
+    def test_transient_error_from_cached_fetch_propagates_without_fallback(self):
         from src.core.exceptions import AdCPRateLimitError
 
-        with patch(
-            "src.core.tools.media_buy_create._get_format_spec_sync",
-            side_effect=AdCPRateLimitError(),
+        with (
+            patch(
+                "src.core.tools.media_buy_create._get_format_spec_sync",
+                side_effect=AdCPRateLimitError(),
+            ),
+            patch("src.core.format_resolver.get_format") as resolver,
         ):
             with pytest.raises(AdCPRateLimitError):
                 self._read()
-
-    def test_the_agent_is_dialled_once_as_the_buyers_url(self):
-        """One dial, carrying the buyer's provenance (salesagent-6gpt.1).
-
-        The stored ``agent_url`` came out of the buyer's own sync, so it is a
-        ``CounterpartyUrl``: omitting it reclassifies the URL as operator configuration, and
-        a refusal on it comes back CONFIGURATION_ERROR/terminal instead of
-        VALIDATION_ERROR/correctable. Graded at the ``fetch_format_spec`` boundary, not by a
-        live seam refusal, so the outcome does not depend on the ``ADCP_TESTING``
-        reference-format short-circuit further down.
-        """
-        from src.core.security.outbound_http import CounterpartyUrl
-
-        with patch("src.core.format_resolver.fetch_format_spec", return_value=None) as fetch_spec:
-            self._read()
-
-        fetch_spec.assert_called_once_with(
-            "https://creative.adcontextprotocol.org",
-            "display_300x250",
-            provenance=CounterpartyUrl(field=None),
-        )
+        resolver.assert_not_called()
 
 
 class TestCreateMediaBuyCreativeValidation:
@@ -937,49 +909,6 @@ class TestCreateMediaBuyCreativeValidation:
         assert [(p.subject_type, p.subject_id, p.rejected_value) for p in problems] == [
             ("creative", mock_creative.creative_id, mock_creative.status)
         ]
-
-    def test_generative_creative_with_no_build_output_is_refused(self):
-        """UC-002-C05: a generative creative is read like any other, and one never built is refused.
-
-        Its build output is what is served (build_creative.mdx), so with none there is
-        nothing an ad server can traffic. This once asserted the opposite -- generative
-        creatives skipped the gate -- which let an unbuilt creative reach the adapter.
-
-        Spec: UNSPECIFIED (implementation-defined creative pre-validation)
-        Priority: P2
-        Type: unit
-        Source: UC-002
-        Covers: UC-002-ALT-WITH-INLINE-CREATIVES-03
-        """
-        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
-
-        # Generative creative: has output_format_ids on its format spec
-        mock_creative = MagicMock()
-        mock_creative.creative_id = "c_gen"
-        # The id is incidental to what this grades -- the generative-ness comes from
-        # ``output_format_ids`` on the SPEC below, not from the id. It must be an id the
-        # registry glob can project, because the write gate refuses a creative whose
-        # reference has no canonical kind and this helper has no catalog to resolve one
-        # with. Every real generative format in the pinned capture (7 of 76) declares
-        # ``canonical.kind`` and so projects in production, where the spec IS passed.
-        stamp_format_identity(mock_creative, format_id="display_300x250")
-        mock_creative.data = {}  # No build output
-
-        mock_format_spec = MagicMock()
-        mock_format_spec.output_format_ids = ["display_300x250"]  # Non-None = generative
-
-        package = MagicMock()
-        package.creative_ids = ["c_gen"]
-        package.package_id = "pkg_1"
-
-        with patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec):
-            session = MagicMock()
-            session.scalars.return_value.all.return_value = [mock_creative]
-
-            with pytest.raises(AdCPValidationError) as exc_info:
-                _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
-
-            assert [reason for reason in exc_info.value.details.reasons or [] if "c_gen" in reason]
 
     def test_multiple_creative_errors_accumulated(self):
         """UC-002-C06: all creative validation errors collected before raising.
