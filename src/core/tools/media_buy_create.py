@@ -4387,6 +4387,7 @@ async def _create_media_buy_impl(
             )
 
         # Handle creative_ids in packages if provided (immediate association)
+        assets: list[AdapterCreativeAsset] = []
         if req.packages:
             with MediaBuyUoW(tenant.tenant_id) as creative_uow:
                 assert creative_uow.session is not None
@@ -4482,26 +4483,36 @@ async def _create_media_buy_impl(
                             pushed, buy_packages, carriers
                         ).items()
                     ]
-                    try:
-                        upload_result = adapter.add_creative_assets(
-                            response.media_buy_id if response.media_buy_id else "", assets, datetime.now(UTC)
-                        )
-                        logger.info(log_safe(f"Uploaded {len(assets)} creatives to the ad server: {upload_result}"))
 
-                        # FIXME(#1566): the status is not read, so a creative the ad server
-                        # reports failed is dropped and the response carries no signal.
+            # Pushed once the assignment rows are committed, with no unit open. An adapter reads
+            # its own rows through get_db_session(), and that exit closes the thread-scoped session
+            # an open unit holds, discarding the unit's uncommitted rows (as GH #1644 describes for
+            # the push path). The enrichment is written by a unit of its own for the same reason.
+            if assets:
+                try:
+                    upload_result = adapter.add_creative_assets(
+                        response.media_buy_id if response.media_buy_id else "", assets, datetime.now(UTC)
+                    )
+                    logger.info(log_safe(f"Uploaded {len(assets)} creatives to the ad server: {upload_result}"))
+
+                    # FIXME(#1566): the status is not read, so a creative the ad server
+                    # reports failed is dropped and the response carries no signal.
+                    with MediaBuyUoW(tenant.tenant_id) as enrichment_uow:
+                        assert enrichment_uow.creatives is not None
                         for uploaded_status in upload_result or []:
-                            creative = creatives_by_id.get(uploaded_status.creative_id or "")
+                            creative = enrichment_uow.creatives.get_by_id(
+                                uploaded_status.creative_id or "", principal_id
+                            )
                             if creative is None:
                                 continue
                             merged_data = _apply_creative_enrichment(creative, uploaded_status)
                             if merged_data is not None:
-                                CreativeRepository(session, tenant.tenant_id).update_data(creative, merged_data)
-                    except AdCPSalesAgentError:
-                        raise
-                    except Exception as upload_error:
-                        logger.error(log_safe(f"Failed to upload creatives to the ad server: {upload_error}"))
-                        raise AdCPAdapterError() from upload_error
+                                enrichment_uow.creatives.update_data(creative, merged_data)
+                except AdCPSalesAgentError:
+                    raise
+                except Exception as upload_error:
+                    logger.error(log_safe(f"Failed to upload creatives to the ad server: {upload_error}"))
+                    raise AdCPAdapterError() from upload_error
 
         # Per (media-buy/package-request.json) creatives live on each PackageRequest, not at
         # request level. Inline creative submission to the adapter happens via the
