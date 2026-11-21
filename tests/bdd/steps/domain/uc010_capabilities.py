@@ -35,7 +35,7 @@ from tests.bdd.steps._outcome_helpers import (
 )
 from tests.bdd.steps.domain.uc006_sync_creatives import _CREATIVE_APPROVAL_MODES
 from tests.bdd.steps.generic._dispatch import dispatch_request
-from tests.bdd.steps.generic._table import comma_list
+from tests.bdd.steps.generic._table import bracket_list, comma_list
 from tests.harness.capabilities import DERIVE_IDENTITY, OMIT_IDENTITY, IdentityMode
 from tests.helpers import pinned_schema
 from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION
@@ -981,7 +981,7 @@ def then_supported_billing_nonempty(ctx: dict) -> None:
 
 @then(parsers.parse("account.supported_billing should equal {expected_set}"))
 def then_supported_billing_equals(ctx: dict, expected_set: str) -> None:
-    expected = comma_list(expected_set.strip("[]"))
+    expected = bracket_list(expected_set)
     value = wire_field(ctx, "account.supported_billing")
     assert sorted(value) == sorted(expected), f"supported_billing {value!r} != {expected!r}"
 
@@ -1758,11 +1758,6 @@ CLOUD_STORAGE_PROTOCOL_ENUM = {"s3", "gcs", "azure_blob"}
 _VENDOR_METRIC_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
-def _parse_bracket_list(token: str) -> list[str]:
-    """Parse a Gherkin '[a, b]' fragment into a list of bare string tokens."""
-    return comma_list(token.strip().removeprefix("[").removesuffix("]"))
-
-
 def _grade_array_or_absent(ctx: dict, path: str, expected: str) -> None:
     """Grade an outline <expected> column of the form 'absent' | 'equal to [a, b]'
     against a success-path array field on the wire."""
@@ -1775,7 +1770,7 @@ def _grade_array_or_absent(ctx: dict, path: str, expected: str) -> None:
         return
     match = re.fullmatch(r"equal to (\[[^\]]*\])", expected)
     assert match, f"unrecognized array expected column: {expected!r}"
-    want = _parse_bracket_list(match.group(1))
+    want = bracket_list(match.group(1))
     actual = wire_field(ctx, path)
     assert actual == want, f"{path} expected {want!r}, got {actual!r}"
 
@@ -1857,8 +1852,8 @@ def given_reporting_delivery_methods(ctx: dict, methods: str, protocols: str) ->
     NOTHING — realizing them would mean grading the unbacked-block refusal, which is a
     different rule from the one this outline is about.
     """
-    declared_methods = None if methods.strip() == "omitted" else _parse_bracket_list(methods)
-    declared_protocols = None if protocols.strip() == "omitted" else _parse_bracket_list(protocols)
+    declared_methods = None if methods.strip() == "omitted" else bracket_list(methods)
+    declared_protocols = None if protocols.strip() == "omitted" else bracket_list(protocols)
     if not declared_methods:
         return  # baseline polling: declaring nothing IS the state under test
     if declared_protocols or "offline" in declared_methods:
@@ -2885,13 +2880,13 @@ def given_trusted_match_surfaces(ctx: dict, surfaces: str) -> None:
     that TMP infrastructure is deployed, so the declared surface list is the
     seller-configured fact the response echoes."""
     env = ctx["env"]
-    env.declare_capabilities(trusted_match={"surfaces": _parse_bracket_list(surfaces)})
+    env.declare_capabilities(trusted_match={"surfaces": bracket_list(surfaces)})
 
 
 @then(parsers.parse("media_buy.execution.trusted_match.surfaces should equal {expected}"))
 def then_trusted_match_surfaces_equal(ctx: dict, expected: str) -> None:
     """Exact echo of the declared TMP surfaces, in declaration order, on the wire."""
-    want = _parse_bracket_list(expected)
+    want = bracket_list(expected)
     actual = wire_field(ctx, "media_buy.execution.trusted_match.surfaces")
     assert actual == want, f"media_buy.execution.trusted_match.surfaces expected {want!r}, got {actual!r}"
 
@@ -2943,7 +2938,7 @@ def _parse_declared_list(token: str) -> list[str]:
     plain strings the schema carries — ``'"create_media_buy"'`` would be declared verbatim
     and then never match an operation name on the wire.
     """
-    return [item.strip('"') for item in _parse_bracket_list(token)]
+    return [item.strip('"') for item in bracket_list(token)]
 
 
 def _parse_posture_fragment(text: str) -> dict[str, Any]:
@@ -3141,7 +3136,7 @@ def _assert_webhook_extra(ctx: dict, block: dict, clause: str) -> None:
     if wanted in ("true", "false"):
         expected: Any = wanted == "true"
     elif wanted.startswith("["):
-        expected = _parse_bracket_list(wanted)
+        expected = bracket_list(wanted)
     else:
         expected = _quoted_list(wanted)[0]
     assert block.get(field) == expected, f"webhook_signing.{field} is {block.get(field)!r}, expected {expected!r}"
