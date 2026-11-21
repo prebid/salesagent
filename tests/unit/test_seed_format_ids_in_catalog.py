@@ -19,6 +19,7 @@ import ast
 from pathlib import Path
 
 from src.core.format_cache import load_reference_formats
+from tests.unit._architecture_helpers import rel
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCANNED_ROOTS = ("src", "scripts")
@@ -58,10 +59,10 @@ def _seeded_format_ids(source: str) -> list[str]:
 def test_seeded_format_ids_exist_in_reference_catalog() -> None:
     catalog = {fmt.format_id.id for fmt in load_reference_formats()}
     seeded = {
-        path.relative_to(REPO_ROOT).as_posix(): ids
+        rel(path, REPO_ROOT): ids
         for root in SCANNED_ROOTS
         for path in sorted((REPO_ROOT / root).rglob("*.py"))
-        if (ids := _seeded_format_ids(path.read_text()))
+        if (ids := _seeded_format_ids(path.read_text(encoding="utf-8")))
     }
 
     # A scanner that stopped recognizing the seed shapes would pass the membership check vacuously.

@@ -126,7 +126,7 @@ def _get_src_files() -> list[Path]:
     files = []
     for p in sorted(src_dir.rglob("*.py")):
         # Exclude the schemas package itself
-        if "src/core/schemas" in str(p):
+        if "src/core/schemas" in p.as_posix():
             continue
         files.append(p)
     return files
@@ -176,13 +176,13 @@ def _collect_shadowing_imports() -> list[tuple[str, str, int, str]]:
     found: list[tuple[str, str, int, str]] = []
 
     for src_file in _get_src_files():
-        source = src_file.read_text()
+        source = src_file.read_text(encoding="utf-8")
         try:
             tree = ast.parse(source)
         except SyntaxError:
             continue
 
-        rel_path = str(src_file)
+        rel_path = src_file.as_posix()
 
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom):

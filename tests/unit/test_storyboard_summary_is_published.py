@@ -55,7 +55,7 @@ class TestSummaryRidesHome:
         assert dest.is_file(), (
             f"the runner summary was not published under test-results/: {sorted(published.rglob('*'))}"
         )
-        assert json.loads(dest.read_text())["passed"] == 33
+        assert json.loads(dest.read_text(encoding="utf-8"))["passed"] == 33
 
     def test_each_protocol_gets_its_own_file(self, published: Path) -> None:
         """One shared name would have A2A's summary overwrite MCP's — the asymmetry
@@ -64,8 +64,8 @@ class TestSummaryRidesHome:
         _publish_summary("a2a", {**_SUMMARY, "passed": 3, "storyboards_executed": []})
 
         results = published / "test-results"
-        assert json.loads((results / "storyboard_summary_mcp.json").read_text())["passed"] == 33
-        assert json.loads((results / "storyboard_summary_a2a.json").read_text())["passed"] == 3
+        assert json.loads((results / "storyboard_summary_mcp.json").read_text(encoding="utf-8"))["passed"] == 33
+        assert json.loads((results / "storyboard_summary_a2a.json").read_text(encoding="utf-8"))["passed"] == 3
 
 
 class TestScoreboardNamesThePassCount:

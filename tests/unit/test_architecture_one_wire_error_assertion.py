@@ -32,6 +32,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import rel
+
 TESTS_ROOT = Path(__file__).resolve().parent.parent
 
 # The primitive itself delegates from assert_wire_error; that call is the one
@@ -42,8 +44,8 @@ _SELF_DELEGATION = ("harness/transport.py",)
 def _offending_calls() -> list[str]:
     bad: list[str] = []
     for path in sorted(TESTS_ROOT.rglob("*.py")):
-        rel = path.relative_to(TESTS_ROOT).as_posix()
-        if rel.endswith(_SELF_DELEGATION):
+        rel_path = rel(path, TESTS_ROOT)
+        if rel_path.endswith(_SELF_DELEGATION):
             continue
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -57,7 +59,7 @@ def _offending_calls() -> list[str]:
                 continue
             first = ast.unparse(node.args[0])
             if "wire_error_envelope" in first:
-                bad.append(f"{rel}:{node.lineno}: assert_envelope_shape({first})")
+                bad.append(f"{rel_path}:{node.lineno}: assert_envelope_shape({first})")
     return bad
 
 

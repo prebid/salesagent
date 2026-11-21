@@ -6,6 +6,8 @@ This document describes the encryption system used to protect sensitive data in 
 
 The system uses **Fernet symmetric encryption** (from the `cryptography` library) to encrypt sensitive API keys stored in the database. Currently, this includes:
 - Tenant Gemini API keys (`tenants.gemini_api_key`)
+- GAM service account JSON (`adapter_config.gam_service_account_json`)
+- GAM OAuth refresh tokens (`adapter_config.gam_refresh_token`, encrypted from revision `9fdf18a56063`)
 
 ## Architecture
 

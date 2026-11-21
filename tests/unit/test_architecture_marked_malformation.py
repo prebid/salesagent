@@ -81,6 +81,7 @@ from tests.unit._architecture_helpers import (
     assert_violations_match_allowlist,
     call_callee_name,
     iter_call_expressions,
+    rel,
     repo_root,
     safe_parse,
     walk_with_enclosing_function,
@@ -226,7 +227,7 @@ def _absolute(scope: str) -> list[str]:
 
 
 def _rel(path: str) -> str:
-    return str(Path(path).resolve().relative_to(repo_root()))
+    return rel(Path(path).resolve(), repo_root())
 
 
 def _site_lines_by_file(scope: str) -> dict[str, set[int]]:
@@ -278,7 +279,7 @@ def test_every_declaration_is_auditable() -> None:
         tree = safe_parse(path)
         if tree is None:
             continue
-        rel_path = str(path.relative_to(repo_root()))
+        rel_path = rel(path, repo_root())
         violations.extend(f"  {rel_path}:{lineno}" for lineno in find_unauditable_markers(tree))
     assert not violations, (
         f"{len(violations)} malformed(...) call(s) cannot be audited. The kind must be a "
@@ -313,7 +314,7 @@ def test_every_path_to_a_transport_gates_first() -> None:
         tree = safe_parse(path)
         if tree is None:
             continue
-        rel_path = str(path.relative_to(repo_root()))
+        rel_path = rel(path, repo_root())
         ungated.extend(f"  {rel_path}:{lineno}" for lineno in find_ungated_transport_calls(tree))
     assert not ungated, (
         f"{len(ungated)} call(s) put a payload on a transport without calling "

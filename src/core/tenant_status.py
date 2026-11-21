@@ -54,7 +54,7 @@ def is_tenant_ad_server_configured(tenant_id: str) -> bool:
 
             if adapter_type == "google_ad_manager":
                 # GAM requires either OAuth refresh token OR service account credentials
-                has_oauth = bool(adapter_config.gam_refresh_token)
+                has_oauth = bool(adapter_config._gam_refresh_token)
                 # Check encrypted field directly (more efficient than decrypting just to check existence)
                 has_service_account = bool(
                     adapter_config._gam_service_account_json and adapter_config.gam_service_account_email
@@ -149,7 +149,7 @@ def get_tenant_status(tenant_id: str) -> dict:
 
             if adapter_type == "google_ad_manager":
                 # Check for either OAuth or service account authentication
-                has_oauth = bool(adapter_config.gam_refresh_token)
+                has_oauth = bool(adapter_config._gam_refresh_token)
                 has_service_account = bool(
                     adapter_config._gam_service_account_json and adapter_config.gam_service_account_email
                 )

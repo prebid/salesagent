@@ -109,7 +109,7 @@ def _read(relpath: str) -> str:
             f"Conformance vector not vendored: {relpath} -> {path}. "
             "Re-run uv run python -m tests.fixtures.adcp_schemas_pinned._refresh to vendor it."
         )
-    return path.read_text()
+    return path.read_text(encoding="utf-8")
 
 
 def load_vector_manifest() -> dict[str, Any]:
@@ -165,7 +165,7 @@ def load_root_signing_vectors() -> dict[str, dict[str, Any]]:
         if not directory.is_dir():
             raise AssertionError(f"Conformance vector directory not vendored: {directory}")
         for path in sorted(directory.glob("*.json")):
-            out[f"{bucket}/{path.stem}"] = json.loads(path.read_text())
+            out[f"{bucket}/{path.stem}"] = json.loads(path.read_text(encoding="utf-8"))
     return out
 
 
@@ -193,7 +193,10 @@ def load_signing_vectors() -> dict[str, dict[str, Any]]:
     root-named, which is what makes the corpus look root-only), and the remaining two are
     orphans. Only one of those is gradeable here — see the constant.
     """
-    return {vector_id: json.loads(source.read_text()) for vector_id, source in _selected_vector_sources().items()}
+    return {
+        vector_id: json.loads(source.read_text(encoding="utf-8"))
+        for vector_id, source in _selected_vector_sources().items()
+    }
 
 
 @lru_cache(maxsize=1)

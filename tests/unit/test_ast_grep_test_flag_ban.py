@@ -25,12 +25,11 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import repo_root, stage_ast_grep_root
+from tests.unit._architecture_helpers import rel, repo_root, stage_ast_grep_root, venv_ast_grep
 
 RULE_ID = "test-flag-never-reaches-production"
 RULE_FILE = f".ast-grep/rules/{RULE_ID}.yml"
@@ -61,26 +60,10 @@ def choose_behavior() -> str:
 """
 
 
-def _ast_grep_bin() -> Path:
-    """The venv-local ast-grep — what ``uv run ast-grep`` resolves to, and nothing else.
-
-    Resolved next to ``sys.executable`` rather than through PATH for the reason the
-    credential-header module records: a PATH lookup finds a homebrew binary that exists on
-    a developer machine and not in CI, so this module would pass locally while the gate
-    line it grades failed there. Absence FAILS rather than skips, for the same reason.
-    """
-    candidate = Path(sys.executable).parent / "ast-grep"
-    assert candidate.exists(), (
-        f"{candidate} does not exist: ast-grep is not installed in this environment's venv. "
-        "Declare `ast-grep-cli` in the pyproject dev group so `uv run ast-grep` resolves."
-    )
-    return candidate
-
-
 def _scan(*paths: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     """Run the real ast-grep with the real rule file over *paths*, from the repo root or a staged *cwd*."""
     return subprocess.run(
-        [str(_ast_grep_bin()), "scan", "--rule", RULE_FILE, *paths, "--json=compact"],
+        [str(venv_ast_grep()), "scan", "--rule", RULE_FILE, *paths, "--json=compact"],
         capture_output=True,
         text=True,
         cwd=cwd or repo_root(),
@@ -127,7 +110,7 @@ def test_a_production_read_of_the_flag_matches(planted: Path) -> None:
     probe = planted / "src" / "_ast_grep_probe" / "reads_the_flag.py"
     probe.write_text(_VIOLATING_SOURCE, encoding="utf-8")
 
-    found = _matches(_scan(str(probe.relative_to(planted)), cwd=planted))
+    found = _matches(_scan(rel(probe, planted), cwd=planted))
 
     assert len(found) == 1, f"expected exactly one match for one read, got {len(found)}: {found}"
     assert found[0]["ruleId"] == RULE_ID
@@ -143,7 +126,7 @@ def test_the_match_is_build_failing(planted: Path) -> None:
     probe = planted / "src" / "_ast_grep_probe" / "reads_the_flag.py"
     probe.write_text(_VIOLATING_SOURCE, encoding="utf-8")
 
-    assert _scan(str(probe.relative_to(planted)), cwd=planted).returncode == 1
+    assert _scan(rel(probe, planted), cwd=planted).returncode == 1
 
 
 def test_the_same_decision_on_a_real_input_is_clean(planted: Path) -> None:
@@ -151,7 +134,7 @@ def test_the_same_decision_on_a_real_input_is_clean(planted: Path) -> None:
     probe = planted / "src" / "_ast_grep_probe" / "reads_a_real_input.py"
     probe.write_text(_CONFORMING_SOURCE, encoding="utf-8")
 
-    proc = _scan(str(probe.relative_to(planted)), cwd=planted)
+    proc = _scan(rel(probe, planted), cwd=planted)
 
     assert _matches(proc) == []
     assert proc.returncode == 0

@@ -51,7 +51,7 @@ def _ruff_config_invocations() -> list[list[str]]:
     interpreter already running it, so the environment is the one pytest resolved.
     """
     invocations = []
-    for raw in _MAKEFILE.read_text().splitlines():
+    for raw in _MAKEFILE.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if "ruff check --config" not in line or line.startswith("#"):
             continue

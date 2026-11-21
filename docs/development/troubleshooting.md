@@ -545,9 +545,9 @@ uv run python -m scripts.setup.setup_tenant "Publisher" \
   --gam-network-code YOUR_CODE \
   --gam-refresh-token NEW_TOKEN
 
-# Verify in the database
+# Verify in the database (the token is stored encrypted, so this shows only whether one is set)
 docker compose exec postgres psql -U adcp_user adcp -c \
-  "SELECT gam_refresh_token FROM adapter_config;"
+  "SELECT tenant_id, gam_refresh_token IS NOT NULL AS has_token FROM adapter_config;"
 ```
 
 ### Network code mismatch

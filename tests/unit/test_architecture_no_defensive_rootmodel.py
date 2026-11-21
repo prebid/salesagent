@@ -19,7 +19,7 @@ import re
 
 import pytest
 
-from tests.unit._architecture_helpers import format_failure, repo_root
+from tests.unit._architecture_helpers import format_failure, rel, repo_root
 
 PATTERN = re.compile(r"""hasattr\([^,]+,\s*["']root["']\)""")
 
@@ -38,8 +38,8 @@ def _find_rootmodel_violations(repo, *, extra_allowed: set[str] | None = None) -
         if not root.exists():
             continue
         for path in root.rglob("*.py"):
-            rel = str(path.relative_to(repo))
-            if rel in allowed:
+            rel_path = rel(path, repo)
+            if rel_path in allowed:
                 continue
             try:
                 lines = path.read_text(encoding="utf-8").splitlines()
@@ -49,7 +49,7 @@ def _find_rootmodel_violations(repo, *, extra_allowed: set[str] | None = None) -
                 if "# noqa: rootmodel" in line:
                     continue
                 if PATTERN.search(line):
-                    violations.append(f"{rel}:{lineno}")
+                    violations.append(f"{rel_path}:{lineno}")
     return violations
 
 

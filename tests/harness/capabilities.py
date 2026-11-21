@@ -342,7 +342,9 @@ class CapabilitiesEnv(PublisherAdagentsMixin, AdminOperatorMixin, IntegrationEnv
         from src.core.signing.keys import provision_signing_key
 
         compose_path = Path(__file__).resolve().parents[2] / "docker-compose.e2e.yml"
-        service_env = yaml.safe_load(compose_path.read_text())["services"][_COMPOSE_SERVICE]["environment"]
+        service_env = yaml.safe_load(compose_path.read_text(encoding="utf-8"))["services"][_COMPOSE_SERVICE][
+            "environment"
+        ]
         kek_pointer = service_env["ADCP_SIGNING_KEY_PASSPHRASE_ENV"]
         kek_value = service_env[kek_pointer]
 

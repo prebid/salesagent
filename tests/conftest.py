@@ -729,7 +729,7 @@ def load_fixture_json():
 
     def _load(filename):
         fixture_path = Path(__file__).parent / "fixtures" / "data" / filename
-        with open(fixture_path) as f:
+        with open(fixture_path, encoding="utf-8") as f:
             return json.load(f)
 
     return _load
@@ -1073,3 +1073,9 @@ def pytest_collection_modifyitems(config, items):
 
         if Path(fspath).stem in _NESTED_PYTEST_MODULES:
             item.add_marker(pytest.mark.xdist_group("nested_pytest"))
+
+        # The one place a test is skipped for the platform: a test marked
+        # ``posix_only("why")`` runs everywhere except Windows, and says why there.
+        posix_only = item.get_closest_marker("posix_only")
+        if posix_only is not None and os.name == "nt":
+            item.add_marker(pytest.mark.skip(reason=f"posix_only: {posix_only.args[0]}"))

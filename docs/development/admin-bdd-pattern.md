@@ -9,13 +9,14 @@ own transports, its own env, and its own `ctx` key.
 | Aspect | AdCP BDD (UC-xxx) | Admin BDD (T-ADMIN-xxx) |
 |---|---|---|
 | Transport | MCP, A2A, REST (plus `e2e_rest`) | Flask `test_client`, or `requests.Session` against the live stack |
-| Parametrized over | `Transport.A2A`, `Transport.MCP`, `Transport.REST`, plus the e2e members when `BDD_E2E_ENABLED=true` (`tests/bdd/conftest.py:4432-4435`) | `AdminTransport.INTEGRATION`, plus `AdminTransport.E2E` when `BDD_E2E_ENABLED=true` (`tests/bdd/conftest.py:4383-4387`) |
+| Parametrized over | `Transport.A2A`, `Transport.MCP`, `Transport.REST`, plus the e2e members when `BDD_E2E_ENABLED=true` (`pytest_generate_tests` in `tests/bdd/conftest.py`) | `AdminTransport.INTEGRATION`, plus `AdminTransport.E2E` when `BDD_E2E_ENABLED=true` (the `T-ADMIN-` branch of `pytest_generate_tests`) |
 | Caller identity | A credential headers dict; production's resolver builds the identity from it | A Flask session cookie, set through the env's `authenticate()` |
 | What a Then reads | The wire envelope, through the guarded helpers in `tests/bdd/steps/_outcome_helpers.py` | The `AdminResponse` the When stored under `ctx["admin_page"]` |
 | Harness | A domain `IntegrationEnv` subclass | `AdminAccountEnv` (`tests/harness/admin_accounts.py`) |
 
 `AdminTransport` is a `StrEnum` and is deliberately **not** a member of
-`tests.harness.transport.Transport` (`tests/harness/admin_accounts.py:26-46`):
+`tests.harness.transport.Transport` (see its docstring in
+`tests/harness/admin_accounts.py`):
 every `Transport` member maps to an AdCP protocol, and the admin UI has none —
 so a member there needs a fabricated protocol. Because `StrEnum` members are
 `str`, a value that leaks into `dispatch_request` misses the transport map and
@@ -83,12 +84,12 @@ Feature: BR-ADMIN-<FEATURE> Admin <Feature> Management
 Follow these conventions:
 
 - Start the file with `# Hand-authored feature — not compiled from adcp-req`.
-- Tag every scenario `@T-ADMIN-<FEAT>-NNN`. `_ADMIN_TAG_PREFIX`
-  (`tests/bdd/conftest.py:4094`) routes the scenario to the admin transports
-  and the admin marker, so the prefix is the wiring, not a label.
+- Tag every scenario `@T-ADMIN-<FEAT>-NNN`. `_ADMIN_TAG_PREFIX` in
+  `tests/bdd/conftest.py` routes the scenario to the admin transports and the
+  admin marker, so the prefix is the wiring, not a label.
 - Authenticate the admin and ensure the tenant in the `Background`.
-- Name the transports the feature runs on in a header comment, as
-  `BR-ADMIN-ACCOUNTS.feature:13-15` does.
+- Name the transports the feature runs on in a header comment, as the
+  `# Transports:` block at the top of `BR-ADMIN-ACCOUNTS.feature` does.
 - Add traceability entries to `docs/test-obligations/bdd-traceability.yaml`.
 
 ### 2. Write the step definitions
@@ -124,13 +125,13 @@ def then_status(ctx, code):
 ```
 
 **Do not write `ctx["response"]`.** Check E of
-`tests/unit/test_architecture_bdd_wire_discipline.py` (`:992` onward) bans that
+`tests/unit/test_architecture_bdd_wire_discipline.py` bans that
 key outright with a permanently empty allowlist, because a provenance-stripped
 copy of a payload cannot tell a Then whether it holds a wire fact or an
 in-process reconstruction. An admin page is not an AdCP payload either. Sharing
 one key made a Flask response indistinguishable from a protocol payload to
 anything that read it, so the admin steps own `ctx["admin_page"]`
-(`tests/bdd/steps/domain/admin_accounts.py:51-58`).
+(`_require_admin_page` in `tests/bdd/steps/domain/admin_accounts.py`).
 
 Every HTTP call goes through an env method (`get_list_page`, `post_create`,
 `post_status_change`, …) so both transports run the same step. The env sends it
@@ -142,7 +143,7 @@ redirect as "no redirect happened" the first time they ran over real HTTP.
 
 ### 3. Register the step module
 
-Add it to `pytest_plugins` in `tests/bdd/conftest.py:57-94`:
+Add it to the `pytest_plugins` list in `tests/bdd/conftest.py`:
 
 ```python
 pytest_plugins = [
@@ -166,17 +167,17 @@ makes the scenarios run at all.
 
 ### 5. Extend the harness
 
-`AdminAccountEnv` (`tests/harness/admin_accounts.py:48`) is the pattern to
+`AdminAccountEnv` in `tests/harness/admin_accounts.py` is the pattern to
 follow:
 
-- **The caller names the transport; the env never infers it** (`:61-94`, with
-  the two refusals at `:81-86`). The constructor takes
+- **The caller names the transport; the env never infers it** (`__init__`,
+  which holds the two refusals). The constructor takes
   `mode="integration" | "e2e"` and, for e2e, a required `base_url`; it rejects
   any other mode and rejects `mode="e2e"` without an address. An env that
   guesses its transport from a process-global cannot tell "my caller wants e2e"
   from "the container publishes a port for unrelated reasons", and a global
   cannot carry a different address per xdist worker at all.
-- **`__enter__` calls `__exit__` if it raises** (`:100-111`), so a failure in
+- **`__enter__` calls `__exit__` if it raises**, so a failure in
   tenant setup does not strand the Flask client or the `requests` session for
   the rest of the process.
 - **One method builds every route** (`_url`), and each page gets a method
@@ -224,31 +225,37 @@ fixture by way of `_admin_env_builder`.
 1. **Admin transports instead of AdCP ones.** `pytest_generate_tests` sees a
    `T-ADMIN-` tag and parametrizes `ctx` over `AdminTransport.INTEGRATION` plus
    `AdminTransport.E2E`, through the same `_parametrize_ctx` helper the AdCP
-   branch uses (`tests/bdd/conftest.py:4379-4387`, `:4104-4135`). It derives the
-   pytest ids from the enum values, because `tox.ini`'s `-k` selectors match on
-   them.
+   branch uses (both in `tests/bdd/conftest.py`). It derives the pytest ids from
+   the enum values, because `tox.ini`'s `-k` selectors match on them.
    Every admin scenario gets both legs. When the live stack cannot realize a Given
    as it stands, the harness or the stack is extended until it can:
    `local-publisher-authorization.feature` serves a publisher's adagents.json from the
    stack's `publisher-origin` service, which the live server reaches on 443 through
    tls-proxy (`tests/harness/publisher_authorization.py`).
-2. **A registry row builds the env.** `ENV_ROUTES["ADMIN"]`
-   (`tests/bdd/conftest.py:6445`) and the `admin-tenant-scoping` predicate row
-   ahead of it (`:6750`, for `T-ADMIN-SCOPE-*`) each name their env class to
-   `_admin_env_builder` (`:6328-6362`). `_run_env_route` is the single consumer.
-   That builder is the only one that passes `base_url=` rather than
-   `e2e_config=`, because the admin env needs the address and nothing else from
-   `E2EConfig`; `tests/unit/test_bdd_admin_transport_parametrization.py` checks
-   that it builds the env its transport names.
+   `local-publisher-authorization.feature` serves a publisher's adagents.json from the
+   stack's `publisher-origin` service, which the live server reaches on 443 through
+   tls-proxy (`tests/harness/publisher_authorization.py`).
+2. **A registry row builds the env.** The `ADMIN` row of `_UC_BUCKET_ROUTES`
+   in `tests/bdd/conftest.py` names `_build_admin_env`. `_uc_bucket_rows()`
+   appends that row to `ENV_ROUTES`, and `_run_env_route` is the single
+   consumer. The `admin-tenant-scoping` predicate row ahead of it names
+   `_build_admin_tenant_scoping_env` for `T-ADMIN-SCOPE-*`. These two builders
+   are the only ones that pass `base_url=` rather than `e2e_config=`, because
+   the admin env needs the address and nothing else from `E2EConfig`;
+   `tests/unit/test_bdd_admin_transport_parametrization.py` checks that every
+   builder an admin scenario resolves to builds the env its transport names.
+   An admin feature that needs a different env adds its own `ENV_ROUTES` row,
+   which wins over the `ADMIN` row: `admin-inventory-profile-publishers` builds
+   `AdminInventoryProfileEnv`, and `pubauth` builds `PublisherAuthorizationEnv`.
 3. **The conftest applies the `admin` entity marker automatically** to any
-   scenario carrying a `T-ADMIN-` tag (`tests/bdd/conftest.py:3833-3834`), so
-   `make test-entity ENTITY=admin` picks it up.
+   scenario carrying a `T-ADMIN-` tag, so `pytest tests/bdd/ -m admin` selects
+   the admin scenarios. `make test-entity` does not collect `tests/bdd`.
 4. **A missing step binding xfails at runtime — there is no `@pending` tag.**
    pytest-bdd reports the missing definition and the conftest converts the
    failure, so the code is the source of truth and no metadata goes stale
-   (`tests/bdd/conftest.py:96-103`). A scenario that falls dormant still fails,
-   since `tests/bdd/dormant_scenarios.txt` is a shrink-only baseline enforced
-   per test. Declare an intent the live stack cannot serve at the env method
-   with `e2e_unsupported(...)` instead (`tests/harness/_realize.py:94-105`); it
-   arrives as a non-strict xfail carrying its reason
-   (`tests/bdd/conftest.py:320-326`).
+   (the `pytest_runtest_makereport` hook in `tests/bdd/conftest.py`). A scenario
+   that falls dormant still fails, since `tests/bdd/dormant_scenarios.txt` is a
+   shrink-only baseline enforced per test. Declare an intent the live stack
+   cannot serve at the env method with `e2e_unsupported(...)` instead
+   (defined in `tests/harness/_realize.py`); it arrives as a non-strict xfail
+   carrying its reason, set by the same hook.

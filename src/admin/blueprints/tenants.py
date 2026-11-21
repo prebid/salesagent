@@ -22,7 +22,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant
+from src.core.database.models import Tenant, UserRole
 from src.core.database.repositories.principal import PrincipalRepository
 from src.services.ai.factory import tenant_ai_enabled
 from src.services.setup_checklist_service import SetupChecklistService
@@ -217,7 +217,7 @@ def tenant_settings(tenant_id, section=None):
             # Get OAuth status for GAM
             oauth_configured = False
             if adapter_config_obj and adapter_config_obj.adapter_type == "google_ad_manager":
-                oauth_configured = bool(adapter_config_obj.gam_refresh_token)
+                oauth_configured = bool(adapter_config_obj._gam_refresh_token)
 
             # Check if GAM OAuth credentials are configured
             gam_oauth_configured = get_settings().auth.gam_oauth_configured
@@ -275,7 +275,8 @@ def tenant_settings(tenant_id, section=None):
             if adapter_config_obj:
                 adapter_config_dict = {
                     "network_code": adapter_config_obj.gam_network_code or "",
-                    "refresh_token": adapter_config_obj.gam_refresh_token or "",
+                    # Whether one is stored, never the token: the page must not be able to render it
+                    "refresh_token": bool(adapter_config_obj._gam_refresh_token),
                     "trafficker_id": adapter_config_obj.gam_trafficker_id or "",
                     "application_name": getattr(adapter_config_obj, "gam_application_name", "") or "",
                     "service_account_email": adapter_config_obj.gam_service_account_email or "",
@@ -531,7 +532,7 @@ def test_slack(tenant_id):
 
 @tenants_bp.route("/<tenant_id>/deactivate", methods=["POST"])
 @log_admin_action("deactivate_tenant")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def deactivate_tenant(tenant_id):
     """Deactivate (soft delete) a tenant."""
     try:

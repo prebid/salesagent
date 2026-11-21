@@ -855,7 +855,7 @@ def _get_gam_service_account_json():
     # 2. File path from env var
     key_file = os.environ.get("GAM_SERVICE_ACCOUNT_KEY_FILE")
     if key_file and os.path.exists(key_file):
-        with open(key_file) as f:
+        with open(key_file, encoding="utf-8") as f:
             return f.read()
 
     return None

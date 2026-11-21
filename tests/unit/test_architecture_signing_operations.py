@@ -72,7 +72,7 @@ import ast
 
 import pytest
 
-from tests.unit._architecture_helpers import REPO_ROOT, parse_module, src_python_files
+from tests.unit._architecture_helpers import REPO_ROOT, parse_module, rel, src_python_files
 
 # --------------------------------------------------------------------------
 # Classification allowlist — SHRINK-ONLY, and each entry states its reason
@@ -355,7 +355,7 @@ class TestTheOperationLabelIsBoundedByADerivedSet:
                     and node.func.id == "sanitize_operation"
                 ):
                     enclosing = _enclosing_function(tree, node) or "<module scope>"
-                    callers.add(f"{path.relative_to(REPO_ROOT)}::{enclosing}")
+                    callers.add(f"{rel(path, REPO_ROOT)}::{enclosing}")
 
         stray = sorted(key for key in callers if key.rsplit("::", 1)[1] not in _OPERATION_RECORDERS)
         missing = sorted(set(_OPERATION_RECORDERS) - {key.rsplit("::", 1)[1] for key in callers})

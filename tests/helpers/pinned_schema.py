@@ -379,7 +379,7 @@ def _resolve_in_tree(source: _PinnedSource, rel: str, ref: str) -> Path:
     if not matches:
         raise PinnedSchemaError(f"Pinned schema {ref!r} not found under {root}.")
     if len(matches) > 1:
-        rels = [str(m.relative_to(root)) for m in matches]
+        rels = [m.relative_to(root).as_posix() for m in matches]
         raise PinnedSchemaError(
             f"Pinned schema filename {ref!r} is ambiguous ({rels}) — pass a "
             f"category-qualified ref (e.g. {rels[0]!r}) instead of a bare filename."
