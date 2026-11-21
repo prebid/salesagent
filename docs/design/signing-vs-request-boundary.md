@@ -213,8 +213,8 @@ sees them. That was written assuming the methods DO something here. Measured, th
 
 | Method | What this agent does |
 |---|---|
-| `tasks/pushNotificationConfig/{set,get,list,delete}` | all four `raise PushNotificationNotSupportedError()` — the agent advertises `push_notifications=False` (`adcp_a2a_server.py:427-457`) |
-| `tasks/get`, `tasks/cancel` | read `self.tasks`, an IN-MEMORY dict written only at `:266` within the same session — no persistence, no credentials, no AdCP state |
+| `tasks/pushNotificationConfig/{set,get,list,delete}` | all four `raise PushNotificationNotSupportedError()` — the agent advertises `push_notifications=False` (the four push-notification handlers in `adcp_a2a_server.py`) |
+| `tasks/get`, `tasks/cancel` | read `self.tasks`, an IN-MEMORY dict written only by `on_message_send` within the same session — no persistence, no credentials, no AdCP state |
 | any `tasks/*` as an AdCP operation | **zero rows** in `src/core/tools/registry.py` |
 
 So there is no credential registration to escalate through and no cross-request state to
@@ -255,7 +255,7 @@ shape (`class AdCPError[DetailsT: ErrorDetails]`). Provenance text moves to `int
 which is server-log only.
 
 > **Landed:** the base class is named `AdCPSalesAgentError`, declared generic over
-> `DetailsT: ErrorDetails` and deriving from `Exception`, at `src/core/exceptions.py:156`.
+> `DetailsT: ErrorDetails` and deriving from `Exception`, in `src/core/exceptions.py`.
 > There is no `AdCPError` name in `src/core/exceptions.py`; read every `AdCPError` above and
 > below as that class.
 
@@ -265,7 +265,7 @@ Our branch authors buyer-facing text at many raise sites. Each needs re-expressi
 | Site | Current | Becomes |
 |---|---|---|
 | egress refusals (`AdCPBlockedUrlError`) | authored sentence | code + `{url}`-shaped details |
-| `MockAdServer._raise_injected_failure` (`src/adapters/mock_ad_server.py:324`) | `f"test_behavior recovery={requested!r} ..."` | code + `internal_detail` |
+| `MockAdServer._raise_injected_failure` (`src/adapters/mock_ad_server.py`) | `f"test_behavior recovery={requested!r} ..."` | code + `internal_detail` |
 | signing/trust-root config errors | authored sentences | `AdCPConfigurationError` + details |
 
 This is mechanical per site but large, and it is where a careless merge silently re-introduces
@@ -280,7 +280,7 @@ then read, so a regression in the production boundary translator could not have 
 result."
 
 Our branch still has all three, and two outstanding guard failures are exactly about them
-(`_outcome_helpers.py:105/137/139` keying on `Transport.IMPL`). **Take theirs wholesale.** Any
+(three branches in `_outcome_helpers.py` keying on `Transport.IMPL`). **Take theirs wholesale.** Any
 conflict in `tests/harness/transport.py`, `dispatchers.py` or `_outcome_helpers.py` where we
 kept an IMPL branch resolves to deletion, not union. This retires our two failures rather than
 merging them forward.

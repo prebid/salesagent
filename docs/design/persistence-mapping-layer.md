@@ -17,8 +17,8 @@ Measured at `b9138b19c`, adcp `9.0.0b3+sa.8qela.f33d4fc71`:
 - **26 repository classes across 24 modules share no base class.** `BaseUoW` has 12 domain
   subclasses; the repositories below it have nothing in common. So each one hand-rolls its
   own mapping, and there is no single place a rule about mapping could live.
-- **Mapping already exists, unnamed and partial.** `repositories/creative.py:49`
-  `_identity_columns(identity) -> dict` is a hand-written mapper whose docstring explains that
+- **Mapping already exists, unnamed and partial.** `_identity_columns(identity) -> dict`
+  in `repositories/creative.py` is a hand-written mapper whose docstring explains that
   `create` and `set_identity` must share it, "which is what happened while the identity was
   three partial columns and each path assigned them itself". That is this layer, for four
   columns of one aggregate, discovered by a bug.
