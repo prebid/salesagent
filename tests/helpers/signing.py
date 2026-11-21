@@ -284,28 +284,78 @@ TEST_KEK_VARIABLE = "SALESAGENT_TEST_SIGNING_KEK"
 TEST_KEK_PASSPHRASE = b"correct-horse-battery-staple"
 
 
-@contextmanager
-def deployment_kek(monkeypatch: Any, name: str = TEST_KEK_VARIABLE) -> Iterator[None]:
-    """Configure the one deployment-wide KEK for the duration of a test.
+#: The setting that NAMES the environment variable holding the deployment KEK.
+KEK_POINTER_SETTING = "ADCP_SIGNING_KEY_PASSPHRASE_ENV"
 
-    Minting REFUSES without it — there is no plaintext fallback — so every
-    suite that provisions a key through production needs this. ``key_passphrase``
-    is resolved from the environment on every use
-    (``SigningSettings.secret_from_env``, deliberately uncached), but the
-    ``Settings`` object carrying ``key_passphrase_env`` is a process global, so the
-    cached settings are dropped too and the next ``get_settings()`` rebuilds off the
-    environment set above.
+
+def install_kek(monkeypatch: Any, pointer: str, value: str) -> None:
+    """Make this process hold *value* as the deployment KEK, read from variable *pointer*.
+
+    The ONE spelling of the three changes that takes: the pointer setting, the variable
+    it names, and the cached settings. ``key_passphrase`` is resolved from the
+    environment on every use (``SigningSettings.secret_from_env``, deliberately
+    uncached), but the ``Settings`` object carrying ``key_passphrase_env`` is a process
+    global, so it is dropped and the next ``get_settings()`` rebuilds off the
+    environment set here.
 
     ``raising`` is left at its default: this attribute is named as a STRING, so a
     rename in ``src.core.config`` is invisible to every checker, and a tolerant
     setattr here would leave the cache undropped and this helper silently doing
     nothing. That is exactly how the pre-merge spelling (``_config``) survived the
     rename to ``_settings``.
+
+    Every change goes through *monkeypatch*, so its owner decides when they are
+    undone: a test's own fixture at test teardown, or a harness env's registry.
     """
-    monkeypatch.setenv("ADCP_SIGNING_KEY_PASSPHRASE_ENV", name)
-    monkeypatch.setenv(name, TEST_KEK_PASSPHRASE.decode())
+    monkeypatch.setenv(KEK_POINTER_SETTING, pointer)
+    monkeypatch.setenv(pointer, value)
     monkeypatch.setattr("src.core.config._settings", None)
+
+
+@contextmanager
+def deployment_kek(monkeypatch: Any, name: str = TEST_KEK_VARIABLE) -> Iterator[None]:
+    """Configure the one deployment-wide KEK for the duration of a test.
+
+    Minting REFUSES without it — there is no plaintext fallback — so every
+    suite that provisions a key through production needs this. The changes are
+    :func:`install_kek`'s, undone by the test's *monkeypatch* at teardown.
+    """
+    install_kek(monkeypatch, name, TEST_KEK_PASSPHRASE.decode())
     yield
+
+
+#: docker-compose.e2e.yml's app service, whose environment names the ONE KEK the live
+#: server container holds.
+_STACK_SERVICE = "adcp-server"
+
+
+def hold_stack_kek(guard: Any) -> bytes:
+    """Make this process hold the KEK docker-compose.e2e.yml gives the live server; return it.
+
+    In-process transports resolve a key in THIS process, the e2e ones in the live server
+    container, which only ever holds compose's value. With both holding the same KEK, a
+    key encrypted under it opens on every transport, and one encrypted under anything
+    else opens on none. The value is read out of compose rather than written here, so the
+    two cannot drift (salesagent-dn4i).
+
+    The changes are :func:`install_kek`'s, made through a ``MonkeyPatch`` of this env's
+    own whose undo is registered with *guard* (``BaseTestEnv._guard``) before anything
+    is changed, so they are undone on both release paths.
+    """
+    from pathlib import Path
+
+    import pytest
+    import yaml
+
+    compose_path = Path(__file__).resolve().parents[2] / "docker-compose.e2e.yml"
+    service_env = yaml.safe_load(compose_path.read_text(encoding="utf-8"))["services"][_STACK_SERVICE]["environment"]
+    kek_pointer = service_env[KEK_POINTER_SETTING]
+    kek_value = str(service_env[kek_pointer])
+
+    monkeypatch = pytest.MonkeyPatch()
+    guard("patch:signing_kek", monkeypatch.undo)
+    install_kek(monkeypatch, kek_pointer, kek_value)
+    return kek_value.encode()
 
 
 @contextmanager
