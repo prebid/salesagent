@@ -24,7 +24,7 @@ The GAM adapter supports:
 - **Line Item Types**: Standard, Sponsorship, Network, House
 - **Pricing Models**: CPM, vCPM, CPC, Flat Rate
 - **Targeting**: Geography, device, custom key-values
-- **Creatives**: Display: an image, a `display_tag` (tag URL, inline markup, or paired redirect), or inline HTML
+- **Creatives**: Display: an image, a `display_tag` (tag URL, inline markup, or paired redirect), inline HTML, or an `html5` zip bundle
 
 ## Creatives GAM refuses before it writes anything
 
@@ -45,7 +45,7 @@ or approved:
 | A creative whose size matches no line item placeholder, or whose stored row states no size | Created at a 300x250 default size, or matched to any 1x1 placeholder as a wildcard | `CREATIVE_SIZE_MISMATCH` when another size its option accepts fits the line item, otherwise `CONFIGURATION_ERROR` |
 | `native_in_feed` | Created as a native `TemplateCreative` with the placeholder template id `123456` | `UNSUPPORTED_FEATURE` (#2445) |
 | Hosted video | Created as a `VideoRedirectCreative`, which needs a duration core never sends, so the upload failed after the order was booked (#2579) | `UNSUPPORTED_FEATURE` |
-| `html5` zip bundle | Created as a `CustomCreative` whose HTML snippet is an iframe of the zip URL | `UNSUPPORTED_FEATURE` until the bundle upload lands (#2545) |
+| `html5` zip bundle | Created as a `CustomCreative` whose HTML snippet is an iframe of the zip URL | Created as an `Html5Creative` carrying the zip, which the seller fetches before booking. A bundle the seller can't fetch: `CREATIVE_VALIDATION_FAILED_GENERIC` |
 | An image with no click-through | Created as an `ImageRedirectCreative` with no destination URL, which GAM refuses at upload, after the order was booked | `CREATIVE_MISSING_CLICK_URL` |
 
 The type sniffing that chose a GAM creative type from a URL's extension or a format name is
