@@ -12,6 +12,7 @@ from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from tests.factories import stamp_format_identity
+from tests.factories.media_buy import bare_package_row
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
@@ -94,6 +95,8 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             },
         )
         session.add(media_buy)
+        # An assignment's package is a foreign key to the buy's own package rows.
+        media_buy.packages.append(bare_package_row(media_buy.media_buy_id, "pkg_default"))
 
         # Create creatives (FK to principal now satisfied)
         creative1 = DBCreative(
@@ -251,6 +254,8 @@ def test_creative_assignments_with_weights(integration_db):
             },
         )
         session.add(media_buy)
+        # An assignment's package is a foreign key to the buy's own package rows.
+        media_buy.packages.append(bare_package_row(media_buy.media_buy_id, "pkg_default"))
 
         # Create creatives (FK to principal now satisfied)
         creative1 = DBCreative(
@@ -405,6 +410,8 @@ def test_creative_assignments_replaces_all(integration_db):
             },
         )
         session.add(media_buy)
+        # An assignment's package is a foreign key to the buy's own package rows.
+        media_buy.packages.append(bare_package_row(media_buy.media_buy_id, "pkg_default"))
 
         # Create three creatives
         for cid in ["c1", "c2", "c3"]:
