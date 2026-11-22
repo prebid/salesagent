@@ -119,7 +119,7 @@ def read_creative_to_traffic(
         return TrafficRefusal(creative_id, TrafficRefusalReason.NO_SERVING_CONTENT)
 
     if isinstance(representation, MediaRepresentation):
-        _url, width, height, owes_dimensions = _read_media_assets(data, format_spec, kind, declarations)
+        _url, width, height, owes_dimensions, _type = _read_media_assets(data, format_spec, kind, declarations)
         if width and height:
             sizes, size_ranges = (TrafficSize(width=width, height=height),), ()
         elif not sizes and owes_dimensions:
@@ -168,10 +168,10 @@ def _representation(
         # agent's preview page there.
         return None
 
-    url, _width, _height, _owes_dimensions = _read_media_assets(data, format_spec, kind, declarations)
+    url, _width, _height, _owes_dimensions, url_asset_type = _read_media_assets(data, format_spec, kind, declarations)
     if not url:
         return None
-    return MediaRepresentation(asset_type=_media_asset_type(assets, kind, declarations), url=str(url))
+    return MediaRepresentation(asset_type=_media_asset_type(url_asset_type, kind, declarations), url=str(url))
 
 
 #: Kinds whose serving content is never a plain media file.
@@ -249,12 +249,16 @@ def _required_media_type(kind: str) -> MediaType | None:
     return None
 
 
-def _media_asset_type(assets: Mapping[str, Mapping[str, Any]], kind: str, declarations: Sequence[Any]) -> MediaType:
-    """The media type the creative's file is: its own asset's, else the kind's required media, else an option's."""
-    for asset in assets.values():
-        own = _MEDIA_TYPES.get(str(asset.get("asset_type")))
-        if own and asset.get("url"):
-            return own
+def _media_asset_type(url_asset_type: str | None, kind: str, declarations: Sequence[Any]) -> MediaType:
+    """The media type the creative's file is: the type of the asset its URL came from, else the
+    kind's required media, else an option's.
+
+    The asset that supplied the URL, not the first media asset in the manifest: an image
+    option may also take a video (formats/canonical/image.json ``slots``: "Products MAY
+    override the default"), and the served file is still the image.
+    """
+    if own := _MEDIA_TYPES.get(str(url_asset_type)):
+        return own
     if required := _required_media_type(kind):
         return required
     for media_type in _MEDIA_TYPES.values():
