@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from flask import Blueprint, jsonify, request
 from sqlalchemy import select, text
 
-from src.admin.utils import require_auth
+from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -36,7 +36,7 @@ def api_health():
 
 
 @api_bp.route("/tenant/<tenant_id>/revenue-chart")
-@require_auth()
+@require_tenant_access(api_mode=True)
 def revenue_chart_api(tenant_id):
     """API endpoint for revenue chart data."""
     period = request.args.get("period", "7d")
@@ -124,7 +124,7 @@ def oauth_status():
 
 
 @api_bp.route("/tenant/<tenant_id>/products", methods=["GET"])
-@require_auth()
+@require_tenant_access(api_mode=True)
 def get_tenant_products(tenant_id):
     """API endpoint to list all products for a tenant."""
     try:
@@ -155,7 +155,7 @@ def get_tenant_products(tenant_id):
 
 
 @api_bp.route("/tenant/<tenant_id>/products/suggestions", methods=["GET"])
-@require_auth()
+@require_tenant_access(api_mode=True)
 def get_product_suggestions(tenant_id):
     """API endpoint to get product suggestions based on industry and criteria."""
     try:

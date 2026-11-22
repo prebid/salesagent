@@ -15,10 +15,11 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from tests.helpers.admin_session import (
-    admin_auth_session,
+    admin_session_payload,
     admin_test_app,
-    authenticate_http_session,
     drop_stated_session_cookie,
+    state_flask_session,
+    state_http_session,
 )
 
 
@@ -117,10 +118,14 @@ class AdminClient:
 
     def authenticate(self, tenant_id: str) -> None:
         """State an authenticated super-admin session for *tenant_id*."""
+        self.state_session(admin_session_payload(tenant_id))
+
+    def state_session(self, payload: dict[str, Any]) -> None:
+        """State *payload* as the session, replacing whatever the client held, through this transport's writer."""
         if self._flask_client is not None:
-            admin_auth_session(self._flask_client, tenant_id)
+            state_flask_session(self._flask_client, payload)
         else:
-            authenticate_http_session(self._http, self._base_url or "", tenant_id)
+            state_http_session(self._http, payload)
 
     def clear_auth(self) -> None:
         """Drop the admin session, so the next request arrives anonymous."""
