@@ -13,7 +13,7 @@ This guide surfaces the repository-specific rules for the Prebid Sales Agent cod
 - **Database changes**: Reach the data through a repository inside a Unit of Work → Use `JSONType` for JSON columns → Create migration with `alembic revision`
 - **Any feature or bug fix**: TDD — the failing test comes first, and every change is gated by `make quality` (full cycles in `.claude/rules/workflows/tdd-workflow.md` and `bug-reporting.md`)
 - **Refactorings**: additionally run `tox -e integration` and verify imports with `uv run python -c "from module import thing"` — pre-commit hooks can't catch import errors
-- **Scope and review**: one outcome per pull request; a review grades what the change writes or touches and files the rest as follow-up issues ([engineering-standards.md § Keep the change to that outcome](docs/development/engineering-standards.md#keep-the-change-to-that-outcome), [§ Review the change](docs/development/engineering-standards.md#review-the-change))
+- **Scope and review**: read [engineering-standards.md § Keep the change to that outcome](docs/development/engineering-standards.md#keep-the-change-to-that-outcome) and [§ Review the change](docs/development/engineering-standards.md#review-the-change) before opening or reviewing a pull request
 
 ### Key files to know
 - `src/core/main.py` — MCP server and tool registration

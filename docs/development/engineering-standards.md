@@ -58,32 +58,35 @@ requirement — the outcome, not the mechanism. Engineer against that:
 One pull request closes one outcome. Scope follows the code the outcome
 needs, not the files the change happens to open:
 
-- **In scope:** the code that delivers the outcome, and the callers and
-  callees of every function the change touches. A sibling caller left
-  broken or inconsistent by the change is part of the fix, not a
-  follow-up.
-- **Out of scope:** problems the change neither introduces nor touches —
-  pre-existing defects elsewhere, unrelated cleanup, guards the outcome
-  does not need. List them under "Out of scope" in the pull request
-  description and open an issue for each. Pre-existing duplicates are paid
-  down through `.duplication-baseline`, not folded into an unrelated
-  change.
+- **In scope** — the change's scope: the code the change writes (every
+  line it adds or edits), plus the callers and callees of every function
+  it writes. A defect in that set — a broken sibling caller, or a shared
+  callee behind the edited caller — is part of the fix, not a follow-up.
+- **Out of scope:** everything outside that set — pre-existing defects
+  elsewhere, unrelated cleanup, guards the outcome does not need. List
+  them under "Out of scope" in the pull request description and open an
+  issue for each. Pre-existing duplicates are paid down through
+  `.duplication-baseline`, not folded into an unrelated change.
 - **Split independent work** when each part can be reviewed and merged on
   its own; keep coupled changes together rather than splitting to shrink
   a diff.
 
 ## Review the change
 
-A review applies every standard in this document to the code the change
-writes or touches; none of them is optional there. It does not grade code
-the change leaves alone.
+A review grades the change's scope, as
+[§ Keep the change to that outcome](#keep-the-change-to-that-outcome)
+defines it, and nothing outside it. Every standard in this document
+applies in full to the code the change writes; none of them is optional
+there.
 
-- **Must fix:** a defect the change introduces, or a standard its new or
-  touched code breaks — including a changed behavior with no BDD scenario
-  executing it. Name the changed line, the concrete impact, and the
-  standard.
-- **Follow-up:** a real problem the change did not introduce or touch.
-  Name it so it becomes an issue; it is never a merge blocker.
+- **Must fix:** a defect anywhere in the change's scope, or a standard
+  the code the change writes breaks — including a changed behavior not
+  proven by a live BDD scenario on all transports
+  ([§ Verify the change](#verify-the-change), item 6). Name the line, the
+  concrete impact, and the standard.
+- **Follow-up:** a real problem outside the change's scope, or a
+  pre-existing standards gap in a caller or callee the change does not
+  edit. Name it so it becomes an issue; it is never a merge blocker.
 - **An unverified concern is a question**, not a finding.
 - **Raise each concern once.** Group related findings into one comment,
   rather than a summary plus the same point inline.
