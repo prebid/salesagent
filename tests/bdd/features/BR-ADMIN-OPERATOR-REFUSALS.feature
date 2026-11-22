@@ -453,3 +453,55 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the JSON issues are:
       | field        | text                         |
       | network_code | Network code must be numeric |
+
+  # A URL the operator enters is stored now and fetched later, so outbound egress policy
+  # refuses it at ingest with EgressUrlRefused (src/admin/utils/url_policy.py). Its details
+  # name the field; nothing says why the address was refused, because that reason maps the
+  # seller's network for whoever supplied the URL (AdCP L1 security.mdx, webhook URL
+  # validation, point 6). 169.254.169.254 is a cloud metadata address: the policy refuses it
+  # whatever the deployment's egress settings.
+
+  @T-ADMIN-REFUSAL-056 @browser @egress
+  Scenario: An agent URL the egress policy refuses is shown on the add form with its field
+    When the operator submits the add creative agent form from its page with:
+      | field     | value                         |
+      | name      | Refused Egress Agent          |
+      | agent_url | https://169.254.169.254/agent |
+    Then the page returns status 200
+    And the page is the add creative agent form
+    And the page shows the "EgressUrlRefused" refusal
+    And the page flashes the error "Agent URL"
+    And the answer does not echo the submitted "agent_url"
+
+  @T-ADMIN-REFUSAL-057 @json @egress
+  Scenario: A fetch() caller is told which URL the egress policy refused
+    When the operator saves an OIDC configuration with:
+      | field         | value                                                    |
+      | provider      | custom                                                   |
+      | client_id     | client-1                                                 |
+      | client_secret | secret-1                                                 |
+      | discovery_url | https://169.254.169.254/.well-known/openid-configuration |
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "EgressUrlRefused" refusal
+    And the JSON details are:
+      | text               |
+      | OIDC discovery URL |
+    And the answer does not echo the submitted "discovery_url"
+
+  @T-ADMIN-REFUSAL-058 @json @egress
+  Scenario: An API caller is told which webhook URL the egress policy refused
+    When the tenant management API is asked to create a tenant with:
+      | field             | value                        |
+      | name              | Refused Egress Seller        |
+      | subdomain         | refused_egress_seller        |
+      | ad_server         | mock                         |
+      | virtual_host      | refused-egress.example.com   |
+      | slack_webhook_url | https://169.254.169.254/hook |
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "EgressUrlRefused" refusal
+    And the JSON details are:
+      | text              |
+      | Slack webhook URL |
+    And the answer does not echo the submitted "slack_webhook_url"

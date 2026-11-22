@@ -227,6 +227,7 @@ _FORM_MARKERS = {
     "create tenant": 'name="virtual_host"',
     "add product": "Add New Product",
     "edit product": "<h2>Edit Product</h2>",
+    "add creative agent": "<h2>Add Creative Agent</h2>",
 }
 
 
