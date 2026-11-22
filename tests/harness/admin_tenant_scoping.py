@@ -1,10 +1,12 @@
-"""Admin tenant-scoping harness for the four routes of prebid/salesagent#2203 and the OIDC test route.
+"""Admin tenant-scoping harness for the routes of prebid/salesagent#2203 and #2204.
 
 Drives ``GET /api/tenant/<tenant_id>/revenue-chart``, ``GET /api/tenant/<tenant_id>/products``,
 ``GET /api/tenant/<tenant_id>/products/suggestions``, ``GET,POST /tenant/<tenant_id>/policy/rules``
-and ``GET /auth/oidc/test/<tenant_id>`` on the two admin transports ``AdminAccountEnv`` already
-provides — Flask ``test_client`` (integration) and ``requests.Session`` against the Docker
-stack (e2e) — and seeds the tenants, memberships, catalogue and media buys the scenarios grade.
+and ``GET /auth/oidc/test/<tenant_id>`` (#2203), and the six GAM reporting routes of
+``src/adapters/gam_reporting_api.py`` (#2204), on the two admin transports ``AdminAccountEnv``
+already provides — Flask ``test_client`` (integration) and ``requests.Session`` against the
+Docker stack (e2e) — and seeds the tenants, memberships, catalogue and media buys the
+scenarios grade.
 
 Subclasses ``AdminAccountEnv`` rather than extracting a base: the transport plumbing is
 inherited unchanged, and the harness lifecycle guard
@@ -63,6 +65,8 @@ MEMBER_ROLE = UserRole.MANAGER
 #: lower role the OIDC test route's role check would refuse in the lookup's place.
 NON_MATCHING_ROW_ROLE = UserRole.ADMIN
 ACTIVE_BUY_BUDGET = Decimal("1500.00")
+#: Any numeric id passes ``validate_numeric_id``; the handlers stop before they would use it.
+GAM_ADVERTISER_ID = "12345"
 
 
 class TenantScopedRoute(NamedTuple):
@@ -70,13 +74,25 @@ class TenantScopedRoute(NamedTuple):
     methods: tuple[str, ...]
 
 
-#: The four routes of #2203 and the OIDC test route, keyed by the name the Gherkin scenarios use.
+_GAM_API = "/api/tenant/{tenant_id}"
+
+#: The routes of #2203 and #2204, keyed by the name the Gherkin scenarios use.
 ROUTES: dict[str, TenantScopedRoute] = {
     "revenue chart API": TenantScopedRoute("/api/tenant/{tenant_id}/revenue-chart", ("GET",)),
     "products API": TenantScopedRoute("/api/tenant/{tenant_id}/products", ("GET",)),
     "product suggestions API": TenantScopedRoute("/api/tenant/{tenant_id}/products/suggestions", ("GET",)),
     "policy rules page": TenantScopedRoute("/tenant/{tenant_id}/policy/rules", ("GET", "POST")),
     "OIDC test page": TenantScopedRoute("/auth/oidc/test/{tenant_id}", ("GET",)),
+    "GAM reporting API": TenantScopedRoute(f"{_GAM_API}/gam/reporting", ("GET",)),
+    "GAM advertiser summary API": TenantScopedRoute(
+        f"{_GAM_API}/gam/reporting/advertiser/{{advertiser_id}}/summary", ("GET",)
+    ),
+    "GAM principal reporting API": TenantScopedRoute(f"{_GAM_API}/principals/{{principal_id}}/gam/reporting", ("GET",)),
+    "GAM country breakdown API": TenantScopedRoute(f"{_GAM_API}/gam/reporting/countries", ("GET",)),
+    "GAM ad unit breakdown API": TenantScopedRoute(f"{_GAM_API}/gam/reporting/ad-units", ("GET",)),
+    "GAM principal summary API": TenantScopedRoute(
+        f"{_GAM_API}/principals/{{principal_id}}/gam/reporting/summary", ("GET",)
+    ),
 }
 
 #: Where a scenario may say a route redirected to, keyed by the name the Gherkin uses. The
@@ -92,6 +108,7 @@ REDIRECTS: dict[str, str] = {
 
 class TargetTenant(NamedTuple):
     tenant_id: str
+    principal_id: str
     principal_name: str
     products_payload: list[dict[str, str]]
 
@@ -146,11 +163,11 @@ def expected_suggestions_body() -> dict[str, Any]:
 
 
 class AdminTenantScopingEnv(AdminAccountEnv):
-    """Test environment for the tenant-scoping scenarios of #2203.
+    """Test environment for the tenant-scoping scenarios of #2203 and #2204.
 
     Same two transports as ``AdminAccountEnv``; adds the target tenant, the three caller
-    memberships (elsewhere / inactive here / active here, in the role the scenario names)
-    and the five routes.
+    memberships (elsewhere / inactive here / active here, in the role the scenario names),
+    a super admin of another tenant, and the routes in ``ROUTES``.
     """
 
     def __init__(self, *, mode: str = "integration", base_url: str | None = None) -> None:
@@ -210,7 +227,9 @@ class AdminTenantScopingEnv(AdminAccountEnv):
                     "delivery_type": product.delivery_type,
                 }
             ]
-            self._target = TargetTenant(tenant.tenant_id, buy.principal.name, products_payload)
+            self._target = TargetTenant(
+                tenant.tenant_id, buy.principal.principal_id, buy.principal.name, products_payload
+            )
         return self._target
 
     def target_state(self) -> TenantState:
@@ -240,6 +259,18 @@ class AdminTenantScopingEnv(AdminAccountEnv):
             _seed_member(target, MEMBER_EMAIL, is_active=is_active, role=role)
         self._authenticate_member(home_tenant_id)
 
+    def login_as_super_admin_of_other_tenant(self) -> None:
+        """A super admin signed in at a fresh home tenant, with no row in the target (#2204, AC4 as amended).
+
+        The session carries the two keys ``is_super_admin()`` caches after a configured super
+        admin's first check (``_cache_admin_status`` in ``src/admin/utils/helpers.py``), so the
+        grant reads the same on both transports without touching the stack's
+        ``SUPER_ADMIN_EMAILS``.
+        """
+        home_tenant_id = self._new_home_tenant(with_member=True)
+        payload = member_session_payload(MEMBER_EMAIL, home_tenant_id)
+        self.client.state_session({**payload, "is_super_admin": True, "admin_email": MEMBER_EMAIL})
+
     def _new_home_tenant(self, *, with_member: bool) -> str:
         """A tenant the session is logged in against. Never the target, so the bypass cannot fire."""
         with bound_factory_session():
@@ -263,7 +294,9 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         """
         route = ROUTES[route_name]
         assert method in route.methods, f"{route_name} does not serve {method}"
-        path = route.path.format(tenant_id=self.target.tenant_id)
+        path = route.path.format(
+            tenant_id=self.target.tenant_id, principal_id=self.target.principal_id, advertiser_id=GAM_ADVERTISER_ID
+        )
         # Read here, not at seeding: a Given after the Background adds the caller's own row.
         self._state_before_request = self.target_state()
         return self.client.request(

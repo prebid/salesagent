@@ -1,17 +1,19 @@
 # Hand-authored feature — not compiled from adcp-req
-# Admin UI BDD scenarios for tenant scoping of admin routes (prebid/salesagent#2203)
+# Admin UI BDD scenarios for tenant scoping of admin routes (prebid/salesagent#2203, #2204)
 
 Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
   As a publisher operating one tenant
   I want every admin route that names my tenant in its URL to check that the caller belongs to it and holds the role the route asks for
-  So that a user of another tenant cannot read my revenue, catalogue or policy pages or start a sign-in test on my tenant, and a member of my tenant needs the admin role to start one
+  So that a user of another tenant cannot read my revenue, catalogue, policy pages or GAM reports or start a sign-in test on my tenant, and a member of my tenant needs the admin role to start one
 
   # A route that takes <tenant_id> from the URL must prove the caller belongs to
   # that tenant. Four admin routes carried only require_auth(), which checks that
-  # somebody is logged in, and the OIDC test route carried no check at all. The one
+  # somebody is logged in, and the OIDC test route carried no check at all (#2203).
+  # The six GAM reporting routes carried a private copy of require_auth and a private
+  # tenant check that answered 500 to every ordinary login (#2204). The one
   # component that proves membership is require_tenant_access
   # (src/admin/utils/helpers.py); every outcome below is that decorator's contract:
-  #   - anonymous        -> JSON 401 on the three api_mode routes, redirect to the
+  #   - anonymous        -> JSON 401 on the api_mode routes, redirect to the
   #                         tenant login page on the two HTML routes
   #   - non-member       -> 403 (JSON {"error": "Access denied"} on the API routes)
   #   - inactive member  -> 403, same shape
@@ -28,14 +30,15 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
   # The caller's active row in the target tenant holds the manager role unless its
   # scenario names another. Manager is the least role that may send POST (role_permits
   # in src/admin/utils/helpers.py), so the role check decides no outcome on the four
-  # routes of #2203. The OIDC test page asks for the admin role although it is a GET:
+  # routes of #2203 or on the six GAM reporting routes of #2204, which serve GET only.
+  # The OIDC test page asks for the admin role although it is a GET:
   # the callback of the flow it starts turns the tenant's SSO on, as the admin-only
   # oidc.enable does. T-ADMIN-SCOPE-011 seeds an admin there, and T-ADMIN-SCOPE-012 a
   # manager and a viewer.
   #
   # A row that must not let the caller in holds the admin role: the other member of the
   # target tenant, the caller's row in another tenant, and the caller's inactive row.
-  # Admin passes the role check of all five routes, so only the membership lookup can
+  # Admin passes the role check of every route here, so only the membership lookup can
   # refuse on those rows, and a lookup that matched one of them would let the caller in.
   #
   # tests/integration/test_admin_role_enforcement.py grades the role on the routes of
@@ -57,10 +60,16 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
     And the target tenant's stored data is unchanged
 
     Examples:
-      | route                   |
-      | revenue chart API       |
-      | products API            |
-      | product suggestions API |
+      | route                       |
+      | revenue chart API           |
+      | products API                |
+      | product suggestions API     |
+      | GAM reporting API           |
+      | GAM advertiser summary API  |
+      | GAM principal reporting API |
+      | GAM country breakdown API   |
+      | GAM ad unit breakdown API   |
+      | GAM principal summary API   |
 
   @T-ADMIN-SCOPE-002 @auth @edge-case
   Scenario Outline: Anonymous callers of the tenant pages are sent to the tenant login
@@ -84,10 +93,16 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
     And the target tenant's stored data is unchanged
 
     Examples:
-      | route                   |
-      | revenue chart API       |
-      | products API            |
-      | product suggestions API |
+      | route                       |
+      | revenue chart API           |
+      | products API                |
+      | product suggestions API     |
+      | GAM reporting API           |
+      | GAM advertiser summary API  |
+      | GAM principal reporting API |
+      | GAM country breakdown API   |
+      | GAM ad unit breakdown API   |
+      | GAM principal summary API   |
 
   @T-ADMIN-SCOPE-004 @auth @edge-case
   Scenario Outline: A member of another tenant receives 403 from the tenant pages
@@ -111,10 +126,16 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
     And the target tenant's stored data is unchanged
 
     Examples:
-      | route                   |
-      | revenue chart API       |
-      | products API            |
-      | product suggestions API |
+      | route                       |
+      | revenue chart API           |
+      | products API                |
+      | product suggestions API     |
+      | GAM reporting API           |
+      | GAM advertiser summary API  |
+      | GAM principal reporting API |
+      | GAM country breakdown API   |
+      | GAM ad unit breakdown API   |
+      | GAM principal summary API   |
 
   @T-ADMIN-SCOPE-006 @auth @edge-case
   Scenario Outline: An inactive membership in the target tenant receives 403 from the tenant pages
@@ -184,3 +205,41 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
       | role    |
       | manager |
       | viewer  |
+
+  @T-ADMIN-SCOPE-013 @auth @main-flow
+  Scenario Outline: An active member reaches the GAM reporting handlers
+    # The target runs the mock adapter, so each handler's first answer is its own refusal
+    # to report: an answer only a caller the guard let through can see.
+    Given the caller is an active member of the target tenant
+    When the caller sends GET to the <route> of the target tenant
+    Then the page returns status 400
+    And the JSON response has "error" as "<error>"
+
+    Examples:
+      | route                       | error                                                               |
+      | GAM reporting API           | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM advertiser summary API  | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM principal reporting API | Principal does not have a GAM advertiser ID configured              |
+      | GAM country breakdown API   | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM ad unit breakdown API   | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM principal summary API   | Principal does not have a GAM advertiser ID configured              |
+
+  @T-ADMIN-SCOPE-014 @auth @main-flow
+  Scenario Outline: A super admin of another tenant reaches the GAM reporting handlers
+    # docs/security.md: super admins have full access to all tenants. The maintainer amended
+    # #2204's AC4 to keep that access and pin it with a test
+    # (https://github.com/prebid/salesagent/issues/2204#issuecomment-5712126259).
+    # T-ADMIN-SCOPE-003 refuses the same caller without the grant.
+    Given the caller is a super admin of a different tenant with no membership in the target tenant
+    When the caller sends GET to the <route> of the target tenant
+    Then the page returns status 400
+    And the JSON response has "error" as "<error>"
+
+    Examples:
+      | route                       | error                                                               |
+      | GAM reporting API           | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM advertiser summary API  | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM principal reporting API | Principal does not have a GAM advertiser ID configured              |
+      | GAM country breakdown API   | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM ad unit breakdown API   | GAM reporting is only available for tenants using Google Ad Manager |
+      | GAM principal summary API   | Principal does not have a GAM advertiser ID configured              |
