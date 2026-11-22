@@ -203,9 +203,10 @@ class ProductRepository:
         """Persist a new product within this tenant.
 
         The product.tenant_id must match the repository's tenant_id.
-        Raises ValueError if there is a tenant mismatch, or if the product sells several
-        publishers without placements and declares an option not all of them accept
-        (:func:`~src.core.format_satisfaction.refuse_outside_common_intersection`).
+        Raises ValueError if there is a tenant mismatch, and its subclass
+        :class:`~src.core.format_satisfaction.FormatOptionsOutsideCommonIntersection` if the
+        product sells several publishers without placements and declares an option not all of
+        them accept.
 
         Does NOT commit — the UoW handles that.
         """

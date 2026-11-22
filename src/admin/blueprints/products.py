@@ -19,7 +19,6 @@ from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.admin.form_validation import (
     FORMAT_OPTIONS,
     form_number,
-    format_options_refusal,
     parse_json_field,
     refuse_a_stale_selection,
     sanitize_form_data,
@@ -44,7 +43,7 @@ from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.product import offer_refusal
 from src.core.database.repositories.publisher import PublisherRepository
 from src.core.format_resolver import linked_format_contract
-from src.core.format_satisfaction import refuse_outside_common_intersection
+from src.core.format_satisfaction import FormatOptionsOutsideCommonIntersection, refuse_outside_common_intersection
 from src.core.helpers.publisher_property_helpers import (
     RenderedSelection,
     SelectableProperty,
@@ -199,13 +198,13 @@ def _parse_authored_format_options(raw: str | None) -> list[dict] | None:
     if not document:
         return None
     if not isinstance(document, list):
-        raise format_options_refusal("format_options must be a JSON array of declarations")
+        raise InvalidFormInput(FormIssue(FORMAT_OPTIONS, "format_options must be a JSON array of declarations"))
     product_local = [d for d in document if not (isinstance(d, dict) and option_key(d))]
     for declaration in document:
         if declaration not in product_local and (
             set(declaration) != {"publisher_domain", "format_option_id"} or not declaration["format_option_id"]
         ):
-            raise format_options_refusal(PUBLISHER_OPTION_KEY_ONLY)
+            raise InvalidFormInput(FormIssue(FORMAT_OPTIONS, PUBLISHER_OPTION_KEY_ONLY))
     try:
         if product_local:
             format_declarations_type().validate_python(product_local)
@@ -231,7 +230,7 @@ def _refuse_unresolved_format_options(declarations, selectors: list[dict], catal
     """
     refusal = format_option_refusal(declarations, authorized_selectors(selectors, catalog.refs), catalog)
     if refusal:
-        raise format_options_refusal(f"format_options do not resolve: {refusal}")
+        raise InvalidFormInput(FormIssue(FORMAT_OPTIONS, f"format_options do not resolve: {refusal}"))
 
 
 def _refuse_a_product_with_no_format_arm(
@@ -255,15 +254,18 @@ def _refuse_a_product_with_no_format_arm(
     legacy product's first edit.
     """
     if not format_ids and not format_options:
-        raise format_options_refusal(
-            # No spec version in the sentence: 0d8d26d72 swept version literals out of
-            # src/ ("read the spec and SDK versions from the SDK, never from a comment")
-            # and `AdCP 3.2` now appears nowhere under src/. An operator does not need the
-            # release number to act on this -- they need to know the field is not theirs to
-            # fill -- so the whole clause goes rather than half of it.
-            "A product must declare at least one creative format: author canonical "
-            "format_options, or link an inventory profile that declares them. (format_ids is "
-            "deprecated and is no longer authored here; a product that already has one keeps it.)"
+        raise InvalidFormInput(
+            FormIssue(
+                FORMAT_OPTIONS,
+                # No spec version in the sentence: 0d8d26d72 swept version literals out of
+                # src/ ("read the spec and SDK versions from the SDK, never from a comment")
+                # and `AdCP 3.2` now appears nowhere under src/. An operator does not need the
+                # release number to act on this -- they need to know the field is not theirs to
+                # fill -- so the whole clause goes rather than half of it.
+                "A product must declare at least one creative format: author canonical "
+                "format_options, or link an inventory profile that declares them. (format_ids is "
+                "deprecated and is no longer authored here; a product that already has one keeps it.)",
+            )
         )
 
 
@@ -1240,7 +1242,7 @@ def add_product(tenant_id):
                 # The contract the product is SERVED, whichever arm supplies it: a linked
                 # profile announces its declarations on the product's behalf. A refusal leaves the
                 # session, which closes without a commit, so the pending product is discarded.
-                refuse_outside_common_intersection(product, format_options_refusal)
+                refuse_outside_common_intersection(product)
                 db_session.flush()  # Flush to get product ID before creating pricing options
 
                 # Create pricing options (already parsed above)
@@ -1299,7 +1301,7 @@ def add_product(tenant_id):
                 flash(f"Product '{product.name}' created successfully!", "success")
                 # Redirect to products list
                 return redirect(url_for("products.list_products", tenant_id=tenant_id))
-        except InvalidFormInput as refusal:
+        except (InvalidFormInput, FormatOptionsOutsideCommonIntersection) as refusal:
             # Caught here only to render the form again with what the operator typed (the
             # GAM form shows it); the error handler would go back to an empty form. The
             # session closed without a commit, so nothing the refused form built is stored.
@@ -1720,7 +1722,7 @@ def edit_product(tenant_id, product_id):
 
             # Asked here, not with the anyOf above: the publisher properties it reads are
             # written after that check.
-            refuse_outside_common_intersection(product, format_options_refusal)
+            refuse_outside_common_intersection(product)
 
             db_session.commit()
 

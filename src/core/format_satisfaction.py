@@ -92,7 +92,7 @@ WHAT THIS MODULE DOES NOT DO, deliberately:
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from decimal import Decimal, InvalidOperation
@@ -132,6 +132,7 @@ from src.core.exceptions import (
     AdCPCreativeValidationFailedError,
     AdCPCreativeValueNotAllowedError,
 )
+from src.core.operator_errors import OperatorRefusal
 from src.core.schemas import Format, FormatOptionIdentity, FormatSelector
 
 logger = logging.getLogger(__name__)
@@ -2510,23 +2511,38 @@ def outside_common_intersection(product: Any) -> tuple[LibraryFormatDeclaration,
     return tuple(d for d in declared if any(d not in (layer.declarations or ()) for layer in slices))
 
 
-def refuse_outside_common_intersection(product: Any, refused: Callable[[str], Exception] = ValueError) -> None:
-    """``refused(<why>)`` when a product's served contract is not the common intersection the pin requires of it.
+class FormatOptionsOutsideCommonIntersection(OperatorRefusal, ValueError):
+    """A product of several publishers, with no placements, offering a format option not all of them accept.
+
+    One class for every write path :func:`refuse_outside_common_intersection` guards: the admin
+    error handler answers it with 400 and ``MESSAGE``, and :class:`ProductRepository`'s writes
+    raise it as the ``ValueError`` they refuse an unstorable product with, as
+    :class:`~src.core.http_utils.InvalidVirtualHost` is both. Its details name the product and
+    each option outside the intersection with the publisher it is scoped to.
+    """
+
+    MESSAGE = (
+        "The product sells inventory of several publishers and publishes no placements, so every "
+        "format option must be accepted by all of them. Declare the options scoped to one publisher "
+        "product-local by omitting publisher_domain, or publish placements with publisher-scoped identities."
+    )
+
+    def __init__(self, product_id: str, outside: Iterable[LibraryFormatDeclaration]) -> None:
+        scoped = sorted({f"{_declaration_label(d)} ({d.publisher_domain})" for d in outside})
+        details = (f"Product: {product_id}", *(f"Scoped to one publisher: {option}" for option in scoped))
+        super().__init__(" ".join((self.MESSAGE, *details)), details=details)
+
+
+def refuse_outside_common_intersection(product: Any) -> None:
+    """:class:`FormatOptionsOutsideCommonIntersection` when a product's served contract is not the common intersection.
 
     Asked of every product save -- the admin product forms, an inventory profile's save for
     each product it supplies the contract to, and :class:`ProductRepository`'s writes -- so
-    no write path stores what :func:`outside_common_intersection` finds. The admin forms
-    pass the refusal they answer the operator with; the repository raises ``ValueError``.
+    no write path stores what :func:`outside_common_intersection` finds.
     """
     outside = outside_common_intersection(product)
     if outside:
-        raise refused(
-            f"Product {product.product_id!r} sells inventory of several publishers and publishes no "
-            f"placements, so every format option must be accepted by all of them. Scoped to one "
-            f"publisher: {', '.join(sorted({_declaration_label(d) for d in outside}))}. Declare "
-            f"them product-local by omitting publisher_domain, or publish placements with "
-            f"publisher-scoped identities."
-        )
+        raise FormatOptionsOutsideCommonIntersection(product.product_id, outside)
 
 
 def _placement_projection(references: Iterable[LibraryFormatId]) -> tuple[LibraryFormatDeclaration, ...]:
