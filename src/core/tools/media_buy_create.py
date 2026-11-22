@@ -2283,12 +2283,29 @@ def push_creative_to_existing_buy(
             assert uow.products is not None
             try:
                 carriers = _read_for_push(uow.products, creative, _assigned_packages(packages, matching))
-                carriers = run_async_in_sync_context(_with_html5_bundles(adapter, carriers, ()))
             except AdCPSalesAgentError as refusal:
                 return CreativePushFailure(f"Creative {creative_id} is not trafficked: {refusal}", refusal)
-            asset = _build_adapter_asset_from_creative(
-                creative, _package_assignments_by_creative(matching, packages, carriers)[creative_id]
-            )
+            # Grouped while the unit is open: its rows detach when it commits.
+            package_assignments = _package_assignments_by_creative(matching, packages, carriers)[creative_id]
+
+        # The html5 bundle is fetched from the buyer's host with nothing open, as the approval
+        # fetches it, so no session waits on a counterparty (#2652). The read and the write are
+        # two units for that reason; the creative is read again for the write.
+        try:
+            carriers = run_async_in_sync_context(_with_html5_bundles(adapter, carriers, ()))
+        except AdCPSalesAgentError as refusal:
+            return CreativePushFailure(f"Creative {creative_id} is not trafficked: {refusal}", refusal)
+        package_assignments = [
+            {**assignment, "creative": carriers[(assignment["package_id"], creative_id)]}
+            for assignment in package_assignments
+        ]
+
+        with AdminCreativeUoW(tenant_id) as uow:
+            assert uow.creatives is not None
+            creative = uow.creatives.get_by_id(creative_id, buy_principal_id)
+            if not creative:
+                return CreativePushFailure(f"Creative {creative_id} not found")
+            asset = _build_adapter_asset_from_creative(creative, package_assignments)
 
             try:
                 asset_statuses = adapter.creatives_manager.add_creative_assets(
