@@ -7,6 +7,7 @@ import logging
 from collections.abc import Mapping
 from functools import wraps
 from typing import TYPE_CHECKING, Literal, NamedTuple, NoReturn, TypeVar
+from urllib.parse import unquote, urlsplit
 
 from flask import abort, g, has_request_context, jsonify, make_response, redirect, request, session, url_for
 from sqlalchemy import select
@@ -401,6 +402,24 @@ def caller_reads_json() -> bool:
         return False
     accept = request.accept_mimetypes
     return not accept["text/html"] > accept["application/json"]
+
+
+def local_path(url: str | None) -> str | None:
+    """*url* when it is a path on this site, else ``None``.
+
+    A path on this site starts with exactly one ``/``, holds no backslash, and has no scheme
+    or host: browsers read ``//host`` and ``/\\host`` as another site. The URL-decoded form
+    is held to the same test, so an encoded ``%2F%2Fhost`` is refused too. The result is
+    *url* as given, not decoded, so it names the same page.
+    """
+    if not url or not url.startswith("/"):
+        return None
+    decoded = unquote(url)
+    parts = urlsplit(decoded)
+    if parts.scheme or parts.netloc or decoded.startswith("//") or "\\" in decoded:
+        return None
+    # A constant "/" followed by the rest: the result is always a path on this host.
+    return "/" + url[1:]
 
 
 def json_failure(message: str, status: int, fields: Mapping[str, object] | None = None) -> Response:

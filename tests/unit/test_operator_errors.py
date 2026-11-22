@@ -13,6 +13,7 @@ import re
 import pytest
 from sqlalchemy.exc import OperationalError
 
+from src.admin.utils.helpers import local_path
 from src.admin.utils.operator_errors import _same_site_referrer
 from src.core.operator_errors import safe_error_message
 
@@ -104,6 +105,46 @@ def test_references_differ_per_call():
 )
 def test_same_site_referrer(referrer, method, full_path, expected):
     assert _same_site_referrer(referrer, "localhost", method, full_path) == expected
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("/tenant/t1/products?page=2", "/tenant/t1/products?page=2"),
+        # Returned as given: decoding %26 would turn one query value into two.
+        ("/search?q=a%26b", "/search?q=a%26b"),
+        (None, None),
+        ("", None),
+        ("tenant/t1", None),
+        ("https://evil.example/page", None),
+        ("//evil.example/page", None),
+        ("/\\evil.example/page", None),
+        ("/page?next=\\evil.example", None),
+        ("/\t/evil.example/page", None),
+        ("/%2F%2Fevil.example/page", None),
+        ("/%2Fevil.example/page", None),
+        ("/%5Cevil.example/page", None),
+        ("%2F%2Fevil.example/page", None),
+    ],
+    ids=[
+        "path-and-query",
+        "encoded-query-kept",
+        "none",
+        "empty",
+        "relative",
+        "absolute-url",
+        "double-slash",
+        "slash-backslash",
+        "backslash-in-query",
+        "tab-between-slashes",
+        "encoded-double-slash",
+        "encoded-second-slash",
+        "encoded-backslash",
+        "encoded-leading-slashes",
+    ],
+)
+def test_local_path(url, expected):
+    assert local_path(url) == expected
 
 
 def test_an_operator_refusal_must_declare_its_message():

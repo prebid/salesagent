@@ -16,7 +16,7 @@ from flask import Flask, flash, redirect, render_template, request
 from flask.typing import ResponseReturnValue
 from werkzeug.exceptions import HTTPException
 
-from src.admin.utils.helpers import caller_reads_json, json_failure
+from src.admin.utils.helpers import caller_reads_json, json_failure, local_path
 from src.core.operator_errors import OperatorRefusal, RecordedFailure, safe_error_message
 
 __all__ = ["flash_refusal", "register_error_handler"]
@@ -28,21 +28,17 @@ def _same_site_referrer(referrer: str | None, host: str, method: str, full_path:
     """The page *referrer* names, as a relative path, when it is on *host* and is not a failed GET of itself.
 
     *method* and *full_path* are the failed request's. Only the referrer's path and query are
-    used, so no scheme or host from the ``Referer`` header reaches ``redirect()``. The path
-    must start with exactly one ``/`` and hold no backslash: browsers read ``//host`` and
-    ``/\\host`` as another site.
+    used, so no scheme or host from the ``Referer`` header reaches ``redirect()``, and together
+    they must be a :func:`~src.admin.utils.helpers.local_path`.
     """
     if not referrer:
         return None
     parsed = urlsplit(referrer)
     if parsed.scheme not in ("http", "https") or parsed.netloc != host:
         return None
-    path = parsed.path
-    if not path.startswith("/") or path.startswith("//") or "\\" in path or "\\" in parsed.query:
+    target = local_path(parsed.path + (f"?{parsed.query}" if parsed.query else ""))
+    if target is None:
         return None
-    # A constant "/" followed by the rest of the path: the result is always a path on
-    # this host, whatever the referrer held.
-    target = "/" + path[1:] + (f"?{parsed.query}" if parsed.query else "")
     # Going back to the URL that just failed would loop, unless the request was a form
     # post: a form that posts to its own page (create_tenant) is redisplayed by a GET.
     if method == "GET" and target == full_path.rstrip("?"):
