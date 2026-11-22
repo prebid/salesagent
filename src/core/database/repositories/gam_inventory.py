@@ -3,7 +3,7 @@
 ``gam_inventory`` is the synced copy of a tenant's Google Ad Manager inventory. The sync
 (``GAMInventoryService``) writes it in bulk batches on its own session; what the sync
 reads first, to tell an item it already holds from a new one, comes from here, and so do
-the counts the admin inventory views show.
+the counts and sync times the admin inventory views show.
 """
 
 from __future__ import annotations
@@ -63,8 +63,12 @@ class GAMInventoryRepository:
             counts.setdefault(inventory_type, {})[status] = count
         return counts
 
-    def last_synced_at(self) -> datetime | None:
-        """When the most recently synced item was synced; None before the first sync."""
-        return self._session.scalar(
-            select(func.max(GAMInventory.last_synced)).where(GAMInventory.tenant_id == self._tenant_id)
-        )
+    def last_synced_at(self, inventory_type: str | None = None) -> datetime | None:
+        """When the most recently synced item was synced; None before the first sync.
+
+        *inventory_type* narrows it to one type.
+        """
+        stmt = select(func.max(GAMInventory.last_synced)).where(GAMInventory.tenant_id == self._tenant_id)
+        if inventory_type is not None:
+            stmt = stmt.where(GAMInventory.inventory_type == inventory_type)
+        return self._session.scalar(stmt)

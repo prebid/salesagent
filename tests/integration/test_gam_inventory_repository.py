@@ -65,6 +65,17 @@ class TestGAMInventoryRepository:
         assert GAMInventoryRepository(factory_session, tenant.tenant_id).last_synced_at() == latest
         assert GAMInventoryRepository(factory_session, TenantFactory().tenant_id).last_synced_at() is None
 
+    def test_last_synced_at_narrows_to_one_type(self, factory_session):
+        tenant = TenantFactory()
+        latest = datetime.now(UTC).replace(microsecond=0)
+        GAMInventoryFactory(tenant=tenant, inventory_type="label", last_synced=latest - timedelta(days=1))
+        GAMInventoryFactory(tenant=tenant, inventory_type="ad_unit", last_synced=latest)
+        GAMInventoryFactory(inventory_type="label", last_synced=latest)  # another tenant's
+        repo = GAMInventoryRepository(factory_session, tenant.tenant_id)
+
+        assert repo.last_synced_at("label") == latest - timedelta(days=1)
+        assert repo.last_synced_at("placement") is None
+
 
 class TestResyncUpdatesWhatItHolds:
     """A sync reads ``row_ids`` first, so an item it already holds is updated in place."""

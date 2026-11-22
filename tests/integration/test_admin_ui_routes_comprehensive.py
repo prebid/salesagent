@@ -9,9 +9,11 @@ This test suite validates that all 71+ GET routes in the Admin UI:
 Routes are organized by blueprint for maintainability.
 """
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
-from tests.factories import ProductFactory, TenantFactory
+from tests.factories import GAMInventoryFactory, ProductFactory, SyncJobFactory, TenantFactory
 from tests.integration.link_validator import LinkValidator, format_broken_links_report
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -229,6 +231,48 @@ class TestInventoryRoutes:
         tenant_id = test_tenant_with_data["tenant_id"]
         response = authenticated_admin_session.get(f"/tenant/{tenant_id}/check-inventory-sync", follow_redirects=True)
         assert response.status_code in [200, 404]
+
+    def test_sync_status_counts_every_status_and_reads_the_latest_sync_per_type(
+        self, authenticated_admin_session, factory_session
+    ):
+        """Per type: the total, the count per status (STALE included), the type's latest sync,
+        and the tenant's latest sync job on every type."""
+        tenant = TenantFactory()
+        latest = datetime.now(UTC).replace(microsecond=0)
+        for status, synced in [("ACTIVE", latest - timedelta(days=2)), ("ACTIVE", latest), ("STALE", latest)]:
+            GAMInventoryFactory(tenant=tenant, inventory_type="placement", status=status, last_synced=synced)
+        GAMInventoryFactory(tenant=tenant, inventory_type="ad_unit", last_synced=latest + timedelta(days=1))
+        GAMInventoryFactory(inventory_type="placement", last_synced=latest + timedelta(days=2))  # another tenant's
+        job = SyncJobFactory(tenant=tenant, status="completed")
+
+        response = authenticated_admin_session.get(f"/api/tenant/{tenant.tenant_id}/sync-status")
+
+        assert response.status_code == 200
+        sync_status = response.get_json()["sync_status"]
+        placement = sync_status["placement"]
+        assert (placement["total_count"], placement["status_counts"]) == (3, {"ACTIVE": 2, "STALE": 1})
+        assert datetime.fromisoformat(placement["last_synced"]) == latest
+        label = sync_status["label"]
+        assert datetime.fromisoformat(label.pop("last_job_time")) == job.started_at
+        assert label == {
+            "total_count": 0,
+            "status_counts": {},
+            "last_synced": None,
+            "last_job_status": "completed",
+            "last_job_error": None,
+        }
+
+    def test_targeting_data_reports_the_latest_sync_of_any_type(self, authenticated_admin_session, factory_session):
+        tenant = TenantFactory()
+        latest = datetime.now(UTC).replace(microsecond=0)
+        GAMInventoryFactory(tenant=tenant, inventory_type="ad_unit", last_synced=latest)
+        GAMInventoryFactory(tenant=tenant, inventory_type="label", last_synced=latest - timedelta(days=1))
+        GAMInventoryFactory(inventory_type="label", last_synced=latest + timedelta(days=1))  # another tenant's
+
+        response = authenticated_admin_session.get(f"/api/tenant/{tenant.tenant_id}/targeting/all")
+
+        assert response.status_code == 200
+        assert datetime.fromisoformat(response.get_json()["last_sync"]) == latest
 
     def test_analyze_ad_server(self, authenticated_admin_session, test_tenant_with_data):
         """Test analyze ad server endpoint."""

@@ -87,13 +87,7 @@ def get_targeting_data(tenant_id):
         labels_rows = db_session.scalars(labels_stmt).all()
 
         # Get last sync time from most recent inventory item
-        last_sync_stmt = (
-            select(GAMInventory.last_synced)
-            .where(GAMInventory.tenant_id == tenant_id)
-            .order_by(GAMInventory.last_synced.desc())
-            .limit(1)
-        )
-        last_sync = db_session.scalar(last_sync_stmt)
+        last_sync = GAMInventoryRepository(db_session, tenant_id).last_synced_at()
 
         # Transform to frontend format
         custom_keys = []
@@ -742,48 +736,29 @@ def get_sync_status(tenant_id):
         # Define inventory types we track
         inventory_types = ["ad_unit", "placement", "label", "custom_targeting_key", "audience_segment"]
 
+        inventory = GAMInventoryRepository(db_session, tenant_id)
+        counts = inventory.counts_by_type_and_status()
+
+        # Get most recent sync job for this tenant (one per tenant, shown on every type)
+        from src.core.database.models import SyncJob
+
+        last_job_stmt = (
+            select(SyncJob)
+            .filter(SyncJob.tenant_id == tenant_id, SyncJob.sync_type == "inventory")
+            .order_by(SyncJob.started_at.desc())
+            .limit(1)
+        )
+        last_job = db_session.scalars(last_job_stmt).first()
+
         sync_status = {}
 
         for inv_type in inventory_types:
-            # Get total count for this type
-            count_stmt = (
-                select(func.count())
-                .select_from(GAMInventory)
-                .where(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == inv_type)
-            )
-            total_count = db_session.scalar(count_stmt) or 0
-
-            # Get count by status
-            status_stmt = (
-                select(GAMInventory.status, func.count())
-                .filter(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == inv_type)
-                .group_by(GAMInventory.status)
-            )
-            status_results = db_session.execute(status_stmt).all()
-            status_counts = dict(status_results)
-
-            # Get last sync time for this type
-            last_sync_stmt = (
-                select(GAMInventory.last_synced)
-                .filter(GAMInventory.tenant_id == tenant_id, GAMInventory.inventory_type == inv_type)
-                .order_by(GAMInventory.last_synced.desc())
-                .limit(1)
-            )
-            last_synced = db_session.scalar(last_sync_stmt)
-
-            # Get most recent sync job for this tenant
-            from src.core.database.models import SyncJob
-
-            last_job_stmt = (
-                select(SyncJob)
-                .filter(SyncJob.tenant_id == tenant_id, SyncJob.sync_type == "inventory")
-                .order_by(SyncJob.started_at.desc())
-                .limit(1)
-            )
-            last_job = db_session.scalars(last_job_stmt).first()
+            # Count by status, every status included
+            status_counts = counts.get(inv_type, {})
+            last_synced = inventory.last_synced_at(inv_type)
 
             sync_status[inv_type] = {
-                "total_count": total_count,
+                "total_count": sum(status_counts.values()),
                 "status_counts": status_counts,
                 "last_synced": last_synced.isoformat() if last_synced else None,
                 "last_job_status": last_job.status if last_job else None,

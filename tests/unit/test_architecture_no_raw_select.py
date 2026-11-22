@@ -265,10 +265,9 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/format_metrics_service.py", "_process_and_store_metrics"),
     ("src/services/format_metrics_service.py", "aggregate_all_tenants"),
     # _save_inventory_to_db, _update_adapter_config_targeting_keys, _write_custom_targeting_keys and
-    # _write_inventory_batch removed — the sync reads gam_inventory through GAMInventoryRepository
+    # _write_inventory_batch removed — the sync reads gam_inventory through GAMInventoryRepository.
+    # get_ad_unit_tree and get_all_targeting_data deleted: #2571 dropped the endpoints that called them
     ("src/services/gam_inventory_service.py", "_upsert_inventory_item"),
-    ("src/services/gam_inventory_service.py", "get_ad_unit_tree"),
-    ("src/services/gam_inventory_service.py", "get_all_targeting_data"),
     ("src/services/gam_inventory_service.py", "get_product_inventory"),
     ("src/services/gam_inventory_service.py", "search_inventory"),
     ("src/services/gam_inventory_service.py", "suggest_inventory_for_product"),
