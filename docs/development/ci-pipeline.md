@@ -283,10 +283,23 @@ credential blast radius on fork PRs).
 
 Failures notify repository watchers via GitHub's default workflow notifications.
 
-**Local equivalent** (requires credentials + Docker):
+**Local equivalent** (requires credentials + Docker). The network is configuration
+(`ToolingSettings.gam_suite_network`), all or nothing: each contributor names the network
+their suite books against. With no GAM setting at all the preflight prints
+`GAM: not configured` (`./run_all_tests.sh` prints it itself, without uv, when no `GAM_*`
+variable is set) and the GAM tests xfail as "this environment configures no GAM
+network"; with some of them, a test fails naming each one that is unset; with all of them the
+preflight prints `GAM: configured, network <code>` and the tests book against it.
+`./run_all_tests.sh` checks them first with the read-only preflight below
+(`--skip-gam-preflight` or `GAM_SUITE_PREFLIGHT_SKIP=1` runs the suites anyway), and the run
+records the outcome as `gam_network` in `meta.json`.
 
 ```bash
-export GAM_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}'
+export GAM_SERVICE_ACCOUNT_KEY_FILE=/path/to/key.json   # or GAM_SERVICE_ACCOUNT_JSON='{...}'
+export GAM_SUITE_NETWORK_CODE=<your suite network> GAM_SUITE_ADVERTISER_ID=<an advertiser on it>
+export GAM_SUITE_AD_UNIT_IDS=<ad unit>,<ad unit>         # ACTIVE ad units on it
+export ENCRYPTION_KEY=<the stack's key>                 # the key is stored encrypted, as the server stores it
+uv run python scripts/gam_prerequisites_check.py --suite-network
 export DATABASE_URL=postgresql://adcp_user:secure_password_change_me@127.0.0.1:5435/postgres
 uv run pytest tests/e2e/ -m requires_gam -v --timeout=300
 ```
