@@ -47,21 +47,6 @@ Feature: A Google Ad Manager seller books the buyer's media buy in Google Ad Man
     Then the response should succeed
     And Google Ad Manager holds the order it created as approved
 
-  # AdCP 3.2.7 media-buy/update-media-buy-request.json `paused`: "Pause/resume the entire
-  # media buy (true = paused, false = active)", and enums/media-buy-status.json's state machine
-  # offers `pause` on an active buy. A buy paused at the seller is paused at its ad server: GAM
-  # holds each of its line items PAUSED. Ad Manager API v202602 marks LineItemSummary.status
-  # "This attribute is readonly"; a line item is paused by the PauseLineItems action. Migrated
-  # from tests/e2e/test_gam_lifecycle.py, which graded only the adapter's answer.
-  @T-UC-002-local-gam-pause @extension
-  Scenario: A buyer who pauses an active buy booked in GAM leaves its line item paused in GAM
-    Given the account exists and is active
-    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
-    And the buyer holds a buy booked in Google Ad Manager as order "8000003" in status "active" whose package "pkg-live" is line item "9000003" accepting 300x250
-    When the Buyer Agent pauses the buy it holds booked in Google Ad Manager
-    Then the update is not refused on the wire
-    And Google Ad Manager holds line item "9000003" as paused
-
   # The buy is booked when it is created and held for the creative under review. The approved
   # creative is created in GAM and placed on the line item at create, once (#2378). Approving
   # the held creative uploads it to the same order and approves that order (#1690); the

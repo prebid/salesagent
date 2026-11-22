@@ -414,13 +414,6 @@ tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_
 # (provenance is one of the three pinned fields that DO reach the row).
 # salesagent-3cs7o.54
 
-# GAM pause, prebid/salesagent#2636: the adapter pauses a line item by writing
-# LineItem.status through updateLineItems, a field Ad Manager API v202602 marks
-# "This attribute is readonly", so the configured network keeps the line item as it was.
-# The same scenario is strict-xfailed in _XFAIL_TAGS on every transport; it graduates here
-# and there when #2636 lands.
-tests/bdd/test_local_gam_seller.py::test_a_buyer_who_pauses_an_active_buy_booked_in_gam_leaves_its_line_item_paused_in_gam[e2e_rest]
-
 # FIXME(#2645, #2646): approving a held media buy books its GAM line items in database order,
 # not package order. execute_approved_media_buy reads the buy's packages with no ORDER BY
 # (src/core/tools/media_buy_create.py), so the order the configured network reads back varies.

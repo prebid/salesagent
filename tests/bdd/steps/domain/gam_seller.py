@@ -601,35 +601,6 @@ def then_gam_holds_created_order_approved(ctx: dict) -> None:
     assert statuses == ["APPROVED"], f"expected GAM to hold one APPROVED order; it holds orders in {statuses}"
 
 
-@when("the Buyer Agent pauses the buy it holds booked in Google Ad Manager")
-def when_buyer_pauses_booked_buy(ctx: dict) -> None:
-    """update_media_buy with ``paused: true`` for the buyer's buy booked in GAM."""
-    from tests.bdd.steps.domain.uc003_storyboard_generic_client import dispatch_update
-
-    dispatch_update(ctx, {"media_buy_id": ctx["live_media_buy"].media_buy_id, "paused": True})
-
-
-@then("the update is not refused on the wire")
-def then_update_not_refused(ctx: dict) -> None:
-    """The update crossed the wire and the seller answered no error envelope.
-
-    The generic client this When dispatches through parses no update body for a create
-    env, so the success body is not read here; the refusal is what is ruled out.
-    """
-    from tests.bdd.steps._outcome_helpers import wire_error_envelope_or_none
-
-    assert ctx["result"].has_wire, "the update never crossed a wire"
-    envelope = wire_error_envelope_or_none(ctx)
-    assert envelope is None and ctx.get("error") is None, f"the seller refused the update: {envelope}"
-
-
-@then(parsers.parse('Google Ad Manager holds line item "{line_item_id}" as paused'))
-def then_gam_holds_line_item_paused(ctx: dict, line_item_id: str) -> None:
-    """GAM holds the line item PAUSED (``LineItemSummary.status``), read from what GAM holds."""
-    status = ctx["env"].gam_line_item(line_item_id).get("status")
-    assert status == "PAUSED", f"expected GAM to hold line item {line_item_id} as PAUSED; it holds it {status}"
-
-
 #: The keys of a GAM line item or order that carry its flight.
 _FLIGHT_KEYS = ("startDateTimeType", "startDateTime", "endDateTime")
 

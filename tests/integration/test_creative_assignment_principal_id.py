@@ -113,7 +113,7 @@ def mock_format_spec():
         return mock_formats.get(format_id)
 
     with patch(
-        "src.core.tools.media_buy_create._get_format_spec_sync",
+        "src.core.tools._creative_trafficking._get_format_spec_sync",
         side_effect=format_spec_side_effect,
     ):
         yield

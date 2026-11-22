@@ -28,6 +28,7 @@ from tests.unit._architecture_helpers import (
 QUERY_FILES = [
     "src/core/tools/media_buy_delivery.py",
     "src/core/tools/media_buy_create.py",
+    "src/core/tools/_creative_trafficking.py",
     "src/core/tools/media_buy_update.py",
     "src/core/tools/media_buy_list.py",
     "src/core/tools/products.py",

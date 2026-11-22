@@ -208,7 +208,7 @@ class MediaBuyCreateEnv(
         "adapter": "src.core.tools.media_buy_create.get_adapter",
         "slack": "src.core.tools.media_buy_create.get_slack_notifier",
         "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
-        "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
+        "format_spec": "src.core.tools._creative_trafficking._get_format_spec_sync",
         **GAM_CLIENT_PATCH,
     }
     REST_ENDPOINT = "/api/v1/media-buys"

@@ -258,7 +258,7 @@ class TestCreativeMissingUrl:
 
         Anchors: media_buy_create.py:280-301
         """
-        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
+        from src.core.tools._creative_trafficking import _validate_creatives_before_adapter_call
 
         # Build a mock MediaPackage with creative_ids
         mock_package = MagicMock()
@@ -279,7 +279,7 @@ class TestCreativeMissingUrl:
 
         # The creative's data is read for real, by the one reader: it carries no asset an
         # ad server can serve.
-        with patch("src.core.tools.media_buy_create._get_format_spec_sync") as mock_get_format:
+        with patch("src.core.tools._creative_trafficking._get_format_spec_sync") as mock_get_format:
             # DB returns the creative
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
@@ -301,7 +301,7 @@ class TestCreativeMissingUrl:
 
         Anchors: media_buy_create.py:285-288
         """
-        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
+        from src.core.tools._creative_trafficking import _validate_creatives_before_adapter_call
 
         mock_package = MagicMock()
         mock_package.creative_ids = ["creative_1"]
@@ -316,7 +316,7 @@ class TestCreativeMissingUrl:
         mock_format_spec.output_format_ids = None
 
         # Read for real: a root-level image URL with no size, and a format spec stating none.
-        with patch("src.core.tools.media_buy_create._get_format_spec_sync") as mock_get_format:
+        with patch("src.core.tools._creative_trafficking._get_format_spec_sync") as mock_get_format:
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
@@ -472,7 +472,7 @@ class TestMultipleInvalidCreativesAccumulated:
 
         Anchors: media_buy_create.py:250-301
         """
-        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
+        from src.core.tools._creative_trafficking import _validate_creatives_before_adapter_call
 
         mock_package = MagicMock()
         mock_package.creative_ids = ["creative_1", "creative_2", "creative_3"]
@@ -496,7 +496,7 @@ class TestMultipleInvalidCreativesAccumulated:
         mock_format_spec.output_format_ids = None  # Non-generative
 
         # Read for real: none of the three carries an asset an ad server can serve.
-        with patch("src.core.tools.media_buy_create._get_format_spec_sync") as mock_get_format:
+        with patch("src.core.tools._creative_trafficking._get_format_spec_sync") as mock_get_format:
             session = MagicMock()
             session.scalars.return_value.all.return_value = creatives
 
