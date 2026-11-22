@@ -57,7 +57,7 @@ from src.core.helpers.publisher_property_helpers import (
     publisher_tag_selection,
     selection_digest,
 )
-from src.core.operator_errors import FormIssue, InvalidFormInput
+from src.core.operator_errors import FormIssue, InvalidFormInput, RecordNotFound
 from src.core.publisher_format_catalog import (
     PublisherCatalog,
     format_declarations_type,
@@ -2178,6 +2178,12 @@ def get_product_inventory(tenant_id, product_id):
         return jsonify({"inventory": result, "count": len(result)})
 
 
+class InventoryAssignmentNotFound(RecordNotFound):
+    """The inventory assignment a product's unassign names does not exist."""
+
+    MESSAGE = "Inventory assignment not found"
+
+
 @products_bp.route("/<product_id>/inventory/<int:mapping_id>", methods=["DELETE"])
 @log_admin_action("unassign_inventory_from_product")
 @require_tenant_access()
@@ -2191,7 +2197,7 @@ def unassign_inventory_from_product(tenant_id, product_id, mapping_id):
         mapping = db_session.scalars(stmt).first()
 
         if not mapping:
-            return jsonify({"success": False, "message": "Inventory assignment not found"}), 404
+            raise InventoryAssignmentNotFound(f"Product {product_id} has no inventory assignment {mapping_id}")
 
         # Store details for logging
         inventory_name = f"{mapping.inventory_type}:{mapping.inventory_id}"
