@@ -312,6 +312,20 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     And Google Ad Manager received no order and no line item
     And Google Ad Manager created no creative
 
+  # The creative is the image its option requires, whatever else its manifest carries. AdCP 3.2.7
+  # formats/canonical/image.json `slots`: "Products MAY override the default", so an image option
+  # may also take an optional video. The served file is the one in the `image_main` slot, and its
+  # type is that asset's own, not the type of the first media asset in the manifest (Codex review
+  # on PR #2582: an image labelled as video was refused as UNSUPPORTED_FEATURE).
+  @T-UC-002-local-gam-creative-image-beside-video @extension
+  Scenario: An image creative that also carries a video becomes one image redirect creative of its image
+    Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "image", "format_option_id": "image_300x250_with_video", "params": {"width": 300, "height": 250, "slots": [{"asset_group_id": "image_main", "asset_type": "image", "required": true}, {"asset_group_id": "video", "asset_type": "video", "required": false}, {"asset_group_id": "landing_page_url", "asset_type": "url", "required": false}]}}]}'
+    And the package references the buyer's approved 300x250 image creative "cr-image-video" showing "https://cdn.example.com/banner-300x250.png", with click-through "https://prebid.org/landing", beside the video "https://cdn.example.com/clip.mp4" in its "video" slot
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And Google Ad Manager created one image redirect creative for advertiser "3000001" showing "https://cdn.example.com/banner-300x250.png" and clicking through to "https://prebid.org/landing"
+    And Google Ad Manager created that creative at size 300x250
+
   # F1 (PR #2582 review): the seller's approval reads the creative once for the union of its
   # packages, so GAM plans it against every line item's placeholders together; the "prod_a"
   # line item then takes the creative at 728x90 too, a size only prod_b's option accepts.

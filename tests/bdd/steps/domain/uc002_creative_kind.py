@@ -48,6 +48,7 @@ from tests.factories.creative_asset import (
     parse_sizes,
     prompt_assets,
     url_spec,
+    video_spec,
 )
 from tests.factories.request import CreativeAssetRequestFactory
 
@@ -215,21 +216,36 @@ def given_legacy_tag_url_creative(ctx: dict, creative_id: str, url: str, url_typ
 @given(
     parsers.re(
         r'the package references the buyer\'s approved (?P<width>\d+)x(?P<height>\d+) image creative "(?P<creative_id>'
-        r'[^"]+)" showing "(?P<url>[^"]+)"(?:, with click-through "(?P<click_url>[^"]+)")?' + _TRACKER + "$"
+        r'[^"]+)" showing "(?P<url>[^"]+)"(?:, with click-through "(?P<click_url>[^"]+)")?'
+        + _TRACKER
+        + r'(?:, beside the video "(?P<video_url>[^"]+)" in its "(?P<video_slot>[^"]+)" slot)?$'
     )
 )
 def given_sized_image_creative(
-    ctx: dict, width: str, height: str, creative_id: str, url: str, click_url: str | None, tracker_url: str | None
+    ctx: dict,
+    width: str,
+    height: str,
+    creative_id: str,
+    url: str,
+    click_url: str | None,
+    tracker_url: str | None,
+    video_url: str | None,
+    video_slot: str | None,
 ) -> None:
     """A canonical image creative whose ``image_main`` file is *width* by *height*.
 
     With a click-through, the manifest carries it as a url asset under the registry's canonical
     ``landing_page_url`` slot with ``url_type: "clickthrough"`` (core/assets/url-asset.json).
+    With a video, the manifest carries it in *video_slot*, ahead of ``image_main``, so a reader
+    that takes the first media asset in the manifest takes the video.
     """
     extra = _tracker_specs(tracker_url)
     if click_url is not None:
         extra.append(url_spec("landing_page_url", url=click_url, url_type="clickthrough"))
-    store_package_creative(ctx, creative_id, _image_assets(int(width), int(height), url, *extra), kind="image")
+    assets = _image_assets(int(width), int(height), url, *extra)
+    if video_url is not None:
+        assets = build_assets(video_spec(str(video_slot), url=video_url)) | assets
+    store_package_creative(ctx, creative_id, assets, kind="image")
 
 
 @given(
