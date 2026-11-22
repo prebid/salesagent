@@ -28,7 +28,7 @@ raises loudly instead of dispatching somewhere wrong.
 tests/bdd/
 ├── features/
 │   ├── BR-ADMIN-ACCOUNTS.feature          # Gherkin scenarios
-│   └── BR-ADMIN-TENANT-SCOPING.feature    # tenant-scoped route authorization (#2203)
+│   └── BR-ADMIN-TENANT-SCOPING.feature    # tenant-scoped route authorization (#2203, #2204)
 ├── steps/domain/
 │   ├── admin_accounts.py            # step definitions
 │   └── admin_tenant_scoping.py      # step definitions
@@ -53,13 +53,15 @@ live-stack env at `e2e_config.base_url` for `e2e_admin`.
 `tests/unit/test_bdd_admin_transport_parametrization.py` takes each row's builder from
 `ENV_ROUTES` and checks it on both transports. The env enters `no_configured_super_admins()`
 (`tests/helpers/admin_session.py`) for the scenario, so the member it logs in as is never an
-ambient super admin. The caller's active row in the target tenant holds the `manager` role,
-the least role that may send a write, unless the scenario names another. T-ADMIN-SCOPE-011
-and T-ADMIN-SCOPE-012 name one, because the OIDC test route asks for `admin`. The three rows
-the membership lookup must not match (the target tenant's other member, the caller's row in
-another tenant, and the caller's inactive row) hold `admin`, which passes the role check of
-all five routes, so a refusal on those rows is the lookup's. When it exits, the env deletes
-the target tenant and the home tenant it created. The feature file is the one statement of
+ambient super admin; T-ADMIN-SCOPE-014 states one explicitly, with the two session keys
+`is_super_admin()` caches. The caller's active row in the target tenant holds the `manager`
+role, the least role that may send a write, unless the scenario names another.
+T-ADMIN-SCOPE-011 and T-ADMIN-SCOPE-012 name one, because the OIDC test route asks for
+`admin`. The three rows the membership lookup must not match (the target tenant's other
+member, the caller's row in another tenant, and the caller's inactive row) hold `admin`,
+which passes the role check of every route in the harness's `ROUTES`, so a refusal on those
+rows is the lookup's. When it exits, the env deletes the target tenant and the home tenant
+it created. The feature file is the one statement of
 the contract: the pytest twins that once ran the same assertions in-process and against the
 Docker stack were deleted once `AdminTransport.E2E` carried the Gherkin, as
 BR-ADMIN-ACCOUNTS' own `test_admin_bdd_e2e.py` had been.

@@ -9,15 +9,15 @@ Provides REST API endpoints for accessing GAM reporting data with:
 
 import logging
 import re
-from functools import wraps
 from typing import Literal, cast
 
 import pytz
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, jsonify, request
 from sqlalchemy import select
 
 from scripts.ops.gam_helper import get_ad_manager_client_for_tenant
 from src.adapters.gam_reporting_service import GAMReportingService
+from src.admin.utils.helpers import require_tenant_access
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Tenant
 from src.core.database.repositories.principal import PrincipalRepository
@@ -57,59 +57,8 @@ def validate_timezone(tz_str: str) -> bool:
         return False
 
 
-def require_auth(f):
-    """Decorator to require authentication for API endpoints.
-
-    This is a specialized version for API endpoints that returns JSON 401 responses
-    instead of redirects. It uses the same session checking as the main admin UI.
-    """
-
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        from flask import request
-
-        # Check if user is authenticated (align with admin_ui style)
-        # Admin UI sets session["user"] on successful authentication
-        has_user = "user" in session
-        logger.debug(
-            f"GAM API auth check - path: {request.path}, session keys: {list(session.keys())}, has_user: {has_user}"
-        )
-
-        if not has_user:
-            logger.warning(
-                f"GAM API authentication failed - no user in session. Path: {request.path}, Session keys: {list(session.keys())}"
-            )
-            return jsonify({"error": "Authentication required. Please log in to the admin UI."}), 401
-
-        return f(*args, **kwargs)
-
-    return decorated_function
-
-
-def get_tenant_access(tenant_id: str) -> bool:
-    """Check if the current user has access to the specified tenant"""
-    # Handle admin_ui style sessions
-    if "role" in session:
-        # Super admin has access to all tenants
-        if session.get("role") == "super_admin":
-            return True
-
-        # Check if user has access to this specific tenant
-        if session.get("tenant_id") == tenant_id:
-            return True
-
-    # Handle legacy user object style (if any)
-    user = session.get("user", {})
-    if user.get("is_super_admin"):
-        return True
-
-    user_tenants = user.get("tenants", [])
-    return tenant_id in user_tenants
-
-
-# FIXME(#2204): the module-local @require_auth stands in for require_tenant_access().
 @gam_reporting_api.route("/api/tenant/<tenant_id>/gam/reporting", methods=["GET"])
-@require_auth
+@require_tenant_access()
 def get_gam_reporting(tenant_id: str):
     """
     Get GAM reporting data
@@ -124,10 +73,6 @@ def get_gam_reporting(tenant_id: str):
     # Validate tenant_id
     if not validate_tenant_id(tenant_id):
         return jsonify({"error": "Invalid tenant ID format"}), 400
-
-    # Check access
-    if not get_tenant_access(tenant_id):
-        return jsonify({"error": "Access denied to this tenant"}), 403
 
     # Check if tenant is using GAM
     with get_db_session() as db_session:
@@ -209,9 +154,8 @@ def get_gam_reporting(tenant_id: str):
     return jsonify(response)
 
 
-# FIXME(#2204): the module-local @require_auth stands in for require_tenant_access().
 @gam_reporting_api.route("/api/tenant/<tenant_id>/gam/reporting/advertiser/<advertiser_id>/summary", methods=["GET"])
-@require_auth
+@require_tenant_access()
 def get_advertiser_summary(tenant_id: str, advertiser_id: str):
     """
     Get summary reporting data for a specific advertiser
@@ -225,10 +169,6 @@ def get_advertiser_summary(tenant_id: str, advertiser_id: str):
         return jsonify({"error": "Invalid tenant ID format"}), 400
     if not validate_numeric_id(advertiser_id):
         return jsonify({"error": "Invalid advertiser ID format"}), 400
-
-    # Check access
-    if not get_tenant_access(tenant_id):
-        return jsonify({"error": "Access denied to this tenant"}), 403
 
     # Check if tenant is using GAM
     with get_db_session() as db_session:
@@ -268,9 +208,8 @@ def get_advertiser_summary(tenant_id: str, advertiser_id: str):
     return jsonify({"success": True, "data": summary})
 
 
-# FIXME(#2204): the module-local @require_auth stands in for require_tenant_access().
 @gam_reporting_api.route("/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting", methods=["GET"])
-@require_auth
+@require_tenant_access()
 def get_principal_reporting(tenant_id: str, principal_id: str):
     """
     Get GAM reporting data for a specific principal (advertiser)
@@ -287,10 +226,6 @@ def get_principal_reporting(tenant_id: str, principal_id: str):
         return jsonify({"error": "Invalid tenant ID format"}), 400
     if not validate_principal_id(principal_id):
         return jsonify({"error": "Invalid principal ID format"}), 400
-
-    # Check access
-    if not get_tenant_access(tenant_id):
-        return jsonify({"error": "Access denied to this tenant"}), 403
 
     # Get the principal's advertiser_id
     with get_db_session() as db_session:
@@ -379,9 +314,8 @@ def get_principal_reporting(tenant_id: str, principal_id: str):
     return jsonify(response)
 
 
-# FIXME(#2204): the module-local @require_auth stands in for require_tenant_access().
 @gam_reporting_api.route("/api/tenant/<tenant_id>/gam/reporting/countries", methods=["GET"])
-@require_auth
+@require_tenant_access()
 def get_country_breakdown(tenant_id: str):
     """
     Get GAM reporting data broken down by country
@@ -396,10 +330,6 @@ def get_country_breakdown(tenant_id: str):
     # Validate tenant_id
     if not validate_tenant_id(tenant_id):
         return jsonify({"error": "Invalid tenant ID format"}), 400
-
-    # Check access
-    if not get_tenant_access(tenant_id):
-        return jsonify({"error": "Access denied to this tenant"}), 403
 
     # Check if tenant is using GAM
     with get_db_session() as db_session:
@@ -460,9 +390,8 @@ def get_country_breakdown(tenant_id: str):
     return jsonify({"success": True, "data": country_data})
 
 
-# FIXME(#2204): the module-local @require_auth stands in for require_tenant_access().
 @gam_reporting_api.route("/api/tenant/<tenant_id>/gam/reporting/ad-units", methods=["GET"])
-@require_auth
+@require_tenant_access()
 def get_ad_unit_breakdown(tenant_id: str):
     """
     Get GAM reporting data broken down by ad unit
@@ -478,10 +407,6 @@ def get_ad_unit_breakdown(tenant_id: str):
     # Validate tenant_id
     if not validate_tenant_id(tenant_id):
         return jsonify({"error": "Invalid tenant ID format"}), 400
-
-    # Check access
-    if not get_tenant_access(tenant_id):
-        return jsonify({"error": "Access denied to this tenant"}), 403
 
     # Check if tenant is using GAM
     with get_db_session() as db_session:
@@ -546,9 +471,8 @@ def get_ad_unit_breakdown(tenant_id: str):
     return jsonify({"success": True, "data": ad_unit_data})
 
 
-# FIXME(#2204): the module-local @require_auth stands in for require_tenant_access().
 @gam_reporting_api.route("/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting/summary", methods=["GET"])
-@require_auth
+@require_tenant_access()
 def get_principal_summary(tenant_id: str, principal_id: str):
     """
     Get summary reporting data for a specific principal (advertiser)
@@ -562,10 +486,6 @@ def get_principal_summary(tenant_id: str, principal_id: str):
         return jsonify({"error": "Invalid tenant ID format"}), 400
     if not validate_principal_id(principal_id):
         return jsonify({"error": "Invalid principal ID format"}), 400
-
-    # Check access
-    if not get_tenant_access(tenant_id):
-        return jsonify({"error": "Access denied to this tenant"}), 403
 
     # Get the principal's advertiser_id
     with get_db_session() as db_session:

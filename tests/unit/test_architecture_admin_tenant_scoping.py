@@ -64,7 +64,6 @@ _LOGIN_ENTRY = LoginEntry()
 _INLINE_DEAD_ROLE_CHECK = Debt(2233, "inline session['role'] viewer/tenant_admin check that no production login sets")
 _INLINE_SESSION_TENANT_CHECK = Debt(2233, "inline session['tenant_id'] == tenant_id compare instead of the decorator")
 _PR_2075 = Debt(2075, "that PR adds require_tenant_access() to publisher partners; remove when it merges")
-_ISSUE_2204 = Debt(2204, "the module-local bare @require_auth in gam_reporting_api has to be removed first")
 
 # (endpoint, rule) -> why nothing in its wrapper chain authorizes the caller. Only ever shrinks.
 EXEMPT: dict[tuple[str, str], LoginEntry | Debt] = {
@@ -89,21 +88,6 @@ EXEMPT: dict[tuple[str, str], LoginEntry | Debt] = {
         "publisher_partners.get_publisher_properties",
         "/tenant/<tenant_id>/publisher-partners/<path:domain>/properties",
     ): _PR_2075,
-    ("gam_reporting_api.get_gam_reporting", "/api/tenant/<tenant_id>/gam/reporting"): _ISSUE_2204,
-    (
-        "gam_reporting_api.get_advertiser_summary",
-        "/api/tenant/<tenant_id>/gam/reporting/advertiser/<advertiser_id>/summary",
-    ): _ISSUE_2204,
-    (
-        "gam_reporting_api.get_principal_reporting",
-        "/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting",
-    ): _ISSUE_2204,
-    ("gam_reporting_api.get_country_breakdown", "/api/tenant/<tenant_id>/gam/reporting/countries"): _ISSUE_2204,
-    ("gam_reporting_api.get_ad_unit_breakdown", "/api/tenant/<tenant_id>/gam/reporting/ad-units"): _ISSUE_2204,
-    (
-        "gam_reporting_api.get_principal_summary",
-        "/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting/summary",
-    ): _ISSUE_2204,
 }
 
 _FIX_HINT = (
