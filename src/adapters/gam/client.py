@@ -6,17 +6,103 @@ Provides centralized access to GAM API services with health checking.
 """
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
+import zeep.exceptions
+from google.auth.exceptions import GoogleAuthError
 from googleads import ad_manager
+from googleads.errors import GoogleAdsError
 
 from src.core.exceptions import AdCPConfigurationError
+from src.core.operator_errors import UpstreamFailure, safe_error_message
 
 from .auth import GAMAuthManager
 from .utils.error_handler import map_gam_exception
 from .utils.health_check import GAMHealthChecker, HealthCheckResult, HealthStatus
 
 logger = logging.getLogger(__name__)
+
+#: What a googleads SOAP service call raises when GAM, or the way to it, fails: the
+#: client turns a SOAP fault into ``GoogleAdsServerFault`` (a ``GoogleAdsError``), zeep
+#: raises its own ``Error`` for a reply that is not SOAP, google-auth raises
+#: ``GoogleAuthError`` when the credentials cannot be refreshed, and the transport's
+#: ``requests.RequestException`` is an ``OSError`` (``requests`` itself is banned in
+#: ``src/`` by ruff-egress.toml, so it is not named here). Private: a caller outside
+#: this module catches :class:`GAMCallFailed`.
+_GAM_CALL_ERRORS: tuple[type[Exception], ...] = (GoogleAdsError, zeep.exceptions.Error, GoogleAuthError, OSError)
+
+
+class GAMCallFailed(UpstreamFailure):
+    """A GAM call made for an operator failed: GAM refused it, or GAM could not be reached.
+
+    Raised in place of the vendor's exception. Its one detail is the sentence the fault
+    was logged under, which ends with the reference that finds it in the log.
+    """
+
+    MESSAGE = "The call to Google Ad Manager failed"
+
+
+@contextmanager
+def _operator_call(call: str) -> Iterator[None]:
+    """Run the GAM *call* for an operator: a vendor failure is logged once and raised as :class:`GAMCallFailed`."""
+    try:
+        yield
+    except _GAM_CALL_ERRORS as fault:
+        context = f"GAM {call} failed"
+        raise GAMCallFailed(context, details=(safe_error_message(fault, context),)) from fault
+
+
+def safe_get(obj, key, default=None):
+    """Get value from dict or zeep SOAP object.
+
+    GAM API returns zeep objects which support bracket notation (obj["key"])
+    but not .get() method. This helper handles both dict and zeep objects.
+    """
+    if hasattr(obj, "get"):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _network_summary(network) -> dict[str, Any]:
+    """The fields of a GAM ``Network`` the connection test reports (GAM's camelCase names)."""
+    return {
+        "id": network["id"],
+        "displayName": network["displayName"],
+        "networkCode": network["networkCode"],
+        "currencyCode": safe_get(network, "currencyCode", "USD"),
+        "secondaryCurrencyCodes": safe_get(network, "secondaryCurrencyCodes") or [],
+        "timeZone": safe_get(network, "timeZone"),
+    }
+
+
+def accessible_networks(client: ad_manager.AdManagerClient, auth_method: str) -> list[dict[str, Any]]:
+    """The networks *client*'s credentials reach; raises :class:`GAMCallFailed` when GAM fails.
+
+    A service account has its network code set already, so it asks for the current network.
+    OAuth asks for all networks, and falls back to the current one when this API version
+    has no ``getAllNetworks``.
+    """
+    with _operator_call("network lookup"):
+        network_service = client.GetService("NetworkService")
+        if auth_method != "service_account":
+            try:
+                all_networks = network_service.getAllNetworks()
+            except AttributeError:
+                logger.info("getAllNetworks not available, falling back to getCurrentNetwork")
+            else:
+                logger.info(f"getAllNetworks() returned {len(all_networks or [])} networks")
+                return [_network_summary(network) for network in all_networks or []]
+        current_network = network_service.getCurrentNetwork()
+        logger.info(f"getCurrentNetwork() returned: {current_network}")
+        return [_network_summary(current_network)]
+
+
+def current_network_user(client: ad_manager.AdManagerClient) -> Any:
+    """The GAM user *client*'s credentials act as, on its network; raises :class:`GAMCallFailed` when GAM fails."""
+    with _operator_call("current user lookup"):
+        return client.GetService("UserService").getCurrentUser()
 
 
 def current_network_time_zone(client: ad_manager.AdManagerClient) -> str:
@@ -189,32 +275,3 @@ class GAMClientManager:
         """
         health_checker = self.get_health_checker()
         return health_checker.check_permissions(advertiser_id)
-
-    @classmethod
-    def from_existing_client(cls, client: ad_manager.AdManagerClient) -> "GAMClientManager":
-        """Create a GAMClientManager from an existing client instance.
-
-        This is useful when integrating with existing code that already has
-        an initialized GAM client.
-
-        Args:
-            client: Existing AdManagerClient instance
-
-        Returns:
-            GAMClientManager instance wrapping the existing client
-        """
-        # Create a minimal config since we have the client already
-        config = {"existing_client": True}
-        network_code = getattr(client, "network_code", "unknown")
-
-        # Create instance bypassing __init__
-        manager = cls.__new__(cls)
-        manager.config = config
-        manager.network_code = network_code
-        # Create a minimal auth manager (not used since client exists)
-        manager.auth_manager = GAMAuthManager(config)
-        manager._client = client
-        manager._health_checker = None
-
-        logger.info(f"Created GAMClientManager from existing client (network: {network_code})")
-        return manager

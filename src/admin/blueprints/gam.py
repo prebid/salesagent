@@ -9,7 +9,7 @@ from flask import Blueprint, jsonify, render_template
 from googleads import ad_manager, oauth2
 from sqlalchemy import select
 
-from src.adapters.gam.utils.error_handler import GAM_CALL_ERRORS
+from src.adapters.gam.client import GAMCallFailed, accessible_networks, current_network_user, safe_get
 from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
 from src.adapters.gam_reporting_service import GAMReportingService
 from src.admin.form_validation import json_object_body, parse_json_field
@@ -27,7 +27,6 @@ from src.core.operator_errors import (
     InvalidFormInput,
     StateConflict,
     TenantNotFound,
-    safe_error_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,17 +120,6 @@ def validate_gam_user_response(user) -> tuple[bool, str | None]:
         return False, "Missing required field: id"
 
     return True, None
-
-
-def safe_get(obj, key, default=None):
-    """Get value from dict or zeep SOAP object.
-
-    GAM API returns zeep objects which support bracket notation (obj["key"])
-    but not .get() method. This helper handles both dict and zeep objects.
-    """
-    if hasattr(obj, "get"):
-        return obj.get(key, default)
-    return getattr(obj, key, default)
 
 
 def validate_gam_config(data: dict) -> None:
@@ -314,8 +302,7 @@ def detect_gam_network(tenant_id):
             try:
                 # Set the network code in the client so we can get user info
                 client.network_code = str(network["networkCode"])
-                user_service = client.GetService("UserService")
-                current_user = user_service.getCurrentUser()
+                current_user = current_network_user(client)
 
                 if current_user:
                     # Validate user response
@@ -325,9 +312,9 @@ def detect_gam_network(tenant_id):
                         logger.info(f"Detected current user ID: {trafficker_id}")
                     else:
                         logger.warning(f"Invalid user response: {error_msg}")
-            except GAM_CALL_ERRORS:
-                # The trafficker id is optional here: the operator can enter it.
-                logger.warning("Could not get the current GAM user; trafficker id left unset", exc_info=True)
+            except GAMCallFailed:
+                # The trafficker id is optional here: the operator can enter it. The fault is logged.
+                logger.warning("Could not get the current GAM user; trafficker id left unset")
 
             return jsonify(
                 {
@@ -764,38 +751,6 @@ def get_service_account_email(tenant_id):
         return jsonify({"success": True, "service_account_email": None, "message": "No service account created"})
 
 
-def _network_summary(network) -> dict:
-    """The fields of a GAM ``Network`` the connection test reports (GAM's camelCase names)."""
-    return {
-        "id": network["id"],
-        "displayName": network["displayName"],
-        "networkCode": network["networkCode"],
-        "currencyCode": safe_get(network, "currencyCode", "USD"),
-        "secondaryCurrencyCodes": safe_get(network, "secondaryCurrencyCodes") or [],
-        "timeZone": safe_get(network, "timeZone"),
-    }
-
-
-def _accessible_networks(network_service, auth_method: str) -> list[dict]:
-    """The networks the credentials reach; raises one of :data:`GAM_CALL_ERRORS` when GAM fails.
-
-    A service account has its network code set already, so it asks for the current network.
-    OAuth asks for all networks, and falls back to the current one when this API version
-    has no ``getAllNetworks``.
-    """
-    if auth_method != "service_account":
-        try:
-            all_networks = network_service.getAllNetworks()
-        except AttributeError:
-            logger.info("getAllNetworks not available, falling back to getCurrentNetwork")
-        else:
-            logger.info(f"getAllNetworks() returned {len(all_networks or [])} networks")
-            return [_network_summary(network) for network in all_networks or []]
-    current_network = network_service.getCurrentNetwork()
-    logger.info(f"getCurrentNetwork() returned: {current_network}")
-    return [_network_summary(current_network)]
-
-
 @gam_bp.route("/test-connection", methods=["POST"])
 @log_admin_action("test_gam_connection")
 @require_tenant_access()
@@ -904,17 +859,9 @@ def test_gam_connection(tenant_id):
     else:
         client = ad_manager.AdManagerClient(oauth2_client, "AdCP-Sales-Agent-Setup")
 
-    # Get network service
-    network_service = client.GetService("NetworkService")
-
-    # Get all networks user has access to. A failed lookup is reported below with the
-    # reference it was logged under.
-    networks: list[dict] = []
-    network_error = None
-    try:
-        networks = _accessible_networks(network_service, auth_method)
-    except GAM_CALL_ERRORS as e:
-        network_error = safe_error_message(e, f"Network lookup failed for tenant {tenant_id}")
+    # Get all networks user has access to. A failed lookup raises GAMCallFailed, which the
+    # error handler answers.
+    networks = accessible_networks(client, auth_method)
 
     # If no network is accessible, the connection test must fail.
     # The OAuth / service-account handshake can succeed while the
@@ -942,7 +889,7 @@ def test_gam_connection(tenant_id):
             )
         raise ConnectionTestFailed(
             f"GAM connection test for tenant {tenant_id}: no accessible network",
-            details=(error_msg, network_error) if network_error else (error_msg,),
+            details=(error_msg,),
         )
 
     result = {
@@ -992,17 +939,16 @@ def test_gam_connection(tenant_id):
             result["companies"] = companies
 
             # Get current user info
-            user_service = client.GetService("UserService")
-            current_user = user_service.getCurrentUser()
+            current_user = current_network_user(client)
             result["current_user"] = {
                 "id": current_user.id,
                 "name": current_user.name,
                 "email": current_user.email,
             }
 
-        except GAM_CALL_ERRORS as e:
-            # It's okay if we can't fetch companies/users.
-            result["warning"] = safe_error_message(e, "Connected but couldn't fetch all resources")
+        except GAMCallFailed as e:
+            # It's okay if we can't fetch companies/users. The detail names the logged fault.
+            result["warning"] = " ".join(("Connected but couldn't fetch all resources.", *e.details()))
 
     return jsonify(result)
 
