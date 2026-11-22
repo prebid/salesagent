@@ -359,6 +359,22 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the JSON response has "success" as false
     And the JSON error is the "SlackWebhookNotConfigured" refusal
 
+  # A GAM call that fails is GAMCallFailed (src/adapters/gam/client.py): its detail is the
+  # sentence the fault was logged under, never GAM's own text. GAM is the stand-in network
+  # (tests/helpers/gam_client.py), which refuses getCurrentNetwork with an ApiError reason. The
+  # live server has no stand-in network and CI has no GAM network (#2583), so on e2e the Given
+  # declares itself unsupported (AdminAccountEnv.serve_gam_network): graded in-process only.
+  @T-ADMIN-REFUSAL-038 @json @connection-test @gam
+  Scenario: A GAM connection test whose network lookup GAM refuses is answered as a failed GAM call
+    Given another tenant of this seller, onboarded to Google Ad Manager with a service account key
+    And Google Ad Manager refuses the current network lookup with "QuotaError.EXCEEDED_QUOTA"
+    When the settings page tests that tenant's GAM connection with its service account
+    Then the page returns status 502
+    And the JSON response has "success" as false
+    And the JSON error is the "GAMCallFailed" refusal
+    And the JSON details are the logged failure "GAM network lookup failed" with a reference
+    And the answer does not carry GAM's fault text
+
   # Neither test deployment sets APPROXIMATED_API_KEY.
   @T-ADMIN-REFUSAL-028 @json @approximated
   Scenario: A DNS widget token on a deployment with no Approximated key is refused

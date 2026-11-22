@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Account, Tenant
+from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.admin_client import AdminClient, AdminResponse
 from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
 
@@ -99,13 +100,19 @@ class AdminAccountEnv:
         self._database_faults: list[tuple[str, str]] = []
         #: The in-process scripted model origin (:meth:`script_ai_connection_test`), once started.
         self._llm_origin: str | None = None
-        #: What ``__exit__`` closes besides the client: the in-process origin and its variable.
-        self._llm_cleanups = ExitStack()
+        #: What ``__exit__`` closes besides the client: the in-process origin and its variable,
+        #: and the stand-in GAM network.
+        self._cleanups = ExitStack()
 
     @property
     def mode(self) -> str:
         """Current transport mode: 'integration' or 'e2e'."""
         return self._mode
+
+    @property
+    def is_e2e(self) -> bool:
+        """Whether the routes run on the live server, which :func:`realize_e2e` setup branches on."""
+        return self._mode == "e2e"
 
     def __enter__(self) -> AdminAccountEnv:
         # Not a BaseTestEnv, so it keeps its own __enter__ — but it owes the same
@@ -138,7 +145,7 @@ class AdminAccountEnv:
 
     def _cleanup(self) -> None:
         """Release what ``_setup`` and the scenario's steps left behind."""
-        self._llm_cleanups.close()
+        self._cleanups.close()
         self._llm_origin = None
         self._drop_database_faults()
         self._cleanup_accounts()
@@ -524,16 +531,26 @@ class AdminAccountEnv:
             product = ProductFactory(tenant=tenant, product_id=product_id)
             PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
 
-    def onboard_gam(self, *, tenant_id: str | None = None, service_account_email: str | None = None) -> None:
+    def onboard_gam(
+        self,
+        *,
+        tenant_id: str | None = None,
+        service_account_email: str | None = None,
+        service_account_json: str | None = None,
+    ) -> None:
         """Leave *tenant_id* (this env's tenant by default) with the rows GAM onboarding writes.
 
-        The service account email is stored if given; GAM onboarding stores none.
+        The service account email is stored if given; GAM onboarding stores none. Given a
+        service account key, the tenant authenticates to GAM with it.
         """
         from tests.utils.tenant_setup import onboard_gam
 
         with self._seeding(tenant_id) as (_, tenant):
             config = onboard_gam(tenant, trafficker_id="bdd_trafficker")
             config.gam_service_account_email = service_account_email
+            if service_account_json is not None:
+                config.gam_auth_method = "service_account"
+                config.gam_service_account_json = service_account_json
 
     def seed_running_inventory_sync(self, sync_id: str, *, tenant_id: str | None = None) -> None:
         """Store an inventory sync *sync_id* of *tenant_id* (this env's by default), started a moment ago, still running."""
@@ -785,6 +802,26 @@ class AdminAccountEnv:
 
             from tests.e2e.scripted_llm_origin_service import run_scripted_llm_origin
 
-            self._llm_origin = self._llm_cleanups.enter_context(run_scripted_llm_origin(host="127.0.0.1", port=0))
-            self._llm_cleanups.enter_context(patch.dict(os.environ, {"GOOGLE_GEMINI_BASE_URL": self._llm_origin}))
+            self._llm_origin = self._cleanups.enter_context(run_scripted_llm_origin(host="127.0.0.1", port=0))
+            self._cleanups.enter_context(patch.dict(os.environ, {"GOOGLE_GEMINI_BASE_URL": self._llm_origin}))
         return self._llm_origin
+
+    @realize_e2e(
+        e2e_unsupported(
+            "the live server has no stand-in Google Ad Manager network, and CI has no GAM network "
+            "to call instead (#2583): a GAM call there would call Google"
+        )
+    )
+    def serve_gam_network(self, **network_answers: Any) -> None:
+        """Every GAM client the admin app builds is one stand-in network, until ``__exit__``.
+
+        The stand-in is ``stub_gam_client``, patched where ``GamSellerMixin`` patches it;
+        *network_answers* are its keywords.
+        """
+        from unittest.mock import patch
+
+        from tests.harness.gam import GAM_CLIENT_PATCH
+        from tests.helpers.gam_client import stub_gam_client
+
+        client = stub_gam_client(**network_answers)
+        self._cleanups.enter_context(patch(GAM_CLIENT_PATCH["gam_client"], return_value=client))

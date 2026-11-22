@@ -10,6 +10,7 @@ import json
 
 from pytest_bdd import given, parsers, then, when
 
+from src.core.operator_errors import logged_failure_pattern
 from tests.bdd.steps.domain.admin_accounts import (
     _answer_text,
     _datatable_to_form,
@@ -21,6 +22,7 @@ from tests.bdd.steps.domain.admin_inventory_profiles import IMAGE_300X250, _moda
 from tests.bdd.steps.domain.admin_unexpected_errors import _other_tenant_id, script_accept
 from tests.harness.admin_client import BROWSER_PAGE_HEADERS
 from tests.helpers.admin_product_form import minimal_product_create_form, minimal_product_edit_form
+from tests.helpers.gam_credentials import service_account_json
 from tests.helpers.operator_refusals import operator_refusal_classes
 
 
@@ -313,6 +315,41 @@ def then_json_details_are(ctx: dict, datatable: list) -> None:
     expected = [str(row[0]) for row in datatable[1:]]
     details = _require_admin_page(ctx).get_json().get("details")
     assert details == expected, f"Expected details {expected!r}, got {details!r}"
+
+
+@given("another tenant of this seller, onboarded to Google Ad Manager with a service account key")
+def given_another_tenant_on_gam_with_service_account_key(ctx: dict) -> None:
+    env = _env(ctx)
+    ctx["admin_other_tenant_id"] = env.seed_tenant()
+    env.onboard_gam(tenant_id=ctx["admin_other_tenant_id"], service_account_json=service_account_json())
+
+
+@given(parsers.parse('Google Ad Manager refuses the current network lookup with "{reason}"'))
+def given_gam_refuses_current_network_lookup(ctx: dict, reason: str) -> None:
+    ctx["gam_fault_reason"] = reason
+    _env(ctx).serve_gam_network(network_fault=reason)
+
+
+@when("the settings page tests that tenant's GAM connection with its service account")
+def when_test_gam_connection_with_service_account(ctx: dict) -> None:
+    body = {"auth_method": "service_account"}
+    ctx["admin_page"] = _env(ctx).fetch_tenant_route(_other_tenant_id(ctx), "gam/test-connection", body)
+
+
+@then(parsers.parse('the JSON details are the logged failure "{context}" with a reference'))
+def then_json_details_are_logged_failure(ctx: dict, context: str) -> None:
+    """The one detail is what ``safe_error_message`` returns for *context*, with the reference it logged under."""
+    details = _require_admin_page(ctx).get_json().get("details")
+    assert isinstance(details, list) and len(details) == 1, f"Expected one detail, got {details!r}"
+    assert logged_failure_pattern(context).fullmatch(details[0]), (
+        f"Expected {context!r} with a reference, got {details[0]!r}"
+    )
+
+
+@then("the answer does not carry GAM's fault text")
+def then_answer_omits_gam_fault_text(ctx: dict) -> None:
+    reason = ctx["gam_fault_reason"]
+    assert reason not in _answer_text(ctx), f"The answer carries GAM's fault text {reason!r}"
 
 
 @given(parsers.parse('another tenant of this seller, authorizing the domain "{domain}"'))
