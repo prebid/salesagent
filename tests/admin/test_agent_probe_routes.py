@@ -29,6 +29,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.admin.app import create_app
+from src.core.operator_errors import ConnectionTestFailed
 from src.core.utils.operator_mcp import ProbeResult
 from tests.factories import CreativeAgentFactory, SignalsAgentFactory, TenantFactory
 from tests.helpers.egress_hatches import UNDIALLED_PUBLIC_HTTPS_ORIGIN
@@ -115,14 +116,14 @@ class TestCreativeAgentProbeProjection:
             "sample_formats": list(SAMPLE_FORMATS),
         }
 
-    def test_failure_puts_the_sentence_under_error_not_message(self, client, creative_agent):
-        """A refused probe is a 400 whose sentence rides under ``error``."""
+    def test_failure_puts_the_sentence_under_details_not_message(self, client, creative_agent):
+        """A failed probe is the ConnectionTestFailed refusal, with the probe's sentence in ``details``."""
         result = ProbeResult(ok=False, message=FAILURE_MESSAGE)
         with patch(_CREATIVE_PROBE, new=AsyncMock(return_value=result)):
             status, body = _post_creative_test(client, creative_agent)
 
-        assert status == 400
-        assert body == {"success": False, "error": FAILURE_MESSAGE}
+        assert status == 502
+        assert body == {"success": False, "error": ConnectionTestFailed.MESSAGE, "details": [FAILURE_MESSAGE]}
 
     def test_success_without_a_count_stays_null_on_the_wire(self, client, creative_agent):
         """``count=None`` is an absence and must not be projected as a genuine 0."""
@@ -159,14 +160,14 @@ class TestSignalsAgentProbeProjection:
         assert status == 200
         assert body == {"success": True, "message": SUCCESS_MESSAGE, "signal_count": SIGNAL_COUNT}
 
-    def test_failure_puts_the_sentence_under_error_not_message(self, client, signals_agent):
-        """A refused probe is a 400 whose sentence rides under ``error``."""
+    def test_failure_puts_the_sentence_under_details_not_message(self, client, signals_agent):
+        """A failed probe is the ConnectionTestFailed refusal, with the probe's sentence in ``details``."""
         result = ProbeResult(ok=False, message=FAILURE_MESSAGE)
         with patch(_SIGNALS_PROBE, new=AsyncMock(return_value=result)):
             status, body = _post_signals_test(client, signals_agent)
 
-        assert status == 400
-        assert body == {"success": False, "error": FAILURE_MESSAGE}
+        assert status == 502
+        assert body == {"success": False, "error": ConnectionTestFailed.MESSAGE, "details": [FAILURE_MESSAGE]}
 
     def test_success_without_a_count_stays_null_on_the_wire(self, client, signals_agent):
         """The state the old dict route could not express: absent count, not 0."""

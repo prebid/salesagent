@@ -63,7 +63,7 @@ class Debt(NamedTuple):
 _LOGIN_ENTRY = LoginEntry()
 _INLINE_DEAD_ROLE_CHECK = Debt(2233, "inline session['role'] viewer/tenant_admin check that no production login sets")
 _INLINE_SESSION_TENANT_CHECK = Debt(2233, "inline session['tenant_id'] == tenant_id compare instead of the decorator")
-_PR_2075 = Debt(2075, "that PR adds require_tenant_access(api_mode=True) to publisher partners; remove when it merges")
+_PR_2075 = Debt(2075, "that PR adds require_tenant_access() to publisher partners; remove when it merges")
 
 # (endpoint, rule) -> why nothing in its wrapper chain authorizes the caller. Only ever shrinks.
 EXEMPT: dict[tuple[str, str], LoginEntry | Debt] = {
@@ -91,7 +91,7 @@ EXEMPT: dict[tuple[str, str], LoginEntry | Debt] = {
 }
 
 _FIX_HINT = (
-    "Put @require_tenant_access(api_mode=True for JSON routes) directly under the @<bp>.route(...) line "
+    "Put @require_tenant_access() directly under the @<bp>.route(...) line "
     "(src/admin/utils/helpers.py). A machine route takes its require_api_key_auth decorator and a super-admin "
     "action takes @require_auth(admin_only=True); the guard reads both from the view, so neither needs a row. "
     "Add a row to EXEMPT only for a login entry point (LoginEntry), or for a route that cannot be guarded in "
@@ -146,7 +146,7 @@ def test_detector_recognises_each_decorator_and_nothing_else() -> None:
 
     api_key = require_api_key_auth(setting="sync_api_key", config_key="sync_api_key", header="X-API-Key")
 
-    assert _authorized_by(require_tenant_access(api_mode=True)(view)) == MEMBERSHIP
+    assert _authorized_by(require_tenant_access()(view)) == MEMBERSHIP
     assert _authorized_by(require_auth()(require_tenant_access()(view))) == MEMBERSHIP
     assert _authorized_by(api_key(view)) == API_KEY
     assert _authorized_by(require_auth(admin_only=True)(view)) == SUPER_ADMIN_ONLY

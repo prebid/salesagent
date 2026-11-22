@@ -24,6 +24,7 @@ from tests.factories.core import (
     GAMInventoryFactory,
     PropertyTagFactory,
     SignalsAgentFactory,
+    SyncJobFactory,
     TenantFactory,
 )
 from tests.factories.creative import (
@@ -84,6 +85,7 @@ ALL_FACTORIES = [
     PublisherFactory,
     CreativeAgentFactory,
     SignalsAgentFactory,
+    SyncJobFactory,
     PrincipalFactory,
     InventoryProfileFactory,
     ProductFactory,
@@ -146,6 +148,7 @@ __all__ = [
     "SigningKeyFactory",
     "SyncAccountsRequestFactory",
     "SyncCreativesRequestFactory",
+    "SyncJobFactory",
     "TargetingFactory",
     "TenantAuthConfigFactory",
     "TenantFactory",

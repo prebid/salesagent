@@ -705,7 +705,7 @@ document.getElementById('add-domain-form').addEventListener('submit', async func
 
             document.getElementById('domain').value = '';
         } else {
-            alert(data.error || 'Failed to add domain');
+            alert(adminErrorText(data));
         }
     } catch (err) {
         console.error('Error adding domain:', err);
@@ -741,7 +741,7 @@ async function removeDomain(domain) {
                 domainList.parentNode.appendChild(msg);
             }
         } else {
-            alert(data.error || 'Failed to remove domain');
+            alert(adminErrorText(data));
         }
     } catch (err) {
         console.error('Error removing domain:', err);
@@ -884,7 +884,7 @@ document.getElementById('oidc-form').addEventListener('submit', async function(e
             document.getElementById('test-oidc-btn').disabled = false;
             loadAuthConfig();
         } else {
-            alert(data.error || 'Failed to save configuration');
+            alert(adminErrorText(data));
         }
     } catch (err) {
         console.error('Error saving config:', err);
@@ -912,7 +912,7 @@ document.getElementById('disable-oidc-btn').addEventListener('click', async func
             alert('SSO deactivated');
             loadAuthConfig();
         } else {
-            alert(data.error || 'Failed to deactivate SSO');
+            alert(adminErrorText(data));
         }
     } catch (err) {
         console.error('Error deactivating SSO:', err);
@@ -937,7 +937,7 @@ if (disableSetupBtn) {
                 alert(data.message);
                 window.location.reload();
             } else {
-                alert(data.error || 'Failed to disable setup mode');
+                alert(adminErrorText(data));
             }
         } catch (err) {
             console.error('Error disabling setup mode:', err);
@@ -963,7 +963,7 @@ if (enableSetupBtn) {
                 alert(data.message);
                 window.location.reload();
             } else {
-                alert(data.error || 'Failed to enable setup mode');
+                alert(adminErrorText(data));
             }
         } catch (err) {
             console.error('Error enabling setup mode:', err);

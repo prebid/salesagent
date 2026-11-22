@@ -288,9 +288,8 @@ class AdminTenantScopingEnv(AdminAccountEnv):
     def send(self, method: str, route_name: str, *, asks_for_json: bool = False) -> AdminResponse:
         """One request to *route_name* of the target tenant.
 
-        *asks_for_json* sends ``Accept: application/json``. ``require_tenant_access`` then
-        states a refusal's reason in a JSON body on an HTML route too, where a caller that
-        does not ask gets the 403 page, which carries no reason.
+        API callers send ``Accept: application/json``. *asks_for_json* sends that header
+        on a page route too, so a refusal states its reason instead of rendering the 403 page.
         """
         route = ROUTES[route_name]
         assert method in route.methods, f"{route_name} does not serve {method}"
@@ -303,5 +302,5 @@ class AdminTenantScopingEnv(AdminAccountEnv):
             method,
             path,
             data={} if method == "POST" else None,
-            headers={"Accept": "application/json"} if asks_for_json else None,
+            headers={"Accept": "application/json"} if asks_for_json or path.startswith("/api/") else None,
         )

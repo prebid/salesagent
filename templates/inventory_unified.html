@@ -731,7 +731,7 @@ function deleteProfile(profileId, profileName) {
             if (data.success) {
                 loadProfiles();  // Reload list
             } else {
-                alert('Error: ' + (data.error || 'Failed to delete profile'));
+                alert('Error: ' + adminErrorText(data));
             }
         })
         .catch(error => {
@@ -844,14 +844,12 @@ function syncInventory() {
                 window.location.href = loginUrl;
                 return Promise.reject(new Error('Session expired'));
             }
-            if (response.status === 202 || response.ok) {
-                return response.json();
-            }
-            throw new Error(`Server error: ${response.status}`);
+            // Every answer is JSON: a started sync, or a refusal the next step shows
+            return response.json();
         })
         .then(data => {
             if (data.error) {
-                throw new Error(data.error);
+                throw new Error(adminErrorText(data));
             }
 
             if (data.sync_id && data.status === 'running') {
@@ -890,7 +888,7 @@ function pollInventorySyncStatus(syncId, btn) {
                     alert(`✅ Sync completed!`);
                     window.location.reload();
                 } else if (data.status === 'failed' || data.error) {
-                    throw new Error(data.error || 'Sync failed');
+                    throw new Error(adminErrorText(data));
                 } else {
                     setTimeout(checkStatus, 2000);
                 }
@@ -953,7 +951,7 @@ function performSelectiveSync() {
         })
         .then(data => {
             if (data.error) {
-                throw new Error(data.error);
+                throw new Error(adminErrorText(data));
             }
 
             alert('Selective sync completed!');
@@ -1043,7 +1041,7 @@ function searchInventory() {
         })
         .then(data => {
             if (data.error) {
-                alert('Search failed: ' + data.error);
+                alert('Search failed: ' + adminErrorText(data));
                 return;
             }
 
@@ -1164,7 +1162,7 @@ async function loadPublishers() {
             credentials: 'same-origin'
         });
 
-        if (!response.ok) throw new Error('Failed to load publishers');
+        if (!response.ok) throw new Error(adminErrorText(await response.json()));
 
         const data = await response.json();
 
@@ -1282,7 +1280,7 @@ async function addPublisher() {
 
         if (!response.ok) {
             const error = await response.json();
-            throw new Error(error.error || 'Failed to add publisher');
+            throw new Error(adminErrorText(error));
         }
 
         alert('Publisher added successfully');
@@ -1302,7 +1300,7 @@ async function deletePublisher(domain) {
             credentials: 'same-origin'
         });
 
-        if (!response.ok) throw new Error('Failed to delete publisher');
+        if (!response.ok) throw new Error(adminErrorText(await response.json()));
 
         loadPublishers();
     } catch (error) {
@@ -1322,7 +1320,7 @@ async function syncAllPublishers() {
             credentials: 'same-origin'
         });
 
-        if (!response.ok) throw new Error('Sync failed');
+        if (!response.ok) throw new Error(adminErrorText(await response.json()));
 
         const data = await response.json();
         alert(`Sync completed!\nFetched: ${data.ok}\nFailed: ${data.errors}`);
@@ -1366,14 +1364,14 @@ async function viewPublisherProperties(domain) {
         const url = API_URLS.publisherProperties.replace('{domain}', encodeURIComponent(domain));
         const response = await fetch(url, { credentials: 'same-origin' });
 
-        if (!response.ok) throw new Error('Failed to load properties');
+        if (!response.ok) throw new Error(adminErrorText(await response.json()));
 
         const data = await response.json();
 
         let html = '';
 
         if (data.error) {
-            html = `<div class="alert alert-danger">${data.error}</div>`;
+            html = `<div class="alert alert-danger">${adminErrorText(data)}</div>`;
         } else if (!data.is_authorized) {
             html = `<div class="alert alert-warning">Not authorized for this publisher.</div>`;
         } else {

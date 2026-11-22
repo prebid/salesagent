@@ -317,7 +317,7 @@ function saveConfiguration() {
             alert('Configuration saved successfully!');
             window.location.href = scriptRoot + `/tenant/${tenantId}/products/${productId}/edit`;
         } else {
-            alert('Error saving configuration: ' + (result.error || 'Unknown error'));
+            alert('Error saving configuration: ' + adminErrorText(result));
         }
     })
     .catch(error => {

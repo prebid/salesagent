@@ -65,7 +65,7 @@ def test_require_auth_is_defined_once_in_the_canonical_module() -> None:
         violations=[f"{path}:{line}" for path, lines in sorted(found.items()) for line in lines],
         fix_hint=(
             "Delete the local copy and import the canonical decorator. A route that takes <tenant_id> "
-            "from the URL needs require_tenant_access (api_mode=True for JSON routes), not require_auth."
+            "from the URL needs require_tenant_access, not require_auth."
         ),
         docs_link="docs/development/structural-guards.md",
     )

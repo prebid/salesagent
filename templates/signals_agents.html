@@ -179,7 +179,7 @@ function testAgent(agentId, agentName) {
         if (data.success) {
             alert(`✅ Connection Successful!\n\nAgent: ${agentName}\nSignals Found: ${data.signal_count}\n\n${data.message}`);
         } else {
-            alert(`❌ Connection Failed\n\n${data.error}`);
+            alert(`❌ ${adminErrorText(data)}`);
         }
     })
     .catch(error => {
@@ -202,7 +202,7 @@ function deleteAgent(agentId, agentName) {
                 window.location.reload();
             } else {
                 return response.json().then(err => {
-                    alert(err.error || 'Could not delete signals agent');
+                    alert(adminErrorText(err));
                     return Promise.reject(err);
                 });
             }

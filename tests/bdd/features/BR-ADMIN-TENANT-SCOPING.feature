@@ -13,8 +13,8 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
   # tenant check that answered 500 to every ordinary login (#2204). The one
   # component that proves membership is require_tenant_access
   # (src/admin/utils/helpers.py); every outcome below is that decorator's contract:
-  #   - anonymous        -> JSON 401 on the api_mode routes, redirect to the
-  #                         tenant login page on the two HTML routes
+  #   - anonymous        -> JSON 401 for callers asking for JSON, redirect to the
+  #                         tenant login page for callers navigating to a page
   #   - non-member       -> 403 (JSON {"error": "Access denied"} on the API routes)
   #   - inactive member  -> 403, same shape
   #   - active member below the role the route asks for
