@@ -31,7 +31,7 @@ from tests.factories.principal import plaintext_token_for
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.adcp_factories import create_test_db_product
 from tests.helpers.environ import isolated_environ
-from tests.helpers.settings_injection import PlatformAICredential
+from tests.helpers.settings_injection import ADMIN_UI_AI_CONFIG, KEYLESS_AI_CONFIG, PlatformAICredential
 from tests.helpers.setup_checklist import checklist_on_both_paths, checklist_task_on_both_paths
 from tests.helpers.signing import deployment_kek
 
@@ -630,13 +630,6 @@ class TestSetupValidation:
         validate_setup_complete(test_tenant_id)
 
 
-#: What the Admin UI's AI Services form stores: provider, model and key (any provider).
-_AI_UI_CONFIG = {"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "sk-ant-tenant"}
-
-#: What the same form stores when the key field is left blank.
-_AI_KEYLESS_CONFIG = {"provider": "google", "model": "gemini-2.0-flash"}
-
-
 class TestTaskDetails:
     """Tests for individual task checking logic."""
 
@@ -645,9 +638,9 @@ class TestTaskDetails:
         [
             ({}, None, False),
             ({}, "platform-key", False),
-            ({"ai_config": _AI_UI_CONFIG}, None, True),
-            ({"ai_config": _AI_KEYLESS_CONFIG}, None, False),
-            ({"ai_config": _AI_KEYLESS_CONFIG}, "platform-key", False),
+            ({"ai_config": ADMIN_UI_AI_CONFIG}, None, True),
+            ({"ai_config": KEYLESS_AI_CONFIG}, None, False),
+            ({"ai_config": KEYLESS_AI_CONFIG}, "platform-key", False),
             ({"gemini_api_key": "test_tenant_key"}, None, True),
         ],
         ids=[
