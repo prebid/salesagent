@@ -12,7 +12,19 @@ from src.adapters.broadstreet.managers.advertisements import (
     AdvertisementInfo,
     BroadstreetAdvertisementManager,
 )
+from src.core.traffic_carrier import CreativeToTraffic, HtmlRepresentation
 from tests.helpers.broadstreet_client import stub_broadstreet_client
+
+
+def _html_carrier(content: str) -> CreativeToTraffic:
+    """An html creative as core hands an adapter it: inline HTML whose markup is *content*."""
+    return CreativeToTraffic(
+        creative_id="creative_html",
+        format_kind="html5",
+        representation=HtmlRepresentation(content=content),
+        option_sizes=(),
+        option_size_ranges=(),
+    )
 
 
 @pytest.fixture
@@ -131,6 +143,7 @@ class TestBroadstreetAdvertisementManager:
     def test_get_ad_type_from_html_content(self, manager):
         """Test ad type detection from HTML content."""
         assert manager._get_ad_type({"html": "<div>Ad</div>"}) == "html"
+        assert manager._get_ad_type({"creative": _html_carrier("<script>...</script>")}) == "html"
 
     def test_get_ad_type_from_image_url(self, manager):
         """Test ad type detection from image URL."""
@@ -159,6 +172,13 @@ class TestBroadstreetAdvertisementManager:
         params = manager._build_ad_params(asset, "html")
 
         assert params["html"] == "<div>HTML Ad</div>"
+
+    def test_build_ad_params_html_from_carrier(self, manager):
+        """An html creative's markup comes from the carrier core read (core/assets/html-asset.json ``content``)."""
+        asset = {"creative": _html_carrier("<script>...</script>")}
+        params = manager._build_ad_params(asset, "html")
+
+        assert params["html"] == "<script>...</script>"
 
     def test_build_ad_params_html_from_url(self, manager):
         """Test building params for HTML ad from URL."""
