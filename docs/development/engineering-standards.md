@@ -90,6 +90,13 @@ there.
 - **An unverified concern is a question**, not a finding.
 - **Raise each concern once.** Group related findings into one comment,
   rather than a summary plus the same point inline.
+- **Make the first review actionable when possible.** State the merge
+  blockers you can identify at that point, with the concrete change or
+  evidence needed to resolve each one. Later findings are appropriate
+  when new evidence, a changed diff, or closer investigation reveals a
+  material issue; explain what surfaced it and why it was not raised
+  earlier when that is not obvious. This is guidance, not a bar against
+  correcting an incomplete review.
 - **Ask for what these standards require** — tests, guards, docs — not
   for coverage of hypothetical cases.
 
