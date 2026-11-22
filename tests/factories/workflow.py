@@ -1,6 +1,6 @@
 """Factories for the async-task tables: a principal's Context and its WorkflowSteps.
 
-Ids come from uuid4 rather than a ``Sequence``: both tables are keyed globally, not per
+Ids come from ``mint_id`` rather than a ``Sequence``: both tables are keyed globally, not per
 tenant, and on e2e_rest every xdist worker writes into the one live-stack database, where
 two workers' sequence counters would hand out the same key.
 """
@@ -8,12 +8,12 @@ two workers' sequence counters would hand out the same key.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import uuid4
 
 import factory
 from factory import LazyAttribute, LazyFunction, SubFactory
 
 from src.core.database.models import Context, WorkflowStep
+from tests.factories.mint import mint_id
 from tests.factories.principal import PrincipalFactory
 
 
@@ -28,7 +28,7 @@ class ContextFactory(factory.alchemy.SQLAlchemyModelFactory):
 
     principal = SubFactory(PrincipalFactory)
 
-    context_id = LazyFunction(lambda: f"ctx_{uuid4().hex[:12]}")
+    context_id = LazyFunction(lambda: mint_id("ctx"))
     tenant_id = LazyAttribute(lambda o: o.principal.tenant_id)
     principal_id = LazyAttribute(lambda o: o.principal.principal_id)
     conversation_history = LazyFunction(list)
@@ -51,7 +51,7 @@ class WorkflowStepFactory(factory.alchemy.SQLAlchemyModelFactory):
 
     context = SubFactory(ContextFactory)
 
-    step_id = LazyFunction(lambda: f"step_{uuid4().hex[:12]}")
+    step_id = LazyFunction(lambda: mint_id("step"))
     context_id = LazyAttribute(lambda o: o.context.context_id)
     step_type = "tool_call"
     owner = "principal"

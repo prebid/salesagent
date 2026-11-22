@@ -24,7 +24,9 @@ directory and what the gaps cost.
   that derives one from the other invents a shape constraint on the id, which then needs
   normalization, a rule, and workarounds — and the bug that started it was two derivations of
   one value disagreeing.
-- **`mint()` RECORDS a value as test-generated; it does not generate one.**
+- **`mint()` RECORDS a value as test-generated; it does not generate one.** `mint_id(prefix)`
+  does both. The BDD steps, the harness and the factories take every `<prefix>_<hex>` id from
+  it, so an id stays unique in a database that outlives the test, such as the e2e stack's.
 - **Build a parent only when no id names it.** factory_boy evaluates every parent
   `SubFactory`, `Meta.exclude` included, so a caller that passes `tenant_id=` still gets the
   factory's own tenant row. Declare the parent with `unless_id_given` and derive its ids in
