@@ -196,18 +196,19 @@ def seed_product(engine, *, tenant_id: str, product_id: str, channels: list[str]
 
     Raw SQL for the same reason as :func:`seed_account`: the channel-repair revision's
     subject is a string the admin picker could once write and the enum-typed read path
-    refuses, so no factory can produce it. Column list as the delivery-measurement
-    migration test seeds it; ``'[]'`` satisfies the format_ids validator (zero iterations),
-    ``property_tags`` satisfies ``ck_product_authorization``, server defaults cover the rest.
-    ``channels=None`` writes SQL NULL, what production stores for "no channels declared".
+    refuses, so no factory can produce it. Columns as the revision before the channel repair
+    has them: ``'[]'`` satisfies the format_ids validator (zero iterations), and the property
+    selection lives in its own table from e2af0c242a7f on, so no column states one; server
+    defaults cover the rest. ``channels=None`` writes SQL NULL, what production stores for
+    "no channels declared".
     """
     with engine.begin() as conn:
         conn.execute(
             text(
                 "INSERT INTO products (tenant_id, product_id, name, description, delivery_type, "
-                "format_ids, targeting_template, property_tags, channels) "
+                "format_ids, targeting_template, channels) "
                 "VALUES (:tid, :pid, :name, 'test', 'guaranteed', '[]'::jsonb, '{}'::jsonb, "
-                "'[\"all_inventory\"]'::jsonb, CAST(:channels AS jsonb))"
+                "CAST(:channels AS jsonb))"
             ),
             {
                 "tid": tenant_id,

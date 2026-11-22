@@ -33,7 +33,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # value rather than on an unknown revision id); pinned now so a later revision cannot run
 # inside this module.
 _REVISION = "b9b8e637b56c"
-_PREVIOUS = "7f31c0ab94d2"
+_PREVIOUS = "9fdf18a56063"
 
 _TENANT = "mig_channels_tenant"
 

@@ -19,6 +19,8 @@ from typing import Any
 
 from adcp.types._generated import MediaChannel
 
+from src.core.operator_errors import FormIssue, InvalidFormInput
+
 #: Labels for the admin picker where title-casing the value is unreadable ("Olv", "Dooh");
 #: every other member title-cases its value. Keyed by member, so mypy refuses a non-member.
 MEDIA_CHANNEL_LABELS: dict[MediaChannel, str] = {
@@ -45,13 +47,20 @@ def media_channel_options() -> list[tuple[str, str]]:
 def parse_media_channels(values: Iterable[str]) -> list[str]:
     """The channel values an admin form posted, each a ``MediaChannel`` member, de-duplicated.
 
-    Raises ``ValueError`` naming the first non-member. A non-member can only come from a
-    form rendered before the picker became enum-driven or from a crafted request, and both
-    are told to reload rather than translated: an alias table here would be a second channel
-    vocabulary beside the enum. Order is kept; duplicates go (``Product.channels`` is
-    ``uniqueItems`` in the pinned schema).
+    Refuses with :class:`InvalidFormInput`, one issue per non-member, which the admin error
+    handler answers. A non-member can only come from a form rendered before the picker became
+    enum-driven or from a crafted request, and both are refused rather than translated: an
+    alias table here would be a second channel vocabulary beside the enum. Order is kept;
+    duplicates go (``Product.channels`` is ``uniqueItems`` in the pinned schema).
     """
-    return list(dict.fromkeys(MediaChannel(value).value for value in values))
+    posted = list(dict.fromkeys(values))
+    members = {member.value for member in MediaChannel}
+    unknown = [value for value in posted if value not in members]
+    if unknown:
+        raise InvalidFormInput(
+            *(FormIssue("channels", f"channels: '{value}' is not an AdCP media channel") for value in unknown)
+        )
+    return posted
 
 
 def effective_channel_names(declared: Iterable[Any] | None, *, adapter_defaults: Sequence[str]) -> set[str]:

@@ -1130,11 +1130,7 @@ def add_product(tenant_id):
                 # only MediaChannel values; anything else is a stale form or a crafted post.
                 from src.core.helpers.channel_helpers import parse_media_channels
 
-                try:
-                    channels = parse_media_channels(request.form.getlist("channels"))
-                except ValueError as e:
-                    flash(str(e), "error")
-                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                channels = parse_media_channels(request.form.getlist("channels"))
                 if channels:
                     product_kwargs["channels"] = channels
 
@@ -1449,12 +1445,7 @@ def edit_product(tenant_id, product_id):
 
             from src.core.helpers.channel_helpers import parse_media_channels
 
-            try:
-                channels = parse_media_channels(request.form.getlist("channels"))
-            except ValueError as e:
-                flash(str(e), "error")
-                return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
-            product.channels = channels or None
+            product.channels = parse_media_channels(request.form.getlist("channels")) or None
             attributes.flag_modified(product, "channels")
 
             # Handle principal access control (allowed_principal_ids)

@@ -1,7 +1,7 @@
 """remap legacy admin channel picker values onto the MediaChannel enum
 
 Revision ID: b9b8e637b56c
-Revises: 7f31c0ab94d2
+Revises: 9fdf18a56063
 Create Date: 2026-10-16 12:00:00.000000
 
 The admin channel picker (templates/components/channel_selector.html) once offered four
@@ -48,7 +48,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b9b8e637b56c"
-down_revision: str | Sequence[str] | None = "7f31c0ab94d2"
+down_revision: str | Sequence[str] | None = "9fdf18a56063"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

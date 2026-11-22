@@ -163,5 +163,8 @@ class TestProductChannelsConversion:
         from src.core.product_conversion import convert_product_model_to_schema
 
         assert member.value in dict(media_channel_options())
-        product = convert_product_model_to_schema(self._make_db_product(channels=[member.value]))
+        product_model = self._make_db_product(channels=[member.value])
+        product = convert_product_model_to_schema(
+            product_model, publisher_properties=product_model.resolve_publisher_properties(ONE_AUTHORIZED_PROPERTY)
+        )
         assert product.channels == [member]

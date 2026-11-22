@@ -6,20 +6,21 @@ cannot mask the template guard: these tests import the helpers, the guard does n
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from src.core.helpers.channel_helpers import media_channel_options, parse_media_channels
-from tests.unit._architecture_helpers import REPO_ROOT
+from src.core.operator_errors import InvalidFormInput
+from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION
+from tests.helpers.pinned_schema import load
 
-_PINNED = REPO_ROOT / "tests/fixtures/adcp_schemas_pinned/3.1.1/enums/channels.json"
+#: The spec repo's own channels.json at the pinned tag (the vendored tree), not the SDK's copy.
+_PINNED = f"{EXPECTED_SPEC_VERSION}/enums/channels.json"
 
 
 class TestMediaChannelOptions:
     def test_values_match_the_pinned_enum_in_order(self):
         """Authority is the pinned schema file, not the enum compared to itself."""
-        assert [value for value, _ in media_channel_options()] == json.loads(_PINNED.read_text())["enum"]
+        assert [value for value, _ in media_channel_options()] == load(_PINNED)["enum"]
 
     @pytest.mark.parametrize(
         ("value", "label"),
@@ -46,9 +47,14 @@ class TestParseMediaChannels:
     @pytest.mark.parametrize("posted", [["video"], ["display", "retail"]])
     def test_a_non_member_refuses_the_whole_post(self, posted: list[str]):
         """Reject, never translate: after the repair migration there is no legitimate source of an alias."""
-        with pytest.raises(ValueError, match="MediaChannel"):
+        with pytest.raises(InvalidFormInput):
             parse_media_channels(posted)
 
-    def test_the_refusal_names_the_offender(self):
-        with pytest.raises(ValueError, match="video"):
-            parse_media_channels(["video"])
+    def test_the_refusal_names_each_offender_on_the_channels_field(self):
+        with pytest.raises(InvalidFormInput) as refused:
+            parse_media_channels(["display", "video", "retail", "video"])
+        assert [issue.field for issue in refused.value.issues] == ["channels", "channels"]
+        assert refused.value.details() == (
+            "channels: 'video' is not an AdCP media channel",
+            "channels: 'retail' is not an AdCP media channel",
+        )

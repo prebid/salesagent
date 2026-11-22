@@ -11,39 +11,33 @@ in tests/unit cannot see them:
 * the create handler refuses a value outside the enum and stores no product;
 * the edit handler refuses one and leaves the stored channels untouched -- the stale-tab
   path, where a form opened before a deploy re-posts a value the repair migration removed.
+  The refusal is ``InvalidFormInput``, so the admin error handler answers it on the page the
+  form came from.
 """
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from adcp.types._generated import MediaChannel
 from bs4 import BeautifulSoup
-from werkzeug.datastructures import MultiDict
 
 from src.core.database.repositories.uow import ProductUoW
 from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+from tests.factories.core import seed_property_tag_selection
+from tests.harness.admin_client import BROWSER_PAGE_HEADERS
+from tests.helpers.admin_product_form import minimal_product_create_form, minimal_product_edit_form
 from tests.helpers.admin_session import admin_auth_session
 from tests.integration._egress_ingest_helpers import flashes
 
 pytestmark = [pytest.mark.admin, pytest.mark.requires_db]
 
 _TENANT_ID = "channel_picker_t1"
-_REFUSAL = "is not a valid MediaChannel"
+_REFUSAL = "is not an AdCP media channel"
 
-#: The proven create payload of ``test_product_creation_integration.py``, minus the fields
-#: this module varies. ``property_mode=none`` bypasses property-tag validation, which is not
-#: what is graded here.
-_ADD_FORM = [
-    ("product_id", "picker_add"),
-    ("name", "Picker Add"),
-    ("description", "channel picker create path"),
-    ("delivery_type", "non_guaranteed"),
-    ("pricing_model_0", "cpm_auction"),
-    ("currency_0", "USD"),
-    ("floor_0", "5.0"),
-    ("min_spend_0", "1000"),
-    ("property_mode", "none"),
-]
+#: The create handler refuses a product with no format arm before it reads the channels.
+_IMAGE_DECLARATION = {"format_kind": "image", "params": {"width": 300, "height": 250}}
 
 
 @pytest.fixture
@@ -75,17 +69,21 @@ def test_add_product_page_offers_exactly_the_media_channel_enum(admin_client, te
     assert set(_picker_options(response)) == {member.value for member in MediaChannel}
 
 
-def test_add_product_refuses_a_channel_outside_the_enum(admin_client, tenant):
+def test_add_product_refuses_a_channel_outside_the_enum(admin_client, tenant, factory_session):
     """Re-rendered form (200) naming the refusal, and no row -- not the 302 a stored product gives."""
+    selection = seed_property_tag_selection(tenant)
+    factory_session.commit()
     admin_auth_session(admin_client, _TENANT_ID)
 
     response = admin_client.post(
         f"/tenant/{_TENANT_ID}/products/add",
-        data=MultiDict([*_ADD_FORM, ("channels", "video")]),
+        data=minimal_product_create_form(
+            selection, product_id="picker_add", format_options=json.dumps([_IMAGE_DECLARATION]), channels="video"
+        ),
         follow_redirects=False,
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.data[:2000]
     # The create path re-renders, which consumes the flash into the page; read it there.
     assert _REFUSAL in response.get_data(as_text=True)
     with ProductUoW(_TENANT_ID) as uow:
@@ -98,27 +96,17 @@ def test_edit_product_refuses_a_channel_outside_the_enum_and_keeps_the_stored_va
     PricingOptionFactory(product=product)
     admin_auth_session(admin_client, _TENANT_ID)
 
+    edit_path = f"/tenant/{_TENANT_ID}/products/picker_edit/edit"
     response = admin_client.post(
-        f"/tenant/{_TENANT_ID}/products/picker_edit/edit",
-        data=MultiDict(
-            [
-                ("name", product.name),
-                ("description", product.description),
-                ("delivery_type", "guaranteed"),
-                # NOT NULL column the handler nulls when the field is absent; omitting it
-                # would turn the failure into an IntegrityError on the list redirect.
-                ("delivery_measurement_provider", "publisher"),
-                ("pricing_model_0", "cpm"),
-                ("currency_0", "USD"),
-                ("rate_0", "10"),
-                ("channels", "video"),
-            ]
-        ),
+        edit_path,
+        # A browser's form post from the edit page: the error handler answers a refusal there.
+        headers={**BROWSER_PAGE_HEADERS, "Referer": f"https://localhost{edit_path}"},
+        data=minimal_product_edit_form(channels="video"),
         follow_redirects=False,
     )
 
-    assert response.status_code == 302
-    # Back to the edit page -- the list is where both success and the outer except go.
-    assert response.headers["Location"].endswith(f"/tenant/{_TENANT_ID}/products/picker_edit/edit")
+    assert response.status_code == 302, response.data[:2000]
+    # Back to the edit page -- success goes to the list.
+    assert response.headers["Location"].endswith(edit_path)
     assert [category for category, message in flashes(admin_client) if _REFUSAL in message] == ["error"]
     assert _stored_channels("picker_edit") == ["olv"]
