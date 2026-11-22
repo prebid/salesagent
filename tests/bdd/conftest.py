@@ -497,12 +497,6 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: UC-003 ext-t — invoice_recipient authorization (BR-RULE-214) not implemented;
     # production accepts the override without an authorization check, so no VALIDATION_ERROR is raised.
     "T-UC-003-ext-t": "invoice_recipient authorization not implemented (BR-RULE-214) — production gap",
-    # FIXME(#2636): the GAM adapter's pause and resume never reach Google Ad Manager.
-    # OrdersManager._update_line_item_status writes LineItem.status and sends updateLineItems;
-    # Ad Manager API v202602 marks LineItemSummary.status "This attribute is readonly", so the
-    # line item is not paused. Strict on every transport (e2e_rest also through its ledger
-    # line): the scenario reports XPASS when #2636 lands and graduates then.
-    "T-UC-002-local-gam-pause": "GAM pause writes the readonly LineItem.status; #2636",
     # ── create_media_buy and update_media_buy disagree (#2483) ──
     # Each scenario states, on update_media_buy, work create_media_buy already does. Neither
     # tool is patched alone: #2483 moves both onto shared services, and each entry

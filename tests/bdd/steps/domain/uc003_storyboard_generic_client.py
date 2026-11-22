@@ -20,7 +20,7 @@ from tests.factories.mint import mint, mint_id
 from tests.harness.transport import DERIVED_STATUS_ADCP_ERROR, DERIVED_STATUS_TRANSPORT_FAULT
 
 
-def dispatch_update(ctx: dict, payload: dict) -> None:
+def _dispatch_update(ctx: dict, payload: dict) -> None:
     """Stamp the spec-required update fields onto *payload* and dispatch it.
 
     Written once for both When steps below because both send the same KIND of
@@ -82,7 +82,7 @@ def when_update_media_buy_with_unknown_id(ctx: dict) -> None:
     """
     payload = {"media_buy_id": ctx["fabricated_media_buy_id"], "paused": True}
     stamp_correlation_id(ctx, payload)
-    dispatch_update(ctx, payload)
+    _dispatch_update(ctx, payload)
 
 
 @when("the Buyer Agent sends update_media_buy with canceled true on the already-canceled buy")
@@ -108,7 +108,7 @@ def when_update_media_buy_recancel(ctx: dict) -> None:
     )
     payload = {"media_buy_id": media_buy.media_buy_id, "canceled": True}
     stamp_correlation_id(ctx, payload)
-    dispatch_update(ctx, payload)
+    _dispatch_update(ctx, payload)
 
 
 @then("the error recovery hint should indicate correctable")
