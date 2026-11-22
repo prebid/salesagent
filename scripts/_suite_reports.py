@@ -17,6 +17,29 @@ import json
 import os
 from collections.abc import Callable, Iterable
 
+from scripts.audit.run_identity import IDENTITY_FILE
+
+
+def _reports(results_dir: str) -> list[str]:
+    """Every per-suite report path in *results_dir*, and nothing else.
+
+    ``IDENTITY_FILE`` lives beside the reports and is not one of them.
+
+    A WHOLE record is inert, measured rather than assumed: it carries no
+    ``summary``, so ``check_truncated_reports``'s predicate finds ``collected``
+    and ``total`` both absent and returns nothing. The case that is not inert is
+    the one that check exists for. A run killed mid-write leaves a HALF-WRITTEN
+    ``meta.json``, and read as a report that is "unreadable" -- which the check
+    reddens, exits 1 on, and explains as "the run is TRUNCATED" and "an xdist
+    worker died". Both sentences would be about the identity record rather than
+    any suite, failing a run whose suites all reported in full.
+    """
+    return [
+        path
+        for path in sorted(glob.glob(os.path.join(results_dir, "*.json")))
+        if os.path.basename(path) != IDENTITY_FILE
+    ]
+
 
 def scan_suite_summaries(
     results_dir: str,
@@ -30,7 +53,7 @@ def scan_suite_summaries(
     unreadable has not been shown to pass.
     """
     problems: list[str] = []
-    for path in sorted(glob.glob(os.path.join(results_dir, "*.json"))):
+    for path in _reports(results_dir):
         name = os.path.basename(path)
         try:
             with open(path, encoding="utf-8") as handle:
@@ -55,7 +78,7 @@ def scan_suite_outcomes(results_dir: str) -> dict[tuple[str, str], str]:
     sharded across reports, and two suites may collect the same nodeid.
     """
     outcomes: dict[tuple[str, str], str] = {}
-    for path in sorted(glob.glob(os.path.join(results_dir, "*.json"))):
+    for path in _reports(results_dir):
         suite = os.path.splitext(os.path.basename(path))[0]
         with open(path, encoding="utf-8") as handle:
             report = json.load(handle)

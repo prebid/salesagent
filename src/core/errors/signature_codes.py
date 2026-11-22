@@ -1,6 +1,6 @@
 """The RFC 9421 transport error taxonomy, as codes this seller can put on the wire.
 
-AdCP 3.1.1 ``security.mdx`` § Transport error taxonomy:
+``security.mdx`` § Transport error taxonomy:
 
     Stable codes returned in ``WWW-Authenticate: Signature error="<code>"`` on 401, and
     surfaced by SDK verifiers as typed errors.
@@ -19,14 +19,15 @@ it, ``failure_response`` renders it, and ``AuthChallengeResponder`` — the ONE 
 lifts it to 401 and writes the challenge from the code it reads off the FINISHED body. So
 the specific code has to survive into the envelope, because the renderer has nothing else
 to read. A generic ``AUTH_INVALID`` would pass our tests and fail conformance:
-``dist/compliance/3.1.1/universal/signed-requests.yaml`` grades the challenge string
+``dist/compliance/<pin>/universal/signed-requests.yaml`` grades the challenge string
 byte-for-byte.
 
 That is legal, and the spec says so directly: ``core/error.json`` types ``error.code`` as a
 wire string rather than a closed enum, the published codes are documentary, senders MAY
 emit codes outside that set, and receivers MUST decode an unknown one by reading
-``error.recovery``. ``recovery`` is the part that must stay inside its three values, and
-:data:`SIGNATURE_CODE_TABLE` is where that is decided.
+``error.recovery``. ``recovery`` is the part that must stay inside its three values, and the
+pin's ``enums/request-signing-error-code.json`` publishes it: "SDKs MUST consume enumMetadata for
+recovery classification".
 
 DERIVED FROM THE SDK'S OWN TAXONOMY, NOT RE-LISTED
 ---------------------------------------------------
@@ -45,19 +46,19 @@ from typing import TYPE_CHECKING, Final
 
 from adcp.signing.errors import REQUEST_TO_WEBHOOK_CODE
 
-from src.core.errors._entry import CodeEntry, CodeGroup, Recovery
-from src.core.signing.canonical import REQUEST_TARGET_URI_MALFORMED, WEBHOOK_TARGET_URI_MALFORMED
+from src.core.errors._entry import Recovery
 
-#: The SDK's retag table plus the ONE row it omits at ``adcp==6.6.0``.
+#: The SDK's retag table, whole.
 #:
-#: ``REQUEST_TO_WEBHOOK_CODE`` maps each request-profile code to its webhook-profile twin,
-#: and it is missing ``request_target_uri_malformed`` -> ``webhook_target_uri_malformed``
-#: (upstream fix: adcp-client-python PR #987 / fbab8f44). Merged here rather than
-#: transcribed, so the other 27 rows still come from the SDK and the local addition
-#: disappears by itself when the pin advances past the fix.
-_TAXONOMY: Final = {**REQUEST_TO_WEBHOOK_CODE, REQUEST_TARGET_URI_MALFORMED: WEBHOOK_TARGET_URI_MALFORMED}
+#: ``REQUEST_TO_WEBHOOK_CODE`` maps each request-profile code to its webhook-profile twin.
+#: At ``adcp==6.6.0`` it omitted ``request_target_uri_malformed`` ->
+#: ``webhook_target_uri_malformed``, so this merged that one row in locally (upstream fix:
+#: adcp-client-python PR #987 / fbab8f44) and said the addition would disappear by itself
+#: when the pin advanced past the fix. the pinned SDK carries it, so it has: the table is 29 rows
+#: from the SDK and nothing local.
+_TAXONOMY: Final = dict(REQUEST_TO_WEBHOOK_CODE)
 
-__all__ = ["SIGNATURE_CODE_TABLE", "SignatureErrorCode", "challenge_for"]
+__all__ = ["SIGNATURE_MESSAGES", "SIGNATURE_STATUS", "SignatureErrorCode", "challenge_for"]
 
 if TYPE_CHECKING:
     # The MEMBERS are generated, so no static checker can know their names -- and this enum
@@ -76,6 +77,7 @@ if TYPE_CHECKING:
     # upgrade that respells a code must not silently respell a class nobody can see change.
     # The roster is written out so an upstream change arrives as a conflict a human reads.
     class SignatureErrorCode(StrEnum):
+        REQUEST_BODY_MALFORMED = "request_body_malformed"
         REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON = "request_signature_agent_not_in_brand_json"
         REQUEST_SIGNATURE_ALG_NOT_ALLOWED = "request_signature_alg_not_allowed"
         REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS = "request_signature_brand_json_ambiguous"
@@ -112,127 +114,28 @@ else:
     SignatureErrorCode = StrEnum("SignatureErrorCode", {code.upper(): code for code in sorted(_TAXONOMY)})
 
 
-#: How a buyer reacts to each code, ONE ROW PER CODE, transcribed from the spec.
+#: What a buyer is TOLD, per recovery class. One sentence each rather than 29, because the
+#: distinguishing information is the CODE -- which is on the wire, twice (``error.code`` and
+#: the challenge) -- and because a buyer-facing message must not narrate which checklist step
+#: refused. The pin's ``enumDescriptions`` for this family do exactly that ("The keyid was absent
+#: from the signer JWKS after the required refetch"), so they are not served:
+#: ``transport-errors.mdx`` § Security Considerations forbids putting internal detail in a
+#: client-facing field, and "your nonce was already claimed" is a verifier-internal fact an
+#: unauthenticated caller should not be able to probe for.
 #:
-#: The SDK publishes the VOCABULARY (``_TAXONOMY``, above) and not the classification:
-#: ``enums/error-code.json``'s ``enumMetadata`` carries ``{recovery, suggestion}`` for the
-#: 92 codes ``_load_published_codes`` reads, and for NONE of these 28 — measured, not
-#: assumed. So the classification has to be stated here, and this is the whole of it.
-#:
-#: WHY A TABLE AND NOT A RULE. This was a pair of suffix-marker tuples and a
-#: ``_recovery_for`` that matched them, so a code's class followed from how it was SPELLED.
-#: That put ``request_signature_brand_json_malformed`` in ``correctable`` on the
-#: ``_malformed`` suffix, while L1122 says "Verifier: do not retry; surface to operations"
-#: — it is the COUNTERPARTY's document and the buyer cannot edit it. Because the message
-#: and the suggestion are selected by class, the buyer was also told to re-sign a request
-#: that was fine. A rule cannot see whose document is malformed; the spec states it per row,
-#: so this does too. ``AppErrorCode`` declares its eight the same way, and for the same
-#: reason: declaring a code and declaring what it means is one act.
-#:
-#: SOURCES, both at v3.1.1. The ``Failure | Retry? | Code`` table (L1373) classifies 20;
-#: the discovery table (L1119-1127) classifies the other 9 in its remediation column. Note
-#: that ``Retry? No`` does NOT mean terminal — it spans "the caller can fix this and send
-#: it again" and "no autonomous recovery", which is exactly the distinction a spelling rule
-#: erased. Each row below takes the reading its remediation text states.
-_RECOVERY: Final[Mapping[str, Recovery]] = MappingProxyType(
+#: The recovery and suggestion are the pin's, read with the other published codes
+#: (``enums/request-signing-error-code.json``, ``src/core/errors/codes.py``).
+SIGNATURE_MESSAGES: Final[Mapping[Recovery, str]] = MappingProxyType(
     {
-        # The buyer signs, or re-signs, and sends it again. Every one of these is a fault
-        # in what the CALLER put on the wire.
-        "request_signature_required": Recovery.CORRECTABLE,
-        "request_signature_header_malformed": Recovery.CORRECTABLE,
-        "request_signature_params_incomplete": Recovery.CORRECTABLE,
-        "request_signature_tag_invalid": Recovery.CORRECTABLE,
-        "request_signature_alg_not_allowed": Recovery.CORRECTABLE,
-        "request_signature_window_invalid": Recovery.CORRECTABLE,
-        "request_signature_components_incomplete": Recovery.CORRECTABLE,
-        "request_signature_components_unexpected": Recovery.CORRECTABLE,
-        "request_target_uri_malformed": Recovery.CORRECTABLE,
-        # Somebody else's availability, so the SAME request may succeed later.
-        # L1120 "Surface as transient"; L1121 "Same retry/cache discipline";
-        # L1373 "Yes (with backoff)".
-        "request_signature_capabilities_unreachable": Recovery.TRANSIENT,
-        "request_signature_brand_json_unreachable": Recovery.TRANSIENT,
-        "request_signature_jwks_unavailable": Recovery.TRANSIENT,
-        # Refused on the signature's own merits: the bytes arrive identically on every
-        # retry, so every retry fails identically (L1373 "No" throughout).
-        "request_signature_invalid": Recovery.TERMINAL,
-        "request_signature_digest_mismatch": Recovery.TERMINAL,
-        "request_signature_replayed": Recovery.TERMINAL,
-        "request_signature_rate_abuse": Recovery.TERMINAL,
-        "request_signature_revocation_stale": Recovery.TERMINAL,
-        # The signer's KEY material or its declaration. An operator fixes these; a buyer
-        # cannot, and retrying changes nothing.
-        "request_signature_key_unknown": Recovery.TERMINAL,
-        "request_signature_key_purpose_invalid": Recovery.TERMINAL,
-        "request_signature_key_revoked": Recovery.TERMINAL,
-        "request_signature_jwks_untrusted": Recovery.TERMINAL,
-        "request_signature_key_origin_mismatch": Recovery.TERMINAL,
-        "request_signature_key_origin_missing": Recovery.TERMINAL,
-        # The counterparty's TRUST ROOT. The buyer does not own these documents, which is
-        # why the spelling rule got this group wrong. L1119/L1122 "surface to operations;
-        # do not retry"; L1123-L1125 "Not retryable".
-        "request_signature_brand_json_url_missing": Recovery.TERMINAL,
-        "request_signature_brand_json_malformed": Recovery.TERMINAL,
-        "request_signature_brand_origin_mismatch": Recovery.TERMINAL,
-        "request_signature_agent_not_in_brand_json": Recovery.TERMINAL,
-        "request_signature_brand_json_ambiguous": Recovery.TERMINAL,
+        Recovery.CORRECTABLE: "The request signature was missing or was not accepted",
+        Recovery.TRANSIENT: "This agent could not reach the documents that establish the signer's keys",
+        Recovery.TERMINAL: "The request signature was rejected",
     }
 )
 
-
-def _recovery_for(code: str) -> Recovery:
-    """How a buyer should react to *code*, read off :data:`_RECOVERY`.
-
-    A lookup, deliberately with no default. A code in the SDK's taxonomy with no row here
-    raises at import rather than being classified by a fallback — the classification is the
-    only machine-readable signal a buyer gets for this family (``core/error.json`` types
-    ``error.code`` as an open string, so a receiver decodes an unknown code by reading
-    ``error.recovery``), and guessing it silently is what this table replaced.
-    """
-    return _RECOVERY[code]
-
-
-#: What a buyer is TOLD, per recovery class. One sentence each rather than 28, because the
-#: distinguishing information is the CODE — which is on the wire, twice (``error.code`` and
-#: the challenge) — and because a buyer-facing message must not narrate which checklist step
-#: refused: AdCP 3.1.1 ``transport-errors.mdx`` § Security Considerations forbids putting
-#: internal detail in a client-facing field, and "your nonce was already claimed" is a
-#: verifier-internal fact an unauthenticated caller should not be able to probe for.
-_TEXT: Final[dict[Recovery, tuple[str, str]]] = {
-    Recovery.CORRECTABLE: (
-        "The request signature was missing or malformed",
-        "Sign the request per RFC 9421 as this agent's request_signing capability describes, and send it again",
-    ),
-    Recovery.TRANSIENT: (
-        "This agent could not reach the documents that establish the signer's keys",
-        "Retry with backoff; if it persists, check that your brand.json and JWKS are reachable",
-    ),
-    Recovery.TERMINAL: (
-        "The request signature was rejected",
-        "Do not retry unchanged; check the named code, then rotate or re-register the signing key",
-    ),
-}
-
-#: Every signature code, mapped to what a buyer gets with it. Merged into ``CODE_TABLE``.
-#:
-#: ``status`` is 401 for all of them, from the taxonomy's own first sentence ("returned in
-#: ``WWW-Authenticate: Signature error="<code>"`` on 401"). It has to agree with what
-#: ``AuthChallengeResponder`` writes, and it does, because both are that one number.
-SIGNATURE_CODE_TABLE: Final = MappingProxyType(
-    {
-        member: CodeEntry(
-            recovery=_recovery_for(member.value),
-            suggestion=_TEXT[_recovery_for(member.value)][1],
-            message=_TEXT[_recovery_for(member.value)][0],
-            status=401,
-            # What makes these 28 different from every other code, declared once, here.
-            # ``AuthChallengeResponder`` asks the table rather than holding its own list:
-            # see CodeGroup for why the fact lives on the code and not on the renderer.
-            group=CodeGroup.SIGNATURE,
-        )
-        for member in SignatureErrorCode
-    }
-)
+#: The taxonomy's own first sentence: "returned in ``WWW-Authenticate: Signature error="<code>"``
+#: on 401". It has to agree with what ``AuthChallengeResponder`` writes.
+SIGNATURE_STATUS: Final = 401
 
 
 def challenge_for(code: str) -> str:

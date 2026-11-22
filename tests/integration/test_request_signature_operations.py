@@ -76,7 +76,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from typing import Any
 
 import pytest
@@ -104,19 +104,19 @@ from tests.harness._base import BareIntegrationEnv
 # The seams, the shared tenant/surface constants and the shared request builders all come
 # from their single home (salesagent-z6nr.14 step 2). What stays below is only what this
 # suite alone uses — the per-surface paths and payload overrides.
+from tests.helpers.metrics import assert_counter_delta
 from tests.helpers.signing import (
     CAPABILITIES_ADCP_PATH,
     COUNTERPARTY_KID,
     FAILED_METRIC,
     SIGNING_PRINCIPAL_ID,
     SIGNING_TENANT_ID,
+    UNSIGNED_METRIC,
     bucketed_declaration,
-    counter_total,
     counterparty_key,
     keypair_for,
     narrowed_none,
     request_headers,
-    samples_with,
     seed_principal,
     signed_headers,
     signing_config,
@@ -216,7 +216,17 @@ def _account_registration(*, with_authentication: bool) -> dict[str, Any]:
     config: dict[str, Any] = {
         "subscriber_id": "sub-signature-probe",
         "url": "https://buyer.example.com/account-webhook",
-        "event_types": ["scheduled"],
+        # ACCOUNT-ANCHORED, which the pin now requires on this surface. This read
+        # ``["scheduled"]``, and the pinned conformance storyboard
+        # ``notification_config_event_scope`` names that value in the set it deliberately
+        # removed: "notification-type.json HISTORICALLY contained both media-buy-anchored
+        # event types (`scheduled`, `final`, `delayed`, `adjusted`, `window_update`,
+        # `impairment`) and account-anchored event types (`creative.*`, `product.*`,
+        # `signal.*`, `wholesale_feed.bulk_change`). Account-level notification config
+        # schemas now expose only account-anchored event types so media-buy registrations
+        # fail." So the pin GRADES the rejection of the old value, and the body here has to
+        # be a valid registration or it never reaches the escalation it exists to probe.
+        "event_types": ["creative.status_changed"],
     }
     if with_authentication:
         config["authentication"] = dict(_WEBHOOK_AUTHENTICATION)
@@ -279,9 +289,8 @@ def _assert_not_rejected(response: Any, why: str) -> None:
     )
 
 
-@contextmanager
-def _assert_verifier_looked() -> Iterator[None]:
-    """The verifier ACTUALLY RAN and reached a verdict for an unsigned request.
+def _assert_verifier_looked() -> AbstractContextManager[None]:
+    """The verifier ACTUALLY RAN and reached a verdict for the one unsigned request in the block.
 
     Absence-of-rejection alone is worthless as an acceptance signal — it is byte-identical to
     a verifier that never looked, which is true whenever the kill switch is off or the
@@ -290,19 +299,13 @@ def _assert_verifier_looked() -> Iterator[None]:
     ``adcp_request_unsigned_total`` through ``record_request_unsigned`` on exactly the path
     that decides an unsigned request may proceed. A boundary that returned early emits nothing
     and the delta is zero.
-
-    Reads the counter through ``counter_total`` (tests/helpers/signing.py) rather than
-    hand-rolling a before/after pair — that idiom was open-coded at eight sites across three
-    modules, and a ninth would make it worse.
     """
-    before = counter_total("adcp_request_unsigned_total")
-    yield
-    after = counter_total("adcp_request_unsigned_total")
-    assert after > before, (
-        "the verifier never recorded a verdict for this request: "
-        f"adcp_request_unsigned_total did not move ({before} -> {after}). A non-rejection is "
-        "equally true of a boundary that returned early — kill switch off, or 'none' bucket "
-        "— so this control proves nothing without the counter."
+    return assert_counter_delta(
+        UNSIGNED_METRIC,
+        1,
+        why="The verifier never recorded a verdict for this request. A non-rejection is equally "
+        "true of a boundary that returned early (kill switch off, or the 'none' bucket), so this "
+        "control proves nothing without the counter.",
     )
 
 
@@ -630,42 +633,32 @@ class TestWebhookCredentialsOutrankTheBucket:
                 extra={"Content-Type": "application/json"},
             )
 
-            def digest_failures() -> float:
-                return sum(
-                    samples_with(
-                        FAILED_METRIC,
-                        operation=_SYNC_ACCOUNTS_OPERATION,
-                        code=REQUEST_SIGNATURE_DIGEST_MISMATCH,
-                    ).values()
-                )
-
-            before = digest_failures()
-
-            with (
-                _declared_posture(**narrowed_none()),
-                counterparty_key(jwks),
-            ):
-                response = client.post(_SYNC_ACCOUNTS_PATH, content=sent_body, headers=headers)
-
-            _assert_rejected(
-                response,
-                "the payload registers webhook credentials, so :1465 promotes this request to "
-                "required 'regardless of required_for membership' (:1375) — and a promoted request "
-                "is REFUSED on a checklist failure an un-promoted one would never have reached",
-                code=REQUEST_SIGNATURE_DIGEST_MISMATCH,
-            )
-
             # PRODUCTION NAMED THE SURFACE, which is what keeps the declaration honest. The
-            # route-table guard above reads the registry; this reads the label the VERIFIER
-            # wrote, so the two agree about which operation this path actually reached. Zero
-            # would mean the declaration bucketed an operation the path does not resolve to,
-            # leaving the surface in ``none`` — waved through unverified and refused for a
-            # different reason, red under the same mutation while grading something else.
-            after = digest_failures()
-            assert after == before + 1, (
-                f"the verifier recorded {after - before} {REQUEST_SIGNATURE_DIGEST_MISMATCH!r} failure(s) "
-                f"labelled operation={_SYNC_ACCOUNTS_OPERATION!r}, expected exactly 1"
-            )
+            # route-table guard above reads the registry; the delta reads the label the
+            # VERIFIER wrote, so the two agree about which operation this path actually
+            # reached. Zero would mean the declaration bucketed an operation the path does not
+            # resolve to, leaving the surface in ``none`` — waved through unverified and refused
+            # for a different reason, red under the same mutation while grading something else.
+            with assert_counter_delta(
+                FAILED_METRIC,
+                1,
+                why="the verifier must label the digest failure with the operation this path reached",
+                operation=_SYNC_ACCOUNTS_OPERATION,
+                code=REQUEST_SIGNATURE_DIGEST_MISMATCH,
+            ):
+                with (
+                    _declared_posture(**narrowed_none()),
+                    counterparty_key(jwks),
+                ):
+                    response = client.post(_SYNC_ACCOUNTS_PATH, content=sent_body, headers=headers)
+
+                _assert_rejected(
+                    response,
+                    "the payload registers webhook credentials, so :1465 promotes this request to "
+                    "required 'regardless of required_for membership' (:1375) — and a promoted request "
+                    "is REFUSED on a checklist failure an un-promoted one would never have reached",
+                    code=REQUEST_SIGNATURE_DIGEST_MISMATCH,
+                )
 
     def test_the_escalation_does_not_fire_under_an_unsupported_posture(self, integration_db):
         """:1465 binds sellers that SUPPORT request signing.

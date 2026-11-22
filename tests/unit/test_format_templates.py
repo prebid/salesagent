@@ -3,121 +3,12 @@
 Issue #782: Support creative format templates with dynamic width/height/duration.
 """
 
-import pytest
-from adcp.types import FormatId
-from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
 
-from src.core.helpers import _extract_format_info, _extract_format_namespace
+from src.core.helpers import _extract_format_namespace
 from src.core.schemas import Format
 from src.core.schemas import FormatId as SchemasFormatId
-
-
-class TestExtractFormatInfo:
-    """Test _extract_format_info function for parameterized formats."""
-
-    def test_basic_format_without_parameters(self):
-        """Basic format with just agent_url and id."""
-        format_value = {"agent_url": "https://creative.example.com", "id": "display_static"}
-        result = _extract_format_info(format_value)
-
-        assert result["agent_url"] == "https://creative.example.com"
-        assert result["format_id"] == "display_static"
-        assert result["parameters"] is None
-
-    def test_format_with_dimensions(self):
-        """Format with width and height parameters."""
-        format_value = {
-            "agent_url": "https://creative.example.com",
-            "id": "display_static",
-            "width": 300,
-            "height": 250,
-        }
-        result = _extract_format_info(format_value)
-
-        assert result["agent_url"] == "https://creative.example.com"
-        assert result["format_id"] == "display_static"
-        assert result["parameters"] == {"width": 300, "height": 250}
-
-    def test_format_with_duration(self):
-        """Format with duration_ms parameter (video)."""
-        format_value = {
-            "agent_url": "https://creative.example.com",
-            "id": "video_hosted",
-            "duration_ms": 15000,
-        }
-        result = _extract_format_info(format_value)
-
-        assert result["agent_url"] == "https://creative.example.com"
-        assert result["format_id"] == "video_hosted"
-        assert result["parameters"] == {"duration_ms": 15000.0}
-
-    def test_format_with_all_parameters(self):
-        """Format with dimensions and duration (video with specific size)."""
-        format_value = {
-            "agent_url": "https://creative.example.com",
-            "id": "video_outstream",
-            "width": 1920,
-            "height": 1080,
-            "duration_ms": 30000,
-        }
-        result = _extract_format_info(format_value)
-
-        assert result["agent_url"] == "https://creative.example.com"
-        assert result["format_id"] == "video_outstream"
-        assert result["parameters"] == {"width": 1920, "height": 1080, "duration_ms": 30000.0}
-
-    def test_format_from_pydantic_object(self):
-        """Extract format info from Pydantic FormatId object."""
-        format_obj = FormatId(
-            agent_url="https://creative.example.com",
-            id="display_static",
-            width=728,
-            height=90,
-        )
-        result = _extract_format_info(format_obj)
-
-        assert result["agent_url"] == "https://creative.example.com/"  # AnyUrl normalizes
-        assert result["format_id"] == "display_static"
-        assert result["parameters"] == {"width": 728, "height": 90}
-
-    def test_format_ignores_none_parameters(self):
-        """None parameters should not be included."""
-        format_value = {
-            "agent_url": "https://creative.example.com",
-            "id": "display_static",
-            "width": None,
-            "height": None,
-        }
-        result = _extract_format_info(format_value)
-
-        assert result["parameters"] is None
-
-    def test_format_partial_parameters(self):
-        """Only non-None parameters should be included."""
-        format_value = {
-            "agent_url": "https://creative.example.com",
-            "id": "display_static",
-            "width": 300,
-            "height": None,  # Only width specified
-        }
-        result = _extract_format_info(format_value)
-
-        assert result["parameters"] == {"width": 300}
-
-    def test_string_format_raises_error(self):
-        """String format should raise clear error."""
-        with pytest.raises(ValueError, match="String format_id is no longer supported"):
-            _extract_format_info("display_static")
-
-    def test_missing_agent_url_raises_error(self):
-        """Missing agent_url should raise error."""
-        with pytest.raises(ValueError, match="must have both 'agent_url' and 'id' fields"):
-            _extract_format_info({"id": "display_static"})
-
-    def test_missing_id_raises_error(self):
-        """Missing id should raise error."""
-        with pytest.raises(ValueError, match="must have both 'agent_url' and 'id' fields"):
-            _extract_format_info({"agent_url": "https://creative.example.com"})
 
 
 class TestExtractFormatNamespaceBackwardCompat:
@@ -156,7 +47,8 @@ class TestFormatIdReconstruction:
             id="display_static",
         )
 
-        assert str(format_obj.agent_url) == "https://creative.example.com/"
+        # Verbatim, not AnyUrl-normalised -- see test_format_from_pydantic_object.
+        assert str(format_obj.agent_url) == "https://creative.example.com"
         assert format_obj.id == "display_static"
         assert format_obj.width is None
         assert format_obj.height is None
@@ -179,7 +71,8 @@ class TestFormatIdReconstruction:
 
         format_obj = FormatId(**format_kwargs)
 
-        assert str(format_obj.agent_url) == "https://creative.example.com/"
+        # Verbatim, not AnyUrl-normalised -- see test_format_from_pydantic_object.
+        assert str(format_obj.agent_url) == "https://creative.example.com"
         assert format_obj.id == "display_static"
         assert format_obj.width == 300
         assert format_obj.height == 250
@@ -195,97 +88,6 @@ class TestFormatIdReconstruction:
 
         assert format_obj.id == "video_hosted"
         assert format_obj.duration_ms == 15000
-
-
-class TestFormatParametersRoundTrip:
-    """Test round-trip: FormatId -> storage -> reconstruction."""
-
-    def test_roundtrip_display_format(self):
-        """Display format roundtrip preserves parameters."""
-        # Original FormatId from AdCP request
-        original = FormatId(
-            agent_url="https://creative.example.com",
-            id="display_static",
-            width=300,
-            height=250,
-        )
-
-        # Extract for storage
-        format_info = _extract_format_info(original)
-
-        # Verify storage format
-        assert format_info["agent_url"] == "https://creative.example.com/"
-        assert format_info["format_id"] == "display_static"
-        assert format_info["parameters"] == {"width": 300, "height": 250}
-
-        # Reconstruct from storage
-        format_kwargs = {
-            "agent_url": format_info["agent_url"],
-            "id": format_info["format_id"],
-        }
-        if format_info["parameters"]:
-            format_kwargs.update(format_info["parameters"])
-
-        reconstructed = FormatId(**format_kwargs)
-
-        # Verify equality
-        assert reconstructed.id == original.id
-        assert reconstructed.width == original.width
-        assert reconstructed.height == original.height
-
-    def test_roundtrip_video_format(self):
-        """Video format roundtrip preserves duration."""
-        original = FormatId(
-            agent_url="https://creative.example.com",
-            id="video_hosted",
-            width=1920,
-            height=1080,
-            duration_ms=30000,
-        )
-
-        # Extract for storage
-        format_info = _extract_format_info(original)
-
-        # Reconstruct
-        format_kwargs = {
-            "agent_url": format_info["agent_url"],
-            "id": format_info["format_id"],
-        }
-        if format_info["parameters"]:
-            format_kwargs.update(format_info["parameters"])
-
-        reconstructed = FormatId(**format_kwargs)
-
-        # Verify all fields preserved
-        assert reconstructed.id == original.id
-        assert reconstructed.width == original.width
-        assert reconstructed.height == original.height
-        assert reconstructed.duration_ms == original.duration_ms
-
-    def test_roundtrip_template_format_no_parameters(self):
-        """Template format without parameters roundtrips correctly."""
-        original = FormatId(
-            agent_url="https://creative.example.com",
-            id="display_static",
-        )
-
-        # Extract for storage
-        format_info = _extract_format_info(original)
-
-        # Verify no parameters stored
-        assert format_info["parameters"] is None
-
-        # Reconstruct
-        format_kwargs = {
-            "agent_url": format_info["agent_url"],
-            "id": format_info["format_id"],
-        }
-
-        reconstructed = FormatId(**format_kwargs)
-
-        assert reconstructed.id == original.id
-        assert reconstructed.width is None
-        assert reconstructed.height is None
 
 
 class TestFormatIdGetDimensions:
@@ -309,23 +111,20 @@ class TestFormatIdGetDimensions:
         )
         assert format_id.get_dimensions() is None
 
-    def test_get_dimensions_partial_width_only(self):
-        """Returns None when only width is set (both required)."""
-        format_id = SchemasFormatId(
-            agent_url="https://creative.example.com",
-            id="display_static",
-            width=300,
-        )
-        assert format_id.get_dimensions() is None
-
-    def test_get_dimensions_partial_height_only(self):
-        """Returns None when only height is set (both required)."""
-        format_id = SchemasFormatId(
-            agent_url="https://creative.example.com",
-            id="display_static",
-            height=250,
-        )
-        assert format_id.get_dimensions() is None
+    # The two partial-dimension tests that stood here are DELETED, not moved.
+    #
+    # They graded get_dimensions() on a FormatId carrying exactly one of width and
+    # height. core/format-id.json states
+    #     "dependencies": {"width": ["height"], "height": ["width"]}
+    # so width and height are mutually dependent and a one-sided pair is not a
+    # document the pin admits. The rebuilt SDK compiles that onto the exported class
+    # and refuses it; the previous SDK did not, which is the only reason the tests
+    # ever ran (salesagent-8qela.121).
+    #
+    # The correct behaviour is that get_dimensions() has exactly two cases, a
+    # complete pair and absent dimensions, and both are graded directly above by
+    # test_get_dimensions_with_both and test_get_dimensions_without_params. There is
+    # no third case to assert, so there is nothing here to re-ground.
 
     def test_get_duration_ms(self):
         """Returns duration_ms when set."""
@@ -358,7 +157,6 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
                 height=250,
             ),
             name="Static Display",
-            type="display",
             # Even if requirements say something different, format_id wins
             requirements={"width": 728, "height": 90},
         )
@@ -372,7 +170,6 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
                 id="display_static",
             ),
             name="Static Display",
-            type="display",
             requirements={"width": 728, "height": 90},
         )
         assert fmt.get_primary_dimensions() == (728, 90)
@@ -385,7 +182,6 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
                 id="display_static",
             ),
             name="Static Display",
-            type="display",
         )
         assert fmt.get_primary_dimensions() is None
 
@@ -406,7 +202,6 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
                 height=250,
             ),
             name="Static Display",
-            type="display",
         )
         assert fmt.get_primary_dimensions() == (300, 250)
 
@@ -418,7 +213,6 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
                 id="video_hosted",
             ),
             name="Hosted Video",
-            type="video",
         )
         assert fmt.get_primary_dimensions() is None
 
@@ -430,24 +224,15 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
                 id="display_static",
             ),
             name="Static Display",
-            type="display",
             renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
         )
         assert fmt.get_primary_dimensions() == (728, 90)
 
-    def test_partial_format_id_dimensions_falls_through(self):
-        """Partial format_id dimensions (width only) fall through to next source."""
-        fmt = Format(
-            format_id=FormatId(
-                agent_url="https://creative.example.com",
-                id="display_static",
-                width=300,
-            ),
-            name="Static Display",
-            type="display",
-            requirements={"width": 728, "height": 90},
-        )
-        assert fmt.get_primary_dimensions() == (728, 90)
+    # test_partial_format_id_dimensions_falls_through is DELETED for the reason given
+    # in TestFormatIdGetDimensions above: its format_id carried width without height,
+    # which core/format-id.json's dependencies forbid. The fall-through it claimed to
+    # grade — a format_id with no usable dimensions deferring to requirements — is
+    # graded by test_falls_back_to_requirements, whose fixture is legal.
 
     def test_format_id_takes_priority_over_renders_and_requirements(self):
         """format_id dimensions take priority over both renders and requirements."""
@@ -459,7 +244,6 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
                 height=250,
             ),
             name="Static Display",
-            type="display",
             renders=[Renders(role="primary", dimensions=Dimensions(width=640, height=480))],
             requirements={"width": 728, "height": 90},
         )

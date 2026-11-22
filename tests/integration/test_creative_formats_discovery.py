@@ -30,7 +30,6 @@ def _make_format(format_id: str, name: str) -> Format:
     return Format(
         format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id=format_id),
         name=name,
-        type="display",
         is_standard=True,
     )
 

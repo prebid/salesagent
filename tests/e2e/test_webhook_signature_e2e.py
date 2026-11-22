@@ -89,6 +89,7 @@ from tests.e2e._webhook_capture import (
 )
 from tests.e2e.adcp_request_builder import build_adcp_media_buy_request, get_test_date_range
 from tests.e2e.conftest import e2e_in_network
+from tests.factories.webhook import PushNotificationConfigRequestFactory
 from tests.helpers.signing import verify_as_conformant_receiver, walk_discovery_to_jwks
 from tests.helpers.webhook_wire import CapturedWebhook, signature_input_label
 
@@ -220,7 +221,13 @@ async def _fire_one_delivery(client: httpx.AsyncClient, callback_url: str) -> No
     # Set here rather than through a builder parameter: the builder's own ``webhook_url``
     # argument produces a ``reporting_webhook`` WITH a Bearer block, which is the legacy
     # arm this module exists to prove is not taken.
-    parameters["push_notification_config"] = {"url": callback_url}
+    #
+    # Built by the factory, not as a bare ``{"url": ...}``: a registration with no
+    # ``operation_id`` is refused outright (``webhooks/registration.py``'s gate, and
+    # ``core/mcp-webhook-payload.json`` /required, which the one envelope builder reads),
+    # so the hand-rolled dict never reached a delivery to grade. ``payload()`` still omits
+    # ``authentication``, which is what selects the RFC 9421 arm this module is about.
+    parameters["push_notification_config"] = PushNotificationConfigRequestFactory.payload(url=callback_url)
     result = await post_a2a(
         client, _a2a_send_message("create_media_buy", parameters), leg="create_media_buy", token=_BUYER_TOKEN
     )

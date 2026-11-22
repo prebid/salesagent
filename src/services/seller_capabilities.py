@@ -17,18 +17,18 @@ protocol still derives the sections it discards. Discovery is not a hot path.
 
 import dataclasses
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
-from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
-from adcp.types.generated_poc.core.postal_area_support import (
-    PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
+from adcp.types.domains.core.media_buy_features import MediaBuyFeatures
+from adcp.types.domains.core.postal_area_support import (
+    PostalAreaSupport,  # the pinned SDK: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
 )
-from adcp.types.generated_poc.enums.channels import MediaChannel
-from adcp.types.generated_poc.enums.pricing_model import PricingModel
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_request import Protocol as RequestProtocol
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+from adcp.types.domains.enums.channels import MediaChannel
+from adcp.types.domains.enums.pricing_model import PricingModel
+from adcp.types.domains.protocol.get_adcp_capabilities_request import Protocol as RequestProtocol
+from adcp.types.domains.protocol.get_adcp_capabilities_response import (
     # Aliased: three distinct types in src/ are named Account -- the ORM row
     # (imported as DBAccount in accounts.py), the domain schema
     # (src/core/schemas/account.py, imported BARE by accounts.py), and this
@@ -39,7 +39,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     # this tools-module alias does not carry.
     Account as AccountCapabilities,
 )
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+from adcp.types.domains.protocol.get_adcp_capabilities_response import (
     Adcp,
     CreativeApprovalMode,
     Execution,
@@ -50,12 +50,12 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     PublisherDomain,
     Targeting,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from src.adapters.base import TargetingCapabilities
 from src.core.agent_identity import AGENT_ENDPOINT_PATHS, brand_json_url, canonical_agent_url, jwks_origin
 from src.core.billing_policy import BillingParty, resolve_account_sandbox, resolve_supported_billing
-from src.core.database.repositories.uow import CapabilitiesUoW
+from src.core.database.repositories.uow import TrustRootUoW
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails
 from src.core.exceptions import AdCPConfigurationError
@@ -63,6 +63,7 @@ from src.core.helpers.adapter_helpers import (
     get_adapter_class_for_tenant,
 )
 from src.core.helpers.channel_helpers import effective_channel_names
+from src.core.http_utils import canonical_publisher_domain
 from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import Error
 from src.core.schemas.capability_declarations import (
@@ -83,7 +84,8 @@ from src.core.signing.posture import (
     webhook_signing_posture,
 )
 from src.core.tenant_context import TenantContext
-from src.services.targeting_capabilities import supports_property_list_filtering
+from src.core.tools.accounts import resolve_account_currency_modes
+from src.services.targeting_capabilities import CATALOG_MANAGEMENT_SUPPORTED, supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
 
@@ -113,18 +115,19 @@ def _record_degradation(advisories: list[Error], what: str, exc: Exception) -> N
     """Log a discovery degradation AND surface it to the buyer as an advisory.
 
     ONE helper for EVERY degradation site in :func:`describe_seller` — the discovery
-    lookups routed through :func:`_resolve_or_degrade`, and the two reads inside the
-    ``CapabilitiesUoW`` block that need their own terminal-error posture.
+    lookups routed through :func:`_resolve_or_degrade`, the two reads inside the
+    ``TrustRootUoW`` block that need their own terminal-error posture, and a stored
+    publisher domain the pinned pattern rejects (:func:`_publisher_domains_on_wire`).
     A site that only logs and falls through to a default leaves the response
     silently carrying a placeholder (or an omission), with no way for the buyer to
     tell "this seller has none" from "the lookup failed" — the quiet-failure class
     CLAUDE.md bans.
 
     EXCEPT-PATH ONLY, deliberately. Two of these sites also degrade on an EMPTY
-    result with no exception (``primary_channels``, ``publisher_domains``), and a
-    tenant with zero publisher partners is the COMMON case — advising there would
-    put ``errors[]`` on nearly every tenant-resolved capabilities response across
-    every use case. A genuinely faulted lookup is the advisory-worthy event.
+    result with no exception (``primary_channels``, ``publisher_domains``). An empty
+    result is the seller's real state (a tenant no publisher has verified yet is
+    common), not a degradation, so it carries no advisory. A genuinely faulted lookup
+    is the advisory-worthy event.
 
     The advisory is a WARNING, not a failure: ``errors`` is "Task-specific errors
     and warnings" and the envelope still reports success, so discovery is not
@@ -137,6 +140,21 @@ def _record_degradation(advisories: list[Error], what: str, exc: Exception) -> N
             details=CapabilityRefusalDetails(capability=what),
         )
     )
+
+
+def _publisher_domains_on_wire(stored: Iterable[str], advisories: list[Error]) -> list[PublisherDomain]:
+    """The distinct publisher domains a buyer can be sent to, from the rows as stored.
+
+    A row the pattern still rejects after canonicalization (a port, an empty domain) costs
+    that row and records an advisory; the other publishers stay on the wire.
+    """
+    named: list[PublisherDomain] = []
+    for domain in sorted({canonical_publisher_domain(row) for row in stored}):
+        try:
+            named.append(PublisherDomain(root=domain))
+        except ValidationError as e:
+            _record_degradation(advisories, "publisher domains", e)
+    return named
 
 
 def _resolve_or_degrade[T](advisories: list[Error], what: str, resolve: Callable[[], T], *, default: T) -> T:
@@ -233,7 +251,7 @@ def _build_signing_blocks(
 
 
 def _resolve_signing_blocks(
-    uow: CapabilitiesUoW,
+    uow: TrustRootUoW,
     declarations: CapabilityDeclarations,
     *,
     tenant: TenantContext,
@@ -312,10 +330,15 @@ def _build_account_block(tenant: TenantContext) -> AccountCapabilities | None:
     -- the two can never diverge. require_operator_auth is a true architectural constant
     (no per-tenant operator-auth config or enforcement exists yet). sandbox reflects the
     tenant's account_sandbox column via resolve_account_sandbox (default FALSE --
-    support is opted into, never assumed from an unset column). authorization_endpoint/
-    required_for_products/account_financials stay omitted -- declaring them would be an
-    aspirational capability the platform doesn't back yet, not an honest one
-    (#1592 Core Invariant).
+    support is opted into, never assumed from an unset column).
+    supported_account_currency_modes is the same claim-and-enforcement pairing one level
+    deeper: resolve_account_currency_modes (src/core/tools/accounts.py) reads the
+    disposition the sync_accounts entry policy gives ``currency``, so this seller cannot
+    advertise a mode its provisioning walk does not implement. It takes no tenant because
+    the binding is architectural, not configuration -- the accounts table has no currency
+    column. authorization_endpoint/required_for_products/account_financials stay omitted --
+    declaring them would be an aspirational capability the platform doesn't back yet, not
+    an honest one (#1592 Core Invariant).
     """
     supported_billing = resolve_supported_billing(tenant)
     if not supported_billing:
@@ -323,6 +346,7 @@ def _build_account_block(tenant: TenantContext) -> AccountCapabilities | None:
 
     return AccountCapabilities(
         supported_billing=[BillingParty(v) for v in supported_billing],
+        supported_account_currency_modes=resolve_account_currency_modes(),
         require_operator_auth=False,
         sandbox=resolve_account_sandbox(tenant),
         # SDK field defaults are False, not None -- pass None explicitly or these
@@ -473,7 +497,7 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
 
     # Get adapter CLASS to determine channels and capabilities. Tenant-only,
     # principal-free: capabilities describe the SELLER (tenant), not the
-    # caller — INV-4 (AdCP v3.1.1). Resolved via get_adcp_capabilities.mdx
+    # caller — INV-4 (AdCP). Resolved via get_adcp_capabilities.mdx
     # L23 + get_adapter_class_for_tenant (adapter_helpers.py), which bypasses
     # Adapter.__init__ entirely — Kevel/TritonDigital would crash __init__
     # for a synthetic/tenant-only Principal (salesagent-dn2s).
@@ -494,9 +518,10 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
     )
 
     def _map_portfolio_channels() -> None:
-        # portfolio.primary_channels is "Primary advertising channels in this
-        # PORTFOLIO" (get-adcp-capabilities-response.json), and the portfolio is the
-        # tenant's product catalog -- the same thing its sibling publisher_domains
+        # portfolio.primary_channels is the "Complete list of AdCP media channels for which
+        # this sales agent accepts and can meaningfully answer product-discovery briefs"
+        # (get-adcp-capabilities-response.json), and what this seller answers briefs from is
+        # the tenant's product catalog -- the same thing its sibling publisher_domains
         # already summarizes from a real per-tenant table. So the channels are the
         # union of what each product effectively offers, under the ONE rule
         # get_products applies per product (channel_helpers). The adapter CLASS's
@@ -525,11 +550,13 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         mapped = {CHANNEL_MAPPING[name] for name in names if name in CHANNEL_MAPPING}
         primary_channels.extend(channel for channel in MediaChannel if channel in mapped)
 
+    # No channel evidence (no catalog channel and no adapter default inside the channels enum,
+    # or the lookup failed) leaves primary_channels EMPTY, and the portfolio then omits it.
+    # Omission is the pin's spelling of unknown scope: "When present, this is an exhaustive
+    # brief-routing allowlist ... Omission means channel scope is unknown"
+    # (get-adcp-capabilities-response.json, portfolio.primary_channels). A guessed default
+    # would be a display-only allowlist that sends buyers away for every other channel.
     _resolve_or_degrade(advisories, "portfolio channels", _map_portfolio_channels, default=None)
-
-    # Default to display if we couldn't determine from adapter
-    if not primary_channels:
-        primary_channels = [MediaChannel.display]
 
     # supported_pricing_models: pre-flight buyer signal, sorted+deterministic.
     # Same source as the per-product "supported" annotation (products.py:721) --
@@ -552,7 +579,7 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
             advisories, "supported pricing models", _resolve_pricing_models, default=None
         )
 
-    # ONE session for every database read this response needs: the publisher partners,
+    # ONE session for every database read this response needs: the verified publishers,
     # and the signing family's key + tenant-host reads. Two reads, each with its OWN
     # degradation label, because a signing-key failure advertised as "could not resolve
     # publisher domains" tells the buyer the wrong thing.
@@ -571,16 +598,19 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         jwks_origin=None,
     )
     try:
-        with CapabilitiesUoW(tenant_id) as uow:
-            tenant_config = uow.tenant_config
-            assert tenant_config is not None
+        with TrustRootUoW(tenant_id) as uow:
+            publishers = uow.publishers
+            assert publishers is not None
 
             def _resolve_publisher_domains() -> list[PublisherDomain]:
-                return [
-                    PublisherDomain(root=partner.publisher_domain)
-                    for partner in tenant_config.list_publisher_partners()
-                    if partner.publisher_domain
-                ]
+                # The publishers this seller is authorized to represent
+                # (get-adcp-capabilities-response.json portfolio.publisher_domains), each of
+                # which a buyer checks at https://<domain>/.well-known/adagents.json. Those
+                # whose stored file authorizes this agent now: fresh, with a property in
+                # effect -- the rule get_products sells by (publisher_format_catalog.
+                # authorized_properties), so the portfolio names exactly the publishers a
+                # product may name.
+                return _publisher_domains_on_wire(publishers.authorizing_domains(datetime.now(UTC)), advisories)
 
             publisher_domains = _resolve_or_degrade(
                 advisories, "publisher domains", _resolve_publisher_domains, default=[]
@@ -598,14 +628,6 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         # The session itself could not be opened, so neither read happened.
         _record_degradation(advisories, "tenant configuration", e)
 
-    # With no publisher partners recorded, the seller's portfolio is its own inventory, so
-    # the domain it names is the one it is served at — never a derived name, which reaches
-    # the buyer as the publisher's own domain while nobody owns it (#1845). Through
-    # ``primary_domain``, the one accessor, because AdCP's publisher_domain pattern admits no
-    # colon while virtual_host carries the port.
-    if not publisher_domains:
-        publisher_domains = [PublisherDomain(root=tenant.primary_domain)]
-
     # Get advertising policies from tenant config
     advertising_policies: str | None = None
     policy = tenant.advertising_policy
@@ -613,18 +635,31 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         if isinstance(policy, dict) and policy.get("description"):
             advertising_policies = policy["description"]
 
-    # Build portfolio
-    portfolio = Portfolio(
-        description=f"Advertising inventory from {tenant_name}",
-        primary_channels=primary_channels if primary_channels else None,
-        publisher_domains=publisher_domains,
-        advertising_policies=advertising_policies,
+    # publisher_domains is required with minItems 1, so a seller that no publisher has
+    # verified has no portfolio to declare, and it is omitted. Its own host is not a
+    # stand-in: a tenant is a sales agent, its host is not a publisher, and a buyer that
+    # fetches that host's adagents.json finds no authorization. An empty set is the
+    # seller's real state, so it carries no advisory; a FAILED lookup already recorded one.
+    portfolio = (
+        Portfolio(
+            description=f"Advertising inventory from {tenant_name}",
+            primary_channels=primary_channels if primary_channels else None,
+            publisher_domains=publisher_domains,
+            advertising_policies=advertising_policies,
+        )
+        if publisher_domains
+        else None
     )
 
     # Build features - be honest about what we actually support
     # These should be adapter-dependent in the future
     features = MediaBuyFeatures(
-        # inline_creative_management: We have sync_creatives/list_creatives tools
+        # inline_creative_management: package-scoped creative bodies are accepted on
+        # create_media_buy and update_media_buy (process_and_upload_package_creatives).
+        # That is the flag's whole meaning at the pin. It says nothing about a reusable
+        # library: sync_creatives/list_creatives are creative.has_creative_library, which
+        # lives in the creative block and is not declared here
+        # (docs/creative/sales-agent-creative-capabilities.mdx § Creative management modes).
         inline_creative_management=True,
         # property_list_filtering: True iff the bound adapter actually compiles
         # `targeting_overlay.property_list` into native ad-server targeting.
@@ -641,7 +676,8 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         # without the tool would let buyers reach the boundary and get
         # UNSUPPORTED_FEATURE there instead of being warned at capability
         # discovery. Mirrors the property_list_filtering=False rationale above.
-        catalog_management=False,
+        # The same fact refuses targeting_overlay.store_catchments at create/update.
+        catalog_management=CATALOG_MANAGEMENT_SUPPORTED,
         # committed_metrics_supported: declared False until a committed-metrics
         # surface exists (no product/media-buy data model backs a delivery
         # commitment today). Mirrors the catalog_management=False rationale above.
@@ -697,19 +733,19 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         trusted_match=declarations.trusted_match,
     )
 
-    # creative_approval_mode: require_human when this tenant's configuration
-    # genuinely requires manual review (resolve_manual_approval_signal, the
-    # same signal _create_media_buy_impl enforces); omit entirely otherwise --
-    # NEVER claim auto_approve without an explicit tenant-level affirmation
-    # that no product/account requires review (no such config surface exists
-    # yet, salesagent-y9ld plan Q2 -- declaring it would be a false
-    # conformance claim, not a "legacy-unspecified" honest omission).
-    from src.core.helpers.adapter_helpers import resolve_manual_approval_signal
-
-    manual_approval_signal = _resolve_or_degrade(
-        advisories, "manual approval signal", lambda: resolve_manual_approval_signal(tenant), default=False
+    # creative_approval_mode is the tenant-wide CREATIVE-review posture
+    # (protocol/get-adcp-capabilities-response.json, v3.2.7: "auto_approve means human
+    # review does not block serving eligibility after creatives are assigned and automated
+    # validation passes"; the pending_creatives_to_start storyboard: "Sellers with manual
+    # creative review declare ... require_human"). It derives from the one predicate
+    # sync_creatives' routing applies (_apply_approval_mode), so auto_approve is claimed
+    # exactly when synced creatives ARE approved at sync. Media-buy approval
+    # (human_review_required, the adapter's manual-approval columns) is a different
+    # decision and does not enter here. Always present: Tenant.approval_mode is NOT NULL,
+    # so this seller never has the legacy-unspecified posture omission describes.
+    creative_approval_mode = (
+        CreativeApprovalMode.auto_approve if tenant.auto_approves_creatives else CreativeApprovalMode.require_human
     )
-    creative_approval_mode = CreativeApprovalMode.require_human if manual_approval_signal else None
 
     # Build media_buy capabilities.
     # reporting_delivery_methods reaches the wire from the declaration store, which is

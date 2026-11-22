@@ -24,6 +24,8 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
+from src.core.operator_errors import OperatorRefusal
+
 
 class HeaderSource(Protocol):
     """Anything that can list its headers.
@@ -71,8 +73,26 @@ def requested_host(headers: HeaderSource) -> str | None:
     return get_header_case_insensitive(headers, "Host")
 
 
+class InvalidVirtualHost(OperatorRefusal, ValueError):
+    """A ``virtual_host`` that is not a bare ``host`` or ``host:port``.
+
+    The exception's own text says exactly what is wrong and quotes the value; it is for
+    the log and the ORM validator. Responses answer with ``MESSAGE``. Also a
+    ``ValueError``, unlike the other refusals, because the ``Tenant.virtual_host``
+    validator and its callers handle shape errors as ``ValueError``.
+    """
+
+    MESSAGE = (
+        "virtual_host must be a bare host or host:port that a client can dial, "
+        "e.g. 'seller.example.com' or 'seller.example.com:8443'"
+    )
+
+    def response_fields(self) -> dict[str, object]:
+        return {"field": "virtual_host"}
+
+
 def validate_virtual_host(value: str | None) -> str:
-    """The host a tenant is served at, folded to lowercase — or a ValueError saying why not.
+    """The host a tenant is served at, folded to lowercase — or an ``InvalidVirtualHost`` saying why not.
 
     ONE definition of the shape, so the ORM validator, the admin form and the management
     API cannot disagree about it. The card publishes this string verbatim, so a value that
@@ -88,36 +108,35 @@ def validate_virtual_host(value: str | None) -> str:
     the card publishes this string verbatim and a client dials what the card says.
     """
     if value is None or not value.strip():
-        raise ValueError("virtual_host is required: a tenant declares the host it is served at")
+        raise InvalidVirtualHost("virtual_host is required: a tenant declares the host it is served at")
     host = value.strip().lower()
     if any(ch.isspace() for ch in host):
-        raise ValueError(f"virtual_host {value!r} contains whitespace, so no Host header can name it")
-    # EVERY ValueError out of here carries an authored message. ``urlsplit`` raises its own
-    # for an unterminated IPv6 bracket ("Invalid IPv6 URL"), and the management API answers
-    # 400 with ``str(exc)`` -- so an uncaught one puts urllib's text in a response body,
-    # which is the exposure CodeQL flags on that line. Re-raised like the port below.
+        raise InvalidVirtualHost(f"virtual_host {value!r} contains whitespace, so no Host header can name it")
+    # EVERY error out of here is an InvalidVirtualHost. ``urlsplit`` raises its own ValueError
+    # for an unterminated IPv6 bracket ("Invalid IPv6 URL"); it is re-raised like the port
+    # below, so callers catch one type and answer with its MESSAGE.
     try:
         parts = urlsplit(f"//{host}")
     except ValueError as exc:
-        raise ValueError(f"virtual_host {value!r} is not a host this seller can be served at") from exc
+        raise InvalidVirtualHost(f"virtual_host {value!r} is not a host this seller can be served at") from exc
     if parts.path or parts.query or parts.fragment:
-        raise ValueError(
+        raise InvalidVirtualHost(
             f"virtual_host {value!r} is not a bare host: it carries a scheme or a path. "
             "Store the host a request names, e.g. 'seller.example.com' or 'seller.example.com:8443'"
         )
     if parts.netloc != host or "@" in parts.netloc:
-        raise ValueError(f"virtual_host {value!r} is not a bare host[:port]")
+        raise InvalidVirtualHost(f"virtual_host {value!r} is not a bare host[:port]")
     # A trailing colon parses as "no port" rather than as an error, so `host:` and `[::1]:`
     # would store and then publish `https://host:/a2a` on the card. The card is dialled
     # verbatim, so a host that cannot be dialled is the defect this function exists to catch.
     if host.endswith(":"):
-        raise ValueError(f"virtual_host {value!r} ends with a colon but names no port")
+        raise InvalidVirtualHost(f"virtual_host {value!r} ends with a colon but names no port")
     try:
         parts.port  # noqa: B018 — raises for a non-numeric port
     except ValueError as exc:
-        raise ValueError(f"virtual_host {value!r} has a non-numeric port") from exc
+        raise InvalidVirtualHost(f"virtual_host {value!r} has a non-numeric port") from exc
     if not parts.hostname:
-        raise ValueError(f"virtual_host {value!r} names no host")
+        raise InvalidVirtualHost(f"virtual_host {value!r} names no host")
     return host
 
 
@@ -132,19 +151,23 @@ def hostname_of(host: str) -> str:
     exactly what took the A2A conformance axis from 27 passing checks to zero.
 
     So the port is dropped where a HOSTNAME is what the reader needs, and nowhere else.
-    Two readers need one: the tenant routing lookups in ``TenantLookupRepository``, which
-    compare host to host so a request naming either form resolves; and
-    ``Tenant.primary_domain``, which feeds ``publisher_properties[].publisher_domain`` --
-    a field AdCP constrains to ``^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[...])*$``, admitting no
-    colon. Feeding the port into that pattern failed every product of such a tenant and
-    answered INTERNAL_ERROR for the whole catalogue, which is the defect that first named
-    these two jobs.
+    The ``Tenant.virtual_host`` validator stores this once as ``virtual_host_name``, and the
+    readers that need a hostname read that column or derive it here: the tenant routing
+    lookups in ``TenantLookupRepository``, which compare host to host so a request naming
+    either form resolves; and the adagents.json route, which finds the properties on the
+    tenant's own host by it. The port first had to come off when the agent host fed
+    ``publisher_properties[].publisher_domain`` -- a field AdCP constrains to
+    ``^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[...])*$``, admitting no colon. Feeding the port into
+    that pattern failed every product of such a tenant and answered INTERNAL_ERROR for the
+    whole catalogue, which is the defect that first named this job. Products no longer name
+    the agent host at all (#1845): a publisher domain comes from the tenant's verified
+    authorized properties.
 
     Projecting a stored origin onto a hostname is not the defensive re-validation the
     architecture forbids: the column's contents are trusted exactly as stored, and what
     happens here is that one reader wants a different part of the same fact.
 
-    The answer is LOWERCASE -- ``urlsplit(...).hostname`` folds case -- and both callers
+    The answer is LOWERCASE -- ``urlsplit(...).hostname`` folds case -- and the readers
     depend on that: ``_same_host`` compares this against a case-folded ``virtual_host``
     column, and ``publisher_domain``'s pinned pattern (``^[a-z0-9]...``) admits no
     uppercase at all. Only this side folding is what took every tenant-routing reader dark
@@ -153,6 +176,25 @@ def hostname_of(host: str) -> str:
     inherited.
     """
     return urlsplit(f"//{host}").hostname or host
+
+
+def same_hostname(a: str, b: str) -> bool:
+    """Whether *a* and *b* name one host, whatever their case, port or trailing dot."""
+    return hostname_of(a).removesuffix(".") == hostname_of(b).removesuffix(".")
+
+
+def canonical_publisher_domain(stored: str) -> str:
+    """The host *stored* names: lower-case, with no scheme, path or trailing dot.
+
+    The admin paths store a publisher domain as typed, and such a row still reaches
+    ``verified``, because ``adcp.adagents.fetch_adagents`` normalizes the domain the same
+    way before it dials. This gives a reader the host that fetch verified.
+
+    A port is kept. ``news.psatest.com:8443`` is a different origin from
+    ``news.psatest.com``, so dropping it would name a host nobody fetched; the pinned
+    ``publisher_domain`` pattern refuses the colon instead.
+    """
+    return stored.strip().lower().split("://", 1)[-1].split("/", 1)[0].rstrip(".")
 
 
 def path_from_asgi_scope(scope: Mapping[str, Any]) -> str:

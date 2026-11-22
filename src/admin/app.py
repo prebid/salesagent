@@ -37,14 +37,15 @@ from src.admin.blueprints.signing_keys import signing_keys_bp
 from src.admin.blueprints.tenants import tenants_bp
 from src.admin.blueprints.users import users_bp
 from src.admin.blueprints.workflows import workflows_bp
+from src.admin.csrf import init_csrf_protection
+from src.admin.utils.operator_errors import register_error_handler
 from src.core.config import load_settings
 from src.core.config_loader import is_single_tenant_mode
 from src.core.domain_config import (
     get_session_cookie_domain,
 )
+from src.core.operator_errors import best_effort
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -119,11 +120,16 @@ def create_app(config=None, settings=None):
     app.secret_key = settings.runtime.flask_secret_key
     app.logger.setLevel(logging.INFO)
 
-    # Configure session cookies for EventSource compatibility
+    # Session cookies. Lax keeps the cookie off cross-site posts, frames and fetches while
+    # still sending it on top-level navigations, which is all the OAuth/OIDC callbacks need
+    # (they arrive as top-level GETs). The admin UI's subdomains are same-site, so a shared
+    # SESSION_COOKIE_DOMAIN is unaffected. No script reads the session cookie: same-origin
+    # fetch and EventSource send it without JavaScript access, so it is HttpOnly.
+    # init_csrf_protection below is the main CSRF defence; Lax backs it up.
     if is_production:
-        app.config["SESSION_COOKIE_SECURE"] = True  # Required for SameSite=None over HTTPS
-        app.config["SESSION_COOKIE_HTTPONLY"] = False  # Allow EventSource to access cookies
-        app.config["SESSION_COOKIE_SAMESITE"] = "None"  # Required for EventSource cross-origin requests
+        app.config["SESSION_COOKIE_SECURE"] = True
+        app.config["SESSION_COOKIE_HTTPONLY"] = True
+        app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
         # Use root path so session works for both /admin/* and /auth/* (OAuth callbacks)
         app.config["SESSION_COOKIE_PATH"] = "/"
         # Only set cookie domain in multi-tenant mode for subdomain sharing
@@ -202,6 +208,9 @@ def create_app(config=None, settings=None):
         # In development, still apply custom proxy fix if needed
         app.wsgi_app = CustomProxyFix(app.wsgi_app)
 
+    # Refuse cross-origin state-changing requests (CSRF) before any view runs
+    init_csrf_protection(app)
+
     # Initialize OAuth
     init_oauth(app)
 
@@ -273,17 +282,16 @@ def create_app(config=None, settings=None):
         # every such URL a plausible-looking fiction when the setting was unset. A tenant's
         # URL comes from `tenant.virtual_host`, the host it is actually served at.
 
-        # Inject fresh tenant data if user is logged in with a tenant
+        # Inject fresh tenant data if user is logged in with a tenant. Every page renders
+        # through here, the error page included, so a failed lookup must not fail the render.
         tenant_id = session.get("tenant_id")
         if tenant_id:
-            try:
+            with best_effort(f"Could not load tenant {tenant_id} for the page context"):
                 with get_db_session() as db_session:
                     stmt = select(Tenant).filter_by(tenant_id=tenant_id)
                     tenant = db_session.scalars(stmt).first()
                     if tenant:
                         context["tenant"] = tenant
-            except Exception as e:
-                logger.warning(f"Could not load tenant {tenant_id} for context: {e}")
 
         return context
 
@@ -342,45 +350,7 @@ def create_app(config=None, settings=None):
     except ImportError:
         logger.warning("gam_reporting_api blueprint not found")
 
-    # Register adapter-specific routes
-    register_adapter_routes(app)
-
-    # Register GAM inventory endpoints
-    try:
-        from src.services.gam_inventory_service import create_inventory_endpoints
-
-        create_inventory_endpoints(app)
-        logger.info("Registered GAM inventory endpoints")
-    except ImportError:
-        logger.warning("gam_inventory_service not found")
+    # One answer for any exception a route lets escape: fixed text plus a log reference.
+    register_error_handler(app)
 
     return app
-
-
-def register_adapter_routes(app):
-    """Register adapter-specific configuration routes."""
-    try:
-        # Import adapter modules that have UI routes
-        from src.adapters.google_ad_manager import GoogleAdManager
-        from src.adapters.mock_ad_server import MockAdServer
-
-        # Register routes for each adapter that supports UI routes
-        # Note: We skip instantiation errors since routes are optional
-        adapter_configs = [
-            (GoogleAdManager, {"config": {}, "principal": None}),
-            (MockAdServer, {"principal": None}),
-        ]
-
-        for adapter_class, kwargs in adapter_configs:
-            try:
-                # Try to create instance for route registration
-                adapter_instance = adapter_class(**kwargs)
-                if hasattr(adapter_instance, "register_ui_routes"):
-                    adapter_instance.register_ui_routes(app)
-                    logger.info(f"Registered UI routes for {adapter_class.__name__}")
-            except Exception as e:
-                # This is expected for some adapters that require specific config
-                logger.debug(f"Could not register {adapter_class.__name__} routes: {e}")
-
-    except Exception as e:
-        logger.warning(f"Error importing adapter modules: {e}")

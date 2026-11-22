@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.core.database.repositories.product import ProductRepository
 from src.services.dynamic_products import (
     archive_expired_variants,
     create_variant_from_template,
@@ -27,7 +28,7 @@ from src.services.dynamic_products import (
     generate_variants_for_brief,
     generate_variants_from_signals,
 )
-from tests.factories import ProductFactory, TenantFactory
+from tests.factories import InventoryProfileFactory, ProductFactory, TenantFactory
 from tests.harness._base import IntegrationEnv
 
 # ---------------------------------------------------------------------------
@@ -303,6 +304,16 @@ def factory_env(integration_db):
         yield env
 
 
+def _products(env, template) -> ProductRepository:
+    """The repository ``generate_variants_from_signals`` takes, on the test's session.
+
+    Built from ``template.tenant_id`` rather than the test's tenant variable because
+    that is the invariant production relies on: the repository is scoped to the tenant
+    whose templates were selected, and ``create()`` raises on any mismatch.
+    """
+    return ProductRepository(env._session, template.tenant_id)
+
+
 class TestGenerateVariantsFromSignals:
     """generate_variants_from_signals creates Product variants in the DB."""
 
@@ -313,7 +324,7 @@ class TestGenerateVariantsFromSignals:
         signals = [_make_signal(segment_id="seg_1", name="Premium")]
 
         variants = generate_variants_from_signals(
-            factory_env._session, template, signals, "test brief", "https://our.example.com/mcp"
+            _products(factory_env, template), template, signals, "test brief", "https://our.example.com/mcp"
         )
 
         assert len(variants) == 1
@@ -333,7 +344,7 @@ class TestGenerateVariantsFromSignals:
 
         # First call — creates
         v1 = generate_variants_from_signals(
-            factory_env._session, template, signals, "brief", "https://our.example.com/mcp"
+            _products(factory_env, template), template, signals, "brief", "https://our.example.com/mcp"
         )
         factory_env._session.flush()
         first_id = v1[0].product_id
@@ -341,7 +352,7 @@ class TestGenerateVariantsFromSignals:
 
         # Second call — updates
         v2 = generate_variants_from_signals(
-            factory_env._session, template, signals, "brief", "https://our.example.com/mcp"
+            _products(factory_env, template), template, signals, "brief", "https://our.example.com/mcp"
         )
 
         assert len(v2) == 1
@@ -357,7 +368,7 @@ class TestGenerateVariantsFromSignals:
         signals = [{"signal_agent_segment_id": "seg_bad", "deployments": []}]
 
         variants = generate_variants_from_signals(
-            factory_env._session, template, signals, "brief", "https://our.example.com/mcp"
+            _products(factory_env, template), template, signals, "brief", "https://our.example.com/mcp"
         )
         factory_env._session.commit()
 
@@ -373,7 +384,7 @@ class TestGenerateVariantsFromSignals:
         ]
 
         variants = generate_variants_from_signals(
-            factory_env._session, template, signals, "brief", "https://our.example.com/mcp"
+            _products(factory_env, template), template, signals, "brief", "https://our.example.com/mcp"
         )
 
         assert len(variants) == 2
@@ -548,3 +559,62 @@ class TestCreateVariantFromTemplate:
         assert variant.activation_key == ak
         assert variant.signal_metadata["name"] == "Premium Users"
         assert variant.expires_at is not None
+
+    def test_a_canonically_authored_template_produces_variants_that_carry_its_declarations(self, factory_env):
+        """The variant inherits the CANONICAL format arm, not only the deprecated one.
+
+        ``core/product.json``: "Products MUST carry format_ids, format_options, or both
+        during the 3.x migration window", and a variant is a product a buyer sees in
+        ``get_products`` like any other. The copy named 23 template columns and omitted
+        ``format_options``, so a template authored the way the same sentence tells sellers to
+        author ("New products MUST author canonical format_options[] ... Do not author a new
+        product from format_ids alone") generated variants satisfying NEITHER branch of that
+        anyOf -- unservable, and invisible while every template was legacy (salesagent-ki6a4).
+
+        The template here is canonical-ONLY on purpose: with a legacy arm present the
+        assertion would pass on the arm that was already copied.
+        """
+        tenant = TenantFactory(tenant_id="test-cvft-canonical", subdomain="cvft-canonical")
+        declarations = [{"format_kind": "image", "params": {"width": 970, "height": 250}}]
+        template = _make_template(tenant, product_id="template_canonical")
+        template.format_ids = None
+        template.format_options = declarations
+        factory_env._commit_factory_data()
+
+        variant = create_variant_from_template(
+            template,
+            _make_signal(name="Premium Users"),
+            {"type": "key_value", "key": "audience", "value": "premium"},
+            "template_canonical__variant_abc",
+            "video ads",
+        )
+
+        assert variant.format_options == declarations
+        assert variant.format_ids is None
+
+    def test_a_profile_linked_template_produces_variants_that_carry_its_profiles_declarations(self, factory_env):
+        """The variant takes the template's CONTRACT, which a linked profile supplies.
+
+        A template linked to an inventory profile is served the profile's declarations
+        (``Product.format_contract``), and the variant does not carry the link. The
+        template's own arms differ from the profile's here, so a copy of the template's
+        columns hands the variant a contract the template was never served.
+        """
+        tenant = TenantFactory(tenant_id="test-cvft-profile", subdomain="cvft-profile")
+        profile_declarations = [{"format_kind": "image", "params": {"width": 728, "height": 90}}]
+        profile = InventoryProfileFactory(tenant=tenant, format_ids=None, format_options=profile_declarations)
+        template = _make_template(tenant, product_id="template_profile")
+        template.inventory_profile_id = profile.id
+        template.format_options = [{"format_kind": "image", "params": {"width": 300, "height": 250}}]
+        factory_env._commit_factory_data()
+
+        variant = create_variant_from_template(
+            template,
+            _make_signal(name="Premium Users"),
+            {"type": "key_value", "key": "audience", "value": "premium"},
+            "template_profile__variant_abc",
+            "video ads",
+        )
+
+        assert variant.format_options == profile_declarations
+        assert variant.format_ids is None

@@ -4,7 +4,7 @@ This document is the reference for the security architecture of the sales agent:
 
 ## Contents
 
-- [Admin authentication architecture](#admin-authentication-architecture) — environment-first super-admin check with database fallback
+- [Admin authentication architecture](#admin-authentication-architecture) — environment-first super-admin check with database fallback, and cross-site request forgery protection
 - [Tenant registration security](#tenant-registration-security) — subdomain assignment, branded URLs, ad server checks
 - [Access control patterns](#access-control-patterns) — super admins, tenant users, principal isolation, audit trail
 - [Message signing (RFC 9421)](#message-signing-rfc-9421) — agent-to-agent authentication, and where it is documented in full
@@ -52,7 +52,17 @@ The session layer avoids redundant checks in the following ways:
 
 - **Session caching**: The session caches super admin status to avoid redundant database calls.
 - **Trusted session state**: `require_tenant_access()` checks the session first, then validates if needed.
+- **Tenant binding**: a session from a tenant's SSO (`auth_method == "oidc"`) is checked against the tenant it was issued for before anything else, and the super-admin check returns false for it.
 - **Automatic caching**: The system updates the session when it confirms admin status.
+
+### Cross-site request forgery
+
+The admin UI authenticates browsers with the session cookie, so a page on another site could otherwise submit a form to an admin route with a signed-in user's cookie attached. Two controls stop this:
+
+- **Origin check** (`src/admin/csrf.py`): every state-changing request (`POST`, `PUT`, `PATCH`, `DELETE`) must come from the admin UI's own origin. The check reads `Sec-Fetch-Site` (only `same-origin` or `none` pass), or, if a browser doesn't send that, `Origin`, which must equal the address the request was sent to. A request with neither header isn't from a browser and passes. Sibling subdomains are refused. Forms and `fetch` calls need no token. Views authenticated only by an API-key header (the tenant management and sync APIs) are exempt with `csrf_exempt`.
+- **`SameSite=Lax` session cookie**: browsers don't send it on cross-site posts, frames or `fetch` calls, but do send it on top-level navigations, which is what the OAuth and OIDC callbacks are.
+
+Behind a reverse proxy, the `Origin` fallback compares against the request's own scheme and host, which `ProxyFix` takes from `X-Forwarded-Proto` and `X-Forwarded-Host` (configured in production). **The proxy must send both.** Without them, a browser that sends `Origin` but not `Sec-Fetch-Site` (`https://admin.example.com`) is compared with the internal address (`http://...`) and refused: the check fails closed, it is not bypassed. Current browsers send `Sec-Fetch-Site`, which does not depend on the proxy.
 
 ## Tenant registration security
 
@@ -79,9 +89,21 @@ Tenants without a configured ad server show a "Pending Configuration" page inste
 
 Super admins have full access to all tenants and can create, modify, and delete tenants and users. You configure super admins through environment variables or the database.
 
+Super-admin powers come only from the deployment's own sign-in (Google, or the global `OAUTH_*` provider). A tenant's own SSO is configured by that tenant's admin, so the email its provider asserts is only as trustworthy as that admin. A session signed in through a tenant's SSO is therefore bound to that tenant: it is never a super admin, whatever email it carries, and it reaches no other tenant. A super admin can still be a user of a tenant and sign in through that tenant's SSO, but that session has only the role the tenant gave them, in that tenant. A deployment with no global sign-in configured has no way to sign in as a super admin.
+
 ### Tenant users
 
-Tenant users have access to specific tenants through the `User` model. They can manage their own tenant's configuration but cannot access other tenants' data.
+Tenant users have access to specific tenants through the `User` model. On admin routes decorated with `require_tenant_access`, that decorator refuses a user with no active `User` row in the tenant, and checks the role on the row on every request:
+
+| Role | Can |
+| --- | --- |
+| `viewer` | Read only: no `POST`, `PUT`, `PATCH` or `DELETE` |
+| `manager` | Change everything except the admin-only routes |
+| `admin` | Everything, including the admin-only routes: managing users and roles, authorized domains and emails, setup mode, SSO configuration and its connection test, and deactivating the tenant |
+
+A route is admin-only when it is decorated `require_tenant_access(role=UserRole.ADMIN)` (the least role the route needs). The role follows what the request can change: the SSO connection test is admin-only because a successful test turns SSO on, and it is a `POST` so a link from another site cannot start one. A refusal is a 403, with a JSON `{"error": ...}` body when the caller reads JSON (an API-mode route, a JSON request, or a `fetch`). The Users page adds people as viewers by default; admins choose a role when adding someone and can change it later. People who sign in from an authorized domain or email without an invitation are created as admins, which is why changing those lists is admin-only. The Users page refuses to demote or deactivate a tenant's last active admin. Super admins signed in through the deployment's own sign-in pass every check; a session from a tenant's SSO never counts as a super admin.
+
+Some admin routes do not use `require_tenant_access` and so do not get these checks; #2203, #2233 and #2496 track them.
 
 ### Principal isolation
 
@@ -201,8 +223,9 @@ Cross-domain OAuth is limited:
 ```python
 # Production session config (src/admin/app.py)
 SESSION_COOKIE_DOMAIN = ".sales-agent.example.com"  # Multi-tenant mode: scoped to the internal domain
-SESSION_COOKIE_SECURE = True                        # Required for SameSite=None over HTTPS
-SESSION_COOKIE_SAMESITE = "None"                    # Required for EventSource cross-origin requests
+SESSION_COOKIE_SECURE = True                        # HTTPS only
+SESSION_COOKIE_HTTPONLY = True                      # No script reads the session cookie
+SESSION_COOKIE_SAMESITE = "Lax"                     # Sent on top-level navigations (OAuth callbacks), not on cross-site posts
 SESSION_COOKIE_PATH = "/"                           # Covers /admin/* and /auth/* (OAuth callbacks)
 ```
 

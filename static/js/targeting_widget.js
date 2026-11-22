@@ -5,21 +5,23 @@
  * - Multiple groups connected by OR logic
  * - Within each group, criteria connected by AND logic
  * - Each criterion: key selection, values (OR'd together), optional exclude
- * - Backward compatible with legacy and enhanced formats
  *
- * Data Structure (groups format):
+ * Data Structure (groups format, the only one this widget reads; for a stored product the
+ * server writes it from CustomTargeting.to_stored, whatever format the product was saved in):
  * {
  *   key_value_pairs: {
  *     groups: [
  *       {
  *         criteria: [
- *           { keyId: '123', values: ['v1', 'v2'] },
- *           { keyId: '456', values: ['v3'], exclude: true }
+ *           { keyId: '123', values: ['448512', '448513'] },
+ *           { keyId: '456', values: [{ name: 'sports' }], exclude: true }
  *         ]
  *       }
  *     ]
  *   }
  * }
+ *
+ * A value string is a GAM value ID; { name } is a value name, kept as the server wrote it.
  */
 
 class TargetingWidget {
@@ -34,7 +36,6 @@ class TargetingWidget {
         };
         this.keyMetadata = {};        // { keyId: { name, display_name } }
         this.valueMetadata = {};      // { keyId: { valueId: displayName } }
-        this.loadedValuesByKey = {};  // { keyId: [values] }
         this.editingCriterion = null; // { groupIndex, criterionIndex }
         this.loadedSuccessfully = false; // Track if existing targeting loaded OK
 
@@ -61,8 +62,8 @@ class TargetingWidget {
     }
 
     /**
-     * Load existing targeting from hidden form field.
-     * Handles legacy, enhanced, and groups formats.
+     * Load existing targeting from hidden form field, in the groups format.
+     * Anything else is left in the field untouched, so saving cannot lose it.
      */
     loadExistingTargeting() {
         const hiddenField = document.getElementById('targeting-data');
@@ -82,53 +83,12 @@ class TargetingWidget {
                 return;
             }
 
-            // Groups format
-            if ('groups' in kvPairs && Array.isArray(kvPairs.groups)) {
-                this.selectedTargeting.key_value_pairs.groups = kvPairs.groups;
-                this.loadedSuccessfully = true;
-                console.log('[TargetingWidget] Loaded groups format:', this.selectedTargeting);
-                return;
+            if (!Array.isArray(kvPairs.groups)) {
+                throw new Error('key_value_pairs is not in the groups format');
             }
-
-            // Enhanced format (include/exclude) - convert to groups
-            if ('include' in kvPairs || 'exclude' in kvPairs) {
-                const criteria = [];
-                const include = kvPairs.include || {};
-                const exclude = kvPairs.exclude || {};
-
-                for (const [keyId, values] of Object.entries(include)) {
-                    if (values && values.length > 0) {
-                        criteria.push({ keyId, values: [...values] });
-                    }
-                }
-                for (const [keyId, values] of Object.entries(exclude)) {
-                    if (values && values.length > 0) {
-                        criteria.push({ keyId, values: [...values], exclude: true });
-                    }
-                }
-
-                if (criteria.length > 0) {
-                    this.selectedTargeting.key_value_pairs.groups = [{ criteria }];
-                }
-                this.loadedSuccessfully = true;
-                console.log('[TargetingWidget] Converted enhanced format to groups:', this.selectedTargeting);
-                return;
-            }
-
-            // Legacy format { keyId: value } - convert to groups
-            const criteria = [];
-            for (const [keyId, value] of Object.entries(kvPairs)) {
-                if (typeof value === 'string') {
-                    criteria.push({ keyId, values: [value] });
-                } else if (Array.isArray(value)) {
-                    criteria.push({ keyId, values: value });
-                }
-            }
-            if (criteria.length > 0) {
-                this.selectedTargeting.key_value_pairs.groups = [{ criteria }];
-            }
+            this.selectedTargeting.key_value_pairs.groups = kvPairs.groups;
             this.loadedSuccessfully = true;
-            console.log('[TargetingWidget] Converted legacy format to groups:', this.selectedTargeting);
+            console.log('[TargetingWidget] Loaded groups format:', this.selectedTargeting);
 
         } catch (error) {
             console.error('[TargetingWidget] Error loading existing targeting:', error);
@@ -140,7 +100,7 @@ class TargetingWidget {
         const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/all`;
         const response = await fetch(url, { credentials: 'same-origin' });
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            throw new Error(adminErrorText(await response.json()));
         }
         this.targetingData = await response.json();
 
@@ -153,13 +113,28 @@ class TargetingWidget {
                 name: key.name,
                 display_name: key.display_name || key.name
             };
-            // Index by GAM ID (for new data)
             this.keyMetadata[key.id] = metadata;
-            // Also index by key name (for legacy data migration)
-            if (key.name && key.name !== key.id) {
-                this.keyMetadata[key.name] = metadata;
-            }
         });
+    }
+
+    /**
+     * Fetch a key's current values from GAM and record their display names.
+     * Never cached: values can be added in GAM while this page is open (#1045).
+     * Throws on a failed request; each caller decides how to surface it.
+     */
+    async fetchValuesForKey(keyId) {
+        const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
+        const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
+        if (!response.ok) {
+            throw new Error(adminErrorText(await response.json()));
+        }
+        const values = (await response.json()).values || [];
+
+        const labels = (this.valueMetadata[keyId] ??= {});
+        values.forEach(val => {
+            labels[val.id] = val.display_name || val.name || val.id;
+        });
+        return values;
     }
 
     /**
@@ -189,23 +164,7 @@ class TargetingWidget {
         // Load values for each key in parallel
         const loadPromises = Array.from(keyIds).map(async (keyId) => {
             try {
-                const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
-                const response = await fetch(url, { credentials: 'same-origin' });
-                if (!response.ok) {
-                    console.warn(`[TargetingWidget] Failed to load values for key ${keyId}: HTTP ${response.status}`);
-                    return;
-                }
-                const data = await response.json();
-
-                this.loadedValuesByKey[keyId] = data.values || [];
-
-                // Cache value metadata (id -> display_name mapping)
-                if (!this.valueMetadata[keyId]) {
-                    this.valueMetadata[keyId] = {};
-                }
-                (data.values || []).forEach(val => {
-                    this.valueMetadata[keyId][val.id] = val.display_name || val.name || val.id;
-                });
+                await this.fetchValuesForKey(keyId);
             } catch (error) {
                 console.warn(`[TargetingWidget] Error loading values for key ${keyId}:`, error);
             }
@@ -296,7 +255,7 @@ class TargetingWidget {
         return criteria.map((criterion, criterionIndex) => {
             const keyMeta = this.keyMetadata[criterion.keyId] || { display_name: criterion.keyId };
             const valueNames = criterion.values.map(v =>
-                this.valueMetadata[criterion.keyId]?.[v] || v
+                typeof v === 'object' ? v.name : this.valueMetadata[criterion.keyId]?.[v] || v
             );
             const isEditing = this.editingCriterion &&
                 this.editingCriterion.groupIndex === groupIndex &&
@@ -669,26 +628,14 @@ class TargetingWidget {
         operatorSection.style.display = 'block';
         valuesList.innerHTML = '<div class="loading">Loading values...</div>';
 
+        // A response for a key the user has since moved off must not render: its
+        // checkboxes would save that key's value ids on the newly selected criterion.
+        // The hidden input holds a string, so compare against one.
+        const isCurrent = () => document.getElementById('key-selector').value === String(keyId);
+
         try {
-            // Check cache first
-            if (!this.loadedValuesByKey[keyId]) {
-                const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
-                const response = await fetch(url, { credentials: 'same-origin' });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const data = await response.json();
-
-                this.loadedValuesByKey[keyId] = data.values || [];
-
-                // Cache value metadata
-                if (!this.valueMetadata[keyId]) {
-                    this.valueMetadata[keyId] = {};
-                }
-                this.loadedValuesByKey[keyId].forEach(val => {
-                    this.valueMetadata[keyId][val.id] = val.display_name || val.name || val.id;
-                });
-            }
-
-            const values = this.loadedValuesByKey[keyId];
+            const values = await this.fetchValuesForKey(keyId);
+            if (!isCurrent()) return;
 
             if (values.length === 0) {
                 valuesList.innerHTML = '<div class="empty-state">No values available for this key</div>';
@@ -718,6 +665,7 @@ class TargetingWidget {
             this.updateApplyButton();
 
         } catch (error) {
+            if (!isCurrent()) return;
             valuesList.innerHTML = `<div class="error-state">Failed to load values: ${error.message}</div>`;
         }
     }
@@ -853,14 +801,12 @@ class TargetingWidget {
         // Filter out empty groups
         const nonEmptyGroups = groups.filter(g => g.criteria && g.criteria.length > 0);
 
+        // Always the whole document, empty included: the server replaces the product's
+        // custom targeting with it, so removing the last criterion clears the targeting.
         if (hiddenField) {
-            if (nonEmptyGroups.length > 0) {
-                hiddenField.value = JSON.stringify({
-                    key_value_pairs: { groups: nonEmptyGroups }
-                });
-            } else {
-                hiddenField.value = '';
-            }
+            hiddenField.value = JSON.stringify({
+                key_value_pairs: { groups: nonEmptyGroups }
+            });
         }
     }
 }

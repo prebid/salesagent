@@ -12,13 +12,15 @@ Part of the #1391 SDK 5.7 creative-asset-shape migration.
 """
 
 import pytest
-from adcp.types import CreativeAsset
+from adcp.types import LegacyCreativeAsset as CreativeAsset
 
 from src.core.tools.creatives._assets import _extract_message_from_assets
 from tests.bdd.steps.domain.uc006_sync_creatives import given_message_asset_with_prompt
 from tests.factories.creative_asset import build_assets, text_spec
 
-_FORMAT = {"id": "display_gen", "agent_url": "http://agent.test"}
+#: A generative format the committed capture carries: the step derives the creative's required
+#: assets from the format it names, so the format must be one the capture serves.
+_FORMAT = {"id": "display_300x250_generative", "agent_url": "https://creative.adcontextprotocol.org"}
 
 
 def test_message_asset_step_builds_parseable_sdk57_shape():
@@ -26,7 +28,8 @@ def test_message_asset_step_builds_parseable_sdk57_shape():
 
     Before the fix the step builds ``{"message": {"content": ...}}`` (bare dict),
     which raises ValidationError on CreativeAsset(**payload). After the fix it uses
-    the SDK 5.7 list shape and parses, and production extracts the prompt.
+    the SDK 5.7 list shape and parses, and production extracts the prompt -- the
+    ``generation_prompt`` the format requires, not the message asset written ahead of it.
     """
     ctx = {"creatives": [{"creative_id": "c1", "name": "Gen", "format_id": _FORMAT, "assets": {}}]}
     given_message_asset_with_prompt(ctx)

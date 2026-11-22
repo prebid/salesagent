@@ -51,6 +51,7 @@ from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.webhooks.registration import ValidatedWebhookRegistration, accept_push_notification_config
 from tests.factories import PrincipalFactory, PushNotificationConfigFactory, TenantFactory
+from tests.factories.webhook import PushNotificationConfigRequestFactory
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -87,9 +88,19 @@ def _registration(
     scheme: str = _HMAC_SCHEME,
     credentials: str = _CREDENTIAL,
 ) -> ValidatedWebhookRegistration:
-    """Build the value through the ONE public constructor buyers' configs go through."""
+    """Build the value through the ONE public constructor buyers' configs go through.
+
+    The document comes from ``PushNotificationConfigRequestFactory`` rather than a
+    literal so it carries an ``operation_id``: every case here grades what the
+    COLUMNS receive, and a registration without a correlation id is refused by the
+    gate before persistence is reached, so a literal here would mean no case in this
+    file could ever exercise a write.
+    """
     return accept_push_notification_config(
-        {"url": url, "authentication": {"schemes": [scheme], "credentials": credentials}}
+        PushNotificationConfigRequestFactory.payload(
+            url=url,
+            authentication={"schemes": [scheme], "credentials": credentials},
+        )
     )
 
 

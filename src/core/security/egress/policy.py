@@ -11,7 +11,7 @@ one shared value, not two independently-maintained copies, which is the
 disease this module exists to make structurally impossible (GH #974,
 GH #974).
 
-AdCP 3.1.1, ``building/by-layer/L1/security.mdx``: a fetcher MUST (1) reject
+``building/by-layer/L1/security.mdx``: a fetcher MUST (1) reject
 non-HTTPS in production, (2) reject reserved ranges — including RFC 6598
 CGNAT — (6) never echo the refusal cause back to the party that supplied the
 URL. Neither verdict tells the caller WHY it refused — that is point 6. The cause

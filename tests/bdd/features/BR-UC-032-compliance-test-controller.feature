@@ -49,7 +49,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     # POST-F4: Production exposure rejected (the defining gate)
     # POST-F1: System state unchanged
     # POST-F2: Structured error returned
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-ext-a-prod-rejected-no-account-declaration @extension-a @sandbox-gate @forbidden @post-f4 @critical
   Scenario: Production account rejected even when caller omits the account declaration
@@ -59,7 +59,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     And the response has error "FORBIDDEN"
     And the seller verified the persisted record rather than trusting the caller's omitted declaration
     # POST-F4: Seller-side persisted-record verification is the primary gate
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-main-sandbox-gate-pass @main-flow @sandbox-gate @happy-path @post-s1
   Scenario: Sandbox account accepted — gate passes, scenario handler dispatched
@@ -79,7 +79,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     And the request context is echoed unchanged in the response
     # POST-S2: Runner receives advertised scenario set
     # POST-S9: Context echoed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-list-scenarios-includes-upstream-traffic @main-flow @list-scenarios @upstream-traffic-opt-in @post-s2
   Scenario: Adopter advertising query_upstream_traffic opts into the upstream-traffic conformance contract
@@ -88,7 +88,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     When the Runner invokes comply_test_controller with scenario "list_scenarios"
     Then the response scenarios array includes "query_upstream_traffic"
     And storyboards declaring check: upstream_traffic against this seller will be graded (not graded not_applicable)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-list-scenarios-omits-upstream-traffic @main-flow @list-scenarios @upstream-traffic-opt-out @post-s2
   Scenario: Adopter not advertising query_upstream_traffic causes upstream_traffic storyboards to grade not_applicable
@@ -108,7 +108,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     And the response has current_state "rejected"
     And the response may include a message string describing the transition
     # POST-S3: Entity transitioned; previous_state and current_state present
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-force-account-status @main-flow @force-account-status @state-transition @post-s3
   Scenario: force_account_status transitions account to suspended
@@ -118,7 +118,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Then the response has success true
     And the response has previous_state "active"
     And the response has current_state "suspended"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-force-create-media-buy-branch-submitted @main-flow @force-create-media-buy-branch @directive @post-s4 @single-shot
   Scenario: force_create_media_buy_arm with submitted branch registers single-shot directive
@@ -130,7 +130,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     And the next create_media_buy call from the same sandbox account returns the submitted branch with task_id "task_async_signed_io_q2"
     And the directive is consumed after the next create_media_buy call (single-shot)
     # POST-S4: Single-shot directive registered
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-force-task-completion-verbatim-delivery @main-flow @force-task-completion @verbatim-delivery @post-s5
   Scenario: force_task_completion delivers result payload verbatim to push_notification_config.url
@@ -145,7 +145,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     And the seller MAY augment with seller-controlled fields like created_at or dsp_* IDs
     And the seller MUST NOT overwrite caller-supplied values
     # POST-S5: Verbatim delivery to push_notification_config.url with caller-supplied fields preserved
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-force-session-status-terminated @main-flow @force-session-status @state-transition @post-s3
   Scenario: force_session_status terminates a session with termination_reason
@@ -165,7 +165,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     And the response has simulated with impressions 10000, clicks 150, reported_spend amount 150
     And the response has cumulative with running totals across all simulation calls for this media buy
     # POST-S6: Simulated values applied; cumulative carries running totals
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-simulate-budget-spend @main-flow @simulate-budget-spend @post-s6
   Scenario: simulate_budget_spend consumes budget to specified percentage
@@ -184,7 +184,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Then the response has success true
     And the product "test-product" is available for reference by ID in subsequent storyboard steps
     # POST-S7: Fixture seeded with stable ID
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-seed-creative @main-flow @seed-creative @post-s7
   Scenario: seed_creative pre-populates an approved creative fixture
@@ -207,7 +207,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     And each recorded_call carries payload_length matching the post-redaction canonical byte length
     # POST-S8: per-principal-scoped recorded_calls returned
     # v3.1 schema: UpstreamTrafficSuccess.required = [success, recorded_calls, total_count, since_timestamp]
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-upstream-traffic-per-principal-scoping @main-flow @query-upstream-traffic @per-principal-scoping @post-s8 @critical
   Scenario: query_upstream_traffic MUST scope to requesting principal — cross-caller traffic excluded
@@ -218,7 +218,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Then the response recorded_calls contains only calls caused by principal-A
     And no call caused by principal-B appears in the response regardless of since_timestamp
     # BR-7: per-principal scoping is normative
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-upstream-traffic-secret-redaction @main-flow @query-upstream-traffic @secret-redaction @critical
   Scenario: Controller-side secret redaction strips authorization/token/api_key/cookie values before emission
@@ -229,7 +229,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     And the redaction is applied recursively at any depth in the payload
     And the redaction is case-insensitive against the pattern "^(authorization|credentials?|token|api[_-]?key|password|secret|client[_-]secret|refresh[_-]token|access[_-]token|bearer|session[_-]token|offering[_-]token|cookie|set[_-]cookie)$"
     # BR-8: secret redaction is normative on the controller
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-upstream-traffic-digest-mode @main-flow @query-upstream-traffic @digest-mode @post-s8
   Scenario: query_upstream_traffic in digest mode returns payload_digest_sha256 instead of raw payload
@@ -241,7 +241,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     And each recorded_call has payload_length (byte length of post-redaction canonical body)
     And each recorded_call has identifier_match_proofs with one entry per requested digest
     And no recorded_call carries a raw payload field
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-idempotent-replay @main-flow @idempotent @post-s10
   Scenario: Replaying a force_*_status request converges to the same observable state without idempotency_key
@@ -262,7 +262,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     And the response has error "INVALID_TRANSITION"
     And the response has current_state "archived"
     And the response error_detail explains "Cannot transition from archived to processing — archived is terminal"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-ext-b-not-found @extension-b @not-found @post-f1 @post-f2
   Scenario: NOT_FOUND — referenced entity does not exist
@@ -272,7 +272,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     And the response has error "NOT_FOUND"
     And the response has current_state null
     And the response error_detail mentions "cr-unknown"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-ext-b-unknown-scenario @extension-b @unknown-scenario @post-f1 @post-f2
   Scenario: UNKNOWN_SCENARIO — seller cannot decode the scenario string
@@ -280,7 +280,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     When the Runner invokes comply_test_controller with scenario "force_quantum_state" which the seller has not implemented
     Then the response has success false
     And the response has error "UNKNOWN_SCENARIO"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-ext-b-invalid-params-missing-task-id @extension-b @invalid-params @post-f1 @post-f2
   Scenario: INVALID_PARAMS — force_create_media_buy_arm with branch "submitted" missing task_id is rejected
@@ -288,7 +288,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     When the Runner invokes comply_test_controller with scenario "force_create_media_buy_arm" params branch "submitted" but omits task_id
     Then the response has success false
     And the response has error "INVALID_PARAMS" (or the request is schema-rejected by the if/then branch before reaching the seller)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-ext-b-invalid-params-result-payload @extension-b @invalid-params @post-f1 @post-f2
   Scenario: INVALID_PARAMS — force_task_completion result payload does not validate against async-response-data union branch
@@ -298,7 +298,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Then the response has success false
     And the response has error "INVALID_PARAMS"
     And the response error_detail explains that the payload did not validate against the response branch for the task's original method
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-ext-b-internal-error @extension-b @internal-error @post-f1 @post-f2 @post-f3
   Scenario: INTERNAL_ERROR — unexpected seller-side failure during scenario dispatch
@@ -310,7 +310,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     And the response has error_detail with a human-readable explanation
     And the persisted state of the targeted entity is unchanged
     And the response context echoes "{request_id: req-int-001}"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
   @T-UC-032-ext-b-context-echoed-on-failure @extension-b @context-echo @post-f3
   Scenario: Context is still echoed on failure when possible
@@ -326,7 +326,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Given the Runner targets a sandbox-flagged account
     When the Runner invokes comply_test_controller with scenario "query_upstream_traffic"
     Then the recorded_calls item satisfies the boundary case "<boundary>"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
     Examples:
       | boundary |
@@ -366,7 +366,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Given the Runner targets a sandbox-flagged account
     When the Runner invokes comply_test_controller with scenario "query_upstream_traffic"
     Then the recorded_calls item attestation_mode discriminator satisfies the boundary case "<boundary>"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
     Examples:
       | boundary |
@@ -388,7 +388,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Given the Runner targets a sandbox-flagged account
     When the Runner invokes comply_test_controller with scenario "query_upstream_traffic"
     Then the recorded_calls timestamp ordering satisfies the boundary case "<boundary>"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
     Examples:
       | boundary |
@@ -412,7 +412,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Given the Runner targets a sandbox-flagged account
     When the Runner invokes comply_test_controller with scenario "query_upstream_traffic"
     Then the UpstreamTrafficSuccess required-field-set satisfies the boundary case "<boundary>"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
     Examples:
       | boundary |
@@ -432,7 +432,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Given the Runner targets a sandbox-flagged account
     When the Runner invokes comply_test_controller with scenario "force_task_completion"
     Then the verbatim-delivery contract satisfies the boundary case "<boundary>"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
     Examples:
       | boundary |
@@ -448,7 +448,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Given the Runner targets a sandbox-flagged account
     When the Runner invokes comply_test_controller with scenario "force_task_completion"
     Then the params.result validation satisfies the boundary case "<boundary>"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
     Examples:
       | boundary |
@@ -465,7 +465,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Given the Runner targets a sandbox-flagged account
     When the Runner invokes comply_test_controller with scenario "force_create_media_buy_arm"
     Then the single-shot directive satisfies the boundary case "<boundary>"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
     Examples:
       | boundary |
@@ -487,7 +487,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Given the Runner targets a sandbox-flagged account
     When the Runner invokes comply_test_controller with scenario "simulate_delivery" or "simulate_budget_spend"
     Then the numeric constraint satisfies the boundary case "<boundary>"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
     Examples:
       | boundary |
@@ -519,7 +519,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Given the Runner targets a sandbox-flagged account
     When the Runner invokes comply_test_controller with scenario "query_upstream_traffic"
     Then the endpoint_pattern parameter satisfies the boundary case "<boundary>"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
     Examples:
       | boundary |
@@ -536,7 +536,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Given the seller has persisted records of accounts
     When the Runner invokes comply_test_controller
     Then the sandbox-only gate evaluates the boundary case "<boundary>"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
     Examples:
       | boundary |
@@ -552,7 +552,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Given the Runner targets a sandbox-flagged account
     When the Runner invokes comply_test_controller with the caller-side account declaration
     Then the schema validation satisfies the boundary case "<boundary>"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
     Examples:
       | boundary |
@@ -567,7 +567,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Given the Runner targets a sandbox-flagged account
     When the Runner invokes comply_test_controller with scenario "force_session_status"
     Then the params.status enum and required-key gating satisfy the boundary case "<boundary>"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
     Examples:
       | boundary |
@@ -583,7 +583,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Given the Runner targets a sandbox-flagged account
     When the Runner invokes comply_test_controller with scenario "query_upstream_traffic"
     Then the per-principal scoping invariant satisfies the boundary case "<boundary>"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/compliance/comply-test-controller-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/compliance/comply-test-controller-request.json
 
     Examples:
       | boundary |

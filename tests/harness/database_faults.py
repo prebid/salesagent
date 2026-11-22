@@ -29,7 +29,8 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import psycopg2
@@ -54,15 +55,43 @@ def _connect(url: URL, *, autocommit: bool = False):
     return conn
 
 
+@contextmanager
+def _admin_cursor(url: URL) -> Iterator:
+    admin = _connect(url, autocommit=True)
+    try:
+        yield admin.cursor()
+    finally:
+        admin.close()
+
+
 class _NextStatementInterrupter:
     """Cancel or terminate the first backend blocked by the lock this object holds.
 
     With *sending*, only a blocked backend whose current statement contains that text.
+
+    WHETHER IT FIRED IS RECORDED, and that is what makes a scenario built on it readable
+    rather than racy (salesagent-f0b86). The lock guarantees the seller's next statement on
+    the table BLOCKS, so the cancellation is ordered against it -- but only once the watcher
+    has seen that blocked backend. If the seller's request has not reached the statement
+    before ``_WAIT_FOR_WAITER_S`` expires, the ``finally`` below releases the lock and the
+    statement then runs to completion UNPROVOKED. The old code returned silently from that
+    path, so the scenario went on to assert a wire rejection that nothing had caused, and its
+    failure was indistinguishable from the seller genuinely failing to reject a cancelled
+    statement -- measured once in 20 box runs on one transport, green in 15 of 15 isolated
+    legs, which is the signature of a race rather than a wrong answer.
+
+    So ``signalled`` is the state that separates "cancelled" from "completed fast", and
+    :meth:`close` refuses a run in which nothing was signalled. A timing change -- a longer
+    deadline, a sleep, a retry -- would have made the row quieter without making its verdict
+    mean one thing.
     """
 
     def __init__(self, url: URL, *, table: str, terminate: bool, sending: str = "") -> None:
         self._signal = "pg_terminate_backend" if terminate else "pg_cancel_backend"
         self._sending = f"%{sending}%"
+        #: The backends this fault actually signalled. Empty means the fault never fired,
+        #: which is a setup failure and never an observation about the seller.
+        self.signalled: set[int] = set()
         self._lock_conn = _connect(url)
         cur = self._lock_conn.cursor()
         cur.execute(f"SET lock_timeout = '{_LOCK_TIMEOUT}'")
@@ -89,19 +118,34 @@ class _NextStatementInterrupter:
                 if victims:
                     for pid in victims:
                         cur.execute(f"SELECT {self._signal}(%s)", (pid,))
-                    # Hold the lock until the signal has landed, or the statement simply
-                    # completes once the lock goes away and nothing was provoked.
+                    self.signalled |= victims
+                    # Hold the lock until the signal has landed. The deadline is a safety
+                    # net against a backend that never clears, not a success condition:
+                    # ``signalled`` is already non-empty here, so whichever way this loop
+                    # ends the fault DID fire and the scenario's wire assertion is about
+                    # the seller.
                     while victims & self._blocked_pids(cur) and time.monotonic() < deadline:
                         time.sleep(0.01)
                     return
                 time.sleep(0.01)
         finally:
+            # Releasing the lock here is what lets an unprovoked statement complete, so the
+            # emptiness of ``signalled`` is the only honest record that this happened.
             self._lock_conn.rollback()
 
     def close(self) -> None:
         self._thread.join(timeout=_WAIT_FOR_WAITER_S + 5)
         self._lock_conn.close()
         self._admin.close()
+        if not self.signalled:
+            raise AssertionError(
+                "the database fault never fired: no backend was ever seen blocked on this "
+                f"fault's lock within {_WAIT_FOR_WAITER_S}s, so nothing was "
+                f"{self._signal}'d and the seller's statement ran to completion unprovoked. "
+                "Whatever this scenario asserted about the wire, it was not asserting it "
+                "about a cancelled statement. This is a SETUP failure, not a finding about "
+                "the seller (salesagent-f0b86)."
+            )
 
 
 def _wait_out_fail_fast(self: DatabaseFaultMixin) -> None:
@@ -114,6 +158,11 @@ def _wait_out_fail_fast(self: DatabaseFaultMixin) -> None:
     remaining = self._connections_restored_at + FAIL_FAST_WINDOW_S + 1 - time.monotonic()
     if remaining > 0:
         time.sleep(remaining)
+
+
+#: The trigger, and the function it runs, behind every media buy status fault. Named once so
+#: the install and the cleanup cannot drift apart.
+_STATUS_FAULT = "poison_media_buy_status_write"
 
 
 class DatabaseFaultMixin:
@@ -159,6 +208,67 @@ class DatabaseFaultMixin:
         self._guard("db_fault:connections", self.accept_new_connections)
         self._set_allow_connections(False)
 
+    def poison_media_buy_status_writes(self, media_buy_ids: Sequence[str], *, terminate: bool) -> None:
+        """Make the database fail an UPDATE of these media buys and no others.
+
+        A BEFORE UPDATE trigger raises, or terminates the backend, when the new
+        row's ``media_buy_id`` is one of *media_buy_ids* and ``status`` changes.
+        A confirmation stamp that leaves status alone is not a status write.
+        Installed before the rows are inserted. The trigger covers only these ids.
+        Cleanup drops the trigger and the function.
+        """
+        action = "PERFORM pg_terminate_backend(pg_backend_pid());" if terminate else "RAISE EXCEPTION 'poison';"
+        self._install_media_buy_status_trigger(media_buy_ids, action=action, deferred=False)
+
+    def refuse_media_buy_status_commit(self, media_buy_ids: Sequence[str]) -> None:
+        """Make the database refuse the COMMIT of a transaction that changed these buys' status.
+
+        The same status-change test as :meth:`poison_media_buy_status_writes`, on a
+        deferred constraint trigger: it fires at COMMIT, after every savepoint the
+        sweep released, so each per-buy write succeeds and only the terminal commit fails.
+        """
+        self._install_media_buy_status_trigger(media_buy_ids, action="RAISE EXCEPTION 'commit refused';", deferred=True)
+
+    def _install_media_buy_status_trigger(self, media_buy_ids: Sequence[str], *, action: str, deferred: bool) -> None:
+        """Run *action* when one of *media_buy_ids* changes status: per row, or at COMMIT if *deferred*."""
+        if not media_buy_ids:
+            raise ValueError("a media buy status fault requires at least one media_buy_id")
+        create = (
+            f"CREATE CONSTRAINT TRIGGER {_STATUS_FAULT} AFTER UPDATE ON media_buys DEFERRABLE INITIALLY DEFERRED"
+            if deferred
+            else f"CREATE TRIGGER {_STATUS_FAULT} BEFORE UPDATE ON media_buys"
+        )
+        self._commit_factory_data()
+        url = self._fault_target_url()
+        with _admin_cursor(url) as cur:
+            literals: list[str] = []
+            for media_buy_id in media_buy_ids:
+                cur.execute("SELECT quote_literal(%s)", (media_buy_id,))
+                literals.append(cur.fetchone()[0])
+            listed = ", ".join(literals)
+            cur.execute(
+                f"""
+                CREATE OR REPLACE FUNCTION {_STATUS_FAULT}() RETURNS trigger
+                LANGUAGE plpgsql AS $fn$
+                BEGIN
+                  IF NEW.media_buy_id IN ({listed}) AND NEW.status IS DISTINCT FROM OLD.status THEN
+                    {action}
+                  END IF;
+                  RETURN NEW;
+                END
+                $fn$;
+                DROP TRIGGER IF EXISTS {_STATUS_FAULT} ON media_buys;
+                {create}
+                FOR EACH ROW EXECUTE FUNCTION {_STATUS_FAULT}();
+                """
+            )
+        self._guard("db_fault:poison_status", self._drop_media_buy_status_poison)
+
+    def _drop_media_buy_status_poison(self) -> None:
+        with _admin_cursor(self._fault_target_url()) as cur:
+            cur.execute(f"DROP TRIGGER IF EXISTS {_STATUS_FAULT} ON media_buys")
+            cur.execute(f"DROP FUNCTION IF EXISTS {_STATUS_FAULT}()")
+
     def accept_new_connections(self) -> None:
         """Let the database accept connections again. Idempotent; also the refusal's cleanup."""
         self._set_allow_connections(True)
@@ -167,14 +277,10 @@ class DatabaseFaultMixin:
 
     def _set_allow_connections(self, allow: bool) -> None:
         url = self._fault_target_url()
-        admin = _connect(url.set(database="postgres"), autocommit=True)
-        try:
-            cur = admin.cursor()
+        with _admin_cursor(url.set(database="postgres")) as cur:
             cur.execute(f'ALTER DATABASE "{url.database}" WITH ALLOW_CONNECTIONS {str(allow).lower()}')
             if not allow:
                 terminate_backends(cur, url.database)
-        finally:
-            admin.close()
 
     @realize_e2e(_wait_out_fail_fast)
     def _clear_seller_fail_fast(self) -> None:

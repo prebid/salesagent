@@ -87,6 +87,26 @@ Feature: A request that cannot reach a tool is refused where it fails (local)
     Then the transport refuses the message with JSON-RPC error -32600
     And no AdCP response was produced
 
+  @T-PREDISPATCH-a2a-malformed-skill @predispatch @predispatch-a2a @error
+  Scenario Outline: An A2A message whose skill is not a string is refused before routing
+    # AdCP v3.2.7 (the active migration target), a2a-guide.mdx "Profile Invocation
+    # Messages" and transport-errors.mdx "Layer Separation": reject an unroutable
+    # invocation at the binding. Exact -32600 is this seller's existing malformed
+    # invocation policy (as for no skill/two skills), not a new AdCP error code.
+    # Upstream storyboard: ungraded; this local scenario grades the policy.
+    Given the buyer's A2A message names skill <skill>
+    When the Buyer Agent sends the document as written
+    Then the transport refuses the message with JSON-RPC error -32600
+    And no AdCP response was produced
+
+    Examples:
+      | skill            |
+      | ["get_products"] |
+      | {}               |
+      | null             |
+      | 7                |
+      | true             |
+
   @T-PREDISPATCH-a2a-unknown-skill @predispatch @predispatch-a2a @error
   Scenario: An A2A message naming a skill the seller does not have is refused by the A2A layer
     Given the buyer names a tool the seller does not have

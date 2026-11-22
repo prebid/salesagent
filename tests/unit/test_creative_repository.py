@@ -13,7 +13,12 @@ from src.core.database.repositories.creative import (
     CreativeListResult,
     CreativeRepository,
 )
+from src.core.schemas import CreativeFormatIdentity, FormatId
 from tests.factories.creative_asset import build_assets, image_spec
+
+LEGACY_IDENTITY = CreativeFormatIdentity.of_legacy(
+    FormatId(agent_url="https://agent.example.com", id="display_300x250_image"), kind="image"
+)
 
 
 class TestCreativeRepositoryInit:
@@ -125,8 +130,7 @@ class TestCreativeRepositoryCreate:
         result = repo.create(
             creative_id="c1",
             name="Test Banner",
-            agent_url="https://agent.example.com",
-            format="display_300x250_image",
+            identity=LEGACY_IDENTITY,
             principal_id="p1",
             data={"assets": build_assets(image_spec("banner", url="https://example.com/banner.png"))},
         )
@@ -138,6 +142,16 @@ class TestCreativeRepositoryCreate:
         assert db_obj.tenant_id == "t1"
         assert db_obj.principal_id == "p1"
         assert db_obj.name == "Test Banner"
+        # The identity reaches all four columns: the kind it projects to, the assertion as
+        # one verbatim document, and its canonical comparison key. Asserting the columns
+        # rather than the call is what catches a mapping that writes only some of them.
+        assert db_obj.format_kind == "image"
+        assert db_obj.legacy_format_id == {
+            "agent_url": "https://agent.example.com",
+            "id": "display_300x250_image",
+        }
+        assert db_obj.legacy_format_key == "https://agent.example.com/\x1fdisplay_300x250_image"
+        assert db_obj.format_option_ref is None
 
     def test_generates_id_when_not_provided(self):
         """create() generates a UUID creative_id when not provided."""
@@ -146,8 +160,7 @@ class TestCreativeRepositoryCreate:
 
         result = repo.create(
             name="Auto ID",
-            agent_url="https://agent.example.com",
-            format="display_300x250_image",
+            identity=LEGACY_IDENTITY,
             principal_id="p1",
         )
 

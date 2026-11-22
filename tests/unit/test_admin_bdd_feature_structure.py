@@ -35,12 +35,12 @@ class TestAdminBddFeatureStructure:
         assert FEATURE_FILE.exists(), f"Feature file not found at {FEATURE_FILE}. Task requires creating this file."
 
     def test_minimum_scenario_count(self) -> None:
-        text = FEATURE_FILE.read_text()
+        text = FEATURE_FILE.read_text(encoding="utf-8")
         scenario_count = len(re.findall(r"^\s*Scenario(?: Outline)?:", text, re.MULTILINE))
         assert scenario_count >= MIN_SCENARIOS, f"Feature has {scenario_count} scenarios, need >= {MIN_SCENARIOS}"
 
     def test_required_area_coverage(self) -> None:
-        text = FEATURE_FILE.read_text()
+        text = FEATURE_FILE.read_text(encoding="utf-8")
         tags = set(re.findall(r"@(\w+)", text))
         missing = REQUIRED_AREAS - tags
         assert not missing, (
@@ -49,11 +49,11 @@ class TestAdminBddFeatureStructure:
         )
 
     def test_has_background_section(self) -> None:
-        text = FEATURE_FILE.read_text()
+        text = FEATURE_FILE.read_text(encoding="utf-8")
         assert "Background:" in text, "Feature file must have a Background section"
 
     def test_tag_prefix_convention(self) -> None:
-        text = FEATURE_FILE.read_text()
+        text = FEATURE_FILE.read_text(encoding="utf-8")
         scenario_tags = re.findall(r"@(T-ADMIN-ACCT-\d+)", text)
         assert len(scenario_tags) >= MIN_SCENARIOS, (
             f"Found {len(scenario_tags)} @T-ADMIN-ACCT-xxx tags, need >= {MIN_SCENARIOS}"

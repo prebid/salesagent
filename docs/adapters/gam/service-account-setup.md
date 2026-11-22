@@ -21,7 +21,7 @@ The Prebid Sales Agent supports two authentication methods for Google Ad Manager
 
 ## Authentication methods
 
-1. **OAuth (refresh token)** — user-based authentication that requires manual token refresh.
+1. **OAuth (refresh token)** — user-based authentication that requires manual token refresh. The refresh token is stored encrypted, so the deployment needs `ENCRYPTION_KEY` set (see [Credential storage](#credential-storage)).
 2. **Service account** — automated authentication using Google Cloud service accounts. Recommended for production.
 
 Service accounts offer the following advantages:
@@ -220,7 +220,7 @@ curl -X POST http://localhost:8000/tenant/{tenant_id}/gam/configure \
 
 ### Credential storage
 
-- The service account JSON is encrypted at rest with Fernet symmetric encryption.
+- The service account JSON and the OAuth refresh token are encrypted at rest with Fernet symmetric encryption. Both methods need `ENCRYPTION_KEY`: without it the sales agent cannot store or read either credential.
 - The encryption key comes from the `ENCRYPTION_KEY` environment variable. Generate one with `uv run python scripts/generate_encryption_key.py` (or `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'`).
 - Credentials are decrypted only when an API call needs them.
 
@@ -305,7 +305,7 @@ On save, the system clears the old OAuth refresh token, encrypts and stores the 
 | User dependency | Requires a Google account | Independent |
 | Automation | Difficult | Straightforward |
 | Audit trail | User email | Service account email |
-| Credential storage | Token string | JSON key (encrypted) |
+| Credential storage | Token string (encrypted) | JSON key (encrypted) |
 | Best for | Development, testing | Production, automation |
 
 ## API reference
@@ -314,7 +314,8 @@ On save, the system clears the old OAuth refresh token, encrypts and stores the 
 
 ```python
 gam_auth_method: str                    # "oauth" or "service_account" (default "oauth")
-gam_refresh_token: str | None           # OAuth refresh token (OAuth method)
+gam_refresh_token: str | None           # OAuth refresh token (OAuth method);
+                                        # stored encrypted, decrypted on property access
 gam_service_account_json: str | None    # Service account JSON (service account method);
                                         # stored encrypted, decrypted on property access
 ```

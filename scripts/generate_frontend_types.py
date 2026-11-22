@@ -143,7 +143,7 @@ def generate_types():
     output_path = Path(__file__).parent.parent / "static" / "js" / "generated-types.d.ts"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(output))
 
     print(f"✅ Generated TypeScript types: {output_path}")

@@ -496,6 +496,22 @@ class TestClientE2eA2aDelivery:
     e2e-with-real-server verification happens in tests/e2e/ against a live
     Docker stack, per this task's scope)."""
 
+    #: The smallest get_products success body the pinned schema accepts.
+    #:
+    #: ``media-buy/get-products-response.json`` states a constraint outside its
+    #: properties, and the rebuilt SDK compiles it onto the exported class, so
+    #: ``client.py``'s parse-back through ``spec_response_model`` refuses a document
+    #: carrying only ``message`` and ``success``. ``products`` is what the constraint
+    #: wants; an empty list satisfies it without hand-maintaining a full Product
+    #: fixture, whose many required nested members (publisher_properties,
+    #: pricing_options, reporting_capabilities, ...) none of these tests assert on.
+    #:
+    #: One constant rather than a literal per test: two of the four call sites wrote
+    #: their own body, omitted ``products``, and stopped running at the new pin
+    #: (salesagent-8qela.123). A test that asserts on the REQUEST should not be
+    #: authoring a response at all, let alone a different one each time.
+    _MINIMAL_GET_PRODUCTS_ARTIFACT = {"products": [], "message": "ok", "success": True}
+
     @staticmethod
     def _rpc_success_body(*, task_id: str = "task_abc123", state: str = "TASK_STATE_COMPLETED", artifact_data: dict):
         return {
@@ -519,14 +535,7 @@ class TestClientE2eA2aDelivery:
         class _UnitEnv(BaseTestEnv):
             pass
 
-        # Empty products list — a full Product needs many required nested
-        # fields (publisher_properties, pricing_options, reporting_capabilities,
-        # ...) that are irrelevant to what this test actually verifies (the
-        # JSON-RPC envelope shape and the artifact-stripping behavior below);
-        # an empty list still round-trips through GetProductsResponse
-        # (the spec_response_model parse-back) without
-        # hand-maintaining an unrelated fixture of the full Product schema.
-        artifact_data = {"products": [], "message": "ok", "success": True}
+        artifact_data = self._MINIMAL_GET_PRODUCTS_ARTIFACT
         rpc_response = self._rpc_success_body(artifact_data=artifact_data)
 
         with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
@@ -565,7 +574,7 @@ class TestClientE2eA2aDelivery:
             pass
 
         credential = credential_headers(token="tok_123", tenant="t1")
-        rpc_response = self._rpc_success_body(artifact_data={"message": "ok", "success": True})
+        rpc_response = self._rpc_success_body(artifact_data=self._MINIMAL_GET_PRODUCTS_ARTIFACT)
 
         with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
             client = AdCPTestClient(env)
@@ -591,7 +600,7 @@ class TestClientE2eA2aDelivery:
         class _UnitEnv(BaseTestEnv):
             pass
 
-        rpc_response = self._rpc_success_body(artifact_data={"message": "ok", "success": True})
+        rpc_response = self._rpc_success_body(artifact_data=self._MINIMAL_GET_PRODUCTS_ARTIFACT)
 
         with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
             client = AdCPTestClient(env)
@@ -842,7 +851,7 @@ class TestA2AE2EDispatcher:
             pass
 
         rpc_response = TestClientE2eA2aDelivery._rpc_success_body(
-            artifact_data={"products": [], "message": "ok", "success": True}
+            artifact_data=TestClientE2eA2aDelivery._MINIMAL_GET_PRODUCTS_ARTIFACT
         )
 
         with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:

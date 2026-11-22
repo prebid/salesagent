@@ -293,7 +293,7 @@ async function updateReports() {
         });
 
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            throw new Error(adminErrorText(await response.json()));
         }
 
         const result = await response.json();
@@ -616,7 +616,7 @@ async function updateCountryHeatmap() {
         });
 
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            throw new Error(adminErrorText(await response.json()));
         }
 
         const result = await response.json();
@@ -906,7 +906,7 @@ async function updateAdUnitAnalysis() {
         });
 
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            throw new Error(adminErrorText(await response.json()));
         }
 
         const result = await response.json();

@@ -475,6 +475,11 @@
             <span>Integrations</span>
         </a>
 
+        <a class="settings-nav-item" href="{{ url_for('signing_keys.list_signing_keys', tenant_id=tenant.tenant_id) }}">
+            <span class="settings-nav-icon">🔑</span>
+            <span>Signing Keys</span>
+        </a>
+
         <div class="settings-nav-separator"></div>
 
         <a class="settings-nav-item" data-section="publishers">
@@ -497,6 +502,11 @@
         <a class="settings-nav-item" data-section="advertisers">
             <span class="settings-nav-icon">👥</span>
             <span>Advertisers</span>
+        </a>
+
+        <a class="settings-nav-item" href="{{ url_for('accounts.list_accounts', tenant_id=tenant.tenant_id) }}">
+            <span class="settings-nav-icon">🧾</span>
+            <span>Buyer Accounts</span>
         </a>
 
         {% if not single_tenant_mode %}
@@ -897,7 +907,7 @@
                     <!-- Fully configured - show success state -->
                     <div class="status-card" style="background: #f0fdf4; border-left: 4px solid #10b981;">
                         <!-- Hidden fields for JS operations -->
-                        <input type="hidden" id="gam_refresh_token" value="{{ adapter_config.get('refresh_token') }}">
+                        <input type="hidden" id="gam_refresh_token" value="">  {# never rendered: a blank token means the stored one #}
                         <input type="hidden" id="gam_network_code" value="{{ adapter_config.get('network_code') }}">
                         <input type="hidden" id="gam_trafficker_id" value="{{ adapter_config.get('trafficker_id') }}">
 
@@ -963,8 +973,8 @@
                             <div style="margin-top: 0.5rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
                                 <label for="gam_refresh_token">Manual OAuth Refresh Token</label>
                                 <input type="text" id="gam_refresh_token" class="form-control"
-                                       value="{{ adapter_config.get('refresh_token', '') if adapter_config else '' }}"
-                                       placeholder="Paste your OAuth refresh token here">
+                                       value=""
+                                       placeholder="{{ 'A token is saved. Paste a new one to replace it.' if adapter_config and adapter_config.get('refresh_token') else 'Paste your OAuth refresh token here' }}">
                                 <small class="form-text text-muted">For advanced users: manually enter a refresh token if you have one.</small>
                                 <button onclick="saveManualToken()" class="btn btn-primary" style="margin-top: 0.5rem;">
                                     Save Token
@@ -1544,14 +1554,14 @@
 
                     <!-- AI Configuration (shown only for ai-powered mode) -->
                     <div id="ai-config-section" style="display: none; margin-top: 1rem;">
-                        {% if not has_gemini_key %}
+                        {% if not ai_enabled %}
                         <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-bottom: 1rem;">
-                            <strong>⚠️ Gemini API Key Required</strong>
-                            <p style="margin: 0.5rem 0 0;">AI review requires a Gemini API key. Please set your key in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
+                            <strong>⚠️ AI Configuration Required</strong>
+                            <p style="margin: 0.5rem 0 0;">AI review requires an AI provider with an API key. Please configure one in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
                         </div>
                         {% else %}
                         <div class="alert alert-success" style="padding: 0.75rem; background: #d1fae5; border: 1px solid #34d399; border-radius: 6px; margin-bottom: 1rem;">
-                            <strong>✅ Gemini API Key Configured</strong>
+                            <strong>✅ AI Configured</strong>
                             <p style="margin: 0.5rem 0 0; font-size: 0.875rem; color: #059669;">AI-powered creative review is enabled.</p>
                         </div>
                         {% endif %}
@@ -1718,10 +1728,10 @@ REJECT - Creative cannot be approved:
                     </div>
 
                     <div id="advertising-policy-config" style="{% if tenant.advertising_policy and tenant.advertising_policy.get('enabled') == False %}display: none;{% endif %}">
-                        {% if not tenant.gemini_api_key %}
+                        {% if not seller_ai_enabled %}
                         <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-bottom: 1rem;">
-                            <strong>⚠️ Gemini API Key Required</strong>
-                            <p style="margin: 0.5rem 0 0;">Advertising policy checks require a Gemini API key to function. Without it, all campaigns will be allowed by default. Please set your key in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
+                            <strong>⚠️ AI Configuration Required</strong>
+                            <p style="margin: 0.5rem 0 0;">Advertising policy checks require your own AI provider and API key to function. Without it, all campaigns will be allowed by default. Please configure one in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
                         </div>
                         {% endif %}
 
@@ -1788,10 +1798,10 @@ REJECT - Creative cannot be approved:
                         <small>When set, AI will use this prompt to rank products based on relevance to the buyer's brief. Leave empty to disable AI ranking and return all products.</small>
                     </div>
 
-                    {% if not has_gemini_key %}
+                    {% if not ai_enabled %}
                     <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-top: 1rem;">
-                        <strong>⚠️ Gemini API Key Required</strong>
-                        <p style="margin: 0.5rem 0 0;">Product ranking requires a Gemini API key. Please set your key in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
+                        <strong>⚠️ AI Configuration Required</strong>
+                        <p style="margin: 0.5rem 0 0;">Product ranking requires an AI provider with an API key. Please configure one in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
                     </div>
                     {% endif %}
 
@@ -2503,7 +2513,8 @@ Exclude any products that don't match the brand's tone.</pre>
                         } else {
                             resultDiv.style.background = '#fee2e2';
                             resultDiv.style.border = '1px solid #f87171';
-                            resultDiv.innerHTML = '<strong>Failed:</strong> ' + data.error;
+                            resultDiv.innerHTML = '<strong>Failed:</strong> ';
+                            resultDiv.append(adminErrorText(data));
                         }
                     } catch (error) {
                         resultDiv.style.background = '#fee2e2';
@@ -2553,7 +2564,8 @@ Exclude any products that don't match the brand's tone.</pre>
                         } else {
                             resultDiv.style.background = '#fee2e2';
                             resultDiv.style.border = '1px solid #f87171';
-                            resultDiv.innerHTML = '<strong>Failed:</strong> ' + data.error;
+                            resultDiv.innerHTML = '<strong>Failed:</strong> ';
+                            resultDiv.append(adminErrorText(data));
                         }
                     } catch (error) {
                         resultDiv.style.background = '#fee2e2';
@@ -2801,8 +2813,8 @@ document.addEventListener("DOMContentLoaded", function() {
                     });
 
                     if (!response.ok) {
-                        console.error('Failed to get Approximated token:', await response.text());
-                        dnsWidgetContainer.innerHTML = '<p style="color: #dc2626; font-size: 0.875rem;">❌ DNS widget unavailable. Please contact support.</p>';
+                        dnsWidgetContainer.innerHTML = '<p style="color: #dc2626; font-size: 0.875rem;"></p>';
+                        dnsWidgetContainer.firstChild.textContent = '❌ DNS widget unavailable: ' + adminErrorText(await response.json());
                         return;
                     }
 
@@ -3043,7 +3055,7 @@ async function checkDomainRegistrationStatus() {
         } else {
             statusIcon.textContent = '⚠️';
             statusText.textContent = 'Check Failed';
-            statusDetails.textContent = data.error || 'Unknown error';
+            statusDetails.textContent = adminErrorText(data);
             registerBtn.style.display = 'none';
             unregisterBtn.style.display = 'none';
         }
@@ -3093,7 +3105,7 @@ async function registerDomain() {
             // Refresh status
             await checkDomainRegistrationStatus();
         } else {
-            alert(`❌ Registration failed:\n${data.error}`);
+            alert(`❌ Registration failed:\n${adminErrorText(data)}`);
         }
     } catch (error) {
         console.error('Error registering domain:', error);
@@ -3138,7 +3150,7 @@ async function unregisterDomain() {
             // Refresh status
             await checkDomainRegistrationStatus();
         } else {
-            alert(`❌ Unregistration failed:\n${data.error}`);
+            alert(`❌ Unregistration failed:\n${adminErrorText(data)}`);
         }
     } catch (error) {
         console.error('Error unregistering domain:', error);

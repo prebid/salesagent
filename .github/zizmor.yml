@@ -34,26 +34,6 @@ rules:
       - ipr-agreement.yml
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # excessive-permissions:
-  #
-  # ipr-agreement.yml: requires contents/pull-requests/statuses: write for the
-  # CLA-assistant action to commit signatures and post status checks.
-  # Minimum required permissions; no narrowing possible without breaking the action.
-  #
-  # release-please.yml: job-level permissions only (workflow default is contents +
-  # pull-requests). No workflow-level packages: write — excessive-permissions no
-  # longer fires for this file (verified via zizmor --persona=auditor).
-  #
-  # pr-title-check.yml: no explicit permissions block — uses workflow default.
-  # The amannn/action-semantic-pull-request action requires pull-requests: write
-  # to post status checks. Narrowing tracked for #1234-pr3.
-  # ─────────────────────────────────────────────────────────────────────────────
-  excessive-permissions:
-    ignore:
-      - ipr-agreement.yml
-      - pr-title-check.yml
-
-  # ─────────────────────────────────────────────────────────────────────────────
   # unpinned-images — ci.yml postgres service containers use the unified rolling
   # tag postgres:17-alpine (PR 5 / ADR-008). Digest pin for service containers
   # is deferred; test_architecture_postgres_image_anchor enforces tag consistency.
@@ -72,3 +52,15 @@ rules:
   secrets-outside-env:
     ignore:
       - release-please.yml
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # self-repository — disabled (note-level, added in zizmor v1.30.0). It asks
+  # for GitHub's July 2026 `uses: $/...` form in place of
+  # `uses: ./.github/actions/...`. The workspace-relative form is the
+  # documented way to call this repo's local composite actions (ci.yml,
+  # security.yml, gam-nightly.yml), each used right after checking out this
+  # repository. The actionlint pinned in security.yml (1.7.7) predates the
+  # `$/` syntax, so the switch can wait until our tooling supports it.
+  # ─────────────────────────────────────────────────────────────────────────────
+  self-repository:
+    disable: true

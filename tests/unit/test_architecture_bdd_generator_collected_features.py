@@ -104,7 +104,7 @@ def _classify(tmp_path: Path, filename: str) -> tuple[str, dict[str, int]]:
     downstream = tmp_path / "downstream" / filename
     for path, text in ((upstream, _UPSTREAM), (downstream, _DOWNSTREAM)):
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
     _uc, output_text, _entries, _ids, _maps, buckets = merge_feature(
         upstream,
         downstream,
@@ -153,7 +153,7 @@ def test_the_derivation_names_every_feature_file_a_driver_collects() -> None:
     """
     from_ast: set[str] = set()
     for module in sorted((_REPO_ROOT / "tests" / "bdd").glob("test_*.py")):
-        tree = ast.parse(module.read_text())
+        tree = ast.parse(module.read_text(encoding="utf-8"))
         for call in (*iter_call_expressions(tree, "scenario"), *iter_call_expressions(tree, "scenarios")):
             for arg in call.args:
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value.endswith(".feature"):

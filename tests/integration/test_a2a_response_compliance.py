@@ -57,7 +57,7 @@ class TestA2ASpecCompliance:
     """Test that A2A handlers return spec-compliant responses without extra fields.
 
     No case here passes ``context=``. Every one used to, and none of them asserted on
-    it: ``context`` is stamped by the boundary (``_boundary._served``) and ``AdcpResponse``
+    it: ``context`` is stamped by the boundary (``_boundary._served``) and ``SalesAgentAdcpResponse``
     now REFUSES the keyword on construction, so a response built in a test carries none.
     ``context`` stays in each ``spec_fields`` set below -- those sets are allowlists of
     what the pin declares, compared as ``actual - spec_fields``, so a key the pin permits
@@ -173,7 +173,7 @@ class TestA2ASpecCompliance:
         """Test create_media_buy returns only spec-defined fields.
 
         No ``context=``: it is stamped by the boundary (``_boundary._served``) and
-        ``AdcpResponse`` refuses it on construction, and this case never asserted on it.
+        ``SalesAgentAdcpResponse`` refuses it on construction, and this case never asserted on it.
         ``confirmed_at``/``revision`` are passed because they carry no model default --
         they are columns the repository owns -- and neither is asserted here either.
         """

@@ -20,8 +20,7 @@ def _make_db_session(*products):
 
     create_media_buy has two `with get_db_session()` blocks. The first reads, per package,
     the Product and then its ProductInventoryMapping rows; the second reads AdapterConfig
-    and then Tenant once. The answers are consumed in that order; everything after them
-    is empty.
+    once. The answers are consumed in that order; everything after them is empty.
     """
     answers = []
     for product in products:
@@ -30,7 +29,7 @@ def _make_db_session(*products):
     pending = iter(answers)
 
     def scalars_side_effect(stmt):
-        kind, value = next(pending, ("first", None))  # AdapterConfig, Tenant, anything later
+        kind, value = next(pending, ("first", None))  # AdapterConfig, anything later
         result = Mock()
         result.first.return_value = value if kind == "first" else None
         result.all.return_value = value if kind == "all" else []
@@ -63,6 +62,7 @@ def _create_media_buy_for(*products: Mock) -> tuple[Mock, dict]:
     mock_adapter.trafficker_id = "traff_123"
     mock_adapter.log = Mock()
     mock_adapter.orders_manager = Mock()
+    mock_adapter.client_manager = Mock()
     mock_adapter.workflow_manager = Mock()
     mock_adapter._requires_manual_approval = Mock(return_value=False)
     mock_adapter._validate_targeting = Mock(return_value=[])
@@ -73,6 +73,7 @@ def _create_media_buy_for(*products: Mock) -> tuple[Mock, dict]:
     mock_adapter._native_template_ids = {"pkg_stale_001": "000000"}
     mock_adapter._order_name_template = None
     mock_adapter._line_item_name_template = None
+    mock_adapter._tenant_ai_config = None
     mock_adapter.targeting_manager = Mock()
 
     packages = []

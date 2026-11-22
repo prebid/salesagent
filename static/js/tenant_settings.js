@@ -148,7 +148,7 @@ function testSlack() {
         if (data.success) {
             alert('✅ Test notification sent successfully!');
         } else {
-            alert('❌ Test failed: ' + (data.error || data.message || 'Unknown error'));
+            alert('❌ Test failed: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -175,7 +175,7 @@ function saveAdapter() {
             alert('Adapter settings saved successfully!');
             location.reload();
         } else {
-            alert('Error: ' + (data.error || data.message || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -241,12 +241,8 @@ function initiateGAMAuth() {
 function detectGAMNetwork() {
     const button = document.querySelector('button[onclick="detectGAMNetwork()"]');
     const originalText = button.textContent;
+    // Blank means the stored token: the page never renders it
     const refreshToken = document.getElementById('gam_refresh_token').value;
-
-    if (!refreshToken) {
-        alert('Please enter a refresh token first');
-        return;
-    }
 
     button.disabled = true;
     button.textContent = 'Detecting...';
@@ -268,7 +264,7 @@ function detectGAMNetwork() {
         if (data.success) {
             // Handle multiple networks - show dropdown for selection
             if (data.multiple_networks && data.networks) {
-                showNetworkSelector(data.networks, refreshToken);
+                showNetworkSelector(data.networks);
             } else {
                 // Single network - auto-select
                 document.getElementById('gam_network_code').value = data.network_code;
@@ -286,7 +282,7 @@ function detectGAMNetwork() {
                 alert(`✅ Network code detected: ${data.network_code}`);
             }
         } else {
-            alert('❌ ' + (data.error || data.message || 'Unknown error'));
+            alert('❌ ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -297,7 +293,7 @@ function detectGAMNetwork() {
 }
 
 // Show network selector when multiple networks found
-function showNetworkSelector(networks, refreshToken) {
+function showNetworkSelector(networks) {
     const container = document.createElement('div');
     container.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;';
 
@@ -316,7 +312,7 @@ function showNetworkSelector(networks, refreshToken) {
         </select>
         <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
             <button onclick="cancelNetworkSelection()" class="btn btn-secondary">Cancel</button>
-            <button onclick="confirmNetworkSelection('${refreshToken}')" class="btn btn-primary">Confirm Selection</button>
+            <button onclick="confirmNetworkSelection()" class="btn btn-primary">Confirm Selection</button>
         </div>
     `;
 
@@ -338,7 +334,8 @@ function cancelNetworkSelection() {
 }
 
 // Confirm network selection and get trafficker ID
-function confirmNetworkSelection(refreshToken) {
+function confirmNetworkSelection() {
+    const refreshToken = document.getElementById('gam_refresh_token').value;
     const selector = document.getElementById('network-selector');
     const selectedNetworkCode = selector.value;
     const selectedNetwork = window.gamNetworks.find(n => n.network_code === selectedNetworkCode);
@@ -378,7 +375,7 @@ function confirmNetworkSelection(refreshToken) {
 
             alert(`✅ Network selected: ${selectedNetwork.network_name} (${selectedNetworkCode})`);
         } else {
-            alert('❌ Error getting trafficker ID: ' + (data.error || 'Unknown error'));
+            alert('❌ Error getting trafficker ID: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -419,7 +416,7 @@ function saveManualToken() {
             alert('✅ Token saved! Page will reload to show next steps.');
             location.reload();
         } else {
-            alert('❌ Failed to save: ' + (data.error || data.message || 'Unknown error'));
+            alert('❌ Failed to save: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -453,11 +450,6 @@ function saveGAMConfig() {
     const secondaryCurrencies = window.gamSecondaryCurrencies || [];
     const networkTimezone = window.gamDetectedTimezone || null;
 
-    if (!refreshToken) {
-        alert('Please provide a Refresh Token');
-        return;
-    }
-
     const button = event.target;
     const originalText = button.textContent;
     button.disabled = true;
@@ -489,7 +481,7 @@ function saveGAMConfig() {
             alert('✅ GAM configuration saved successfully');
             location.reload();
         } else {
-            alert('❌ Failed to save: ' + (data.error || data.message || 'Unknown error'));
+            alert('❌ Failed to save: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -503,11 +495,6 @@ function saveGAMConfig() {
 function refreshGAMInfo() {
     const refreshToken = document.getElementById('gam_refresh_token').value;
     const networkCode = document.getElementById('gam_network_code').value;
-
-    if (!refreshToken) {
-        alert('Please configure OAuth first');
-        return;
-    }
 
     const button = event.target;
     const originalText = button.textContent;
@@ -540,7 +527,7 @@ function refreshGAMInfo() {
                 })
             });
         }
-        throw new Error(data.error || 'Failed to fetch GAM info');
+        throw new Error(adminErrorText(data));
     })
     .then(response => response.json())
     .then(data => {
@@ -550,7 +537,7 @@ function refreshGAMInfo() {
             alert('GAM info refreshed successfully');
             location.reload();
         } else {
-            alert('Failed to save: ' + (data.error || 'Unknown error'));
+            alert('Failed to save: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -563,11 +550,6 @@ function refreshGAMInfo() {
 // Test GAM connection
 function testGAMConnection() {
     const refreshToken = document.getElementById('gam_refresh_token').value;
-
-    if (!refreshToken) {
-        alert('Please provide a refresh token first');
-        return;
-    }
 
     const button = event.target;
     const originalText = button.textContent;
@@ -591,7 +573,7 @@ function testGAMConnection() {
         if (data.success) {
             alert('✅ Connection successful!');
         } else {
-            alert('❌ Connection failed: ' + (data.error || data.message || 'Unknown error'));
+            alert('❌ Connection failed: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -682,13 +664,14 @@ function saveBusinessRules() {
                 // No flash messages means success - reload to show updated data
                 window.location.reload();
             });
-        } else if (response.ok) {
-            // JSON response
+        } else if (contentType && contentType.includes('application/json')) {
+            // JSON response: a success, a refusal (400, with the refused fields' issues)
+            // or a failure (500, with the reference the server logged it under)
             return response.json().then(data => {
-                if (data.success) {
+                if (response.ok && data.success) {
                     window.location.reload();
                 } else {
-                    alert('Error: ' + (data.error || data.message || 'Unknown error'));
+                    alert('Error: ' + adminErrorText(data));
                 }
             });
         } else {
@@ -715,7 +698,7 @@ function configureGAM() {
             alert('✅ GAM configuration saved successfully!');
             location.reload();
         } else {
-            alert('❌ Error: ' + (data.error || data.message || 'Unknown error'));
+            alert('❌ Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -748,7 +731,7 @@ function editGAMConfig() {
             // Reload page to show configuration form
             location.reload();
         } else {
-            alert('Error: ' + (data.error || data.message || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -834,11 +817,8 @@ function syncGAMInventory(mode = 'full') {
         body: JSON.stringify({ mode: mode })
     })
     .then(response => {
-        // Handle 202 Accepted (sync started) or 400/409 (already running/error)
-        if (response.status === 202 || response.ok || response.status === 409 || response.status === 400) {
-            return response.json();
-        }
-        throw new Error(`Server error: ${response.status}`);
+        // Every answer is JSON: a started sync, or a refusal (a sync already running names it)
+        return response.json();
     })
     .then(data => {
         // New response format: {sync_id, status, message} or {error, sync_id}
@@ -854,7 +834,7 @@ function syncGAMInventory(mode = 'full') {
             allButtons.forEach(btn => btn.disabled = false);
 
             button.innerHTML = originalText;
-            alert('❌ Sync failed: ' + data.error);
+            alert('❌ Sync failed: ' + adminErrorText(data));
         } else {
             // Unexpected response format
             clearInterval(loadingInterval);
@@ -864,7 +844,7 @@ function syncGAMInventory(mode = 'full') {
             allButtons.forEach(btn => btn.disabled = false);
 
             button.innerHTML = originalText;
-            alert('❌ Sync failed: ' + (data.message || 'Unknown error'));
+            alert('❌ Sync failed: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -950,7 +930,7 @@ function pollSyncStatus(syncId, button, originalText, loadingInterval) {
                     const msg = document.getElementById('sync-progress-message');
                     if (msg) msg.remove();
 
-                    alert('❌ Sync failed: ' + (data.error || 'Unknown error'));
+                    alert('❌ Sync failed: ' + adminErrorText(data));
                 } else if (data.status === 'running' || data.status === 'pending') {
                     // Still running - continue polling
                     setTimeout(checkStatus, 2000); // Poll every 2 seconds
@@ -1008,7 +988,7 @@ function resetStuckSync() {
                 alert('✅ ' + data.message);
                 location.reload();
             } else {
-                alert('❌ Failed to reset sync: ' + (data.error || data.message || 'Unknown error'));
+                alert('❌ Failed to reset sync: ' + adminErrorText(data));
                 if (button) {
                     button.disabled = false;
                     button.innerHTML = '🛑 Reset Stuck Sync';
@@ -1083,7 +1063,7 @@ function rotateToken(principalId, principalName) {
         headers: { 'X-Requested-With': 'XMLHttpRequest' },
     }).then(response => response.json()).then(data => {
         if (!data.success) {
-            alert('Failed to rotate token: ' + (data.error || 'unknown error'));
+            alert('Failed to rotate token: ' + adminErrorText(data));
             return;
         }
         const tokenDisplay = button.parentElement.querySelector('.token-display');
@@ -1112,7 +1092,7 @@ function deletePrincipal(principalId, principalName) {
     .then(response => {
         if (!response.ok) {
             return response.json().then(data => {
-                throw new Error(data.error || `HTTP error ${response.status}`);
+                throw new Error(adminErrorText(data));
             });
         }
         return response.json();
@@ -1122,7 +1102,7 @@ function deletePrincipal(principalId, principalName) {
             alert('Principal deleted successfully');
             location.reload();
         } else {
-            alert('Error: ' + (data.error || data.message || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -1152,7 +1132,7 @@ function testSignalsEndpoint() {
         if (data.success) {
             alert('✅ Connection successful! Found ' + data.signal_count + ' signals');
         } else {
-            alert('❌ Connection failed: ' + (data.error || data.message || 'Unknown error'));
+            alert('❌ Connection failed: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -1181,7 +1161,7 @@ function updatePrincipal(principalId) {
         if (data.success) {
             alert('Principal updated successfully');
         } else {
-            alert('Error: ' + (data.error || data.message || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -1217,7 +1197,7 @@ function fetchGAMAdvertisers() {
         if (data.success) {
             displayGAMAdvertisers(data.advertisers);
         } else {
-            alert('❌ Failed to fetch advertisers: ' + (data.error || data.message || 'Unknown error'));
+            alert('❌ Failed to fetch advertisers: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -1341,7 +1321,7 @@ function selectAdapter(adapterType) {
             // Reload to show the adapter's configuration
             location.reload();
         } else {
-            alert('Error: ' + (data.error || data.message || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -1477,7 +1457,7 @@ function editPrincipalMappings(principalId, principalName) {
             const modal = new bootstrap.Modal(document.getElementById('editPrincipalModal'));
             modal.show();
         } else {
-            alert('Error loading principal: ' + (data.error || 'Unknown error'));
+            alert('Error loading principal: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -1646,7 +1626,7 @@ function savePrincipalMappings() {
             // Reload page to show updated mappings
             location.reload();
         } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -1673,7 +1653,7 @@ function createServiceAccount() {
             // Reload page to show the service account email and next steps
             location.reload();
         } else {
-            alert('Error creating service account: ' + (data.error || 'Unknown error'));
+            alert('Error creating service account: ' + adminErrorText(data));
             button.disabled = false;
             button.innerHTML = '🔑 Create Service Account';
         }
@@ -1738,7 +1718,7 @@ function saveServiceAccountNetworkCode() {
             // Reload page to show updated state
             location.reload();
         } else {
-            alert('❌ Failed to save network code:\n\n' + (data.error || data.errors?.join('\n') || 'Unknown error'));
+            alert('❌ Failed to save network code:\n\n' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -1804,7 +1784,7 @@ function saveManualServiceAccount() {
             alert('✅ Service account configuration saved!\n\nNext, authorize the service account email (' + jsonData.client_email + ') in GAM:\n\n1. In GAM, go to Admin → Global Settings\n2. Scroll to API access and ensure it is enabled\n3. Click "Add a service account user"\n4. Paste the email and assign the Trafficker role\n5. Click Save\n\nNote: service accounts must be added through Global Settings → API access, not the Users page (which sends an email invitation a service account cannot accept). You can verify the account appears under Admin → Access & authorization → Users once added.\n\nThen come back here and test the connection.');
             location.reload();
         } else {
-            alert('❌ Failed to save configuration:\n\n' + (data.error || data.errors?.join('\n') || 'Unknown error'));
+            alert('❌ Failed to save configuration:\n\n' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -1835,7 +1815,7 @@ function testGAMServiceAccountConnection() {
         if (data.success) {
             alert('✅ Connection successful!\n\nNetwork: ' + (data.networks?.[0]?.displayName || 'N/A') + '\nNetwork Code: ' + (data.networks?.[0]?.networkCode || 'N/A'));
         } else {
-            alert('❌ Connection failed!\n\n' + (data.error || 'Unknown error') + '\n\nPlease make sure:\n1. You authorized the service account in GAM under Admin → Global Settings → API access → "Add a service account user" (NOT through the Users page — that path sends an email invitation and will not work for service accounts)\n2. The service account now appears under Admin → Access & authorization → Users as an active user (this is how you verify the authorization took effect)\n3. You assigned the Trafficker role\n4. You clicked Save in GAM\n5. The network code is correct');
+            alert('❌ Connection failed!\n\n' + adminErrorText(data) + '\n\nPlease make sure:\n1. You authorized the service account in GAM under Admin → Global Settings → API access → "Add a service account user" (NOT through the Users page — that path sends an email invitation and will not work for service accounts)\n2. The service account now appears under Admin → Access & authorization → Users as an active user (this is how you verify the authorization took effect)\n3. You assigned the Trafficker role\n4. You clicked Save in GAM\n5. The network code is correct');
         }
     })
     .catch(error => {
@@ -2117,7 +2097,7 @@ function loadPublishers() {
             container.innerHTML = `
                 <div style="text-align: center; padding: 2rem; color: #dc2626;">
                     <span style="font-size: 1.5rem;">❌</span>
-                    <p>Error: ${escapeHtml(data.error)}</p>
+                    <p>Error: ${escapeHtml(adminErrorText(data))}</p>
                 </div>
             `;
             return;
@@ -2258,7 +2238,7 @@ function addPublisher(event) {
         submitBtn.textContent = 'Add Publisher';
 
         if (data.error) {
-            alert('Error: ' + data.error);
+            alert('Error: ' + adminErrorText(data));
             return;
         }
 
@@ -2290,7 +2270,7 @@ function deletePublisher(partnerId, domain) {
     .then(response => response.json())
     .then(data => {
         if (data.error) {
-            alert('Error: ' + data.error);
+            alert('Error: ' + adminErrorText(data));
             return;
         }
 
@@ -2319,7 +2299,7 @@ function syncAllPublishers() {
         icon.style.animation = '';
 
         if (data.error) {
-            alert('Error: ' + data.error);
+            alert('Error: ' + adminErrorText(data));
             return;
         }
 

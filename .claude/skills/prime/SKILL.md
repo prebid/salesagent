@@ -52,8 +52,12 @@ Resolve the pin, do not assume it:
 
 ```bash
 grep -n 'adcp==' pyproject.toml
-grep -n 'targets AdCP spec' docs/adcp-spec-version.md
+uv run python -c "import adcp; print(adcp.get_adcp_spec_version())"
 ```
+
+Those two commands are the only sources. No document states either number, so
+there is no prose to grep — `docs/adcp-spec-version.md` explains the pin, it does
+not restate it.
 
 Then read the spec at that version — the worktree at `~/projects/adcp` is
 usually checked out somewhere else, so always go through `git show`:

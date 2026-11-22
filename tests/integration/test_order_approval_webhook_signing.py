@@ -36,12 +36,11 @@ The two tests grade two distinct defects through the same outbound request:
    produce IDENTICAL bytes and an ASCII test proves nothing. The signing core
    serializes with the default ``ensure_ascii=True``, so only a payload carrying a
    NON-ASCII value distinguishes "signed the dict" from "sent the signed bytes".
-   That is what the accented/CJK advertiser name below is for — it is what makes
-   the byte-identity assertion able to fail, not decoration. (The success payload
-   has no free-text field: ``message`` is the constant "Order approved
-   successfully". The ad server's own rejection text is the one place a
-   buyer-visible non-ASCII string enters this payload, which is why test 2 drives
-   the FAILURE path.)
+   That is what the accented/CJK order id below is for — it is what makes the
+   byte-identity assertion able to fail, not decoration. The ad server's own
+   rejection text no longer reaches the buyer (``message`` is fixed text and a log
+   reference), so the non-ASCII value travels in ``order_id``; test 2 drives the
+   FAILURE path and also asserts the rejection text stays out of the payload.
 
 Test 2 also covers a THIRD defect this reproduction uncovered, since fixed:
 ``_mark_approval_failed`` committed inside ``with get_db_session()`` — which
@@ -105,9 +104,12 @@ _WEBHOOK_URL = "https://buyer.example.com/adcp/order-approval"
 #: accepted rather than refused and no sender can decline to sign on strength grounds.
 _SECRET = "order-approval-shared-secret-0123456789abcd"
 
-#: The advertiser name GAM quotes back in its rejection. Non-ASCII on purpose:
-#: it is what gives the byte-identity assertion its power (see module docstring).
+#: The advertiser name GAM quotes back in its rejection, which must not reach the buyer.
 _ADVERTISER = "Grüße Tōkyō Medien"
+
+#: The rejected order's id. Non-ASCII on purpose: it is what gives the byte-identity
+#: assertion its power (see module docstring).
+_NON_ASCII_ORDER_ID = "gam_order_rejected_Grüße_東京"
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +270,9 @@ class TestOrderApprovalWebhookAuthentication:
         """The POSTed bytes are the signed bytes, for a payload with non-ASCII text.
 
         The ad server rejects the order quoting the advertiser's own name; that
-        name reaches the buyer in ``message``. With a non-ASCII value present,
+        text stays in the server log, and the buyer gets fixed text in ``message``.
+        The order id is non-ASCII and reaches the buyer in ``order_id``. With a
+        non-ASCII value present,
         "sign the dict, POST ``json=``" and "POST the signed bytes" diverge —
         which is precisely what the receiver-side verification detects.
 
@@ -284,16 +288,17 @@ class TestOrderApprovalWebhookAuthentication:
             env.get_session()
 
             request = _deliver_order_approval_notification(
-                order_id="gam_order_rejected_98t2",
+                order_id=_NON_ASCII_ORDER_ID,
                 approve_raises=gam_rejection,
             )
 
         payload = json.loads(request.content)
         assert payload["status"] == "failed"
-        # Fidelity: the advertiser name survives the round trip intact...
-        assert _ADVERTISER in payload["message"], f"advertiser name mangled in transit: {payload['message']!r}"
-        # ...and non-vacuity: the payload really does carry non-ASCII, which is
-        # what makes the byte-identity assertion below able to fail.
-        assert any(ord(char) > 127 for char in payload["message"])
+        # The ad server's text is not the buyer's to read.
+        assert str(gam_rejection) not in request.content.decode(), f"GAM's text reached the buyer: {payload!r}"
+        # Fidelity: the order id survives the round trip intact, and it is non-ASCII,
+        # which is what makes the byte-identity assertion below able to fail.
+        assert payload["order_id"] == _NON_ASCII_ORDER_ID, f"order id mangled in transit: {payload!r}"
+        assert any(ord(char) > 127 for char in payload["order_id"])
 
         _assert_signature_covers_the_bytes_sent(request)

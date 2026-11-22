@@ -21,6 +21,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_ROOT = REPO_ROOT / "src"
 SANCTIONED = SCAN_ROOT / "core" / "validation_helpers.py"
@@ -75,9 +77,9 @@ def test_no_handrolled_validation_boundary_in_src():
     for path in sorted(SCAN_ROOT.rglob("*.py")):
         if path == SANCTIONED:
             continue
-        tree = ast.parse(path.read_text(), filename=str(path))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for offender in find_handrolled_boundaries(tree):
-            violations.append(f"{path.relative_to(REPO_ROOT)}: {offender}")
+            violations.append(f"{rel(path, REPO_ROOT)}: {offender}")
     assert not violations, (
         "Hand-rolled ValidationError translation. Let the ValidationError PROPAGATE: every "
         "transport boundary converts it through the one adcp_error_for mapping, which is "

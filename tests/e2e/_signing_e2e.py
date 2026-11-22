@@ -12,9 +12,11 @@ exactly ONE home:
   same green.
 * **The tenant seam** — :func:`provisioned_trust_root_tenant`, which owns the
   ``virtual_host`` routing state the whole e2e session shares.
-* **The hop-1 seed** — :func:`seeded_capabilities_factory`, needed because the
-  SDK's capabilities hop raw-GETs the agent URL (SDK divergence #4, see
-  ``test_trust_root_e2e``).
+* **The hop-1 seed** — :func:`seeded_capabilities_factory`, which keeps a module
+  that grades the PUBLISHED DOCUMENTS from also grading the capabilities builder
+  (see ``test_trust_root_e2e``). It no longer exists to route around the SDK: the
+  capabilities hop used to raw-GET the agent URL and now invokes the tool over
+  MCP, so the seed speaks MCP too.
 * **Production-path key provisioning** — :func:`provision_signing_key_via_admin`,
   which drives the real admin route over real HTTP so the row is minted under
   the SERVER CONTAINER's KEK rather than the test runner's.
@@ -38,8 +40,8 @@ from urllib.parse import urljoin
 
 import httpx
 import pytest
-from sqlalchemy import delete
 
+from src.core.http_utils import hostname_of
 from tests.e2e.conftest import e2e_ca_bundle, e2e_tls_base_url
 from tests.e2e.utils import _LiveDBEnv, live_db_env, live_repo_session
 from tests.helpers.admin_session import authenticate_http_session, drop_stated_session_cookie
@@ -91,6 +93,48 @@ def tls_base_url(live_server: dict) -> str:
     )
     assert url.startswith("https://"), f"the TLS base URL must be an https origin; got {url!r}"
     return url.rstrip("/")
+
+
+#: The seller hostname a SPEC-CONFORMANT verifier can resolve us by, under the
+#: generated leaf's ``*.adcp-e2e.dev`` wildcard SAN.
+#:
+#: ``proxy.adcp.test`` — the name every other TLS test dials — cannot be walked,
+#: and the reason is normative rather than a stack limitation. security.mdx step 3
+#: (Origin binding): "The agent URL ``A``'s host eTLD+1 MUST equal the
+#: ``brand_json_url``'s host eTLD+1. eTLD+1 computation MUST use a pinned, dated
+#: Public Suffix List snapshot". ``.test`` is not in the PSL, so
+#: ``registrable_domain`` is ``None`` on BOTH sides and equality never holds; the
+#: documented fallback is an ``authorized_operators[]`` entry, which only a House
+#: Portfolio document carries and no seller's brand.json does. A conformant
+#: verifier therefore MUST answer ``request_signature_brand_origin_mismatch`` for
+#: a ``.test`` seller, and ``adcp.signing.agent_resolver`` does exactly that with
+#: no development-domain opt-in (``async_resolve_agent`` takes no
+#: ``allow_development_domains``; only ``brand_authz`` has one).
+#:
+#: This is the SAME conclusion ``COUNTERPARTY_HOSTNAME`` reached for the inbound
+#: direction (``tests/unit/test_architecture_e2e_counterparty_origin_wiring.py``),
+#: measured in-network there. The alias is additive: ``proxy.adcp.test`` keeps its
+#: route, and this name reaches the same upstream.
+SELLER_ETLD1_HOST = "seller.adcp-e2e.dev"
+
+
+def seller_etld1_base_url(live_server: dict) -> str:
+    """The seller origin a conformant resolver can walk: :data:`SELLER_ETLD1_HOST`.
+
+    Derived from :func:`tls_base_url` by swapping the host and KEEPING the port,
+    rather than read from a variable of its own: it is one more SNI alias on the one
+    TLS front, so it answers at exactly the port that front already serves. A second
+    env var would be a second thing to keep in step with the port allocator.
+
+    IN-NETWORK ONLY. The alias is a compose network alias, so it resolves inside the
+    stack's network and nowhere else — the host path has no name with a registrable
+    domain pointing at the loopback listener, and cannot be given one offline.
+    """
+    from urllib.parse import urlsplit, urlunsplit
+
+    front = urlsplit(tls_base_url(live_server))
+    port = f":{front.port}" if front.port else ""
+    return urlunsplit(("https", f"{SELLER_ETLD1_HOST}{port}", "", "", ""))
 
 
 def ca_bundle() -> str:
@@ -227,6 +271,9 @@ def seeded_capabilities_factory(body: dict):
     ``async_resolve_agent`` calls ``factory(agent_url)`` and uses the result as an
     async context manager, so an ``httpx.AsyncClient`` over a ``MockTransport`` is
     a drop-in — no monkeypatching of the SDK.
+
+    Hop 1 is an MCP ``tools/call``, and the transport underneath answers it as one;
+    *body* is what the tool returns. See ``json_seeded_client_factory``.
     """
 
     return json_seeded_client_factory(body)
@@ -270,26 +317,7 @@ def free_host(live_server: dict, host: str) -> None:
 def drop_tenant(live_server: dict, tenant_id: str) -> None:
     """Remove a test tenant and EVERY row that hangs off it, from the shared e2e database.
 
-    Children go first, explicitly: the ORM ``backref`` relationships carry no
-    delete cascade, so an ORM ``session.delete(tenant)`` tries to NULL a child's
-    ``tenant_id`` — which is half of its composite primary key. The FK's
-    ``ON DELETE CASCADE`` only applies to a database-level delete.
-
-    And the deployed schema does not have the cascade the models claim. ``AuditLog``
-    was already in this list for that reason; the same gap covers three more tables:
-    ``initial_schema.py`` created ``principals``, ``products``, ``media_buys`` and
-    ``audit_logs`` with a plain ``tenant_id`` FK, and no later migration ever added
-    ``ON DELETE CASCADE`` — while ``models.py`` declares it on all four today. That
-    model/migration drift is a real, pre-existing bug (out of scope to fix here), and
-    reading the model metadata instead of the migrations is what would make this
-    teardown silently incomplete. ``adapter_config``, ``property_tags``,
-    ``pricing_options`` and ``contexts`` DO carry a real cascade in their creating
-    migrations; they are deleted anyway, because an explicit delete of an
-    already-cascaded row is a harmless no-op and depending on which half of a known
-    drift is true is not.
-
-    ``ObjectWorkflowMapping`` and ``WorkflowStep`` have no ``tenant_id`` at all, so
-    they are reached through ``contexts``.
+    The rows and their order are :func:`tests.utils.database_helpers.delete_tenant_rows`.
 
     A failure here must SURFACE. A tenant row that survives teardown keeps its
     ``virtual_host`` — session-global routing state that ``get_tenant_by_virtual_host``
@@ -297,60 +325,11 @@ def drop_tenant(live_server: dict, tenant_id: str) -> None:
     module's incomplete list into every later module's tenant resolving to the wrong
     row.
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import (
-        AdapterConfig,
-        AuditLog,
-        AuthorizedProperty,
-        Context,
-        Creative,
-        CreativeAssignment,
-        MediaBuy,
-        MediaPackage,
-        ObjectWorkflowMapping,
-        Principal,
-        Product,
-        PropertyTag,
-        PushNotificationConfig,
-        SigningKey,
-        Tenant,
-        WebhookDeliveryLog,
-        WorkflowStep,
-    )
+    from tests.utils.database_helpers import delete_tenant_rows
 
     with live_db_env(live_server) as env:
         session = env.get_session()
-        context_ids = select(Context.context_id).where(Context.tenant_id == tenant_id)
-        step_ids = select(WorkflowStep.step_id).where(WorkflowStep.context_id.in_(context_ids))
-        session.execute(delete(ObjectWorkflowMapping).where(ObjectWorkflowMapping.step_id.in_(step_ids)))
-        session.execute(delete(WorkflowStep).where(WorkflowStep.context_id.in_(context_ids)))
-        # ``media_packages`` has no tenant_id and its FK to media_buys carries no cascade,
-        # so a created media buy is unreachable from the tenant-scoped deletes below.
-        media_buy_ids = select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == tenant_id)
-        session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id.in_(media_buy_ids)))
-        # ``PricingOption`` is deliberately NOT deleted directly: the
-        # ``prevent_empty_pricing_options`` trigger REFUSES to remove a product's last
-        # pricing option while that product still exists, and explicitly allows the same
-        # row to go via the product's cascade. The composite FK's ``ON DELETE CASCADE``
-        # (migration c3b75d304773) is real, so deleting ``Product`` takes it.
-        for model in (
-            Context,
-            CreativeAssignment,
-            WebhookDeliveryLog,
-            Creative,
-            PushNotificationConfig,
-            MediaBuy,
-            Product,
-            Principal,
-            PropertyTag,
-            AdapterConfig,
-            SigningKey,
-            AuthorizedProperty,
-            AuditLog,
-            Tenant,
-        ):
-            session.execute(delete(model).where(model.tenant_id == tenant_id))
+        delete_tenant_rows(session, tenant_id)
         session.commit()
 
 
@@ -384,9 +363,8 @@ def _seed_buying_surface(env: Any, tenant: Any, *, access_token: str) -> None:
     USD one through its ``currency_usd`` ``RelatedFactory``, and a second insert would
     collide rather than help.
 
-    ``PropertyTagFactory``'s ``tag_id`` is a ``Sequence`` (``tag_0001``), while
-    ``ProductFactory.property_tags`` defaults to ``["all_inventory"]`` — so the id is
-    passed explicitly or the product's tag reference dangles.
+    ``PropertyTagFactory``'s ``tag_id`` is a ``Sequence`` (``tag_0001``), so the
+    tenant's ``all_inventory`` tag is passed explicitly.
 
     The access token is handed IN as a caller-supplied literal rather than read back
     out of the created row — which is now the only way round it can travel, since the row
@@ -411,22 +389,10 @@ def _seed_buying_surface(env: Any, tenant: Any, *, access_token: str) -> None:
     # account it names cannot leave this seeding the old one.
     seed_default_account(tenant.tenant_id, principal.principal_id, account_id=CI_TEST_ACCOUNT["account_id"])
     PropertyTagFactory(tenant=tenant, tag_id="all_inventory")
-    # ``publisher_properties`` is spelled out rather than left to the model's fallback.
-    # The fallback derives ``publisher_domain`` from ``tenant.virtual_host``, which on
-    # this seam carries the stack's PORT — and the AdCP ``Product`` schema types that
-    # field as a bare hostname, so the derived value fails validation and every read of
-    # the product 500s before anything about signing is reached.
-    publisher_domain = (tenant.virtual_host or "").split(":")[0]
-    # ``property_tags`` is cleared in the same breath: ``ck_product_authorization`` is an
-    # XOR across properties / property_ids / property_tags, so the factory's default tag
-    # list and an explicit ``properties`` cannot both stand.
-    product = ProductFactory(
-        tenant=tenant,
-        property_tags=None,
-        properties=[
-            {"publisher_domain": publisher_domain, "property_tags": ["all_inventory"], "selection_type": "by_tag"}
-        ],
-    )
+    # The factory's default selector names its publisher and seeds the verified property
+    # that backs it, so the product is offered: a product naming the tenant's own host would
+    # not be (#1845).
+    product = ProductFactory(tenant=tenant)
     PricingOptionFactory(product=product)
     # Creates the mock AdapterConfig row and pins approval in one call — e2e shares one
     # database and pytest-randomly reorders, so leftover approval state is not something
@@ -498,7 +464,8 @@ def provisioned_trust_root_tenant(
     The row is removed at both ends: ``virtual_host`` is host-routing state
     shared by the whole e2e session.
     """
-    from tests.factories import AuthorizedPropertyFactory, PrincipalFactory, SigningKeyFactory, TenantFactory
+    from tests.factories import PrincipalFactory, SigningKeyFactory, TenantFactory
+    from tests.factories.publisher import authorize_properties
 
     drop_tenant(live_server, tenant_id)
     free_host(live_server, host)
@@ -510,7 +477,10 @@ def provisioned_trust_root_tenant(
                 virtual_host=host,
             )
             key = SigningKeyFactory(tenant=tenant, kid=f"adcp-{slug}-key") if mint_key else None
-            AuthorizedPropertyFactory(tenant=tenant, publisher_domain=host, tags=["premium_news"])
+            # The tenant's own host is a publisher: its stored adagents.json authorizes a property
+            # there. publisher_domain is a hostname (its pattern admits no colon); *host* carries
+            # the port the stack listens on, and the adagents.json lookup drops it.
+            authorize_properties(tenant, hostname_of(host), [("own_home", ("premium_news",))])
             if buyer_access_token is not None:
                 _seed_buying_surface(env, tenant, access_token=buyer_access_token)
             for access_token, agent_url in (counterparty_principals or {}).items():

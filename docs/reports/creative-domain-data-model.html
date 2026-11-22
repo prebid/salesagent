@@ -1,0 +1,206 @@
+<title>Creative Domain Data Model</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --fg: #1a1a18; --muted: #5f5c55; --rule: #e0ddd6;
+    --code-bg: #f3f1ec; --accent: #7a3e12; --bad: #8a2b20; --good: #2d5e3a; --warn: #8a6a14;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17171a; --fg: #e8e6e1; --muted: #a09c93; --rule: #33333a;
+      --code-bg: #1f1f24; --accent: #d79a62; --bad: #e08b7e; --good: #8fc79f; --warn: #d9b65c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17171a; --fg: #e8e6e1; --muted: #a09c93; --rule: #33333a;
+    --code-bg: #1f1f24; --accent: #d79a62; --bad: #e08b7e; --good: #8fc79f; --warn: #d9b65c;
+  }
+  body { background: var(--bg); color: var(--fg); margin: 0;
+         font: 16px/1.65 ui-serif, Georgia, "Times New Roman", serif; }
+  main { max-width: 48rem; margin: 0 auto; padding: 3rem 1.25rem 6rem; }
+  h1 { font-size: 1.95rem; line-height: 1.2; margin: 0 0 .3rem; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: .95rem; margin: 0 0 2.5rem; }
+  h2 { font-size: 1.28rem; margin: 2.9rem 0 .8rem; padding-top: 1.2rem;
+       border-top: 1px solid var(--rule); }
+  h3 { font-size: 1.04rem; margin: 1.9rem 0 .5rem; color: var(--accent); }
+  p { margin: 0 0 1rem; }
+  pre { background: var(--code-bg); border-radius: 4px; padding: .9rem 1rem; overflow-x: auto;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0 0 1.2rem; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 3px;
+         font: .88em ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 0 0 1.3rem; font-size: .92rem; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--rule);
+           vertical-align: top; }
+  th { font-weight: 600; font-size: .82rem; text-transform: uppercase;
+       letter-spacing: .04em; color: var(--muted); }
+  blockquote { margin: 0 0 1.2rem; padding: .2rem 0 .2rem 1rem;
+               border-left: 3px solid var(--rule); color: var(--muted); font-style: italic; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .good { color: var(--good); font-weight: 600; }
+  .warn { color: var(--warn); font-weight: 600; }
+  ol, ul { margin: 0 0 1.2rem; padding-left: 1.4rem; }
+  li { margin-bottom: .5rem; }
+  .note { font-size: .9rem; color: var(--muted); }
+</style>
+
+<main>
+<h1>The creative domain, and the data model it implies</h1>
+<p class="sub">Three layers — what the SDK gives, what the creative domain is, how this app should
+store it. Measured against <code>v9.0.0-beta.1</code> + PRs #1435 and #1415, spec 3.2.1.
+Companion to <em>Creative formats: the spec model, the measured gaps, the design</em>, which
+this does not restate.</p>
+
+<p>The question is how to represent creatives, formats, products and metrics now that the
+creative domain is canonical-first. The short answer: <strong>one identity, stored once,
+keyed on the canonical kind</strong> — and three of the four entities currently store
+something else.</p>
+
+<h2>1. What the SDK gives</h2>
+<p>Three surfaces, and knowing which to sit on is most of the design:</p>
+<table>
+  <thead><tr><th>Surface</th><th>Shape</th><th>Use</th></tr></thead>
+  <tbody>
+    <tr><td><code>adcp.types.domains.*</code> (generated)</td>
+        <td>both arms optional, XOR enforced</td>
+        <td class="good">the 3.x compatibility window — <strong>where this seller belongs</strong></td></tr>
+    <tr><td><code>adcp.types.Legacy*</code> (52 types)</td>
+        <td>identical to generated on identity</td>
+        <td>not a format_id-only surface; no reason to prefer it</td></tr>
+    <tr><td><code>adcp.types.canonical_creative</code></td>
+        <td><code>format_id</code> deleted, <code>format_kind</code> required</td>
+        <td>the 4.0-ready surface; adopting it drops the legacy arm the 3.x window requires</td></tr>
+  </tbody>
+</table>
+
+<h3>The resolution layer already exists</h3>
+<p>This is the single most load-bearing measurement in this document, because the companion
+report's gap G2 reads "no resolution machinery exists at all" — and that is a gap in
+<em>our wiring</em>, not something to build:</p>
+<pre><code>adcp/_schemas/3.2/registries/v1-canonical-mapping.json   the normative v1↔v2 mapping
+load_default_registry()                                  parses it
+resolve_legacy_format_refs(declaration, resolver=...)     "without ever reverse-guessing"
+LegacyFormatConverter · CanonicalFormatLegacyResolver     the projection seam
+is_canonical_format_kind(value, vocabulary)               the vocabulary check</code></pre>
+
+<h3>What the SDK deliberately does not do</h3>
+<p><code>format_kind</code> is an open <code>str</code> on every model, in both directions, and
+the SDK never validates it. From the helper's own docstring:</p>
+<blockquote>“it is a PARAMETER, because the set that matters is the seller's, not this SDK's…
+refusing [a kind defined after the pin] would make this SDK's version a ceiling on what the
+protocol permits. ‘I accept the request and then tell you I cannot process this creative’ is a
+seller's answer, not a type error.”</blockquote>
+<p>So the vocabulary check is this seller's, and <strong>the seller's supported set is a real
+input</strong> — a tenant column or an adapter capability — not the pin's sixteen. Defaulting to
+the pin is a ceiling, and today that default is all we have.</p>
+
+<h2>2. The creative domain</h2>
+<p>One rule governs everything downstream, and it is not a preference:</p>
+<pre><code>v1 -> v2   RESOLVES, through a six-step normative order in v1-canonical-mapping.json
+v2 -> v1   DOES NOT. "SDKs MUST NOT synthesize a v1 format_id from the registry by
+           inverting structural matches" — the registry's slugs lack the agent_url half,
+           and glob/structural entries have no single literal to invert to.</code></pre>
+<p>Because the projection runs one way only, <strong>the canonical kind is the only
+representation every layer can share</strong>. Which fixes the roles:</p>
+<table>
+  <thead><tr><th>Member</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr><td><code>format_kind</code></td><td class="good">THE identity. What business logic keys on, what is compared, what is stored as identity.</td></tr>
+    <tr><td><code>format_id</code></td><td>A <strong>retained buyer assertion</strong>: stored verbatim, echoed on the legacy wire, never the thing logic keys on.</td></tr>
+    <tr><td><code>format_option_ref</code></td><td>Narrows the kind to a concrete option. REQUIRED when the kind alone is ambiguous in the enclosing product context.</td></tr>
+  </tbody>
+</table>
+<p>The consequence worth stating plainly: <strong>the <code>isinstance</code> branch belongs at
+exactly one place</strong> — the edge where an inbound legacy identity is projected to a kind.
+Carrying two co-equal arms inward makes every consumer branch, which is the shape to remove.</p>
+<p class="note">A current implementation detail that contradicts this: <code>creative_format_identity()</code>
+returns a union of two frozen types and the repository branches on it. That was built to the
+"state mirrors input" reading, which the spec supports for the WIRE but not for internal
+representation. The accessor stays; what it returns should be a kind plus a retained assertion.</p>
+
+<h2>3. The data model this implies</h2>
+
+<h3>Creatives</h3>
+<p>Today one identity is spread across three partial columns and reassembled on read:</p>
+<pre><code>agent_url          String(500)   the legacy arm's first half
+format             String(100)   its second half
+format_parameters  JSON          FormatId's OTHER FOUR declared fields, as a loose blob
+format_kind        String(100)   added this session
+format_option_ref  JSON          added this session</code></pre>
+<p>That is three representations of one value, and the reassembly is where
+<code>pixel_ratio</code> was being dropped — the blob did not know which fields the model
+needed. The faithful shape is the domain's:</p>
+<pre><code>format_kind        the identity          NOT NULL once backfilled
+format_option_ref  JSON, nullable        the option that narrows it
+legacy_format_id   JSON, nullable        the retained buyer assertion, ONE faithful value
+                                         (agent_url + id + all declared parameters)</code></pre>
+<p><code>agent_url</code>, <code>format</code> and <code>format_parameters</code> collapse into
+<code>legacy_format_id</code>. A <code>FormatId</code> goes in and comes back out; nothing is
+decomposed, so nothing can be dropped on reassembly. Request → persistence model → DB → logic →
+response flows with no scaffolding, which is the whole point.</p>
+
+<h3>Formats</h3>
+<p>A format is not a row this seller owns — it is a declaration fetched from a creative agent and
+cached. What matters for the data model is the one field we ignore:
+<code>Format.reported_metrics: list[AvailableMetric]</code>.</p>
+
+<h3>Products</h3>
+<pre><code>core/product.json                     "Products MUST carry format_ids, format_options, or BOTH"
+                                      (root anyOf, plus canonical_formats_only)
+core/product-format-declaration.json  format_kind + params REQUIRED
+                                      format_option_id, v1_format_ref[], format_shape,
+                                      format_schema, canonical_formats_only</code></pre>
+<p><code>format_options</code> has <strong>zero references in <code>src/</code></strong>, so this
+seller carries only the deprecated half of a <code>MUST … or BOTH</code>. And
+<code>v1_format_ref[]</code> is the field that makes the one-way rule workable: a canonical
+declaration <em>states</em> its legacy refs, so serving a legacy peer is a lookup, never a
+synthesis.</p>
+
+<h3>Metrics</h3>
+<p>The least examined and the simplest to state:</p>
+<pre><code>pin:  AvailableMetric — a CLOSED 49-member vocabulary
+      (impressions, spend, clicks, ctr, views, completed_views, completion_rate,
+       conversions, conversion_value, commissionable_value, roas, cost_per_acquisition, …)
+      and Format.reported_metrics declares which of them a format reports
+
+app:  AvailableMetric      0 references
+      reported_metrics     0 references
+      "impressions"       41 files</code></pre>
+<p>So the seller has no notion of the vocabulary at all: it hardcodes one metric name across
+forty-one files and never asks a format which metrics it reports. Metrics belong to the format
+declaration, and what a package can be reported on is derivable from the formats it carries —
+not from a name repeated in the code.</p>
+
+<h2>4. The flow, once the above holds</h2>
+<pre><code>REQUEST    either arm accepted (3.x window)
+   ↓       edge: project legacy -> kind via the SDK resolver; retain the assertion verbatim
+DOMAIN     one identity: format_kind (+ option ref). No isinstance branching.
+   ↓
+DB         faithful: format_kind, format_option_ref, legacy_format_id
+   ↓
+RESPONSE   canonical by default; the retained assertion echoed to a legacy peer</code></pre>
+
+<h2>5. Sequencing</h2>
+<ol>
+  <li><strong>Wire the SDK's resolver at the edge.</strong> Nothing else is correct until a legacy
+      identity can become a kind, and no new code is needed for it.</li>
+  <li><strong>Collapse the creative identity columns</strong> to the three faithful ones. Structure
+      only; the backfill of <code>format_kind</code> for existing rows is separate and may be
+      impossible where an agent publishes no canonical declaration — that case needs a decision,
+      not a default.</li>
+  <li><strong>Make logic key on the kind</strong> and delete the branching the current union
+      forces.</li>
+  <li><strong>Products: add <code>format_options[]</code></strong>, which is also what makes
+      <code>format_option_ref</code>'s ambiguity rule checkable.</li>
+  <li><strong>Metrics: adopt the vocabulary</strong> and read <code>reported_metrics</code> off the
+      format instead of assuming impressions.</li>
+  <li><strong>Only then decide the SDK release question.</strong> A forked release is viable — a
+      wheel built from the integrated tree carries the schema bundle (measured: 2,973
+      <code>_schemas</code> entries) where a pushed branch does not, because
+      <code>src/adcp/_schemas/</code> is gitignored and generated. But if steps 1–5 surface more
+      SDK gaps, cutting a release first is premature.</li>
+</ol>
+<p class="note">Steps 2 and 3 invalidate part of what landed this session: the migration added
+<code>format_kind</code> beside the three partial legacy columns rather than collapsing them, and
+the identity accessor returns a two-arm union the design says to remove. The BDD work is correct
+to 3.2.1 and stays.</p>
+</main>

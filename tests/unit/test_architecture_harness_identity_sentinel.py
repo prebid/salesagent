@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import repo_root, safe_parse
+from tests.unit._architecture_helpers import rel, repo_root, safe_parse
 
 SCAN_DIRS = ("tests/harness", "tests/helpers")
 CANONICAL_FILE = "tests/harness/transport.py"
@@ -69,15 +69,15 @@ def _scan(repo: Path) -> dict[str, list[str]]:
         if not directory.exists():
             continue
         for path in sorted(directory.rglob("*.py")):
-            rel = str(path.relative_to(repo))
-            if rel == CANONICAL_FILE:
+            rel_path = rel(path, repo)
+            if rel_path == CANONICAL_FILE:
                 continue
             tree = safe_parse(path)
             if tree is None:
                 continue
             names = _find_identity_sentinel_assignments(tree)
             if names:
-                offenders[rel] = names
+                offenders[rel_path] = names
     return offenders
 
 

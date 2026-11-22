@@ -33,7 +33,7 @@ import pytest
 from src.adapters.base import AdapterCreateResult
 from src.core.database.database_session import get_db_session, get_engine
 from src.core.database.models import MediaPackage as DBMediaPackage
-from tests.helpers.gam_client import gam_line_item, stub_gam_client_manager
+from tests.helpers.gam_client import build_gam_adapter, gam_line_item, stub_gam_client_manager
 from tests.helpers.media_buy_approval import run_approval
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -49,7 +49,6 @@ def pending_media_buy_with_package(integration_db):
         AccountFactory,
         AgentAccountAccessFactory,
         MediaBuyFactory,
-        MediaPackageFactory,
         PricingOptionFactory,
         PrincipalFactory,
         ProductFactory,
@@ -110,24 +109,15 @@ def pending_media_buy_with_package(integration_db):
                 "brand": {"domain": "testbrand.com"},
                 "start_time": start.isoformat(),
                 "end_time": end.isoformat(),
+                # MediaBuyFactory writes each named package's row, as the pending writer does.
                 "packages": [
                     {
+                        "package_id": "pkg_001",
                         "product_id": "guaranteed_display",
-                        "pricing_option_id": "po_1",
+                        "pricing_option_id": "cpm_usd_fixed",
                         "budget": 5000.0,
                     }
                 ],
-            },
-        )
-
-        MediaPackageFactory(
-            media_buy=mb,
-            package_id="pkg_001",
-            package_config={
-                "product_id": "guaranteed_display",
-                "name": "Guaranteed Display Ads",
-                "budget": 5000.0,
-                "pricing_model": "cpm",
             },
         )
 
@@ -152,7 +142,6 @@ def pending_media_buy_with_two_packages(integration_db):
         AccountFactory,
         AgentAccountAccessFactory,
         MediaBuyFactory,
-        MediaPackageFactory,
         PricingOptionFactory,
         PrincipalFactory,
         ProductFactory,
@@ -206,30 +195,22 @@ def pending_media_buy_with_two_packages(integration_db):
                 "brand": {"domain": "testbrand.com"},
                 "start_time": start.isoformat(),
                 "end_time": end.isoformat(),
+                # MediaBuyFactory writes each named package's row, as the pending writer does.
                 "packages": [
                     {
+                        "package_id": "pkg_A",
                         "product_id": "guaranteed_display",
-                        "pricing_option_id": "po_1",
+                        "pricing_option_id": "cpm_usd_fixed",
                         "budget": 3000.0,
                     },
                     {
+                        "package_id": "pkg_B",
                         "product_id": "guaranteed_display",
-                        "pricing_option_id": "po_1",
+                        "pricing_option_id": "cpm_usd_fixed",
                         "budget": 2000.0,
                     },
                 ],
             },
-        )
-
-        MediaPackageFactory(
-            media_buy=mb,
-            package_id="pkg_A",
-            package_config={"product_id": "guaranteed_display", "name": "Package A", "budget": 3000.0},
-        )
-        MediaPackageFactory(
-            media_buy=mb,
-            package_id="pkg_B",
-            package_config={"product_id": "guaranteed_display", "name": "Package B", "budget": 2000.0},
         )
 
         yield {
@@ -476,36 +457,12 @@ class TestExecuteApprovedEnrichesSellerConcept:
     def _produce_gam_status(self, gam_order_id: str, creative_id: str, tenant_id: str):
         """Emit the AssetStatus the REAL dry-run GAM producer returns for a pushed
         creative — so a change to the GAM concept keys/values reddens this test too."""
-        from src.adapters.google_ad_manager import GoogleAdManager
-        from src.core.schemas import Principal
-
-        # The SCHEMA Principal, which carries no token at all — ``with_token`` is a
-        # classmethod on the ORM ``Principal`` row, not on this model.
-        gam_principal = Principal(
-            principal_id="test_principal",
-            name="Test Principal",
-            platform_mappings={"google_ad_manager": {"advertiser_id": "123"}},
-        )
-        config = {
-            "network_code": "123456",
-            "service_account_key_file": "/path/to/key.json",
-            "trafficker_id": "trafficker_123",
-        }
         # The adapter reaches GAM on construction, so the client manager is a stand-in
-        # serving the one line item this order has. ``_init_client``, which this used to
-        # patch, is a legacy delegate the constructor no longer calls.
-        with patch("src.adapters.google_ad_manager.GAMClientManager") as client_manager:
-            client_manager.return_value = stub_gam_client_manager(
-                line_items=[gam_line_item("test_package", sizes=((970, 250),))]
-            )
-            gam = GoogleAdManager(
-                config=config,
-                principal=gam_principal,
-                network_code=config["network_code"],
-                advertiser_id="123",
-                trafficker_id=config["trafficker_id"],
-                tenant_id=tenant_id,
-            )
+        # serving the one line item this order has.
+        gam = build_gam_adapter(
+            stub_gam_client_manager(line_items=[gam_line_item("test_package", sizes=((970, 250),))]),
+            tenant_id=tenant_id,
+        )
         # The order's line item accepts the asset's 970x250 (read off its format), so the
         # producer's size-vs-placeholder check passes. This asset only drives the producer
         # to emit the concept-bearing status — it is independent of the DB package the
@@ -516,7 +473,7 @@ class TestExecuteApprovedEnrichesSellerConcept:
             "format": "display_970x250",
             "media_url": "https://example.com/creative.html",
             "click_url": "https://example.com/landing",
-            "package_assignments": ["test_package"],
+            "package_assignments": [{"package_id": "test_package", "weight": 100, "platform_line_item_id": "1001"}],
         }
         with patch.object(gam, "_validate_creative_for_gam", return_value=[]):
             statuses = gam.add_creative_assets(gam_order_id, [gam_asset], datetime.now(UTC))
@@ -575,7 +532,7 @@ class TestExecuteApprovedEnrichesSellerConcept:
             result = run_approval(media_buy_id, tenant_id)
 
         assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
-        mock_adapter.push_creative_assets.assert_called_once_with(gam_order_id, ANY, ANY)
+        mock_adapter.push_creative_assets.assert_called_once_with(gam_order_id, ANY, ANY, native_template_ids=None)
 
         # (3) The concept is PERSISTED to the creative's data blob (the Finding 1 fix —
         # without the writeback wiring, these keys are absent).
@@ -587,8 +544,9 @@ class TestExecuteApprovedEnrichesSellerConcept:
             assert creative.data.get("concept_id") == expected_concept
             assert creative.data.get("concept_name") == f"GAM Order {gam_order_id}"
             assert creative.data.get("concept_source") == "gam_order"
-            # The platform_creative_id half is filled on the same path.
-            assert creative.data.get("platform_creative_id") == creative_id
+            # The platform_creative_id half is filled on the same path, with the id GAM
+            # returned from createCreatives (stub_gam_client_manager numbers them from 9000001).
+            assert creative.data.get("ad_server_creative_id") == "9000001"
             # Fill-only-when-absent preserved the pre-existing assets blob.
             assert creative.data.get("assets") is not None
 
@@ -600,3 +558,46 @@ class TestExecuteApprovedEnrichesSellerConcept:
             assert creative_id in returned, (
                 f"list_creatives concept_ids filter did not return the enriched creative; got {returned!r}"
             )
+
+
+class TestExecuteApprovedBookedOrderNativeTemplates:
+    """A buy create already booked (#1690) is pushed on an adapter that never placed its order."""
+
+    def test_booked_order_push_carries_the_products_native_template(self, pending_media_buy_with_approved_creative):
+        """The approval hands the push the native creative template the buy's product names (GH #1516).
+
+        The adapter instance that booked the order kept its template map; the approval runs
+        later on a fresh one, so the map is re-derived from the products, keyed by package.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import Product as DBProduct
+        from tests.factories import MediaBuyFactory
+
+        fixture = pending_media_buy_with_approved_creative
+        # Booked at create: the package carries the order, and its product names the template.
+        session = MediaBuyFactory._meta.sqlalchemy_session
+        package = session.scalars(select(DBMediaPackage).filter_by(media_buy_id=fixture["media_buy_id"])).one()
+        package.package_config = {**package.package_config, "platform_order_id": "777"}
+        product = session.scalars(
+            select(DBProduct).filter_by(tenant_id=fixture["tenant_id"], product_id="guaranteed_display")
+        ).one()
+        product.implementation_config = {"native_style_id": 987654}
+        session.commit()
+
+        mock_adapter = MagicMock()
+        mock_adapter.push_creative_assets.return_value = []
+        mock_adapter.orders_manager.approve_order.return_value = True
+        asset = {"creative_id": fixture["creative_id"], "package_assignments": []}
+        with (
+            patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
+            patch("src.core.tools.media_buy_create._build_adapter_asset_from_creative", return_value=(asset, None)),
+            patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
+        ):
+            result = run_approval(fixture["media_buy_id"], fixture["tenant_id"])
+
+        assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
+        mock_adapter.create_media_buy.assert_not_called()
+        mock_adapter.push_creative_assets.assert_called_once_with(
+            "777", [asset], ANY, native_template_ids={fixture["package_id"]: "987654"}
+        )

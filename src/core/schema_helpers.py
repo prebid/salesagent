@@ -13,14 +13,6 @@ Philosophy:
 import logging
 from typing import Any
 
-# FIXME(#1388): GetProductsResponse, Product have local subclasses; import from src.core.schemas.
-from adcp import CreativeFilters, GetProductsResponse, Product
-
-# FIXME(#1388): ProductFilters has a local subclass; import from src.core.schemas.
-from adcp.types import (
-    BrandReference,
-    ReportingWebhook,
-)
 from pydantic import BaseModel
 
 from src.core.schemas.notification import PushNotificationConfig
@@ -119,17 +111,18 @@ def require_push_notification_config(
     return coerced
 
 
-# Re-export commonly used generated types for convenience
+# ``GetProductsRequest`` is the one re-export left, because it has an importer
+# (tests/unit/test_mcp_tool_imports.py). Every other name that stood here is GONE rather
+# than re-pointed, and for the same reason: nothing imported it from this module.
+# ``CreativeFilters``, ``GetProductsResponse`` and ``Product`` were also the SDK parent
+# bound to the bare name src.core.schemas uses for its local subclass, so a caller
+# reaching them here got the library model without the local validators (#1388);
+# ``BrandReference`` and ``ReportingWebhook`` were only dead. Anything that needs one of
+# them imports it from where it lives.
 
 
 __all__ = [
     "require_push_notification_config",
     "to_push_notification_config",
-    # Re-export types for type hints
-    "BrandReference",
-    "CreativeFilters",
     "GetProductsRequest",
-    "GetProductsResponse",
-    "Product",
-    "ReportingWebhook",
 ]

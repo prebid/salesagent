@@ -11,7 +11,7 @@ silently, both of which produce a vacuous pass rather than a failure:
   (``:443``, ``/./``, ``%2F``, ``[2001:db8::1]``) is quietly normalised away.
 
 Both are guarded here, in ``tests/unit`` (pure data, no app, no DB), so they fail at
-``make quality`` rather than inside a 40-case integration run.
+``make quality`` rather than inside the full integration run.
 """
 
 from __future__ import annotations

@@ -1,0 +1,981 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adversarial review: SDK codegen design analysis</title>
+<style>
+  :root {
+    --ink: #1a1e24; --muted: #5b6470; --bg: #ffffff; --panel: #f6f7f9;
+    --line: #d9dde3; --accent: #0b5fa5; --good: #1a7f4b; --bad: #b3362c;
+    --warn: #9a6700; --code-bg: #f0f2f5;
+  }
+  body { background: var(--bg); color: var(--ink); font: 16px/1.55 Georgia, 'Times New Roman', serif;
+         max-width: 56rem; margin: 2rem auto 6rem; padding: 0 1.5rem; }
+  h1 { font-size: 1.7rem; line-height: 1.25; border-bottom: 2px solid var(--ink); padding-bottom: .5rem; }
+  h2 { font-size: 1.25rem; margin-top: 2.6rem; border-bottom: 1px solid var(--line); padding-bottom: .3rem; }
+  h3 { font-size: 1.05rem; margin-top: 1.8rem; }
+  h4 { font-size: .97rem; margin-top: 1.4rem; }
+  p, li { max-width: 52rem; }
+  code, pre { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: .85em; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 3px; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px;
+        padding: .8rem 1rem; overflow-x: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; }
+  th, td { border: 1px solid var(--line); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--panel); font-family: system-ui, sans-serif; font-size: .82rem; }
+  .verdict { font-family: system-ui, sans-serif; font-weight: 600; font-size: .78rem;
+             padding: .1em .5em; border-radius: 10px; white-space: nowrap; }
+  .holds { background: #e2f3e9; color: var(--good); }
+  .breaks { background: #fbe4e1; color: var(--bad); }
+  .partial { background: #fdf0d5; color: var(--warn); }
+  .tag { font-family: system-ui, sans-serif; font-size: .7rem; font-weight: 700; letter-spacing: .04em;
+         padding: .08em .4em; border-radius: 3px; border: 1px solid var(--line); background: var(--panel);
+         color: var(--muted); white-space: nowrap; }
+  .box { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent);
+         border-radius: 6px; padding: .9rem 1.1rem; margin: 1.2rem 0; }
+  .box.rec { border-left-color: var(--good); }
+  .box.counter { border-left-color: var(--bad); }
+  .box.fail { border-left-color: var(--bad); background: #fdf3f1; }
+  .meta { color: var(--muted); font-family: system-ui, sans-serif; font-size: .85rem; }
+  div.scroll { overflow-x: auto; }
+  a { color: var(--accent); }
+  ol.q > li { margin-bottom: .5rem; }
+</style>
+</head>
+<body>
+
+<h1>Adversarial review: &ldquo;Where the generator loses the schema, and where to stop it&rdquo;</h1>
+
+<p class="meta">
+Review of <code>docs/audits/sdk-codegen-design.html</code> at <code>610219f44</code>
+(branch <code>docs/sdk-codegen-design</code>), read in full before any measurement.
+Every measurement below was taken in a fresh clone of
+<code>adcontextprotocol/adcp-client-python</code> at <code>0c7e8b86d</code>
+(<code>origin/main</code> head at review time; <code>9.0.0b2</code>, bundle
+<code>schemas/cache/3.2</code>, 1,625 schema files), in a sibling directory
+<code>sa-sdk-review-clone</code>, in an isolated virtualenv
+(<code>pydantic 2.13.5</code>, <code>jsonschema 4.26.0</code>, CPython 3.12.9), 2026-10-10.
+<br>
+<span class="tag">EXECUTION</span> means I ran it in that tree and the output is quoted.
+<span class="tag">READING</span> means I read source, issue text or git history and did not run it.
+Nothing below is inferred from the design document's own figures, and nothing is relayed from a
+sibling lane without independent measurement &mdash; where a lane reported a number, I re-derived
+it and say so.
+</p>
+
+<h2>Verdict</h2>
+
+<div class="box fail">
+<p><strong>FAIL.</strong> The design's recommendation defers the structural fix. Its own text names
+the permanent mechanism, argues it is legal, and then schedules it as a fallback contingent on a
+signal that I measured cannot fire. That is the pattern it exists to stop.</p>
+<p>The diagnosis is sound and better-grounded than most of what it reviews. The recommendation is
+not, and the reasons are measurements rather than preferences:</p>
+<ul>
+<li>Option A's structural part covers only shapes that are <em>not</em> in its residue set. The twelve
+models that are broken today stay broken by permission.</li>
+<li>Its behavioral guarantee does not execute. An existing predicate in the conformance suite
+classifies the entire #1414 divergence class as already-declared, so the suite stays green. It is
+green right now, over 41,667 documents, with the defect live.</li>
+<li>Three of the four objections it raises against the permanent mechanism are refuted by code
+already shipped in this repository.</li>
+<li>The deferral's trigger &mdash; &ldquo;if the residue set grows across the next two spec
+bumps&rdquo; &mdash; is unobservable for the same reason as the second point.</li>
+<li>One of the supports for deferring does not exist: the containment the triage lane reported
+(<code>revalidate_instances="subclass-instances"</code>) is absent from main, was added and then
+removed on branches that never merged, and the pass-through it was said to close is live.</li>
+</ul>
+<p>An unconstructible design does exist. It is one change with two parts, specified in &sect;1,
+and it dissolves all four issues plus the two defects the sibling lanes found, because all six are
+consequences of one arrangement.</p>
+<p><strong>Amended after writing</strong> (&sect;1.3): the dropped arm conditions turn out to be
+cheaply expressible in ordinary pydantic logic, so #1414 can be closed without schema delegation.
+That narrows Part A from &ldquo;the only possible fix&rdquo; to &ldquo;the only fix that makes the
+class unconstructible,&rdquo; and it strengthens the FAIL &mdash; the residue set's justification
+was that these conditions are hard, and they are not.</p>
+</div>
+
+<h2>1. Is there a design that makes this class of defect unconstructible?</h2>
+
+<p>
+Yes. Finding it requires asking what is common to the six observed defects rather than what fixes
+each, so this section starts there.
+</p>
+
+<h3>1.1 The arrangement that produces all six</h3>
+
+<p>The SDK holds three artifacts in a specific relationship:</p>
+
+<ol>
+<li>the bundled JSON Schema, which <code>docs/validation-contract.md</code> declares the authority;</li>
+<li>a generated pydantic tree, produced by a pinned generator plus a <strong>7,522-line
+post-processor that writes behavior into generated Python source</strong>
+(<span class="tag">EXECUTION</span> <code>wc -l scripts/post_generate_fixes.py</code> &rarr; 7522);</li>
+<li>a 1,173-line hand-written canonical layer that <strong>inherits from (2)</strong> in order to
+receive what the post-processor wrote.</li>
+</ol>
+
+<p>
+<span class="tag">READING</span> <code>CanonicalBoundaryModel</code>'s docstring
+(<code>canonical_creative.py:491</code>) states the dependency in the first sentence:
+</p>
+
+<blockquote>
+<p>&ldquo;Every canonical model is a real subclass of the generated wire model it refines, so each
+one inherits the generated model's fields, <strong>its injected
+<code>model_validator</code>s</strong>, and its envelope ancestry.&rdquo;</p>
+</blockquote>
+
+<p>
+Every one of the six defects follows from &ldquo;behavior is delivered as source injected into a
+generated class.&rdquo; Delivering a rule as source means expressing it in Python; what cannot be
+expressed is dropped. Receiving a rule means inheriting, which means subtyping.
+</p>
+
+<div class="scroll">
+<table>
+<tr><th>Defect</th><th>What it is</th><th>Why the arrangement causes it</th></tr>
+<tr>
+<td><strong>#1414</strong></td>
+<td>Root <code>anyOf</code> branch conditions reduced to a presence check over <code>required</code></td>
+<td>A schema keyword has to be transcribed into a Python expression, and nothing requires the transcription to be complete. The extractor reads one key per arm and drops the rest silently. See the amendment in &sect;1.3: the dropped conditions turn out to be cheaply expressible, which changes why this happens but not that it can happen again.</td>
+</tr>
+<tr>
+<td><strong>#1409</strong></td>
+<td>Union arms named <code>f"{base}{index}"</code></td>
+<td>Identity has nowhere to live in emitted source except the name, and the name is assigned by position because the generator orders arms and the post-processor renames from a 22-row table.</td>
+</tr>
+<tr>
+<td><strong>#1397</strong>, and 11 more</td>
+<td>A tolerant canonical model <code>isinstance</code>-passes as a strict wire model while missing one of its fields</td>
+<td>The canonical layer must inherit to receive the injection, and inheritance forces a subtype it explicitly does not want &mdash; <code>_DeliveryCreativeManifest</code>'s own docstring says it is &ldquo;deliberately not a subtype of the strict input.&rdquo;</td>
+</tr>
+<tr>
+<td><strong>5 dropped constraints</strong></td>
+<td><code>min_length</code>/<code>max_length</code> on the generated field vanish on the canonical redeclaration</td>
+<td>A canonical field is a <em>redeclaration of an inherited field</em>, and <code>Field(...)</code> starts from nothing. Without the inheritance there is no inherited constraint to lose.</td>
+</tr>
+<tr>
+<td><strong>The field-deletion hack</strong></td>
+<td><code>del cls.model_fields[name]; setattr(cls, name, None)</code> in <code>__pydantic_init_subclass__</code></td>
+<td>It exists only to undo an inheritance the layer was forced to take. It also makes the Liskov violation silent rather than loud &mdash; see &sect;3.2.</td>
+</tr>
+<tr>
+<td><strong>#1362</strong> (fixed)</td>
+<td>A pointer into a structural position got an invented wrapper type</td>
+<td>Same family, and the fix that worked (#1371) is the one that <em>eliminated</em> the construction rather than validating it afterwards. That is the precedent for what works here.</td>
+</tr>
+</table>
+</div>
+
+<p>
+#1362 is the control case. It was the only one of the four closed by a merged fix, and the design
+notices why: &ldquo;it is neither a validator nor a guard: it classifies the pointer and eliminates
+the wrapper before generation, so the wrong type is never constructed.&rdquo; The design identifies
+the shape of fix that holds in this repository and then does not apply it to #1414.
+</p>
+
+<h3>1.2 The design</h3>
+
+<div class="box rec">
+<p><strong>Part A &mdash; Rules are evaluated from the schema, never transcribed into source.</strong>
+A model that corresponds to a schema node carries that node's <em>identity</em> as a class constant
+(tool + direction, or bundle + pointer). One <code>@model_validator(mode="after")</code>, written
+once in <code>src/adcp/types/base.py</code>, evaluates the node's composition keywords against the
+document through <code>adcp.validation.schema_loader</code>. The post-processor's job for
+composition rules becomes writing one constant &mdash; a copy, not a derivation.</p>
+<p><strong>Part B &mdash; The canonical layer is generated from the same schema minus a declared
+omission set, not hand-written as a subclass of the wire model.</strong> It declares the same schema
+identity and its own fields. It receives the same rules by naming the same schema, not by inheriting
+a method.</p>
+<p>They are one change with an order: B is only possible once A holds, because inheritance is
+currently the <em>only</em> delivery route for the injected rules.</p>
+</div>
+
+<h4>What becomes unconstructible, and what does not</h4>
+
+<table>
+<tr><th>Defect class</th><th>After A+B</th><th>By what</th></tr>
+<tr>
+<td>An emitted rule weaker than its schema keyword</td>
+<td><span class="verdict holds">UNCONSTRUCTIBLE</span></td>
+<td>There is no emitted rule. The keyword is evaluated where it is written. Nothing transcribes, so nothing can transcribe partially &mdash; and there is no remainder, so no residue set and no third hand-maintained allowlist.</td>
+</tr>
+<tr>
+<td>A tolerant model that <code>isinstance</code>-passes as a strict one</td>
+<td><span class="verdict holds">UNCONSTRUCTIBLE</span></td>
+<td>The lattice stops claiming it. Enforced by the type system, not by a pydantic config that has to be remembered &mdash; which is #1397's &ldquo;honest lattice&rdquo; direction, and the cost that direction had ("the inheritance that currently carries every injected validator would need another route") is paid by Part A, which IS the other route.</td>
+</tr>
+<tr>
+<td>A redeclaration silently dropping an inherited constraint</td>
+<td><span class="verdict holds">UNCONSTRUCTIBLE</span></td>
+<td>No inheritance from the wire model, so no inherited constraint exists to drop. The five sites stop being redeclarations and become first declarations, generated.</td>
+</tr>
+<tr>
+<td>A positional name whose meaning can move</td>
+<td><span class="verdict holds">UNCONSTRUCTIBLE</span></td>
+<td>Independent of A+B: the design's Option D is already structurally correct as written. <code>union_arm_names.py</code> derives the name from <code>title</code>, discriminator <code>const</code>, or <code>required</code> set, and raises <code>UnnameableArmError</code> otherwise. Derived-or-refused cannot be positional. It only needs wiring.</td>
+</tr>
+<tr>
+<td>A canonical field declared weaker than its schema at the field level</td>
+<td><span class="verdict partial">DETECTED, not prevented &mdash; unless B generates the fields</span></td>
+<td>This is the honest limit. If the canonical layer stays hand-written, A catches a field-level narrowing loss at validate time but does not prevent it. Generating the layer from the schema with a declared omission set is what closes it, and is why B says "generated", not "hand-written but careful".</td>
+</tr>
+</table>
+
+<p>
+The one-line test of whether this is structural or corrective: after A, ask &ldquo;what would a
+future spec version have to contain for the projection to drop it silently?&rdquo; There is no
+answer, because there is no projection. After Option A as the design recommends it, the answer is
+&ldquo;any arm condition whose shape is not <code>not.required</code> or a sibling
+<code>const</code>&rdquo; &mdash; and a human decides whether it goes in the residue or fails the
+build.
+</p>
+
+<h4>Precedent: Part A is already shipped in this repository</h4>
+
+<p>
+<span class="tag">READING</span> <code>src/adcp/types/versioned.py:353</code>,
+<code>_VersionedExtensionModel._validate_schema_document</code> &mdash; on a field-based pydantic
+model built by <code>create_model</code>:
+</p>
+
+<pre><code>def _protocol_payload(self) -> dict[str, Any]:
+    return BaseModel.model_dump(self, mode="json", by_alias=True, exclude_unset=True)
+
+@model_validator(mode="after")
+def _validate_schema_document(self) -> _VersionedExtensionModel:
+    validator = get_validator(self.schema_tool_name, self.schema_direction,
+                              version=self.schema_version)
+    ...
+    issues = sorted(validator.iter_errors(self._protocol_payload()),
+                    key=lambda error: list(error.path))
+    if issues:
+        issue = issues[0]
+        path = ".".join(str(part) for part in issue.absolute_path) or "&lt;root&gt;"
+        raise ValueError(f"{path}: {issue.message}")
+    return self</code></pre>
+
+<p>
+The class carries its schema identity as <code>ClassVar</code>s
+(<code>schema_tool_name</code>, <code>schema_direction</code>, <code>schema_version</code>,
+<code>schema_document</code>); one validator evaluates it; the jsonschema error is rendered as
+<code>path: message</code> and raised as a <code>ValueError</code> that pydantic wraps into an
+ordinary field-level <code>ValidationError</code>. Part A is this mechanism, applied to the pinned
+tree instead of the negotiated-version tree.
+</p>
+
+<p>
+The honest limit on the precedent: <code>VersionedSchemaModel</code>'s docstring scopes it &mdash;
+&ldquo;intended for boundary validation and schema generation, not as a base class for
+adopter-defined models.&rdquo; So it does not authorize Part A by itself. It does remove three of
+the four objections the design gave for ruling it out (&sect;4).
+</p>
+
+<h3>1.3 Amendment: the dropped conditions are expressible, which narrows Part A's premise</h3>
+
+<p class="meta">
+Added after the sections above were written, on a measurement reported by a sibling lane and not
+re-derived by me &mdash; marked accordingly.
+</p>
+
+<p>
+A subsequent experiment hand-patched <code>CreateMediaBuyRequest</code> with every dropped arm
+condition written out as ordinary pydantic boolean logic. Reported result: nine parity cases green,
+and the cost within noise of the baseline (+0.9&micro;s / &minus;0.7&micro;s against my 64&micro;s
+figure for schema evaluation). I did not re-run it.
+</p>
+
+<p>
+If that holds, my reasoning above overstated one thing. I wrote that <code>not</code>,
+<code>const</code> and nested <code>allOf</code> &ldquo;have no cheap transcription&rdquo; and that
+&ldquo;transcription is lossy by construction.&rdquo; That is wrong as stated for this schema: the
+conditions were transcribable, cheaply. The accurate claim is narrower and still holds &mdash;
+<strong>nothing forces a transcription to be complete</strong>. The extractor reads one key per arm
+because that is what it was written to read; the loss is a choice, not a ceiling.
+</p>
+
+<p>What this changes, and what it does not:</p>
+
+<ul>
+<li><strong>Part A is no longer needed to fix this bug.</strong> If the twelve models' conditions can
+be expressed at no cost, express them. The defect closes without schema delegation, and the cost
+objection in &sect;2 stops applying to the fix at all.</li>
+<li><strong>Part A remains the only thing that makes the class unconstructible.</strong> A
+hand-expressed boolean is complete today and silently incomplete the next time a spec version adds
+a keyword shape nobody transcribes &mdash; which is the same failure, one bump later, and the
+reason &sect;6.1 matters regardless. So Part A becomes a question about the class rather than about
+this bug, and the user may reasonably decide the class is worth less than the cost.</li>
+<li><strong>The FAIL verdict stands, and gets stronger.</strong> The design's recommendation was a
+residue set re-admitting the twelve present defects. If those conditions are expressible at
+negligible cost, a ledger that tolerates them has no remaining justification &mdash; the argument
+for the residue rested on the conditions being hard, and they are not.</li>
+<li><strong>Part B and the ordering constraint are untouched.</strong> They rest on the canonical
+layer's inheritance being the delivery route for injected validators (&sect;3), which this
+measurement does not bear on. The ordering constraint survives in a modified form: Part B still
+needs <em>some</em> route other than inheritance, and a hand-expressed boolean on the generated
+class is still delivered by inheritance. So Part B still cannot precede a change to how rules
+reach the canonical layer.</li>
+</ul>
+
+<p>
+Honest note on how this correction arose: it was found by someone trying the cheap thing I had
+argued past. My claim about expressibility was an inference from the extractor's docstring
+(&ldquo;those narrow an arm further&rdquo;) and the design's framing, not a measurement &mdash; and
+it is the one load in this review I asserted without running anything.
+</p>
+
+<h2>2. The cost objection, measured</h2>
+
+<p>
+The design's stated reason for deferring was &ldquo;schema evaluation on every construction.&rdquo;
+<span class="tag">EXECUTION</span> <code>create_media_buy</code>, 500 iterations each, steady state
+(the jsonschema validator is built once and reused, as any implementation would).
+&ldquo;Big doc&rdquo; is <code>tests/conformance/_schema_parity.py</code>'s synthesized maximal
+request: 102 leaves, 3,085 bytes, valid under both validators. &ldquo;Minimal doc&rdquo; is #1414's
+six-key reproduction.
+</p>
+
+<div class="scroll">
+<table>
+<tr><th>Operation</th><th>&micro;s/call</th><th>Note</th></tr>
+<tr><td><code>CreateMediaBuyRequest.model_validate(big_doc)</code></td><td style="text-align:right">102.4</td><td>baseline</td></tr>
+<tr><td><code>CreateMediaBuyRequest.model_validate(minimal_doc)</code></td><td style="text-align:right">9.0</td><td>baseline</td></tr>
+<tr><td>root <code>anyOf</code>-only subschema <code>is_valid(big_doc)</code></td><td style="text-align:right">64.1</td><td>Part A, scoped, from a document</td></tr>
+<tr><td>root <code>anyOf</code>-only subschema <code>is_valid(minimal_doc)</code></td><td style="text-align:right">69.1</td><td>same; the cost is in the arms, not the document</td></tr>
+<tr><td><code>model_dump(mode="json", by_alias, exclude_unset)</code></td><td style="text-align:right">168.1</td><td>the <code>_protocol_payload()</code> step, needed only for keyword construction</td></tr>
+<tr><td>FULL bundled schema <code>is_valid(big_doc)</code></td><td style="text-align:right">548.4</td><td>what <code>serve()</code> / <code>create_mcp_server()</code> / <code>create_a2a_server()</code> run per call by default</td></tr>
+</table>
+</div>
+
+<p>
+<span class="tag">EXECUTION</span> correctness at that scope: the <code>anyOf</code>-only subschema
+accepts the valid synthesized payload and refuses #1414's document. 3 arms, 3 root
+<code>allOf</code> items.
+</p>
+
+<p>Four readings, because they do not all point the same way:</p>
+
+<ul>
+<li><strong>The cost is real and does not amortize.</strong> 64&ndash;69&micro;s regardless of
+document size. On a six-key request that pydantic validates in 9&micro;s, that is a
+<strong>7.6&times;</strong> slowdown. This is the one objection in the design I could not refute.</li>
+<li><strong>It is 12% of a cost most adopters already pay.</strong>
+<code>docs/validation-contract.md</code> says the three public server factories default to strict
+canonical validation on both sides, which is the 548&micro;s row.</li>
+<li><strong>The expensive half is the dump, not the check.</strong> Keyword construction is
+168 + 64 = 232&micro;s; <code>model_validate</code>-from-document is 64&micro;s because the document
+already exists.</li>
+<li><strong>It does not justify the deferral.</strong> A deferral trades a known defect for a
+measured cost; it needs the cost to be unacceptable, and 64&micro;s against a 548&micro;s per-call
+baseline that the same document mandates is not an argument the design made &mdash; it used an
+adjective.</li>
+</ul>
+
+<p>
+Unexplored lever, stated as unmeasured: a compiled validator
+(<code>fastjsonschema</code>-style codegen) over the arms-only subschema would plausibly cut the
+64&micro;s substantially. Not installed in this tree, so I did not measure it, and it is a new
+dependency.
+</p>
+
+<h2>3. Why does a hand-written canonical layer subclass generated models at all?</h2>
+
+<p>
+<span class="verdict breaks">Because validator injection has no other delivery mechanism. That is
+the whole reason, it is stated in the code, and it is the same root cause as #1414.</span>
+</p>
+
+<h3>3.1 The stated reason, and what it costs</h3>
+
+<p>
+<span class="tag">READING</span> The arrangement is
+<code>class Canonical(GeneratedWireModel, CanonicalBoundaryModel)</code>, with
+<code>CanonicalBoundaryModel</code> listed last so its <code>model_config</code> wins. Its
+docstring gives the purpose: inherit &ldquo;the generated model's fields, its injected
+<code>model_validator</code>s, and its envelope ancestry,&rdquo; and notes that two concerns
+&ldquo;used to be re-attached per class by <code>create_model</code>&rdquo; and are now inherited
+instead. The repo's refusals section confirms the history from the other side: &ldquo;When an
+injected validator failed to reach the public canonical models, the fix was to delete the runtime
+copies so inheritance carries it.&rdquo;
+</p>
+
+<p>
+So the subclassing is not an independent modelling decision anyone made about creatives. It is the
+delivery mechanism for post-processor output. The layer wants the <em>rules</em> and is obliged to
+take the <em>type relationship</em> to get them.
+</p>
+
+<p>
+And it does not want that relationship. <span class="tag">READING</span>
+<code>_DeliveryCreativeManifest</code>'s own docstring says it is &ldquo;deliberately not a subtype
+of the strict input&rdquo; while being exactly that subtype. Then
+<code>__pydantic_init_subclass__</code> deletes the unwanted inherited fields from
+<code>model_fields</code> and binds each name as a class attribute holding <code>None</code> &mdash;
+necessary, per its own docstring, because an inherited injected validator
+(<code>_validate_format_reference_xor</code>) reads the removed field and raised
+<code>AttributeError</code> when it was merely deleted. A hack that exists to repair an inheritance
+taken to receive a rule, which is three mechanisms deep into working around the first one.
+</p>
+
+<h3>3.2 The consequence is wider than #1397 states, and quieter</h3>
+
+<p>
+<span class="tag">EXECUTION</span> enumerating every canonical class against its generated base on
+main: <strong>12 canonical classes drop a parent field while remaining subtypes</strong>, not the
+one #1397 names.
+</p>
+
+<pre><code>Creative              &lt;- Creative         drops ['format_id']
+CreativeAsset         &lt;- CreativeAsset    drops ['format_id']
+CreativeManifest      &lt;- CreativeManifest drops ['format_id']
+DeliveryCreative      &lt;- Creative         drops ['format_id']
+_DeliveryCreativeManifest &lt;- CreativeManifest drops ['format_id']
+CreativeFilters       &lt;- CreativeFilters  drops ['format_ids']
+PackageRequest        &lt;- PackageRequest    drops ['format_ids']
+Placement             &lt;- Placement        drops ['format_ids']
+Product               &lt;- Product          drops ['format_ids']
+ProductFilters        &lt;- ProductFilters   drops ['format_ids']
+Package               &lt;- Package          drops ['format_ids','format_ids_pending','format_ids_to_provide']
+MediaBuyPackage       &lt;- Package          drops ['format_ids','format_ids_pending','format_ids_to_provide']
+</code></pre>
+
+<p>
+And the <code>setattr(cls, name, None)</code> half makes it worse than a Liskov violation that
+crashes. <span class="tag">EXECUTION</span>:
+</p>
+
+<pre><code>'format_ids' in Canon.model_fields: False
+inst.format_ids -&gt; None</code></pre>
+
+<p>
+A function annotated for the strict model reads the field it was promised and receives
+<code>None</code> &mdash; indistinguishable from &ldquo;the buyer sent no format_ids.&rdquo; The
+failure is a silent wrong value, not an <code>AttributeError</code>. #1397 describes the type
+lattice being dishonest; the runtime is dishonest in the same direction and more quietly.
+</p>
+
+<h3>3.3 The five dropped constraints, measured independently</h3>
+
+<p>
+A sibling lane reported five canonical redeclarations losing a generated constraint. I did not
+relay it &mdash; <span class="tag">EXECUTION</span>, walking every canonical field that is
+redeclared over a generated base and diffing the pydantic metadata:
+</p>
+
+<pre><code>canonical redeclarations that LOST a base constraint: 5
+  CreateMediaBuyRequest.packages   lost={'min_length': 1}   kept=-
+  PackageRequest.creatives         lost={'max_length': 100} kept={'min_length': 1}
+  PackageUpdate.creatives          lost={'max_length': 100} kept={'min_length': 1}
+  SyncCreativesRequest.creatives   lost={'max_length': 100} kept={'min_length': 1}
+  UpdateMediaBuyRequest.packages   lost={'min_length': 1}   kept=-</code></pre>
+
+<p>Same count, same shape, independently derived. The consequence, <span class="tag">EXECUTION</span>:</p>
+
+<pre><code>canonical   ACCEPTS packages=[]
+generated   refuses: too_short
+bundled schema refuses packages=[]</code></pre>
+
+<p>
+The canonical layer &mdash; which <code>canonical_creative.py</code>'s module docstring calls
+&ldquo;the primary application-facing models&rdquo; &mdash; is the <strong>weakest of the three
+validators the SDK ships</strong>, on a constraint it inherited and silently discarded. That is the
+same defect as #1414 (an emitted rule weaker than its schema) in a second location, reached by a
+second mechanism, which is what makes it evidence about the arrangement rather than about either
+site.
+</p>
+
+<p>
+I agree with the ruling that this must be fixed by re-applying dropped base constraints
+derivably rather than by restating five values. It is worth naming what that shows: at this one
+site the derived form existed and was cheaper than the corrective form. That is the same
+availability the design declined to use for #1414.
+</p>
+
+<h3>3.4 So: is the arrangement right?</h3>
+
+<p>
+No, and the reason is not aesthetic. The layer takes a type relationship it documents as unwanted,
+in order to obtain rules, and then spends three mechanisms undoing the relationship's side effects
+&mdash; field deletion, attribute rebinding, and (on the unmerged branches) a
+<code>revalidate_instances</code> config. Each of those is a place a future defect lands. Part B
+removes the reason to take the relationship, which removes all three mechanisms rather than
+hardening them.
+</p>
+
+<p>
+One sub-question I am explicitly not re-opening, per the instruction and because I independently
+confirm the finding: deriving the canonical/legacy split from the schema's <code>deprecated</code>
+markers fails in both directions, so <code>is_legacy_creative_identity_key</code>
+(<code>canonical_creative.py:317</code>, over the three-key regex at <code>:253</code>) stays the
+single hand-owned selector. <span class="tag">READING</span> the repository's own design text
+already makes it the one predicate shared by the input validator, the schema sanitizer, the
+serializer and the field removal &mdash; so the selector is already single-owner; it is simply not
+keyed on deprecation, and should not be. Part B does not change it: an omission set is what that
+predicate already computes.
+</p>
+
+<h2>4. The containment contradiction, settled</h2>
+
+<p>
+<span class="verdict breaks">The PR lane stands. The containment does not exist on main, and never
+did.</span>
+</p>
+
+<p>
+<span class="tag">EXECUTION</span> on <code>origin/main</code> at <code>0c7e8b86d</code>, freshly
+fetched. <code>revalidate_instances</code> appears three times in the whole tree and not once as a
+configured value:
+</p>
+
+<pre><code>$ git grep -n "revalidate_instances" origin/main -- src/ tests/ scripts/
+origin/main:src/adcp/types/_scalar.py:130:   # ``revalidate_instances="never"``, so a typed value composed into a
+origin/main:tests/test_scalar_roots.py:341:  ``RootModel`` defaulted to ``revalidate_instances="never"``, so composing an</code></pre>
+
+<p>Both are comments about pydantic's <em>default</em>. The history explains where the claim came from:</p>
+
+<table>
+<tr><th>Commit</th><th>Date</th><th>Effect on <code>revalidate_instances</code></th><th>Ancestor of <code>origin/main</code>?</th></tr>
+<tr><td><code>37367fd25</code> &ldquo;stop a tolerant delivery model passing as its strict wire base&rdquo;</td><td>2026-10-04</td><td><strong>ADDED</strong> <code>"subclass-instances"</code> to the wire bases</td><td><span class="verdict breaks">NO</span></td></tr>
+<tr><td><code>3bb00f495</code> &ldquo;make format_kind an open str the SDK never refuses&rdquo;</td><td>2026-10-05</td><td><strong>REMOVED</strong> it</td><td><span class="verdict breaks">NO</span></td></tr>
+</table>
+
+<p>
+So it was added and removed on branches that never merged. <span class="tag">READING</span> and
+this is the point that matters for how the contradiction arose: <strong>#1397's own body asserts the
+containment.</strong> Its &ldquo;Current state&rdquo; section says &ldquo;The strict creative-manifest
+wire bases carry <code>revalidate_instances="subclass-instances"</code>&hellip; That removes the
+observable failure.&rdquo; That sentence was true of the branch the issue was filed from and is
+false of main. The triage lane read the issue; the PR lane measured the tree. Reading an issue body
+as a statement about main is the error, and it is an easy one to make because the issue is recent
+and specific.
+</p>
+
+<p><span class="tag">EXECUTION</span> the consequence, on main:</p>
+
+<pre><code>canonical: adcp.types.canonical_creative.ProductFilters
+wire base: adcp.types.domains.core.product_filters.ProductFilters
+wire fields missing on canonical: ['format_ids']
+revalidate_instances on wire base: None
+
+isinstance(canonical_instance, Wire):                      True
+Wire.model_validate(canonical_instance) is canonical_instance: True
+type of the 'validated' result: ProductFilters
+inst.format_ids -&gt; None</code></pre>
+
+<p>
+Identity pass-through, confirmed. A canonical instance handed to a position typed as the strict
+wire model is returned unchanged and unrevalidated, and reading the promised field yields
+<code>None</code>.
+</p>
+
+<p>
+<strong>What this costs the design.</strong> The deferral loses a support, and it loses it twice
+over. The containment was never in main, so there was nothing holding the line while the permanent
+fix waited; and had it merged, #1397 is explicit that it would be &ldquo;only a pydantic config&rdquo;
+keeping the lattice from being exploitable &mdash; a config that a future
+<code>model_config</code> merge can silently drop, which is the same class of defect one level up.
+Part B makes it unnecessary rather than mandatory.
+</p>
+
+<h2>5. The design's claims: confirmed, broken, unchecked</h2>
+
+<div class="scroll">
+<table>
+<tr><th>Claim</th><th>Verdict</th><th>Evidence</th></tr>
+
+<tr>
+<td>#1414 reproduces on current main</td>
+<td><span class="verdict holds">CONFIRMED</span></td>
+<td><span class="tag">EXECUTION</span> model <code>ACCEPTED</code>; <code>validate_request("create_media_buy", doc).valid == False</code>, issue <code>/ anyOf "anyOf composition failed"</code></td>
+</tr>
+
+<tr>
+<td><code>_root_required_groups</code> discards <code>not</code>, <code>const</code> and nested <code>allOf</code> by documented choice</td>
+<td><span class="verdict holds">CONFIRMED</span></td>
+<td><span class="tag">READING</span> <code>post_generate_fixes.py:7029</code> docstring verbatim; <code>flatten_root_object_validation_union</code> at <code>generate_types.py:899</code> over a hand-listed 8</td>
+</tr>
+
+<tr>
+<td><code>adcp.types</code> already imports <code>adcp.validation</code> in four modules, so delegation is not layering-forbidden</td>
+<td><span class="verdict holds">CONFIRMED &mdash; and understated</span></td>
+<td><span class="tag">EXECUTION</span> 4 modules; three import <code>schema_loader</code>. Delegation is not merely legal, it is <strong>implemented</strong> at <code>versioned.py:267</code> and <code>:353</code></td>
+</tr>
+
+<tr>
+<td>The parity suite's <code>MUTATIONS</code> never removes a field, so the #1414 class is outside its corpus</td>
+<td><span class="verdict holds">CONFIRMED</span></td>
+<td><span class="tag">READING</span> <code>_schema_parity.py:400</code> &mdash; 19 leaf values, no deletion</td>
+</tr>
+
+<tr>
+<td>Closing the corpus hole makes the residue honest, because &ldquo;a divergence with no entry fails the suite&rdquo;</td>
+<td><span class="verdict breaks">BROKEN</span></td>
+<td><span class="tag">EXECUTION</span> <code>parity.classify()</code> returns <code>union_arm_absorbs_a_type_error</code> for a #1414-class divergence. See &sect;6</td>
+</tr>
+
+<tr>
+<td>Option A's residue is &ldquo;exactly the manifest pattern the repo already runs&rdquo;</td>
+<td><span class="verdict breaks">BROKEN</span></td>
+<td><span class="tag">EXECUTION</span> <code>DECLARED</code> is 8 cause <em>predicates</em>; the repo's one instance ledger (<code>validation-model-divergences.json</code>, 3 entries, one tool) is the artifact that missed #1414</td>
+</tr>
+
+<tr>
+<td>Delegation &ldquo;re-litigates #1102&rdquo;</td>
+<td><span class="verdict breaks">BROKEN</span></td>
+<td><span class="tag">READING</span> <code>docs/validation-contract.md</code> (PR #1117, which closed #1102, authored by the repo owner): &ldquo;prefer an additional targeted runtime validator so invalid state fails during ordinary model construction &hellip; they do not change which artifact is the protocol source of truth.&rdquo; <code>create_media_buy</code> is an irreversible commitment with billing semantics</td>
+</tr>
+
+<tr>
+<td>Delegation's failures &ldquo;surface as jsonschema pointer paths, not pydantic field errors&rdquo;</td>
+<td><span class="verdict breaks">BROKEN</span></td>
+<td><span class="tag">READING</span> <code>versioned.py:370</code> renders <code>path: message</code> into a <code>ValueError</code> that pydantic wraps as a field error</td>
+</tr>
+
+<tr>
+<td>Delegation's cost &ldquo;lands on every model construction forever&rdquo;</td>
+<td><span class="verdict partial">CONFIRMED, QUANTIFIED</span></td>
+<td><span class="tag">EXECUTION</span> 64&ndash;69&micro;s steady state: +63% on a 102-leaf document, +764% on a 6-key one, 12% of the 548&micro;s full-schema check adopters already run per call</td>
+</tr>
+
+<tr>
+<td>The containment for #1397 exists (<code>revalidate_instances="subclass-instances"</code>)</td>
+<td><span class="verdict breaks">BROKEN</span></td>
+<td><span class="tag">EXECUTION</span> absent from main; added in <code>37367fd25</code> and removed in <code>3bb00f495</code>, neither an ancestor of <code>origin/main</code>; identity pass-through live. See &sect;4</td>
+</tr>
+
+<tr>
+<td>#1359's 4,604-of-5,995 opposite-direction split, dominated by the bundled validator skipping <code>format: uri</code></td>
+<td><span class="verdict breaks">STALE; THE MECHANISM IS CLOSED</span></td>
+<td>See &sect;6</td>
+</tr>
+
+<tr>
+<td>The grouping breaks at #1359: an aggregate with causes that are not the #1409/#1414 defect</td>
+<td><span class="verdict holds">CONFIRMED on other grounds</span></td>
+<td>The evidence cited is gone; the conclusion survives on the coercion and optional-nullable classes. See &sect;6</td>
+</tr>
+
+<tr>
+<td>Deriving the canonical/legacy split from <code>deprecated</code> markers is wrong (&ldquo;NO for selection&rdquo;)</td>
+<td><span class="verdict holds">CONFIRMED by a sibling lane and not re-opened</span></td>
+<td>Independently reported to fail in both directions: the marker is far wider than legacy identity, and under-removes. The existing three-key predicate is already the single derived owner</td>
+</tr>
+
+<tr>
+<td>38 numeric-suffixed names on the public surface</td>
+<td><span class="verdict partial">39</span></td>
+<td><span class="tag">EXECUTION</span> 39 of 934 in <code>adcp.types.__all__</code>; 1,133 numbered definitions under <code>domains/</code>. <code>type-generation.md</code>'s 38/923/1,037 are stale and unguarded</td>
+</tr>
+
+<tr>
+<td>The #1409 naming rule's figures (557 arms, 1 refused) hold on the current bundle</td>
+<td><span class="verdict partial">NOT CHECKED</span></td>
+<td><code>scripts/union_arm_names.py</code> is absent from <code>0c7e8b86d</code>. <span class="tag">EXECUTION</span> upstream <code>adcp#7913</code> is still <code>OPEN</code>, so the 1 refusal is live</td>
+</tr>
+
+<tr>
+<td>The 282-property deprecation-metadata shortfall; the Option A residue's seed contents</td>
+<td><span class="verdict partial">NOT CHECKED</span></td>
+<td>Declared unverified by the design; neither bears on the verdict</td>
+</tr>
+</table>
+</div>
+
+<h2>6. Two measurements the design's recommendation rests on</h2>
+
+<h3>6.1 The behavioral guarantee does not execute</h3>
+
+<p><span class="tag">EXECUTION</span>:</p>
+
+<pre><code>create_media_buy graded? True
+
+Divergence(tool='create_media_buy', pointer='/packages/0/budget', mutation='&lt;removed&gt;',
+           direction='the model accepts a document the bundled schema refuses',
+           keyword='anyOf', message='anyOf composition failed', schema_path='#/anyOf',
+           error_types=frozenset())
+classify -&gt; union_arm_absorbs_a_type_error</code></pre>
+
+<p>
+<code>DECLARED["union_arm_absorbs_a_type_error"]</code> is
+<code>lambda d: d.direction == MODEL_ACCEPTS and d.keyword in ("oneOf", "anyOf")</code>, and the
+jsonschema keyword that refuses a branch-membership failure <em>is</em> <code>anyOf</code>. So the
+predicate covers every root-composition divergence regardless of cause. Three consequences, and all
+three survive under any option:
+</p>
+
+<ul>
+<li>Adding the field-removal mutations does not surface #1414. The suite stays green.</li>
+<li>No residue set is ever graded behaviorally while that predicate stands.</li>
+<li>The stale-entry test will never retire it, because it keeps matching the real type-absorption
+divergences it was written for &mdash; a correct entry that is also too coarse.</li>
+</ul>
+
+<p>
+The suite's present state is the plainest form of the point.
+<span class="tag">EXECUTION</span>, driving its own grading machinery over every graded tool on
+<code>0c7e8b86d</code>: <strong>41,667 documents compared, 1,744 divergences, zero undeclared</strong>
+&mdash; the suite is green &mdash; while <code>CreateMediaBuyRequest</code> accepts a document its
+own bundled schema refuses. <code>union_arm_absorbs_a_type_error</code> matched 73 of the 1,744.
+</p>
+
+<p>
+This is a finding about the instrument and it is independent of the verdict: <strong>narrowing that
+predicate is worth doing on its own merits, before and regardless of any design decision</strong>,
+because until it discriminates, the parity suite's green is not evidence about root composition.
+</p>
+
+<h3>6.2 #1359's numbers, re-measured</h3>
+
+<p>
+The design lists &ldquo;#1359's residual divergence count on current main&rdquo; as unverified. It
+is a 55-second measurement once the suite exists. <span class="tag">EXECUTION</span>, same method,
+same 72 graded tools:
+</p>
+
+<div class="scroll">
+<table>
+<tr><th></th><th>#1359, at <code>6677169e8</code> (v8.0.0-4)</th><th>Re-measured, <code>0c7e8b86d</code> (9.0.0b2)</th></tr>
+<tr><td>documents compared</td><td style="text-align:right">39,546</td><td style="text-align:right">41,667</td></tr>
+<tr><td>divergences</td><td style="text-align:right">5,995</td><td style="text-align:right"><strong>1,744</strong></td></tr>
+<tr><td>schema accepts, model refuses</td><td style="text-align:right">4,604</td><td style="text-align:right"><strong>5</strong></td></tr>
+<tr><td>model accepts, schema refuses</td><td style="text-align:right">1,391</td><td style="text-align:right">1,739</td></tr>
+<tr><td>divergences matching no declared class</td><td>&mdash;</td><td style="text-align:right">0</td></tr>
+</table>
+</div>
+
+<p>
+The cause is closed. <span class="tag">EXECUTION</span> <code>pyproject.toml:105</code> declares
+<code>rfc3986-validator&gt;=0.1.1,&lt;0.2</code> as a <em>runtime</em> dependency, jsonschema's
+<code>uri</code> check uses it, and the issue's own worked example now has both validators
+refusing:
+</p>
+
+<pre><code>bundled schema valid: False
+model: REFUSED  accounts.0.governance_agents.0.url  Input should be a valid URL, empty host</code></pre>
+
+<p>
+<span class="tag">EXECUTION</span> the population is intact &mdash; 13,176 <code>format: uri</code>
+and 9,044 <code>date-time</code> occurrences across 1,625 bundle files &mdash; so what changed is
+the verdict, not the corpus. The design is accurate about where its number came from; a reader
+would nonetheless conclude the bundled validator still skips <code>format: uri</code>, and it does
+not.
+</p>
+
+<p>
+The design's reason for breaking the grouping at #1359 is therefore gone, and the conclusion
+survives anyway: the remaining 1,739 are <code>optional_field_accepts_explicit_null</code> (946)
+and <code>datetime_field_parses_a_number</code> (689) &mdash; 94% &mdash; and both are carrier-type
+semantics being wider than the schema keyword, not a dropped keyword. #1359 is still an aggregate
+whose dominant causes are not the #1409/#1414 defect.
+</p>
+
+<h2>7. The lineage, which is why deferral is the failure mode here</h2>
+
+<p><span class="tag">READING</span> Three widenings of one projection, datable:</p>
+
+<table>
+<tr><th>#</th><th>Mechanism</th><th>Scope</th><th>Where</th></tr>
+<tr><td>1</td><td><code>_require_portable_bound</code>, written out by hand</td><td>4 <code>MediaBuyChangeTermConstraints</code> classes</td><td><code>enforce_change_term_runtime_constraints</code></td></tr>
+<tr><td>2</td><td><code>enforce_root_required_groups</code>, generalized</td><td>42 classes, <code>required</code> only</td><td>PR #1368, merged 2026-10-04</td></tr>
+<tr><td>3</td><td>exclusions + sibling consts</td><td>12 affected models</td><td>the design's Option A</td></tr>
+</table>
+
+<p>Widening 2 is six days old, and its PR body argues the omission harmless in these words:</p>
+
+<blockquote>
+<p>&ldquo;An arm's <code>not</code> and <code>properties</code> clauses narrow that arm further;
+<strong>omitting them under-enforces and rejects no valid document</strong>, because a document
+satisfying no arm's <code>required</code> set satisfies no arm.&rdquo;</p>
+</blockquote>
+
+<p>
+The sentence proves there are no false rejections and is silent about false acceptances, which is
+#1414, filed two days later. The same reading is in the shipped docstring
+(<code>post_generate_fixes.py:7029</code>) and in the test.
+</p>
+
+<h3>The defect is reproducible inside the fixture of the test meant to grade it</h3>
+
+<p><span class="tag">READING</span> <code>_REQUIRED_GROUP_SCHEMA</code> carries a <code>not</code> on arm 0:</p>
+
+<pre><code>"anyOf": [
+    {"title": "Explicit packages",  "required": ["packages"],
+     "not": {"required": ["proposal_id"]}},
+    {"title": "Committed proposal", "required": ["proposal_id", "total_budget"]},
+]</code></pre>
+
+<p>
+<code>test_root_required_group_validator_enforces_every_declared_group</code> asserts the emitted
+tuple, asserts each group validates, asserts the bare required fields raise, and asserts a partial
+group raises. It never constructs a document violating the <code>not</code>, and its docstring
+states the omission as intended semantics. <span class="tag">EXECUTION</span>, driving the pass
+through that same fixture:
+</p>
+
+<pre><code>$ pytest /tmp/test_probe_1414_fixture.py -q -s
+  Emitted 1 root required-group validator(s)
+schema refuses the doc: True -&gt; {'account': 'acct_1', 'packages': ['pkg_1'],
+    'proposal_id': 'prop_1'} is not valid under any of the given schemas
+MODEL ACCEPTS IT  &lt;-- the #1414 shape, inside #1368's own test fixture
+1 passed</code></pre>
+
+<p>
+A three-field document. The projection, its docstring, its PR text and its test all agree with each
+other and all disagree with the schema. Nothing was missing that a check could have supplied; the
+check, its author and its test shared one reading of what the keyword meant. Widening 3 will be
+written and tested by whoever holds that same reading of the next keyword &mdash; which is the
+argument against scheduling the structural fix behind it, independent of how good widening 3 is.
+</p>
+
+<p>
+Stated fairly against myself: 110 commits have landed since <code>v8.0.0</code> and at least seven
+carry <code>!</code> on <code>codegen</code> or <code>types</code>. These maintainers do land
+structural rewrites. &ldquo;Patches never hold here&rdquo; is too strong as a general claim about
+this repository; it is established for this one mechanism, where the evidence is six days old.
+</p>
+
+<h2>8. Recommendation</h2>
+
+<div class="box rec">
+<p><strong>Reject the recommendation. Delete the projection rather than widen it, and remove the
+canonical layer's reason to subclass.</strong> Both are specified in &sect;1.2. The design's Option D
+for #1409 stands as written and needs no change beyond the corrected count.</p>
+</div>
+
+<p>Landing order, with the reason each step precedes the next:</p>
+
+<ol>
+<li>
+<strong>Narrow <code>DECLARED["union_arm_absorbs_a_type_error"]</code> and fire-probe it red.</strong>
+First, because it is the measurement instrument and it currently returns the wrong answer for the
+defect under discussion. Worth doing whatever is decided about the rest.
+</li>
+<li>
+<strong>Add field-removal mutations to the parity corpus.</strong> With step 1 done this makes the
+whole class visible; without step 1 it changes nothing.
+</li>
+<li>
+<strong>Part A.</strong> <code>enforce_root_required_groups</code> stops deriving anything: it
+writes the model's schema identity as a <code>ClassVar</code>, and one
+<code>@model_validator(mode="after")</code> in <code>base.py</code> evaluates the root composition
+through <code>schema_loader</code>. Delete the extractor, the emitter's tuple rendering, and the
+plan for a residue set. <code>versioned.py</code> is the shape to copy.
+</li>
+<li>
+<strong>Part B.</strong> The canonical layer declares its own fields and the same schema identity
+instead of inheriting the wire model. The 12 field-dropping subtypes stop being subtypes;
+<code>__pydantic_init_subclass__</code>'s deletion-and-rebinding is deleted; the five dropped
+constraints become first declarations generated from the schema; <code>revalidate_instances</code>
+is not needed in any branch.
+</li>
+<li>
+<strong>Option D</strong>, wiring the existing naming rule, with 39 renames behind the deprecation
+shim that <code>adcp.types.__getattr__</code> already implements for one name.
+</li>
+</ol>
+
+<p>
+Steps 1&ndash;2 are independent and small. Step 3 is the fix. Step 4 is the larger piece and is the
+one a maintainer may reasonably stage &mdash; but staging step 4 after step 3 is not deferring a
+structural fix, because step 3 is what makes step 4 possible and step 3 alone closes #1414.
+</p>
+
+<div class="box counter">
+<p><strong>The strongest argument against this recommendation.</strong></p>
+<p>
+Part B undoes an inheritance that landed six days ago. #1392 deleted the derived <code>.pyi</code>
+and made canonical models real subclasses precisely so injected validators would reach them, and
+that fixed a live defect. Proposing to remove the inheritance immediately afterwards asks the
+maintainers to reverse a recent, deliberate, correctness-motivated decision &mdash; and the repo's
+own refusals section warns against exactly this shape of churn (&ldquo;this entry exists so it is
+not proposed a third time&rdquo;).
+</p>
+<p>
+My answer, and I think it holds: Part A removes the <em>need</em> for #1392's fix rather than
+reversing it. #1392 solved &ldquo;injected validators do not reach the canonical models&rdquo;; under
+Part A there are no injected validators to reach. But this is a sequencing argument, and if Part A
+is not taken, Part B is a regression and should not be done on its own.
+</p>
+<p>
+The cost objection also stands on its own: 64&ndash;69&micro;s does not amortize, is a 7.6&times;
+slowdown on small-document validation, and cannot be turned off with
+<code>ValidationHookConfig</code> because it lives inside the model. The maintainer who put
+<code>defer_build=True</code> on <code>AdCPBaseModel</code> to control model cost manages that
+dimension actively. A sharper form: carrying the arms means carrying their <code>$ref</code> graph,
+so Part A resolves to &ldquo;read the bundled schema at validation time&rdquo; &mdash; which makes
+model correctness depend on the shipped bundle's layout, where the projection did not.
+</p>
+<p>
+If the cost objection is taken, the fallback is <em>not</em> the design as written. It is steps
+1&ndash;2 plus a refusal with no residue: generation fails on any arm condition the projection
+cannot express, and the twelve affected schemas are fixed upstream or the build stays red. That is
+detection plus a hard stop, which is weaker than Part A and honest about being weaker. The design's
+version &mdash; a residue set that re-admits the twelve, graded by a suite that cannot see them
+&mdash; is the one shape I would not accept.
+</p>
+</div>
+
+<h2>9. What a reviewer cannot settle</h2>
+
+<table>
+<tr><th>Question</th><th>Why it is not a reviewer's call</th><th>Who decides</th></tr>
+<tr>
+<td>Whether 64&micro;s per <code>model_validate</code> (232&micro;s on the keyword path) is an acceptable product cost</td>
+<td>It is a cost on every adopter, and the maintainers manage this dimension deliberately. I can measure it; I cannot price it.</td>
+<td>SDK maintainer</td>
+</tr>
+<tr>
+<td>Whether Part B is worth reversing #1392's inheritance so soon after it landed</td>
+<td>It is a judgment about churn tolerance and about how much of <code>canonical_creative.py</code>'s 1,173 hand-written lines can become generated. The technical case is in &sect;3; the appetite is not mine.</td>
+<td>SDK maintainer</td>
+</tr>
+<tr>
+<td>Whether <code>validation-contract.md</code>'s &ldquo;targeted runtime validator&rdquo; paragraph was meant to extend from hand-written <code>x-adcp-validation</code> checks to generic schema delegation</td>
+<td>The text covers &ldquo;irreversible commitments &hellip; and billing semantics&rdquo; and a media buy is both. Whether the author intended that reach is their intent, not the document's grammar.</td>
+<td>The author of PR #1117</td>
+</tr>
+<tr>
+<td>Demote the unnameable arm off the flat surface, or wait for upstream <code>adcp#7913</code></td>
+<td><code>type-generation.md</code> says the house answer is the upstream title change; #7913 is open. Trading delay for a surface demotion is release timing.</td>
+<td>SDK maintainer, with the spec editor</td>
+</tr>
+<tr>
+<td>Whether 39 public renames ship in 9.0 final</td>
+<td>Realistic &mdash; the shim exists (<code>GeoPostalArea</code> &rarr; <code>PostalArea2</code>), the path-alias precedent exists with a removal-major test, <code>MIGRATION_v8_to_v9.md</code> is 39 lines, and <code>adcp migrate v3-to-v4 --apply</code> is a shipped codemod. Desirability depends on adopter inventory the maintainer has (#1360's &ldquo;110 imports in ONE production seller&rdquo; is the deciding kind of number).</td>
+<td>SDK maintainer</td>
+</tr>
+<tr>
+<td>Whether the other seven <code>DECLARED</code> predicates are similarly too coarse</td>
+<td>I found one by probing the defect at hand and did not audit the rest. That is a measurement someone should take before treating the parity suite's green as evidence about anything.</td>
+<td>A finding, not a decision &mdash; whoever owns the conformance suite</td>
+</tr>
+</table>
+
+<h2>10. Scope and limits</h2>
+
+<ul>
+<li>No production code written. The probes
+(<code>/tmp/probe_declared.py</code>, <code>/tmp/test_probe_1414_fixture.py</code>,
+<code>/tmp/resweep.py</code>) and the benchmarks are throwaway scripts outside the repository; the
+clone at <code>0c7e8b86d</code> is unmodified.</li>
+<li>No PR opened, no issue commented on, nothing published.</li>
+<li>Figures labelled <span class="tag">EXECUTION</span> come from the clone and virtualenv named at
+the top and nowhere else. A figure measured in a different environment is a figure about that
+environment &mdash; which is how the #1359 <code>format: uri</code> claim came to be stale, and the
+same caution applies to mine.</li>
+<li>Two numbers reported by sibling lanes were re-derived here independently before use (the five
+dropped constraints, the <code>revalidate_instances</code> absence). One was accepted without
+re-derivation and is marked as such (the <code>deprecated</code>-marker derivation failing in both
+directions), because the conclusion it supports &mdash; keep the existing hand-owned predicate
+&mdash; is the one this review was told not to re-open and does not rest on the count.</li>
+<li>The 9.0 beta is moving fast: seven breaking <code>codegen</code>/<code>types</code> commits in
+the current series, three of the four originating issues changed status between filing and the
+design, and two commits central to &sect;4 live on branches that never merged. Re-check
+<code>0c7e8b86d</code> against <code>origin/main</code> before acting on any line number here.</li>
+</ul>
+
+</body>
+</html>

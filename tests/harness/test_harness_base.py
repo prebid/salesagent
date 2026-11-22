@@ -401,21 +401,32 @@ class TestEnvMethodNamingConsistency:
             "exception instead. Dispatch by tool name through _run_mcp_client."
         )
 
-    def test_creative_sync_env_has_set_run_async_result(self):
-        """CreativeSyncEnv uses set_run_async_result, not set_registry_formats.
+    def test_creative_sync_env_has_set_served_catalogue(self):
+        """CreativeSyncEnv uses set_served_catalogue, not set_registry_formats.
 
-        set_registry_formats patches registry.list_all_formats (CreativeFormatsEnv).
-        CreativeSyncEnv patches run_async.side_effect, which is a different mechanic.
-        Using the same name is a trap for new Env authors.
+        Both seed a real peer creative agent through the one shared mechanism
+        (PeerCreativeAgentMixin.seed_own_creative_agent), but they promise different
+        identities: set_registry_formats (CreativeFormatsEnv) serves each format_id
+        verbatim, and set_served_catalogue re-homes each at the peer's URL so a sync
+        resolves the creative by dialling that peer (env.seeded_format_ids()). Sharing
+        the name would hide that difference from new Env authors.
+
+        (``set_run_async_result`` was the previous name here. It configured the sync
+        BRIDGE rather than the registry, so ``get_format`` never saw what it set — see
+        CreativeSyncEnv.set_served_catalogue.)
         """
         from tests.harness.creative_sync import CreativeSyncEnv
 
-        assert hasattr(CreativeSyncEnv, "set_run_async_result"), (
-            "CreativeSyncEnv should have set_run_async_result (not set_registry_formats)"
+        assert hasattr(CreativeSyncEnv, "set_served_catalogue"), (
+            "CreativeSyncEnv should have set_served_catalogue (not set_registry_formats)"
         )
         assert not hasattr(CreativeSyncEnv, "set_registry_formats"), (
             "CreativeSyncEnv should NOT have set_registry_formats — "
             "that name belongs to CreativeFormatsEnv (different mechanic)"
+        )
+        assert not hasattr(CreativeSyncEnv, "set_run_async_result"), (
+            "set_run_async_result is gone: it configured the sync bridge, so the "
+            "catalogue it set was invisible to registry.get_format"
         )
 
 
@@ -457,10 +468,9 @@ class TestPartialEnterUnwind:
 
     These tests grade the acquisition set: whatever an env acquired is released,
     wherever it was acquired from. Two of them (``local_origin_mixin`` and
-    ``fast_backoff_mixin``) are security oracles -- the resource they pin is an
-    ENVIRONMENT VARIABLE that relaxes the outbound egress posture, and a leaked
-    ``ADCP_OUTBOUND_ALLOW_PRIVATE=true`` silently disarms every later refusal
-    scenario on the same worker.
+    ``fast_backoff_mixin``) are security oracles -- the resource they pin relaxes
+    the outbound egress posture, and a leaked private-range hatch silently disarms
+    every later refusal scenario on the same worker.
     """
 
     # -- helpers ---------------------------------------------------------
@@ -489,11 +499,11 @@ class TestPartialEnterUnwind:
         Runs only in a ``finally``, after every observation has been captured
         into locals, so it can never mask the leak it exists to clean up. It is
         here because a RED run of these tests genuinely leaks a live TLS server
-        thread and two environment variables into the rest of the session.
+        thread, a settings patch and two environment variables into the rest of the session.
         """
         from contextlib import suppress
 
-        for name in ("_fast_backoff", "_egress_hatches", "_ssl_cert_file"):
+        for name in ("_fast_backoff", "_egress_hatches", "_egress_hatches_env", "_ssl_cert_file"):
             resource = getattr(env, name, None)
             if resource is None:
                 continue
@@ -584,15 +594,16 @@ class TestPartialEnterUnwind:
         """A base failure must not leave the egress hatch open for the whole worker.
 
         ``LocalOriginMixin`` acquires three resources -- the ``SSL_CERT_FILE``
-        patch, the running TLS origin, and ``ADCP_OUTBOUND_ALLOW_PRIVATE=true``
-        -- and only then enters the base. When the base fails, Python skips
-        ``__exit__`` and all three survive. The env var is the one that matters:
+        patch, the running TLS origin, and ``adcp_outbound_allow_private`` on the
+        settings -- and only then enters the base. When the base fails, Python skips
+        ``__exit__`` and all three survive. The hatch is the one that matters:
         every later scenario on this worker that grades a private-address
         refusal is then graded with the hatch WIDE OPEN, and passes for the
         wrong reason.
         """
         import pytest
 
+        from src.core.config import get_settings
         from tests.harness._base import IntegrationEnv
         from tests.harness._mixins import LocalOriginMixin
         from tests.helpers.egress_hatches import ALLOW_PRIVATE_ENV
@@ -619,16 +630,21 @@ class TestPartialEnterUnwind:
                     env.__enter__()
 
                 leaked_ssl_cert_file = os.environ.get("SSL_CERT_FILE")
-                leaked_allow_private = os.environ.get(ALLOW_PRIVATE_ENV)
+                leaked_allow_private = get_settings().limits.adcp_outbound_allow_private
+                leaked_allow_private_env = os.environ.get(ALLOW_PRIVATE_ENV)
                 origin = getattr(env, "_origin", None)
                 origin_still_listening = origin is not None and self._origin_is_listening(origin)
             finally:
                 self._force_release(env)
 
-            assert leaked_allow_private is None, (
-                f"{ALLOW_PRIVATE_ENV}={leaked_allow_private!r} survived a failed __enter__ -- "
+            assert leaked_allow_private is False, (
+                f"adcp_outbound_allow_private={leaked_allow_private!r} survived a failed __enter__ -- "
                 f"the private-egress hatch is now open for the rest of this worker, and every "
                 f"later scenario grading a private-address refusal is disarmed"
+            )
+            assert leaked_allow_private_env is None, (
+                f"{ALLOW_PRIVATE_ENV}={leaked_allow_private_env!r} survived a failed __enter__ -- "
+                f"the next settings rebuild on this worker opens the private-egress hatch"
             )
             assert leaked_ssl_cert_file is None, (
                 f"SSL_CERT_FILE={leaked_ssl_cert_file!r} survived a failed __enter__ -- "

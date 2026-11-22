@@ -8,16 +8,19 @@ This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 """
 
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
-from adcp.types.generated_poc.core.async_response_data import AdcpAsyncResponseData
-from adcp.types.generated_poc.core.pagination_response import PaginationResponse
-from adcp.types.generated_poc.protocol.get_task_status_response import HistoryItem
-from adcp.types.generated_poc.protocol.list_tasks_response import QuerySummary
+from adcp.types.domains.core.async_response_data import AdcpAsyncResponseData
+from adcp.types.domains.core.pagination_response import PaginationResponse
+from adcp.types.domains.protocol.get_task_status_response import HistoryItem
+from adcp.types.domains.protocol.list_tasks_response import QuerySummary
+from pydantic import TypeAdapter
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.repositories.uow import WorkflowUoW
+from src.core.database.repositories.workflow import StepOrder
 from src.core.errors.details import ConflictDetails, ValidationDetails
 from src.core.exceptions import (
     AdCPConflictError,
@@ -37,28 +40,16 @@ from src.core.schemas import (
 
 logger = logging.getLogger(__name__)
 
-
-#: Spec TaskStatus -> the workflow-step status this repo actually stores.
+#: Validator for ``core/async-response-data.json``, built ONCE.
 #:
-#: The two vocabularies are genuinely different, which is the substance of the rebase and
-#: not a naming detail: list-tasks-request.json filters on TaskStatus
-#: (submitted/working/input-required/completed/canceled/failed/rejected/auth-required)
-#: while WorkflowStep.status is pending/in_progress/requires_approval/completed/failed.
-#: A buyer now sends the SPEC value and this is where it becomes ours.
-#:
-#: canceled, rejected and auth-required have no workflow-step equivalent today. They map to
-#: None, which the filter treats as "no such task", rather than being silently dropped --
-#: dropping the filter would return EVERY task for a status the buyer meant to narrow by.
-_SPEC_STATUS_TO_WORKFLOW_STATUS: dict[str, str | None] = {
-    "submitted": "pending",
-    "working": "in_progress",
-    "input-required": "requires_approval",
-    "completed": "completed",
-    "failed": "failed",
-    "canceled": None,
-    "rejected": None,
-    "auth-required": None,
-}
+#: A ``TypeAdapter`` rather than ``AdcpAsyncResponseData.model_validate``: the pinned SDK ships
+#: that name as an ``Annotated[Union[...]]`` ALIAS over the concrete task results rather
+#: than as a RootModel wrapping them, so there is no class to call a classmethod on.
+#: ``TypeAdapter`` is pydantic's own way to validate against a non-model annotation, and
+#: it keeps the refusal identical -- a payload that is none of the arms raises, which is
+#: the fail-loudly posture the call site below depends on. Module level because building
+#: an adapter compiles a validator; doing it per request would pay that on every read.
+_ASYNC_RESPONSE_DATA: TypeAdapter[AdcpAsyncResponseData] = TypeAdapter(AdcpAsyncResponseData)
 
 
 #: The AdCP task a workflow step SERVICES, keyed by ``WorkflowStep.tool_name``.
@@ -68,7 +59,7 @@ _SPEC_STATUS_TO_WORKFLOW_STATUS: dict[str, str | None] = {
 #:     `create_media_buy`, `sync_creatives`) for routing to per-task handlers";
 #:   * protocol/calling-an-agent.mdx:95-99 -- the normative tasks/get response carries
 #:     `task_type: "create_media_buy"` beside `protocol: "media-buy"`;
-#:   * dist/compliance/3.1.1/domains/media-buy/scenarios/get_products_async.yaml GRADES it
+#: * dist/compliance/<pin>/domains/media-buy/scenarios/get_products_async.yaml GRADES it
 #:     twice -- `tasks[0].task_type == "get_products"` ("Task type identifies get_products")
 #:     on list_products_task, and `task_type == "get_products"` + `protocol == "media-buy"`
 #:     on get_products_task_status_completed -- and FILTERS on `filters.task_type`, so an
@@ -101,15 +92,50 @@ _DOMAIN_BY_TASK_TYPE: dict[str, str] = {
     "sync_creatives": "media-buy",
 }
 
-#: The inverse of :data:`_SPEC_STATUS_TO_WORKFLOW_STATUS`. A response must speak the SPEC
-#: vocabulary (TaskStatus) just as the filter accepts it.
+#: ``task_type``'s domain keyed by the stored ``tool_name``, so a protocol filter and a
+#: protocol sort can be stated in the column the repository holds.
+_DOMAIN_BY_TOOL: dict[str, str] = {tool: _DOMAIN_BY_TASK_TYPE[task] for tool, task in _TASK_TYPE_BY_TOOL.items()}
+
+#: The workflow-step status this repo stores -> the spec TaskStatus a buyer reads and filters
+#: on. The two vocabularies are genuinely different: enums/task-status.json is
+#: submitted/working/input-required/completed/canceled/failed/rejected/auth-required/unknown.
+#:
+#: ONE map serves the response, the filter and the sort. The filter used to read a second,
+#: hand-inverted copy, so a status added to one direction was missing from the other;
+#: ``rejected`` was, which the admin writes when it declines a step (operations.py) and the
+#: pin defines as "The agent declined the request". A stored status not listed here is the
+#: enum's own ``unknown``. canceled and auth-required have no stored equivalent, so a filter
+#: naming only those matches nothing rather than being dropped -- dropping the filter would
+#: return EVERY task for a status the buyer meant to narrow by.
 _WORKFLOW_STATUS_TO_SPEC_STATUS: dict[str, str] = {
     "pending": "submitted",
     "in_progress": "working",
     "requires_approval": "input-required",
     "completed": "completed",
     "failed": "failed",
+    "rejected": "rejected",
 }
+
+#: list-tasks-request.json ``sort.field`` -> how the repository orders the rows. The three
+#: categorical fields sort by the value the BUYER reads, not by what is stored.
+_STEP_ORDER_BY_SORT_FIELD: dict[str, StepOrder] = {
+    "created_at": StepOrder(column="created_at"),
+    "updated_at": StepOrder(column="updated_at"),
+    "status": StepOrder(column="status", labels=_WORKFLOW_STATUS_TO_SPEC_STATUS, unlabelled="unknown"),
+    "task_type": StepOrder(column="tool_name", labels=_TASK_TYPE_BY_TOOL),
+    "protocol": StepOrder(column="tool_name", labels=_DOMAIN_BY_TOOL),
+}
+
+
+def _requested(single: Any, plural: list[Any] | None) -> set[str] | None:
+    """The spec values a filter names through its singular and plural spellings, or None."""
+    values = ([] if single is None else [single]) + list(plural or [])
+    return {enum_value(value) for value in values} if values else None
+
+
+def _stored_matching(labels: dict[str, str], requested: set[str] | None) -> list[str] | None:
+    """The stored values whose spec label was requested; None when the filter was absent."""
+    return None if requested is None else [stored for stored, label in labels.items() if label in requested]
 
 
 def _spec_task_type(step: Any) -> str:
@@ -171,19 +197,6 @@ def _task_timestamps(step: Any) -> tuple[Any, Any, Any]:
     return created_at, completed_at or created_at, completed_at
 
 
-def _request_summary(request_data: Any) -> dict[str, Any] | None:
-    """The non-spec ``summary`` highlights, or None. Extracted so the item build reads as one
-    expression instead of three conditional mutations of a dict."""
-    if not isinstance(request_data, dict) or not request_data:
-        return None
-    nested = request_data.get("request") or {}
-    return {
-        "operation": request_data.get("operation"),
-        "media_buy_id": request_data.get("media_buy_id"),
-        "po_number": nested.get("po_number") if isinstance(nested, dict) else None,
-    }
-
-
 def _list_tasks_response(tasks: list[TaskSummary], *, total: int | None, limit: int, offset: int) -> ListTasksResponse:
     """Wrap a page in the pinned envelope.
 
@@ -220,22 +233,30 @@ async def _list_tasks_impl(
     missing boundary showing up as two absent transports.
     """
 
-    # Map the spec shape onto the repository's own vocabulary. `statuses` is the plural
-    # branch; a single `status` is the singular one, and the repository takes one string.
-    status: str | None = None
-    filtered_by_status = False
+    # The spec filters, restated in the columns the repository holds. Each dimension is the
+    # union of its singular and plural spellings (list-tasks-request.json declares both). A
+    # dimension naming only values this seller never stores becomes an EMPTY list, which
+    # matches nothing: the buyer asked to narrow, and an unfiltered listing would answer
+    # with everything. task_type and protocol both narrow tool_name, so naming both keeps
+    # the tools that satisfy each.
+    statuses: list[str] | None = None
+    tool_names: list[str] | None = None
+    step_ids: list[str] | None = None
     if req.filters is not None:
-        spec_status = req.filters.status
-        if spec_status is None and req.filters.statuses:
-            spec_status = req.filters.statuses[0]
-        if spec_status is not None:
-            filtered_by_status = True
-            status = _SPEC_STATUS_TO_WORKFLOW_STATUS.get(enum_value(spec_status))
-    if filtered_by_status and status is None:
-        # A spec status this seller has no workflow equivalent for. Answering with an
-        # unfiltered listing would be worse than answering with none: the buyer asked to
-        # narrow and would get everything.
-        return _list_tasks_response([], total=0, limit=0, offset=0)
+        filters = req.filters
+        statuses = _stored_matching(_WORKFLOW_STATUS_TO_SPEC_STATUS, _requested(filters.status, filters.statuses))
+        by_type = _stored_matching(_TASK_TYPE_BY_TOOL, _requested(filters.task_type, filters.task_types))
+        by_protocol = _stored_matching(_DOMAIN_BY_TOOL, _requested(filters.protocol, filters.protocols))
+        tool_names = by_type if by_protocol is None else [t for t in by_protocol if by_type is None or t in by_type]
+        step_ids = filters.task_ids
+    # created_after/created_before/updated_after/updated_before, context_contains and
+    # has_webhook are not applied yet: a buyer naming one gets the listing unnarrowed by it.
+
+    # sort.field defaults to created_at and sort.direction to desc in the pin.
+    sort = req.sort
+    sort_field = enum_value(sort.field) if sort is not None and sort.field is not None else "created_at"
+    descending = sort is None or sort.direction is None or enum_value(sort.direction) == "desc"
+    order = replace(_STEP_ORDER_BY_SORT_FIELD[sort_field], descending=descending)
     object_type = None
     object_id = None
     limit = req.pagination.max_results if req.pagination and req.pagination.max_results else 20
@@ -257,28 +278,33 @@ async def _list_tasks_impl(
         # Count and page are narrowed TOGETHER on purpose -- a tenant-wide count beside a
         # principal-scoped page discloses how many tasks the others hold.
         total = uow.workflows.count_by_tenant(
-            status=status,
+            statuses=statuses,
+            tool_names=tool_names,
+            step_ids=step_ids,
             object_type=object_type,
             object_id=object_id,
             principal_id=principal_id,
         )
 
         tasks = uow.workflows.list_by_tenant(
-            status=status,
+            statuses=statuses,
+            tool_names=tool_names,
+            step_ids=step_ids,
             object_type=object_type,
             object_id=object_id,
             offset=offset,
             limit=limit,
             principal_id=principal_id,
+            order=order,
         )
 
-        step_ids = [task.step_id for task in tasks]
-        all_mappings = uow.workflows.get_mappings_for_steps(step_ids)
+        # No mapping read, for the reason ``_get_task_status_impl`` already records: the
+        # object mappings fed a non-spec ``associated_objects`` field this item no longer
+        # declares, so fetching them was a per-page query whose only consumer was a field a
+        # buyer could not validate.
 
         formatted_tasks = []
         for task in tasks:
-            mappings = all_mappings.get(task.step_id, [])
-
             task_type = _spec_task_type(task)
             created_at, updated_at, completed_at = _task_timestamps(task)
 
@@ -291,14 +317,6 @@ async def _list_tasks_impl(
                     created_at=created_at,
                     updated_at=updated_at,
                     completed_at=completed_at,
-                    context_id=task.context_id,
-                    tool_name=task.tool_name,
-                    owner=task.owner,
-                    associated_objects=[
-                        {"type": m.object_type, "id": m.object_id, "action": m.action} for m in mappings
-                    ],
-                    error_message=(task.error_message if task.status == "failed" else None),
-                    summary=_request_summary(task.request_data),
                 )
             )
 
@@ -315,8 +333,6 @@ async def _get_task_status_impl(
     callable this tool could not be dispatched over A2A or routed over REST -- one
     missing boundary showing up as two absent transports.
     """
-    task_id = req.task_id
-
     tenant = identity.tenant
     # F-03: an authenticated principal is required; the ResolvedIdentity carries one by type
     principal_id = identity.principal.principal_id
@@ -328,11 +344,13 @@ async def _get_task_status_impl(
         # to here: "Sellers MUST return REFERENCE_NOT_FOUND for a task_id that exists only
         # under a different account or principal" (get-task-status-status-request.json @ 3.1.1).
         # The lookup was tenant-scoped only, so any authenticated principal could read
-        # another's task by id -- request_data and response_data included. The raised error
-        # is identical to the absent case, so it does not reveal that the task exists.
+        # another's task by id -- the opening request and response_data included. The raised
+        # error is identical to the absent case, so it does not reveal that the task exists.
         task = uow.workflows.get_by_step_id_or_raise(req.task_id, principal_id=principal_id)
 
-        mappings = uow.workflows.get_mappings_for_step(task_id)
+        # No mapping read. The object mappings fed a non-spec ``associated_objects`` field
+        # this response no longer declares (see the class docstring), so fetching them was
+        # a query whose only consumer was a field a buyer could not validate.
 
         task_type = _spec_task_type(task)
         created_at, updated_at, completed_at = _task_timestamps(task)
@@ -349,21 +367,14 @@ async def _get_task_status_impl(
             updated_at=updated_at,
             completed_at=completed_at,
             context_id=task.context_id,
-            tool_name=task.tool_name,
-            owner=task.owner,
-            request_data=task.request_data,
-            error_message=task.error_message,
-            associated_objects=[
-                {
-                    "type": m.object_type,
-                    "id": m.object_id,
-                    "action": m.action,
-                    "created_at": (
-                        m.created_at.isoformat() if hasattr(m.created_at, "isoformat") else str(m.created_at)
-                    ),
-                }
-                for m in mappings
-            ],
+            # The stored failure text under the PIN's name for it: ``message`` is
+            # "Human-readable summary of the task result ... suitable for display to end
+            # users or for AI agent comprehension" (protocol/get-task-status-response.json).
+            # It replaces a non-spec ``error_message`` the buyer could not validate, and it
+            # is not an ``error``/``adcp_error`` object because those carry a CODE and this
+            # seller stores only the sentence -- minting a code to wrap it is what CLAUDE.md
+            # pattern #10 refuses.
+            message=task.error_message,
         )
 
         # The terminal payload is CONDITIONAL. get-task-status-status-request.json defaults
@@ -378,12 +389,20 @@ async def _get_task_status_impl(
         # failed task's detail rides error_message, per "For failed tasks, read the existing
         # error field instead" (task-lifecycle.mdx).
         if req.include_result and task.status == "completed":
-            # VALIDATED, not cast. The pin types ``result`` as core/async-response-data.json --
-            # a union of the concrete AdCP task results -- while ``response_data`` is whatever
-            # this seller stored. model_validate raises on a payload that is not one of them
-            # rather than shipping an arbitrary dict under a spec field name, which is the same
+            # VALIDATED, not cast. ``core/async-response-data.json`` is the union of the
+            # concrete AdCP task results, while ``response_data`` is whatever this seller
+            # stored, so the validation raises on a payload that is not one of them rather
+            # than shipping an arbitrary dict under a spec field name -- the same
             # fail-loudly posture _spec_task_type takes.
-            task_detail.result = AdcpAsyncResponseData.model_validate(task.response_data)
+            #
+            # The validated OBJECT is deliberately discarded: ``result`` is
+            # ``dict[str, Any] | None`` on the pinned response, so the document itself is
+            # what goes on the wire and the call above exists for its REFUSAL. Assigning
+            # the validated model instead would put a pydantic object in a dict-typed
+            # field, and turning it back into a dict here would be a serialization
+            # outside the named edges (CLAUDE.md pattern #4).
+            _ASYNC_RESPONSE_DATA.validate_python(task.response_data)
+            task_detail.result = task.response_data
 
         # UNGRADED by any storyboard in the 3.1.1 tree, so this is the response schema's
         # item shape and nothing invented on top of it: {timestamp, type, data}, all three

@@ -124,8 +124,7 @@ registry-as-fallback precedence and the production refusal).
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager
 from typing import Any
 
 import pytest
@@ -152,6 +151,9 @@ from tests.factories.request import CreateMediaBuyRequestFactory
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers import assert_envelope_shape
 from tests.helpers.asgi_wire import send_wire_messages, truncated_body
+from tests.helpers.metrics import assert_counter_delta
+from tests.helpers.metrics import counter_samples as _counter_samples
+from tests.helpers.metrics import samples_with as _samples_with
 
 # The B1 seams, the counter readers, the shared counterparty/tenant/surface
 # constants and the request builders all live in tests/helpers/signing.py
@@ -175,7 +177,6 @@ from tests.helpers.signing import (
     VERIFIED_METRIC,
     VERIFIER_ERROR,
     WIRE_ORIGIN,
-    assert_counter_delta,
     bucketed_declaration,
     counterparty_key,
     keypair_for,
@@ -189,16 +190,10 @@ from tests.helpers.signing import (
     unsupported,
 )
 from tests.helpers.signing import (
-    counter_samples as _counter_samples,
-)
-from tests.helpers.signing import (
     declared_posture as _declared_posture,
 )
 from tests.helpers.signing import (
     rejection_code as _rejection_code,
-)
-from tests.helpers.signing import (
-    samples_with as _samples_with,
 )
 from tests.helpers.signing import (
     signing_config as _signing_config,
@@ -789,8 +784,7 @@ class TestNoneBucketCostsNothing:
 _CAPABILITIES_OPERATION = "get_adcp_capabilities"
 
 
-@contextmanager
-def _assert_ignored_recorded(operation: str, expected: int = 1) -> Iterator[None]:
+def _assert_ignored_recorded(operation: str, expected: int = 1) -> AbstractContextManager[None]:
     """``adcp_request_unsigned_total{operation, reason="ignored"}`` moved by *expected*.
 
     Read on the LABELLED series rather than on the metric total, because "the series
@@ -801,13 +795,12 @@ def _assert_ignored_recorded(operation: str, expected: int = 1) -> Iterator[None
     ``expected=0`` is a first-class case here — it is how a row says the pass-through
     arm was NOT the one taken.
     """
-    before = sum(_samples_with(UNSIGNED_METRIC, operation=operation, reason="ignored").values())
-    yield
-    after = sum(_samples_with(UNSIGNED_METRIC, operation=operation, reason="ignored").values())
-    assert after == before + expected, (
-        f"{UNSIGNED_METRIC}{{operation={operation!r}, reason='ignored'}} must move by "
-        f"{expected} across this block; it went {before} -> {after}. This series is what "
-        "tells 'the none bucket passed a request through' apart from 'traffic stopped'"
+    return assert_counter_delta(
+        UNSIGNED_METRIC,
+        expected,
+        why="This series is what tells 'the none bucket passed a request through' apart from 'traffic stopped'",
+        operation=operation,
+        reason="ignored",
     )
 
 
@@ -1398,19 +1391,28 @@ class TestRegistryIsAFallbackNeverAnOverride:
         """Same registry entry that verifies the request in the class above; the only
         change is that the principal HAS an ``agent_url`` and its walk fails.
 
-        The walk fails for real, not by substitution: the SDK resolves and validates
-        the authority synchronously before opening a socket, so a loopback
-        ``agent_url`` raises ``AgentResolverError`` inside the real
+        The walk fails for real, not by substitution: the SDK resolves the authority
+        before opening a socket, so :data:`UNRESOLVABLE_AGENT_URL`'s RFC 2606
+        ``.invalid`` host raises ``AgentResolverError`` inside the real
         ``_resolution_for``, which returns ``None`` — the identical input the fallback
         branch sees in the passing case. The two tests therefore differ in exactly one
         thing, WHY the resolution is empty, which is precisely the distinction the
         implementation must make.
 
         Correct behavior is a 401 rejection carrying the counterparty walk's OWN
-        discovery-family code (#1291 hksr assigns ``capabilities_unreachable`` its own
-        ``request_signature_capabilities_unreachable`` wire code instead of collapsing
-        every walk failure onto the generic ``key_unknown``) — an unreachable
-        counterparty is a failure to resolve, not a licence to trust a different key.
+        discovery-family code instead of collapsing every walk failure onto the generic
+        ``key_unknown`` (#1291 hksr) — an unresolvable counterparty is a failure to
+        resolve, not a licence to trust a different key.
+
+        WHICH discovery code is a property of the fixture rather than of the claim above,
+        and the fixture is deliberately UNREACHABLE rather than BANNED: a DNS miss is the
+        capabilities hop's own transient row (3.2.1 ``security.mdx`` § "Discovering an
+        agent's signing keys via ``brand_json_url``", step 1, :1358), so the answer is
+        ``request_signature_capabilities_unreachable``. A banned destination would answer
+        the terminal ``request_signature_jwks_untrusted`` instead and would grade a
+        different failure; :data:`UNRESOLVABLE_AGENT_URL`'s comment carries that
+        measurement. This test grades the registry invariant, and the code is only its
+        observable.
         """
         private_key, jwks = counterparty_keypair
         with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:

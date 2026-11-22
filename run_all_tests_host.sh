@@ -5,10 +5,14 @@
 #
 # Usage (host path — invoked directly, or reached via `./run_all_tests.sh quick`
 # and `./run_all_tests.sh ci <target>`, which delegate here):
-#   ./run_all_tests_host.sh           # Docker + all 6 suites via tox (default)
+#   ./run_all_tests_host.sh           # Docker + 8 suites via tox, all but `collection` (default)
 #   ./run_all_tests_host.sh quick     # No Docker: unit + integration
 #   ./run_all_tests_host.sh ci tests/integration/test_file.py -k test_name
 #   ./run_all_tests_host.sh ci tests/integration/ -m creative     # scoped by entity
+#
+# `collection` runs in-network and in CI, not here. Two of its tests read a record
+# of the whole BDD tree collected with BDD_E2E_ENABLED=true, and this runner's bdd
+# env runs under xdist, which refuses that setting, so no such record can exist.
 
 set -euo pipefail
 
@@ -116,10 +120,12 @@ elif [ "$MODE" = "ci" ]; then
     # single-sourced in scripts/creative-agent-stack.sh. Idempotent (reuses a
     # healthy stack across runs); torn down with the Docker stack on EXIT.
     ./scripts/creative-agent-stack.sh up
-    export CREATIVE_AGENT_URL="$(./scripts/creative-agent-stack.sh url)"
+    # CREATIVE_AGENT_URL, CREATIVE_AGENT_ORIGIN and SSL_CERT_FILE, from the one
+    # recipe the stack prints.
+    eval "$(./scripts/creative-agent-stack.sh env)"
 
     # ─── Outbound egress escape hatch — TEST PATH ONLY (#1589, salesagent-e6h0) ──
-    # The line above exports an https://agent.localhost:<port>/... URL
+    # The env above exports an https://agent.localhost:<port>/... URL
     # (scripts/creative-agent-stack.sh's own TLS front, salesagent-40qh) at a
     # reserved loopback address, which src/core/security/outbound_http.py
     # refuses for the ADDRESS reason. docker-compose.e2e.yml opens the same
@@ -147,9 +153,9 @@ elif [ "$MODE" = "ci" ]; then
     # BDD refusal scenarios). An ambient private-range hatch there would make
     # the seam accept exactly the addresses it exists to reject.
     #
-    # Literal "true" — the seam compares the lowercased string.
+    # Literal "true" — the seam compares the lowercased string. This setting is
+    # being deleted (salesagent-0o5xs): the origins get resolvable hosts instead.
     export ADCP_OUTBOUND_ALLOW_PRIVATE="true"
-    export SSL_CERT_FILE="$(pwd)/.test-tls/combined-ca.pem"
 
     trap './scripts/creative-agent-stack.sh down 2>/dev/null || true; ./scripts/test-stack.sh down 2>/dev/null || true' EXIT
 
@@ -165,10 +171,10 @@ elif [ "$MODE" = "ci" ]; then
         set -eo pipefail
         [ "$TOX_RC" -ne 0 ] && FAILURES="targeted"
     else
-        echo -e "${BLUE}Running all 6 suites in parallel via tox...${NC}"
+        echo -e "${BLUE}Running 8 suites in parallel via tox, all but collection...${NC}"
         set +eo pipefail
         purge_stale_reports
-        tox -p -o > >(tee "$RESULTS_DIR/tox.log") 2>&1
+        tox -p -o --skip-env '^collection$' > >(tee "$RESULTS_DIR/tox.log") 2>&1
         TOX_RC=${PIPESTATUS[0]}
         set -eo pipefail
         collect_reports
@@ -193,7 +199,7 @@ elif [ "$MODE" = "ci" ]; then
     fi
 else
     echo "Usage: ./run_all_tests.sh [quick|ci]"
-    echo "  ci (default) — Docker + all 6 suites via tox"
+    echo "  ci (default) — Docker + 8 suites via tox, all but collection"
     echo "  quick        — no Docker: unit + integration"
     exit 1
 fi

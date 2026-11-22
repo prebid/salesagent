@@ -24,16 +24,19 @@ delete the JWKS route (the last assertions lose their document), and delete the
 locate the JWKS, and the origin-consistency assertion has nothing to compare).
 
 Why the chain is walked here rather than through ``adcp.signing.async_resolve_agent``:
-the SDK's THIRD hop is ``async_default_jwks_fetcher``, which builds its own
-``httpx.AsyncClient`` with ``trust_env=False`` and takes no client-factory seam
-(``_brand_jwks_client_factory`` reaches hop 2 only). Against a leaf signed by the
-private e2e CA that hop can only ever raise ``jwks_fetch_failed`` — a RIG failure
-whose one obvious "fix" is ``verify=False``, which would destroy the only property
-this module has. So every hop here is fetched over ONE client pinned to the test
-CA, and the SDK still supplies the piece that matters: ``check_key_origin_consistency``
-is the verifier's mandatory step-7 check, called on the served documents rather than
-re-implemented. The plaintext sibling in ``test_trust_root_e2e`` keeps grading the
-SDK resolver end to end, where no private CA is in the way.
+the SDK's THIRD hop is ``async_default_jwks_fetcher``, which takes no client-factory
+seam (``_brand_jwks_client_factory`` reaches hop 2 only), so a caller cannot hand it
+this stack's CA as a cafile. It CAN be given one at the OpenSSL level —
+``SSL_CERT_FILE`` pointing at ``combined-ca.pem``, which both e2e runners set and
+which the transport's own ``ssl.create_default_context()`` honours — and
+``test_trust_root_e2e`` walks the resolver end to end on exactly that basis. This
+module still fetches every hop over ONE client pinned explicitly to the test CA,
+because the trust anchor is then an ARGUMENT here rather than ambient process state:
+an environment that lost the variable would turn this test's handshake assertions
+into a RIG failure whose one obvious "fix" is ``verify=False``, and that would
+destroy the only property the module has. The SDK still supplies the piece that
+matters: ``check_key_origin_consistency`` is the verifier's mandatory step-7 check,
+called on the served documents rather than re-implemented.
 """
 
 from __future__ import annotations

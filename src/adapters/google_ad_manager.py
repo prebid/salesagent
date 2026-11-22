@@ -17,12 +17,10 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-import sqlalchemy.exc
-
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot
 
-from flask import Flask
+from pydantic import ValidationError
 
 from src.adapters.base import (
     AdapterCapabilities,
@@ -34,7 +32,7 @@ from src.adapters.base import (
 )
 
 # Import modular components
-from src.adapters.gam.client import GAMClientManager
+from src.adapters.gam.client import GAMClientManager, current_network_time_zone
 from src.adapters.gam.managers import (
     GAMCreativesManager,
     GAMInventoryManager,
@@ -50,7 +48,8 @@ from src.adapters.gam.managers.orders import (
     NON_GUARANTEED_LINE_ITEM_TYPES,
 )
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
-from src.adapters.gam_data_freshness import validate_and_log_freshness
+from src.adapters.gam_data_freshness import GAMDataFreshnessValidator
+from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.core.audit_logger import AuditLogger
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.details import (
@@ -64,7 +63,6 @@ from src.core.errors.details import (
 )
 from src.core.exceptions import (
     AdCPActivationWorkflowError,
-    AdCPAdapterError,
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPBulkUpdateError,
@@ -86,6 +84,7 @@ from src.core.schemas import (
     MediaPackage,
     ReportingPeriod,
 )
+from src.services.ai.config import SellerAIConfig
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -98,6 +97,7 @@ class GoogleAdManager(AdServerAdapter):
 
     capabilities = AdapterCapabilities(
         supports_realtime_reporting=True,  # Snapshots via cached GAM line item stats
+        supports_creative_trafficking=True,
     )
 
     # GAM supports display, olv (online video), and social advertising
@@ -122,6 +122,7 @@ class GoogleAdManager(AdServerAdapter):
         tenant_id: str | None = None,
         targeting_config: dict[str, Any] | None = None,
         naming_templates: tuple[str | None, str | None] | None = None,
+        tenant_ai_config: SellerAIConfig,
     ):
         """Initialize Google Ad Manager adapter with modular managers.
 
@@ -137,6 +138,9 @@ class GoogleAdManager(AdServerAdapter):
                 If None, uses empty defaults (caller should pre-load via repository).
             naming_templates: Pre-loaded (order_template, line_item_template) tuple.
                 If None, uses (None, None) defaults.
+            tenant_ai_config: What AI the seller configured (``TenantContext.ai_config``),
+                for the order name's ``{auto_name}``. Required: ``None`` means the seller
+                configured nothing, so it is stated, never defaulted.
         """
         super().__init__(config, principal, None, tenant_id)
         assert self.tenant_id is not None  # Guaranteed by base class validation
@@ -170,6 +174,7 @@ class GoogleAdManager(AdServerAdapter):
         self._targeting_config = targeting_config
         self._order_name_template: str | None = naming_templates[0] if naming_templates else None
         self._line_item_name_template: str | None = naming_templates[1] if naming_templates else None
+        self._tenant_ai_config = tenant_ai_config
         self._placement_targeting_map: dict[str, str] = {}
         # package_id -> GAM creative template id, from each product's
         # implementation_config.native_style_id. Rebuilt per order in create_media_buy and
@@ -245,9 +250,9 @@ class GoogleAdManager(AdServerAdapter):
         """Validate targeting and return unsupported features (delegated to targeting manager)."""
         return self.targeting_manager.validate_targeting(targeting_overlay)
 
-    def _build_targeting(self, targeting_overlay):
+    def _build_targeting(self, targeting_overlay, product_custom_targeting: CustomTargeting | None = None):
         """Build GAM targeting criteria from AdCP targeting (delegated to targeting manager)."""
-        return self.targeting_manager.build_targeting(targeting_overlay)
+        return self.targeting_manager.build_targeting(targeting_overlay, product_custom_targeting)
 
     # HITL (Human-in-the-Loop) support methods
     def _requires_manual_approval(self, operation: str) -> bool:
@@ -315,10 +320,9 @@ class GoogleAdManager(AdServerAdapter):
     def get_targeting_capabilities() -> TargetingCapabilities:
         """Return targeting capabilities GAM adapter supports.
 
-        Google Ad Manager supports comprehensive geo targeting:
-        - Countries and regions worldwide
-        - Nielsen DMAs (US metros)
-        - US ZIP codes
+        Declares the geo targeting this adapter books: countries, regions and Nielsen
+        DMAs, for the codes in its geo data (src/adapters/gam/geo_codes.json); any other
+        code is refused. Postal codes are refused, so no postal system is declared.
 
         Returns:
             TargetingCapabilities describing GAM's targeting support
@@ -326,8 +330,7 @@ class GoogleAdManager(AdServerAdapter):
         return TargetingCapabilities(
             geo_countries=True,
             geo_regions=True,
-            nielsen_dma=True,  # GAM supports US DMAs
-            us_zip=True,  # GAM supports US ZIP targeting
+            nielsen_dma=True,
         )
 
     # Legacy properties for backward compatibility
@@ -499,6 +502,7 @@ class GoogleAdManager(AdServerAdapter):
 
         # Validate products have required inventory targeting BEFORE creating order
         # This prevents the "hidden failure" where order is created but line items fail
+        product_custom_targeting: dict[str, CustomTargeting] = {}
         for package in packages:
             product_config = products_map.get(package.package_id)
             if not product_config:
@@ -529,6 +533,16 @@ class GoogleAdManager(AdServerAdapter):
                 )
                 self.log(f"[red]Error: {error_msg}[/red]")
                 raise AdCPProductUnavailableError()
+
+            # A product's custom targeting is the seller's configuration: one GAM cannot take
+            # is CONFIGURATION_ERROR, which the buyer cannot fix (enums/error-code.json at the
+            # pinned spec), refused here so it precedes the approval branch and every GAM write
+            try:
+                product_custom_targeting[package.package_id] = CustomTargeting.from_stored(
+                    product_impl_config.get("custom_targeting_keys") or {}
+                )
+            except ValidationError as exc:
+                raise AdCPConfigurationError(internal_detail=exc) from exc
 
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
         unsupported_features = []
@@ -561,6 +575,7 @@ class GoogleAdManager(AdServerAdapter):
                 end_time,
                 media_buy_id,
                 order_name_template=self._order_name_template,
+                tenant_ai_config=self._tenant_ai_config,
             )
 
             if step_id:
@@ -573,13 +588,9 @@ class GoogleAdManager(AdServerAdapter):
                 raise AdCPWorkflowError()
 
         # Automatic mode - create order directly
-        # Use pre-loaded naming template, or fallback to default
         from src.adapters.gam.utils.constants import GAM_NAME_LIMITS
         from src.adapters.gam.utils.naming import truncate_name_with_suffix
-        from src.core.utils.naming import apply_naming_template, build_order_name_context
-
-        order_name_template = self._order_name_template or "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
-        tenant_gemini_key = None
+        from src.core.utils.naming import render_order_name
 
         # Get currency from the request's package pricing (validated upstream in media_buy_create.py)
         # All packages in a media buy use the same currency
@@ -589,27 +600,17 @@ class GoogleAdManager(AdServerAdapter):
                 order_currency = pricing.get("currency", "USD")
                 break  # All packages have same currency
 
-        # Get tenant's Gemini key for auto_name generation
-        try:
-            from src.core.database.database_session import get_db_session
-            from src.core.database.models import Tenant
-
-            with get_db_session() as db_session:
-                from sqlalchemy import select
-
-                tenant_stmt = select(Tenant).filter_by(tenant_id=self.tenant_id)
-                tenant_obj = db_session.scalars(tenant_stmt).first()
-                if tenant_obj:
-                    tenant_gemini_key = tenant_obj.gemini_api_key
-        except sqlalchemy.exc.SQLAlchemyError as e:
-            logger.warning(f"Could not load tenant Gemini key: {e}")
-
         # Generate a pre-order media_buy_id for naming (GAM order_id replaces this in the response)
         pre_order_id = f"gam_{uuid.uuid4().hex[:8]}"
-        context = build_order_name_context(
-            request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key, media_buy_id=pre_order_id
+        base_order_name = render_order_name(
+            self._order_name_template,
+            request,
+            packages,
+            start_time,
+            end_time,
+            tenant_ai_config=self._tenant_ai_config,
+            media_buy_id=pre_order_id,
         )
-        base_order_name = apply_naming_template(order_name_template, context)
 
         # Add unique identifier to prevent duplicate order names
         unique_suffix = f"mb_{pre_order_id}"
@@ -621,21 +622,26 @@ class GoogleAdManager(AdServerAdapter):
         # Calculate total budget from package budgets (AdCP v2.2.0)
         total_budget_amount = request.total_budget
 
+        # The flight is written in the network's own zone. Asked before the order exists, so a
+        # refused lookup leaves nothing behind in GAM.
+        flight_time_zone = current_network_time_zone(self.client_manager.get_client())
+
+        # Build targeting for each package (per AdCP spec, targeting is at package level):
+        # the buyer's overlay, ANDed with the product's own custom targeting. Built before
+        # the order, so targeting GAM refuses leaves no order behind.
+        package_targeting = {}
+        for package in packages:
+            targeting = self._build_targeting(package.targeting_overlay, product_custom_targeting[package.package_id])
+            if targeting:
+                package_targeting[package.package_id] = targeting
+
         order_id = self.orders_manager.create_order(
             order_name=order_name,
             total_budget=total_budget_amount,
-            start_time=start_time,
-            end_time=end_time,
             currency=order_currency,
         )
 
         self.log(f"✓ Created GAM Order ID: {order_id}")
-
-        # Build targeting for each package (per AdCP spec, targeting is at package level)
-        package_targeting = {}
-        for package in packages:
-            if package.targeting_overlay:
-                package_targeting[package.package_id] = self._build_targeting(package.targeting_overlay)
 
         # Build the per-order creative maps from all products' impl_configs:
         # _placement_targeting_map (placement_id -> targeting_name, creative-level targeting,
@@ -675,6 +681,7 @@ class GoogleAdManager(AdServerAdapter):
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
+                network_time_zone=flight_time_zone,
                 products_map=products_map,
                 log_func=self.log,
                 tenant_id=self.tenant_id,
@@ -875,8 +882,8 @@ class GoogleAdManager(AdServerAdapter):
         buy IS the approval) and the retroactive push of a creative approved later. Forwards
         the per-order maps this instance built in create_media_buy: placement targeting
         (adcp#208) and the native creative template per package (GH #1516). The retroactive
-        push runs on a fresh instance in a later process, so it hands in the native template
-        map it re-derived from the products.
+        push, and the approval of an order an earlier create booked, run on a fresh instance
+        in a later process, so they hand in the native template map re-derived from the products.
         """
         return self._require_creatives_manager().add_creative_assets(
             media_buy_id,
@@ -967,11 +974,9 @@ class GoogleAdManager(AdServerAdapter):
         Returns:
             AdapterGetMediaBuyDeliveryResponse with real metrics from GAM
         """
-        from sqlalchemy import select
-
         from src.adapters.gam_reporting_service import GAMReportingService
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import MediaBuy
+        from src.core.database.repositories.media_buy import MediaBuyRepository
         from src.core.schemas import AdapterPackageDelivery, DeliveryTotals
 
         # Input validation
@@ -1000,13 +1005,12 @@ class GoogleAdManager(AdServerAdapter):
                 currency="USD",
             )
 
-        # Get media buy from database to find GAM order/line item IDs
+        # The buy's packages are its persisted rows, each carrying the line item create
+        # booked for it. Read through the repository, as update_media_buy does; nothing
+        # here reads a row after the session closes.
         with get_db_session() as session:
-            stmt = select(MediaBuy).where(
-                MediaBuy.media_buy_id == media_buy_id,
-                MediaBuy.tenant_id == self.tenant_id,
-            )
-            media_buy = session.scalars(stmt).first()
+            repo = MediaBuyRepository(session, self.tenant_id)
+            media_buy = repo.get_by_id(media_buy_id)
 
             if not media_buy:
                 logger.error(f"Media buy {media_buy_id} not found in database")
@@ -1025,9 +1029,12 @@ class GoogleAdManager(AdServerAdapter):
                     currency="USD",
                 )
 
-            # Extract package information from raw_request
-            raw_request = media_buy.raw_request or {}
-            packages_data = raw_request.get("packages", [])
+            currency = str(media_buy.currency or "USD")
+            package_by_line_item = {
+                str(package.package_config["platform_line_item_id"]): package.package_id
+                for package in repo.get_packages(media_buy_id)
+                if package.package_config.get("platform_line_item_id")
+            }
 
         # Initialize GAM reporting service
         reporting_service = GAMReportingService(self.client)
@@ -1053,15 +1060,9 @@ class GoogleAdManager(AdServerAdapter):
             requested_timezone="America/New_York",
         )
 
-        # Validate data freshness
-        # The adapter decides whether to return data or raise error if data is stale
-        # Target date is the end of the reporting period
-        target_date = date_range.end
-
-        is_fresh = validate_and_log_freshness(reporting_data, media_buy_id, target_date=target_date)
-
-        if not is_fresh:
-            raise AdCPAdapterError(details=AdapterFailureDetails(media_buy_id=media_buy_id))
+        # The figures GAM has reported so far are the answer (get_media_buy_delivery.mdx: "zero or
+        # partial metrics"). When GAM has not finished the period, say when to expect it complete.
+        _, expected_availability = GAMDataFreshnessValidator.should_retry_later(reporting_data, date_range.end)
 
         # Aggregate totals across all packages
         total_impressions = reporting_data.metrics.get("total_impressions", 0)
@@ -1106,39 +1107,24 @@ class GoogleAdManager(AdServerAdapter):
                 }
             )
 
-        # Build package-level delivery data if we have line item IDs
-        by_package = []
-        if packages_data:
-            # Group reporting data by line item
-            line_item_metrics = {}
-            for row in reporting_data.data:
-                line_item_id = row.get("line_item_id", "")
-                if line_item_id:
-                    if line_item_id not in line_item_metrics:
-                        line_item_metrics[line_item_id] = {
-                            "impressions": 0,
-                            "clicks": 0,
-                            "spend": 0.0,
-                        }
-                    line_item_metrics[line_item_id]["impressions"] += row.get("impressions", 0)
-                    line_item_metrics[line_item_id]["clicks"] += row.get("clicks", 0)
-                    line_item_metrics[line_item_id]["spend"] += row.get("spend", 0.0)
-
-            # Match packages to line items and build delivery data
-            for i, pkg_data in enumerate(packages_data):
-                package_id = pkg_data.get("package_id", f"pkg_{i}")
-                # Try to find platform_line_item_id from the package data
-                platform_line_item_id = pkg_data.get("platform_line_item_id")
-
-                if platform_line_item_id and platform_line_item_id in line_item_metrics:
-                    metrics = line_item_metrics[platform_line_item_id]
-                    by_package.append(
-                        AdapterPackageDelivery(
-                            package_id=package_id,
-                            impressions=int(metrics["impressions"]),
-                            spend=metrics["spend"],
-                        )
-                    )
+        # A package's delivery is its line item's. GAM's report covers every line item of
+        # the buy, so a line item with no rows has delivered nothing, and is reported at zero.
+        line_item_metrics: dict[str, dict[str, Any]] = {}
+        for row in reporting_data.data:
+            line_item_id = str(row.get("line_item_id") or "")
+            if line_item_id:
+                metrics = line_item_metrics.setdefault(line_item_id, {"impressions": 0, "spend": 0.0})
+                metrics["impressions"] += row.get("impressions", 0)
+                metrics["spend"] += row.get("spend", 0.0)
+        zero = {"impressions": 0, "spend": 0.0}
+        by_package = [
+            AdapterPackageDelivery(
+                package_id=package_id,
+                impressions=int(line_item_metrics.get(line_item_id, zero)["impressions"]),
+                spend=line_item_metrics.get(line_item_id, zero)["spend"],
+            )
+            for line_item_id, package_id in package_by_line_item.items()
+        ]
 
         return AdapterGetMediaBuyDeliveryResponse(
             media_buy_id=media_buy_id,
@@ -1152,8 +1138,9 @@ class GoogleAdManager(AdServerAdapter):
                 completed_views=None,
                 completion_rate=None,
             ),
-            currency=str(media_buy.currency or "USD"),
+            currency=currency,
             daily_breakdown=daily_breakdown if daily_breakdown else None,
+            expected_availability=expected_availability,
         )
 
     def get_packages_snapshot(
@@ -1429,8 +1416,6 @@ class GoogleAdManager(AdServerAdapter):
                     affected_package = AffectedPackage(
                         package_id=package_id,
                         paused=is_pause,  # True if paused, False if resumed
-                        changes_applied=None,
-                        buyer_package_ref=None,
                     )
 
                     return AdapterUpdateResult(
@@ -1495,8 +1480,6 @@ class GoogleAdManager(AdServerAdapter):
                         AffectedPackage(
                             package_id=pkg.package_id,
                             paused=is_pause,  # True if paused, False if resumed
-                            changes_applied=None,
-                            buyer_package_ref=None,
                         )
                         for pkg in packages
                     ]
@@ -1521,25 +1504,6 @@ class GoogleAdManager(AdServerAdapter):
                 accepted_values=["approve_order", "activate_order", "update_package_budget"],
             ),
         )
-
-    def get_config_ui_endpoint(self) -> str | None:
-        """Return the endpoint for GAM-specific configuration UI."""
-        return "/adapters/gam/config"
-
-    def register_ui_routes(self, app: Flask) -> None:
-        """Register GAM-specific configuration routes."""
-        from flask import jsonify, render_template, request
-
-        @app.route("/adapters/gam/config/<tenant_id>/<product_id>", methods=["GET", "POST"])
-        def gam_config_ui(tenant_id: str, product_id: str):
-            """GAM adapter configuration UI."""
-            if request.method == "POST":
-                # Handle configuration updates
-                return jsonify({"success": True})
-
-            return render_template(
-                "gam_config.html", tenant_id=tenant_id, product_id=product_id, title="Google Ad Manager Configuration"
-            )
 
     def validate_product_config(self, config: dict[str, Any]) -> tuple[bool, str | None]:
         """Validate GAM-specific product configuration."""

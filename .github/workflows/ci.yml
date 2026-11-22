@@ -37,7 +37,7 @@ jobs:
         with:
           egress-policy: audit
           disable-sudo-and-containers: true
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
@@ -64,7 +64,7 @@ jobs:
         with:
           egress-policy: audit
           disable-sudo-and-containers: true
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
@@ -82,7 +82,7 @@ jobs:
         with:
           egress-policy: audit
           disable-sudo-and-containers: true
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
@@ -105,7 +105,7 @@ jobs:
         with:
           egress-policy: audit
           disable-sudo-and-containers: true
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
@@ -122,7 +122,7 @@ jobs:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           egress-policy: audit
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Start services with docker compose
@@ -144,7 +144,7 @@ jobs:
         with:
           egress-policy: audit
           disable-sudo-and-containers: true
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
@@ -154,11 +154,27 @@ jobs:
           tb: short
           extra_args: -v
 
+  # One job, one row per OS. The Windows row catches a guard that reads files
+  # in the platform's default encoding, builds paths with "\\", or reaches for
+  # a POSIX-only module; tests that grade POSIX-only behaviour carry
+  # @pytest.mark.posix_only and skip with a reason. Both rows gate merges: the
+  # Summary job needs `unit-tests`, whose result covers every row. Coverage is
+  # collected and uploaded by the Linux row only.
   unit-tests:
-    name: Unit Tests
-    runs-on: ubuntu-latest
+    name: Unit Tests${{ matrix.suffix }}
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            suffix: ""
+            coverage: "true"
+          - os: windows-latest
+            suffix: " (Windows)"
+            coverage: "false"
     # 15 was enough while the six storyboard structural guards SKIPPED for want
     # of a pinned tree. Provisioning the release bundle below un-skips 25 of
     # them, and they parse all 121 pinned storyboards — the job went 9m38s ->
@@ -170,8 +186,8 @@ jobs:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           egress-policy: audit
-          disable-sudo-and-containers: true
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+          disable-sudo-and-containers: ${{ runner.os == 'Linux' }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
@@ -183,7 +199,7 @@ jobs:
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/unit/ tests/harness/
-          with_coverage: "true"
+          with_coverage: ${{ matrix.coverage }}
           # Run the unit suite the way the runner does. Without these three
           # flags this job cannot observe the failure it is meant to gate:
           # `--json-report` is the discriminator (pytest-json-report attaches
@@ -194,7 +210,8 @@ jobs:
           # and a green run here says nothing about the parallel one.
           # The JSON file is not consumed; producing it is the point.
           extra_args: -n auto --dist loadgroup --json-report --json-report-file=unit-ci.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - if: matrix.coverage == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: unit-coverage
           path: |
@@ -216,7 +233,12 @@ jobs:
     # tests) on top of agent pull + compose build + migrations + TLS. That
     # exceeds 15m on its own. A ceiling is not a wait — the four host-path groups
     # still finish in minutes and are unaffected by the higher bound.
-    timeout-minutes: 35
+    # When the pin-keyed ghcr image cannot be pulled (a pin no main run has published
+    # yet, or a pull request whose token cannot read the package), the agent is built
+    # from source first: 11m on a hosted runner for adcp@8d1d3244b2ef. 35m then ran out
+    # mid-suite, so the ceiling covers the source build as well. Measured with that
+    # build and three workers: 17m to a healthy stack, 26m of pytest, 43m in all.
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -249,7 +271,7 @@ jobs:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           egress-policy: audit
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
@@ -264,6 +286,9 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Free runner disk
+        if: matrix.group == 'creative'
+        uses: ./.github/actions/_free-runner-disk
       # Four of the five groups need no service beyond the job's own Postgres,
       # so they stay on the host path exactly as before. None of them talks to
       # the creative agent, so none of them needs the egress seam's private-
@@ -303,7 +328,11 @@ jobs:
       # wall-clock note on salesagent-2xnqw.
       - name: Run integration suite in-network
         if: matrix.group == 'creative'
-        run: ./run_all_tests.sh integration
+        timeout-minutes: 60
+        run: |
+          sudo fallocate -l 8G /ci-swapfile && sudo chmod 600 /ci-swapfile
+          sudo mkswap /ci-swapfile && sudo swapon /ci-swapfile
+          ./run_all_tests.sh integration
         env:
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
@@ -312,6 +341,22 @@ jobs:
           # The dedicated Security Audit check owns the uv-secure scan; letting
           # it run here would fail this job on an unrelated gate.
           RUN_ALL_SKIP_AUDIT: 1
+          # A hosted runner has 16 GiB and 3 GiB of swap. Measured in-network with
+          # run_all_tests.sh's default of 4 workers: each worker ~1.4 GiB and
+          # growing, both app servers ~1.8 GiB, the nested BDD/storyboard pytest
+          # runs ~1 GiB each, and harden-runner's agent climbing past 2 GiB; RAM
+          # and swap were exhausted 16 minutes into the suite and the runner was
+          # shut down. Three workers plus the swapfile above finished it with swap
+          # peaking at 5.5 of 11 GiB.
+          INTEGRATION_XDIST_N: 3
+      # On a failed run, run_all_tests.sh saves every container's log beside the
+      # reports under test-results/innet_*/ (as in bdd-in-network below).
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure() && matrix.group == 'creative'
+        with:
+          name: integration-in-network-results
+          path: test-results/innet_*/
+          if-no-files-found: warn
       - name: Cleanup Docker services
         if: always() && matrix.group == 'creative'
         run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
@@ -327,7 +372,7 @@ jobs:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           egress-policy: audit
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
@@ -337,6 +382,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/_free-runner-disk
       - name: Ensure docker-compose alias exists
         run: |
           docker compose version
@@ -409,7 +455,7 @@ jobs:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           egress-policy: audit
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Clean up lingering containers
@@ -423,6 +469,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/_free-runner-disk
       # No _setup-env / host Postgres: the runner container executes tox inside
       # the compose network (postgres:5432, proxy:8000) and publishes no host
       # ports. No coverage upload: the suite asserts behavior on the live
@@ -438,6 +485,30 @@ jobs:
           # No host uvx in this job (no _setup-env); the dedicated Security
           # Audit check owns the uv-secure scan.
           RUN_ALL_SKIP_AUDIT: 1
+      # The FULL-TREE collection record. This job is the only one that produces
+      # it: bdd-tests-shard invokes pytest with a shard's file list, so its
+      # records are path-scoped, while run_all_tests.sh here invokes
+      # `pytest tests/bdd/` whole. Three of the four collection observers ask
+      # for that target by name, so without this upload they have nothing to
+      # read and bdd-tests fails loudly rather than grading a shard.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: bdd-in-network-collection
+          path: |
+            test-results/*/collection-manifest/
+            test-results/*/liveness-sessions/
+          include-hidden-files: true
+          if-no-files-found: error
+      # On a failed run, run_all_tests.sh saves every container's log under
+      # test-results/innet_*/containers/ before removing the stack; the reports beside them
+      # show the wire answer, the server logs say why it was given.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: bdd-in-network-results
+          path: test-results/innet_*/
+          if-no-files-found: warn
       - name: Cleanup Docker services
         if: always()
         run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
@@ -467,7 +538,7 @@ jobs:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           egress-policy: audit
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Clean up lingering containers
@@ -480,6 +551,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/_free-runner-disk
       # The report generators below import `adcp` and `pyyaml`, and the bundle
       # action resolves the pin from that same installed SDK, so this job needs
       # the project venv. It did not before: it only ever drove docker compose.
@@ -623,7 +695,7 @@ jobs:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           egress-policy: audit
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
@@ -665,7 +737,7 @@ jobs:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           egress-policy: audit
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
@@ -690,6 +762,13 @@ jobs:
         env:
           # Separate data file per shard so artifacts cannot collide with unit's .coverage.
           COVERAGE_FILE: .coverage.bdd-${{ matrix.shard }}
+          # What this shard COLLECTED and what it MEASURED, published for the
+          # bdd-tests aggregator below. This job runs `_pytest` directly rather
+          # than tox or run_all_tests.sh, so neither variable is set for it the
+          # way it is everywhere else -- it needs them named here or the
+          # artifacts are simply never written.
+          PYTEST_COLLECTION_MANIFEST: collection-manifest
+          BDD_LIVENESS_SESSIONS: liveness-sessions
         with:
           paths: ${{ steps.bdd_shard.outputs.paths }}
           coverage_xml: coverage-bdd-${{ matrix.shard }}.xml
@@ -709,17 +788,24 @@ jobs:
           path: |
             .coverage.bdd-${{ matrix.shard }}
             coverage-bdd-${{ matrix.shard }}.xml
+            collection-manifest/
+            liveness-sessions/
           include-hidden-files: true
           if-no-files-found: error
 
   bdd-tests:
     name: BDD Tests
     runs-on: ubuntu-latest
-    needs: [bdd-tests-shard]
+    # bdd-in-network is needed for its ARTIFACT, not only its verdict: it is the
+    # only job that collects `tests/bdd/` whole, and three of the four
+    # collection observers ask for that full-tree target by name.
+    needs: [bdd-tests-shard, bdd-in-network]
     if: always()
     permissions:
       contents: read
-    timeout-minutes: 5
+    # Was 5 while this job only read a result string. It now runs a real pytest
+    # env, so it needs setup time; the suite itself is set operations over JSON.
+    timeout-minutes: 15
     steps:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
@@ -732,6 +818,56 @@ jobs:
             exit 1
           fi
           echo "BDD shards passed."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+      - uses: ./.github/actions/_adcp-bundle
+      # Every producer's records into ONE directory. Filenames are content
+      # fingerprints (collection: target+filter; liveness: target+selection+
+      # markers), so two shards and the in-network run cannot collide, and
+      # merge-multiple is safe rather than last-writer-wins.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: "bdd-shard-*-coverage"
+          path: bdd-artifacts
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bdd-in-network-collection
+          path: bdd-artifacts
+      - name: Gather every producer's records into one directory
+        run: |
+          set -euo pipefail
+          # Collect by DIRECTORY NAME wherever it sits, rather than by an
+          # assumed depth. upload-artifact strips the common prefix of the paths
+          # it matched, so the in-network job's `test-results/<ts>/...` arrives
+          # as `collection-manifest/...` while the shards' arrives at the root
+          # already. Keying on the name survives both layouts.
+          mkdir -p bdd-artifacts/collection-manifest bdd-artifacts/liveness-sessions
+          for kind in collection-manifest liveness-sessions; do
+            find bdd-artifacts -type f -name '*.json' -path "*/$kind/*" \
+              -not -path "bdd-artifacts/$kind/*" \
+              -exec cp -n {} "bdd-artifacts/$kind/" \;
+          done
+
+          records=$(find bdd-artifacts/collection-manifest -name '*.json' | wc -l)
+          sessions=$(find bdd-artifacts/liveness-sessions -name '*.json' | wc -l)
+          echo "collection records: $records"
+          echo "liveness sessions:  $sessions"
+
+          # Fail here, with the cause, rather than in 32 tests that each report
+          # the same missing record. Three of the four collection observers need
+          # the FULL-TREE record, which only bdd-in-network produces.
+          python3 scripts/ci/assert_full_tree_record.py bdd-artifacts/collection-manifest
+
+      - uses: ./.github/actions/_pytest
+        env:
+          PYTEST_COLLECTION_MANIFEST: bdd-artifacts/collection-manifest
+          BDD_LIVENESS_SESSIONS: bdd-artifacts/liveness-sessions
+        with:
+          paths: tests/collection/
+          extra_args: --timeout=300
 
   migration-roundtrip:
     name: Migration Roundtrip
@@ -757,7 +893,7 @@ jobs:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           egress-policy: audit
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
@@ -781,7 +917,7 @@ jobs:
         with:
           egress-policy: audit
           disable-sudo-and-containers: true
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env

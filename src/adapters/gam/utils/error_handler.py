@@ -5,7 +5,7 @@ This module classifies GAM API faults and retries the ones worth retrying.
 
 It defines NO exception classes. A GAM fault is an AdCP error like any other:
 ``map_gam_exception`` sorts an upstream fault into the ``AdCP*Error`` the buyer
-should receive, which is what AdCP 3.1.1 mandates --
+should receive, which is what mandates --
 ``building/operating/transport-errors.mdx`` Rule 1: "Translate upstream errors
 into AdCP error codes. Do not pass through raw upstream errors ... The buyer
 should never see error formats from systems it has no relationship with."
@@ -23,6 +23,10 @@ from datetime import UTC, datetime
 from functools import wraps
 from typing import Any, TypeVar
 
+import zeep.exceptions
+from google.auth.exceptions import GoogleAuthError
+from googleads.errors import GoogleAdsError
+
 from src.core.exceptions import (
     AdCPAdapterResourceNotFoundError,
     AdCPAuthorizationError,
@@ -39,6 +43,14 @@ from src.core.exceptions import (
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+#: What a googleads SOAP service call raises when GAM, or the way to it, fails: the
+#: client turns a SOAP fault into ``GoogleAdsServerFault`` (a ``GoogleAdsError``), zeep
+#: raises its own ``Error`` for a reply that is not SOAP, google-auth raises
+#: ``GoogleAuthError`` when the credentials cannot be refreshed, and the transport's
+#: ``requests.RequestException`` is an ``OSError`` (``requests`` itself is banned in
+#: ``src/`` by ruff-egress.toml, so it is not named here).
+GAM_CALL_ERRORS: tuple[type[Exception], ...] = (GoogleAdsError, zeep.exceptions.Error, GoogleAuthError, OSError)
 
 
 class RetryConfig:
@@ -67,7 +79,7 @@ def map_gam_exception(exception: Exception) -> AdCPSalesAgentError:
     ``AdCPSalesAgentError`` untouched, so this decision is the one the buyer receives.
 
     Carries NO upstream text into the error. A SOAP fault's string is a third
-    party's, and AdCP 3.1.1 transport-errors.mdx forbids putting it on the wire
+    party's, and transport-errors.mdx forbids putting it on the wire
     (Security Considerations; restated for CONFIGURATION_ERROR as "MUST NOT
     include credentials, connection strings, full file paths, or stack traces").
     The fault travels in ``internal_detail``, which is non-wire by construction,

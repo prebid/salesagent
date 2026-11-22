@@ -23,7 +23,7 @@ jobs:
           egress-policy: audit
           # scorecard-action is a Docker container action; disable-sudo-and-containers
           # uninstalls Docker and breaks it — deliberately omitted (enforced by arch_guard).
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3

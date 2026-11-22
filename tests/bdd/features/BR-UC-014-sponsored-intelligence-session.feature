@@ -51,7 +51,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the response contains matching_products array with total_matching count
     # POST-S1: Buyer knows offering availability and can view details and products
     # POST-S7: Buyer received offering_token for session continuity
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
     Examples:
       | transport |
@@ -90,7 +90,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the response contains an initial brand response with message text
     # POST-S2: Active session with unique ID and negotiated capabilities
     # POST-S8: Capabilities are intersection of host and brand
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-006 @ext-a @initiate-session @happy-path @post-s2 @post-s8
   Scenario: Initiate session -- consent denied with anonymous session
@@ -102,7 +102,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And negotiated_capabilities includes conversational modality as true
     # POST-S2: Anonymous session created
     # POST-S8: At least conversational baseline negotiated
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-007 @ext-a @initiate-session @happy-path @post-s8
   Scenario: Initiate session -- no supported_capabilities yields conversational baseline only
@@ -112,7 +112,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And negotiated_capabilities contains only conversational modality
     And negotiated_capabilities does not include voice, video, or avatar
     # POST-S8: Only conversational baseline when host omits capabilities
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-008 @ext-a @initiate-session @happy-path @post-s2
   Scenario: Initiate session -- with valid offering_token recalls prior context
@@ -122,7 +122,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the response contains session_status "active"
     And the brand agent can reference prior product listings
     # POST-S2: Session with offering context
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-009 @ext-a @initiate-session @happy-path @post-s2 @degradation
   Scenario: Initiate session -- expired offering_token degrades gracefully
@@ -197,7 +197,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     # POST-S5: Session terminated successfully
     # POST-S6: ACP handoff data for checkout
     # BR-RULE-100 INV-1: handoff_transaction requires acp_handoff
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-017 @terminate-session @happy-path @post-s5
   Scenario: Terminate session -- user_exit without ACP handoff
@@ -209,7 +209,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the response may contain follow_up suggestions
     # POST-S5: Session terminated (no commerce handoff)
     # BR-RULE-100 INV-2: non-transaction reason has no ACP data
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-018 @terminate-session @happy-path @post-s5
   Scenario: Terminate session -- handoff_complete without ACP handoff
@@ -219,7 +219,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the response contains session_status "complete"
     And the response does not contain acp_handoff
     # POST-S5: Session terminated with handoff_complete
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-019 @terminate-session @happy-path @post-s5
   Scenario: Terminate session -- session_timeout
@@ -228,7 +228,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Then the response contains terminated true
     And the response contains session_status "terminated"
     # POST-S5: Session terminated due to timeout
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-020 @terminate-session @happy-path @post-s5
   Scenario: Terminate session -- host_terminated with cause
@@ -338,7 +338,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     # POST-F2: Error code SESSION_TERMINATED
     # BR-RULE-098 INV-4: Message to terminal session rejected
     # v3.1: Terminated sessions return error codes (no synthetic session_status on the error path), per si-send-message-response schema description.
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-029 @extension @ext-h @error @post-f1 @post-f2
   Scenario: Send message to complete session -- SESSION_TERMINATED
@@ -707,7 +707,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_get_offering with offering_id "shoes-fall" and intent "mens running shoes size 10"
     Then the offering lookup succeeds
     # BR-RULE-095 INV-2: intent without PII → proceeds (v3.1: NL surface is `intent`; `context` is opaque envelope)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-inv-095-4 @invariant @br-rule-095 @error @schema-v3.1
   Scenario: BR-RULE-095 INV-4 violated -- intent with PII rejected
@@ -819,7 +819,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the error should include "suggestion" field
     And the suggestion should contain "new session"
     # BR-RULE-098 INV-4: terminal session (complete OR terminated) rejects messages
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-inv-098-5 @invariant @br-rule-098 @schema-v3.1
   Scenario: BR-RULE-098 INV-5 holds -- terminated state distinct from complete
@@ -829,7 +829,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the session_status should not be "complete"
     And no further activity should be accepted on session_id "sess-host-end"
     # BR-RULE-098 INV-5: terminated (involuntary/forced end) is distinct from complete (natural successful end)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-inv-098-6 @invariant @br-rule-098 @error @schema-v3.1
   Scenario: BR-RULE-098 INV-6 violated -- initiate response omits session_status
@@ -1186,7 +1186,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the brand response declares a surface with catalogId "si-standard"
     And the surface contains a component of type "<component_type>"
     Then <outcome>
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
     Examples: Standard catalog components (must render)
       | component_type     | outcome                                              |
@@ -1226,7 +1226,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the response contains session_status "active"
     And the brand agent's next surface reflects the "add_to_cart" intent
     # POST-S3: Buyer receives next conversational turn driven by the user action
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-offering-anchors-session @offering @initiate-session @happy-path @post-s2 @br-rule-095
   Scenario: Offering anchors si_initiate_session via offering_token continuity
@@ -1238,7 +1238,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the session is anchored to offering_id "delta-flights-summer"
     And the negotiated capabilities are scoped to the offering's brand agent
     # POST-S2: Buyer has an active session anchored to a specific offering
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-offering-expired-blocks-session @offering @initiate-session @error @br-rule-095
   Scenario: Expired offering blocks session establishment
@@ -1278,7 +1278,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Then the request proceeds to identity and consent processing
     And a session is created with a unique session_id
     # BR-RULE-286 INV-1: all three required fields present → proceeds
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-inv-286-2 @invariant @br-rule-286 @error @schema-v3.1
   Scenario: BR-RULE-286 INV-2 violated -- idempotency_key missing rejected
@@ -1289,7 +1289,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the error should include "suggestion" field
     And the suggestion should contain "UUID"
     # BR-RULE-286 INV-2: idempotency_key absent → IDEMPOTENCY_KEY_REQUIRED
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-inv-286-3 @invariant @br-rule-286 @error @schema-v3.1
   Scenario: BR-RULE-286 INV-3 violated -- intent missing rejected
@@ -1300,7 +1300,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the error should include "suggestion" field
     And the suggestion should contain "natural-language"
     # BR-RULE-286 INV-3: intent absent → INTENT_REQUIRED
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-inv-286-4 @invariant @br-rule-286 @error @schema-v3.1
   Scenario: BR-RULE-286 INV-4 violated -- identity missing rejected
@@ -1350,7 +1350,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the host validates the acp_handoff
     Then the host may open the checkout_url to initiate checkout
     # BR-RULE-287 INV-1: HTTPS scheme + valid URI → host MAY open
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-inv-287-2 @invariant @br-rule-287 @error @schema-v3.1
   Scenario: BR-RULE-287 INV-2 violated -- non-HTTPS checkout_url rejected
@@ -1361,7 +1361,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-287 INV-2: non-HTTPS scheme → CHECKOUT_URL_NOT_HTTPS
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-inv-287-3 @invariant @br-rule-287 @error @schema-v3.1
   Scenario: BR-RULE-287 INV-3 violated -- malformed checkout_url rejected
@@ -1372,7 +1372,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-287 INV-3: syntactically invalid URI → CHECKOUT_URL_INVALID
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-inv-287-4 @invariant @br-rule-287 @schema-v3.1
   Scenario: BR-RULE-287 INV-4 holds -- checkout_token treated as opaque
@@ -1381,7 +1381,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the host forwards the handoff to the checkout endpoint
     Then the host should pass checkout_token verbatim without parsing, decoding, or modification
     # BR-RULE-287 INV-4: checkout_token is opaque → host passes verbatim
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-inv-287-5 @invariant @br-rule-287 @schema-v3.1
   Scenario: BR-RULE-287 INV-5 holds -- future expires_at allows checkout
@@ -1390,7 +1390,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the host validates the acp_handoff
     Then the host should initiate checkout before the expires_at time
     # BR-RULE-287 INV-5: future ISO 8601 expires_at → host SHOULD initiate before
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-inv-287-6 @invariant @br-rule-287 @error @schema-v3.1
   Scenario: BR-RULE-287 INV-6 violated -- past or malformed expires_at rejected
@@ -1401,7 +1401,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-287 INV-6: past or malformed expires_at → HANDOFF_EXPIRES_AT_INVALID
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-inv-287-7 @invariant @br-rule-287 @schema-v3.1
   Scenario: BR-RULE-287 INV-7 holds -- payload may carry structured checkout context
@@ -1460,7 +1460,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the bound value is { "literalString": "Hello" }
     Then the value is well-formed and the host renders the literal
     # BR-RULE-288 INV-1: value matches exactly one of the 5 oneOf variants → well-formed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-inv-288-2 @invariant @br-rule-288 @error @schema-v3.1
   Scenario: BR-RULE-288 INV-2 violated -- bound value with multiple variant keys rejected
@@ -1471,7 +1471,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the error should include "suggestion" field
     And the suggestion should contain "single oneOf variant"
     # BR-RULE-288 INV-2: multiple variant keys present → BOUND_VALUE_MALFORMED
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-inv-288-3 @invariant @br-rule-288 @error @schema-v3.1
   Scenario: BR-RULE-288 INV-3 violated -- empty or extra-key bound value rejected
@@ -1481,7 +1481,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-288 INV-3: empty object or additionalProperties violation → BOUND_VALUE_MALFORMED
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-inv-288-4 @invariant @br-rule-288 @error @schema-v3.1
   Scenario: BR-RULE-288 INV-4 violated -- path paired with literalNumber rejected

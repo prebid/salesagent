@@ -17,7 +17,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.core.database.models import CreativeAgent, SignalsAgent
+from src.core.database.models import CreativeAgent, SignalsAgent, Tenant
 
 
 class CreativeAgentRepository:
@@ -50,6 +50,16 @@ class CreativeAgentRepository:
                 .order_by(CreativeAgent.priority)
             ).all()
         )
+
+    def federates_default_agent(self) -> bool:
+        """Whether this tenant lists the AdCP standard creative agent beside its own agents.
+
+        ``one()``: the tenant exists by construction -- the resolver loaded it before
+        any tool asked for its agents.
+        """
+        return self._session.scalars(
+            select(Tenant.use_default_creative_agent).where(Tenant.tenant_id == self._tenant_id)
+        ).one()
 
 
 class SignalsAgentRepository:

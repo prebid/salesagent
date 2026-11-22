@@ -33,7 +33,7 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 
 from src.core.schemas import AssetStatus
-from src.core.tools.media_buy_create import push_creative_to_existing_buy
+from src.core.tools.media_buy_create import CreativePushFailure, push_creative_to_existing_buy
 from tests.helpers.media_buy_approval import uploadable_creative
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -42,6 +42,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 #: function carries, so reading it off the persisted row can only pass if production
 #: carried it from the adapter through the merge into the write.
 PLATFORM_CONCEPT_ID = "gam-order-90210"
+#: The ad server's id for the creative it created -- never the buyer's creative_id.
+PLATFORM_CREATIVE_ID = "gam_creative_4242"
 
 
 def _seed_live_buy_with_assigned_creative(*, native_style_id: int | None = None):
@@ -93,6 +95,7 @@ def _adapter_reporting(creative_id: str) -> MagicMock:
     adapter.push_creative_assets.return_value = [
         AssetStatus(
             creative_id=creative_id,
+            platform_creative_id=PLATFORM_CREATIVE_ID,
             status="active",
             concept_id=PLATFORM_CONCEPT_ID,
             concept_name="Q4 Brand Push",
@@ -102,7 +105,7 @@ def _adapter_reporting(creative_id: str) -> MagicMock:
     return adapter
 
 
-def _push(adapter: MagicMock, *, creative_id: str, media_buy_id: str, tenant_id: str) -> tuple[bool, str | None]:
+def _push(adapter: MagicMock, *, creative_id: str, media_buy_id: str, tenant_id: str) -> CreativePushFailure | None:
     """Run the push with ``adapter`` standing in for the ad server it builds."""
     with patch("src.core.tools.media_buy_create.get_adapter", return_value=adapter):
         return push_creative_to_existing_buy(creative_id=creative_id, media_buy_id=media_buy_id, tenant_id=tenant_id)
@@ -134,11 +137,11 @@ def test_push_persists_the_adapter_enrichment(integration_db, factory_session):
     """The enrichment the adapter reported is on the ROW after the push returns."""
     tenant_id, creative_id, media_buy_id, principal_id = _seed_live_buy_with_assigned_creative()
 
-    ok, err = _push(
+    failure = _push(
         _adapter_reporting(creative_id), creative_id=creative_id, media_buy_id=media_buy_id, tenant_id=tenant_id
     )
 
-    assert (ok, err) == (True, None), f"push failed: {err}"
+    assert failure is None, f"push failed: {failure}"
 
     data = _persisted_creative_data(tenant_id, creative_id, principal_id)
     assert data.get("concept_id") == PLATFORM_CONCEPT_ID, (
@@ -146,8 +149,8 @@ def test_push_persists_the_adapter_enrichment(integration_db, factory_session):
         f"was lost. Persisted data: {data}"
     )
     assert data.get("concept_source") == "gam_order"
-    assert data.get("platform_creative_id") == creative_id, (
-        "platform_creative_id is what the function's own re-approval guard reads; without "
+    assert data.get("ad_server_creative_id") == PLATFORM_CREATIVE_ID, (
+        "ad_server_creative_id is what the function's own re-approval guard reads; without "
         "it a second approval pushes this creative to the ad server again"
     )
 
@@ -164,9 +167,9 @@ def test_push_hands_the_product_native_template_to_the_fresh_adapter(integration
     tenant_id, creative_id, media_buy_id, _principal_id = _seed_live_buy_with_assigned_creative(native_style_id=987654)
     adapter = _adapter_reporting(creative_id)
 
-    ok, err = _push(adapter, creative_id=creative_id, media_buy_id=media_buy_id, tenant_id=tenant_id)
+    failure = _push(adapter, creative_id=creative_id, media_buy_id=media_buy_id, tenant_id=tenant_id)
 
-    assert (ok, err) == (True, None), f"push failed: {err}"
+    assert failure is None, f"push failed: {failure}"
     adapter.push_creative_assets.assert_called_once_with(
         "gam_order_777", ANY, ANY, native_template_ids={"pkg_live": "987654"}
     )

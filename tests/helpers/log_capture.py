@@ -22,8 +22,10 @@ class LogCaptureHandler(logging.Handler):
     def __init__(self, level: int = logging.WARNING) -> None:
         super().__init__(level=level)
         self.records: list[str] = []
+        self.log_records: list[logging.LogRecord] = []
 
     def emit(self, record: logging.LogRecord) -> None:
+        self.log_records.append(record)
         self.records.append(self.format(record))
 
 
@@ -37,8 +39,11 @@ def capture_logs(logger_name: str, *, level: int = logging.WARNING) -> Iterator[
     """
     handler = LogCaptureHandler(level=level)
     logger = logging.getLogger(logger_name)
+    previous = logger.level
+    logger.setLevel(level)
     logger.addHandler(handler)
     try:
         yield handler
     finally:
         logger.removeHandler(handler)
+        logger.setLevel(previous)

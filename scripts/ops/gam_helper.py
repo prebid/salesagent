@@ -214,7 +214,7 @@ def get_gam_config_for_tenant(tenant_id: str) -> dict | None:
 
         return {
             "network_code": adapter_config.gam_network_code,
-            "has_refresh_token": bool(adapter_config.gam_refresh_token),
+            "has_refresh_token": bool(adapter_config._gam_refresh_token),
             "company_id": adapter_config.advertiser_id if hasattr(adapter_config, "advertiser_id") else None,
             "trafficker_id": adapter_config.gam_trafficker_id,
             "manual_approval_required": adapter_config.gam_manual_approval_required,

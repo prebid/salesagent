@@ -26,7 +26,7 @@
 # What DOES fork it is whether the creative already exists — the two branches have
 # separate submit sites and separate wrong answers (missing row vs stale row).
 #
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/creative/sync-creatives-response.json
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json
 Feature: UC-006 sync_creatives — an effect that leaves the transaction runs only after that transaction commits (local)
 
   @T-UC-006-local-post-commit-ai-review-ordering @creative-approval @invariant
@@ -63,24 +63,16 @@ Feature: UC-006 sync_creatives — an effect that leaves the transaction runs on
   # and the writes it names: the Slack approval notification and the workflow
   # steps a human opens from it.
   #
-  # Today _sync.py orders them the wrong way round twice over:
-  #   * the notification fires at the END of the impl, AFTER _process_assignments
-  #     — so a strict-mode assignment failure aborts before either the steps or
-  #     the Slack message exist, while the creatives were already committed at
-  #     `if not dry_run: stack.close()`. That is the GH #1987 orphan: a creative
-  #     sitting at pending_review that no workflow step and no human ever hears
-  #     about (#1987).
-  #   * once the workflow-step write joins the creatives transaction, the
-  #     notification becomes an after_commit effect and therefore fires BEFORE
-  #     the assignment stage — the direct inverse of today's order.
+  # The creatives, their assignments and the workflow steps are one transaction, and
+  # the notification is an after_commit effect of it. So it fires only for a sync that
+  # stood, and it names rows a human can already open.
   #
-  # Both are graded at the notification itself, over an INDEPENDENT connection,
-  # because after the request every ordering looks alike. A flush without a
-  # commit is invisible to that connection, so neither assertion can pass
-  # vacuously: an empty read reddens them.
+  # Graded at the notification itself, over an INDEPENDENT connection, because after
+  # the request every ordering looks alike. A flush without a commit is invisible to
+  # that connection, so neither assertion can pass vacuously: an empty read reddens them.
 
   @T-UC-006-local-post-commit-workflow-step-ordering @creative-approval @invariant
-  Scenario: the approval notification names workflow steps that are already committed, and precedes the assignment stage
+  Scenario: the approval notification names workflow steps and an assignment that are already committed
     Given the Buyer is authenticated
     And the tenant has approval_mode "require-human"
     And the tenant has a slack_webhook_url configured
@@ -92,16 +84,12 @@ Feature: UC-006 sync_creatives — an effect that leaves the transaction runs on
     And the response is the success variant carrying a creatives array
     And a Slack notification should be sent immediately
     And the workflow steps the request committed were already visible when Slack was notified
-    And no creative assignment was committed when Slack was notified
-    And the assignment the request made is committed
-    # "a Slack notification should be sent immediately" plus "the assignment the
-    # request made is committed" are the two non-vacuity controls: without the
-    # first, an unsent notification would leave both observations unset; without
-    # the second, "no assignment at notification time" would also hold for a
-    # request that never created one.
+    And the assignment the request made was already committed when Slack was notified
+    # "a Slack notification should be sent immediately" is the non-vacuity control:
+    # an unsent notification would leave both observations unset.
 
   @T-UC-006-local-post-commit-no-orphan-pending-creative @creative-approval @invariant
-  Scenario: a strict-mode assignment failure leaves no committed creative without its workflow step
+  Scenario: a strict-mode assignment failure leaves no creative, workflow step or notification behind
     Given the Buyer is authenticated
     And the tenant has approval_mode "require-human"
     And the tenant has a slack_webhook_url configured
@@ -112,22 +100,18 @@ Feature: UC-006 sync_creatives — an effect that leaves the transaction runs on
     Then the error is compliant with the AdCP error spec
     And the response arrives
     And the response contains error code PACKAGE_NOT_FOUND
-    And every committed creative awaiting approval has a committed workflow step
+    And no creative, workflow step or Slack notification came of the request
     # The buyer-facing half is graded on the real wire bytes, not on the
     # harness's reconstructed exception, and deliberately NOT through the
     # existing "the operation should fail with an assignment error" step: that
     # step xfails the whole scenario on the package-not-found branch to excuse a
-    # spec-code gap in OTHER features, which would swallow the orphan assertion
-    # below before it ever ran. PACKAGE_NOT_FOUND / correctable is what
+    # spec-code gap in OTHER features, which would swallow the assertion below
+    # before it ever ran. PACKAGE_NOT_FOUND / correctable is what
     # AdCPPackageNotFoundError declares (src/core/exceptions.py) and what
-    # _assignments.py raises in strict mode.
+    # _assignments.py raises.
     #
-    # Cross-reference GH #1987: the buyer still gets the
-    # assignment error — that half is production's current, correct behaviour and
-    # is asserted first so this scenario cannot be "fixed" by swallowing it. What
-    # must change is the second half. _process_assignments raises out of the impl
-    # with no try covering it (_assignments.py:137/:168/:241), and today the
-    # workflow-step call sits AFTER that raise while the creatives were committed
-    # BEFORE it — so the creative is left at pending_review with nothing pointing
-    # at it. Once the steps join the creatives' transaction they commit together
-    # at the same stack.close(), before the raise, and the orphan cannot occur.
+    # Cross-reference GH #1987, a creative left at pending_review with nothing pointing
+    # at it. sync-creatives-request.json validation_mode: "'strict' fails entire sync on
+    # any validation error", so the creative, its step and the message all go with the
+    # refusal and there is nothing to orphan. The buyer's error is asserted first so this
+    # scenario cannot be satisfied by swallowing it.

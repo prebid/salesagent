@@ -7,10 +7,9 @@ setup:
 
 # Recapture the reference format fixture from the pinned creative agent. Run only when
 # the pin or the agent's catalog changes; the reviewed fixture diff is the drift gate.
-# Brings up the pinned agent if needed (idempotent). See issue #1418.
+# Runs inside the e2e compose network and tears it down afterwards. See issue #1418.
 creative-formats-refresh:
-	@./scripts/creative-agent-stack.sh up
-	uv run python scripts/refresh-reference-formats.py --url $$(./scripts/creative-agent-stack.sh url)
+	./scripts/dev/refresh-reference-formats.sh
 
 quality-ci:
 	uv run ruff format --check .

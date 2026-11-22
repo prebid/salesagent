@@ -59,7 +59,7 @@ INTENTIONAL_OVERRIDES = frozenset(
 def _step_texts(path: Path) -> set[str]:
     """Every Gherkin sentence a module registers, including ``parsers.parse`` forms."""
     found: set[str] = set()
-    for node in ast.walk(ast.parse(path.read_text())):
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
         if not isinstance(node, ast.FunctionDef):
             continue
         for decorator in node.decorator_list:

@@ -136,7 +136,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     And the billing fields vendor_cost, pricing_option_id, currency, and consumption are <billing_presence>
     # POST-S9: cost detail (vendor_cost as source of truth, consumption breakdown) appears only when
     #          the governance evaluation is billable AND an account was supplied to bill against
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/get-creative-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/get-creative-delivery-request.json
 
     Examples:
       | case                       | charges         | account            | billing_presence |
@@ -165,7 +165,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows at least one scoping filter is required
     # POST-F3: Buyer knows to provide media_buy_ids or creative_ids
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/get-creative-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/get-creative-delivery-request.json
 
   @T-UC-022-ext-a-empty @extension @ext-a @error @get-delivery @post-f1 @post-f2 @post-f3
   Scenario: Creative delivery fails -- scoping filter present but empty array
@@ -363,7 +363,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows which feature_ids are not evaluable
     # POST-F3: Buyer knows to omit the filter or check capabilities
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/get-creative-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/get-creative-delivery-request.json
 
   @T-UC-022-ext-i-cap @extension @ext-i @error @get-features @post-f1 @post-f2 @post-f3
   Scenario: Creative features fails -- creative_features capability not declared
@@ -801,7 +801,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "1"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/get-creative-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/get-creative-delivery-request.json
 
   @T-UC-022-pagination-over @boundary @get-delivery @error
   Scenario: Creative delivery fails -- pagination max_results above maximum
@@ -861,7 +861,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     And the error details should include a policy_url where the full policy can be reviewed
     # POST-F2: rejection rationale is structured, not free text
     # POST-F3: buyer knows which policy to consult before re-submitting
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/get-creative-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/get-creative-delivery-request.json
 
   @T-UC-022-creative-rejected-policy-url-format @v3-1 @error-details @creative-rejected
   Scenario: CREATIVE_REJECTED policy_url is a syntactically valid URI
@@ -871,7 +871,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Then the error code should be "CREATIVE_REJECTED"
     And the error details policy_url should be a syntactically valid URI
     # POST-F3: policy_url is dereferenceable so the buyer can review
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/get-creative-delivery-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/get-creative-delivery-request.json
 
   @T-UC-022-creative-rejected-delivery-not-applicable @v3-1 @error-details @creative-rejected
   Scenario: get_creative_delivery does not raise CREATIVE_REJECTED

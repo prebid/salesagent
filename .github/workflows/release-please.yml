@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+  # Sign a published release whose sign-and-attest job failed (3.0.1: its image_tags output was
+  # dropped). Only sign-and-attest runs, and only from main.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release to sign (for example 3.0.1). Its v<version> release must exist, and <image>:<version> must name the same digest on ghcr.io and Docker Hub.
+        required: true
+        type: string
 
 concurrency:
   group: release-please
@@ -11,8 +19,15 @@ concurrency:
 
 permissions: {}
 
+# The image names, written once: build-and-push pushes to them, sign-and-attest signs, attests and
+# scans them.
+env:
+  GHCR_IMAGE: ghcr.io/${{ github.repository }}
+  DOCKERHUB_IMAGE: docker.io/${{ secrets.DOCKERHUB_USER }}/salesagent
+
 jobs:
   release-please:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -43,13 +58,12 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image_tags: ${{ steps.meta.outputs.tags }}
       image_digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           egress-policy: audit
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Require CI green on release commit (D47 gate)
@@ -102,8 +116,8 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: |
-            ghcr.io/${{ github.repository }}
-            ${{ secrets.DOCKERHUB_USER }}/salesagent
+            ${{ env.GHCR_IMAGE }}
+            ${{ env.DOCKERHUB_IMAGE }}
           tags: |
             type=semver,pattern={{version}},value=${{ needs.release-please.outputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.version }}
@@ -178,7 +192,10 @@ jobs:
 
   sign-and-attest:
     needs: [release-please, build-and-push]
-    if: ${{ needs.release-please.outputs.release_created }}
+    # After a release's build, or on dispatch from main (when the other two jobs are skipped). A run
+    # from another branch would sign with a refs/heads/<branch> identity that ADR-007's cosign verify
+    # rejects.
+    if: ${{ !cancelled() && (needs.build-and-push.result == 'success' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -203,29 +220,82 @@ jobs:
           set -euo pipefail
           cosign login ghcr.io -u "$GHCR_USER" -p "$GH_TOKEN"
           cosign login docker.io -u "$DH_USER" -p "$DH_PASS"
-      - name: Sign image with cosign keyless
+      # After a release's build: the digest build-and-push pushed. On dispatch: the digest that a
+      # published release's version tag names, which must be the same in both registries, so a
+      # recovery run can only sign an image this workflow released.
+      - name: Resolve the image digest
+        id: digest
         env:
-          DIGEST: ${{ needs.build-and-push.outputs.image_digest }}
-          TAGS: ${{ needs.build-and-push.outputs.image_tags }}
+          EVENT_NAME: ${{ github.event_name }}
+          BUILD_DIGEST: ${{ needs.build-and-push.outputs.image_digest }}
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          DH_USER: ${{ secrets.DOCKERHUB_USER }}
+          DH_PASS: ${{ secrets.DOCKERHUB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Prints the digest that <image>:<tag> names, from the registry's Docker-Content-Digest header.
+          manifest_digest() {  # <image> <tag> <user> <password>
+            local host="${1%%/*}" repo="${1#*/}" token_url api token
+            case "$host" in
+              ghcr.io) token_url="https://ghcr.io/token?scope=repository:${repo}:pull"; api="ghcr.io" ;;
+              docker.io)
+                token_url="https://auth.docker.io/token?service=registry.docker.io&scope=repository:${repo}:pull"
+                api="registry-1.docker.io" ;;
+              *) echo "ERROR: unknown registry ${host}" >&2; return 1 ;;
+            esac
+            token=$(curl -fsS -u "$3:$4" "$token_url" | sed -n 's/.*"token": *"\([^"]*\)".*/\1/p')
+            [[ -n "$token" ]] || { echo "ERROR: no pull token for $1" >&2; return 1; }
+            curl -fsSI -H "Authorization: Bearer ${token}" \
+              -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+              "https://${api}/v2/${repo}/manifests/$2" | tr -d '\r' | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: *//p'
+          }
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ERROR: not a release version: $VERSION"; exit 1; }
+            gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" > /dev/null \
+              || { echo "ERROR: no v${VERSION} release in ${GITHUB_REPOSITORY}"; exit 1; }
+            ghcr=$(manifest_digest "$GHCR_IMAGE" "$VERSION" "$GHCR_USER" "$GH_TOKEN")
+            dockerhub=$(manifest_digest "$DOCKERHUB_IMAGE" "$VERSION" "$DH_USER" "$DH_PASS")
+            [[ -n "$ghcr" && "$ghcr" == "$dockerhub" ]] \
+              || { echo "ERROR: ${VERSION} is '${ghcr}' on ghcr.io and '${dockerhub}' on Docker Hub"; exit 1; }
+            digest=$ghcr
+          else
+            digest=$BUILD_DIGEST
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "ERROR: not an image digest: '${digest}'"; exit 1; }
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+      - name: Sign image with cosign keyless
+        id: sign
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+          # The image names, not build-and-push's image_tags output: the tags include the Docker Hub
+          # user, a secret, so GitHub drops that output between jobs ("Skip output 'image_tags' since
+          # it may contain secret") and nothing was signed. A signature attaches to the digest, so
+          # signing each image at the digest covers every tag.
+          IMAGES: ${{ env.GHCR_IMAGE }} ${{ env.DOCKERHUB_IMAGE }}
           BUNDLE_DIR: /tmp/cosign-bundles-${{ github.run_id }}
         run: |
           set -euo pipefail
-          [[ -n "$DIGEST" ]] || { echo "ERROR: build-and-push image_digest is empty"; exit 1; }
+          [[ -n "$DIGEST" ]] || { echo "ERROR: no image digest to sign"; exit 1; }
+          read -ra image_list <<< "$IMAGES"
+          # Signing nothing must fail, not pass silently as it did for 3.0.1.
+          [[ "${#image_list[@]}" -gt 0 ]] || { echo "ERROR: no images to sign"; exit 1; }
           mkdir -p "$BUNDLE_DIR"
-          for tag in $TAGS; do
+          for image in "${image_list[@]}"; do
             signed=false
-            safe_tag="${tag//\//-}"
+            safe_name="${image//\//-}"
             for attempt in 1 2 3; do
-              bundle_path="${BUNDLE_DIR}/${safe_tag}-${attempt}.json"
-              if cosign sign --yes --bundle "$bundle_path" "${tag}@${DIGEST}"; then
+              bundle_path="${BUNDLE_DIR}/${safe_name}-${attempt}.json"
+              if cosign sign --yes --bundle "$bundle_path" "${image}@${DIGEST}"; then
                 signed=true
                 break
               fi
-              echo "cosign attempt $attempt failed for ${tag} — retrying..."
+              echo "cosign attempt $attempt failed for ${image} — retrying..."
               sleep 30
             done
             if [ "$signed" != true ]; then
-              echo "ERROR: cosign sign failed for ${tag} after 3 attempts"
+              echo "ERROR: cosign sign failed for ${image} after 3 attempts"
               exit 1
             fi
           done
@@ -235,20 +305,22 @@ jobs:
           name: cosign-bundles-${{ github.run_id }}
           path: /tmp/cosign-bundles-${{ github.run_id }}/*.json
           if-no-files-found: error
+      # A recovery run attests too, so `gh attestation verify` works for the release; its attestation
+      # names the recovery run as the builder (ADR-007).
       - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-name: ghcr.io/${{ github.repository }}
-          subject-digest: ${{ needs.build-and-push.outputs.image_digest }}
+          subject-name: ${{ env.GHCR_IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: true
       - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-name: docker.io/${{ secrets.DOCKERHUB_USER }}/salesagent
-          subject-digest: ${{ needs.build-and-push.outputs.image_digest }}
+          subject-name: ${{ env.DOCKERHUB_IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: true
       - name: Scan image for OS-layer CVEs (SARIF report)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository }}@${{ needs.build-and-push.outputs.image_digest }}
+          image-ref: ${{ env.GHCR_IMAGE }}@${{ steps.digest.outputs.digest }}
           severity: CRITICAL,HIGH
           vuln-type: os,library
           ignore-unfixed: true

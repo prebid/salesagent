@@ -10,18 +10,17 @@ from src.core.tools.products import get_recommended_cpm
 
 
 def _make_pricing_option(pricing_model: str, price_guidance=None):
-    """Build a mock PricingOption (RootModel wrapper around a typed option).
+    """Build a mock pricing option: the MEMBER, not a wrapper around one.
 
-    Mirrors adcp library's PricingOption which is a RootModel — .root gives the
-    inner typed option (CpmPricingOption, etc.).
+    ``Product.pricing_options`` holds the typed members (CpmPricingOption, ...) from
+    adcp 9 on -- the SDK deleted the ``PricingOption`` RootModel wrapper that made
+    ``.root`` necessary -- so a fixture wrapping one describes a shape production no
+    longer produces.
     """
-    inner = MagicMock()
-    inner.pricing_model = pricing_model
-    inner.price_guidance = price_guidance
-
-    wrapper = MagicMock()
-    wrapper.root = inner
-    return wrapper
+    option = MagicMock()
+    option.pricing_model = pricing_model
+    option.price_guidance = price_guidance
+    return option
 
 
 def _make_price_guidance(p75=None, p50=None, p25=None, p90=None):

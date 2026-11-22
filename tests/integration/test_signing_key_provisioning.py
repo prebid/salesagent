@@ -505,7 +505,7 @@ class TestNoKeyMaterialTouchesAFilesystem:
             f"Nothing was written to {structured}"
         )
 
-        entries = [json.loads(line) for line in structured.read_text().splitlines() if line.strip()]
+        entries = [json.loads(line) for line in structured.read_text(encoding="utf-8").splitlines() if line.strip()]
         provisioning = [
             entry for entry in entries if entry.get("operation") == "provision_signing_key" and entry.get("success")
         ]
@@ -584,9 +584,7 @@ class TestProvisioningHandsBackNoKeyMaterial:
     caller. The admin route then ``flash()``es that PEM, and ``flash()`` writes to
     Flask's DEFAULT session store -- ``SecureCookieSessionInterface``, a
     CLIENT-SIDE cookie that is SIGNED BUT NOT ENCRYPTED, so its contents are
-    readable by anyone holding the cookie. ``src/admin/app.py:128`` additionally
-    sets ``SESSION_COOKIE_HTTPONLY=False`` in production so JavaScript can read
-    it. The path an operator picks to keep private keys OUT of any store is the
+    readable by anyone holding the cookie. The path an operator picks to keep private keys OUT of any store is the
     path that writes one into a browser cookie.
 
     The fix is not to stop flashing it. It is that provisioning has no private
@@ -658,9 +656,8 @@ class TestProvisioningHandsBackNoKeyMaterial:
             "a provisioning response that carries private key material IS the defect "
             "(salesagent-9misv), and it must be unreachable rather than merely unused: "
             f"found {sorted(leaked.items())}. flash() writes to Flask's default client-side "
-            "SecureCookieSessionInterface -- signed, NOT encrypted -- and src/admin/app.py:128 "
-            "sets SESSION_COOKIE_HTTPONLY=False in production, so a PEM flashed here is a PEM "
-            "any script on the page can read. Provisioning must have no private half to return."
+            "SecureCookieSessionInterface -- signed, NOT encrypted -- so a PEM flashed here is a "
+            "PEM anyone holding the cookie can read. Provisioning must have no private half to return."
         )
         assert len(_rows(env, tenant.tenant_id)) == 1, (
             "and the mint must still SUCCEED -- this grades that no material comes back, not "
@@ -944,7 +941,7 @@ def _env_template_values() -> dict[str, str]:
     needs the two literals the file DEFINES, not what they would expand to in a shell that
     already had them set.
     """
-    lines = (Path(__file__).resolve().parents[2] / _ENV_TEMPLATE).read_text().splitlines()
+    lines = (Path(__file__).resolve().parents[2] / _ENV_TEMPLATE).read_text(encoding="utf-8").splitlines()
     pairs = (line.split("=", 1) for line in lines if "=" in line and not line.lstrip().startswith("#"))
     return {name.strip(): value.strip() for name, value in pairs}
 

@@ -59,6 +59,7 @@ right under every image, which is why it is required here rather than argued for
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 
 import pytest
@@ -134,32 +135,53 @@ _ORIGIN_MODULE_PATH = _REPO_ROOT / "tests" / "e2e" / "counterparty_origin_servic
 # ---------------------------------------------------------------------------
 
 
-#: Import roots a bare ``python:3.12-slim`` cannot satisfy. ``tests.helpers``'s
-#: package ``__init__`` transitively imports ``tests.factories`` (factory-boy),
-#: so reaching for either kills the container on import, before it ever binds a
-#: socket — a failure mp53.9's capture service hit for real.
-FORBIDDEN_IMPORT_ROOTS = ("tests.helpers", "tests.factories")
+#: The two roots this check was originally written against, kept only as the
+#: documented WHY: ``tests.helpers``'s package ``__init__`` transitively imports
+#: ``tests.factories`` (factory-boy), so reaching for either kills the container on
+#: import before it ever binds a socket — a failure mp53.9's capture service hit for
+#: real. ``_forbidden_imports`` no longer consults this tuple; it requires the stdlib
+#: instead, which covers these two and every other package a bare image lacks.
+HISTORICAL_FORBIDDEN_IMPORT_ROOTS = ("tests.helpers", "tests.factories")
 
 
 def _forbidden_imports(path: Path) -> list[str]:
-    """``<file>:<line>: imports <name>`` for every import of a forbidden root.
+    """``<file>:<line>: imports <name>`` for every import a bare image cannot resolve.
 
     Walks import NODES rather than scanning text: a substring match reports the
     prose in a module docstring that explains the constraint, and still misses
     ``import tests.helpers as h`` or an import nested inside a function.
+
+    DERIVED from ``sys.stdlib_module_names`` rather than a list of roots to ban. It
+    used to name only ``tests.helpers`` and ``tests.factories``, which made the check
+    narrower than the docstring above it promised — and the gap was not theoretical:
+    ``import mcp`` passed this guard cleanly when probed, even though the compose
+    service is a bare ``python:3.12-slim`` with the repo mounted and NO install step,
+    so nothing outside the stdlib resolves there at runtime. Banning a list catches the
+    two roots someone thought of; requiring the stdlib catches every third-party
+    package, including the next one.
+
+    The two ``tests.e2e`` siblings are the one allowance, and they are not a hole:
+    ``tests/__init__.py`` and ``tests/e2e/__init__.py`` are themselves stdlib-safe,
+    which is exactly what makes a sibling module importable where a helper is not
+    (``tests/e2e/_stdlib_json_http.py``'s own docstring).
     """
+    allowed_prefixes = ("tests.e2e.",)
     tree = ast.parse(path.read_text(encoding="utf-8"))
     found: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names = [alias.name for alias in node.names]
         elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                continue  # a relative import stays inside tests/e2e/ by construction
             names = [node.module or ""]
         else:
             continue
         for name in names:
-            if any(name == root or name.startswith(f"{root}.") for root in FORBIDDEN_IMPORT_ROOTS):
-                found.append(f"{path.name}:{node.lineno}: imports {name}")
+            root = name.split(".")[0]
+            if root in sys.stdlib_module_names or name.startswith(allowed_prefixes):
+                continue
+            found.append(f"{path.name}:{node.lineno}: imports {name}")
     return found
 
 
@@ -226,10 +248,15 @@ def test_the_counterparty_origin_module_exists_and_is_stdlib_only() -> None:
         summary=f"{_ORIGIN_MODULE_PATH.name} does not exist",
         violations=[f"tests/e2e/{_ORIGIN_MODULE_PATH.name}: missing"],
         fix_hint=(
-            "Write the static counterparty origin: the capabilities document at the agent path, "
-            "/.well-known/brand.json (lists the agent url), /.well-known/brand-unlisted.json (does "
-            "NOT), and /.well-known/jwks.json. All plain GETs answering 200 with a JSON object — "
-            "that is what agent_resolver._fetch_capabilities requires."
+            "Write the counterparty origin: a get_adcp_capabilities MCP tool call at the agent "
+            "path, then /.well-known/brand.json (lists the agent url), "
+            "/.well-known/brand-unlisted.json (does NOT), and /.well-known/jwks.json as plain "
+            "GETs answering 200 with a JSON object. Hop 1 is a TOOL CALL, not a fetch: AdCP "
+            "3.2.1 L1/security.mdx step 1 invokes it over the declared transport and adcp 9's "
+            "_resolver_protocol does exactly that. This hint used to say 'all plain GETs ... "
+            "that is what agent_resolver._fetch_capabilities requires', which was true of adcp "
+            "6.6.0 and is the shape that broke seven signing scenarios once the SDK caught up "
+            "(salesagent-8qela.167)."
         ),
     )
 
@@ -482,3 +509,67 @@ def test_sni_upstream_detector_reports_a_name_routed_to_the_wrong_service() -> N
     )
 
     assert sni_map_upstreams(synthetic)[COUNTERPARTY_HOSTNAME] == "webhook-capture:8080"
+
+
+def test_the_counterparty_origin_answers_hop_1_as_the_mcp_tool_call() -> None:
+    """Hop 1 is a ``get_adcp_capabilities`` TOOL CALL, and this origin must complete one.
+
+    The sixth site, added after the fixture outlived the SDK behaviour it was shaped
+    around. Up to adcp 6.6.0 hop 1 was a raw ``GET <agent_url>``; adcp 9's
+    ``_resolver_protocol`` opens an MCP session and calls the tool, which is what AdCP
+    3.2.1 § "Discovering an agent's signing keys via ``brand_json_url``" step 1
+    specifies. This origin answered only the raw GET, so hop 1 failed and seven signing
+    scenarios across three suites reported ``request_signature_capabilities_unreachable``
+    — the pin's correct code for a failed hop 1 (``salesagent-8qela.167``).
+
+    The other five sites read files. This one EXECUTES, through the real
+    ``fetch_protocol_capabilities`` rather than a hand-rolled client, because the defect
+    it guards was a disagreement between this fixture and that function — and only the
+    function itself is authority on what it sends. It needs no Docker: the origin binds
+    a loopback port in-process for the length of the test.
+
+    The uninstalled slot is the CONTROL. Without it a handler that answered every path
+    with a document would pass, and the fixture's deliberate hop-1 refusal for a slot
+    nobody installed (``_agent_capabilities``) would be gone with nothing to notice.
+    """
+    import asyncio
+
+    import httpx
+    from adcp.signing._resolver_protocol import DiscoveryTransport, fetch_protocol_capabilities
+
+    from tests.e2e.counterparty_origin_service import run_counterparty_origin
+
+    async def capabilities_at(base: str, path: str) -> dict | None:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False, follow_redirects=False) as client:
+            transport = DiscoveryTransport(client, f"{base}{path}", 64 * 1024, 0)
+            try:
+                return await fetch_protocol_capabilities(transport, "mcp", 10.0)
+            except Exception:  # noqa: BLE001 - the refusal is one of the two outcomes graded
+                return None
+
+    async def walk() -> tuple[dict | None, dict | None, dict | None]:
+        with run_counterparty_origin(host="127.0.0.1", port=0) as base:
+            return (
+                await capabilities_at(base, "/agent/listed"),
+                await capabilities_at(base, "/agent/unlisted"),
+                await capabilities_at(base, "/agent/slot/nothing-is-installed-here"),
+            )
+
+    listed, unlisted, uninstalled_slot = asyncio.run(walk())
+
+    assert listed is not None, (
+        "hop 1 did not complete over MCP for /agent/listed — the SDK's own "
+        "fetch_protocol_capabilities could not reach a capabilities document, which is "
+        "exactly the condition that produced request_signature_capabilities_unreachable"
+    )
+    assert listed.get("identity", {}).get("brand_json_url", "").endswith("/.well-known/brand.json"), (
+        f"hop 1 resolved but carried no usable identity.brand_json_url, so hop 2 has nothing to fetch: {listed!r}"
+    )
+    assert unlisted is not None and "brand-unlisted" in unlisted.get("identity", {}).get("brand_json_url", ""), (
+        "the unlisted sibling must resolve too and point at the unlisted brand.json — it "
+        f"differs from its twin in brand.json, not in hop 1: {unlisted!r}"
+    )
+    assert uninstalled_slot is None, (
+        "a slot with no keyset installed completed hop 1, so the deliberate hop-1 refusal "
+        f"is gone and an unknown slot will now fail later as an unresolvable keyid: {uninstalled_slot!r}"
+    )

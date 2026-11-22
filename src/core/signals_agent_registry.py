@@ -136,7 +136,7 @@ class SignalsAgentRegistry:
 
         Routes through ``call_operator_mcp_tool`` — a real MCP handshake, IP-pinned,
         redirect-refusing — rather than ``adcp.ADCPMultiAgentClient``, whose own
-        httpx stack no egress policy of ours could reach (adcp 6.6.0 exposes no
+        httpx stack no egress policy of ours could reach (the pinned SDK exposes no
         transport injection point; upstream adcp-client-python#1004). Closes the
         gap tracked by salesagent-4n88. Signals agents are ALWAYS
         operator-configured (tenant DB rows) — there is no counterparty-supplied
@@ -150,7 +150,7 @@ class SignalsAgentRegistry:
         to an unsigned request (see
         :func:`~src.core.helpers.adapter_helpers.request_signer_for_tenant`).
 
-        Spec grounding for signing THIS dial: pinned AdCP 3.1.1,
+        Spec grounding for signing THIS dial: pinned AdCP,
         ``docs/building/by-layer/L1/security.mdx`` §Request signing (the
         ``adcp/request-signing/v1`` profile). :1043 restricts the operation a
         signature may be attributed to to AdCP protocol operation names;

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from src.core.database.repositories.tenant_lookup import TenantLookupRepository
+    from src.core.tenant_context import TenantContext
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +81,18 @@ def safe_json_loads(value, default=None):
     return default
 
 
-def get_tenant_by_id(tenant_id: str) -> dict[str, Any] | None:
-    """The active tenant with this id, as a dict, or ``None``."""
+def get_tenant_context(tenant_id: str) -> "TenantContext | None":
+    """The active tenant with this id, as the ``TenantContext`` the resolver hands on, or ``None``.
+
+    Built from the ORM row, not from ``serialize_tenant_to_dict``: the context carries the
+    seller's parsed AI configuration, a credential the dict deliberately leaves out. The
+    import is local because ``tenant_context`` imports ``safe_json_loads`` from this module.
+    """
+    from src.core.tenant_context import TenantContext
+
     with get_db_session() as db_session:
-        return _as_dict(_lookup(db_session).find_active_by_id(tenant_id))
+        tenant = _lookup(db_session).find_active_by_id(tenant_id)
+        return TenantContext.from_orm_model(tenant) if tenant else None
 
 
 def get_tenant_by_virtual_host(virtual_host: str) -> dict[str, Any] | None:

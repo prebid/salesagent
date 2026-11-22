@@ -96,16 +96,56 @@ map $ssl_server_name $tls_upstream_named {
     webhooks.adcp-e2e.dev      webhook-capture:8080;
     counterparty.adcp-e2e.dev  counterparty-origin:8080;
 
+    # The SELLER, under the same wildcard and for the same eTLD+1 reason as the
+    # counterparty above — a SECOND name for the `proxy.adcp.test` upstream, not a
+    # replacement for it. It exists because the RUNNER walks the seller's own trust
+    # root through the SDK resolver (tests/e2e/test_trust_root_e2e.py), and
+    # security.mdx step 3 (Origin binding) makes that walk REFUSE a `.test` name:
+    # "The agent URL A's host eTLD+1 MUST equal the brand_json_url's host eTLD+1.
+    # eTLD+1 computation MUST use a pinned, dated Public Suffix List snapshot" —
+    # `.test` is not in the PSL, so `registrable_domain` is None on both sides, the
+    # fallback needs an `authorized_operators[]` entry no seller document carries,
+    # and the walk ends in `request_signature_brand_origin_mismatch`. The name a
+    # buyer resolves us by therefore has to have a registrable domain, so every
+    # other seller-side front stays on `*.adcp.test` and this one does not.
+    seller.adcp-e2e.dev        adcp-server:8080;
+
     # Retained alongside webhooks.adcp-e2e.dev, same upstream: the READBACK leg
     # (the test process draining its own captures) and the tls-proxy healthcheck
     # are not the graded delivery path, so the reserved-TLD gate above never
     # runs for them and this alias stays valid. Costs nothing if compose stops
     # advertising it — an unrouted map key is inert.
     webhooks.adcp.test         webhook-capture:8080;
+
+    # ── Test publishers the SERVER dials for their adagents.json (salesagent-ts3gk.9) ──
+    # A publisher domain carries no port, so the SDK fetches on 443 (the `listen 443`
+    # below). publisher-origin answers per (dialing address, Host with port), from the
+    # files each BDD runner wrote for its own server (config/nginx/publisher-origin.conf);
+    # the location below forwards both. Each is also a tls-proxy alias and a leaf SAN.
+    psatest.com                    publisher-origin:8080;
+    news.psatest.com               publisher-origin:8080;
+    dotted.psatest.com             publisher-origin:8080;
+    mixed.psatest.com              publisher-origin:8080;
+    news-psatest.com               publisher-origin:8080;
+    radio-psatest.com              publisher-origin:8080;
+    podcast-psatest.com            publisher-origin:8080;
+    sports-psatest.com             publisher-origin:8080;
+    weather-psatest.com            publisher-origin:8080;
+    pub-psatest.com                publisher-origin:8080;
+    partner-psatest.com            publisher-origin:8080;
+    other-psatest.com              publisher-origin:8080;
+    stranger-psatest.com           publisher-origin:8080;
+    other-publisher-psatest.com    publisher-origin:8080;
+    unverified-psatest.com         publisher-origin:8080;
+    pending-psatest.com            publisher-origin:8080;
+    failed-psatest.com             publisher-origin:8080;
+    unbacked-publisher-psatest.com publisher-origin:8080;
 }
 
 server {
     listen 8443 ssl;
+    # 443 for the test publishers: a publisher domain carries no port (map above).
+    listen 443 ssl;
     server_name _;
 
     ssl_certificate     /app/.test-tls/server.pem;

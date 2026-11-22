@@ -34,6 +34,7 @@ import secrets
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, TypedDict
+from urllib.parse import urlsplit
 
 from adcp.signing.agent_resolver import BrandAgentType
 from pydantic import Field, ValidationInfo, field_validator, model_validator
@@ -42,7 +43,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _ENV = SettingsConfigDict(env_prefix="", case_sensitive=False, extra="ignore", env_ignore_empty=True)
 
 
-def _csv(value: str | None) -> list[str]:
+def split_csv(value: str | None) -> list[str]:
+    """The non-empty, stripped items of a comma-separated *value*."""
     return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
@@ -63,6 +65,9 @@ class RuntimeSettings(BaseSettings):
     sales_agent_domain: str | None = None
     admin_domain: str | None = None
     super_admin_domain: str | None = None
+    # Mounts GET /tls/ask, the on-demand TLS gate a proxy such as Caddy asks before issuing a
+    # certificate. Off by default: it tells any caller whether a host is served here.
+    tls_ask_enabled: bool = False
     support_email: str = "support@example.com"
     adcp_agent_url: str | None = None
     adcp_multi_tenant: bool = False
@@ -79,16 +84,6 @@ class RuntimeSettings(BaseSettings):
             "leave it at. It exists because 'serve a newer buyer forward-compatibly' and 'this "
             "is a production deployment' are two facts that were spelled with one variable, and "
             "a grading deployment needs the first without claiming the second"
-        ),
-    )
-    publisher_auto_verify: bool | None = Field(
-        default=None,
-        description=(
-            "Whether a publisher partner is verified without reading its adagents.json, "
-            "stated explicitly. Unset (the normal case) it is DERIVED from is_production: a "
-            "local server is in nobody's file, so anywhere but production skips the check. "
-            "It exists so a non-production deployment can run the check without claiming "
-            "production"
         ),
     )
 
@@ -108,7 +103,7 @@ class RuntimeSettings(BaseSettings):
 
     @property
     def allowed_origin_list(self) -> list[str]:
-        return _csv(self.allowed_origins)
+        return split_csv(self.allowed_origins)
 
     @property
     def admin_domain_or_derived(self) -> str | None:
@@ -153,18 +148,6 @@ class RuntimeSettings(BaseSettings):
         favour of whichever was checked last.
         """
         return self.adcp_pydantic_extra_mode or ("ignore" if self.is_production else "forbid")
-
-    @property
-    def publisher_auto_verify_allowed(self) -> bool:
-        """A publisher partner is verified without an adagents.json check: a local server
-        is in nobody's file. Anywhere that is not production.
-
-        ``PUBLISHER_AUTO_VERIFY`` states it outright and wins, so a test deployment can
-        grade the check without claiming production.
-        """
-        if self.publisher_auto_verify is not None:
-            return self.publisher_auto_verify
-        return not self.is_production
 
 
 class TestingSettings(BaseSettings):
@@ -284,11 +267,11 @@ class AuthSettings(BaseSettings):
 
     @property
     def super_admin_email_list(self) -> list[str]:
-        return [e.lower() for e in _csv(self.super_admin_emails)]
+        return [e.lower() for e in split_csv(self.super_admin_emails)]
 
     @property
     def super_admin_domain_list(self) -> list[str]:
-        return [d.lower() for d in _csv(self.super_admin_domains)]
+        return [d.lower() for d in split_csv(self.super_admin_domains)]
 
     @property
     def gam_oauth_configured(self) -> bool:
@@ -304,23 +287,50 @@ class AuthSettings(BaseSettings):
         return self.tenant_management_domains or self.super_admin_domains
 
 
+# The model that pairs with the Google provider, and so the deployment's default model.
+# Named once because a provider and a model must travel together: a model name is only
+# meaningful to the vendor it belongs to, so a Google client handed a "claude-*" name
+# 404s on every call. src/services/ai/config.py pairs it with the Google provider.
+DEFAULT_GOOGLE_MODEL = "gemini-2.0-flash"
+
+
 class IntegrationSettings(BaseSettings):
     """Other services this seller talks to."""
 
     model_config = _ENV
 
+    #: The MCP endpoint the seller dials for its operator creative agent, and nothing else.
+    #: It is never compared to a format reference: that is ``creative_agent_origin``.
     creative_agent_url: str | None = None
+    #: The operator creative agent's IDENTITY: an origin (``scheme://host[:port]``), the
+    #: thing a format reference's ``agent_url`` is recognized by. ``None`` means the public
+    #: reference agent, ``https://creative.adcontextprotocol.org``.
+    creative_agent_origin: str | None = None
     approximated_api_key: str | None = None
     approximated_backend_url: str = "adcp-sales-agent.fly.dev"
     approximated_proxy_ip: str = "37.16.24.200"
     pydantic_ai_provider: str = "gemini"
-    pydantic_ai_model: str = "gemini-2.0-flash"
+    pydantic_ai_model: str = DEFAULT_GOOGLE_MODEL
     logfire_token: str | None = None
     gemini_api_key: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
     groq_api_key: str | None = None
     aws_access_key_id: str | None = None
+
+    @field_validator("creative_agent_origin")
+    @classmethod
+    def _creative_agent_origin_is_an_origin(cls, v: str | None) -> str | None:
+        """Refuse anything but ``scheme://host[:port]``: a path, query or fragment is not identity."""
+        if v is None:
+            return v
+        parts = urlsplit(v)
+        if not parts.scheme or not parts.hostname or parts.path or parts.query or parts.fragment or "@" in parts.netloc:
+            raise ValueError(
+                f"CREATIVE_AGENT_ORIGIN must be an origin, scheme://host[:port] with no path, query, "
+                f"fragment or userinfo; got {v!r}. The endpoint the seller dials is CREATIVE_AGENT_URL."
+            )
+        return v
 
     def provider_api_key(self, provider: str) -> str | None:
         """The API key for an AI *provider* name as ``services.ai`` spells it."""
@@ -356,7 +366,7 @@ class LimitSettings(BaseSettings):
 # Characters that make an override key a PATTERN rather than one counterparty's keyid.
 _KEYID_PATTERN_CHARS = "*?%[]"
 
-#: AdCP 3.1.1 ``security.mdx`` §per-keyid cap, and the signed-requests test kit's
+#: ``security.mdx`` §per-keyid cap, and the signed-requests test kit's
 #: ``production_min_per_keyid_cap_requests``.
 _PRODUCTION_MIN_PER_KEYID_CAP = 1_000_000
 
@@ -813,10 +823,6 @@ class Settings:
         return self.testing.adcp_testing and not self.database.database_url
 
     # --- production-derived selections ------------------------------------------------
-
-    @property
-    def publisher_auto_verify_allowed(self) -> bool:
-        return self.runtime.publisher_auto_verify_allowed
 
     @property
     def structured_logging(self) -> bool:

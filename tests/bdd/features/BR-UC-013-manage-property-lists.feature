@@ -43,7 +43,7 @@ Feature: BR-UC-013 Manage Property Lists
     And the request context is echoed in the response
     # POST-S3: Buyer discovers all property lists matching optional filters
     # POST-S6: Application context echoed unchanged
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
     Examples:
       | transport |
@@ -66,7 +66,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the response contains 1 property list
     And the list is owned by account {"account_id": "acc-alpha"}
     # BR-RULE-078 INV-2: account (account-ref) filter -> exact match on owning account
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-004 @list @filter @post-s3 @partition @br-rule-078
   Scenario: List property lists -- name_contains filter returns substring matches
@@ -88,7 +88,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the response contains 1 property list
     And the list is "Travel A"
     # DR-5: account AND name_contains filters applied together
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-006 @list @filter @post-s3 @partition @br-rule-078 @schema-v3.1
   Scenario Outline: List property lists -- <filter_type> with no match returns empty
@@ -97,7 +97,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the response contains an empty lists array
     And the response is not an error
     # BR-RULE-078: Filters with no matching results return empty (not error)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
     Examples:
       | filter_type      | filter_field  | filter_value  |
@@ -132,7 +132,7 @@ Feature: BR-UC-013 Manage Property Lists
     # @bva boundary: create response contains auth_token
     # @bva boundary: webhook_url absent from create request
     # POST-S1: list_id assigned; POST-S7: auth_token one-shot; POST-S6: context echoed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
     Examples:
       | transport |
@@ -191,7 +191,7 @@ Feature: BR-UC-013 Manage Property Lists
     # @bva boundary: list_id of existing list owned by requesting tenant
     # POST-S2: full configuration with resolved identifiers
     # --- Get: resolve field ---
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
     Examples:
       | transport | list_id_partition |
@@ -227,7 +227,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # @bva boundary: resolve as string 'true' (type mismatch)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-023 @get @resolution @pagination @br-rule-077
   Scenario: Get property list -- pagination with resolve=false has no effect
@@ -251,7 +251,7 @@ Feature: BR-UC-013 Manage Property Lists
     And the resolved identifiers do not include P2 or P3
     # BR-RULE-073 INV-2+3: countries_all = AND logic, channels_any = OR logic
     # P2 fails countries_all (missing CA); P3 fails channels_any (social not in [display,olv])
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-025 @get @resolution @br-rule-072
   Scenario: Get property list -- base_properties narrows resolution scope
@@ -308,7 +308,7 @@ Feature: BR-UC-013 Manage Property Lists
     And each pricing_options entry includes a selectable pricing_option_id
     # INT-010 (Seller SUCCESS): v3.1-added pricing_options on returned list when billing relationship exists
     # ext-b step 6a: pricing_options is a non-empty array; each option carries a selectable pricing_option_id
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-064 @get @pricing-options @partition @post-s2
   Scenario: Get property list -- pricing_options omitted when no billing relationship exists
@@ -373,7 +373,7 @@ Feature: BR-UC-013 Manage Property Lists
     And the response echoes the list_id "list-abc"
     And the request context is echoed in the response
     # POST-S5: list deleted; POST-S6: context echoed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
     Examples:
       | transport |
@@ -404,7 +404,7 @@ Feature: BR-UC-013 Manage Property Lists
     # @bva boundary: list_id that does not exist at all
     # Representative: get (read) + delete (mutating). Update shares same check.
     # POST-F4: Error references the provided list_id
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
     Examples:
       | operation | list_id_partition   |
@@ -420,7 +420,7 @@ Feature: BR-UC-013 Manage Property Lists
     And the error should include "suggestion" field
     # BR-RULE-071 INV-2: Cross-tenant access returns NOT_FOUND (not ACCESS_DENIED)
     # @bva boundary: list_id of a list in another tenant (same ID, different tenant)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-044 @error @ext-e @context-echo @post-f3 @br-rule-043
   Scenario: Get property list -- REFERENCE_NOT_FOUND still echoes context
@@ -430,7 +430,7 @@ Feature: BR-UC-013 Manage Property Lists
     And the response context is {"trace_id": "abc123"}
     # POST-F3: Application context echoed even on error
     # --- Extension F: LIST_ACCESS_DENIED ---
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-045 @error @ext-f @post-f1 @post-f2 @br-rule-070
   Scenario Outline: <operation> property list -- LIST_ACCESS_DENIED when principal lacks permission
@@ -610,7 +610,7 @@ Feature: BR-UC-013 Manage Property Lists
     And the response contains the same auth_token as the first call
     # v3.1: idempotency_key is REQUIRED on create_property_list
     # First call executes fresh, second call with same key returns the cached response
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-idempotency-update-replay @schema-v3.1 @update @idempotency @post-s4
   Scenario: Update property list -- idempotency_key replay returns cached response with replayed=true
@@ -622,7 +622,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the response replayed flag is true
     And the list state is unchanged from the first update
     # v3.1: idempotency_key is REQUIRED on update_property_list
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-idempotency-delete-replay @schema-v3.1 @delete @idempotency @post-s5
   Scenario: Delete property list -- idempotency_key replay returns cached delete response with replayed=true
@@ -634,7 +634,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the response contains deleted=true
     And the response replayed flag is true
     # v3.1: idempotency_key is REQUIRED on delete_property_list
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-coverage-gaps-include @schema-v3.1 @get @coverage-gaps @post-s2
   Scenario: Get property list -- coverage_gaps surfaces identifiers admitted without feature data
@@ -646,7 +646,7 @@ Feature: BR-UC-013 Manage Property Lists
     And the coverage_gaps entry lists the 2 uncovered identifiers
     # v3.1: when a feature_requirement uses if_not_covered=include, response carries
     # coverage_gaps map: feature_id -> list of identifiers admitted without feature data.
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-resolved-cache-window @schema-v3.1 @get @cache @post-s2
   Scenario: Get property list -- response carries resolved_at and cache_valid_until
@@ -656,7 +656,7 @@ Feature: BR-UC-013 Manage Property Lists
     And the response contains a cache_valid_until timestamp in ISO-8601 form
     And cache_valid_until is later than resolved_at
     # v3.1: resolved response includes resolved_at + cache_valid_until for consumer caching
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-filters-exclude-identifiers @schema-v3.1 @create @exclude-identifiers @filter
   Scenario: Create property list -- exclude_identifiers filter removes specified identifiers at resolution
@@ -667,7 +667,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the response identifiers array contains 3 items
     And the excluded identifiers are absent from the response
     # v3.1: filters.exclude_identifiers is a valid filter; resolution drops listed identifiers
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-webhook-dedup-by-idempotency-key @schema-v3.1 @webhook @idempotency @partition
   Scenario: Property list changed webhook -- retried delivery is deduped by idempotency_key per sender
@@ -676,7 +676,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the recipient deduplicates the event and does not re-call get_property_list
     But when a different sender delivers a webhook with the same idempotency_key value
     Then the recipient treats it as a distinct event (keys are sender-scoped)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-update-conflict-details-shape @schema-v3.1 @conflict @error-details @post-f2
   Scenario: Update property list -- CONFLICT error carries conflict details shape
@@ -696,7 +696,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the response identifiers array includes P1
     And the response identifiers array excludes P2
     # BR-RULE-073 INV-5: only properties of a listed property-type are included in resolution
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-feature-requirement-exclude-default @schema-v3.1 @get @resolution @feature-requirement @br-rule-073
   Scenario: Get property list -- feature_requirement if_not_covered=exclude drops uncovered properties
@@ -707,7 +707,7 @@ Feature: BR-UC-013 Manage Property Lists
     And the response identifiers array excludes P2
     And the response coverage_gaps map does not contain feature_id "brand_safety_score"
     # BR-RULE-073 INV-6: if_not_covered=exclude (default) removes properties lacking the feature
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-idempotency-read-no-key @schema-v3.1 @get @list @idempotency @partition
   Scenario Outline: <operation> property list -- read operation carries no idempotency_key
@@ -716,7 +716,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the request is accepted
     And no idempotency_key is required on the request
     # BR-RULE-257 INV-4: get_property_list and list_property_lists do not accept/require idempotency_key
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
     Examples:
       | operation           |
@@ -731,7 +731,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the request is rejected with code "ACCOUNT_AMBIGUOUS"
     And the error code should be "ACCOUNT_AMBIGUOUS"
     # BR-RULE-258 INV-2: ambiguous ownership must be disambiguated by account
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-account-ref-default-assign @schema-v3.1 @account-ref @create @post-s1
   Scenario: Create property list -- account omitted with single accessible account assigns default
@@ -740,7 +740,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the response contains a generated list_id
     And the list is owned by account {"account_id": "acc-solo"}
     # BR-RULE-258 INV-3: sole accessible account is assigned when account omitted on create
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-account-ref-ambiguous-error @schema-v3.1 @account-ref @create @validation @partition @post-f2
   Scenario Outline: Create property list -- account omitted with <access> accessible accounts is rejected
@@ -749,7 +749,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the request is rejected with code "ACCOUNT_AMBIGUOUS"
     And the error code should be "ACCOUNT_AMBIGUOUS"
     # BR-RULE-258 INV-4: default account cannot be inferred when zero or multiple accounts accessible
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
     Examples:
       | access   |
@@ -762,7 +762,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the request is rejected with code "<error_code>"
     And the error code should be "<error_code>"
     # BR-RULE-258 INV-1 / BR-RULE-078 INV-4: exactly one of {account_id} or {brand,operator}; additionalProperties false
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
     Examples:
       | ref_type       | account_payload                                                           | error_code       |
@@ -777,7 +777,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the payload does not contain the resolved property set
     And the recipient calls get_property_list to obtain the updated resolved properties
     # BR-RULE-259 INV-1+INV-2: payload is summary-only; recipient must call get_property_list for resolved set
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-webhook-signature-verify @schema-v3.1 @webhook @signature @property-list-changed
   Scenario: Property list changed webhook -- payload with unverifiable signature is rejected
@@ -786,7 +786,7 @@ Feature: BR-UC-013 Manage Property Lists
     Then the recipient rejects the payload and does not act on it
     And the recipient does not call get_property_list for that payload
     # BR-RULE-259 INV-4: recipient MUST verify signature against sender public key; reject if unverifiable
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/property/list-property-lists-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/property/list-property-lists-request.json
 
   @T-UC-013-webhook-emitted-only-when-configured @schema-v3.1 @webhook @property-list-changed @partition
   Scenario Outline: Property list changed webhook -- emission gated by <webhook_state>

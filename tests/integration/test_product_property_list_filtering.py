@@ -24,16 +24,21 @@ from decimal import Decimal
 
 import pytest
 from adcp.types import PropertyId
-from adcp.types.generated_poc.core.publisher_property_selector import (  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.publisher_property_selector import (  # TODO: no stable alias in adcp.types
     PublisherPropertySelector,
     PublisherPropertySelector1,
     PublisherPropertySelector2,
 )
 
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories.product import authorize_publishers, authorize_selected_properties
 from tests.harness.product import ProductEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+#: Every publisher these tests' products name; the seller holds a verified property on each,
+#: so property-list filtering is what decides which products are offered (#1845).
+_PUBLISHERS = ("psatest.com", "other.com")
 
 
 # ---------------------------------------------------------------------------
@@ -41,24 +46,20 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # ---------------------------------------------------------------------------
 
 
-def _make_selector_all(domain: str = "example.com") -> PublisherPropertySelector:
+def _make_selector_all(domain: str = "psatest.com") -> PublisherPropertySelector:
     """Create a 'select all' publisher property selector."""
-    return PublisherPropertySelector(
-        root=PublisherPropertySelector1(
-            publisher_domain=domain,
-            selection_type="all",
-        )
+    return PublisherPropertySelector1(
+        publisher_domain=domain,
+        selection_type="all",
     )
 
 
-def _make_selector_by_id(property_ids: list[str], domain: str = "example.com") -> PublisherPropertySelector:
+def _make_selector_by_id(property_ids: list[str], domain: str = "psatest.com") -> PublisherPropertySelector:
     """Create a 'by_id' publisher property selector."""
-    return PublisherPropertySelector(
-        root=PublisherPropertySelector2(
-            publisher_domain=domain,
-            selection_type="by_id",
-            property_ids=[PropertyId(root=pid) for pid in property_ids],
-        )
+    return PublisherPropertySelector2(
+        publisher_domain=domain,
+        selection_type="by_id",
+        property_ids=[PropertyId(root=pid) for pid in property_ids],
     )
 
 
@@ -141,16 +142,17 @@ class TestPropertyListFilteringAllSelectorE2E:
         """Product with selection_type='all' is included regardless of resolved property list."""
         with ProductEnv(tenant_id="plf-all", principal_id="plf-all-p") as env:
             tenant = TenantFactory(tenant_id="plf-all", subdomain="plf-all")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-all-p")
 
             p = ProductFactory(
                 tenant=tenant,
                 product_id="all_selector",
                 name="All Properties Product",
-                property_tags=None,
-                properties=[{"publisher_domain": "example.com", "selection_type": "all"}],
+                properties=[{"publisher_domain": "psatest.com", "selection_type": "all"}],
             )
             PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p.stored_publisher_properties)
 
             # Resolve returns a narrow set — all-selector should still be included
             env.set_property_list(["prop_x", "prop_y"])
@@ -172,16 +174,16 @@ class TestPropertyListFilteringNoOverlapE2E:
         """Product whose property IDs have zero overlap with resolved list is excluded."""
         with ProductEnv(tenant_id="plf-noovlp", principal_id="plf-noovlp-p") as env:
             tenant = TenantFactory(tenant_id="plf-noovlp", subdomain="plf-noovlp")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-noovlp-p")
 
             p = ProductFactory(
                 tenant=tenant,
                 product_id="no_overlap",
                 name="No Overlap Product",
-                property_tags=None,
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a", "prop_b"],
                         "selection_type": "by_id",
                     }
@@ -189,6 +191,7 @@ class TestPropertyListFilteringNoOverlapE2E:
                 property_targeting_allowed=True,
             )
             PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p.stored_publisher_properties)
 
             # Resolved list has completely different property IDs
             env.set_property_list(["prop_x", "prop_y"])
@@ -210,16 +213,16 @@ class TestPropertyListFilteringTargetingAllowedE2E:
         """Product with property_targeting_allowed=true is included with partial overlap."""
         with ProductEnv(tenant_id="plf-partial", principal_id="plf-partial-p") as env:
             tenant = TenantFactory(tenant_id="plf-partial", subdomain="plf-partial")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-partial-p")
 
             p = ProductFactory(
                 tenant=tenant,
                 product_id="partial_allowed",
                 name="Partial Overlap Product",
-                property_tags=None,
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a", "prop_b", "prop_c"],
                         "selection_type": "by_id",
                     }
@@ -227,6 +230,7 @@ class TestPropertyListFilteringTargetingAllowedE2E:
                 property_targeting_allowed=True,
             )
             PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p.stored_publisher_properties)
 
             # Resolved list has only one matching property ID
             env.set_property_list(["prop_a"])
@@ -248,16 +252,16 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
         """Product with property_targeting_allowed=false is excluded with partial overlap."""
         with ProductEnv(tenant_id="plf-strict", principal_id="plf-strict-p") as env:
             tenant = TenantFactory(tenant_id="plf-strict", subdomain="plf-strict")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-strict-p")
 
             p = ProductFactory(
                 tenant=tenant,
                 product_id="strict_partial",
                 name="Strict Partial Product",
-                property_tags=None,
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a", "prop_b"],
                         "selection_type": "by_id",
                     }
@@ -265,6 +269,7 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
                 property_targeting_allowed=False,
             )
             PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p.stored_publisher_properties)
 
             # Resolved list has prop_a but not prop_b — partial overlap
             env.set_property_list(["prop_a", "prop_c"])
@@ -282,16 +287,16 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
         """Product with property_targeting_allowed=false is included when all its props are in allowed set."""
         with ProductEnv(tenant_id="plf-subset", principal_id="plf-subset-p") as env:
             tenant = TenantFactory(tenant_id="plf-subset", subdomain="plf-subset")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-subset-p")
 
             p = ProductFactory(
                 tenant=tenant,
                 product_id="strict_subset",
                 name="Strict Full Subset Product",
-                property_tags=None,
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a", "prop_b"],
                         "selection_type": "by_id",
                     }
@@ -299,6 +304,7 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
                 property_targeting_allowed=False,
             )
             PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p.stored_publisher_properties)
 
             # Resolved list contains all product IDs plus extras
             env.set_property_list(["prop_a", "prop_b", "prop_c"])
@@ -316,16 +322,16 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
         """Product with property_targeting_allowed=false is included with exact match."""
         with ProductEnv(tenant_id="plf-exact", principal_id="plf-exact-p") as env:
             tenant = TenantFactory(tenant_id="plf-exact", subdomain="plf-exact")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-exact-p")
 
             p = ProductFactory(
                 tenant=tenant,
                 product_id="strict_exact",
                 name="Strict Exact Match Product",
-                property_tags=None,
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a"],
                         "selection_type": "by_id",
                     }
@@ -333,6 +339,7 @@ class TestPropertyListFilteringTargetingNotAllowedE2E:
                 property_targeting_allowed=False,
             )
             PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p.stored_publisher_properties)
 
             # Resolved list exactly matches product IDs
             env.set_property_list(["prop_a"])
@@ -354,31 +361,32 @@ class TestPropertyListFilteringEmptyResolvedListE2E:
         """Empty resolved set excludes by_id products but keeps selection_type='all'."""
         with ProductEnv(tenant_id="plf-empty", principal_id="plf-empty-p") as env:
             tenant = TenantFactory(tenant_id="plf-empty", subdomain="plf-empty")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-empty-p")
 
             p_all = ProductFactory(
                 tenant=tenant,
                 product_id="all_selector_empty",
                 name="All Selector Product",
-                property_tags=None,
-                properties=[{"publisher_domain": "example.com", "selection_type": "all"}],
+                properties=[{"publisher_domain": "psatest.com", "selection_type": "all"}],
             )
             PricingOptionFactory(product=p_all, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p_all.stored_publisher_properties)
 
             p_specific = ProductFactory(
                 tenant=tenant,
                 product_id="specific_empty",
                 name="Specific ID Product",
-                property_tags=None,
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a"],
                         "selection_type": "by_id",
                     }
                 ],
             )
             PricingOptionFactory(product=p_specific, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p_specific.stored_publisher_properties)
 
             # Empty resolved list
             env.set_property_list([])
@@ -401,6 +409,7 @@ class TestPropertyListFilteringCombinedE2E:
         """End-to-end test with 5 products covering all filtering scenarios."""
         with ProductEnv(tenant_id="plf-combo", principal_id="plf-combo-p") as env:
             tenant = TenantFactory(tenant_id="plf-combo", subdomain="plf-combo")
+            authorize_publishers(tenant, *_PUBLISHERS)
             PrincipalFactory(tenant=tenant, principal_id="plf-combo-p")
 
             # 1. selection_type="all" — always matches
@@ -408,20 +417,19 @@ class TestPropertyListFilteringCombinedE2E:
                 tenant=tenant,
                 product_id="combo_all",
                 name="All Properties",
-                property_tags=None,
-                properties=[{"publisher_domain": "example.com", "selection_type": "all"}],
+                properties=[{"publisher_domain": "psatest.com", "selection_type": "all"}],
             )
             PricingOptionFactory(product=p1, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p1.stored_publisher_properties)
 
             # 2. Exact match with targeting_not_allowed — should match
             p2 = ProductFactory(
                 tenant=tenant,
                 product_id="combo_match",
                 name="Matching Product",
-                property_tags=None,
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a"],
                         "selection_type": "by_id",
                     }
@@ -429,13 +437,13 @@ class TestPropertyListFilteringCombinedE2E:
                 property_targeting_allowed=False,
             )
             PricingOptionFactory(product=p2, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p2.stored_publisher_properties)
 
             # 3. No overlap — should be excluded
             p3 = ProductFactory(
                 tenant=tenant,
                 product_id="combo_no_match",
                 name="No Match Product",
-                property_tags=None,
                 properties=[
                     {
                         "publisher_domain": "other.com",
@@ -445,16 +453,16 @@ class TestPropertyListFilteringCombinedE2E:
                 ],
             )
             PricingOptionFactory(product=p3, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p3.stored_publisher_properties)
 
             # 4. Partial overlap + targeting_allowed=True — should match
             p4 = ProductFactory(
                 tenant=tenant,
                 product_id="combo_partial_ok",
                 name="Partial With Targeting",
-                property_tags=None,
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a", "prop_b"],
                         "selection_type": "by_id",
                     }
@@ -462,16 +470,16 @@ class TestPropertyListFilteringCombinedE2E:
                 property_targeting_allowed=True,
             )
             PricingOptionFactory(product=p4, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p4.stored_publisher_properties)
 
             # 5. Partial overlap + targeting_allowed=False — should be excluded
             p5 = ProductFactory(
                 tenant=tenant,
                 product_id="combo_partial_no",
                 name="Partial Without Targeting",
-                property_tags=None,
                 properties=[
                     {
-                        "publisher_domain": "example.com",
+                        "publisher_domain": "psatest.com",
                         "property_ids": ["prop_a", "prop_b"],
                         "selection_type": "by_id",
                     }
@@ -479,6 +487,7 @@ class TestPropertyListFilteringCombinedE2E:
                 property_targeting_allowed=False,
             )
             PricingOptionFactory(product=p5, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+            authorize_selected_properties(tenant, p5.stored_publisher_properties)
 
             # Resolved property list: only prop_a
             env.set_property_list(["prop_a"])

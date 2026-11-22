@@ -10,9 +10,29 @@ nothing else, so they live here once. An env names its routes and reads its rows
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
-from tests.helpers.admin_session import admin_auth_session, admin_test_app, authenticate_http_session
+from tests.helpers.admin_session import (
+    admin_session_payload,
+    admin_test_app,
+    drop_stated_session_cookie,
+    member_session_payload,
+    state_flask_session,
+    state_http_session,
+)
+
+#: Where the in-process Flask client sends its requests.
+_IN_PROCESS_ORIGIN = "https://localhost"
+
+#: What a current browser sends on a page load and on a form submit. The admin app answers
+#: a caller that sends neither ``Sec-Fetch-Mode: navigate`` nor an ``Accept`` preferring HTML
+#: with JSON (``caller_reads_json``), so a request that stands for a browser must say so.
+BROWSER_PAGE_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Sec-Fetch-Mode": "navigate",
+}
 
 
 class _CaseInsensitiveHeaders(dict):
@@ -108,12 +128,29 @@ class AdminClient:
 
             self._http = requests.Session()
 
-    def authenticate(self, tenant_id: str) -> None:
-        """State an authenticated super-admin session for *tenant_id*."""
+    @property
+    def origin(self) -> str:
+        """The scheme and host requests are sent to, as a browser's ``Referer`` names a page."""
+        return self._base_url or _IN_PROCESS_ORIGIN
+
+    def authenticate(self, tenant_id: str, *, tenant_user: str | None = None, auth_method: str | None = None) -> None:
+        """State a super-admin session for *tenant_id*, or *tenant_user*'s session.
+
+        *auth_method* is how the session says its user signed in (``oidc`` for SSO).
+        """
+        payload = (
+            member_session_payload(tenant_user, tenant_id, auth_method=auth_method)
+            if tenant_user is not None
+            else admin_session_payload(tenant_id, auth_method=auth_method)
+        )
+        self.state_session(payload)
+
+    def state_session(self, payload: dict[str, Any]) -> None:
+        """State *payload* as the session, replacing whatever the client held, through this transport's writer."""
         if self._flask_client is not None:
-            admin_auth_session(self._flask_client, tenant_id)
+            state_flask_session(self._flask_client, payload)
         else:
-            authenticate_http_session(self._http, self._base_url or "", tenant_id)
+            state_http_session(self._http, payload)
 
     def clear_auth(self) -> None:
         """Drop the admin session, so the next request arrives anonymous."""
@@ -127,19 +164,62 @@ class AdminClient:
             self._http = requests.Session()
 
     def request(
-        self, method: str, path: str, *, data: dict[str, str] | None = None, json: dict[str, Any] | None = None
+        self,
+        method: str,
+        path: str,
+        *,
+        data: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
+        headers: dict[str, str | None] | None = None,
     ) -> AdminResponse:
-        """Send *method* to *path* (``/tenant/...``) with a form body or a JSON body."""
+        """Send *method* to *path* (``/tenant/...``) with a form body or a JSON body.
+
+        With no *headers* and no JSON body the request is a browser's (a page load or a form
+        post) and carries :data:`BROWSER_PAGE_HEADERS`. A header given as ``None`` is not sent
+        at all, on either transport (``requests`` otherwise sends ``Accept: */*`` itself).
+        """
+        if headers is None and json is None:
+            headers = dict(BROWSER_PAGE_HEADERS)
         if self._flask_client is not None:
+            sent = {name: value for name, value in (headers or {}).items() if value is not None}
             # Over https, because a production app marks its session cookie Secure.
             response = self._flask_client.open(
-                path, method=method.upper(), data=data, json=json, base_url="https://localhost"
+                path, method=method.upper(), data=data, json=json, headers=sent, base_url=_IN_PROCESS_ORIGIN
             )
             return AdminResponse.from_flask(response)
         response = self._http.request(
-            method, f"{self._base_url}{path}", data=data, json=json, allow_redirects=False, timeout=60
+            method, f"{self._base_url}{path}", data=data, json=json, headers=headers, allow_redirects=False, timeout=60
         )
         return AdminResponse.from_requests(response)
+
+    def submit(
+        self,
+        path: str,
+        data: dict[str, Any],
+        *,
+        from_page: str | None = None,
+        browser_headers: dict[str, str | None] | None = None,
+    ) -> AdminResponse:
+        """POST the form *data* to *path* as a browser does, and GET the page its redirect names, flash included.
+
+        *from_page* is the page the form is on, sent as the browser's ``Referer``: the page an
+        answer goes back to. A path is a page on this server; a URL with a scheme is another
+        site's page. Without it the request names no page to go back to. A form that answers
+        without a redirect (it re-rendered with an error) is returned as is. *browser_headers*
+        say how the browser asks for a page, :data:`BROWSER_PAGE_HEADERS` by default.
+        """
+        headers: dict[str, str | None] = dict(BROWSER_PAGE_HEADERS if browser_headers is None else browser_headers)
+        if from_page is not None:
+            headers["Referer"] = from_page if urlsplit(from_page).scheme else f"{self.origin}{from_page}"
+        response = self.request("post", path, data=data, headers=headers)
+        location = response.headers.get("location")
+        if not location:
+            return response
+        if self._http is not None:
+            # The flash lives in the session the server just wrote; see the helper.
+            drop_stated_session_cookie(self._http)
+        target = urlsplit(location)
+        return self.request("get", target.path + (f"?{target.query}" if target.query else ""))
 
     def close(self) -> None:
         if self._flask_client is not None:
@@ -148,3 +228,54 @@ class AdminClient:
         if self._http is not None:
             self._http.close()
             self._http = None
+
+
+def guarded_admin_client(
+    guard: Callable[[str, Callable[[], None]], None], base_url: str | None, tenant_id: str
+) -> AdminClient:
+    """An :class:`AdminClient` authenticated for *tenant_id*, closed by the env's *guard*.
+
+    An env opens it on its first admin request, after every Given, so the in-process app is
+    composed under the deployment a Given chose.
+    """
+    client = AdminClient(base_url)
+    guard("admin_client", client.close)
+    client.authenticate(tenant_id)
+    return client
+
+
+class AdminOperatorMixin:
+    """The seller's operator, for an ``IntegrationEnv`` whose scenario includes an admin action.
+
+    One :class:`AdminClient` on the env's OWN transport: in this process when the env has no
+    ``e2e_config``, over HTTP to that live server when it has one. So an AdCP scenario whose
+    Given is an operator action (authoring a product, syncing a publisher) runs that action
+    against the same deployment its When then dispatches to, on every transport.
+
+    The client is opened on the first request, after every earlier Given: the in-process
+    app is composed under the settings those Givens chose. Factory rows are committed first,
+    because the admin request reads them in its own session.
+    """
+
+    _admin: AdminClient | None = None
+
+    def admin_client(self, tenant_id: str) -> AdminClient:
+        """The operator's client for *tenant_id*, opened on first use, after factory rows commit."""
+        self._commit_factory_data()  # type: ignore[attr-defined]
+        if self._admin is None:
+            e2e_config = self.e2e_config  # type: ignore[attr-defined]
+            base_url = e2e_config.base_url if e2e_config is not None else None
+            self._admin = guarded_admin_client(self._guard, base_url, tenant_id)  # type: ignore[attr-defined]
+        return self._admin
+
+    def admin_request(
+        self,
+        tenant_id: str,
+        method: str,
+        path: str,
+        *,
+        data: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> AdminResponse:
+        """One authenticated request to *tenant_id*'s admin route at *path*, with a form or JSON body."""
+        return self.admin_client(tenant_id).request(method, f"/tenant/{tenant_id}/{path}", data=data, json=json)

@@ -17,9 +17,10 @@ import pytest
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import MediaBuy, Principal
-from src.core.exceptions import AdCPAuthorizationError
+from src.core.exceptions import AdCPMediaBuyNotFoundError
 from src.core.schemas import ListCreativesResponse, UpdateMediaBuyRequest
 from src.core.schemas.creative import ListCreativesRequest
+from tests.factories import stamp_format_identity
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -74,14 +75,15 @@ class TestCrossPrincipalSecurity:
                 creative_id="creative_owned_by_a",
                 principal_id="advertiser_a",
                 name="Advertiser A Creative",
-                format="display_300x250",
-                agent_url="https://creative.adcontextprotocol.org/",
                 status="approved",
                 data={
                     "url": "https://example.com/creative_a.jpg",
                     "width": 300,
                     "height": 250,
                 },
+            )
+            stamp_format_identity(
+                creative_a, format_id="display_300x250", agent_url="https://creative.adcontextprotocol.org/"
             )
             session.add(creative_a)
 
@@ -158,8 +160,9 @@ class TestCrossPrincipalSecurity:
         )
 
         # Principal B tries to update Principal A's media buy
-        # _verify_principal should raise AdCPAuthorizationError
-        with pytest.raises(AdCPAuthorizationError):
+        # _verify_principal answers as if the buy were absent: L1/security.mdx (3.2.7)
+        # forbids a body that distinguishes "unauthorized" from "not found".
+        with pytest.raises(AdCPMediaBuyNotFoundError):
             req = UpdateMediaBuyRequest(
                 account={"account_id": "acct_test"},
                 idempotency_key="test-idem-key-0001",
@@ -231,10 +234,11 @@ class TestCrossPrincipalSecurity:
                 creative_id="creative_owned_by_c",
                 principal_id="advertiser_c",
                 name="Advertiser C Creative",
-                format="display_300x250",
-                agent_url="https://creative.adcontextprotocol.org/",
                 status="approved",
                 data={"url": "https://example.com/creative_c.jpg", "width": 300, "height": 250},
+            )
+            stamp_format_identity(
+                creative_c, format_id="display_300x250", agent_url="https://creative.adcontextprotocol.org/"
             )
             session.add(creative_c)
             session.commit()

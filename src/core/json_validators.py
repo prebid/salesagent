@@ -280,3 +280,32 @@ def validate_json_schema(value: Any, schema: type[BaseModel]) -> dict:
 
     validated = schema(**value)
     return validated.model_dump(mode="json")
+
+
+# The ``products.placements`` CHECK. ``core/placement.json`` requires ``kind``,
+# ``placement_id`` and ``mode``, and its allOf conditionals require ``name`` of a
+# ``seller_inline`` placement and ``publisher_domain`` of a ``publisher_ref`` one. A stored
+# placement states all of them itself: nothing fills a missing member when the row is read,
+# so a row that omits one is refused when it is written. Revision 89442a2be9e1 brought the
+# rows stored before this rule up to it.
+#
+# The CHECK grades presence and names no enum. A deployed CHECK keeps the values it was
+# created with while a create_all database follows the source, so a value set written here
+# would split the two on the next pin that grows Kind or Mode. The two kind literals are the
+# spec's allOf conditionals and gate only which identity member must be present.
+# Every element counts. The path keeps only the elements that satisfy it (``strict`` mode,
+# so a missing member is an error, which a filter reads as unknown and drops), and the array
+# passes only when nothing was dropped. A non-array document is refused; SQL NULL passes.
+_EXPLICIT_PLACEMENT_PATH = (
+    'strict $[*] ? (@.placement_id.type() == "string" && @.kind.type() == "string"'
+    ' && @.mode.type() == "string"'
+    ' && (@.kind != "seller_inline" || @.name.type() == "string")'
+    ' && (@.kind != "publisher_ref" || @.publisher_domain.type() == "string"))'
+)
+PLACEMENTS_ARE_EXPLICIT_SQL = (
+    "CASE WHEN jsonb_typeof(placements) = 'array' THEN "
+    "jsonb_array_length(placements) = "
+    f"jsonb_array_length(jsonb_path_query_array(placements, '{_EXPLICIT_PLACEMENT_PATH}')) "
+    "ELSE placements IS NULL END"
+)
+PLACEMENTS_ARE_EXPLICIT_CHECK = "ck_products_placements_explicit"

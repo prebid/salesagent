@@ -38,6 +38,7 @@ from tests.unit._architecture_helpers import (
     format_failure,
     iter_call_expressions,
     parse_module,
+    rel,
     repo_root,
     src_python_files,
 )
@@ -102,7 +103,7 @@ class TestNoDiscoveryCodeCollapse:
     def test_no_unmapped_agent_resolver_error_handler(self):
         repo = repo_root()
         violations = [
-            f"{path.relative_to(repo)}:{lineno}: except AgentResolverError never calls {_MAPPER_NAME}(exc)"
+            f"{rel(path, repo)}:{lineno}: except AgentResolverError never calls {_MAPPER_NAME}(exc)"
             for path in src_python_files(repo)
             for lineno in find_unmapped_resolver_error_handlers(parse_module(path))
         ]
@@ -119,7 +120,7 @@ class TestNoDiscoveryCodeCollapse:
     def test_no_key_origin_map_reaches_the_verifier(self):
         repo = repo_root()
         violations = [
-            f"{path.relative_to(repo)}:{lineno}: expected_key_origins= is passed to the SDK verifier"
+            f"{rel(path, repo)}:{lineno}: expected_key_origins= is passed to the SDK verifier"
             for path in src_python_files(repo)
             for lineno in find_key_origin_map_passthrough_violations(parse_module(path))
         ]

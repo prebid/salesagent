@@ -174,6 +174,15 @@ class TestNoForcedInvalidNull:
         which rejects null. Constructed directly (bypassing the factory,
         which always defaults format_ids) to get a Product with format_ids
         genuinely unset.
+
+        ``format_options`` carries the product instead. core/product.json's root
+        anyOf admits a product that satisfies either the deprecated
+        "Named-format product" arm (``format_ids`` required) or the
+        "Canonical-format product" arm (``format_options`` required), and this
+        fixture needs format_ids genuinely UNSET — so the canonical arm is the only
+        legal way to reach the state the assertion grades. The fixture used to
+        satisfy neither arm, which the previous SDK's exported class accepted and
+        the pin never did (salesagent-8qela.124).
         """
         product = Product(
             product_id="test",
@@ -181,6 +190,7 @@ class TestNoForcedInvalidNull:
             description="Test",
             publisher_properties=[create_test_publisher_properties_by_tag()],
             format_ids=None,
+            format_options=[{"format_kind": "image", "params": {"width": 300, "height": 250}}],
             delivery_type="guaranteed",
             pricing_options=[create_test_cpm_pricing_option()],
             reporting_capabilities=default_reporting_capabilities(),

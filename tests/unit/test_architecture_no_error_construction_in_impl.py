@@ -58,7 +58,7 @@ def _count_pattern_a_sites(filepath: Path) -> list[int]:
     if tree is None:
         return []
 
-    source_lines = filepath.read_text().splitlines()
+    source_lines = filepath.read_text(encoding="utf-8").splitlines()
     aliases = collect_error_aliases(tree)
     lines: list[int] = []
     for node in iter_call_expressions(tree):

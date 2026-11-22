@@ -55,7 +55,8 @@ def _verify_principal(principal_id: str, media_buy_id: str):
     if media_buy_id not in media_buys:
         raise ValueError(f"Media buy '{media_buy_id}' not found.")
     if media_buys[media_buy_id]["principal_id"] != principal_id:
-        raise PermissionError(f"Principal '{principal_id}' does not own media buy '{media_buy_id}'.")
+        # Same answer as an absent buy: the body must not reveal that the buy exists.
+        raise ValueError(f"Media buy '{media_buy_id}' not found.")
 ```
 
 ### 4. Adapter Layer

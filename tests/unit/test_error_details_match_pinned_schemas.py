@@ -13,7 +13,7 @@ agreement, so nothing else catches it.
 
 Scope is deliberately narrow. Only schemas with ``required`` fields are checked,
 and only where a local class exists — a pinned shape nothing emits needs no class,
-which is why four of the five required-field schemas have none today. The guard
+which is why most required-field schemas have none today. The guard
 grows on its own as raise sites appear.
 
 It is NOT a full equivalence check. The pin declares these shapes open
@@ -52,12 +52,13 @@ _BUNDLE = _locate_bundle()
 #: Pinned schema stem -> the local class that transcribes it. Only pairings that
 #: exist; a schema with no live raise site has no class and is not listed.
 _PAIRINGS = {
+    "billing-not-permitted-for-agent": "BillingNotPermittedForAgentDetails",
     "version-unsupported": "VersionUnsupportedDetails",
 }
 
 
 def _required_fields(stem: str) -> list[str]:
-    return json.loads((_BUNDLE / f"{stem}.json").read_text()).get("required") or []
+    return json.loads((_BUNDLE / f"{stem}.json").read_text(encoding="utf-8")).get("required") or []
 
 
 def test_bundle_is_readable() -> None:

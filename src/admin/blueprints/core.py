@@ -19,7 +19,6 @@ from sqlalchemy import select, text
 
 from src.admin.utils import require_auth
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.operator_errors import safe_error_message
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -67,6 +66,7 @@ def render_super_admin_index():
     from sqlalchemy.orm import joinedload
 
     from src.core.database.models import MediaBuy
+    from src.core.database.repositories.tenant_counts import count_by_tenant
     from src.core.tenant_status import is_tenant_ad_server_configured
     from src.services.setup_checklist_service import SetupChecklistService
 
@@ -127,22 +127,10 @@ def render_super_admin_index():
         # Bulk fetch media buy counts (total and recent) for all tenants on this page
         thirty_days_ago = datetime.now(UTC) - timedelta(days=30)
 
-        # Total media buy counts per tenant
-        total_buys_stmt = (
-            select(MediaBuy.tenant_id, func.count())
-            .where(MediaBuy.tenant_id.in_(tenant_ids))
-            .group_by(MediaBuy.tenant_id)
+        total_buys_counts = count_by_tenant(db_session, MediaBuy.tenant_id, tenant_ids)
+        recent_buys_counts = count_by_tenant(
+            db_session, MediaBuy.tenant_id, tenant_ids, MediaBuy.created_at >= thirty_days_ago
         )
-        total_buys_counts = dict(db_session.execute(total_buys_stmt).all())
-
-        # Recent media buy counts per tenant (last 30 days)
-        recent_buys_stmt = (
-            select(MediaBuy.tenant_id, func.count())
-            .where(MediaBuy.tenant_id.in_(tenant_ids))
-            .where(MediaBuy.created_at >= thirty_days_ago)
-            .group_by(MediaBuy.tenant_id)
-        )
-        recent_buys_counts = dict(db_session.execute(recent_buys_stmt).all())
 
         tenant_list = []
         for tenant in tenants:
@@ -356,46 +344,28 @@ def debug_headers():
 @core_bp.route("/health")
 def health():
     """Health check endpoint."""
-    try:
-        with get_db_session() as db_session:
-            db_session.execute(text("SELECT 1"))
-            return "OK", 200
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return f"Database connection failed: {str(e)}", 500
+    with get_db_session() as db_session:
+        db_session.execute(text("SELECT 1"))
+        return "OK", 200
 
 
 @core_bp.route("/health/config")
 def health_config():
     """Configuration health check endpoint."""
-    try:
-        from src.core.startup import validate_startup_requirements
+    from src.core.startup import validate_startup_requirements
 
-        validate_startup_requirements()
-        return (
-            jsonify(
-                {
-                    "status": "healthy",
-                    "service": "admin-ui",
-                    "component": "configuration",
-                    "message": "All configuration validation passed",
-                }
-            ),
-            200,
-        )
-    except Exception as e:
-        logger.error(f"Configuration health check failed: {e}")
-        return (
-            jsonify(
-                {
-                    "status": "unhealthy",
-                    "service": "admin-ui",
-                    "component": "configuration",
-                    "error": safe_error_message(e),
-                }
-            ),
-            500,
-        )
+    validate_startup_requirements()
+    return (
+        jsonify(
+            {
+                "status": "healthy",
+                "service": "admin-ui",
+                "component": "configuration",
+                "message": "All configuration validation passed",
+            }
+        ),
+        200,
+    )
 
 
 @core_bp.route("/metrics")
@@ -447,91 +417,85 @@ def create_tenant():
         return render_template("create_tenant.html")
 
     # Handle POST request
-    try:
-        # Get form data
-        tenant_name = request.form.get("name", "").strip()
-        subdomain = request.form.get("subdomain", "").strip()
-        virtual_host = request.form.get("virtual_host", "").strip()
-        ad_server = request.form.get("ad_server", "").strip() or None  # Default to None, not mock
+    # Get form data
+    tenant_name = request.form.get("name", "").strip()
+    subdomain = request.form.get("subdomain", "").strip()
+    virtual_host = request.form.get("virtual_host", "").strip()
+    ad_server = request.form.get("ad_server", "").strip() or None  # Default to None, not mock
 
-        if refusal := _missing_required_tenant_field(tenant_name, virtual_host):
-            flash(refusal, "error")
-            return render_template("create_tenant.html")
-
-        # Generate tenant ID if not provided
-        if not subdomain:
-            subdomain = tenant_name.lower().replace(" ", "_").replace("-", "_")
-            # Remove non-alphanumeric characters
-            subdomain = "".join(c for c in subdomain if c.isalnum() or c == "_")
-
-        tenant_id = f"tenant_{subdomain}"
-
-        with get_db_session() as db_session:
-            # Create new tenant
-            new_tenant = Tenant(
-                tenant_id=tenant_id,
-                name=tenant_name,
-                subdomain=subdomain,
-                virtual_host=virtual_host,
-                is_active=True,
-                ad_server=ad_server,
-                created_at=datetime.now(UTC),
-                updated_at=datetime.now(UTC),
-                # Set default measurement provider (Publisher Ad Server)
-                measurement_providers={"providers": ["Publisher Ad Server"], "default": "Publisher Ad Server"},
-            )
-
-            # Set default configuration based on ad server
-            if ad_server == "google_ad_manager":
-                # GAM requires additional configuration
-                new_tenant.gam_network_code = request.form.get("gam_network_code", "")
-                new_tenant.gam_refresh_token = request.form.get("gam_refresh_token", "")
-
-            # Set feature flags
-            new_tenant.max_daily_budget = float(request.form.get("max_daily_budget", "10000"))
-            new_tenant.enable_axe_signals = "enable_axe_signals" in request.form
-            new_tenant.human_review_required = "human_review_required" in request.form
-
-            # Set authorization settings
-            authorized_emails = request.form.get("authorized_emails", "")
-            email_list = [e.strip() for e in authorized_emails.split(",") if e.strip()]
-
-            # Automatically add the creator's email to authorized list
-            creator_email = session.get("user")
-            if creator_email and creator_email not in email_list:
-                email_list.append(creator_email)
-
-            # JSONType/JSONB columns take the list directly — json.dumps here
-            # stores a JSON-encoded STRING, which breaks the jsonb operators
-            # behind TenantConfigRepository's atomic list mutations.
-            if email_list:
-                new_tenant.authorized_emails = email_list  # noqa: authorized-list-assign — construction of a not-yet-persisted tenant, race-free
-
-            authorized_domains = request.form.get("authorized_domains", "")
-            if authorized_domains:
-                domain_list = [d.strip() for d in authorized_domains.split(",") if d.strip()]
-                new_tenant.authorized_domains = domain_list  # noqa: authorized-list-assign — construction of a not-yet-persisted tenant, race-free
-
-            conflict = resolve_or_write(
-                db_session,
-                conflict=lambda: _tenant_already_exists(db_session, tenant_id, subdomain),
-                write=lambda: db_session.add(new_tenant),
-                constraint=("tenants_pkey", "tenants_subdomain_key"),
-            )
-            if conflict is not None:
-                return conflict
-            db_session.commit()
-
-            # Note: No default principal created - principals must be added manually
-            # to map to real advertiser accounts in the ad server (GAM, Kevel, etc.)
-
-            flash(f"Tenant '{tenant_name}' created successfully!", "success")
-            return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
-
-    except Exception as e:
-        logger.error(f"Error creating tenant: {e}", exc_info=True)
-        flash(f"Error creating tenant: {safe_error_message(e)}", "error")
+    if refusal := _missing_required_tenant_field(tenant_name, virtual_host):
+        flash(refusal, "error")
         return render_template("create_tenant.html")
+
+    # Generate tenant ID if not provided
+    if not subdomain:
+        subdomain = tenant_name.lower().replace(" ", "_").replace("-", "_")
+        # Remove non-alphanumeric characters
+        subdomain = "".join(c for c in subdomain if c.isalnum() or c == "_")
+
+    tenant_id = f"tenant_{subdomain}"
+
+    with get_db_session() as db_session:
+        # Create new tenant
+        new_tenant = Tenant(
+            tenant_id=tenant_id,
+            name=tenant_name,
+            subdomain=subdomain,
+            virtual_host=virtual_host,
+            is_active=True,
+            ad_server=ad_server,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+            # Set default measurement provider (Publisher Ad Server)
+            measurement_providers={"providers": ["Publisher Ad Server"], "default": "Publisher Ad Server"},
+        )
+
+        # Set default configuration based on ad server
+        if ad_server == "google_ad_manager":
+            # GAM requires additional configuration
+            new_tenant.gam_network_code = request.form.get("gam_network_code", "")
+            new_tenant.gam_refresh_token = request.form.get("gam_refresh_token", "")
+
+        # Set feature flags
+        new_tenant.max_daily_budget = float(request.form.get("max_daily_budget", "10000"))
+        new_tenant.enable_axe_signals = "enable_axe_signals" in request.form
+        new_tenant.human_review_required = "human_review_required" in request.form
+
+        # Set authorization settings
+        authorized_emails = request.form.get("authorized_emails", "")
+        email_list = [e.strip() for e in authorized_emails.split(",") if e.strip()]
+
+        # Automatically add the creator's email to authorized list
+        creator_email = session.get("user")
+        if creator_email and creator_email not in email_list:
+            email_list.append(creator_email)
+
+        # JSONType/JSONB columns take the list directly — json.dumps here
+        # stores a JSON-encoded STRING, which breaks the jsonb operators
+        # behind TenantConfigRepository's atomic list mutations.
+        if email_list:
+            new_tenant.authorized_emails = email_list  # noqa: authorized-list-assign — construction of a not-yet-persisted tenant, race-free
+
+        authorized_domains = request.form.get("authorized_domains", "")
+        if authorized_domains:
+            domain_list = [d.strip() for d in authorized_domains.split(",") if d.strip()]
+            new_tenant.authorized_domains = domain_list  # noqa: authorized-list-assign — construction of a not-yet-persisted tenant, race-free
+
+        conflict = resolve_or_write(
+            db_session,
+            conflict=lambda: _tenant_already_exists(db_session, tenant_id, subdomain),
+            write=lambda: db_session.add(new_tenant),
+            constraint=("tenants_pkey", "tenants_subdomain_key"),
+        )
+        if conflict is not None:
+            return conflict
+        db_session.commit()
+
+        # Note: No default principal created - principals must be added manually
+        # to map to real advertiser accounts in the ad server (GAM, Kevel, etc.)
+
+        flash(f"Tenant '{tenant_name}' created successfully!", "success")
+        return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
 
 @core_bp.route("/static/<path:path>")
@@ -545,37 +509,29 @@ def send_static(path):
 @log_admin_action("reactivate_tenant")
 def reactivate_tenant(tenant_id):
     """Reactivate a deactivated tenant (super admin only)."""
-    try:
-        # Verify super admin
-        if session.get("role") != "super_admin":
-            flash("Only super admins can reactivate tenants", "error")
+    # Verify super admin
+    if session.get("role") != "super_admin":
+        flash("Only super admins can reactivate tenants", "error")
+        return redirect(url_for("core.index"))
+
+    with get_db_session() as db_session:
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+
+        if not tenant:
+            flash("Tenant not found", "error")
             return redirect(url_for("core.index"))
 
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
-
-            # Already active?
-            if tenant.is_active:
-                flash(f"Tenant '{tenant.name}' is already active", "warning")
-                return redirect(url_for("core.index"))
-
-            # Reactivate tenant
-            tenant.is_active = True
-            tenant.updated_at = datetime.now(UTC)
-            db_session.commit()
-
-            logger.info(
-                f"Tenant {tenant_id} ({tenant.name}) reactivated by super admin {session.get('user', 'unknown')}"
-            )
-
-            flash(f"Sales agent '{tenant.name}' has been reactivated successfully", "success")
+        # Already active?
+        if tenant.is_active:
+            flash(f"Tenant '{tenant.name}' is already active", "warning")
             return redirect(url_for("core.index"))
 
-    except Exception as e:
-        logger.error(f"Error reactivating tenant {tenant_id}: {e}", exc_info=True)
-        flash(f"Error reactivating sales agent: {safe_error_message(e)}", "error")
+        # Reactivate tenant
+        tenant.is_active = True
+        tenant.updated_at = datetime.now(UTC)
+        db_session.commit()
+
+        logger.info(f"Tenant {tenant_id} ({tenant.name}) reactivated by super admin {session.get('user', 'unknown')}")
+
+        flash(f"Sales agent '{tenant.name}' has been reactivated successfully", "success")
         return redirect(url_for("core.index"))
