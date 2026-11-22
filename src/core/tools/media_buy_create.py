@@ -23,7 +23,6 @@ from sqlalchemy.exc import IntegrityError
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-    from src.adapters.base import AdServerAdapter
     from src.core.database.models import CreativeAssignment
     from src.core.database.models import MediaPackage as DBMediaPackage
     from src.core.database.repositories.media_buy import MediaBuyRepository
@@ -41,7 +40,6 @@ from rich.console import Console
 from src.core.database.integrity import is_constraint_violation
 from src.core.database.repositories.creative import CLEARED_TO_SERVE, CreativeRepository
 from src.core.database.repositories.media_buy import RequestedPackage, stored_line_item_id
-from src.core.errors.codes import ErrorCode
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPBudgetExceededError,
@@ -73,7 +71,6 @@ from src.core.idempotency_replay import raise_on_payload_conflict
 from src.core.traffic_carrier import (
     AdapterCreativeAsset,
     CreativeToTraffic,
-    Html5BundleRepresentation,
     PackageAssignmentDict,
 )
 
@@ -149,7 +146,7 @@ from src.core.schemas import (
     Product,
     Targeting,
 )
-from src.core.security.outbound_http import CounterpartyUrl, OutboundDeliveryFailed, UrlProvenance, asend
+from src.core.security.outbound_http import CounterpartyUrl, UrlProvenance
 from src.core.tools._media_buy_status import seller_valid_actions
 from src.core.tools._media_buy_transitions import resolve_flight_window_status
 from src.core.tools.creatives._assignments import assignments_by_package
@@ -167,7 +164,6 @@ from src.core.validation_helpers import (
     package_field_path,
     refuse_duplicate_catalog_types,
     refuse_inverted_flight,
-    run_async_in_sync_context,
 )
 from src.core.webhook_validator import (
     reject_unsafe_webhook_registration_url,
@@ -972,11 +968,11 @@ def _one_refusal(refusals: Sequence[tuple[str, AdCPSalesAgentError[Any]]]) -> Ad
 def _adapter_refusal(
     problems: "Sequence[ErrorProblem]", named_packages: Sequence[MediaPackage]
 ) -> AdCPSalesAgentError[Any]:
-    """The error pre-booking problems are answered with, pointing at the first creative refused.
+    """The error an adapter's pre-booking problems are answered with, pointing at the first creative refused.
 
-    The adapter's check, or core's html5 bundle fetch (:func:`_with_html5_bundles`), classifies
-    (each problem names its creative and the package it was refused on); core builds the error,
-    through the one selection the gate uses, and points it where the request named the creative.
+    The adapter classifies (each problem names its creative and the package it was refused
+    on); core builds the error, through the one selection the gate uses, and points it where
+    the request named the creative.
     """
     index_of = {package.package_id: index for index, package in enumerate(named_packages)}
     refused = next(
@@ -987,64 +983,6 @@ def _adapter_refusal(
         assert refused.subject_id is not None and refused.package_id is not None
         field = _creative_path(named_packages, index_of[refused.package_id], refused.subject_id)
     return problems_refusal(problems, field=field)
-
-
-async def _with_html5_bundles(
-    adapter: "AdServerAdapter",
-    carriers: dict[CarrierKey, CreativeToTraffic],
-    named_packages: Sequence[MediaPackage],
-) -> dict[CarrierKey, CreativeToTraffic]:
-    """*carriers*, each html5 bundle carrying its zip's bytes when *adapter* uploads them; or the refusal.
-
-    *carriers* come back as they are when none is an html5 bundle or *adapter* uploads none.
-
-    The create, the approval replay and the retroactive push call this before the ad server is
-    written to, so a bundle the seller cannot fetch is refused before anything is booked and the
-    upload does no I/O. Each bundle URL is fetched once, through the egress seam, as the buyer's
-    URL; a URL the seam refuses outright raises the seam's own refusal. A bundle the seam could
-    not deliver is a problem on each creative and package naming it:
-    adcp/_schemas/3.2/enums/error-code.json CREATIVE_VALIDATION_FAILED_GENERIC, "The creative
-    failed buyer-correctable validation, but the producer cannot classify the failure with a more
-    specific standard code ... Recovery: correctable". The problem carries no text, so the
-    buyer-facing message names no vendor and no internal id, as the same entry requires. The
-    error points where *named_packages* name the first one (:func:`_adapter_refusal`).
-    """
-    urls = {c.representation.url for c in carriers.values() if isinstance(c.representation, Html5BundleRepresentation)}
-    if not urls or not adapter.capabilities.uploads_html5_bundles:
-        return carriers
-    bundles = {url: await _fetched_bundle(url) for url in urls}
-    filled: dict[CarrierKey, CreativeToTraffic] = {}
-    problems: list[ErrorProblem] = []
-    for (package_id, creative_id), carrier in carriers.items():
-        representation = carrier.representation
-        if isinstance(representation, Html5BundleRepresentation):
-            bundle = bundles[representation.url]
-            if bundle is None:
-                problems.append(
-                    ErrorProblem(
-                        code=ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC,
-                        subject_type="creative",
-                        subject_id=creative_id,
-                        package_id=package_id,
-                    )
-                )
-                continue
-            carrier = carrier.model_copy(
-                update={"representation": representation.model_copy(update={"bundle": bundle})}
-            )
-        filled[(package_id, creative_id)] = carrier
-    if problems:
-        raise _adapter_refusal(problems, named_packages)
-    return filled
-
-
-async def _fetched_bundle(url: str) -> bytes | None:
-    """The zip at the buyer's *url*, or None when the seam could not deliver it."""
-    try:
-        return (await asend(url, method="GET", provenance=CounterpartyUrl())).content
-    except OutboundDeliveryFailed as failure:
-        logger.warning(log_safe(f"[HTML5] Bundle {url} could not be fetched: {failure}"))
-        return None
 
 
 def _carriers_by_package_id(
@@ -1898,12 +1836,6 @@ def execute_approved_media_buy(
         # (GH #1644). Only the two ids cross the boundary, which is why the capture above
         # is separate from this line.
         identity = identity_of(tenant_id, buy_principal_id, buy_account_id)
-        # Resolved before the unit below opens: get_adapter reads the adapter config in a session
-        # of its own, which would close the unit's session and lose the enrichment written there.
-        adapter = get_adapter(identity)
-        # Before the adapter runs, as the gate above: a bundle refused here leaves the buy
-        # pending_approval, because nothing was booked.
-        carriers = run_async_in_sync_context(_with_html5_bundles(adapter, carriers, gate_packages))
 
         if stored_order_id:
             # Already booked: upload the creatives to that order and approve it (#1690).
@@ -1956,6 +1888,10 @@ def execute_approved_media_buy(
                     )
             else:
                 logger.info("[APPROVAL] Adapter returned no media_buy_id — skipping ID persistence")
+
+        # Resolved before the unit opens: get_adapter reads the adapter config in a session of
+        # its own, which would close the unit's session and lose the enrichment written below.
+        adapter = get_adapter(identity)
 
         # Upload and associate inline creatives if any exist
         # This handles inline creatives that were uploaded during initial media buy creation
@@ -2283,7 +2219,6 @@ def push_creative_to_existing_buy(
             assert uow.products is not None
             try:
                 carriers = _read_for_push(uow.products, creative, _assigned_packages(packages, matching))
-                carriers = run_async_in_sync_context(_with_html5_bundles(adapter, carriers, ()))
             except AdCPSalesAgentError as refusal:
                 return CreativePushFailure(f"Creative {creative_id} is not trafficked: {refusal}", refusal)
             asset = _build_adapter_asset_from_creative(
@@ -4240,7 +4175,6 @@ async def _create_media_buy_impl(
         # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
         # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
         carriers = _pre_validate_package_creatives(packages, tenant.tenant_id, principal_id, ctx_manager, step)
-        carriers = await _with_html5_bundles(adapter, carriers, packages)
 
         # What the adapters read, projected off the buyer's request ONCE and handed to
         # both the pre-validation and the creation call — the same type the approval

@@ -160,44 +160,6 @@ def _hold_on_the_configured_network(self: Any, gam_id: str, image_url: str) -> s
     return self._configured_network().hold_creative(creative_id=gam_id, image_url=image_url)
 
 
-#: The buyer's bundle host on e2e: a tls-proxy alias ``publisher-origin`` serves (see
-#: ``tests/harness/publisher_authorization.py``). Bundles live under ``/bundles/<key>/``, a
-#: path no adagents.json shares.
-_BUNDLE_HOST = "pub-psatest.com"
-
-
-def _serve_from_the_publisher_origin(self: Any, bundle: bytes | None) -> str:
-    """``serve_html5_bundle`` on e2e: the bundle is a file ``publisher-origin`` serves, at a per-scenario path.
-
-    ``publisher-origin`` serves a dialer only the files written under that dialer's address,
-    and two processes fetch the bundle: the live server, on create, and this process, on a
-    seller's approval it runs itself. So the file is written under both addresses. With no
-    *bundle* nothing is written, and the path answers 404 (``publisher_authorization.py``): the
-    seller fetches no bundle there either.
-    """
-    import shutil
-    import socket
-    import uuid
-
-    from tests.harness.publisher_authorization import PUBLISHER_FILES_DIR
-
-    self._reach_the_bundle_host()
-    key = uuid.uuid4().hex
-    runner_files = PUBLISHER_FILES_DIR / socket.gethostbyname(socket.gethostname())
-    if bundle is not None:
-        for files in (self._registered_server_files(), runner_files):
-            bundle_file = files / _BUNDLE_HOST / "bundles" / key / "bundle.zip"
-            bundle_file.parent.mkdir(parents=True, exist_ok=True)
-            bundle_file.write_bytes(bundle)
-    self._guard("html5 bundle at this runner's address", lambda: shutil.rmtree(runner_files, ignore_errors=True))
-    return f"https://{_BUNDLE_HOST}/bundles/{key}/bundle.zip"
-
-
-def _a_network_asset_is_held(self: Any, asset: Mapping[str, Any], bundle: bytes) -> bool:
-    """``gam_asset_is_the_bundle`` on e2e: GAM holds the asset, by its reference. It does not read the bytes back."""
-    return asset.get("assetId") is not None
-
-
 def _read_a_line_item_on_the_configured_network(self: Any, line_item_id: str) -> Mapping[str, Any]:
     """``gam_line_item`` on e2e: the line item the configured network holds under the scenario's *line_item_id*."""
     return self._configured_network().line_item(line_item_id)
@@ -620,44 +582,6 @@ class GamSellerMixin:
 
         line_items = self.mock["gam_client"].return_value.GetService("LineItemService")
         line_items.getLineItemsByStatement.side_effect = gam_fault(reason)
-
-    def _reach_the_bundle_host(self) -> None:
-        """This process may fetch the buyer's bundle host: it trusts the shared test CA and opens the private-range hatch.
-
-        The seller fetches a bundle through the egress seam, and the bundle host is a private
-        address on a test certificate. Both released with the env.
-        """
-        from unittest.mock import patch
-
-        from src.core.config import get_settings
-        from tests.helpers.tls_material import trust_test_ca
-
-        trust_test_ca(self._guard)
-        hatch = patch.object(get_settings().limits, "adcp_outbound_allow_private", True)
-        hatch.start()
-        self._guard("html5 bundle egress hatch", hatch.stop)
-
-    @realize_e2e(_serve_from_the_publisher_origin)
-    def serve_html5_bundle(self, bundle: bytes | None) -> str:
-        """Serve *bundle* as a zip from a loopback origin over TLS; return its URL.
-
-        The buyer's bundle host, which the seller fetches the bundle from (``_reach_the_bundle_host``).
-        With no *bundle* the host does not answer: it closes every connection before a status line.
-        """
-        from tests.helpers.tls_material import start_tls_origin
-
-        self._reach_the_bundle_host()
-        origin = start_tls_origin(self._guard, "html5 bundle origin")
-        if bundle is None:
-            origin.close_without_responding()
-        else:
-            origin.respond_with(200, body=bundle, content_type="application/zip")
-        return f"{origin.base_url}/bundle.zip"
-
-    @realize_e2e(_a_network_asset_is_held)
-    def gam_asset_is_the_bundle(self, asset: Mapping[str, Any], bundle: bytes) -> bool:
-        """Whether GAM's *asset* of a creative is *bundle*: the stand-in holds the bytes the seller sent."""
-        return asset.get("assetByteArray") == bundle
 
     @realize_e2e(_read_back_what_the_network_holds)
     def gam_objects_sent(self, service: str, method: str) -> list[Any]:
