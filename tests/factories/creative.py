@@ -14,7 +14,7 @@ from src.core.format_resolver import creative_identity_of, find_format
 from src.core.schemas import CreativeFormatIdentity, Format, FormatId
 from src.core.schemas.creative import CreativeAssetRequest
 
-from .core import TenantFactory
+from .core import TenantFactory, fill_from_parents, unless_id_given
 from .creative_asset import build_assets, image_spec
 from .media_buy import MediaBuyFactory
 from .principal import PrincipalFactory
@@ -336,11 +336,19 @@ class CreativeAssignmentFactory(SQLAlchemyModelFactory):
         exclude = ("creative", "media_buy")
 
     assignment_id = factory.Sequence(lambda n: f"assignment_{n:04d}")
-    creative = factory.SubFactory(CreativeFactory)
-    tenant_id = factory.LazyAttribute(lambda o: o.creative.tenant_id)
-    creative_id = factory.LazyAttribute(lambda o: o.creative.creative_id)
-    principal_id = factory.LazyAttribute(lambda o: o.creative.principal_id)
-    media_buy = factory.SubFactory(MediaBuyFactory, tenant=factory.SelfAttribute("..creative.tenant"))
-    media_buy_id = factory.LazyAttribute(lambda o: o.media_buy.media_buy_id)
+    tenant_id = None
+    creative_id = None
+    principal_id = None
+    media_buy_id = None
+    creative = unless_id_given("creative_id", factory.SubFactory(CreativeFactory))
+    media_buy = unless_id_given(
+        "media_buy_id", factory.SubFactory(MediaBuyFactory, tenant=factory.SelfAttribute("..creative.tenant"))
+    )
     package_id = factory.Sequence(lambda n: f"pkg_{n:04d}")
     weight = 100
+
+    @classmethod
+    def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
+        return fill_from_parents(
+            kwargs, creative=("tenant_id", "creative_id", "principal_id"), media_buy=("media_buy_id",)
+        )

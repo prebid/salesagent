@@ -3457,9 +3457,6 @@ class IntegrationEnv(BaseTestEnv):
 
         account = self._session.scalars(select(Account).filter_by(tenant_id=self._tenant_id)).first()
         if account is None:
-            # tenant_id, never tenant= -- Account.tenant is a real relationship, so handing
-            # it a SubFactory's throwaway Tenant makes SQLAlchemy re-sync tenant_id FROM
-            # that object at flush and silently relocate the row (see AccountFactory.Meta).
             # A DETERMINISTIC id, not the factory Sequence: tests name this account by
             # literal (``{"account_id": "acct_test"}``) in ~120 request constructions, and a
             # sequence id would parse in all of them and resolve in none.

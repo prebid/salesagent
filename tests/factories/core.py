@@ -64,6 +64,32 @@ def tenant_subdomain(tenant_id: str) -> str:
     return f"pub-{tenant_id}".replace("_", "-")
 
 
+def unless_id_given(id_field: str, parent: Any) -> factory.Maybe:
+    """Declare a parent ``SubFactory`` that runs only when the caller names no ``id_field``.
+
+    factory_boy evaluates every declaration, ``Meta.exclude`` included, so a plain parent
+    ``SubFactory`` commits its row even when the caller passes the parent's id instead (#2658).
+    Declare ``id_field`` as ``None`` beside it, and derive it with :func:`fill_from_parents`.
+    """
+    return factory.Maybe(id_field, yes_declaration=None, no_declaration=parent)
+
+
+def fill_from_parents(kwargs: dict[str, Any], **derived: tuple[str, ...]) -> dict[str, Any]:
+    """Copy each field the caller left ``None`` from its parent, then drop every ``None`` parent.
+
+    Call it from ``_adjust_kwargs``: factory_boy runs that hook before it removes the
+    ``Meta.exclude`` names, so the parent object is still in ``kwargs``. A ``None`` parent means
+    the caller named it by id, so the model gets the id and never a relationship set to ``None``.
+    """
+    for parent, fields in derived.items():
+        for field in fields:
+            if kwargs[field] is None:
+                kwargs[field] = getattr(kwargs[parent], field)
+        if kwargs[parent] is None:
+            del kwargs[parent]
+    return kwargs
+
+
 class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
     class Meta:
         model = Tenant
@@ -169,8 +195,8 @@ class GAMInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
 
-    tenant = SubFactory(TenantFactory)
-    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    tenant_id = None
+    tenant = unless_id_given("tenant_id", SubFactory(TenantFactory))
     inventory_type = "ad_unit"
     inventory_id = Sequence(lambda n: f"au_{n:04d}")
     name = LazyAttribute(lambda o: f"Ad Unit {o.inventory_id}")
@@ -184,6 +210,10 @@ class GAMInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):
             "sizes": [{"width": 300, "height": 250}],
         }
     )
+
+    @classmethod
+    def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
+        return fill_from_parents(kwargs, tenant=("tenant_id",))
 
 
 class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):

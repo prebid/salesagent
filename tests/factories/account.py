@@ -20,7 +20,7 @@ from adcp.types.domains.core.business_entity import (  # TODO: no stable alias i
 from factory import LazyAttribute, Sequence, SubFactory
 
 from src.core.database.models import Account, AgentAccountAccess
-from tests.factories.core import TenantFactory
+from tests.factories.core import TenantFactory, fill_from_parents, unless_id_given
 
 #: The account every test names by literal. Deterministic on purpose: ``account`` is
 #: spec-REQUIRED on create_media_buy, update_media_buy and sync_creatives, and the transport
@@ -48,11 +48,20 @@ class AccountFactory(factory.alchemy.SQLAlchemyModelFactory):
         #: ``.build()`` carrying the trap.
         exclude = ["tenant"]
 
-    tenant = SubFactory(TenantFactory)
-    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    tenant_id = None
+    tenant = unless_id_given("tenant_id", SubFactory(TenantFactory))
     account_id = Sequence(lambda n: f"acc_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Account {o.account_id}")
     status = "active"
+
+    @classmethod
+    def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
+        return fill_from_parents(kwargs, tenant=("tenant_id",))
+
+
+#: A principal or account that the grant builds goes in the grant's tenant, whether the caller
+#: passed that tenant or only its id.
+_IN_GRANT_TENANT = {"tenant": factory.SelfAttribute("..tenant"), "tenant_id": factory.SelfAttribute("..tenant_id")}
 
 
 class AgentAccountAccessFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -62,13 +71,18 @@ class AgentAccountAccessFactory(factory.alchemy.SQLAlchemyModelFactory):
         sqlalchemy_session_persistence = "commit"
         exclude = ["tenant", "principal", "account"]
 
-    tenant = SubFactory(TenantFactory)
-    principal = SubFactory("tests.factories.principal.PrincipalFactory", tenant=factory.SelfAttribute("..tenant"))
-    account = SubFactory(AccountFactory, tenant=factory.SelfAttribute("..tenant"))
+    tenant_id = None
+    principal_id = None
+    account_id = None
+    tenant = unless_id_given("tenant_id", SubFactory(TenantFactory))
+    principal = unless_id_given(
+        "principal_id", SubFactory("tests.factories.principal.PrincipalFactory", **_IN_GRANT_TENANT)
+    )
+    account = unless_id_given("account_id", SubFactory(AccountFactory, **_IN_GRANT_TENANT))
 
-    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
-    principal_id = LazyAttribute(lambda o: o.principal.principal_id)
-    account_id = LazyAttribute(lambda o: o.account.account_id)
+    @classmethod
+    def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
+        return fill_from_parents(kwargs, tenant=("tenant_id",), principal=("principal_id",), account=("account_id",))
 
 
 def seed_default_account(

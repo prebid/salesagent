@@ -25,6 +25,10 @@ directory and what the gaps cost.
   normalization, a rule, and workarounds — and the bug that started it was two derivations of
   one value disagreeing.
 - **`mint()` RECORDS a value as test-generated; it does not generate one.**
+- **Build a parent only when no id names it.** factory_boy evaluates every parent
+  `SubFactory`, `Meta.exclude` included, so a caller that passes `tenant_id=` still gets the
+  factory's own tenant row. Declare the parent with `unless_id_given` and derive its ids in
+  `_adjust_kwargs` with `fill_from_parents`, both in `core.py`.
 
 ## Multi-row facts belong in a seeder, not in each caller
 

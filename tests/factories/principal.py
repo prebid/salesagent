@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any
 
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
@@ -13,7 +14,7 @@ from src.core.resolved_identity import AccountIdentity, PublicIdentity, Resolved
 from src.core.schemas import Principal as SchemaPrincipal
 from src.core.schemas.account import Account
 from src.core.tenant_context import TenantContext
-from tests.factories.core import TenantFactory
+from tests.factories.core import TenantFactory, fill_from_parents, unless_id_given
 
 _UNSET = object()
 
@@ -35,8 +36,8 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
 
-    tenant = SubFactory(TenantFactory)
-    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    tenant_id = None
+    tenant = unless_id_given("tenant_id", SubFactory(TenantFactory))
     principal_id = Sequence(lambda n: f"principal_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Advertiser {o.principal_id}")
     # The row stores only the hash. The plaintext a test PRESENTS is derived from the
@@ -48,6 +49,10 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
     # The column default, stated: a BUILT row (unit mode) is never flushed, so the
     # server default never fills it and ``SchemaPrincipal.from_row`` would read None.
     billing_passthrough_only = False
+
+    @classmethod
+    def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
+        return fill_from_parents(kwargs, tenant=("tenant_id",))
 
     @staticmethod
     def _tenant_for(tenant: object, tenant_id: str, tenant_overrides: dict[str, object]) -> object:
