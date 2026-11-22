@@ -516,14 +516,13 @@ def given_principal_has_n_creatives(ctx: dict, principal_id: str, count: int) ->
     Two ``@given`` phrasings map to this one body: ``parsers.parse`` requires a
     whole-string match, so the "in the same tenant" variant needs its own decorator.
     """
-    from uuid import uuid4
-
     from tests.factories import PrincipalFactory, TenantFactory
+    from tests.factories.mint import mint_id
 
     env = ctx["env"]
     tenant = ctx.get("tenant")
     if tenant is None:
-        tenant_id = f"uc018_iso_{uuid4().hex[:8]}"
+        tenant_id = mint_id("uc018_iso")
         tenant = TenantFactory(tenant_id=tenant_id)
         env.switch_tenant(tenant_id)
         ctx["tenant"] = tenant

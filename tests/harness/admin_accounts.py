@@ -100,7 +100,7 @@ class AdminAccountEnv:
         #: The in-process scripted model origin (:meth:`script_ai_connection_test`), once started.
         self._llm_origin: str | None = None
         #: What ``__exit__`` closes besides the client: the in-process origin and its variable.
-        self._cleanups = ExitStack()
+        self._llm_cleanups = ExitStack()
 
     @property
     def mode(self) -> str:
@@ -110,24 +110,38 @@ class AdminAccountEnv:
     def __enter__(self) -> AdminAccountEnv:
         # Not a BaseTestEnv, so it keeps its own __enter__ — but it owes the same
         # guarantee. Python does not call __exit__ when __enter__ raises, so a
-        # failure in _ensure_tenant would strand the admin client for the rest of
+        # failure in _setup would strand the admin client for the rest of
         # the process. __exit__ is None-safe, so calling it here is what releases it.
         try:
             self._client = AdminClient(self._base_url if self._mode == "e2e" else None)
-            self._ensure_tenant()
+            self._setup()
         except BaseException:
             self.__exit__(None, None, None)
             raise
         return self
 
     def __exit__(self, *exc: object) -> None:
-        self._cleanups.close()
+        try:
+            self._cleanup()
+        finally:
+            if self._client is not None:
+                self._client.close()
+                self._client = None
+
+    def _setup(self) -> None:
+        """Put in place what the env needs before its first step, once the client is open.
+
+        A subclass extends this, and releases whatever it acquires here in ``_cleanup``,
+        which also runs when this raises part-way.
+        """
+        self._ensure_tenant()
+
+    def _cleanup(self) -> None:
+        """Release what ``_setup`` and the scenario's steps left behind."""
+        self._llm_cleanups.close()
         self._llm_origin = None
         self._drop_database_faults()
         self._cleanup_accounts()
-        if self._client is not None:
-            self._client.close()
-            self._client = None
 
     @property
     def tenant_id(self) -> str:
@@ -365,13 +379,11 @@ class AdminAccountEnv:
         duplicate key should fail loudly here rather than quietly produce a database
         the buyer's ``sync_accounts`` could never have created.
         """
-        import uuid
-
         from src.core.database.repositories.uow import AccountUoW
         from tests.factories.account import AccountFactory
-        from tests.factories.mint import mint
+        from tests.factories.mint import mint_id
 
-        account_id = mint(f"acc_{uuid.uuid4().hex[:12]}")
+        account_id = mint_id("acc")
 
         with AccountUoW(self._tenant_id) as uow:
             assert uow.accounts is not None
@@ -773,6 +785,6 @@ class AdminAccountEnv:
 
             from tests.e2e.scripted_llm_origin_service import run_scripted_llm_origin
 
-            self._llm_origin = self._cleanups.enter_context(run_scripted_llm_origin(host="127.0.0.1", port=0))
-            self._cleanups.enter_context(patch.dict(os.environ, {"GOOGLE_GEMINI_BASE_URL": self._llm_origin}))
+            self._llm_origin = self._llm_cleanups.enter_context(run_scripted_llm_origin(host="127.0.0.1", port=0))
+            self._llm_cleanups.enter_context(patch.dict(os.environ, {"GOOGLE_GEMINI_BASE_URL": self._llm_origin}))
         return self._llm_origin

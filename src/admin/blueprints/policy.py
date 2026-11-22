@@ -5,7 +5,7 @@ import logging
 from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
-from src.admin.utils import get_tenant_config_from_db, require_auth
+from src.admin.utils import get_tenant_config_from_db, require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.audit_logger import AuditLogger
 from src.core.database.database_session import get_db_session
@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 policy_bp = Blueprint("policy", __name__)
 
 
+# FIXME(#2233): inline session["role"] check stands in for require_tenant_access.
 @policy_bp.route("/", methods=["GET"])
 @require_auth()
 def index(tenant_id):
@@ -132,6 +133,7 @@ def index(tenant_id):
     )
 
 
+# FIXME(#2233): inline session["role"] check stands in for require_tenant_access.
 @policy_bp.route("/update", methods=["POST"])
 @require_auth()
 @log_admin_action("update_policy")
@@ -199,12 +201,13 @@ def update(tenant_id):
 
 
 @policy_bp.route("/rules", methods=["GET", "POST"])
-@require_auth()
+@require_tenant_access()
 def rules(tenant_id):
     """Redirect old policy rules URL to new comprehensive policy settings page."""
     return redirect(url_for("policy.index", tenant_id=tenant_id))
 
 
+# FIXME(#2233): inline session["role"] check stands in for require_tenant_access.
 @policy_bp.route("/review/<task_id>", methods=["GET", "POST"])
 @require_auth()
 @log_admin_action("review_policy_task")

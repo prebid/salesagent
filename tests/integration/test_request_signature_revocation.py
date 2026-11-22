@@ -179,6 +179,7 @@ from src.core.signing.revocation import (
 from src.core.signing.verifier import AGENT_RESOLUTION_CACHE
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.log_capture import LogCaptureHandler
+from tests.helpers.metrics import assert_counter_delta
 
 # tests/helpers/signing.py owns the wire plumbing for signed requests
 # (declaration seam, counterparty resolution seam, signing, rejection-code
@@ -194,16 +195,12 @@ from tests.helpers.signing import (
     LADDER_OPERATIONS,
     SIGNING_PRINCIPAL_ID,
     SIGNING_TENANT_ID,
-    assert_counter_delta,
     bucketed_declaration,
     counterparty_key,
     keypair_for,
     seed_principal,
     seeded_cache_entry,
     signed_headers,
-)
-from tests.helpers.signing import (
-    counter_total as _counter_total,
 )
 from tests.helpers.signing import (
     declared_posture as _declared_posture,
@@ -636,29 +633,28 @@ class TestAbsentRevocationList:
         with _caller(counterparty_keypair) as caller:
             _install_checker(_STUBBED_ORIGIN, _dead_endpoint_checker(_STUBBED_ORIGIN, caller.jwks))
 
-            before = _counter_total(_UNAVAILABLE_METRIC)
-            with (
-                _step_nine(origin=_STUBBED_ORIGIN, jwks=caller.jwks, require_revocation_list=False),
-                _warnings() as warnings,
+            with assert_counter_delta(
+                _UNAVAILABLE_METRIC,
+                1,
+                why="The fail-open is metered exactly once: it is the evidence for flipping "
+                "require_revocation_list as the ecosystem starts publishing.",
             ):
-                response = caller.send()
-            after = _counter_total(_UNAVAILABLE_METRIC)
+                with (
+                    _step_nine(origin=_STUBBED_ORIGIN, jwks=caller.jwks, require_revocation_list=False),
+                    _warnings() as warnings,
+                ):
+                    response = caller.send()
 
-            assert response.status_code == 200, (
-                "a counterparty that publishes no revocation list must not break its signed "
-                f"traffic; got {response.status_code}"
-                + (
-                    " — a 500 means the cold-path fetch error escaped the translation site"
-                    if response.status_code >= 500
-                    else ""
+                assert response.status_code == 200, (
+                    "a counterparty that publishes no revocation list must not break its signed "
+                    f"traffic; got {response.status_code}"
+                    + (
+                        " — a 500 means the cold-path fetch error escaped the translation site"
+                        if response.status_code >= 500
+                        else ""
+                    )
+                    + f": {response.text[:300]}"
                 )
-                + f": {response.text[:300]}"
-            )
-            assert after == before + 1, (
-                f"the fail-open must be metered exactly once — it is the evidence for flipping "
-                f"require_revocation_list as the ecosystem starts publishing; {_UNAVAILABLE_METRIC} "
-                f"went {before} -> {after}"
-            )
             assert _revocation_warned(warnings), (
                 "the fail-open must be announced at WARNING (no quiet failures); the "
                 f"{_SIGNING_LOGGER!r} logger recorded {warnings.records!r}"
@@ -717,28 +713,27 @@ class TestRevocationHostThatCannotBeDialed:
         DNS at all, so the guard holds even on an isolated runner.
         """
         with _caller(counterparty_keypair) as caller:
-            before = _counter_total(_UNAVAILABLE_METRIC)
-            with (
-                _step_nine(origin=origin, jwks=caller.jwks, require_revocation_list=False),
-                _warnings() as warnings,
+            with assert_counter_delta(
+                _UNAVAILABLE_METRIC,
+                1,
+                why="The undialable endpoint is metered like any other unavailable list.",
             ):
-                response = caller.send()
-            after = _counter_total(_UNAVAILABLE_METRIC)
+                with (
+                    _step_nine(origin=origin, jwks=caller.jwks, require_revocation_list=False),
+                    _warnings() as warnings,
+                ):
+                    response = caller.send()
 
-            assert response.status_code == 200, (
-                f"a revocation endpoint at {origin!r} that cannot be dialed must fail open "
-                f"(200 + WARNING + metric), not fail the request; got {response.status_code}"
-                + (
-                    " — a 500 is the R-H1 escape: SSRFValidationError is not in the translation site's exception tuple"
-                    if response.status_code >= 500
-                    else ""
+                assert response.status_code == 200, (
+                    f"a revocation endpoint at {origin!r} that cannot be dialed must fail open "
+                    f"(200 + WARNING + metric), not fail the request; got {response.status_code}"
+                    + (
+                        " — a 500 is the R-H1 escape: SSRFValidationError is not in the translation site's exception tuple"
+                        if response.status_code >= 500
+                        else ""
+                    )
+                    + f": {response.text[:300]}"
                 )
-                + f": {response.text[:300]}"
-            )
-            assert after == before + 1, (
-                f"the undialable endpoint must be metered like any other unavailable list; "
-                f"{_UNAVAILABLE_METRIC} went {before} -> {after}"
-            )
             assert _revocation_warned(warnings), (
                 f"the fail-open must be announced at WARNING; the {_SIGNING_LOGGER!r} logger "
                 f"recorded {warnings.records!r}"

@@ -24,7 +24,7 @@ import os
 import re
 import ssl
 from collections.abc import Callable, Generator, Sequence
-from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
@@ -35,6 +35,7 @@ from scripts.audit import storyboard_spec
 from tests.helpers.bdd_transport import NODEID_TRANSPORTS, transport_of
 from tests.helpers.ledger import load_ledger_nodeids
 from tests.helpers.marker_names import derive_marker_names
+from tests.utils.database_helpers import production_db_pointed_at
 
 # ``src.app`` reads this when it is imported and mounts GET /tls/ask from it, as a deployment
 # does. local-tls-ask.feature grades that composed app, so it is set before anything imports
@@ -102,6 +103,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.admin_operator_refusals",
     "tests.bdd.steps.domain.admin_unexpected_errors",
+    "tests.bdd.steps.domain.admin_tenant_scoping",
     "tests.bdd.steps.domain.admin_inventory_profiles",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
@@ -124,6 +126,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.security_wire_safety",
     "tests.bdd.steps.domain.security_tenant_isolation",
     "tests.bdd.steps.domain.database_fail_fast",
+    "tests.bdd.steps.domain.local_media_buy_status_sweep",
     "tests.bdd.steps.domain.tls_ask",
     "tests.bdd.steps.domain.protocol_version_negotiation",
 ]
@@ -6060,39 +6063,6 @@ def _build_uc003_storyboard_generic_client_env(e2e_config: object | None) -> Abs
     return BareIntegrationEnv(e2e_config=e2e_config)
 
 
-def _build_admin_env(e2e_config: object | None) -> AbstractContextManager:
-    """Both transports BR-ADMIN-ACCOUNTS.feature declares, chosen at collection.
-
-    ``pytest_generate_tests`` parametrizes ADMIN scenarios over
-    ``AdminTransport.INTEGRATION`` plus ``AdminTransport.E2E`` (when
-    ``BDD_E2E_ENABLED=true``), and the ``ctx`` fixture stashes ``e2e_config``
-    for the ``e2e_``-prefixed one. ADMIN is never parametrized under ``e2e_rest``,
-    but ``AdminTransport.E2E`` (``"e2e_admin"``) DOES carry the ``e2e_`` prefix the
-    ``ctx`` fixture keys on, so ``e2e_config`` is not always ``None`` here: pinning
-    ``mode="integration"`` would run the Flask test_client while the node id claims
-    the live stack, silently grading 13 scenarios on one transport. The env is TOLD
-    its transport and, over e2e, the per-worker address ``e2e_stack`` synthesised —
-    it discovers neither.
-
-    This is the ONE builder that passes ``base_url=`` instead of
-    ``e2e_config=``, and the asymmetry is deliberate: the admin UI is an HTML
-    form surface, not an AdCP tool surface, so the env needs the ADDRESS and
-    nothing else from ``E2EConfig``. Handing it the whole object would pull an
-    AdCP-shaped dependency into a surface that has no AdCP protocol — the same
-    reason ``AdminTransport`` is not a member of the ``Transport`` enum (see its
-    docstring). A census asking "does every builder here receive e2e_config?"
-    will flag this line; that flag is expected. What actually must hold — no
-    branch pins its own DB scope — is machine-checked by
-    ``tests/unit/test_bdd_admin_transport_parametrization.py``
-    ``::test_harness_env_never_pins_its_db_scope``, not by that heuristic.
-    """
-    from tests.harness.admin_accounts import AdminAccountEnv
-
-    mode = "e2e" if e2e_config is not None else "integration"
-    base_url = e2e_config.base_url if e2e_config is not None else None  # type: ignore[attr-defined]
-    return AdminAccountEnv(mode=mode, base_url=base_url)
-
-
 def _build_product_env(e2e_config: object | None) -> AbstractContextManager:
     """Shared by COMPAT and UC-GET-PRODUCTS — both are read-only product listing."""
     from tests.harness.product import ProductEnv
@@ -6341,15 +6311,56 @@ def _seed_delivery_poll(ctx: dict, env: object) -> None:
     ctx[f"db_principal_{env._principal_id}"] = principal
 
 
+def _harness_class(factory_path: str) -> Callable[..., AbstractContextManager]:
+    """The harness class at dotted *factory_path*, imported when a builder runs rather than with this conftest."""
+    import importlib
+
+    module_name, _, class_name = factory_path.rpartition(".")
+    return getattr(importlib.import_module(module_name), class_name)
+
+
 def _env(factory_path: str, **kwargs: object) -> Callable[[object | None], AbstractContextManager]:
     """Build an env_builder that imports its harness lazily, as the branches did."""
 
     def _builder(e2e_config: object | None) -> AbstractContextManager:
-        import importlib
+        return _harness_class(factory_path)(e2e_config=e2e_config, **kwargs)
 
-        module_name, _, class_name = factory_path.rpartition(".")
-        env_cls = getattr(importlib.import_module(module_name), class_name)
-        return env_cls(e2e_config=e2e_config, **kwargs)
+    return _builder
+
+
+def _admin_env_builder(factory_path: str) -> Callable[[object | None], AbstractContextManager]:
+    """Build the env_builder of an ``AdminAccountEnv`` subclass, on the transport chosen at collection.
+
+    ``pytest_generate_tests`` parametrizes a ``T-ADMIN-`` scenario over
+    ``AdminTransport.INTEGRATION`` plus ``AdminTransport.E2E`` (when
+    ``BDD_E2E_ENABLED=true``), and the ``ctx`` fixture stashes ``e2e_config``
+    for the ``e2e_``-prefixed one. ADMIN is never parametrized under ``e2e_rest``,
+    but ``AdminTransport.E2E`` (``"e2e_admin"``) DOES carry the ``e2e_`` prefix the
+    ``ctx`` fixture keys on, so ``e2e_config`` is not always ``None`` here: pinning
+    ``mode="integration"`` would run the Flask test_client while the node id claims
+    the live stack, silently grading the scenario on one transport. The env is TOLD
+    its transport and, over e2e, the per-worker address ``e2e_stack`` synthesised —
+    it discovers neither.
+
+    These builders are the only ones that pass ``base_url=`` instead of
+    ``e2e_config=``, and the asymmetry is deliberate: the admin UI is an HTML form
+    surface, not an AdCP tool surface, so the env needs the ADDRESS and nothing
+    else from ``E2EConfig``. Handing it the whole object would pull an AdCP-shaped
+    dependency into a surface that has no AdCP protocol — the same reason
+    ``AdminTransport`` is not a member of the ``Transport`` enum (see its
+    docstring). A census asking "does every builder here receive e2e_config?"
+    will flag this one; that flag is expected. What actually must hold — no
+    branch pins its own DB scope — is machine-checked by
+    ``tests/unit/test_bdd_admin_transport_parametrization.py``
+    ``::test_harness_env_never_pins_its_db_scope``, not by that heuristic. Over e2e
+    ``_run_env_route`` has already entered ``_db_scope_for``, so the env's factory
+    writes land in the server's database.
+    """
+
+    def _builder(e2e_config: object | None) -> AbstractContextManager:
+        mode = "e2e" if e2e_config is not None else "integration"
+        base_url = e2e_config.base_url if e2e_config is not None else None  # type: ignore[attr-defined]
+        return _harness_class(factory_path)(mode=mode, base_url=base_url)
 
     return _builder
 
@@ -6362,36 +6373,6 @@ def _uc(uc_name: str, predicate: Callable[[frozenset[str]], bool]) -> Callable[[
     ``BR-RULE-034`` are both carried by more than one use case).
     """
     return lambda markers: storyboard_spec.detect_uc(markers) == uc_name and predicate(markers)
-
-
-@contextmanager
-def _production_db_pointed_at(url: str) -> Generator[None, None, None]:
-    """Point production's cached DB engine at ``url`` for the scenario duration.
-
-    The e2e counterpart of ``integration_db``'s engine repoint: over e2e_rest
-    the env's factories write to the live server DB (``e2e_config.postgres_url``),
-    but the runner's ``DATABASE_URL`` targets the in-process test base (in-network:
-    ``.../adcp_test``), so any in-process production call inside an e2e scenario
-    (e.g. a TRANSPORT-BYPASS Given calling an ``_impl``) would read a different
-    database than the one being seeded. Repoint DATABASE_URL + reset the cached
-    engine on entry, restore both on exit (mirrors tests/conftest_db.py).
-    """
-    import src.core.context_manager as _context_manager_module
-    from src.core.database.database_session import reset_engine
-
-    original_url = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = url
-    reset_engine()
-    _context_manager_module._context_manager_instance = None
-    try:
-        yield
-    finally:
-        if original_url is None:
-            os.environ.pop("DATABASE_URL", None)
-        else:
-            os.environ["DATABASE_URL"] = original_url
-        reset_engine()
-        _context_manager_module._context_manager_instance = None
 
 
 def _db_scope_for(request: pytest.FixtureRequest, e2e_config: object | None) -> AbstractContextManager[None]:
@@ -6408,7 +6389,7 @@ def _db_scope_for(request: pytest.FixtureRequest, e2e_config: object | None) -> 
     if e2e_config is None:
         request.getfixturevalue("integration_db")
         return nullcontext()
-    return _production_db_pointed_at(e2e_config.postgres_url)  # type: ignore[attr-defined]
+    return production_db_pointed_at(e2e_config.postgres_url)  # type: ignore[attr-defined]
 
 
 def _run_env_route(
@@ -6459,12 +6440,12 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
     ),
     # The seven rows below are keyed by the coarse `uc` bucket (from
     # storyboard_spec.detect_uc), not a per-scenario tag: they are what a scenario in these
-    # UCs falls back to when no predicate row above claims it. ADMIN, COMPAT,
-    # UC-001, UC-GET-PRODUCTS and UC-005 have no predicate rows at all — one env
-    # + one seed serves every scenario. UC-019 does have one (@post-create-poll
-    # needs create + list in a single scenario), so its bucket row is the
-    # remainder.
-    "ADMIN": EnvRoute(tag="ADMIN", env_builder=_build_admin_env),
+    # UCs falls back to when no predicate row above claims it. COMPAT, UC-001,
+    # UC-GET-PRODUCTS and UC-005 have no predicate rows at all — one env + one
+    # seed serves every scenario. ADMIN has one (T-ADMIN-SCOPE-* takes its own
+    # harness) and UC-019 has one (@post-create-poll needs create + list in a
+    # single scenario), so their bucket rows are the remainder.
+    "ADMIN": EnvRoute(tag="ADMIN", env_builder=_admin_env_builder("tests.harness.admin_accounts.AdminAccountEnv")),
     "COMPAT": EnvRoute(tag="COMPAT", env_builder=_build_product_env),
     # UC-001 is get_products discovery, so it takes the SAME env as
     # UC-GET-PRODUCTS. It had no row at all until now, which meant a
@@ -6764,6 +6745,16 @@ _UC006_WIRED_SCENARIOS = frozenset(
 )
 
 ENV_ROUTES: list[EnvRoute] = [
+    # ── ADMIN (hand-authored admin UI features) ─────────────────────────────
+    # T-ADMIN-* detects as the ADMIN bucket (storyboard_spec.detect_uc); the
+    # bucket row serves BR-ADMIN-ACCOUNTS. BR-ADMIN-TENANT-SCOPING carries the
+    # narrower T-ADMIN-SCOPE- prefix and needs its own harness, so it is claimed
+    # here, ahead of the bucket, by predicate.
+    EnvRoute(
+        tag="admin-tenant-scoping",
+        when=lambda m: any(t.startswith("T-ADMIN-SCOPE-") for t in m),
+        env_builder=_admin_env_builder("tests.harness.admin_tenant_scoping.AdminTenantScopingEnv"),
+    ),
     # ── @ctxecho (local context-echo-on-every-outcome feature) ──────────────
     # Same reason the @egress rows below are UNSCOPED `when` rows: these
     # scenarios carry T-CTXECHO-* identity tags, not T-UC-<n>, so
@@ -7177,6 +7168,14 @@ ENV_ROUTES: list[EnvRoute] = [
         # BR-SECURITY-002's two-tenant seeding and dispatches get_products like it does.
         when=lambda m: any(t.startswith("T-DBFAILFAST") for t in m),
         env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="media-buy-status-sweep",
+        # The status sweep runs in the test process. get_media_buys is the read a buyer
+        # makes, so the scenario takes the UC-019 list env and crosses transports there.
+        when=lambda m: any(t.startswith("T-SWEEP") for t in m),
+        env_builder=_build_media_buy_list_env,
+        seed=_seed_tenant_and_principal,
     ),
     EnvRoute(
         tag="protocol-version-negotiation",

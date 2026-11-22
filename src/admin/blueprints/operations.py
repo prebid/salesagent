@@ -52,6 +52,7 @@ operations_bp = Blueprint("operations", __name__)
 # @operations_bp.route("/workflows", methods=["GET"]) - DISABLED: Conflicts with workflows.list_workflows
 
 
+# FIXME(#2233): inline session["tenant_id"] compare stands in for require_tenant_access.
 @operations_bp.route("/reporting", methods=["GET"])
 @require_auth()
 def reporting(tenant_id):

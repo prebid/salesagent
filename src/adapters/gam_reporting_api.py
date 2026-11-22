@@ -107,6 +107,7 @@ def get_tenant_access(tenant_id: str) -> bool:
     return tenant_id in user_tenants
 
 
+# FIXME(#2204): the module-local @require_auth stands in for require_tenant_access().
 @gam_reporting_api.route("/api/tenant/<tenant_id>/gam/reporting", methods=["GET"])
 @require_auth
 def get_gam_reporting(tenant_id: str):
@@ -208,6 +209,7 @@ def get_gam_reporting(tenant_id: str):
     return jsonify(response)
 
 
+# FIXME(#2204): the module-local @require_auth stands in for require_tenant_access().
 @gam_reporting_api.route("/api/tenant/<tenant_id>/gam/reporting/advertiser/<advertiser_id>/summary", methods=["GET"])
 @require_auth
 def get_advertiser_summary(tenant_id: str, advertiser_id: str):
@@ -266,6 +268,7 @@ def get_advertiser_summary(tenant_id: str, advertiser_id: str):
     return jsonify({"success": True, "data": summary})
 
 
+# FIXME(#2204): the module-local @require_auth stands in for require_tenant_access().
 @gam_reporting_api.route("/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting", methods=["GET"])
 @require_auth
 def get_principal_reporting(tenant_id: str, principal_id: str):
@@ -376,6 +379,7 @@ def get_principal_reporting(tenant_id: str, principal_id: str):
     return jsonify(response)
 
 
+# FIXME(#2204): the module-local @require_auth stands in for require_tenant_access().
 @gam_reporting_api.route("/api/tenant/<tenant_id>/gam/reporting/countries", methods=["GET"])
 @require_auth
 def get_country_breakdown(tenant_id: str):
@@ -456,6 +460,7 @@ def get_country_breakdown(tenant_id: str):
     return jsonify({"success": True, "data": country_data})
 
 
+# FIXME(#2204): the module-local @require_auth stands in for require_tenant_access().
 @gam_reporting_api.route("/api/tenant/<tenant_id>/gam/reporting/ad-units", methods=["GET"])
 @require_auth
 def get_ad_unit_breakdown(tenant_id: str):
@@ -541,6 +546,7 @@ def get_ad_unit_breakdown(tenant_id: str):
     return jsonify({"success": True, "data": ad_unit_data})
 
 
+# FIXME(#2204): the module-local @require_auth stands in for require_tenant_access().
 @gam_reporting_api.route("/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting/summary", methods=["GET"])
 @require_auth
 def get_principal_summary(tenant_id: str, principal_id: str):

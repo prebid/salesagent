@@ -50,6 +50,7 @@ def _publisher_json(publisher: Publisher, now: datetime) -> dict[str, Any]:
     }
 
 
+# FIXME(#2075): no require_tenant_access() on this route until that PR merges.
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["GET"])
 def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
     """The tenant's publishers, with what each one's stored adagents.json authorizes now."""
@@ -67,6 +68,7 @@ def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
     )
 
 
+# FIXME(#2075): no require_tenant_access() on this route until that PR merges.
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["POST"])
 def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
     """Add a publisher by its domain, and ingest its adagents.json."""
@@ -84,6 +86,7 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
     return jsonify({**_outcome_json(outcome), "message": "Publisher added"}), 201
 
 
+# FIXME(#2075): no require_tenant_access() on this route until that PR merges.
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<path:domain>", methods=["DELETE"])
 def delete_publisher_partner(tenant_id: str, domain: str) -> Response | tuple[Response, int]:
     """Remove a publisher; its derived properties and every selection of it go with it."""
@@ -94,6 +97,7 @@ def delete_publisher_partner(tenant_id: str, domain: str) -> Response | tuple[Re
     return jsonify({"message": "Publisher deleted successfully"})
 
 
+# FIXME(#2075): no require_tenant_access() on this route until that PR merges.
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/sync", methods=["POST"])
 def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
     """Ingest every publisher's adagents.json now."""
@@ -112,6 +116,7 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
     )
 
 
+# FIXME(#2075): no require_tenant_access() on this route until that PR merges.
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<path:domain>/properties", methods=["GET"])
 def get_publisher_properties(tenant_id: str, domain: str) -> Response | tuple[Response, int]:
     """What the publisher's stored adagents.json authorizes this agent for now. Fetches nothing."""

@@ -15,11 +15,12 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from tests.helpers.admin_session import (
-    admin_auth_session,
+    admin_session_payload,
     admin_test_app,
-    authenticate_http_session,
     drop_stated_session_cookie,
-    tenant_user_session,
+    member_session_payload,
+    state_flask_session,
+    state_http_session,
 )
 
 #: Where the in-process Flask client sends its requests.
@@ -133,19 +134,23 @@ class AdminClient:
         return self._base_url or _IN_PROCESS_ORIGIN
 
     def authenticate(self, tenant_id: str, *, tenant_user: str | None = None, auth_method: str | None = None) -> None:
-        """State an authenticated super-admin session for *tenant_id*, or *tenant_user*'s session.
+        """State a super-admin session for *tenant_id*, or *tenant_user*'s session.
 
         *auth_method* is how the session says its user signed in (``oidc`` for SSO).
         """
+        payload = (
+            member_session_payload(tenant_user, tenant_id, auth_method=auth_method)
+            if tenant_user is not None
+            else admin_session_payload(tenant_id, auth_method=auth_method)
+        )
+        self.state_session(payload)
+
+    def state_session(self, payload: dict[str, Any]) -> None:
+        """State *payload* as the session, replacing whatever the client held, through this transport's writer."""
         if self._flask_client is not None:
-            if tenant_user is not None:
-                tenant_user_session(self._flask_client, tenant_user, tenant_id=tenant_id, auth_method=auth_method)
-            else:
-                admin_auth_session(self._flask_client, tenant_id, auth_method=auth_method)
+            state_flask_session(self._flask_client, payload)
         else:
-            authenticate_http_session(
-                self._http, self._base_url or "", tenant_id, tenant_user=tenant_user, auth_method=auth_method
-            )
+            state_http_session(self._http, payload)
 
     def clear_auth(self) -> None:
         """Drop the admin session, so the next request arrives anonymous."""
