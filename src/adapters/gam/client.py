@@ -8,7 +8,7 @@ Provides centralized access to GAM API services with health checking.
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Protocol
 
 import zeep.exceptions
 from google.auth.exceptions import GoogleAuthError
@@ -99,7 +99,19 @@ def accessible_networks(client: ad_manager.AdManagerClient, auth_method: str) ->
         return [_network_summary(current_network)]
 
 
-def current_network_user(client: ad_manager.AdManagerClient) -> Any:
+class GAMUser(Protocol):
+    """What the admin app reads of the GAM ``User`` googleads answers: a zeep object, read by attribute and by key."""
+
+    id: int
+    name: str
+    email: str
+
+    def __getitem__(self, key: str) -> object: ...
+
+    def __contains__(self, key: object) -> bool: ...
+
+
+def current_network_user(client: ad_manager.AdManagerClient) -> GAMUser:
     """The GAM user *client*'s credentials act as, on its network; raises :class:`GAMCallFailed` when GAM fails."""
     with _operator_call("current user lookup"):
         return client.GetService("UserService").getCurrentUser()
