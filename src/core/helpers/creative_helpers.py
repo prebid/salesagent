@@ -864,8 +864,8 @@ def _media_asset_candidates(
 
 def _read_media_assets(
     creative_data: dict[str, Any], format_spec: Any | None, kind: str | None, declarations: "Sequence[Any]"
-) -> tuple[str | None, int | None, int | None, bool]:
-    """``(url, width, height, the url's slot carries dimensions)`` — the one media read.
+) -> tuple[str | None, int | None, int | None, bool, str | None]:
+    """``(url, width, height, the url's slot carries dimensions, the url's asset type)`` — the one media read.
 
     Its one consumer is ``read_creative_to_traffic`` (src/core/creative_to_traffic.py), the
     only reader of a stored creative for trafficking; nothing else asks a row for its media.
@@ -881,8 +881,13 @@ def _read_media_assets(
     carrying both ``audio_main`` and ``companion_image`` takes the URL from the first and
     the dimensions from the second. The fourth value therefore reports the slot that
     supplied the URL, which is what decides whether dimensions are OWED.
+
+    The fifth value is the ``asset_type`` of the asset that supplied the URL, so the file is
+    typed by the asset it is, never by another media asset the manifest also carries. It is
+    None for a root-level url, which names no asset.
     """
     url = None
+    url_asset_type = None
     width = None
     height = None
     url_slot_is_sized = True
@@ -895,6 +900,7 @@ def _read_media_assets(
                 continue
             if not url and asset_obj.get("url"):
                 url = asset_obj["url"]
+                url_asset_type = asset_obj.get("asset_type")
                 url_slot_is_sized = carries_dimensions
                 logger.debug("Extracted media URL from creative asset %r", asset_id)
             if carries_dimensions:
@@ -916,7 +922,7 @@ def _read_media_assets(
     width = width or _coerce_dimension(creative_data.get("width"), "width")
     height = height or _coerce_dimension(creative_data.get("height"), "height")
 
-    return url, width, height, url_slot_is_sized
+    return url, width, height, url_slot_is_sized, url_asset_type
 
 
 def extract_click_url(
