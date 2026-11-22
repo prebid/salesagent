@@ -781,7 +781,7 @@ class TestOneFormatResolutionForEveryRead:
         return creative
 
     def _read(self):
-        from src.core.tools.media_buy_create import _AssignedPackage, _read_for_packages
+        from src.core.tools._creative_trafficking import _AssignedPackage, _read_for_packages
 
         return _read_for_packages(self._creative(), [_AssignedPackage("p1", None, ["c_fb"])], {})
 
@@ -790,7 +790,7 @@ class TestOneFormatResolutionForEveryRead:
 
         with (
             patch(
-                "src.core.tools.media_buy_create._get_format_spec_sync",
+                "src.core.tools._creative_trafficking._get_format_spec_sync",
                 side_effect=AdCPRateLimitError(),
             ),
             patch("src.core.format_resolver.get_format") as resolver,
@@ -810,7 +810,7 @@ class TestCreateMediaBuyCreativeValidation:
         Ported from test_create_media_buy_behavioral.py::test_creative_missing_url_raises_invalid_creatives
         Covers: UC-002-EXT-G-01
         """
-        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
+        from src.core.tools._creative_trafficking import _validate_creatives_before_adapter_call
 
         # Build a creative in DB that has no URL in its data
         mock_creative = MagicMock()
@@ -826,7 +826,7 @@ class TestCreateMediaBuyCreativeValidation:
         package.creative_ids = ["c_1"]
         package.package_id = "pkg_1"
 
-        with patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec):
+        with patch("src.core.tools._creative_trafficking._get_format_spec_sync", return_value=mock_format_spec):
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
@@ -847,7 +847,7 @@ class TestCreateMediaBuyCreativeValidation:
         Source: UC-002, BR-RULE-026
         Covers: UC-002-CC-CREATIVE-ASSIGNMENT-VALIDATION-01
         """
-        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
+        from src.core.tools._creative_trafficking import _validate_creatives_before_adapter_call
 
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_err"
@@ -883,7 +883,7 @@ class TestCreateMediaBuyCreativeValidation:
         Source: UC-002, BR-RULE-026
         Covers: UC-002-CC-CREATIVE-ASSIGNMENT-VALIDATION-02
         """
-        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
+        from src.core.tools._creative_trafficking import _validate_creatives_before_adapter_call
 
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_rej"
@@ -919,7 +919,7 @@ class TestCreateMediaBuyCreativeValidation:
         Source: UC-002
         Covers: UC-002-EXT-G-04
         """
-        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
+        from src.core.tools._creative_trafficking import _validate_creatives_before_adapter_call
 
         # Two reference creatives, both missing URL
         mock_creative_1 = MagicMock()
@@ -939,7 +939,7 @@ class TestCreateMediaBuyCreativeValidation:
         package.creative_ids = ["c_1", "c_2"]
         package.package_id = "pkg_1"
 
-        with patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec):
+        with patch("src.core.tools._creative_trafficking._get_format_spec_sync", return_value=mock_format_spec):
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative_1, mock_creative_2]
 

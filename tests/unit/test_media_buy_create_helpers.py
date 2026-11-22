@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.tools.media_buy_create import _get_format_spec_sync
+from src.core.tools._creative_trafficking import _get_format_spec_sync
 
 _AGENT_URL = "https://creative.adcontextprotocol.org"
 

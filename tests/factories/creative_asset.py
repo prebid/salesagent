@@ -26,7 +26,7 @@ def make_legacy_asset_dict(asset_id: str, **fields: object) -> dict:
     ``url_type``, ``content``, ``duration_ms``). The pinned SDK's discriminated
     asset union rejects this shape. The legacy adapter converter that consumed it,
     ``_convert_creative_to_adapter_asset``, is deleted; the live path is
-    ``media_buy_create._read_for_packages``, which reads the ORM row rather than a
+    ``_creative_trafficking._read_for_packages``, which reads the ORM row rather than a
     schema object.
 
     Use this ONLY for legacy-input / negative tests that deliberately exercise the

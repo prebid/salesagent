@@ -31,7 +31,8 @@ from src.adapters.base import AdapterCreateRequest
 from src.adapters.mock_ad_server import MockAdServer
 from src.core.database.repositories.product import ProductRepository
 from src.core.schemas import FormatId, MediaPackage, Principal
-from src.core.tools.media_buy_create import _AssignedPackage, _build_adapter_asset_from_creative, _read_for_push
+from src.core.tools._creative_trafficking import _AssignedPackage, _read_for_push
+from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
 from tests.helpers.media_buy_approval import uploadable_creative
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
