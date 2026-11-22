@@ -76,12 +76,16 @@ def test_a_viewer_may_not_change_tenant_settings_but_a_manager_may(rbac_tenant, 
 
 
 # --- Admin-only routes ----------------------------------------------------------------
-# Every route marked require_tenant_access(role=UserRole.ADMIN). Signing in from an
-# authorized domain (OIDC or Google) or an authorized email (Google) with no User row
-# creates the user as an admin, so the sign-in lists and SSO are admin-only along with
-# user management: a manager who could add an address they control could make
-# themselves an admin. A viewer or manager gets 403 and nothing changes; an admin gets
-# the route's own answer.
+# Every route marked require_tenant_access(role=UserRole.ADMIN) except oidc.test_initiate.
+# Signing in from an authorized domain (OIDC or Google) or an authorized email (Google)
+# with no User row creates the user as an admin, so the sign-in lists and SSO are
+# admin-only along with user management: a manager who could add an address they control
+# could make themselves an admin. A viewer or manager gets 403 and nothing changes; an
+# admin gets the route's own answer.
+#
+# oidc.test_initiate is left to tests/bdd/features/BR-ADMIN-TENANT-SCOPING.feature
+# (T-ADMIN-SCOPE-011 and T-ADMIN-SCOPE-012): with the SSO client this tenant has, the
+# route sends an admin on to the identity provider, and the feature's tenant has none.
 
 
 class AdminRoute(NamedTuple):

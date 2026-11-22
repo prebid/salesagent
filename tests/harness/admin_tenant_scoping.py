@@ -1,11 +1,12 @@
 """Admin tenant-scoping harness for the routes of prebid/salesagent#2203 and #2204.
 
 Drives ``GET /api/tenant/<tenant_id>/revenue-chart``, ``GET /api/tenant/<tenant_id>/products``,
-``GET /api/tenant/<tenant_id>/products/suggestions`` and ``GET,POST /tenant/<tenant_id>/policy/rules``
-(#2203), and the six GAM reporting routes of ``src/adapters/gam_reporting_api.py`` (#2204),
-on the two admin transports ``AdminAccountEnv`` already provides — Flask ``test_client``
-(integration) and ``requests.Session`` against the Docker stack (e2e) — and seeds the
-tenants, memberships, catalogue and media buys the scenarios grade.
+``GET /api/tenant/<tenant_id>/products/suggestions``, ``GET,POST /tenant/<tenant_id>/policy/rules``
+and ``GET /auth/oidc/test/<tenant_id>`` (#2203), and the six GAM reporting routes of
+``src/adapters/gam_reporting_api.py`` (#2204), on the two admin transports ``AdminAccountEnv``
+already provides — Flask ``test_client`` (integration) and ``requests.Session`` against the
+Docker stack (e2e) — and seeds the tenants, memberships, catalogue and media buys the
+scenarios grade.
 
 Subclasses ``AdminAccountEnv`` rather than extracting a base: the transport plumbing is
 inherited unchanged, and the harness lifecycle guard
@@ -14,11 +15,12 @@ one hand-rolled ``__enter__``/``__exit__`` home to ``AdminAccountEnv``, so a sec
 env inherits that lifecycle instead of restating it.
 
 The caller's session is STATED on both transports (``AdminClient.state_session``), with the
-keys an OIDC login writes for a non-admin (``member_session_payload``): ``user`` as a bare
-email and a HOME tenant that is never the target, with no ``test_user`` key.
-``require_tenant_access`` therefore takes its real branch, and the target tenant's ``User``
-row is the only thing that decides the outcome, so a rejection here is the real membership
-check, on the same branch of the decorator in-process as on the stack.
+keys an OIDC login writes for a caller who is not a super admin (``member_session_payload``):
+``user`` as a bare email and a HOME tenant that is never the target, with no ``test_user``
+key. ``require_tenant_access`` therefore takes its real branch, and the target tenant's
+``User`` row is the only thing that decides the outcome: whether it exists, whether it is
+active, and the role it holds. A refusal of that session is the decorator's membership or
+role check, on the same branch in-process as on the stack.
 
 The contract itself is stated once, in ``tests/bdd/features/BR-ADMIN-TENANT-SCOPING.feature``,
 and runs on both transports through the ``admin-tenant-scoping`` row of ``ENV_ROUTES`` in
@@ -44,18 +46,24 @@ from tests.harness.admin_client import AdminResponse
 from tests.helpers.admin_session import member_session_payload, no_configured_super_admins
 from tests.utils.database_helpers import bound_factory_session, delete_tenant, tenant_row_counts
 
-#: The non-admin identity the scenarios log in as. Both transports use the same address
-#: so they grade identical ``User`` rows.
+#: The identity the scenarios log in as: a tenant user, never a super admin. Both transports
+#: use the same address so they grade identical ``User`` rows.
 MEMBER_EMAIL = "test_tenant_user@example.com"
 #: Somebody else, who IS an active member of the target tenant in every scenario. Without
 #: this row a lookup that forgot the caller's email would still find nobody, and a refusal
 #: would prove nothing about whose membership was checked.
 OTHER_MEMBER_EMAIL = "target_tenant_member@example.com"
-#: The role every seeded membership holds: the least one that may send every method in
-#: ``ROUTES``, because ``role_permits`` asks ``manager`` for a write. A refusal is then the
-#: membership check's and never the role check's, which
-#: tests/integration/test_admin_role_enforcement.py grades.
+#: The role a caller's active row in the target tenant holds unless the scenario names
+#: another: the least one that may send every method the four routes of #2203 serve,
+#: because ``role_permits`` asks ``manager`` for a write. The OIDC test route asks for
+#: ``admin``, so T-ADMIN-SCOPE-011 and T-ADMIN-SCOPE-012 name the role they seed.
 MEMBER_ROLE = UserRole.MANAGER
+#: The role of a row the membership lookup must not match: the other member of the target
+#: tenant, the caller's row in another tenant, and the caller's inactive row in the target.
+#: ``admin`` passes the role check of every route in ``ROUTES``, so a lookup that matched
+#: one of these rows would let the caller in and the refusal scenario would fail. Under a
+#: lower role the OIDC test route's role check would refuse in the lookup's place.
+NON_MATCHING_ROW_ROLE = UserRole.ADMIN
 ACTIVE_BUY_BUDGET = Decimal("1500.00")
 #: Any numeric id passes ``validate_numeric_id``; the handlers stop before they would use it.
 GAM_ADVERTISER_ID = "12345"
@@ -74,6 +82,7 @@ ROUTES: dict[str, TenantScopedRoute] = {
     "products API": TenantScopedRoute("/api/tenant/{tenant_id}/products", ("GET",)),
     "product suggestions API": TenantScopedRoute("/api/tenant/{tenant_id}/products/suggestions", ("GET",)),
     "policy rules page": TenantScopedRoute("/tenant/{tenant_id}/policy/rules", ("GET", "POST")),
+    "OIDC test page": TenantScopedRoute("/auth/oidc/test/{tenant_id}", ("GET",)),
     "GAM reporting API": TenantScopedRoute(f"{_GAM_API}/gam/reporting", ("GET",)),
     "GAM advertiser summary API": TenantScopedRoute(
         f"{_GAM_API}/gam/reporting/advertiser/{{advertiser_id}}/summary", ("GET",)
@@ -88,10 +97,12 @@ ROUTES: dict[str, TenantScopedRoute] = {
 
 #: Where a scenario may say a route redirected to, keyed by the name the Gherkin uses. The
 #: login page is the TENANT's, not the generic ``/login`` ``require_auth`` sends to; the
-#: policy page is where ``policy.rules`` sends an authorized member.
+#: policy page is where ``policy.rules`` sends an authorized member, and the settings page
+#: is where ``oidc.test_initiate`` sends one when the tenant has no OIDC configuration.
 REDIRECTS: dict[str, str] = {
     "login page": "/tenant/{tenant_id}/login",
     "policy page": "/tenant/{tenant_id}/policy/",
+    "settings page": "/tenant/{tenant_id}/settings",
 }
 
 
@@ -109,9 +120,9 @@ class TenantState(NamedTuple):
     policy_settings: Any
 
 
-def _seed_member(tenant: Tenant, email: str, *, is_active: bool = True) -> None:
-    """A ``User`` row for *email* in *tenant*, holding ``MEMBER_ROLE``. Call it inside ``bound_factory_session()``."""
-    UserFactory(tenant=tenant, user_id=mint_id("user"), email=email, role=MEMBER_ROLE, is_active=is_active)
+def _seed_member(tenant: Tenant, email: str, *, role: UserRole, is_active: bool = True) -> None:
+    """A ``User`` row for *email* in *tenant*, holding *role*. Call it inside ``bound_factory_session()``."""
+    UserFactory(tenant=tenant, user_id=mint_id("user"), email=email, role=role, is_active=is_active)
 
 
 def redirect_path(response: AdminResponse) -> str:
@@ -155,8 +166,8 @@ class AdminTenantScopingEnv(AdminAccountEnv):
     """Test environment for the tenant-scoping scenarios of #2203 and #2204.
 
     Same two transports as ``AdminAccountEnv``; adds the target tenant, the three caller
-    memberships (elsewhere / inactive here / active here), a super admin of another tenant,
-    and the routes.
+    memberships (elsewhere / inactive here / active here, in the role the scenario names),
+    a super admin of another tenant, and the routes in ``ROUTES``.
     """
 
     def __init__(self, *, mode: str = "integration", base_url: str | None = None) -> None:
@@ -171,10 +182,11 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         self._cleanups.enter_context(no_configured_super_admins())
 
     def _cleanup(self) -> None:
-        """Delete the tenants this env created, with their rows, and restore the settings.
+        """Delete the tenants this env named through ``_new_tenant_id``, with their rows, and restore the settings.
 
-        The e2e stack's database outlives the scenario, so a tenant left there stays for
-        every later run.
+        The e2e stack's database outlives the scenario: ``_reset_e2e_db`` in
+        tests/bdd/conftest.py empties it before the next e2e scenario, and no fixture
+        empties it after the last one.
         """
         with self._cleanups:
             super()._cleanup()
@@ -206,7 +218,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
                 # from it (tests/factories/principal.py), so a unique id is a unique credential.
                 principal__principal_id=mint_id("principal"),
             )
-            _seed_member(tenant, OTHER_MEMBER_EMAIL)
+            _seed_member(tenant, OTHER_MEMBER_EMAIL, role=NON_MATCHING_ROW_ROLE)
             products_payload = [
                 {
                     "product_id": product.product_id,
@@ -239,12 +251,12 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         """Active ``User`` row in a fresh home tenant, no row in the target."""
         self._authenticate_member(self._new_home_tenant(with_member=True))
 
-    def login_with_target_membership(self, *, is_active: bool) -> None:
-        """A ``User`` row in the TARGET tenant with ``is_active`` as given; session held via a fresh home tenant."""
+    def login_with_target_membership(self, *, is_active: bool, role: UserRole = MEMBER_ROLE) -> None:
+        """A ``User`` row in the TARGET tenant with ``is_active`` and *role* as given; session held via a fresh home tenant."""
         home_tenant_id = self._new_home_tenant(with_member=False)
         with bound_factory_session() as session:
             target = session.get(Tenant, self.target.tenant_id)
-            _seed_member(target, MEMBER_EMAIL, is_active=is_active)
+            _seed_member(target, MEMBER_EMAIL, is_active=is_active, role=role)
         self._authenticate_member(home_tenant_id)
 
     def login_as_super_admin_of_other_tenant(self) -> None:
@@ -264,16 +276,22 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         with bound_factory_session():
             home = TenantFactory(tenant_id=self._new_tenant_id("home"))
             if with_member:
-                _seed_member(home, MEMBER_EMAIL)
+                _seed_member(home, MEMBER_EMAIL, role=NON_MATCHING_ROW_ROLE)
             return home.tenant_id
 
     def _authenticate_member(self, login_tenant_id: str) -> None:
-        """State a non-admin session for ``MEMBER_EMAIL`` against ``login_tenant_id`` (never the target)."""
+        """State a tenant user's session for ``MEMBER_EMAIL`` against ``login_tenant_id`` (never the target)."""
         self.client.state_session(member_session_payload(MEMBER_EMAIL, login_tenant_id))
 
     # ── Requests ──────────────────────────────────────────────────────────
 
-    def send(self, method: str, route_name: str) -> AdminResponse:
+    def send(self, method: str, route_name: str, *, asks_for_json: bool = False) -> AdminResponse:
+        """One request to *route_name* of the target tenant.
+
+        *asks_for_json* sends ``Accept: application/json``. ``require_tenant_access`` then
+        states a refusal's reason in a JSON body on an HTML route too, where a caller that
+        does not ask gets the 403 page, which carries no reason.
+        """
         route = ROUTES[route_name]
         assert method in route.methods, f"{route_name} does not serve {method}"
         path = route.path.format(
@@ -281,4 +299,9 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         )
         # Read here, not at seeding: a Given after the Background adds the caller's own row.
         self._state_before_request = self.target_state()
-        return self.client.request(method, path, data={} if method == "POST" else None)
+        return self.client.request(
+            method,
+            path,
+            data={} if method == "POST" else None,
+            headers={"Accept": "application/json"} if asks_for_json else None,
+        )

@@ -6,7 +6,7 @@ flow and comes back with the state it was issued" is written once. Since #2205 t
 callback denies anything else before it exchanges the code, so every test that
 wants to reach the exchange has to arrive this way.
 
-``log_in`` sets only ``session["user"]`` — none of the ``test_user`` /
+``log_in`` states a member session with no tenant — none of the ``test_user`` /
 ``test_tenant_id`` keys that ``require_tenant_access`` accepts in test mode — so a
 request that passes did so on membership.
 """

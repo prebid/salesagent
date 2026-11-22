@@ -174,13 +174,16 @@ def disable(tenant_id: str):
     )
 
 
-# FIXME(#2256): no membership check, and the callback this starts sets oidc_enabled on the tenant.
 @oidc_bp.route("/test/<tenant_id>")
+@require_tenant_access(role=UserRole.ADMIN)
 def test_initiate(tenant_id: str):
     """Initiate a test OAuth flow.
 
     This starts the OAuth flow but redirects to a test success page instead of
     creating a real session.
+
+    Admin-only although it is a GET: when the flow succeeds, ``callback`` marks the
+    configuration verified and enables SSO for the tenant, which is what ``enable`` does.
     """
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
