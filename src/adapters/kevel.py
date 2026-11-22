@@ -1,5 +1,6 @@
 import logging
 import uuid
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -22,7 +23,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas import *
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError
-from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
+from src.core.traffic_carrier import CreativesByPackage
 from src.core.utils.frequency_cap import suppress_cooldown_minutes
 
 
@@ -303,14 +304,11 @@ class Kevel(AdServerAdapter):
         return self._build_create_success(media_buy_id, packages)
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
+        self, media_buy_id: str, assets: Sequence[Mapping[str, Any]], today: datetime
     ) -> list[AssetStatus]:
         """Creates new Creatives in Kevel and associates them with Flights."""
         self.log(f"Kevel.add_creative_assets for media buy '{media_buy_id}'")
         created_asset_statuses = []
-        # FIXME(#2416): this adapter reads keys the core never sets (format, media_url), so
-        # it reads each asset as a plain dict until it reads the carrier.
-        unread_assets: list[dict[str, Any]] = [dict(asset) for asset in assets]
 
         try:
             # Get all flights for the campaign to map package names to flight IDs
@@ -320,7 +318,7 @@ class Kevel(AdServerAdapter):
             flights = flights_response.json().get("items", [])
             flight_map = {flight["Name"]: flight["Id"] for flight in flights}
 
-            for asset in unread_assets:
+            for asset in assets:
                 creative_payload = {
                     "Name": asset["name"],
                     "IsActive": True,
@@ -367,7 +365,7 @@ class Kevel(AdServerAdapter):
             # AdCPSalesAgentError would swallow it and report a package-not-found as an
             # adapter failure.
             self.log(f"Error creating Kevel Creative or Ad: {e}")
-            for asset in unread_assets:
+            for asset in assets:
                 if not any(s.creative_id == asset["creative_id"] for s in created_asset_statuses):
                     created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
 
