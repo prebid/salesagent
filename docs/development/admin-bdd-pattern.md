@@ -53,8 +53,9 @@ live-stack env at `e2e_config.base_url` for `e2e_admin`.
 `tests/unit/test_bdd_admin_transport_parametrization.py` takes each row's builder from
 `ENV_ROUTES` and checks it on both transports. The env enters `no_configured_super_admins()`
 (`tests/helpers/admin_session.py`) for the scenario, so the member it logs in as is never an
-ambient super admin. Every membership it seeds holds the `manager` role, the least role that
-may send a write, so the role check never decides a scenario. The env deletes the tenants it
+ambient super admin. A membership it seeds holds the `manager` role, the least role that
+may send a write, unless the scenario names another. T-ADMIN-SCOPE-011 and T-ADMIN-SCOPE-012
+name one, because the OIDC test route asks for `admin`. The env deletes the tenants it
 created when it exits. The feature file is the one statement of the contract: the pytest
 twins that once ran the same assertions in-process and against the
 Docker stack were deleted once `AdminTransport.E2E` carried the Gherkin, as

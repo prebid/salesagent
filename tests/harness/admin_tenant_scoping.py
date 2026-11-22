@@ -13,11 +13,12 @@ one hand-rolled ``__enter__``/``__exit__`` home to ``AdminAccountEnv``, so a sec
 env inherits that lifecycle instead of restating it.
 
 The caller's session is STATED on both transports (``AdminClient.state_session``), with the
-keys an OIDC login writes for a non-admin (``member_session_payload``): ``user`` as a bare
-email and a HOME tenant that is never the target, with no ``test_user`` key.
-``require_tenant_access`` therefore takes its real branch, and the target tenant's ``User``
-row is the only thing that decides the outcome, so a rejection here is the real membership
-check, on the same branch of the decorator in-process as on the stack.
+keys an OIDC login writes for a caller who is not a super admin (``member_session_payload``):
+``user`` as a bare email and a HOME tenant that is never the target, with no ``test_user``
+key. ``require_tenant_access`` therefore takes its real branch, and the target tenant's
+``User`` row is the only thing that decides the outcome: whether it exists, whether it is
+active, and the role it holds. A refusal of that session is the decorator's membership or
+role check, on the same branch in-process as on the stack.
 
 The contract itself is stated once, in ``tests/bdd/features/BR-ADMIN-TENANT-SCOPING.feature``,
 and runs on both transports through the ``admin-tenant-scoping`` row of ``ENV_ROUTES`` in
@@ -43,17 +44,18 @@ from tests.harness.admin_client import AdminResponse
 from tests.helpers.admin_session import member_session_payload, no_configured_super_admins
 from tests.utils.database_helpers import bound_factory_session, delete_tenant, tenant_row_counts
 
-#: The non-admin identity the scenarios log in as. Both transports use the same address
-#: so they grade identical ``User`` rows.
+#: The identity the scenarios log in as: a tenant user, never a super admin. Both transports
+#: use the same address so they grade identical ``User`` rows.
 MEMBER_EMAIL = "test_tenant_user@example.com"
 #: Somebody else, who IS an active member of the target tenant in every scenario. Without
 #: this row a lookup that forgot the caller's email would still find nobody, and a refusal
 #: would prove nothing about whose membership was checked.
 OTHER_MEMBER_EMAIL = "target_tenant_member@example.com"
-#: The role a seeded membership holds unless the seeding call names another: the least one
-#: that may send every method in ``ROUTES``, because ``role_permits`` asks ``manager`` for a
-#: write. A refusal is then the membership check's and never the role check's, which
-#: tests/integration/test_admin_role_enforcement.py grades.
+#: The role a seeded membership holds unless the scenario names another: the least one that
+#: may send every method the four routes of #2203 serve, because ``role_permits`` asks
+#: ``manager`` for a write. A refusal on those routes is then the membership check's and
+#: never the role check's. The OIDC test route asks for ``admin``, so T-ADMIN-SCOPE-011 and
+#: T-ADMIN-SCOPE-012 name the role they seed.
 MEMBER_ROLE = UserRole.MANAGER
 ACTIVE_BUY_BUDGET = Decimal("1500.00")
 
@@ -142,7 +144,8 @@ class AdminTenantScopingEnv(AdminAccountEnv):
     """Test environment for the tenant-scoping scenarios of #2203.
 
     Same two transports as ``AdminAccountEnv``; adds the target tenant, the three caller
-    memberships (elsewhere / inactive here / active here) and the five routes.
+    memberships (elsewhere / inactive here / active here, in the role the scenario names)
+    and the five routes.
     """
 
     def __init__(self, *, mode: str = "integration", base_url: str | None = None) -> None:
@@ -240,15 +243,26 @@ class AdminTenantScopingEnv(AdminAccountEnv):
             return home.tenant_id
 
     def _authenticate_member(self, login_tenant_id: str) -> None:
-        """State a non-admin session for ``MEMBER_EMAIL`` against ``login_tenant_id`` (never the target)."""
+        """State a tenant user's session for ``MEMBER_EMAIL`` against ``login_tenant_id`` (never the target)."""
         self.client.state_session(member_session_payload(MEMBER_EMAIL, login_tenant_id))
 
     # ── Requests ──────────────────────────────────────────────────────────
 
-    def send(self, method: str, route_name: str) -> AdminResponse:
+    def send(self, method: str, route_name: str, *, asks_for_json: bool = False) -> AdminResponse:
+        """One request to *route_name* of the target tenant.
+
+        *asks_for_json* sends ``Accept: application/json``. ``require_tenant_access`` then
+        states a refusal's reason in a JSON body on an HTML route too, where a caller that
+        does not ask gets the 403 page, which carries no reason.
+        """
         route = ROUTES[route_name]
         assert method in route.methods, f"{route_name} does not serve {method}"
         path = route.path.format(tenant_id=self.target.tenant_id)
         # Read here, not at seeding: a Given after the Background adds the caller's own row.
         self._state_before_request = self.target_state()
-        return self.client.request(method, path, data={} if method == "POST" else None)
+        return self.client.request(
+            method,
+            path,
+            data={} if method == "POST" else None,
+            headers={"Accept": "application/json"} if asks_for_json else None,
+        )

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from pytest_bdd import given, parsers, then, when
 
+from src.core.database.models import UserRole
 from tests.bdd.steps.domain.admin_accounts import _require_admin_page
 from tests.harness.admin_tenant_scoping import (
     ACTIVE_BUY_BUDGET,
@@ -60,6 +61,12 @@ def given_caller_active_member(ctx: dict) -> None:
     _env(ctx).login_with_target_membership(is_active=True)
 
 
+@given(parsers.parse("the caller is an active member of the target tenant with the {role} role"))
+def given_caller_active_member_with_role(ctx: dict, role: str) -> None:
+    """The same active User row, holding the role the scenario names in place of the harness default."""
+    _env(ctx).login_with_target_membership(is_active=True, role=UserRole(role))
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # WHEN steps
 # ═══════════════════════════════════════════════════════════════════════════
@@ -69,6 +76,12 @@ def given_caller_active_member(ctx: dict) -> None:
 def when_caller_sends(ctx: dict, method: str, route: str) -> None:
     """Send one request to one of the routes in ``ROUTES``, for the target tenant's id."""
     ctx["admin_page"] = _env(ctx).send(method, route)
+
+
+@when(parsers.parse("the caller sends {method} to the {route} of the target tenant, asking for JSON"))
+def when_caller_sends_asking_for_json(ctx: dict, method: str, route: str) -> None:
+    """The same request from a caller that asks for a JSON answer, so a refusal states its reason."""
+    ctx["admin_page"] = _env(ctx).send(method, route, asks_for_json=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
