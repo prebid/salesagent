@@ -27,10 +27,10 @@ import pytest
 
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.signing import (
-    KEK_POINTER_SETTING,
     TEST_KEK_VARIABLE,
     install_kek,
     provision_key,
+    remove_kek,
     signing_key_repo,
 )
 
@@ -103,7 +103,6 @@ class TestKeyBackingHonorsTheActualKek:
         (this branch already worked before the fix -- pins it stays working)."""
         from datetime import UTC, datetime
 
-        from src.core.config import load_settings
         from src.core.signing.posture import ActiveKeyFault, signing_key_backed
 
         tenant_id = "dn4i_no_kek"
@@ -117,9 +116,7 @@ class TestKeyBackingHonorsTheActualKek:
             install_kek(monkeypatch, TEST_KEK_VARIABLE, "a-kek-for-minting-only")
             provision_key(repo, tenant_id, "dn4i-kid-3")
 
-            monkeypatch.delenv(TEST_KEK_VARIABLE, raising=False)
-            monkeypatch.delenv(KEK_POINTER_SETTING, raising=False)
-            load_settings()
+            remove_kek(monkeypatch, TEST_KEK_VARIABLE)
 
             backing = signing_key_backed(repo, now=datetime.now(UTC))
 

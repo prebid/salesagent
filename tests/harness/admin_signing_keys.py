@@ -99,9 +99,18 @@ def status_cell(page: BeautifulSoup, kid: str) -> str:
     """The text of the Status cell on *kid*'s row of the signing-keys table."""
     for row in page.select("table.signing-table tbody tr"):
         cells = row.find_all("td")
-        if cells and cells[0].get_text(strip=True) == kid:
-            return " ".join(cells[3].get_text().split())
+        if cells and _rendered_text(cells[0]) == kid:
+            return _rendered_text(cells[3])
     raise AssertionError(f"the signing-keys page lists no row for {kid!r}")
+
+
+def _rendered_text(tag: Tag) -> str:
+    """*tag*'s text as the operator reads it: every run of whitespace collapsed to one space.
+
+    The one normalisation every reader here uses, so the signing-keys page and the
+    checklist are compared under the same rule and the feature can show they agree.
+    """
+    return " ".join(tag.get_text().split())
 
 
 def _warning(page: BeautifulSoup) -> Tag | None:
@@ -112,7 +121,7 @@ def _warning(page: BeautifulSoup) -> Tag | None:
 def warning_text(page: BeautifulSoup) -> str | None:
     """The text of the warning above the signing-keys table, or ``None`` when there is none."""
     banner = _warning(page)
-    return None if banner is None else " ".join(banner.get_text().split())
+    return None if banner is None else _rendered_text(banner)
 
 
 def warning_runbook_link(page: BeautifulSoup) -> str | None:
@@ -126,8 +135,8 @@ def checklist_task_details(page: BeautifulSoup, task_name: str) -> str:
     """The details line of the checklist task named *task_name*."""
     for item in page.select(".task-item"):
         name = item.select_one(".task-name")
-        if name is not None and name.get_text(strip=True) == task_name:
+        if name is not None and _rendered_text(name) == task_name:
             details = item.select_one(".task-details")
             assert details is not None, f"the {task_name!r} task renders no details"
-            return " ".join(details.get_text().split())
+            return _rendered_text(details)
     raise AssertionError(f"the setup checklist has no {task_name!r} task")

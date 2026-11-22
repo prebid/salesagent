@@ -284,8 +284,28 @@ TEST_KEK_VARIABLE = "SALESAGENT_TEST_SIGNING_KEK"
 TEST_KEK_PASSPHRASE = b"correct-horse-battery-staple"
 
 
-#: The setting that NAMES the environment variable holding the deployment KEK.
+#: The setting that NAMES the environment variable holding the deployment KEK. Pinned as a
+#: literal because it is ``SigningSettings.key_passphrase_env``'s env name and so is not
+#: compose's or ``.env.template``'s to rename: the variable it POINTS AT is read out of those
+#: files instead, so a deliberate consistent rename stays green while a broken pointer
+#: goes red.
 KEK_POINTER_SETTING = "ADCP_SIGNING_KEY_PASSPHRASE_ENV"
+
+
+def drop_cached_settings(monkeypatch: Any) -> None:
+    """Make the next ``get_settings()`` rebuild from the environment.
+
+    ``Settings`` is composed once and cached in ``src.core.config._settings``, so a test
+    that changes ``ADCP_SIGNING_*`` after the first read sees nothing until the cached
+    object is dropped. The ONE spelling of that reset.
+
+    ``raising`` is left at its default: this attribute is named as a STRING, so a
+    rename in ``src.core.config`` is invisible to every checker, and a tolerant
+    setattr here would leave the cache undropped and the caller silently doing
+    nothing. That is exactly how the pre-merge spelling (``_config``) survived the
+    rename to ``_settings``.
+    """
+    monkeypatch.setattr("src.core.config._settings", None)
 
 
 def install_kek(monkeypatch: Any, pointer: str, value: str) -> None:
@@ -295,21 +315,29 @@ def install_kek(monkeypatch: Any, pointer: str, value: str) -> None:
     it names, and the cached settings. ``key_passphrase`` is resolved from the
     environment on every use (``SigningSettings.secret_from_env``, deliberately
     uncached), but the ``Settings`` object carrying ``key_passphrase_env`` is a process
-    global, so it is dropped and the next ``get_settings()`` rebuilds off the
-    environment set here.
-
-    ``raising`` is left at its default: this attribute is named as a STRING, so a
-    rename in ``src.core.config`` is invisible to every checker, and a tolerant
-    setattr here would leave the cache undropped and this helper silently doing
-    nothing. That is exactly how the pre-merge spelling (``_config``) survived the
-    rename to ``_settings``.
+    global, so it is dropped (:func:`drop_cached_settings`) and the next
+    ``get_settings()`` rebuilds off the environment set here. :func:`remove_kek` is the
+    inverse.
 
     Every change goes through *monkeypatch*, so its owner decides when they are
     undone: a test's own fixture at test teardown, or a harness env's registry.
     """
     monkeypatch.setenv(KEK_POINTER_SETTING, pointer)
     monkeypatch.setenv(pointer, value)
-    monkeypatch.setattr("src.core.config._settings", None)
+    drop_cached_settings(monkeypatch)
+
+
+def remove_kek(monkeypatch: Any, pointer: str) -> None:
+    """Make this process hold NO deployment KEK: the inverse of :func:`install_kek`.
+
+    Deletes the pointer setting and the variable *pointer* it would name, each with
+    ``raising=False`` so it does not matter which of them was set, and drops the cached
+    settings the same way :func:`install_kek` does, so ``key_passphrase`` resolves to
+    ``None`` on the next read.
+    """
+    monkeypatch.delenv(KEK_POINTER_SETTING, raising=False)
+    monkeypatch.delenv(pointer, raising=False)
+    drop_cached_settings(monkeypatch)
 
 
 @contextmanager
@@ -417,7 +445,7 @@ def inbound_verifier_disabled(monkeypatch: Any) -> Iterator[None]:
     must sign instead.
     """
     monkeypatch.setenv("ADCP_SIGNING_VERIFIER_ENABLED", "false")
-    monkeypatch.setattr("src.core.config._settings", None)
+    drop_cached_settings(monkeypatch)
     with verifier_disabled():
         yield
 
