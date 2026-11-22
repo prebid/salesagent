@@ -21,6 +21,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, GAMLineItem, GAMOrder, Tenant
 from src.core.database.repositories.adapter_config import AdapterConfigRepository, read_adapter_config
+from src.core.database.repositories.sync_job import SyncJobRepository
 from src.core.operator_errors import (
     ConnectionTestFailed,
     FormIssue,
@@ -613,12 +614,8 @@ def get_gam_custom_targeting_keys(tenant_id):
 def get_sync_status(tenant_id, sync_id):
     """Get status of a sync job."""
     with get_db_session() as db_session:
-        from src.core.database.models import SyncJob
-
-        sync_job = db_session.scalars(select(SyncJob).filter_by(sync_id=sync_id, tenant_id=tenant_id)).first()
-
-        if not sync_job:
-            return jsonify({"error": "Sync job not found"}), 404
+        sync_jobs = SyncJobRepository(db_session, tenant_id)
+        sync_job = sync_jobs.require(sync_jobs.get, sync_id)
 
         response = {
             "sync_id": sync_job.sync_id,

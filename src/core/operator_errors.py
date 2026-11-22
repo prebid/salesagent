@@ -115,10 +115,44 @@ class ConnectionTestFailed(UpstreamFailure):
     MESSAGE = "The connection test failed"
 
 
-class TenantNotFound(RecordNotFound):
-    """The tenant the request names does not exist."""
+# One RecordNotFound per kind of record. The repository for that kind names it as its
+# NOT_FOUND, and Repository.require (src/core/database/repositories/base.py) raises it.
 
+
+class TenantNotFound(RecordNotFound):
     MESSAGE = "Tenant not found"
+
+
+class AccountNotFound(RecordNotFound):
+    MESSAGE = "Account not found"
+
+
+class PrincipalNotFound(RecordNotFound):
+    MESSAGE = "Principal not found"
+
+
+class ProductNotFound(RecordNotFound):
+    MESSAGE = "Product not found"
+
+
+class CreativeNotFound(RecordNotFound):
+    MESSAGE = "Creative not found"
+
+
+class SignalsAgentNotFound(RecordNotFound):
+    MESSAGE = "Signals agent not found"
+
+
+class WorkflowStepNotFound(RecordNotFound):
+    MESSAGE = "Workflow step not found"
+
+
+class OrderNotFound(RecordNotFound):
+    MESSAGE = "Order not found"
+
+
+class SyncJobNotFound(RecordNotFound):
+    MESSAGE = "Sync job not found"
 
 
 class RecordedFailure(Exception):

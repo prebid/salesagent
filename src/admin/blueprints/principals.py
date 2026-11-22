@@ -270,10 +270,8 @@ def edit_principal(tenant_id, principal_id):
 def get_principal(tenant_id, principal_id):
     """Get principal details including platform mappings (API endpoint)."""
     with get_db_session() as db_session:
-        principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
-
-        if not principal:
-            return jsonify({"error": "Principal not found"}), 404
+        principals = PrincipalRepository(db_session, tenant_id)
+        principal = principals.require(principals.get, principal_id)
 
         # Parse platform mappings (handle both string and dict formats)
         if principal.platform_mappings:

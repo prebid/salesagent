@@ -753,7 +753,11 @@ class AdminAccountEnv:
 
     def fetch_tenant_route(self, tenant_id: str, path: str, body: dict[str, Any] | None = None) -> AdminResponse:
         """POST *body* (none: ``{}``) to *tenant_id*'s ``/tenant/<id>/<path>``, as its page's script does with fetch()."""
-        return self.client.request("post", f"/tenant/{tenant_id}/{path}", json=body or {})
+        return self.fetch("post", f"/tenant/{tenant_id}/{path}", body or {})
+
+    def fetch(self, method: str, path: str, body: dict[str, Any] | None = None) -> AdminResponse:
+        """Send *method* to *path* as a page's script does with fetch(): *body* as JSON, if any, and ``Accept: */*``."""
+        return self.client.request(method, path, json=body, headers={"Accept": "*/*"})
 
     def post_ai_connection_test(self, body: Any) -> AdminResponse:
         """POST *body* as JSON to this tenant's AI connection test, as the settings page does with fetch()."""

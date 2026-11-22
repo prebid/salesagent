@@ -24,7 +24,8 @@ from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, UserRole
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.operator_errors import ConnectionTestFailed, StateConflict, TenantNotFound, best_effort_call
+from src.core.database.repositories.uow import TenantConfigUoW
+from src.core.operator_errors import ConnectionTestFailed, StateConflict, best_effort_call
 from src.services.ai.factory import tenant_ai_enabled
 from src.services.setup_checklist_service import SetupChecklistService
 from src.services.slack_notifier import SlackNotifier
@@ -399,55 +400,55 @@ class SlackWebhookNotConfigured(StateConflict):
 @require_tenant_access()
 def test_slack(tenant_id):
     """Test Slack webhook."""
-    with get_db_session() as db_session:
-        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        if not tenant:
-            raise TenantNotFound(f"Tenant {tenant_id}")
+    # The message is sent after the read's transaction ends: a rollback cannot undo it.
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        tenant = uow.tenant_config.require(uow.tenant_config.get_tenant)
+        webhook_url, tenant_name = tenant.slack_webhook_url, tenant.name
 
-        if not tenant.slack_webhook_url:
-            raise SlackWebhookNotConfigured(f"Slack test for tenant {tenant_id}: no webhook stored")
+    if not webhook_url:
+        raise SlackWebhookNotConfigured(f"Slack test for tenant {tenant_id}: no webhook stored")
 
-        # One Block Kit owner: the route does not assemble its own blocks or dial the
-        # egress seam itself, because that duplicates slack_notifier and skips its
-        # retry/record bookkeeping.
-        #
-        # max_retries=1 is deliberate: a test notification that silently sends three
-        # times is worse than one that fails visibly.
-        sent = SlackNotifier(webhook_url=tenant.slack_webhook_url).send_message(
-            text=f"🎉 Test message from Prebid Sales Agent for {tenant.name}",
-            blocks=[
-                {
-                    "type": "section",
-                    "text": {
+    # One Block Kit owner: the route does not assemble its own blocks or dial the
+    # egress seam itself, because that duplicates slack_notifier and skips its
+    # retry/record bookkeeping.
+    #
+    # max_retries=1 is deliberate: a test notification that silently sends three
+    # times is worse than one that fails visibly.
+    sent = SlackNotifier(webhook_url=webhook_url).send_message(
+        text=f"🎉 Test message from Prebid Sales Agent for {tenant_name}",
+        blocks=[
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*Test Notification*\nThis is a test message from the Prebid Sales Agent for *{tenant_name}*."
+                    ),
+                },
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
                         "type": "mrkdwn",
-                        "text": (
-                            f"*Test Notification*\nThis is a test message from the "
-                            f"Prebid Sales Agent for *{tenant.name}*."
-                        ),
-                    },
-                },
-                {
-                    "type": "context",
-                    "elements": [
-                        {
-                            "type": "mrkdwn",
-                            "text": f"Sent at {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}",
-                        }
-                    ],
-                },
-            ],
-            tenant_id=tenant.tenant_id,
-            max_retries=1,
+                        "text": f"Sent at {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                    }
+                ],
+            },
+        ],
+        tenant_id=tenant_id,
+        max_retries=1,
+    )
+
+    if not sent:
+        # Fixed text: Slack's own response body is a counterparty response and is
+        # never echoed back to the operator.
+        raise ConnectionTestFailed(
+            f"Slack test for tenant {tenant_id}: delivery failed", details=("Slack webhook delivery failed",)
         )
 
-        if not sent:
-            # Fixed text: Slack's own response body is a counterparty response and is
-            # never echoed back to the operator.
-            raise ConnectionTestFailed(
-                f"Slack test for tenant {tenant_id}: delivery failed", details=("Slack webhook delivery failed",)
-            )
-
-        return jsonify({"success": True, "message": "Test message sent successfully"})
+    return jsonify({"success": True, "message": "Test message sent successfully"})
 
 
 @tenants_bp.route("/<tenant_id>/deactivate", methods=["POST"])

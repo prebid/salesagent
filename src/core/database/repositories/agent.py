@@ -18,6 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import CreativeAgent, SignalsAgent, Tenant
+from src.core.database.repositories.base import Repository
+from src.core.operator_errors import SignalsAgentNotFound
 
 
 class CreativeAgentRepository:
@@ -62,13 +64,15 @@ class CreativeAgentRepository:
         ).one()
 
 
-class SignalsAgentRepository:
+class SignalsAgentRepository(Repository):
     """Tenant-scoped access for ``signals_agents``.
 
     Args:
         session: SQLAlchemy session (caller manages lifecycle).
         tenant_id: Tenant scope for all queries.
     """
+
+    NOT_FOUND = SignalsAgentNotFound
 
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session
@@ -77,6 +81,10 @@ class SignalsAgentRepository:
     @property
     def tenant_id(self) -> str:
         return self._tenant_id
+
+    def get(self, agent_id: int) -> SignalsAgent | None:
+        """The signals agent with row id *agent_id* in this tenant, or ``None``."""
+        return self._session.scalars(select(SignalsAgent).filter_by(id=agent_id, tenant_id=self._tenant_id)).first()
 
     def get_enabled(self) -> list[SignalsAgent]:
         """This tenant's enabled signals agents, by name.
