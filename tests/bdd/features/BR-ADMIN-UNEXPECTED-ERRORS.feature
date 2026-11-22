@@ -103,9 +103,9 @@ Feature: BR-ADMIN-UNEXPECTED-ERRORS Unexpected failures in the admin app
       | field               | text                                               |
       | order_name_template | order_name_template: Template has unbalanced braces |
 
-  # A sync's failure is written in a unit of work of its own (src/services/sync_jobs.py):
-  # the session its work used holds a transaction the database aborted, and committing on
-  # it left the job running, which refused every later sync that day.
+  # A sync's failure is written in a unit of work of its own (src/services/sync_jobs.py
+  # recording_failure), after the unit whose write the database refused has rolled back and
+  # closed. Left running, the job refused every later sync that day.
   @T-ADMIN-FAULT-007 @json
   Scenario: A sync whose database write fails is recorded as failed, with the reference it answered
     Given another tenant of this seller, onboarded to Google Ad Manager
@@ -174,3 +174,38 @@ Feature: BR-ADMIN-UNEXPECTED-ERRORS Unexpected failures in the admin app
     Then the activity feed shows the create account action as failed with the fixed audit text
     And the activity feed does not carry the database fault's text
     And the database refused the write once
+
+  # An operator resets a sync that hangs: the running job is recorded as failed with the
+  # reset's fixed text (src/admin/blueprints/gam.py reset_stuck_sync), so a new sync can start.
+  @T-ADMIN-FAULT-012 @json @inventory-sync
+  Scenario: Resetting a stuck sync records the running sync as failed
+    Given another tenant of this seller
+    And that tenant's inventory sync is running
+    When the settings page resets that tenant's stuck inventory sync
+    Then the page returns status 200
+    And the JSON response has "success" as true
+    And the JSON response names that tenant's running sync as the one reset
+    And the sync API reports that tenant's running sync as failed with "Manually reset by admin (sync appeared to be stuck)"
+
+  # A sync whose thread died (running for over an hour with no progress) is recorded as failed
+  # when the next sync starts (src/services/background_sync_service.py
+  # start_inventory_sync_background). This tenant names a service account whose key it never
+  # stored, so the new sync stops at its first step, before any call to Google.
+  @T-ADMIN-FAULT-013 @json @inventory-sync
+  Scenario: A sync started over a stale one records the stale sync as failed
+    Given another tenant of this seller, onboarded to Google Ad Manager with a service account whose key it never stored
+    And that tenant's inventory sync has been running for two hours with no progress
+    When a script starts that tenant's inventory sync with no body, sending Accept "*/*"
+    Then the page returns status 202
+    And the sync API reports that tenant's running sync as failed with "Sync thread died (stale after 1+ hour with no progress) - marked as failed to allow fresh sync"
+
+  # The background sync's thread records a refusal on its own job after the session it read
+  # the tenant's GAM configuration on has closed (src/services/background_sync_service.py
+  # _run_sync_thread, under recording_failure), never from inside that session.
+  @T-ADMIN-FAULT-014 @json @inventory-sync
+  Scenario: A background sync that cannot authenticate to GAM records the refusal on its job
+    Given another tenant of this seller, onboarded to Google Ad Manager with a service account whose key it never stored
+    And that tenant's inventory sync has been running for two hours with no progress
+    When a script starts that tenant's inventory sync with no body, sending Accept "*/*"
+    Then the page returns status 202
+    And the sync API reports the started sync as failed with "Service account JSON not found"
