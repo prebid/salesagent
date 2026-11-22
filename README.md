@@ -135,9 +135,8 @@ Add to your Claude config (`~/Library/Application Support/Claude/claude_desktop_
 }
 ```
 
-`YOUR_TOKEN` is an advertiser's token (see [API Token](docs/user-guide/advertisers.md#api-token)),
-and `default` is the tenant id; [quickstart step 7](docs/quickstart.md#7-connect-an-ai-agent)
-explains why a local call needs both headers.
+Replace `YOUR_TOKEN` with an advertiser's token ([API Token](docs/user-guide/advertisers.md#api-token))
+and `default` with the tenant id; see [quickstart step 7](docs/quickstart.md#7-connect-an-ai-agent).
 
 ---
 
@@ -251,9 +250,8 @@ a buyer sent it; the only difference between them is the tenant's adapter.
 
 ## Using the MCP Client
 
-[Quickstart step 7](docs/quickstart.md#7-connect-an-ai-agent) is a runnable first call with
-the fastmcp client: the advertiser token, the `x-adcp-tenant` header and `get_products`. The
-other tools take the request shapes in the
+Make a first call with the script in
+[quickstart step 7](docs/quickstart.md#7-connect-an-ai-agent). The other tools take the request shapes in the
 [AdCP specification](https://github.com/adcontextprotocol/adcp).
 
 ## Project Structure

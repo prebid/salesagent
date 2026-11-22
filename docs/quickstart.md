@@ -47,10 +47,8 @@ In the Google Cloud Console:
    http://localhost:8000/admin/auth/google/callback
    ```
 
-   The Admin UI answers under `/admin/` and at the root, and the callback keeps the path the
-   sign-in started from, so both are needed;
-   [Deployment OAuth](deployment/environment-variables.md#deployment-oauth) has the full
-   rule. If you change the published port with `CONDUCTOR_PORT`, use that port in both URIs.
+   [Deployment OAuth](deployment/environment-variables.md#deployment-oauth) explains why
+   both are needed. If you change the published port with `CONDUCTOR_PORT`, use that port in both URIs.
    No authorized JavaScript origins are needed.
 6. Choose **Create**, then copy the **Client ID** and **Client secret**.
 
@@ -237,9 +235,12 @@ uv run --no-project --with fastmcp python first_call.py
 
 With Python and `pip install fastmcp` instead, run `python first_call.py`.
 
-The token is needed even for `get_products`: a tenant's **Brand Context Requirement**
-(**Settings > Policies & Workflows**) defaults to "Require Authentication". A2A clients send
-the same two headers to http://localhost:8000/a2a.
+To list the server's tools instead, replace the `call_tool` line with
+`print(await client.list_tools())`.
+
+The token is needed even for `get_products`; see
+[Agent calls are refused with `AUTH_MISSING`](development/troubleshooting.md#agent-calls-are-refused-with-auth_missing).
+A2A clients send the same two headers to http://localhost:8000/a2a.
 
 ## Endpoints
 

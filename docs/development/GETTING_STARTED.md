@@ -155,8 +155,7 @@ uv run alembic revision -m "description"
 
 ### Test the MCP interface
 
-Run the script in [quickstart step 7](../quickstart.md#7-connect-an-ai-agent). It needs an
-advertiser token from the Admin UI and the `x-adcp-tenant` header.
+Run the script in [quickstart step 7](../quickstart.md#7-connect-an-ai-agent).
 
 ### Type checking
 

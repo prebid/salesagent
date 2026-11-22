@@ -39,7 +39,7 @@ SUPER_ADMIN_EMAILS=you@example.com
 GEMINI_API_KEY=your-key
 ```
 
-After the first sign-in, each tenant configures its own SSO in the Admin UI. See [Authentication](#authentication).
+[Deployment OAuth](#deployment-oauth) explains what the sign-in variables are for.
 
 ## Authentication
 
@@ -59,9 +59,8 @@ See the [SSO setup guide](../user-guide/sso-setup.md) for detailed instructions.
 
 New tenants start with `auth_setup_mode=true`. Setup Mode lets a tenant complete an OIDC
 login *before* its SSO is enabled, so you can verify a provider before committing to it.
-It grants no credentials of its own — the first administrator signs in with the
-deployment's own OAuth (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` or the generic
-`OAUTH_*` variables) plus `SUPER_ADMIN_EMAILS`.
+It grants no credentials of its own; see [Deployment OAuth](#deployment-oauth) for how the
+first administrator signs in.
 
 Once SSO is configured and tested, sign in through **Sign in with SSO** and disable Setup Mode from the Users & Access page. After that, **Sign in with SSO** works only while the tenant's SSO is enabled.
 

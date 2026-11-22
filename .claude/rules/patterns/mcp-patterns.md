@@ -5,13 +5,7 @@ or modify a tool.
 
 ## MCP client usage (smoke test against the local stack)
 
-The one recipe is [quickstart step 7](../../../docs/quickstart.md#7-connect-an-ai-agent): a
-fastmcp `Client` inside `async def main()`, sending `Authorization: Bearer <token>` and
-`x-adcp-tenant: <tenant_id>`. Both headers are required. The token comes from an advertiser
-the Admin UI created (see [API Token](../../../docs/user-guide/advertisers.md#api-token));
-`test-token` exists only in databases seeded by `scripts/setup/init_database.py`, which the
-compose stack does not run. To list tools, replace the `call_tool` line with
-`print(await client.list_tools())`.
+Use the script in [quickstart step 7](../../../docs/quickstart.md#7-connect-an-ai-agent).
 
 Do not use `uvx adcp ... --auth <token>` against this server; see
 [Agent calls are refused with `AUTH_MISSING`](../../../docs/development/troubleshooting.md#agent-calls-are-refused-with-auth_missing).

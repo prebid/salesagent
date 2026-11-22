@@ -352,8 +352,8 @@ The Prebid Sales Agent is a Python application with the following components:
 
 ### Run locally
 Migrations run automatically on container startup. The local-run walkthrough, access points, and
-OAuth sign-in setup (there is no password login) are in [docs/quickstart.md](docs/quickstart.md). The one MCP smoke
-test is quickstart step 7 (advertiser token plus `x-adcp-tenant`); `.claude/rules/patterns/mcp-patterns.md` points to it.
+OAuth sign-in setup (there is no password login) are in [docs/quickstart.md](docs/quickstart.md). The MCP smoke
+test is quickstart step 7.
 
 ### Testing
 Test orchestration uses **tox** (with tox-uv): `uv tool install tox --with tox-uv`.

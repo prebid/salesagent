@@ -232,10 +232,7 @@ this configuration.
 The `default` tenant of the local stack already uses the mock adapter. For
 another one, use `scripts/setup/setup_tenant.py` as in
 [Creating a tenant from the command line](../../quickstart.md#creating-a-tenant-from-the-command-line);
-the mock adapter is its default. It also creates USD, EUR and GBP currency
-limits and one advertiser, and prints that advertiser's token. The tenant
-starts with no products; create them in the Admin UI before calling
-`get_products`.
+the mock adapter is its default.
 
 ### 2. Retrieve a token later
 
@@ -244,8 +241,7 @@ A lost token cannot be read back; rotate it as described in
 
 ### 3. Call the server
 
-Run the script in [quickstart step 7](../../quickstart.md#7-connect-an-ai-agent)
-with the advertiser's token and the tenant id in `x-adcp-tenant`.
+Run the script in [quickstart step 7](../../quickstart.md#7-connect-an-ai-agent).
 
 The A2A server serves the same tools at `http://localhost:8000/a2a`, and the
 REST routes serve them at `/api/v1` — see

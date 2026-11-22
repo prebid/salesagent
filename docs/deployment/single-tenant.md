@@ -89,9 +89,8 @@ Each release publishes a full version tag plus rolling major and major.minor tag
 | `FLASK_SECRET_KEY` | Yes | Long random value that signs session cookies |
 | `GEMINI_API_KEY` | No | For AI-powered creative review |
 
-The Admin UI has no password login, so the first sign-in uses the deployment's own OAuth
-client and a super admin address. After it, each tenant configures its own SSO on the
-**Users & Access** page. `CREATE_DEMO_TENANT` has no effect in single-tenant mode; see
+[Deployment OAuth](environment-variables.md#deployment-oauth) explains what the sign-in
+variables are for. `CREATE_DEMO_TENANT` has no effect in single-tenant mode; see
 [About `CREATE_DEMO_TENANT`](../quickstart.md#about-create_demo_tenant).
 
 For a complete list including GAM integration and all optional settings, see the **[environment variables reference](environment-variables.md)**.

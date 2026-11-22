@@ -16,7 +16,7 @@ Advertisers (also called "principals") are the entities that can access your MCP
 ### API Token
 
 Each advertiser gets a unique API token, sent as `Authorization: Bearer <token>` on every
-transport. The server stores only a hash of it, so the token is shown once: in the
+transport. The server stores only a hash of it (`principals.token_hash`), so the token is shown once: in the
 confirmation message after you create the advertiser. Copy it then. The **Current
 Advertisers** list shows the first characters of each token so you can tell them apart,
 never the whole token.
@@ -60,9 +60,8 @@ They cannot access other advertisers' data or system configuration.
 
 ## MCP Client Configuration
 
-Advertisers connect via MCP with their token in `Authorization: Bearer <token>` and a
-request that names the tenant. [Quickstart step 7](../quickstart.md#7-connect-an-ai-agent)
-has a runnable first call.
+Give the advertiser its token and the first call in
+[quickstart step 7](../quickstart.md#7-connect-an-ai-agent).
 
 ## Notifications
 

@@ -378,10 +378,9 @@ The agent's request named no tenant this deployment serves. The error code is
 `TENANT_UNDEFINED` (HTTP 421, recovery `terminal`). Earlier releases returned
 `CONFIGURATION_ERROR` "no tenant context" for the same condition.
 
-- Send `x-adcp-tenant` with the tenant id (`default` on a fresh local stack),
-  or send a `Host` that matches the tenant's `virtual_host`. A local agent
-  sends `Host: localhost:8000`, which no tenant declares, so it needs the
-  header.
+- Send `x-adcp-tenant` with the tenant id, as the script in
+  [quickstart step 7](../quickstart.md#7-connect-an-ai-agent) does, or send a
+  `Host` that matches the tenant's `virtual_host`.
 - Check that the tenant exists: `docker compose logs db-init` shows the
   migrations completing and "Default tenant ready".
 - Behind a custom domain or subdomain, check the tenant's **Custom Domain** in
@@ -404,9 +403,10 @@ Policies & Workflows**) is set to "Public". Create an advertiser in the Admin
 UI to get a token (see
 [API Token](../user-guide/advertisers.md#api-token)).
 
-The `adcp` command-line client (`uvx adcp ... --auth <token>`) sends its token
-in an `x-adcp-auth` header, which this server does not read, so its calls get
-`AUTH_MISSING` too. Use the fastmcp script in
+The server reads the credential from `Authorization: Bearer` only. A token sent
+in `x-adcp-auth` counts as none, and that is where the `adcp` command-line
+client (`uvx adcp ... --auth <token>`) sends it, so its calls get
+`AUTH_MISSING` too. Use the script in
 [quickstart step 7](../quickstart.md#7-connect-an-ai-agent) instead.
 
 ### Rejected with a valid token
@@ -419,19 +419,15 @@ docker compose exec postgres psql -U adcp_user adcp -c \
   "SELECT is_active FROM tenants WHERE tenant_id='your_tenant_id';"
 ```
 
-The server reads the credential from `Authorization: Bearer` only. It does not
-recognize `x-adcp-auth`, so a request that sends only the alias presents
-nothing and gets `AUTH_MISSING`. The server identifies the tenant from the
-host before it looks the token up, and it looks the token up only inside that
+The server identifies the tenant from the request before it looks the token up, and it looks the token up only inside that
 tenant. A token issued for one tenant is therefore `AUTH_INVALID` on another.
 The [request lifecycle](request-lifecycle.md) document describes the exact
 order.
 
 ### Invalid token for the MCP API
 
-The database holds only a hash of each token (`principals.token_hash`), so a
-lost token cannot be read back from the Admin UI or the database. Rotate it
-as described in [API Token](../user-guide/advertisers.md#api-token).
+A lost token cannot be retrieved; rotate it as described in
+[API Token](../user-guide/advertisers.md#api-token).
 
 ### A2A authentication failed
 
@@ -449,9 +445,8 @@ curl -X POST http://localhost:8000/a2a \
 
 ### Tool not found
 
-List the tools the server actually registers: run the script from
-[quickstart step 7](../quickstart.md#7-connect-an-ai-agent) with its
-`call_tool` line replaced by `print(await client.list_tools())`.
+List the tools the server actually registers with the `list_tools` variant
+of the script in [quickstart step 7](../quickstart.md#7-connect-an-ai-agent).
 
 If a tool is missing, check its registration in `src/core/main.py` and its
 implementation under `src/core/tools/`:
