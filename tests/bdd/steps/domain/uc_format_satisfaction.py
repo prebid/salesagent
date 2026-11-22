@@ -23,7 +23,6 @@ carrying JSON a reader has to decode.
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -44,6 +43,7 @@ from tests.bdd.steps.generic._table import comma_list
 from tests.factories import PricingOptionFactory, ProductFactory, StoredPlacementFactory
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.creative_asset import build_assets, make_legacy_image_assets, manifest_image_spec
+from tests.factories.mint import mint_id
 from tests.factories.product import authorize_publishers, default_publisher_properties
 
 #: The legacy arm every product here also carries, matching ``MediaBuyCreateEnv``'s own
@@ -1942,7 +1942,7 @@ def when_update_replaces_inline_creatives(ctx: dict, kind: str, manifests: str, 
     (:func:`_product_option_refs`). The ids sent are kept in ``ctx["uploaded_creative_ids"]``.
     """
     names = comma_list(manifests)
-    ctx["uploaded_creative_ids"] = [f"satisfaction_inline_{uuid.uuid4().hex[:12]}" for _ in names]
+    ctx["uploaded_creative_ids"] = [mint_id("satisfaction_inline") for _ in names]
     _dispatch_package_update(
         ctx,
         creatives=[

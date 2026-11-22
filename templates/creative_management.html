@@ -320,9 +320,9 @@ function approveCreative(creativeId) {
             approved_by: 'admin'
         })
     })
-    .then(response => {
+    .then(async response => {
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            throw new Error(adminErrorText(await response.json()));
         }
         return response.json();
     })
@@ -337,7 +337,7 @@ function approveCreative(creativeId) {
             }
             window.location.reload();
         } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -365,9 +365,9 @@ function rejectCreative(creativeId) {
             rejection_reason: reason.trim()
         })
     })
-    .then(response => {
+    .then(async response => {
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            throw new Error(adminErrorText(await response.json()));
         }
         return response.json();
     })
@@ -376,7 +376,7 @@ function rejectCreative(creativeId) {
             alert('❌ Creative rejected.');
             window.location.reload();
         } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -404,7 +404,7 @@ function aiReviewCreative(creativeId) {
             alert(`AI Review Complete:\n\nStatus: ${data.status}\n\nReason: ${data.reason}\n\nConfidence: ${data.confidence}`);
             window.location.reload();
         } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
             button.disabled = false;
             button.textContent = '🤖 AI Review';
         }

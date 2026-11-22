@@ -12,6 +12,7 @@ from sqlalchemy import select
 from src.admin.utils import require_tenant_access
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog
+from src.core.operator_errors import best_effort, best_effort_call
 
 logger = logging.getLogger(__name__)
 
@@ -174,34 +175,43 @@ def get_recent_activities(tenant_id: str, since: datetime = None, limit: int = 5
     # Enforce reasonable limits
     limit = max(1, min(limit, 100))  # Between 1 and 100
 
-    try:
-        with get_db_session() as db_session:
-            stmt = select(AuditLog).filter(AuditLog.tenant_id == tenant_id)
+    with get_db_session() as db_session:
+        stmt = select(AuditLog).filter(AuditLog.tenant_id == tenant_id)
 
-            if since:
-                stmt = stmt.filter(AuditLog.timestamp > since)
+        if since:
+            stmt = stmt.filter(AuditLog.timestamp > since)
 
-            # Order by timestamp descending and limit results
-            audit_logs = db_session.scalars(stmt.order_by(AuditLog.timestamp.desc()).limit(limit)).all()
+        # Order by timestamp descending and limit results
+        audit_logs = db_session.scalars(stmt.order_by(AuditLog.timestamp.desc()).limit(limit)).all()
 
-            # Convert to activity format
-            activities = []
-            for audit_log in audit_logs:
-                try:
-                    activity = format_activity_from_audit_log(audit_log)
-                    activities.append(activity)
-                except Exception as e:
-                    logger.warning(f"Failed to format activity from audit log {audit_log.log_id}: {e}")
+        # Convert to activity format; a row that does not format is left out of the feed
+        activities = []
+        for audit_log in audit_logs:
+            with best_effort(f"Failed to format activity from audit log {audit_log.log_id}"):
+                activities.append(format_activity_from_audit_log(audit_log))
 
-            return activities
+        return activities
 
-    except Exception as e:
-        logger.error(f"Failed to query activities for tenant {tenant_id}: {e}")
-        return []
+
+def _read_activities(tenant_id: str, since: datetime | None = None, limit: int = 50) -> list[dict] | None:
+    """:func:`get_recent_activities` for the event stream, or ``None`` when the read failed.
+
+    An open stream cannot be answered by the app's error handler, so a failed read is
+    logged once under a reference and the stream sends an error event instead.
+    """
+    return best_effort_call(
+        f"Failed to read the activity stream for tenant {tenant_id}",
+        lambda: get_recent_activities(tenant_id, since=since, limit=limit),
+    )
+
+
+def _error_event(message: str) -> str:
+    data = json.dumps({"type": "error", "message": message, "timestamp": datetime.now(UTC).isoformat()})
+    return f"event: error\ndata: {data}\n\n"
 
 
 @activity_stream_bp.route("/tenant/<tenant_id>/activity", methods=["GET"])
-@require_tenant_access(api_mode=False)  # Use normal redirect auth for polling
+@require_tenant_access()  # Use normal redirect auth for polling
 def activity_feed(tenant_id, **kwargs):
     """JSON endpoint for polling recent activities."""
 
@@ -210,21 +220,16 @@ def activity_feed(tenant_id, **kwargs):
         logger.error(f"Invalid tenant_id for activity endpoint: {tenant_id}")
         return jsonify({"error": "Invalid tenant ID"}), 400
 
-    try:
-        # Get recent activities (last 50)
-        activities = get_recent_activities(tenant_id, limit=50)
+    # Get recent activities (last 50)
+    activities = get_recent_activities(tenant_id, limit=50)
 
-        logger.info(f"Activity polling request - tenant: {tenant_id}, activities: {len(activities)}")
+    logger.info(f"Activity polling request - tenant: {tenant_id}, activities: {len(activities)}")
 
-        return jsonify({"activities": activities, "timestamp": datetime.now(UTC).isoformat(), "count": len(activities)})
-
-    except Exception as e:
-        logger.error(f"Error getting activities for tenant {tenant_id}: {e}")
-        return jsonify({"error": "Failed to get activities"}), 500
+    return jsonify({"activities": activities, "timestamp": datetime.now(UTC).isoformat(), "count": len(activities)})
 
 
 @activity_stream_bp.route("/tenant/<tenant_id>/events", methods=["GET", "HEAD"])
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def activity_events(tenant_id, **kwargs):
     """Server-Sent Events endpoint for real-time activity updates."""
 
@@ -262,13 +267,13 @@ def activity_events(tenant_id, **kwargs):
 
     def generate():
         """Generator function that yields SSE formatted data."""
-        # Track resources for cleanup
-        cleanup_needed = False
-
         try:
             # Send initial historical data
             logger.info(f"Starting SSE stream for tenant {tenant_id}")
-            recent_activities = get_recent_activities(tenant_id, limit=50)
+            recent_activities = _read_activities(tenant_id, limit=50)
+            if recent_activities is None:
+                yield _error_event("Failed to start activity stream")
+                return
 
             for activity in reversed(recent_activities):  # Reverse to show oldest first
                 data = json.dumps(activity)
@@ -276,79 +281,53 @@ def activity_events(tenant_id, **kwargs):
 
             # Keep track of last check time
             last_check = datetime.now(UTC)
-            cleanup_needed = True
 
             # Poll for new activities every 2 seconds
             while True:
-                try:
-                    # Check for new activities since last check
-                    new_activities = get_recent_activities(
-                        tenant_id,
-                        since=last_check - timedelta(seconds=1),  # Small overlap to avoid missing events
-                        limit=10,
-                    )
-
-                    # Send new activities
-                    for activity in reversed(new_activities):  # Newest activities last
-                        data = json.dumps(activity)
-                        yield f"data: {data}\n\n"
-
-                    # Update last check time
-                    if new_activities:
-                        # Use timestamp of newest activity
-                        newest_timestamp_str = new_activities[0]["timestamp"]
-                        newest_timestamp = datetime.fromisoformat(newest_timestamp_str.replace("Z", "+00:00"))
-                        last_check = max(last_check, newest_timestamp)
-                    else:
-                        last_check = datetime.now(UTC)
-
-                    # Send heartbeat to keep connection alive
-                    yield ": heartbeat\n\n"
-
-                    # Wait before next poll
-                    time.sleep(2)
-
-                except GeneratorExit:
-                    logger.info(f"SSE client disconnected for tenant {tenant_id}")
-                    cleanup_needed = True
-                    break
-                except Exception as e:
-                    logger.error(f"Error in SSE stream for tenant {tenant_id}: {e}")
-                    cleanup_needed = True
-                    # Send error event
-                    error_data = json.dumps(
-                        {
-                            "type": "error",
-                            "message": "Stream error occurred",
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        }
-                    )
-                    yield f"event: error\ndata: {error_data}\n\n"
+                # Check for new activities since last check
+                new_activities = _read_activities(
+                    tenant_id,
+                    since=last_check - timedelta(seconds=1),  # Small overlap to avoid missing events
+                    limit=10,
+                )
+                if new_activities is None:
+                    yield _error_event("Stream error occurred")
                     time.sleep(5)  # Wait longer after error
+                    continue
 
-        except Exception as e:
-            logger.error(f"Failed to start SSE stream for tenant {tenant_id}: {e}")
-            cleanup_needed = True
-            error_data = json.dumps(
-                {
-                    "type": "error",
-                    "message": "Failed to start activity stream",
-                    "timestamp": datetime.now(UTC).isoformat(),
-                }
-            )
-            yield f"event: error\ndata: {error_data}\n\n"
+                # Send new activities
+                for activity in reversed(new_activities):  # Newest activities last
+                    data = json.dumps(activity)
+                    yield f"data: {data}\n\n"
+
+                # Update last check time
+                if new_activities:
+                    # Use timestamp of newest activity
+                    newest_timestamp_str = new_activities[0]["timestamp"]
+                    newest_timestamp = datetime.fromisoformat(newest_timestamp_str.replace("Z", "+00:00"))
+                    last_check = max(last_check, newest_timestamp)
+                else:
+                    last_check = datetime.now(UTC)
+
+                # Send heartbeat to keep connection alive
+                yield ": heartbeat\n\n"
+
+                # Wait before next poll
+                time.sleep(2)
+
+        except GeneratorExit:
+            logger.info(f"SSE client disconnected for tenant {tenant_id}")
         finally:
             # Clean up resources
-            if cleanup_needed:
-                old_count = connection_counts[tenant_id]
-                connection_counts[tenant_id] = max(0, connection_counts[tenant_id] - 1)
-                logger.info(
-                    f"Cleaning up SSE stream resources for tenant {tenant_id} - connection count: {old_count} -> {connection_counts[tenant_id]}"
-                )
-                # Force garbage collection for any lingering resources
-                import gc
+            old_count = connection_counts[tenant_id]
+            connection_counts[tenant_id] = max(0, connection_counts[tenant_id] - 1)
+            logger.info(
+                f"Cleaning up SSE stream resources for tenant {tenant_id} - connection count: {old_count} -> {connection_counts[tenant_id]}"
+            )
+            # Force garbage collection for any lingering resources
+            import gc
 
-                gc.collect()
+            gc.collect()
 
     # Set appropriate headers for SSE
     response = Response(
@@ -368,23 +347,18 @@ def activity_events(tenant_id, **kwargs):
 @require_tenant_access()
 def get_activities_api(tenant_id, **kwargs):
     """REST API endpoint to get recent activities (fallback for non-SSE clients)."""
-    try:
-        # Get optional since parameter
-        since_param = request.args.get("since")
-        since = None
-        if since_param:
-            try:
-                since = datetime.fromisoformat(since_param.replace("Z", "+00:00"))
-            except ValueError:
-                logger.warning(f"Invalid since parameter: {since_param}")
+    # Get optional since parameter
+    since_param = request.args.get("since")
+    since = None
+    if since_param:
+        try:
+            since = datetime.fromisoformat(since_param.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning(f"Invalid since parameter: {since_param}")
 
-        # Get optional limit parameter
-        limit = min(int(request.args.get("limit", 50)), 100)  # Max 100 activities
+    # Get optional limit parameter
+    limit = min(int(request.args.get("limit", 50)), 100)  # Max 100 activities
 
-        activities = get_recent_activities(tenant_id, since=since, limit=limit)
+    activities = get_recent_activities(tenant_id, since=since, limit=limit)
 
-        return {"activities": activities, "count": len(activities), "timestamp": datetime.now(UTC).isoformat()}
-
-    except Exception as e:
-        logger.error(f"Failed to get activities for tenant {tenant_id}: {e}")
-        return {"error": "Failed to retrieve activities"}, 500
+    return {"activities": activities, "count": len(activities), "timestamp": datetime.now(UTC).isoformat()}

@@ -53,7 +53,7 @@ async def webhook_handler(request):
 
     except Exception as e:
         print(f"❌ Error handling webhook: {e}")
-        return web.Response(text=str(e), status=400)
+        return web.Response(text="Error handling webhook", status=400)
 
 
 async def start_webhook_server(port=8888):

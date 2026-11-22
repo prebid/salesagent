@@ -100,7 +100,7 @@ class TargetingWidget {
         const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/all`;
         const response = await fetch(url, { credentials: 'same-origin' });
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            throw new Error(adminErrorText(await response.json()));
         }
         this.targetingData = await response.json();
 
@@ -126,7 +126,7 @@ class TargetingWidget {
         const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
         const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+            throw new Error(adminErrorText(await response.json()));
         }
         const values = (await response.json()).values || [];
 

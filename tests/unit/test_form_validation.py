@@ -6,7 +6,12 @@ ever reached either, and these tests were the only thing keeping them alive.
 Both admin call sites pass a list of required field names.
 """
 
-from src.admin.form_validation import sanitize_form_data, sanitize_url, validate_form_data
+from decimal import Decimal
+
+import pytest
+
+from src.admin.form_validation import form_number, sanitize_form_data, sanitize_url, validate_form_data
+from src.core.operator_errors import FormIssue, InvalidFormInput
 
 
 class TestValidateFormData:
@@ -54,3 +59,29 @@ class TestSanitizeUrl:
 
     def test_empty_stays_empty(self):
         assert sanitize_url("") == ""
+
+
+class TestFormNumber:
+    @pytest.mark.parametrize(
+        ("cast", "raw"),
+        [
+            (float, "nan"),
+            (float, "inf"),
+            (float, "-Infinity"),
+            (float, "1e999"),
+            (Decimal, "NaN"),
+            (Decimal, "sNaN"),
+            (Decimal, "Infinity"),
+            (Decimal, "abc"),
+            (int, "1.5"),
+            (int, ""),
+        ],
+    )
+    def test_a_value_that_is_not_a_finite_number_is_refused_for_its_field(self, cast, raw):
+        with pytest.raises(InvalidFormInput) as refused:
+            form_number(cast, "fill_rate", raw)
+
+        assert refused.value.issues == (FormIssue("fill_rate", "fill_rate must be a number"),)
+
+    def test_a_decimal_is_read_exactly(self):
+        assert form_number(Decimal, "min_package_budget", "0.10") == Decimal("0.10")
