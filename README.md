@@ -127,16 +127,16 @@ Add to your Claude config (`~/Library/Application Support/Claude/claude_desktop_
       "command": "uvx",
       "args": [
         "mcp-remote", "http://localhost:8000/mcp/",
-        "--header", "Authorization: Bearer YOUR_TOKEN",
-        "--header", "x-adcp-tenant: default"
+        "--header", "Authorization: Bearer YOUR_TOKEN"
       ]
     }
   }
 }
 ```
 
-Replace `YOUR_TOKEN` with an advertiser's token ([API Token](docs/user-guide/advertisers.md#api-token))
-and `default` with the tenant id; see [quickstart step 7](docs/quickstart.md#7-connect-an-ai-agent).
+Replace `YOUR_TOKEN` with a token of an advertiser of the `default` tenant
+([API Token](docs/user-guide/advertisers.md#api-token)). To reach another tenant, see
+[quickstart step 7](docs/quickstart.md#7-connect-an-ai-agent).
 
 ---
 

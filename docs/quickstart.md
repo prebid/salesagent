@@ -177,8 +177,8 @@ docker compose exec adcp-server python -m scripts.setup.setup_tenant "Demo Publi
   --tenant-id demo --virtual-host demo.localhost:8000
 ```
 
-`--virtual-host` is required and must be unique across tenants. An agent addresses this
-tenant with `x-adcp-tenant: demo`. The script creates no products; add them in the Admin UI
+`--virtual-host` is required and must be unique across tenants, port aside. An agent reaches
+this tenant by sending `Host: demo.localhost:8000` (see step 7). The script creates no products; add them in the Admin UI
 as above. A super admin can open the new tenant at http://localhost:8000/tenant/demo.
 
 ### About `CREATE_DEMO_TENANT`
@@ -192,11 +192,15 @@ created.
 
 ## 7. Connect an AI agent
 
-A request has to say which seller it is for. A tenant is served at the host it declares in
-`virtual_host`, but the `Host` a local agent sends is `localhost:8000`, which no tenant
-declares. So a local call names the tenant explicitly with the `x-adcp-tenant` header,
-carrying the tenant id. This is the same header the test suites use. A request naming no
-tenant is refused (see
+A request has to say which seller it is for. The server matches the request's `Host` against
+each tenant's `virtual_host`, ignoring the port. The `default` tenant declares
+`localhost:8080`, so a call to `localhost:8000` reaches `default`. To reach another tenant,
+keep connecting to `localhost:8000` and send that tenant's virtual host as the `Host` header:
+`demo.localhost:8000` for the tenant created from the command line in step 6.
+
+The `x-adcp-tenant` header, carrying a tenant id, is read only when no tenant claims the
+`Host`. On this stack `default` claims `localhost`, so the header changes nothing here. A
+request whose `Host` no tenant claims and that sends no `x-adcp-tenant` is refused (see
 [No seller is served at the address this request named](development/troubleshooting.md#no-seller-is-served-at-the-address-this-request-named)).
 
 Save this as `first_call.py`:
@@ -209,18 +213,24 @@ from fastmcp.client import Client, StreamableHttpTransport
 transport = StreamableHttpTransport(
     url="http://localhost:8000/mcp/",
     headers={
-        # The advertiser token from step 6 (Settings > Advertisers)
+        # The advertiser token from step 6, issued by the tenant you are calling
         "Authorization": "Bearer <advertiser-token>",
-        # The tenant id from the Admin UI address bar: /tenant/<tenant_id>
-        "x-adcp-tenant": "default",
+        # Selects the tenant: its virtual host. localhost reaches `default`;
+        # use "demo.localhost:8000" for the tenant from the command line.
+        "Host": "localhost:8000",
     },
 )
 
 
 async def main():
-    async with Client(transport=transport) as client:
-        result = await client.call_tool("get_products", {"brief": "video ads"})
-        print(result)
+    try:
+        async with Client(transport=transport) as client:
+            result = await client.call_tool("get_products", {"brief": "video ads"})
+            print(result)
+    except Exception as error:
+        # A refused call reaches the client without its error code; the server log has it.
+        print(f"The call failed: {error}")
+        print("Error code: docker compose logs adcp-server | grep -E 'AUTH_|TENANT_'")
 
 
 asyncio.run(main())
@@ -235,12 +245,12 @@ uv run --no-project --with fastmcp python first_call.py
 
 With Python and `pip install fastmcp` instead, run `python first_call.py`.
 
-To list the server's tools instead, replace the `call_tool` line with
+To list the server's tools instead, replace the `call_tool` and `print(result)` lines with
 `print(await client.list_tools())`.
 
 The token is needed even for `get_products`; see
 [Agent calls are refused with `AUTH_MISSING`](development/troubleshooting.md#agent-calls-are-refused-with-auth_missing).
-A2A clients send the same two headers to http://localhost:8000/a2a.
+A2A clients send the same `Authorization` and `Host` headers to http://localhost:8000/a2a.
 
 ## Endpoints
 
@@ -250,8 +260,8 @@ All services are reached through the nginx proxy on port 8000:
 |---------|-----|---|
 | Admin UI | http://localhost:8000/ | its own session |
 | Admin UI (alternate) | http://localhost:8000/admin | its own session |
-| MCP Server | http://localhost:8000/mcp/ | `x-adcp-tenant` header |
-| A2A Server | http://localhost:8000/a2a | `x-adcp-tenant` header |
+| MCP Server | http://localhost:8000/mcp/ | `Host` header (step 7) |
+| A2A Server | http://localhost:8000/a2a | `Host` header (step 7) |
 | Health Check | http://localhost:8000/health | no tenant needed |
 
 ## Running the published image without compose

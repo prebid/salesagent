@@ -350,7 +350,7 @@ def init_db(exit_on_error=False):
 ║                                                                  ║
 ║  A default tenant has been created for quick start:              ║
 ║                                                                  ║
-║  🏢 Tenant: Default Publisher (x-adcp-tenant: default)           ║
+║  🏢 Tenant: Default Publisher                                    ║
 ║  🌐 Admin UI: http://localhost:8000/admin                        ║
 ║                                                                  ║
 ║  🔑 Default Advertiser Token (Authorization: Bearer):            ║
@@ -375,7 +375,7 @@ def init_db(exit_on_error=False):
 ╠══════════════════════════════════════════════════════════════════════════╣
 ║                                                                          ║
 ║  ⚡ TEST IT NOW: the script in docs/quickstart.md step 7, with           ║
-║     Authorization: Bearer test-token and x-adcp-tenant: default          ║
+║     Authorization: Bearer test-token                                     ║
 ║                                                                          ║
 ╠══════════════════════════════════════════════════════════════════════════╣
 ║                                                                          ║

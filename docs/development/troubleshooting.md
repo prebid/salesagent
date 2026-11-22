@@ -378,9 +378,9 @@ The agent's request named no tenant this deployment serves. The error code is
 `TENANT_UNDEFINED` (HTTP 421, recovery `terminal`). Earlier releases returned
 `CONFIGURATION_ERROR` "no tenant context" for the same condition.
 
-- Send `x-adcp-tenant` with the tenant id, as the script in
-  [quickstart step 7](../quickstart.md#7-connect-an-ai-agent) does, or send a
-  `Host` that matches the tenant's `virtual_host`.
+- Name the tenant as [quickstart step 7](../quickstart.md#7-connect-an-ai-agent)
+  describes: a `Host` that matches the tenant's `virtual_host`, or
+  `x-adcp-tenant` when no tenant claims the `Host`.
 - Check that the tenant exists: `docker compose logs db-init` shows the
   migrations completing and "Default tenant ready".
 - Behind a custom domain or subdomain, check the tenant's **Custom Domain** in
@@ -420,7 +420,9 @@ docker compose exec postgres psql -U adcp_user adcp -c \
 ```
 
 The server identifies the tenant from the request before it looks the token up, and it looks the token up only inside that
-tenant. A token issued for one tenant is therefore `AUTH_INVALID` on another.
+tenant. A token issued for one tenant is therefore `AUTH_INVALID` on another:
+send the `Host` of the tenant that issued it, as in
+[quickstart step 7](../quickstart.md#7-connect-an-ai-agent).
 The [request lifecycle](request-lifecycle.md) document describes the exact
 order.
 
@@ -436,7 +438,7 @@ Send the token as a Bearer token in the `Authorization` header:
 ```bash
 curl -X POST http://localhost:8000/a2a \
   -H "Authorization: Bearer ${ADCP_AUTH_TOKEN}" \
-  -H "x-adcp-tenant: default" \
+\
   -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "method": "message/send", ...}'
 ```

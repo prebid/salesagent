@@ -181,7 +181,7 @@ Principal Token (for MCP/A2A API):
    {principal_token}
 
 It is shown only now. Use it in the script from docs/quickstart.md step 7, with
-   x-adcp-tenant: {tenant_id}
+   Host: {args.virtual_host}
 {gam_note}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
