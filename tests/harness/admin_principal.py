@@ -53,23 +53,16 @@ class AdminPrincipalEnv:
     def seed_principal(self, *, principal_id: str) -> str:
         """Create the tenant and one principal, returning the principal id.
 
-        Factories are bound to the session this method owns. Binding every factory rather
-        than the two named here is not defensive: ``PrincipalFactory`` declares
-        ``tenant = SubFactory(TenantFactory)`` and reaches siblings, and an unbound one
-        raises ``RuntimeError("No session provided.")`` from inside factory_boy rather than
-        at the call site. ``ALL_FACTORIES`` is the list ``IntegrationEnv`` itself binds.
+        Factories are bound to the session this method owns, every one of them, because
+        ``PrincipalFactory`` declares ``tenant = SubFactory(TenantFactory)`` and reaches
+        siblings (see :func:`tests.utils.database_helpers.bind_factories_to_session`).
         """
-        from tests.factories import ALL_FACTORIES, PrincipalFactory, TenantFactory
+        from tests.factories import PrincipalFactory, TenantFactory
+        from tests.utils.database_helpers import bind_factories_to_session
 
-        with get_db_session() as session:
-            for factory in ALL_FACTORIES:
-                factory._meta.sqlalchemy_session = session
-            try:
-                tenant = TenantFactory(tenant_id=self._tenant_id)
-                PrincipalFactory(tenant=tenant, principal_id=principal_id)
-            finally:
-                for factory in ALL_FACTORIES:
-                    factory._meta.sqlalchemy_session = None
+        with get_db_session() as session, bind_factories_to_session(session):
+            tenant = TenantFactory(tenant_id=self._tenant_id)
+            PrincipalFactory(tenant=tenant, principal_id=principal_id)
         return principal_id
 
     # ── requests ───────────────────────────────────────────────────────────
