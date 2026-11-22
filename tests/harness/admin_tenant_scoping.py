@@ -51,12 +51,17 @@ MEMBER_EMAIL = "test_tenant_user@example.com"
 #: this row a lookup that forgot the caller's email would still find nobody, and a refusal
 #: would prove nothing about whose membership was checked.
 OTHER_MEMBER_EMAIL = "target_tenant_member@example.com"
-#: The role a seeded membership holds unless the scenario names another: the least one that
-#: may send every method the four routes of #2203 serve, because ``role_permits`` asks
-#: ``manager`` for a write. A refusal on those routes is then the membership check's and
-#: never the role check's. The OIDC test route asks for ``admin``, so T-ADMIN-SCOPE-011 and
-#: T-ADMIN-SCOPE-012 name the role they seed.
+#: The role a caller's active row in the target tenant holds unless the scenario names
+#: another: the least one that may send every method the four routes of #2203 serve,
+#: because ``role_permits`` asks ``manager`` for a write. The OIDC test route asks for
+#: ``admin``, so T-ADMIN-SCOPE-011 and T-ADMIN-SCOPE-012 name the role they seed.
 MEMBER_ROLE = UserRole.MANAGER
+#: The role of a row the membership lookup must not match: the other member of the target
+#: tenant, the caller's row in another tenant, and the caller's inactive row in the target.
+#: ``admin`` passes the role check of every route in ``ROUTES``, so a lookup that matched
+#: one of these rows would let the caller in and the refusal scenario would fail. Under a
+#: lower role the OIDC test route's role check would refuse in the lookup's place.
+NON_MATCHING_ROW_ROLE = UserRole.ADMIN
 ACTIVE_BUY_BUDGET = Decimal("1500.00")
 
 
@@ -98,7 +103,7 @@ class TenantState(NamedTuple):
     policy_settings: Any
 
 
-def _seed_member(tenant: Tenant, email: str, *, is_active: bool = True, role: UserRole = MEMBER_ROLE) -> None:
+def _seed_member(tenant: Tenant, email: str, *, role: UserRole, is_active: bool = True) -> None:
     """A ``User`` row for *email* in *tenant*, holding *role*. Call it inside ``bound_factory_session()``."""
     UserFactory(tenant=tenant, user_id=mint_id("user"), email=email, role=role, is_active=is_active)
 
@@ -195,7 +200,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
                 # from it (tests/factories/principal.py), so a unique id is a unique credential.
                 principal__principal_id=mint_id("principal"),
             )
-            _seed_member(tenant, OTHER_MEMBER_EMAIL)
+            _seed_member(tenant, OTHER_MEMBER_EMAIL, role=NON_MATCHING_ROW_ROLE)
             products_payload = [
                 {
                     "product_id": product.product_id,
@@ -239,7 +244,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         with bound_factory_session():
             home = TenantFactory(tenant_id=self._new_tenant_id("home"))
             if with_member:
-                _seed_member(home, MEMBER_EMAIL)
+                _seed_member(home, MEMBER_EMAIL, role=NON_MATCHING_ROW_ROLE)
             return home.tenant_id
 
     def _authenticate_member(self, login_tenant_id: str) -> None:

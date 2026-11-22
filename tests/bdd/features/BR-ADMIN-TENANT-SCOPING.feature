@@ -25,12 +25,19 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
   # The caller's session is always held against a tenant that is NOT the target,
   # so the target tenant's membership row is the only thing that decides.
   #
-  # A membership row holds the manager role unless its scenario names another. Manager
-  # is the least role that may send POST (role_permits in src/admin/utils/helpers.py),
-  # so the role check decides no outcome on the four routes of #2203. The OIDC test page
-  # asks for the admin role although it is a GET: the callback of the flow it starts
-  # turns the tenant's SSO on, as the admin-only oidc.enable does. T-ADMIN-SCOPE-011
-  # seeds an admin there, and T-ADMIN-SCOPE-012 a manager and a viewer.
+  # The caller's active row in the target tenant holds the manager role unless its
+  # scenario names another. Manager is the least role that may send POST (role_permits
+  # in src/admin/utils/helpers.py), so the role check decides no outcome on the four
+  # routes of #2203. The OIDC test page asks for the admin role although it is a GET:
+  # the callback of the flow it starts turns the tenant's SSO on, as the admin-only
+  # oidc.enable does. T-ADMIN-SCOPE-011 seeds an admin there, and T-ADMIN-SCOPE-012 a
+  # manager and a viewer.
+  #
+  # A row that must not let the caller in holds the admin role: the other member of the
+  # target tenant, the caller's row in another tenant, and the caller's inactive row.
+  # Admin passes the role check of all five routes, so only the membership lookup can
+  # refuse on those rows, and a lookup that matched one of them would let the caller in.
+  #
   # tests/integration/test_admin_role_enforcement.py grades the role on the routes of
   # its ADMIN_ONLY_ROUTES table, which the OIDC test page is not in.
   #

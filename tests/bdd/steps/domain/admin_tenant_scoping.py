@@ -18,6 +18,7 @@ from src.core.database.models import UserRole
 from tests.bdd.steps.domain.admin_accounts import _require_admin_page
 from tests.harness.admin_tenant_scoping import (
     ACTIVE_BUY_BUDGET,
+    NON_MATCHING_ROW_ROLE,
     REDIRECTS,
     expected_suggestions_body,
     redirect_path,
@@ -52,7 +53,7 @@ def given_caller_member_elsewhere(ctx: dict) -> None:
 @given("the caller's membership in the target tenant is inactive")
 def given_caller_inactive_member(ctx: dict) -> None:
     """Logged in with a User row in the target tenant that has is_active=False."""
-    _env(ctx).login_with_target_membership(is_active=False)
+    _env(ctx).login_with_target_membership(is_active=False, role=NON_MATCHING_ROW_ROLE)
 
 
 @given("the caller is an active member of the target tenant")
