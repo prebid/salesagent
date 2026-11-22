@@ -41,6 +41,7 @@ from tests.factories.creative_asset import (
     build_assets,
     display_tag_spec,
     html5_bundle_specs,
+    html5_zip_bundle,
     html_spec,
     image_spec,
     legacy_tag_url_spec,
@@ -185,17 +186,35 @@ def given_display_tag_creative(
 @given(
     parsers.re(
         r'the package references the buyer\'s approved html5 creative "(?P<creative_id>[^"]+)" bundled '
-        r'(?:at "(?P<bundle_url>[^"]+)"|with no url), '
-        r'with backup image "(?P<backup_url>[^"]+)"$'
+        r'(?:at "(?P<bundle_url>[^"]+)"|by (?P<hosted>the buyer\'s bundle host)'
+        r"|by (?P<silent>a bundle host that does not answer)|with no url), "
+        r'with backup image "(?P<backup_url>[^"]+)"(?:, sized (?P<width>\d+)x(?P<height>\d+))?$'
     )
 )
-def given_html5_bundle_creative(ctx: dict, creative_id: str, bundle_url: str | None, backup_url: str) -> None:
+def given_html5_bundle_creative(
+    ctx: dict,
+    creative_id: str,
+    bundle_url: str | None,
+    hosted: str | None,
+    silent: str | None,
+    backup_url: str,
+    width: str | None,
+    height: str | None,
+) -> None:
     """A canonical ``html5`` creative: slots ``html5_bundle`` (zip) and ``backup_image`` (formats/canonical/html5.json).
 
-    The zip is at *bundle_url*, or it names no ``url``, the member core/assets/zip-asset.json
-    requires. The backup image is 300x250.
+    The zip is at *bundle_url*; or served by the buyer's bundle host (``serve_html5_bundle``),
+    its bytes kept to compare with what the ad server receives; or at a host that does not
+    answer (``serve_html5_bundle(None)``); or it names no ``url``, the member
+    core/assets/zip-asset.json requires. The backup image is 300x250 unless sized.
     """
-    assets = build_assets(*html5_bundle_specs(bundle_url, backup_url=backup_url))
+    if hosted is not None:
+        ctx["html5_bundle"] = html5_zip_bundle()
+        bundle_url = ctx["env"].serve_html5_bundle(ctx["html5_bundle"])
+    elif silent is not None:
+        bundle_url = ctx["env"].serve_html5_bundle(None)
+    size = {} if width is None else {"backup_width": int(width), "backup_height": int(str(height))}
+    assets = build_assets(*html5_bundle_specs(bundle_url, backup_url=backup_url, **size))
     store_package_creative(ctx, creative_id, assets, kind="html5")
 
 
@@ -379,7 +398,8 @@ def given_live_booked_buy(
         r"the buyer's creative \"(?P<creative_id>[^\"]+)\", (?P<status>approved|under review), "
         r'(?:a display_tag carrying the tag URL "(?P<tag_url>[^"]+)"'
         r'|a (?P<width>\d+)x(?P<height>\d+) image showing "(?P<image_url>[^"]+)"'
-        r'(?: in the reference format "(?P<unserved_format>[^"]+)", which the creative agent does not serve)?), '
+        r'(?: in the reference format "(?P<unserved_format>[^"]+)", which the creative agent does not serve)?'
+        r'|an html5 creative bundled by the buyer\'s bundle host, with backup image "(?P<backup_url>[^"]+)"), '
         r'is assigned to (?:packages? "(?P<package_ids>[^"]+)" of the live media buy|the media buy awaiting approval)$'
     )
 )
@@ -392,13 +412,16 @@ def given_creative_assigned_to_buy(
     height: str | None,
     image_url: str | None,
     unserved_format: str | None,
+    backup_url: str | None,
     package_ids: str | None,
 ) -> None:
     """A creative already assigned to a stored buy: the live one's named packages, or the held buy's one package.
 
     The rows create leaves for a creative it held back (under review), or a creative assigned
     to the buy before the product's option changed (approved). Either way it was never pushed:
-    the seller's approval of the creative, or of the buy, is what pushes it.
+    the seller's approval of the creative, or of the buy, is what pushes it. An html5 bundle's
+    zip is served by the buyer's bundle host (``serve_html5_bundle``), and its bytes are kept
+    to compare with what the ad server receives.
 
     An image in a reference format the creative agent does not serve was stored when the agent
     still declared it as an image format, and the product still lists that reference. Neither
@@ -414,6 +437,10 @@ def given_creative_assigned_to_buy(
         packages = [package.package_id for package in media_buy.packages]
     if tag_url is not None:
         kind, assets = "display_tag", build_assets(display_tag_spec("tag_url", url=tag_url))
+    elif backup_url is not None:
+        ctx["html5_bundle"] = html5_zip_bundle()
+        bundle_url = env.serve_html5_bundle(ctx["html5_bundle"])
+        kind, assets = "html5", build_assets(*html5_bundle_specs(bundle_url, backup_url=backup_url))
     else:
         kind, assets = "image", _image_assets(int(str(width)), int(str(height)), str(image_url))
     identity: dict[str, Any] = {"kind": kind}

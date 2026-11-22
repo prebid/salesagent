@@ -264,6 +264,20 @@ def html5_bundle_specs(
     return bundle, image_spec("backup_image", url=backup_url, width=backup_width, height=backup_height)
 
 
+def html5_zip_bundle() -> bytes:
+    """A one-file HTML5 bundle, as a zip archive with a fixed timestamp so its bytes are stable."""
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as bundle:
+        bundle.writestr(
+            zipfile.ZipInfo("index.html", date_time=(2026, 1, 1, 0, 0, 0)),
+            '<html><body><a href="javascript:window.open(clickTag)">Example ad</a></body></html>',
+        )
+    return buffer.getvalue()
+
+
 #: The reference-catalog format of the approved library creative scenarios reference by id: a
 #: format the committed capture serves and the harness's default product accepts.
 LIBRARY_IMAGE_FORMAT = "display_300x250_image"

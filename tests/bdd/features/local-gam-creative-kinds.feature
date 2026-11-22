@@ -26,8 +26,9 @@
 # Ungraded by the storyboard runner: what a seller sends its ad server is seller-internal.
 #
 # GAM facts are Ad Manager API v202602 (googleads 49.0.0 calls it by default):
-# ThirdPartyCreative.snippet; ImageRedirectCreative.imageUrl and destinationUrl;
-# LineItemCreativeAssociation.sizes "Overrides the value set for Creative.size".
+# ThirdPartyCreative.snippet; ImageRedirectCreative.imageUrl and destinationUrl; Html5Creative
+# requires html5Asset, whose assetByteArray "must be a zip bundle" and fileName "must have a zip
+# extension"; LineItemCreativeAssociation.sizes "Overrides the value set for Creative.size".
 #
 # Transports: a2a, mcp and rest with the real GoogleAdManager adapter over a stand-in SOAP
 # client. On e2e the tenant
@@ -117,18 +118,33 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     And Google Ad Manager created that creative at size 300x250
     And Google Ad Manager associated that creative with the line item it created, at its own size
 
-  # A GAM Html5Creative takes the zip's bytes (html5Asset.assetByteArray "must be a zip bundle"),
-  # and this seller fetches none before booking (#2545). So an html5 bundle is refused before GAM
-  # is written to, as a native creative is, and its backup image is not trafficked in its place.
-  # AdCP 3.2.7 enums/error-code.json UNSUPPORTED_FEATURE: "A requested feature or field is not
-  # supported by this seller ... Recovery: correctable (check get_adcp_capabilities and remove
-  # unsupported fields)." The request names the creative at packages[0].creative_ids[0].
-  @T-UC-002-local-gam-creative-html5-bundle-refused @extension
-  Scenario: An html5 creative's zip bundle is refused as unsupported, and nothing is created in GAM
+  # GAM receives the bundle itself, fetched from the buyer's host; the backup image is not the
+  # creative.
+  @T-UC-002-local-gam-creative-html5-bundle @extension
+  Scenario: An html5 creative's zip bundle becomes one HTML5 creative carrying the bundle, not an image of its backup
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "html5", "format_option_id": "html5_300x250", "params": {"width": 300, "height": 250}}]}'
-    And the package references the buyer's approved html5 creative "cr-bundle" bundled at "https://cdn.example.com/banner-300x250.zip", with backup image "https://cdn.example.com/backup.png"
+    And the package references the buyer's approved html5 creative "cr-bundle" bundled by the buyer's bundle host, with backup image "https://cdn.example.com/backup.png"
     When the Buyer Agent sends the create_media_buy request
-    Then the request is refused on the wire with code "UNSUPPORTED_FEATURE" recovery "correctable" naming field "packages[0].creative_ids[0]"
+    Then the response should succeed
+    And Google Ad Manager created one HTML5 creative for advertiser "3000001" whose html5 asset is the buyer's zip bundle, in a file with a zip extension, and which names no image URL
+    And Google Ad Manager created that creative at size 300x250
+    And Google Ad Manager associated that creative with the line item it created, at its own size
+
+  # GAM never fetches the bundle; the seller does, and hands GAM its bytes. So a bundle the
+  # seller cannot fetch is the buyer's to fix, found before anything is booked, never after the
+  # order and line items are written. AdCP 3.2.7 enums/error-code.json
+  # CREATIVE_VALIDATION_FAILED_GENERIC: "The creative failed buyer-correctable validation, but
+  # the producer cannot classify the failure with a more specific standard code ... Recovery:
+  # correctable (correct the buyer-visible validation problem and resubmit the creative)." No
+  # code names a creative asset the seller cannot fetch: CREATIVE_INACCESSIBLE is a creative
+  # governance agent's failure to retrieve assets. The request names the creative at
+  # packages[0].creative_ids[0].
+  @T-UC-002-local-gam-creative-html5-bundle-unreachable @extension
+  Scenario: An html5 creative whose bundle URL does not answer is refused before booking, and GAM holds no order
+    Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "html5", "format_option_id": "html5_300x250", "params": {"width": 300, "height": 250}}]}'
+    And the package references the buyer's approved html5 creative "cr-bundle-silent" bundled by a bundle host that does not answer, with backup image "https://cdn.example.com/backup.png"
+    When the Buyer Agent sends the create_media_buy request
+    Then the request is refused on the wire with code "CREATIVE_VALIDATION_FAILED_GENERIC" recovery "correctable" naming field "packages[0].creative_ids[0]"
     And no media buy is persisted for the tenant
     And Google Ad Manager received no order and no line item
     And Google Ad Manager created no creative
@@ -352,9 +368,9 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
       | auto-approval | at once         | completed |
 
   # F1 (PR #2582 review): the seller's approval of a held buy pushes through a second reader and
-  # a second GAM plan, and only its refusal was graded on GAM. A display_tag creative is created
-  # as on create: the GAM creative its representation is, at its option's size, on the line item
-  # the approval booked.
+  # a second GAM plan, and only its refusal was graded on GAM. A display_tag creative, and an
+  # html5 creative, are created as on create: the GAM creative its representation is, at its
+  # option's size, on the line item the approval booked.
   @T-UC-002-local-gam-creative-approval-tag-url @extension
   Scenario: The seller's approval of a held buy creates its display_tag creative as one third-party creative calling the tag
     Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "display_tag", "format_option_id": "tag_url_728x90", "params": {"width": 728, "height": 90, "supported_delivery_types": ["tag_url"], "slots": [{"asset_group_id": "serving_tag", "asset_type": "display_tag", "required": true}]}}]}'
@@ -368,6 +384,19 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     And Google Ad Manager created that creative at size 728x90
     And Google Ad Manager associated that creative with the line item it created, at its own size
 
+  @T-UC-002-local-gam-creative-approval-html5-bundle @extension
+  Scenario: The seller's approval of a held buy creates its html5 creative as one HTML5 creative carrying the bundle
+    Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "html5", "format_option_id": "html5_300x250", "params": {"width": 300, "height": 250}}]}'
+    And the tenant requires manual approval
+    And the package references the buyer's approved html5 creative "cr-held-bundle" bundled by the buyer's bundle host, with backup image "https://cdn.example.com/backup.png"
+    When the Buyer Agent sends the create_media_buy request
+    Then the response status should be "submitted"
+    When the seller approves the media buy
+    Then the seller's approval books the media buy
+    And Google Ad Manager created one HTML5 creative for advertiser "3000001" whose html5 asset is the buyer's zip bundle, in a file with a zip extension, and which names no image URL
+    And Google Ad Manager created that creative at size 300x250
+    And Google Ad Manager associated that creative with the line item it created, at its own size
+
   # F1 (PR #2582 review): the retroactive push, after the seller approves a creative assigned to
   # a buy GAM already holds, has the same second reader and plan, and was graded on GAM nowhere.
   @T-UC-002-local-gam-creative-retroactive-push-tag-url @extension
@@ -379,6 +408,30 @@ Feature: A Google Ad Manager seller creates each creative as the GAM creative it
     Then Google Ad Manager created one third-party creative for advertiser "3000001" whose snippet is '<script src="https://ads.example.com/tag.js?slot=3"></script>' and which names no image URL
     And Google Ad Manager created that creative at size 728x90
     And Google Ad Manager associated that creative with line items "9000001"
+
+  @T-UC-002-local-gam-creative-retroactive-push-html5-bundle @extension
+  Scenario: An html5 creative the seller approves after its buy was booked is created as one HTML5 creative on the booked line item
+    Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "html5", "format_option_id": "html5_300x250", "params": {"width": 300, "height": 250}}]}'
+    And the buyer holds a buy booked in Google Ad Manager as order "8000002" in status "active" whose package "pkg-live" is line item "9000002" accepting 300x250
+    And the buyer's creative "cr-late-bundle", under review, an html5 creative bundled by the buyer's bundle host, with backup image "https://cdn.example.com/backup.png", is assigned to package "pkg-live" of the live media buy
+    When the seller approves creative "cr-late-bundle"
+    Then Google Ad Manager created one HTML5 creative for advertiser "3000001" whose html5 asset is the buyer's zip bundle, in a file with a zip extension, and which names no image URL
+    And Google Ad Manager created that creative at size 300x250
+    And Google Ad Manager associated that creative with line items "9000002"
+
+  # F5 (PR #2582 review): the line item's placeholders are narrowed by a second reader of the
+  # stored row, which takes the first sized asset; for html5 that is the backup image, 320x50, a
+  # size the option does not declare (formats/canonical/html5.json: the bundle is what is
+  # served; `backup_image` is optional). The creative is the bundle, at the option's 300x250.
+  @T-UC-002-local-gam-creative-html5-backup-size @extension
+  Scenario: An html5 creative whose backup image is a size its option does not declare is created at its option's size
+    Given the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product formats '{"format_options": [{"format_kind": "html5", "format_option_id": "html5_300x250", "params": {"width": 300, "height": 250}}]}', with product settings '{"creative_placeholders": [{"width": 300, "height": 250}, {"width": 320, "height": 50}]}'
+    And the package references the buyer's approved html5 creative "cr-bundle" bundled by the buyer's bundle host, with backup image "https://cdn.example.com/backup-320x50.png", sized 320x50
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And Google Ad Manager created one HTML5 creative for advertiser "3000001" whose html5 asset is the buyer's zip bundle, in a file with a zip extension, and which names no image URL
+    And Google Ad Manager created that creative at size 300x250
+    And Google Ad Manager associated that creative with the line item it created, at its own size
 
   # F5 (PR #2582 review): a row synced before sync stopped copying the creative agent's preview
   # onto the creative still carries the preview page as its url and the preview's 300x250 as

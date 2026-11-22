@@ -4,16 +4,18 @@
 ``sizes`` its line item creative associations carry, or refuses it. It is pure: no client
 call, no fetch, no write. RFC #2529 section 4: "Inline markup becomes a ThirdPartyCreative
 whose snippet is the markup byte for byte; a tag URL, a ThirdPartyCreative whose snippet is a
-script tag calling it; a paired redirect, an ImageRedirectCreative ... A GAM creative has one
-size and one type for life ... a size that matches none is refused at plan time, with no
-default." An html5 bundle is refused for now: an ``Html5Creative`` takes the zip's bytes, and
-nothing fetches them before booking (#2545).
+script tag calling it; a paired redirect, an ImageRedirectCreative; an html5 bundle, an
+Html5Creative. A GAM creative has one size and one type for life ... a size that matches none
+is refused at plan time, with no default."
 
 GAM facts are Ad Manager API v202602 (googleads 49.0.0 defaults to it):
 
 * ``LineItemCreativeAssociation.sizes``: "Overrides the value set for Creative.size, which
   allows the creative to be served to ad units that would otherwise not be compatible for its
   actual size. This value is optional."
+* ``Html5Creative`` requires ``advertiserId``, ``name``, ``size`` and ``html5Asset``; the
+  asset's ``assetByteArray`` "must be a zip bundle" and its ``fileName`` "must have a zip
+  extension". It is not a ``HasDestinationUrlCreative``, so it has no ``destinationUrl``.
 * An ``ImageRedirectCreative`` needs a ``destinationUrl``. The v202602 reference says
   ``HasDestinationUrlCreative.destinationUrl`` "is required unless the destinationUrlType is set
   to DestinationUrlType.NONE", but the configured test network, probed on 2026-11-20 with one
@@ -24,7 +26,9 @@ GAM facts are Ad Manager API v202602 (googleads 49.0.0 defaults to it):
   at plan time (``GamRefusalReason.NO_CLICKTHROUGH``).
 
 The plan leaves out ``advertiserId`` and ``name``: the creatives manager owns both, as it does
-today.
+today. An html5 bundle's bytes come on the carrier (``Html5BundleRepresentation.bundle``): core
+fetches the bundle from the buyer's host before anything is booked, so neither the plan nor the
+upload fetches anything.
 """
 
 from __future__ import annotations
@@ -169,16 +173,13 @@ def plan_gam_creative(
     refusal: there is no default size.
     """
     representation = ctt.representation
-    if (
-        gam_format_family(ctt.format_kind) != "display"
-        or (isinstance(representation, MediaRepresentation) and representation.asset_type != "image")
-        or isinstance(representation, Html5BundleRepresentation)
+    if gam_format_family(ctt.format_kind) != "display" or (
+        isinstance(representation, MediaRepresentation) and representation.asset_type != "image"
     ):
         # Only the display family is planned. A native kind is a GAM native style over a
         # creative template (PR #2445); audio has no GAM creative; video needs a duration
-        # (VideoRedirectCreative), which the carrier does not hold; an html5 bundle needs its zip's
-        # bytes (Html5Creative.html5Asset), which the carrier does not hold either (#2545); a kind
-        # GAM has no family for names no GAM creative type.
+        # (VideoRedirectCreative), which the carrier does not hold; a kind GAM has no family for
+        # names no GAM creative type.
         return GamCreativeRefusal(ctt.creative_id, GamRefusalReason.NOT_TRAFFICKED, ctt.format_kind)
 
     sizes = _candidate_sizes(ctt, placeholder_sizes)
@@ -202,6 +203,12 @@ def plan_gam_creative(
             xsi_type="ImageRedirectCreative",
             imageUrl=representation.ad_request_url,
             destinationUrl=representation.clickthrough_url,
+        )
+    elif isinstance(representation, Html5BundleRepresentation):
+        assert representation.bundle is not None, "core fetches an html5 bundle before GAM is handed its carrier"
+        creative.update(
+            xsi_type="Html5Creative",
+            html5Asset={"fileName": f"{ctt.creative_id}.zip", "assetByteArray": representation.bundle},
         )
     elif not ctt.clickthrough_url:
         return GamCreativeRefusal(ctt.creative_id, GamRefusalReason.NO_CLICKTHROUGH)

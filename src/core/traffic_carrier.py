@@ -78,6 +78,10 @@ class Html5BundleRepresentation(BaseModel):
     type: Literal["html5_bundle"] = "html5_bundle"
     url: str
     backup_image_url: str | None = None
+    #: The zip's bytes, fetched by core before anything is booked for an adapter that uploads
+    #: them (``AdapterCapabilities.uploads_html5_bundles``); None for every other adapter. Kept
+    #: out of every dump and repr: a zip belongs in neither a stored row nor a log line.
+    bundle: bytes | None = Field(default=None, exclude=True, repr=False)
 
 
 class TagUrlRepresentation(BaseModel):
