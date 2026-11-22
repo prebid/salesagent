@@ -6,18 +6,20 @@ import json
 import logging
 from collections.abc import Mapping
 from functools import wraps
-from typing import TYPE_CHECKING, NamedTuple, NoReturn, TypeVar
+from typing import TYPE_CHECKING, Literal, NamedTuple, NoReturn, TypeVar
 
-from flask import abort, g, jsonify, make_response, redirect, request, session, url_for
+from flask import abort, g, has_request_context, jsonify, make_response, redirect, request, session, url_for
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 from werkzeug.exceptions import Forbidden
 
 from src.admin.csrf import SAFE_METHODS
-from src.core.config import get_settings
+from src.core.config import get_settings, split_csv
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant, TenantManagementConfig, User, UserRole
+from src.core.database.models import Tenant, User, UserRole
+from src.core.database.repositories.tenant_management_config import TenantManagementConfigRepository
+from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.logging_config import log_safe
 
 T = TypeVar("T")
@@ -136,13 +138,106 @@ def get_tenant_config_from_db(tenant_id):
         return config
 
 
-def is_super_admin(email):
-    """Check if user is a super admin based on email or domain.
+class SuperAdminGrants(NamedTuple):
+    """The emails and email domains this deployment makes super admins of, lower-cased."""
 
-    Checks environment variables first, then falls back to database configuration.
-    This ensures robust authentication even if database initialization hasn't run.
+    emails: frozenset[str]
+    domains: frozenset[str]
+
+
+def _csv_lower(value: str | None) -> set[str]:
+    """The lower-cased items of a comma-separated *value*, as the settings lists read them."""
+    return {item.lower() for item in split_csv(value)}
+
+
+def super_admin_grants() -> SuperAdminGrants:
+    """Every email and domain that :func:`is_super_admin` grants super admin through.
+
+    The ``SUPER_ADMIN_EMAILS`` / ``SUPER_ADMIN_DOMAINS`` settings, then the
+    ``super_admin_emails`` / ``super_admin_domains`` rows of the global config table,
+    the latter read through ``TenantManagementConfigRepository``. A failed lookup fails
+    the request rather than answering "not a super admin", which the caller would cache.
+    """
+    auth_settings = get_settings().auth
+    emails = set(auth_settings.super_admin_email_list)
+    domains = set(auth_settings.super_admin_domain_list)
+    with get_db_session() as db_session:
+        config = TenantManagementConfigRepository(db_session)
+        emails |= _csv_lower(config.get_value("super_admin_emails"))
+        domains |= _csv_lower(config.get_value("super_admin_domains"))
+    return SuperAdminGrants(frozenset(emails), frozenset(domains))
+
+
+#: Session keys that say who the caller is and what they may reach. A sign-in writes a
+#: new identity, and none of these may survive from an earlier one in the same browser:
+#: a deployment sign-in's ``role``/``is_super_admin`` must not ride along into a tenant's
+#: SSO session, nor a tenant SSO's ``auth_method`` into a deployment sign-in.
+_IDENTITY_SESSION_KEYS = (
+    "user",
+    "user_name",
+    "user_picture",
+    "email",
+    "authenticated",
+    "auth_method",
+    "tenant_id",
+    "role",
+    "is_super_admin",
+    "admin_email",
+    "is_tenant_admin",
+    "available_tenants",
+)
+
+
+def clear_session_identity() -> None:
+    """Drop every identity key from the session, ahead of a sign-in writing its own."""
+    for key in _IDENTITY_SESSION_KEYS:
+        session.pop(key, None)
+
+
+def session_caller_email() -> str:
+    """The email the current session is signed in as, or ``""`` when it is not signed in."""
+    return _session_email(session["user"]) if "user" in session else ""
+
+
+def session_is_tenant_scoped() -> bool:
+    """Whether the current request's session was issued by a tenant's own identity provider.
+
+    A tenant admin chooses that tenant's OIDC provider, so the provider vouches for an
+    identity INSIDE that tenant and nothing more: the email it asserts can be any string
+    the provider's operator likes. Such a session is bound to the tenant it was issued
+    for (``session["tenant_id"]``) and never carries deployment-wide privilege.
+
+    False outside a request context: there is no session to be scoped.
+    """
+    return has_request_context() and session.get("auth_method") == "oidc"
+
+
+def session_reaches_tenant(tenant_id: str) -> bool:
+    """Whether the current session's sign-in method lets it act on *tenant_id* at all.
+
+    A session from a tenant's own identity provider reaches only the tenant it was
+    issued for; one that names no tenant reaches none. Every other session is not
+    limited here, and the caller goes on to its membership and role checks.
+    """
+    if not session_is_tenant_scoped():
+        return True
+    return bool(tenant_id) and session.get("tenant_id") == tenant_id
+
+
+def is_super_admin(email):
+    """Whether the current request's caller, signed in as *email*, is a super admin.
+
+    *email* must be the caller's own: the answer is about the session as much as the
+    address. A session issued by a tenant's identity provider is never a super admin,
+    whatever email it carries (:func:`session_is_tenant_scoped`), because deployment-wide
+    privilege cannot come from an identity provider a tenant admin configured.
+
+    Otherwise the email or its domain is matched against :func:`super_admin_grants`.
     """
     if not email:
+        return False
+
+    if session_is_tenant_scoped():
         return False
 
     email_lower = email.lower()
@@ -156,42 +251,12 @@ def is_super_admin(email):
         # No session context available (e.g., outside request context)
         pass
 
-    # 1. FIRST: Check the configured lists (most reliable)
-    auth_settings = get_settings().auth
-    if email_lower in auth_settings.super_admin_email_list:
-        logger.debug(f"Super admin access granted via environment: {email}")
+    grants = super_admin_grants()
+    email_domain = email_lower.rpartition("@")[2] if "@" in email_lower else ""
+    if email_lower in grants.emails or (email_domain and email_domain in grants.domains):
+        logger.debug(f"Super admin access granted: {email}")
         _cache_admin_status(email_lower, True)
         return True
-
-    email_domain = email_lower.split("@")[1] if "@" in email_lower else ""
-    if email_domain and email_domain in auth_settings.super_admin_domain_list:
-        logger.debug(f"Super admin access granted via environment domain: {email}")
-        _cache_admin_status(email_lower, True)
-        return True
-
-    # 2. FALLBACK: Check database configuration. A failed lookup fails the request rather
-    # than answering "not a super admin", which would also be cached in the session below.
-    with get_db_session() as db_session:
-        # Check exact emails
-        stmt = select(TenantManagementConfig).filter_by(config_key="super_admin_emails")
-        emails_config = db_session.scalars(stmt).first()
-        if emails_config and emails_config.config_value:
-            emails_list = [e.strip().lower() for e in emails_config.config_value.split(",")]
-            if email_lower in emails_list:
-                logger.debug(f"Super admin access granted via database: {email}")
-                _cache_admin_status(email_lower, True)
-                return True
-
-        # Check domains
-        stmt = select(TenantManagementConfig).filter_by(config_key="super_admin_domains")
-        domains_config = db_session.scalars(stmt).first()
-        if domains_config and domains_config.config_value:
-            domains_list = [d.strip().lower() for d in domains_config.config_value.split(",")]
-            email_domain = email_lower.split("@")[1] if "@" in email_lower else ""
-            if email_domain in domains_list:
-                logger.debug(f"Super admin access granted via database domain: {email}")
-                _cache_admin_status(email_lower, True)
-                return True
 
     # Cache negative result too (to avoid repeated expensive checks)
     _cache_admin_status(email_lower, False)
@@ -255,15 +320,14 @@ def require_auth(admin_only=False):
             # Store user in g for access in view functions
             g.user = session["user"]
 
-            # Handle both string email and dict user info formats for admin check
-            user_info = session["user"]
-            if isinstance(user_info, dict):
-                email = user_info.get("email", "")
-            else:
-                email = str(user_info)
+            email = session_caller_email()
 
             # Check admin requirement
             if admin_only and not is_super_admin(email):
+                abort(403)
+
+            # A tenant-scoped session acts only on its own tenant, here as in require_tenant_access.
+            if "tenant_id" in kwargs and not session_reaches_tenant(kwargs["tenant_id"]):
                 abort(403)
 
             return f(*args, **kwargs)
@@ -358,6 +422,58 @@ def _forbid(message: str) -> NoReturn:
     raise Forbidden(response=_json_refusal(403, message))
 
 
+#: How :func:`tenant_access` answers. ``setup_session`` and ``super_admin`` pass without a
+#: tenant membership; ``member`` passes on the caller's own active ``User`` row; the rest refuse.
+TenantAccess = Literal["setup_session", "super_admin", "member", "unauthenticated", "not_a_member", "role_refused"]
+
+#: The :data:`TenantAccess` answers that grant the request.
+TENANT_ACCESS_GRANTED: frozenset[TenantAccess] = frozenset({"setup_session", "super_admin", "member"})
+
+
+def tenant_access(tenant_id: str, role: UserRole, method: str) -> TenantAccess:
+    """Whether the current session may make a *method* request needing *role* on *tenant_id*.
+
+    The one decision behind :func:`require_tenant_access`, callable on its own by a flow
+    that must re-check the caller after leaving the request that was authorized (the
+    OIDC test callback returns from the identity provider in a new request).
+
+    A database failure reading the caller's ``User`` row propagates to the admin error
+    handler, which answers with a reference.
+    """
+    # A SETUP-MODE SESSION, decided from the session alone — NO DATABASE READ. See
+    # _setup_session_reaches for why, and why it is never true in production.
+    if _setup_session_reaches(tenant_id):
+        return "setup_session"
+
+    if "user" not in session:
+        return "unauthenticated"
+
+    # A session from a tenant's own identity provider stops at its own tenant, before the
+    # super-admin and membership checks: the email it carries is only as good as that
+    # provider, which the tenant's admin chose.
+    if not session_reaches_tenant(tenant_id):
+        return "not_a_member"
+
+    email = session_caller_email()
+
+    # Check super admin status (is_super_admin handles env + db + session caching internally)
+    if is_super_admin(email):
+        return "super_admin"
+
+    # The lookup's session closes before the route runs, so what the route raises reaches
+    # the admin error handler on its own.
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        user = uow.tenant_config.get_active_user_by_email(email)
+        user_role = user.role if user else None
+
+    if user_role is None:
+        return "not_a_member"
+    if not role_permits(user_role, method, minimum=role):
+        return "role_refused"
+    return "member"
+
+
 def require_tenant_access(*, role: UserRole = UserRole.VIEWER):
     """Decorator to require tenant access for routes.
 
@@ -365,7 +481,7 @@ def require_tenant_access(*, role: UserRole = UserRole.VIEWER):
     *role* is the least role the route needs, so ``role=UserRole.ADMIN`` limits it to
     tenant admins. Super admins pass regardless. Each refusal is answered in the form the
     caller reads (:func:`caller_reads_json`): JSON, or for a browser the login redirect or
-    the HTML page.
+    the HTML page. The decision is :func:`tenant_access`.
     """
 
     def decorator(f):
@@ -380,61 +496,23 @@ def require_tenant_access(*, role: UserRole = UserRole.VIEWER):
                 f"Auth check - tenant: {tenant_id}, method: {request.method}, has_session: {has_session}, has_cookies: {has_cookies}, session_keys: {list(session.keys())}"
             )
 
-            # A SETUP-MODE SESSION, decided from the session alone — NO DATABASE READ.
-            #
-            # Reading the tenant's auth_setup_mode to decide whether a ``test_user`` session
-            # counts would be a DB read inside the auth decorator, on every request, and
-            # ``get_db_session()`` is scoped: opening one here nests inside whatever session
-            # the caller already holds, and the inner exit REMOVES the scoped session and
-            # detaches the outer one, discarding rows the caller flushed but had not
-            # committed. ``enable_oidc`` carries the same rule.
-            #
-            # The scope check does not need the database. The session states which tenant it
-            # is for, and a session is signed by this server, so what it states is as
-            # trustworthy as the ``user`` the path below reads. The grant is TENANT-SCOPED:
-            # a caller who is not a super admin reaches exactly the tenant named in its own
-            # session, which is what the approval-refusal tests grade (a super admin crosses
-            # tenants by design, so a refusal test authenticated as one proves nothing).
-            #
-            # Never in production: no route in a deployment mints such a session, so this
-            # branch is unreachable there by construction; the guard states that rather than
-            # leaving it to be inferred.
-            if _setup_session_reaches(tenant_id):
-                g.user = session["test_user"]
-                return f(tenant_id, *args, **kwargs)
+            access = tenant_access(tenant_id, role, request.method)
 
-            if "user" not in session:
+            if access == "setup_session":
+                g.user = session["test_user"]
+            elif access == "unauthenticated":
                 if (refusal := _json_refusal(401, "Authentication required")) is not None:
                     return refusal
                 # Redirect to tenant-specific login (preserves tenant context)
                 return redirect(url_for("auth.tenant_login", tenant_id=tenant_id, next=request.url))
-
-            user_info = session["user"]
-
-            email = _session_email(user_info)
-
-            # Check super admin status (is_super_admin handles env + db + session caching internally)
-            if is_super_admin(email):
-                return f(tenant_id, *args, **kwargs)
-
-            # Check if user has access to this specific tenant. The route runs after the
-            # lookup's session has closed, as it does for a super admin above, so what the
-            # route raises reaches the admin error handler: an OperatorRefusal is answered
-            # with its MESSAGE, anything else (the lookup's own failures too) with a reference.
-            with get_db_session() as db_session:
-                stmt = select(User).filter_by(email=email.lower(), tenant_id=tenant_id, is_active=True)
-                user = db_session.scalars(stmt).first()
-                user_role = user.role if user else None
-
-            if user_role is None:
+            elif access == "not_a_member":
                 _forbid("Access denied")
-            if not role_permits(user_role, request.method, minimum=role):
+            elif access == "role_refused":
                 logger.warning(
-                    "Refused %s %s for tenant %s: role %s",
+                    "Refused %s %s for tenant %s: role too low",
                     log_safe(request.method),
                     log_safe(request.path),
                     log_safe(tenant_id),
-                    log_safe(user_role),
                 )
                 _forbid("Your role does not allow this")
             return f(tenant_id, *args, **kwargs)

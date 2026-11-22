@@ -31,8 +31,8 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
   # scenario names another. Manager is the least role that may send POST (role_permits
   # in src/admin/utils/helpers.py), so the role check decides no outcome on the four
   # routes of #2203 or on the six GAM reporting routes of #2204, which serve GET only.
-  # The OIDC test page asks for the admin role although it is a GET:
-  # the callback of the flow it starts turns the tenant's SSO on, as the admin-only
+  # The OIDC test page is a POST and asks for the admin role: the
+  # callback of the flow it starts turns the tenant's SSO on, as the admin-only
   # oidc.enable does. T-ADMIN-SCOPE-011 seeds an admin there, and T-ADMIN-SCOPE-012 a
   # manager and a viewer.
   #
@@ -82,7 +82,7 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
       | method | route             |
       | GET    | policy rules page |
       | POST   | policy rules page |
-      | GET    | OIDC test page    |
+      | POST   | OIDC test page    |
 
   @T-ADMIN-SCOPE-003 @auth @edge-case
   Scenario Outline: A member of another tenant receives JSON 403 from the tenant APIs
@@ -115,7 +115,7 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
       | method | route             |
       | GET    | policy rules page |
       | POST   | policy rules page |
-      | GET    | OIDC test page    |
+      | POST   | OIDC test page    |
 
   @T-ADMIN-SCOPE-005 @auth @edge-case
   Scenario Outline: An inactive membership in the target tenant receives JSON 403 from the tenant APIs
@@ -148,7 +148,7 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
       | method | route             |
       | GET    | policy rules page |
       | POST   | policy rules page |
-      | GET    | OIDC test page    |
+      | POST   | OIDC test page    |
 
   @T-ADMIN-SCOPE-007 @auth @main-flow
   Scenario: An active member reads the tenant's revenue chart
@@ -187,16 +187,16 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
   @T-ADMIN-SCOPE-011 @auth @main-flow
   Scenario: An admin of the target tenant is redirected from the OIDC test page to the tenant settings
     Given the caller is an active member of the target tenant with the admin role
-    When the caller sends GET to the OIDC test page of the target tenant
+    When the caller sends POST to the OIDC test page of the target tenant
     Then the page redirects to the settings page of the target tenant
 
   # The 403 page carries no reason, so this caller asks for JSON: the answer then names
-  # the role check, where the membership check answers "Access denied". An admitted
-  # request creates the tenant's tenant_auth_configs row, which the last step counts.
+  # the role check, where the membership check answers "Access denied". The last step
+  # counts the tenant's rows, tenant_auth_configs included, so a refusal that wrote one fails.
   @T-ADMIN-SCOPE-012 @auth @edge-case
   Scenario Outline: A member below the admin role is refused the OIDC test page
     Given the caller is an active member of the target tenant with the <role> role
-    When the caller sends GET to the OIDC test page of the target tenant, asking for JSON
+    When the caller sends POST to the OIDC test page of the target tenant, asking for JSON
     Then the page returns status 403
     And the JSON response has "error" as "Your role does not allow this"
     And the target tenant's stored data is unchanged

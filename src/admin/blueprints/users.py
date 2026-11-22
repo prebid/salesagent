@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
+from src.admin.auth_utils import is_email_shaped
 from src.admin.form_validation import json_object_body, required_values
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
@@ -50,38 +51,6 @@ ROLE_DESCRIPTIONS: dict[UserRole, str] = {
     UserRole.MANAGER: "can change settings, products and campaigns",
     UserRole.ADMIN: "can also manage users and sign-in",
 }
-
-
-def _is_valid_email(email: str) -> bool:
-    """Whether *email* has a local part, one ``@``, and a dotted domain.
-
-    Replaces ``re.match(r"[^@]+@[^@]+\\.[^@]+", email)``, which CodeQL reports as
-    ``py/polynomial-redos``. **That report is a false positive, and this is not a
-    security fix.** Measured: every adversarial shape runs in under 0.0001s at
-    80,000 characters, because ``[^@]`` excludes the delimiter the pattern splits
-    on, so each quantifier is bounded to one segment with no overlapping
-    alternation to backtrack across. The pattern is linear.
-
-    It is replaced anyway, for two honest reasons: a single ``str.partition`` pass
-    states the rule more plainly than the pattern did, and expressing the check
-    structurally retires the alert without DISMISSING it -- which is the better of
-    the two ways to clear a false positive, because a dismissal is a standing
-    claim about code that can later change underneath it. The old spelling also
-    carried a function-body ``import re``.
-
-    STRICTER than the pattern in one respect: ``re.match`` anchors only at the
-    start, so ``"a@b.c@d"`` matched on its ``"a@b.c"`` prefix with the trailing
-    ``"@d"`` never examined. A second ``@`` is refused here.
-    ``tests/unit/test_admin_email_shape.py`` pins that as a deliberate change.
-
-    A shape check, not a deliverability check. Nothing here says the domain
-    resolves or the mailbox exists.
-    """
-    local, at, domain = email.partition("@")
-    if not local or not at or "@" in domain:
-        return False
-    label, dot, rest = domain.partition(".")
-    return bool(label and dot and rest)
 
 
 def _flash_user_change(change: UserChange, success: str) -> None:
@@ -170,7 +139,7 @@ def add_user(tenant_id):
         return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
     # Validate email format
-    if not _is_valid_email(email):
+    if not is_email_shaped(email):
         flash("Invalid email format", "error")
         return redirect(url_for("users.list_users", tenant_id=tenant_id))
 

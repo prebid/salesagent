@@ -41,9 +41,9 @@ signature, is how one of them comes to seed the row without the join.
 
 ## The gap that forces `session.add()`
 
-13 of 39 ORM models have no factory: `AuditLog`, `Context`, `CreativeReview`, `GAMLineItem`,
+12 of 39 ORM models have no factory: `AuditLog`, `Context`, `CreativeReview`, `GAMLineItem`,
 `GAMOrder`, `IdempotencyAttempt`, `ObjectWorkflowMapping`, `ProductInventoryMapping`,
-`Strategy`, `StrategyState`, `TenantManagementConfig`,
+`Strategy`, `StrategyState`,
 `WebhookDeliveryRecord`, `WorkflowStep`. A test needing one has no option but a raw
 `session.add()`, which is most of the 547 in `tests/integration/`. **Adding the missing
 factory is the fix; the `session.add()` is the symptom.**

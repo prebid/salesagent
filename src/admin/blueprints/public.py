@@ -8,6 +8,7 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 from sqlalchemy import select
 
 from src.admin.blueprints.core import get_tenant_from_hostname
+from src.admin.utils.helpers import clear_session_identity, session_is_tenant_scoped
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -43,9 +44,45 @@ def landing():
     return render_template("landing.html")
 
 
+def _signup_identity_refusal() -> str | None:
+    """Why the signed-in caller cannot sign up a tenant, or None when they can.
+
+    Signup stores the caller's email as an authorized email and its domain as an
+    authorized domain, and makes the caller the new tenant's admin. That email must come
+    from the deployment's own sign-in: a tenant's SSO vouches for nothing outside that
+    tenant, and its provider can assert any address.
+    """
+    if session_is_tenant_scoped():
+        return "Sign in with the main sign-in, not a tenant's SSO, to create a tenant."
+    return None
+
+
+def _signup_session_refusal(not_signed_in: str):
+    """The answer to a signup step whose caller may not sign up, or None when they may.
+
+    Not signed in: back to the sign-in, keeping the signup going. Signed in with an
+    identity signup cannot use (:func:`_signup_identity_refusal`): the signup ends.
+    """
+    if "user" not in session:
+        flash(not_signed_in, "error")
+        session["signup_flow"] = True  # Maintain signup context
+        return redirect(url_for("public.signup_start"))
+    if refusal := _signup_identity_refusal():
+        flash(refusal, "error")
+        session.pop("signup_flow", None)
+        session.pop("signup_step", None)
+        return redirect(url_for("public.landing"))
+    return None
+
+
 @public_bp.route("/signup/start")
 def signup_start():
     """Initiate Google OAuth for signup flow."""
+    # Signup signs in afresh through the deployment's sign-in; a tenant SSO identity
+    # does not carry into it.
+    if session_is_tenant_scoped():
+        clear_session_identity()
+
     # Set signup context in session
     session["signup_flow"] = True
     session["signup_step"] = "oauth"
@@ -62,11 +99,9 @@ def signup_onboarding():
         flash("Invalid signup session. Please start again.", "error")
         return redirect(url_for("public.landing"))
 
-    # Verify user is authenticated
-    if "user" not in session:
-        flash("You must sign in with Google to continue.", "error")
-        session["signup_flow"] = True  # Maintain signup context
-        return redirect(url_for("public.signup_start"))
+    # Verify user is authenticated, with an identity signup can use
+    if (refused := _signup_session_refusal("You must sign in with Google to continue.")) is not None:
+        return refused
 
     # Get user info from session
     user_email = session.get("user")
@@ -124,10 +159,9 @@ def provision_tenant():
         flash("Invalid signup session. Please start again.", "error")
         return redirect(url_for("public.landing"))
 
-    # Verify user is authenticated
-    if "user" not in session:
-        flash("You must be signed in to create a tenant.", "error")
-        return redirect(url_for("public.signup_start"))
+    # Verify user is authenticated, with an identity signup can use
+    if (refused := _signup_session_refusal("You must be signed in to create a tenant.")) is not None:
+        return refused
 
     # Get form data
     publisher_name = request.form.get("publisher_name", "").strip()

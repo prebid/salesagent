@@ -12,10 +12,16 @@ from werkzeug.wrappers import Response
 
 from src.admin.auth_utils import OAUTH_CALLBACK_ERRORS, extract_user_info
 from src.admin.utils import require_tenant_access
+from src.admin.utils.helpers import (
+    TENANT_ACCESS_GRANTED,
+    clear_session_identity,
+    session_caller_email,
+    tenant_access,
+)
 from src.admin.utils.url_policy import json_error_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import Tenant, User, UserRole
+from src.core.database.models import Tenant, TenantAuthConfig, User, UserRole
 from src.core.operator_errors import safe_error_message
 from src.services.auth_config_service import (
     disable_oidc,
@@ -24,6 +30,7 @@ from src.services.auth_config_service import (
     get_oidc_config_for_auth,
     get_or_create_auth_config,
     get_tenant_redirect_uri,
+    mark_oidc_verified,
     save_oidc_config,
 )
 
@@ -138,8 +145,6 @@ def enable(tenant_id: str):
     """Enable OIDC authentication for a tenant."""
     if enable_oidc(tenant_id):
         # Verify the change persisted
-        from src.core.database.models import TenantAuthConfig
-
         with get_db_session() as db_session:
             config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
             actual_enabled = config.oidc_enabled if config else False
@@ -169,16 +174,14 @@ def disable(tenant_id: str):
     )
 
 
-@oidc_bp.route("/test/<tenant_id>")
+@oidc_bp.route("/test/<tenant_id>", methods=["POST"])
 @require_tenant_access(role=UserRole.ADMIN)
 def test_initiate(tenant_id: str):
     """Initiate a test OAuth flow.
 
     This starts the OAuth flow but redirects to a test success page instead of
-    creating a real session.
-
-    Admin-only although it is a GET: when the flow succeeds, ``callback`` marks the
-    configuration verified and enables SSO for the tenant, which is what ``enable`` does.
+    creating a real session. A successful test enables SSO for the tenant, so only a
+    tenant admin may start one, and the callback re-checks that the same admin finishes it.
     """
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -186,9 +189,10 @@ def test_initiate(tenant_id: str):
             flash("Tenant not found", "error")
             return redirect(url_for("auth.login"))
 
-        # Get OIDC config (doesn't require enabled, just configured)
-        config = get_or_create_auth_config(tenant_id)
-        if not config.oidc_client_id:
+        # Get OIDC config (doesn't require enabled, just configured). A read: a tenant
+        # with nothing configured has nothing to test, and the test writes nothing.
+        config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
+        if not config or not config.oidc_client_id:
             flash("OIDC not configured for this tenant", "error")
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
@@ -204,9 +208,11 @@ def test_initiate(tenant_id: str):
             client_kwargs={"scope": config.oidc_scopes or "openid email profile"},
         )
 
-        # Store test flow state
+        # Store test flow state, and who started it: the callback finishes the test only
+        # for this same admin, still an admin of this tenant.
         session["oidc_test_flow"] = True
         session["oidc_test_tenant_id"] = tenant_id
+        session["oidc_test_initiator"] = session_caller_email()
 
         # Get redirect URI
         redirect_uri = get_tenant_redirect_uri(tenant)
@@ -214,6 +220,28 @@ def test_initiate(tenant_id: str):
         logger.info(f"Initiating test OIDC flow for tenant {tenant_id}, redirect_uri={redirect_uri}")
 
         return oauth.test_oidc.authorize_redirect(redirect_uri)
+
+
+#: The session keys an SSO test keeps between ``test_initiate`` and the callback.
+_TEST_FLOW_KEYS = ("oidc_test_flow", "oidc_test_tenant_id", "oidc_test_initiator")
+
+
+def _forget_test_flow() -> None:
+    """Drop any SSO test state from the session: a callback consumes it, a login starts afresh."""
+    for key in _TEST_FLOW_KEYS:
+        session.pop(key, None)
+
+
+def _test_flow_still_authorized(tenant_id: str, initiator: str | None) -> bool:
+    """Whether the session finishing an SSO test is the admin who started it, still a tenant admin.
+
+    The test round-trips through the identity provider, so the request that was
+    authorized (``test_initiate``) is not the one that writes. This re-runs the decision
+    ``require_tenant_access(role=UserRole.ADMIN)`` made, on the session as it is now.
+    """
+    if not initiator or initiator != session_caller_email():
+        return False
+    return tenant_access(tenant_id, UserRole.ADMIN, "POST") in TENANT_ACCESS_GRANTED
 
 
 def _back_from_callback(message: str, tenant_id: str, is_test: bool) -> Response:
@@ -232,13 +260,20 @@ def _back_from_callback(message: str, tenant_id: str, is_test: bool) -> Response
 def callback():
     """Handle OAuth callback for both test and production flows."""
     # Check if this is a test flow
-    is_test = session.pop("oidc_test_flow", False)
-    tenant_id = session.pop("oidc_test_tenant_id", None) or session.get("oidc_login_tenant_id")
+    is_test = session.get("oidc_test_flow", False)
+    test_initiator = session.get("oidc_test_initiator")
+    tenant_id = session.get("oidc_test_tenant_id") or session.get("oidc_login_tenant_id")
+    _forget_test_flow()
 
     logger.info(f"OAuth callback: is_test={is_test}, tenant_id={tenant_id}")
 
     if not tenant_id:
         flash("Invalid OAuth callback - no tenant context", "error")
+        return redirect(url_for("auth.login"))
+
+    if is_test and not _test_flow_still_authorized(tenant_id, test_initiator):
+        flash("Only an admin of this tenant can test its SSO configuration", "error")
+        logger.warning("OIDC test callback refused for tenant %s: not the admin who started it", tenant_id)
         return redirect(url_for("auth.login"))
 
     with get_db_session() as db_session:
@@ -248,8 +283,6 @@ def callback():
             return redirect(url_for("auth.login"))
 
         # Get OIDC config directly from this session to avoid nested session issues
-        from src.core.database.models import TenantAuthConfig
-
         config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
         if not config or not config.oidc_client_id:
             flash("OIDC not configured", "error")
@@ -291,23 +324,13 @@ def callback():
     email = user_info["email"]
 
     if is_test:
-        # Test flow - mark config as verified and enable SSO in one transaction
-        redirect_uri = get_tenant_redirect_uri(tenant)
-        from datetime import UTC, datetime
-
-        from src.core.database.models import TenantAuthConfig
-
-        with get_db_session() as db_session:
-            config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
-            if config:
-                config.oidc_verified_at = datetime.now(UTC)
-                config.oidc_verified_redirect_uri = redirect_uri
-                config.oidc_enabled = True
-                config.updated_at = datetime.now(UTC)
-                db_session.commit()
-                logger.info(f"Verified and enabled SSO for tenant {tenant_id}")
-            else:
-                logger.warning(f"No auth config found for tenant {tenant_id}")
+        # Test flow - mark the config verified for the redirect URI just exercised, then
+        # enable SSO through the same code path the admin-only enable route uses.
+        mark_oidc_verified(tenant_id, get_tenant_redirect_uri(tenant))
+        if enable_oidc(tenant_id):
+            logger.info(f"Verified and enabled SSO for tenant {tenant_id}")
+        else:
+            logger.warning(f"SSO test for tenant {tenant_id} completed but SSO was not enabled")
 
         return render_template(
             "oidc_test_success.html",
@@ -377,7 +400,9 @@ def callback():
             user.name = sso_name
             logger.info(f"Updated user {email} name from SSO: {sso_name}")
 
-        # Create session
+        # Create session. Nothing from an earlier sign-in in this browser survives: this
+        # session is bound to this tenant and carries no deployment-wide privilege.
+        clear_session_identity()
         session["user"] = user.email
         session["user_name"] = user.name or user.email
         session["tenant_id"] = tenant_id
@@ -412,8 +437,6 @@ def login(tenant_id: str):
 
         # In setup mode, allow login when OIDC is configured (even if not enabled)
         # This lets users test the full login flow before enabling
-        from src.core.database.models import TenantAuthConfig
-
         auth_config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
 
         # Check if OIDC is available
@@ -442,7 +465,9 @@ def login(tenant_id: str):
             client_kwargs={"scope": auth_config.oidc_scopes or "openid email profile"},
         )
 
-        # Store login state
+        # Store login state. A test flow abandoned at the provider must not turn this
+        # login's callback into a test for whichever tenant it named.
+        _forget_test_flow()
         session["oidc_login_tenant_id"] = tenant_id
 
         redirect_uri = get_tenant_redirect_uri(tenant)

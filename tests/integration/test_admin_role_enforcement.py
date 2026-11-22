@@ -49,6 +49,8 @@ def _client_as(app, role):
     client = app.test_client()
     # signed in through SSO, which disable-setup-mode requires of its caller
     tenant_user_session(client, EMAILS[role], auth_method="oidc")
+    with client.session_transaction() as sess:
+        sess["tenant_id"] = TENANT_ID  # an SSO sign-in is bound to the tenant it was made for
     return client
 
 

@@ -64,7 +64,7 @@ from tests.factories.targeting import (
     PropertyListReferenceFactory,
     TargetingFactory,
 )
-from tests.factories.user import TenantAuthConfigFactory, UserFactory
+from tests.factories.user import TenantAuthConfigFactory, TenantManagementConfigFactory, UserFactory
 from tests.factories.webhook import PushNotificationConfigFactory, WebhookDeliveryLogFactory, WebhookTaskContextFactory
 from tests.factories.workflow import ContextFactory, WorkflowStepFactory
 
@@ -100,6 +100,7 @@ ALL_FACTORIES = [
     FormatPerformanceMetricsFactory,
     UserFactory,
     TenantAuthConfigFactory,
+    TenantManagementConfigFactory,
     SigningKeyFactory,
     ContextFactory,
     WorkflowStepFactory,
@@ -151,6 +152,7 @@ __all__ = [
     "SyncJobFactory",
     "TargetingFactory",
     "TenantAuthConfigFactory",
+    "TenantManagementConfigFactory",
     "TenantFactory",
     "UserFactory",
     "WebhookDeliveryLogFactory",

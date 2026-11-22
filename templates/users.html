@@ -892,9 +892,14 @@ document.getElementById('oidc-form').addEventListener('submit', async function(e
     }
 });
 
-// Test OIDC connection - navigate directly (OAuth redirects don't work with fetch due to CORS)
+// Test OIDC connection - submit a form (OAuth redirects don't work with fetch due to CORS).
+// A POST, so a link from another site cannot start a test that enables SSO.
 document.getElementById('test-oidc-btn').addEventListener('click', function() {
-    window.location.href = `${scriptRoot}/auth/oidc/test/${tenantId}`;
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = `${scriptRoot}/auth/oidc/test/${tenantId}`;
+    document.body.appendChild(form);
+    form.submit();
 });
 
 // Deactivate SSO

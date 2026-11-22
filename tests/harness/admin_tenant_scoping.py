@@ -2,7 +2,7 @@
 
 Drives ``GET /api/tenant/<tenant_id>/revenue-chart``, ``GET /api/tenant/<tenant_id>/products``,
 ``GET /api/tenant/<tenant_id>/products/suggestions``, ``GET,POST /tenant/<tenant_id>/policy/rules``
-and ``GET /auth/oidc/test/<tenant_id>`` (#2203), and the six GAM reporting routes of
+and ``POST /auth/oidc/test/<tenant_id>`` (#2203), and the six GAM reporting routes of
 ``src/adapters/gam_reporting_api.py`` (#2204), on the two admin transports ``AdminAccountEnv``
 already provides — Flask ``test_client`` (integration) and ``requests.Session`` against the
 Docker stack (e2e) — and seeds the tenants, memberships, catalogue and media buys the
@@ -15,9 +15,11 @@ one hand-rolled ``__enter__``/``__exit__`` home to ``AdminAccountEnv``, so a sec
 env inherits that lifecycle instead of restating it.
 
 The caller's session is STATED on both transports (``AdminClient.state_session``), with the
-keys an OIDC login writes for a caller who is not a super admin (``member_session_payload``):
-``user`` as a bare email and a HOME tenant that is never the target, with no ``test_user``
-key. ``require_tenant_access`` therefore takes its real branch, and the target tenant's
+keys the deployment's own (Google) sign-in writes for a caller who is not a super admin
+(``member_session_payload(..., auth_method=None)``): ``user`` as a bare email and a HOME
+tenant that is never the target, with no ``test_user`` key. Not an OIDC session: a sign-in
+through a tenant's own SSO is bound to that tenant and reaches no other, so it would be
+refused on the target before its membership row was ever read. ``require_tenant_access`` therefore takes its real branch, and the target tenant's
 ``User`` row is the only thing that decides the outcome: whether it exists, whether it is
 active, and the role it holds. A refusal of that session is the decorator's membership or
 role check, on the same branch in-process as on the stack.
@@ -82,7 +84,7 @@ ROUTES: dict[str, TenantScopedRoute] = {
     "products API": TenantScopedRoute("/api/tenant/{tenant_id}/products", ("GET",)),
     "product suggestions API": TenantScopedRoute("/api/tenant/{tenant_id}/products/suggestions", ("GET",)),
     "policy rules page": TenantScopedRoute("/tenant/{tenant_id}/policy/rules", ("GET", "POST")),
-    "OIDC test page": TenantScopedRoute("/auth/oidc/test/{tenant_id}", ("GET",)),
+    "OIDC test page": TenantScopedRoute("/auth/oidc/test/{tenant_id}", ("POST",)),
     "GAM reporting API": TenantScopedRoute(f"{_GAM_API}/gam/reporting", ("GET",)),
     "GAM advertiser summary API": TenantScopedRoute(
         f"{_GAM_API}/gam/reporting/advertiser/{{advertiser_id}}/summary", ("GET",)
@@ -281,7 +283,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
 
     def _authenticate_member(self, login_tenant_id: str) -> None:
         """State a tenant user's session for ``MEMBER_EMAIL`` against ``login_tenant_id`` (never the target)."""
-        self.client.state_session(member_session_payload(MEMBER_EMAIL, login_tenant_id))
+        self.client.state_session(member_session_payload(MEMBER_EMAIL, login_tenant_id, auth_method=None))
 
     # ── Requests ──────────────────────────────────────────────────────────
 
