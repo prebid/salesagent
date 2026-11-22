@@ -50,9 +50,9 @@ MEMBER_EMAIL = "test_tenant_user@example.com"
 #: this row a lookup that forgot the caller's email would still find nobody, and a refusal
 #: would prove nothing about whose membership was checked.
 OTHER_MEMBER_EMAIL = "target_tenant_member@example.com"
-#: The role every seeded membership holds: the least one that may send every method in
-#: ``ROUTES``, because ``role_permits`` asks ``manager`` for a write. A refusal is then the
-#: membership check's and never the role check's, which
+#: The role a seeded membership holds unless the seeding call names another: the least one
+#: that may send every method in ``ROUTES``, because ``role_permits`` asks ``manager`` for a
+#: write. A refusal is then the membership check's and never the role check's, which
 #: tests/integration/test_admin_role_enforcement.py grades.
 MEMBER_ROLE = UserRole.MANAGER
 ACTIVE_BUY_BUDGET = Decimal("1500.00")
@@ -96,9 +96,9 @@ class TenantState(NamedTuple):
     policy_settings: Any
 
 
-def _seed_member(tenant: Tenant, email: str, *, is_active: bool = True) -> None:
-    """A ``User`` row for *email* in *tenant*, holding ``MEMBER_ROLE``. Call it inside ``bound_factory_session()``."""
-    UserFactory(tenant=tenant, user_id=mint_id("user"), email=email, role=MEMBER_ROLE, is_active=is_active)
+def _seed_member(tenant: Tenant, email: str, *, is_active: bool = True, role: UserRole = MEMBER_ROLE) -> None:
+    """A ``User`` row for *email* in *tenant*, holding *role*. Call it inside ``bound_factory_session()``."""
+    UserFactory(tenant=tenant, user_id=mint_id("user"), email=email, role=role, is_active=is_active)
 
 
 def redirect_path(response: AdminResponse) -> str:
@@ -223,12 +223,12 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         """Active ``User`` row in a fresh home tenant, no row in the target."""
         self._authenticate_member(self._new_home_tenant(with_member=True))
 
-    def login_with_target_membership(self, *, is_active: bool) -> None:
-        """A ``User`` row in the TARGET tenant with ``is_active`` as given; session held via a fresh home tenant."""
+    def login_with_target_membership(self, *, is_active: bool, role: UserRole = MEMBER_ROLE) -> None:
+        """A ``User`` row in the TARGET tenant with ``is_active`` and *role* as given; session held via a fresh home tenant."""
         home_tenant_id = self._new_home_tenant(with_member=False)
         with bound_factory_session() as session:
             target = session.get(Tenant, self.target.tenant_id)
-            _seed_member(target, MEMBER_EMAIL, is_active=is_active)
+            _seed_member(target, MEMBER_EMAIL, is_active=is_active, role=role)
         self._authenticate_member(home_tenant_id)
 
     def _new_home_tenant(self, *, with_member: bool) -> str:
