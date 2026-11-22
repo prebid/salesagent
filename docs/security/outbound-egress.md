@@ -134,8 +134,8 @@ resolution cached across the ingest-to-fetch gap is precisely the DNS-rebinding
 window that resolve-once-then-pin closes within a single request.
 
 Two consumers use it: the admin ingest path (`src/admin/utils/url_policy.py`,
-two helpers over one refusal decision, reached from ten call sites in five admin
-modules)
+one check that raises `EgressUrlRefused`, which the admin error handler answers,
+reached from call sites in five admin modules)
 and the Model Context Protocol (MCP) client wrapper, which validates the agent
 URL before the handshake. Admin handlers omit `provenance` — they build no Ad
 Context Protocol (AdCP) envelope, so there is no request path to name.

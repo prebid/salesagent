@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.admin.utils.url_policy import json_error_if_url_blocked, redirect_if_url_blocked
+from src.admin.utils.url_policy import require_allowed_url
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SignalsAgent, Tenant
 from src.core.operator_errors import ConnectionTestFailed
@@ -102,12 +102,7 @@ def add_signals_agent(tenant_id):
 
         # The agent URL is stored now and fetched later, so egress policy is
         # applied at ingest — see src.admin.utils.url_policy.
-        if blocked := redirect_if_url_blocked(
-            agent_url,
-            "Agent URL",
-            url_for("signals_agents.add_signals_agent", tenant_id=tenant_id),
-        ):
-            return blocked
+        require_allowed_url(agent_url, "Agent URL")
 
         if not name:
             flash("Agent name is required", "error")
@@ -199,15 +194,10 @@ def edit_signals_agent(tenant_id, agent_id):
             return redirect(url_for("signals_agents.edit_signals_agent", tenant_id=tenant_id, agent_id=agent_id))
 
         # Validate the newly submitted URL — agent.agent_url is the form value set above.
-        # Returning here leaves the assignment uncommitted: the session context
-        # manager closes without committing, so the rejected URL never reaches
+        # The refusal leaves the assignment uncommitted: the session context
+        # manager rolls back on the way out, so the rejected URL never reaches
         # the row.
-        if blocked := redirect_if_url_blocked(
-            agent.agent_url,
-            "Agent URL",
-            url_for("signals_agents.edit_signals_agent", tenant_id=tenant_id, agent_id=agent_id),
-        ):
-            return blocked
+        require_allowed_url(agent.agent_url, "Agent URL")
 
         if not agent.name:
             flash("Agent name is required", "error")
@@ -261,8 +251,7 @@ def test_signals_agent(tenant_id, agent_id):
         # (call_mcp_tool's own validate_url) — it exists because policy
         # can change between ingest and test, and this route's obligation is
         # "ask again, using CURRENT policy" (tests/integration/test_admin_ingest_url_policy.py).
-        if blocked := json_error_if_url_blocked(agent.agent_url, "Agent URL", success=False):
-            return blocked
+        require_allowed_url(agent.agent_url, "Agent URL")
 
         # Test connection
         # Use asyncio.run() instead of new_event_loop() for better compatibility with adcp library

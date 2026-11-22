@@ -18,7 +18,7 @@ from src.admin.utils.helpers import (
     session_caller_email,
     tenant_access,
 )
-from src.admin.utils.url_policy import json_error_if_url_blocked
+from src.admin.utils.url_policy import require_allowed_url
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig, User, UserRole
@@ -107,11 +107,10 @@ def save_config(tenant_id: str):
     # Both are stored now and fetched later — discovery_url by authlib's own
     # server_metadata_url= dereference, logout_url by the browser redirect at
     # logout — so both are graded by ingest-time egress policy.
-    if discovery_url and (blocked := json_error_if_url_blocked(discovery_url, "OIDC discovery URL")):
-        return blocked
-
-    if logout_url and (blocked := json_error_if_url_blocked(logout_url, "OIDC logout URL")):
-        return blocked
+    if discovery_url:
+        require_allowed_url(discovery_url, "OIDC discovery URL")
+    if logout_url:
+        require_allowed_url(logout_url, "OIDC logout URL")
 
     # Require client_secret for new configs (no existing secret)
     existing_config = get_or_create_auth_config(tenant_id)

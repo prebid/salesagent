@@ -21,7 +21,7 @@ from src.admin.form_validation import form_number, json_object_body, required_va
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import caller_reads_json
-from src.admin.utils.url_policy import redirect_if_url_blocked
+from src.admin.utils.url_policy import require_allowed_url
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -489,14 +489,10 @@ def update_slack(tenant_id):
 
     # Both are stored now and posted to later, so both are graded by
     # ingest-time egress policy. An empty value clears the webhook.
-    integrations_page = url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations")
-    if webhook_url and (blocked := redirect_if_url_blocked(webhook_url, "Slack webhook URL", integrations_page)):
-        return blocked
-
-    if audit_webhook_url and (
-        blocked := redirect_if_url_blocked(audit_webhook_url, "Slack audit webhook URL", integrations_page)
-    ):
-        return blocked
+    if webhook_url:
+        require_allowed_url(webhook_url, "Slack webhook URL")
+    if audit_webhook_url:
+        require_allowed_url(audit_webhook_url, "Slack audit webhook URL")
 
     with get_db_session() as db_session:
         repository = TenantConfigRepository(db_session, tenant_id)
@@ -515,7 +511,7 @@ def update_slack(tenant_id):
         else:
             flash("Slack integration disabled", "info")
 
-    return redirect(integrations_page)
+    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations"))
 
 
 @settings_bp.route("/ai", methods=["POST"])
