@@ -401,10 +401,11 @@ def orm_bindings(relpath: str, tree: ast.Module) -> dict[str, str]:
 #
 # Each question a guard asks about a query is answered here, once: which classes are
 # mapped (``orm_classes``), which local names denote one (``orm_bindings``), what a
-# scope sees (``iter_scopes``), how a chain is walked (``select_chain``), which class a
-# ``select(...)`` addresses (``select_entity``) and which class any node denotes
-# (``orm_references``). A guard that answers one of them itself is a second answer, and
-# the two drift: one line was a raw-select violation in one guard and unresolved in another.
+# scope sees (``iter_scopes``), how a chain is walked (``select_chain``), which statement
+# a local name holds (``fold_name``), which class a ``select(...)`` addresses
+# (``select_entity``) and which class any node denotes (``orm_references``). A guard that
+# answers one of them itself is a second answer, and the two drift: one line was a
+# raw-select violation in one guard and unresolved in another.
 # ---------------------------------------------------------------------------
 
 
@@ -620,6 +621,71 @@ def scope_bound_names(scope: ast.AST) -> set[str]:
     """
     plain, other = _bindings(scope)
     return other | set(plain)
+
+
+class Fold(NamedTuple):
+    """The statement :func:`fold_name` reads a local name as."""
+
+    #: The call the statement starts from: ``select(...)`` or ``<session>.query(...)``.
+    root: ast.Call
+    #: Every chain call folded onto *root*, outermost (latest) first, as :func:`select_chain` orders them.
+    calls: list[ast.Call]
+    #: A read of the name may see a statement other than this one.
+    opaque: bool
+
+
+def _statement_root(expr: ast.expr, bindings: QueryBindings) -> ast.Call | None:
+    """*expr* when a statement starts there: SQLAlchemy's ``select(...)`` by import, or a legacy
+    ``<session>.query(...)``. Else None."""
+    if isinstance(expr, ast.Call):
+        func = expr.func
+        if (isinstance(func, ast.Name) and func.id in bindings.select) or (
+            isinstance(func, ast.Attribute) and func.attr == "query"
+        ):
+            return expr
+    return None
+
+
+def fold_name(name: str, assigned: Mapping[str, list[ast.expr]], bindings: QueryBindings) -> Fold | None:
+    """The statement local *name* holds, folded from its bindings in source order, else None.
+
+    *assigned* is the scope's :func:`scope_bindings`, *bindings* the imports it sees
+    (:func:`iter_scopes`). A binding whose chain (:func:`select_chain`) starts at a statement
+    starts the fold, and so does one that starts at another name holding one
+    (``stmt = base.where(...)``); ``name = name.<chain>`` folds its calls onto the earlier ones.
+    The fold is ``opaque`` when a read of *name* may see a statement other than the one
+    returned: after a rebind it cannot read (``s = wrap(s)``), whose calls folded so far are
+    kept, or when the name holds a second statement (bound in a branch, or reused). What
+    opaque means is each guard's decision. None when no binding starts a statement.
+    """
+    return _fold(name, assigned, bindings, frozenset())
+
+
+def _fold(
+    name: str, assigned: Mapping[str, list[ast.expr]], bindings: QueryBindings, resolving: frozenset[str]
+) -> Fold | None:
+    if name in resolving:
+        return None  # a = b.where(...); b = a.where(...)
+    fold: Fold | None = None
+    opaque = False
+    for position, value in enumerate(assigned.get(name, ())):
+        base, calls = select_chain(value, SELECT_CHAIN_METHODS)
+        if isinstance(base, ast.Name) and base.id == name:
+            if fold is None:
+                opaque = True  # extends a value the fold could not read
+            else:
+                fold = fold._replace(calls=calls + fold.calls)
+            continue
+        if (root := _statement_root(base, bindings)) is not None:
+            start = Fold(root, calls, opaque=False)
+        elif isinstance(base, ast.Name) and (other := _fold(base.id, assigned, bindings, resolving | {name})):
+            start = Fold(other.root, calls + other.calls, other.opaque)
+        else:
+            opaque = True  # a rebind the fold cannot read: what it folded so far stands
+            continue
+        opaque = opaque or start.opaque or position > 0  # position > 0: the name held another value
+        fold = start
+    return fold._replace(opaque=opaque) if fold else None
 
 
 def iter_scopes(tree: ast.Module, bindings: QueryBindings) -> Iterator[tuple[ast.AST, QueryBindings]]:

@@ -44,6 +44,7 @@ from tests.unit._architecture_helpers import (
     SELECT_FILTER_METHODS,
     assert_violations_match_allowlist,
     call_callee_name,
+    fold_name,
     iter_scopes,
     orm_references,
     parse_module,
@@ -95,36 +96,23 @@ def _creative_query_chains(
 ) -> list[tuple[ast.Call, list[ast.Call]]]:
     """Every query on a Creative-family model, once: ``(select call, its filter stages)``.
 
-    Per scope (``iter_scopes``). Accumulator-style queries come first: a simple
-    ``name = select(...)...`` assignment and every later ``name = name.where(...)``
-    are folded into one chain, so the query is graded on its FULL accumulated filter
-    set (an unscoped accumulator is flagged; principal_id pinned in a later statement
-    is credited). Only a name the scope binds by plain assignment alone is folded
-    (``scope_bindings``): for a parameter or a loop target the fold cannot know which
-    binding a read sees, and its inline ``select(...)`` chain is still graded on its
-    own. Then the inline chains, longest first, so a sub-chain of a graded chain is
-    skipped. Chains are walked by ``select_chain``; only the filter stages are kept.
+    Per scope (``iter_scopes``). Accumulator-style queries come first: every name the
+    scope binds by plain assignment alone (``scope_bindings``) is read through the shared
+    ``fold_name``, so ``name = select(...)...`` and every later ``name = name.where(...)``
+    are graded as ONE query on their FULL filter set (an unscoped accumulator is flagged;
+    principal_id pinned in a later statement is credited). For a parameter or a loop
+    target nothing is folded, and its inline ``select(...)`` chain is graded on its own.
+    Then the inline chains, longest first, so a sub-chain of a graded chain is skipped.
+    Chains are walked by ``select_chain``; only the filter stages are kept.
     *references* is ``orm_references(relpath, tree)``.
     """
     chains: list[tuple[ast.Call, list[ast.Call]]] = []
-    for scope, _imports in iter_scopes(tree, query_bindings(relpath, tree)):
+    for scope, imports in iter_scopes(tree, query_bindings(relpath, tree)):
         nodes = list(scope_nodes(scope))
-        foldable = scope_bindings(scope)
-        accumulators: dict[str, tuple[ast.Call, list[ast.Call]]] = {}
-        for stmt in (n for n in nodes if isinstance(n, ast.Assign)):
-            if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
-                continue
-            target = stmt.targets[0].id
-            if target not in foldable:
-                continue
-            base, calls = select_chain(stmt.value, SELECT_CHAIN_METHODS)
-            if isinstance(base, ast.Call) and id(base) in references:
-                accumulators[target] = (base, calls)
-            elif isinstance(base, ast.Name) and base.id in accumulators and calls:
-                select_call, earlier = accumulators[base.id]
-                accumulators[target] = (select_call, calls + earlier)
-            else:
-                accumulators.pop(target, None)
+        assigned = scope_bindings(scope)
+        # Opaque or not, a fold is graded on the calls it folded: a rebind it cannot read
+        # (``s = wrap(s)``) receives the statement with those filters already applied.
+        folded = [(fold.root, fold.calls) for name in assigned if (fold := fold_name(name, assigned, imports))]
         inline = [
             (base, calls)
             for base, calls in (select_chain(n, SELECT_CHAIN_METHODS) for n in nodes if isinstance(n, ast.Call))
@@ -132,8 +120,8 @@ def _creative_query_chains(
         ]
         inline.sort(key=lambda chain: -len(chain[1]))
         seen: set[int] = set()
-        for select_call, calls in [*accumulators.values(), *inline]:
-            if id(select_call) in seen or references[id(select_call)] not in _CREATIVE_MODELS:
+        for select_call, calls in [*folded, *inline]:
+            if id(select_call) in seen or references.get(id(select_call)) not in _CREATIVE_MODELS:
                 continue
             seen.add(id(select_call))
             chains.append((select_call, [c for c in calls if call_callee_name(c) in SELECT_FILTER_METHODS]))
@@ -437,6 +425,23 @@ class TestDetectorMetaTests:
             "    return session.scalars(stmt).all()\n"
         )
         assert _flagged(source) == []
+
+    @pytest.mark.arch_guard
+    def test_detector_grades_the_filters_folded_before_an_opaque_rebind(self):
+        """``s = wrap(s)`` receives the statement with the folded filters already applied, so
+        they are graded: principal_id pinned before it scopes the query, and creative_id
+        without principal_id still flags. The fold used to be dropped there, and the first
+        line was graded alone."""
+        source = (
+            "from src.core.database.models import Creative\n"
+            "def f(session, cid, p):\n"
+            "    s = select(Creative).where(Creative.creative_id == cid)\n"
+            "    s = s.where(Creative.principal_id == p)\n"
+            "    s = wrap(s)\n"
+            "    return session.scalars(s).all()\n"
+        )
+        assert _flagged(source) == []
+        assert _flagged(source.replace("    s = s.where(Creative.principal_id == p)\n", "")) == ["f"]
 
     @pytest.mark.arch_guard
     def test_admin_call_detector(self):

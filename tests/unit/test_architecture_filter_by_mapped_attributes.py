@@ -22,13 +22,15 @@ shares (``tests/unit/_architecture_helpers.py``):
 - The chain is crossed only through the ``Select`` methods in ``SELECT_CHAIN_METHODS``
   (``select_chain``), which keep the entity; ``with_only_columns``, ``add_columns``,
   ``subquery`` and anything else not named there ends resolution.
-- A local name resolves (``scope_bindings``) only when every binding of it in the scope
-  is a plain ``name = value`` statement and every one agrees on the class;
-  ``stmt = stmt.where(...)`` keeps the class. A parameter, a loop or ``with`` target,
-  ``+=``, an annotated or walrus assignment, or bindings that disagree leave it
-  unresolved. Functions, lambdas, classes and comprehensions are scopes (``iter_scopes``);
-  a nested scope does not read the enclosing one's local names, and a name it or an
-  enclosing function binds shadows the import of the same spelling.
+- A local name resolves through ``fold_name``, the fold the creative-lookup guard reads
+  too: only when every binding of it in the scope is a plain ``name = value`` statement
+  (``scope_bindings``) and together they hold one statement, ``stmt = stmt.where(...)``
+  folded onto it. A parameter, a loop or ``with`` target, ``+=``, an annotated or walrus
+  assignment leave it unresolved, and so does an opaque fold: a second statement bound to
+  the name, or a rebind the fold cannot read (``s = wrap(s)``). Functions, lambdas,
+  classes and comprehensions are scopes (``iter_scopes``); a nested scope does not read
+  the enclosing one's local names, and a name it or an enclosing function binds shadows
+  the import of the same spelling.
 
 Unresolved means skipped, never guessed. Each keyword must be in
 ``sqlalchemy.inspect(M).all_orm_descriptors`` -- columns, relationships, synonyms and
@@ -58,6 +60,7 @@ from tests.unit._architecture_helpers import (
     QueryBindings,
     assert_violations_match_allowlist,
     call_callee_name,
+    fold_name,
     iter_module_trees,
     iter_scopes,
     orm_classes,
@@ -75,16 +78,14 @@ from tests.unit._architecture_helpers import (
 ALLOWLIST: set[tuple[str, str, str]] = set()
 
 
-def _anchor(expr: ast.expr) -> tuple[str, ast.expr | None]:
-    """What ``Select._filter_by_zero`` picks on *expr*: a fold over its chain, outermost call first.
+def _anchor(base: ast.expr, calls: list[ast.Call]) -> tuple[str, ast.expr | None]:
+    """What ``Select._filter_by_zero`` picks on a statement: a fold over its *calls*, outermost first.
 
     ``("join", target)``: the first join met is the LAST in source order, so it decides.
     ``("select_from", entity)``: the last met is the FIRST in source order, so it
-    overwrites. Otherwise the chain's base (``select_chain``): ``("select", call)`` for a
-    bare-name call, ``("query", call)`` for ``<x>.query(...)``, ``("name", Name)`` for a local
-    accumulator, ``("other", node)`` for anything else, a method outside the chain set included.
+    overwrites. Otherwise the statement's *base*: ``("select", call)`` for a bare-name call,
+    ``("query", call)`` for ``<x>.query(...)``, ``("other", node)`` for anything else.
     """
-    base, calls = select_chain(expr, SELECT_CHAIN_METHODS)
     select_from: ast.expr | None = None
     for call in calls:
         method, args = call_callee_name(call), call.args
@@ -100,8 +101,6 @@ def _anchor(expr: ast.expr) -> tuple[str, ast.expr | None]:
             return "select", base
         if isinstance(base.func, ast.Attribute) and base.func.attr == "query":
             return "query", base
-    if isinstance(base, ast.Name):
-        return "name", base
     return "other", base
 
 
@@ -117,9 +116,15 @@ class _Scope:
         """The ORM class a bare name denotes by import, else None (an attribute never does)."""
         return self._imports.orm.get(node.id) if isinstance(node, ast.Name) else None
 
-    def target(self, expr: ast.expr, resolving: frozenset[str] = frozenset()) -> type[Any] | None:
+    def target(self, expr: ast.expr) -> type[Any] | None:
         """The entity ``filter_by`` addresses on *expr*, or None when it cannot be told."""
-        kind, node = _anchor(expr)
+        base, calls = select_chain(expr, SELECT_CHAIN_METHODS)
+        if isinstance(base, ast.Name):
+            fold = fold_name(base.id, self._assigned, self._imports)
+            if fold is None or fold.opaque:
+                return None  # the name may hold another statement: skipped, never guessed
+            base, calls = fold.root, calls + fold.calls
+        kind, node = _anchor(base, calls)
         name: str | None = None
         if kind in {"join", "select_from"}:
             name = self._imported(node)
@@ -127,24 +132,7 @@ class _Scope:
             name = select_entity(node, self._imports)
         elif kind == "query" and isinstance(node, ast.Call) and node.args:
             name = orm_entity(node.args[0], self._imports.orm)
-        elif kind == "name" and isinstance(node, ast.Name):
-            return self._resolve(node.id, resolving)
         return orm_classes().get(name) if name else None
-
-    def _resolve(self, name: str, resolving: frozenset[str]) -> type[Any] | None:
-        """The one class every binding of *name* agrees on, else None."""
-        if name in resolving:
-            return None  # a = b.where(...); b = a.where(...)
-        agreed: set[type[Any]] = set()
-        for value in self._assigned.get(name, ()):
-            kind, node = _anchor(value)
-            if kind == "name" and isinstance(node, ast.Name) and node.id == name:
-                continue  # stmt = stmt.where(...) keeps the class
-            model = self.target(value, resolving | {name})
-            if model is None:
-                return None
-            agreed.add(model)
-        return agreed.pop() if len(agreed) == 1 else None
 
 
 def _scope_name(scope: ast.AST) -> str:
@@ -249,6 +237,10 @@ _TABLE: dict[str, tuple[str, set[tuple[str, str]]]] = {
         "def f():\n    return select(Tenant).outerjoin(User).filter_by(subdomain='x')\n",
         {("f", "User.subdomain")},
     ),
+    "join-folded-through-a-rebind": (
+        "def f():\n    s = select(Tenant)\n    s = s.join(User)\n    return s.filter_by(nope=1)\n",
+        {("f", "User.nope")},
+    ),
     "join-from-targets-the-right-side": (
         "def f():\n    return select(Tenant).join_from(Tenant, User).filter_by(subdomain='x')\n",
         {("f", "User.subdomain")},
@@ -278,6 +270,10 @@ _TABLE: dict[str, tuple[str, set[tuple[str, str]]]] = {
     # scan still says nothing, because it cannot tell WHICH class the name holds.
     "rebound-after-use-with-a-phantom": (
         "def f():\n    s = select(User)\n    a = s.filter_by(subdomain='x')\n    s = select(Tenant)\n    return a, s\n",
+        set(),
+    ),
+    "opaque-rebind": (
+        "def f():\n    s = select(User)\n    s = s.where(User.is_active)\n    s = wrap(s)\n    return s.filter_by(nope=1)\n",
         set(),
     ),
     "branch-bound-name": (

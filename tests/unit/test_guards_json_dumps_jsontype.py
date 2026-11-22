@@ -7,8 +7,8 @@ principal platform_mappings, and self-serve signup tenant fields were all
 emptied this way), and now raises TypeError at runtime.
 This guard catches the mistake at test time instead.
 
-The JSONType column inventory is mapper-derived (``Base.registry.mappers``),
-not name-matched, so Text columns that legitimately store JSON strings
+The JSONType column inventory is mapper-derived (``orm_classes()``, the live
+registry), not name-matched, so Text columns that legitimately store JSON strings
 (e.g. ``SyncJob.summary``) are never dragged in. Form A (constructor kwarg)
 is import-resolving like test_guards_orm_constructor_kwargs; form B
 (attribute assignment) matches any ``obj.<attr> = json.dumps(...)`` where

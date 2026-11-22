@@ -14,6 +14,7 @@ from tests.unit._architecture_helpers import (
     assert_anchor_consistency,
     assert_violations_match_allowlist,
     call_callee_name,
+    fold_name,
     iter_call_expressions,
     iter_git_tracked_files,
     iter_scopes,
@@ -211,6 +212,44 @@ def test_orm_references_resolves_names_and_selects_per_scope() -> None:
     assert id(calls["Lambda"]) not in references  # select is the enclosing function's parameter
     assert references.get(id(calls["Lambda"].args[0])) == "User"  # ...while User itself still resolves
     assert all(isinstance(node, (ast.Name, ast.Call)) for node in ast.walk(tree) if id(node) in references)
+
+
+_FOLD_SOURCE = """
+from sqlalchemy import select
+from src.core.database.models import Creative, User
+
+def f(c, cid, p, session):
+    s = select(Creative).where(Creative.creative_id == cid)
+    s = s.where(Creative.principal_id == p)
+    s = wrap(s)
+    t = select(User)
+    t = t.order_by(User.email)
+    u = t.where(User.is_active)
+    if c:
+        v = select(User)
+    else:
+        v = session.query(Creative)
+    w = make()
+    w = w.where(User.is_active)
+"""
+
+
+@pytest.mark.arch_guard
+def test_fold_name_folds_rebinds_in_source_order_and_marks_what_it_cannot_read() -> None:
+    tree = ast.parse(_FOLD_SOURCE)
+    ((scope, view),) = [(s, v) for s, v in iter_scopes(tree, query_bindings("src/x.py", tree)) if s is not tree]
+    assigned = scope_bindings(scope)
+
+    def read(name: str) -> tuple[str, list[str | None], bool] | None:
+        fold = fold_name(name, assigned, view)
+        return fold and (ast.unparse(fold.root), [call_callee_name(call) for call in fold.calls], fold.opaque)
+
+    assert read("s") == ("select(Creative)", ["where", "where"], True)  # wrap(s): the filters stand, opaque
+    assert read("t") == ("select(User)", ["order_by"], False)
+    assert read("u") == ("select(User)", ["where", "order_by"], False)  # folded through another name
+    assert read("v") == ("session.query(Creative)", [], True)  # two statements: the last one, opaque
+    assert read("w") is None  # no binding starts a statement
+    assert read("c") is None  # a parameter
 
 
 @pytest.mark.arch_guard
