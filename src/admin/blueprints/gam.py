@@ -688,22 +688,18 @@ def reset_stuck_sync(tenant_id):
     Marks any running inventory sync as failed and allows a new sync to start.
     Use this when a sync appears to be hanging or frozen.
     """
-    with get_db_session() as db_session:
-        from src.core.database.models import SyncJob
+    from src.core.database.repositories.uow import SyncJobUoW
+
+    with SyncJobUoW(tenant_id) as uow:
+        assert uow.sync_jobs is not None
 
         # Find running inventory sync
-        running_sync = db_session.scalars(
-            select(SyncJob).where(
-                SyncJob.tenant_id == tenant_id, SyncJob.status == "running", SyncJob.sync_type == "inventory"
-            )
-        ).first()
+        running_sync = uow.sync_jobs.find_running("inventory")
 
         if not running_sync:
             raise NoRunningSyncToReset(f"Stuck-sync reset for tenant {tenant_id}: no inventory sync is running")
 
-        running_sync.mark_failed("Manually reset by admin (sync appeared to be stuck)")
-
-        db_session.commit()
+        uow.sync_jobs.record_failure(running_sync.sync_id, "Manually reset by admin (sync appeared to be stuck)")
 
         logger.info(
             f"Admin reset stuck sync {running_sync.sync_id} for tenant {tenant_id} "

@@ -3,17 +3,14 @@
 The GAM sync manager, the admin sync API, the background inventory sync and the order
 approval poller each run a ``SyncJob``'s work and report its failure on the job, where
 the admin UI's status routes read it. They all write it through
-``SyncJobRepository.record_failure``: a sync's own work through :func:`recording_failure`, on
-its session, and a standalone caller through :func:`record_sync_failure`.
+:func:`record_sync_failure`, in a unit of work of its own: a sync's own work by running
+inside :func:`recording_failure`, and a standalone caller directly.
 """
 
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from sqlalchemy.orm import Session
-
-from src.core.database.models import SyncJob
 from src.core.operator_errors import RecordedFailure, safe_error_message
 
 
@@ -51,26 +48,19 @@ def record_sync_failure(tenant_id: str, sync_id: str, operator_message: str) -> 
 
 
 @contextmanager
-def recording_failure(db_session: Session, sync_job: SyncJob, context: str) -> Iterator[None]:
-    """Run a sync's work on *db_session*; if it raises, mark ``sync_job`` failed and raise :class:`SyncFailed`.
+def recording_failure(tenant_id: str, sync_id: str, context: str) -> Iterator[None]:
+    """Run a sync's work; if it raises, mark the job *sync_id* failed and raise :class:`SyncFailed`.
 
     The cause is logged once, by ``safe_error_message(cause, context)``, unless it is a
-    nested sync's :class:`SyncFailed`, whose text (and reference) the job takes over.
-    *db_session* is rolled back first: after a failed flush it holds a transaction the
-    database has aborted, which can neither commit the failure nor release the row locks
-    the failure's own write would wait on. The rollback ends that transaction, so the
-    failure is then written and committed on the same session, through the repository
-    :func:`record_sync_failure` writes through too.
+    nested sync's :class:`SyncFailed` (or a refusal raised as one), whose text the job
+    takes over. The work writes the job's row only in units of work that close inside this
+    block, never on a session held across it. A unit the work raised in has rolled back and
+    closed on its way out, so its aborted transaction, and the lock it held on the job's
+    row, are gone before :func:`record_sync_failure` writes the failure in a unit of its own.
     """
-    # Imported here for the reason record_sync_failure gives.
-    from src.core.database.repositories.sync_job import SyncJobRepository
-
-    tenant_id, sync_id = sync_job.tenant_id, sync_job.sync_id
     try:
         yield
     except Exception as e:  # noqa: BLE001 - every failure of a sync is recorded on its job, then re-raised
         operator_message = e.operator_message if isinstance(e, SyncFailed) else safe_error_message(e, context)
-        db_session.rollback()
-        SyncJobRepository(db_session, tenant_id).record_failure(sync_id, operator_message)
-        db_session.commit()
+        record_sync_failure(tenant_id, sync_id, operator_message)
         raise SyncFailed(sync_id, operator_message) from e

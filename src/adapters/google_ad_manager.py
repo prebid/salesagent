@@ -1529,21 +1529,21 @@ class GoogleAdManager(AdServerAdapter):
         return self.inventory_manager.validate_inventory_access(ad_unit_ids)
 
     # Sync management methods - delegated to sync manager
-    def sync_inventory(self, db_session, force=False, custom_targeting_limit=1000):
+    def sync_inventory(self, force=False, custom_targeting_limit=1000):
         """Synchronize inventory data from GAM (delegated to sync manager)."""
-        return self.sync_manager.sync_inventory(db_session, force, custom_targeting_limit)
+        return self.sync_manager.sync_inventory(force, custom_targeting_limit)
 
-    def sync_orders(self, db_session, force=False):
+    def sync_orders(self, force=False):
         """Synchronize orders data from GAM (delegated to sync manager)."""
-        return self.sync_manager.sync_orders(db_session, force)
+        return self.sync_manager.sync_orders(force)
 
-    def sync_full(self, db_session, force=False, custom_targeting_limit=1000):
+    def sync_full(self, force=False, custom_targeting_limit=1000):
         """Perform full synchronization (delegated to sync manager)."""
-        return self.sync_manager.sync_full(db_session, force, custom_targeting_limit)
+        return self.sync_manager.sync_full(force, custom_targeting_limit)
 
-    def sync_selective(self, db_session, sync_types, custom_targeting_limit=1000, audience_segment_limit=None):
+    def sync_selective(self, sync_types, custom_targeting_limit=1000, audience_segment_limit=None):
         """Perform selective synchronization (delegated to sync manager)."""
-        return self.sync_manager.sync_selective(db_session, sync_types, custom_targeting_limit, audience_segment_limit)
+        return self.sync_manager.sync_selective(sync_types, custom_targeting_limit, audience_segment_limit)
 
     def get_sync_status(self, db_session, sync_id):
         """Get sync status (delegated to sync manager)."""

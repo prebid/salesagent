@@ -7,6 +7,13 @@ See GitHub issue #812: Incremental Sync incorrectly marks unchanged Placements a
 import sys
 from unittest.mock import MagicMock, patch
 
+# Imported at collection, before tests/unit/conftest.py's autouse fixture replaces
+# database_session.get_db_session with its blanket mock: the sync module and the unit of
+# work it opens must bind the real one, which draws from the stand-in below. Imported
+# under that fixture instead, they bind the blanket mock, whose adapter config names no
+# adapter, and the sync stops at "GAM not configured" before it writes anything.
+from src.services.background_sync_service import _run_sync_thread
+
 
 def _setup_mock_dependencies():
     """Set up mocks for the heavy external dependencies of _run_sync_thread.
@@ -33,22 +40,23 @@ def _setup_mock_dependencies():
     }
 
 
-def _make_mock_db_session(scalars_side_effect, scalar_return=None):
-    """Create a mock db session context manager.
+def _make_mock_scoped_session(scalars_side_effect, scalar_return=None):
+    """Create a stand-in for the scoped session factory every ``get_db_session`` draws from.
+
+    The sync's ``get_db_session`` blocks and its units of work (``SyncJobUoW``) both open
+    their session through it, so one stand-in serves every database scope the thread opens.
 
     Args:
         scalars_side_effect: Side effect function for db.scalars()
         scalar_return: Return value for db.scalar() (used in count queries)
     """
     mock_db = MagicMock()
+    mock_db.info = {}  # the unit of work keeps its effect scope here
     mock_db.scalars.side_effect = scalars_side_effect
     if scalar_return is not None:
         mock_db.scalar.return_value = scalar_return
 
-    mock_db_session = MagicMock()
-    mock_db_session.__enter__ = MagicMock(return_value=mock_db)
-    mock_db_session.__exit__ = MagicMock(return_value=False)
-    return mock_db_session
+    return MagicMock(return_value=mock_db)
 
 
 def _ensure_googleads_mocked():
@@ -114,14 +122,14 @@ def _run_sync_with_mode(sync_mode, mocks):
         return result
 
     scalar_return = 0 if sync_mode == "incremental" else None
-    mock_db_session = _make_mock_db_session(scalars_side_effect, scalar_return=scalar_return)
+    mock_scoped_session = _make_mock_scoped_session(scalars_side_effect, scalar_return=scalar_return)
 
     added_modules = _ensure_googleads_mocked()
     try:
         with (
             patch(
-                "src.services.background_sync_service.get_db_session",
-                return_value=mock_db_session,
+                "src.core.database.database_session.get_scoped_session",
+                return_value=mock_scoped_session,
             ),
             patch(
                 "src.adapters.gam_inventory_discovery.GAMInventoryDiscovery",
@@ -132,8 +140,6 @@ def _run_sync_with_mode(sync_mode, mocks):
                 return_value=mocks["inventory_service"],
             ),
         ):
-            from src.services.background_sync_service import _run_sync_thread
-
             _run_sync_thread(
                 tenant_id="test-tenant",
                 sync_id=f"sync-{sync_mode}",
@@ -158,6 +164,8 @@ def test_incremental_sync_should_skip_stale_marking():
     """
     mocks = _setup_mock_dependencies()
     _run_sync_with_mode("incremental", mocks)
+    # The sync reached its writes, so the stale marking it skipped was not skipped by a failure.
+    mocks["inventory_service"]._write_inventory_batch.assert_called()
     mocks["inventory_service"]._mark_stale_inventory.assert_not_called()
 
 

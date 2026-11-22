@@ -32,8 +32,8 @@ class _ProcessEngineSession(Session):
 
 
 #: Thread-local sessions for the sync API, separate from ``get_db_session``'s, on the same
-#: engine: a sync's failure is recorded in a unit of work of its own while this session
-#: still holds the failed work.
+#: engine: a sync route holds this one open while the sync's units of work open and close
+#: ``get_db_session``'s, and a unit's exit closes only the session it opened.
 db_session: scoped_session[Session] = scoped_session(sessionmaker(class_=_ProcessEngineSession))
 
 logger = logging.getLogger(__name__)

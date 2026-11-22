@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.account import AccountRepository
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.effects import begin_effects, drain_after_commit, end_effects
@@ -534,15 +535,21 @@ class PublisherUoW(BaseUoW):
 
 
 class SyncJobUoW(BaseUoW):
-    """Unit of Work for a tenant's sync jobs.
+    """Unit of Work for one step of a tenant's sync job: start it, mark it running, complete it, or fail it.
 
-    For a caller that records a job's failure with no session of its own open
-    (``src.services.sync_jobs.record_sync_failure``).
+    A sync is a sequence of these units, never one unit around its work: every unit shares
+    the thread's scoped session, so a unit opened inside another closes the outer one's
+    session (``src.services.sync_jobs.recording_failure``). The adapter config is here for
+    the adapter type a new job records.
 
     Args:
         tenant_id: Tenant scope for all repository queries.
     """
 
     sync_jobs: SyncJobRepository | None
+    adapter_config: AdapterConfigRepository | None
 
-    _REPOSITORIES: ClassVar[Mapping[str, type]] = {"sync_jobs": SyncJobRepository}
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {
+        "sync_jobs": SyncJobRepository,
+        "adapter_config": AdapterConfigRepository,
+    }
