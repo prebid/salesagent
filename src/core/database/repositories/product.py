@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from src.core.database.models import InventoryProfile, Product, Publisher, Tenant
-from src.core.format_satisfaction import refuse_outside_common_intersection
+from src.core.format_satisfaction import FormatOptionsOutsideCommonIntersection, refuse_outside_common_intersection
 from src.core.publisher_format_catalog import PublisherCatalog, format_option_refusal
 
 logger = logging.getLogger(__name__)
@@ -203,7 +203,7 @@ class ProductRepository:
         """Persist a new product within this tenant.
 
         The product.tenant_id must match the repository's tenant_id.
-        Raises ValueError if there is a tenant mismatch, and its subclass
+        Raises ValueError if there is a tenant mismatch, and
         :class:`~src.core.format_satisfaction.FormatOptionsOutsideCommonIntersection` if the
         product sells several publishers without placements and declares an option not all of
         them accept.
@@ -219,7 +219,7 @@ class ProductRepository:
         self._session.add(product)
         try:
             refuse_outside_common_intersection(product)
-        except ValueError:
+        except FormatOptionsOutsideCommonIntersection:
             self._session.expunge(product)
             raise
         self._session.flush()

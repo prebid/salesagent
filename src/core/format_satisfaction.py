@@ -2511,14 +2511,13 @@ def outside_common_intersection(product: Any) -> tuple[LibraryFormatDeclaration,
     return tuple(d for d in declared if any(d not in (layer.declarations or ()) for layer in slices))
 
 
-class FormatOptionsOutsideCommonIntersection(OperatorRefusal, ValueError):
+class FormatOptionsOutsideCommonIntersection(OperatorRefusal):
     """A product of several publishers, with no placements, offering a format option not all of them accept.
 
     One class for every write path :func:`refuse_outside_common_intersection` guards: the admin
-    error handler answers it with 400 and ``MESSAGE``, and :class:`ProductRepository`'s writes
-    raise it as the ``ValueError`` they refuse an unstorable product with, as
-    :class:`~src.core.http_utils.InvalidVirtualHost` is both. Its details name the product and
-    each option outside the intersection with the publisher it is scoped to.
+    product and profile forms and :class:`ProductRepository`'s writes. The admin error handler
+    answers it with 400 and ``MESSAGE``. Its details name the product and each option outside
+    the intersection with the publisher it is scoped to.
     """
 
     MESSAGE = (
