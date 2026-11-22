@@ -165,10 +165,11 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         self._cleanups.enter_context(no_configured_super_admins())
 
     def _cleanup(self) -> None:
-        """Delete the tenants this env created, with their rows, and restore the settings.
+        """Delete the tenants this env named through ``_new_tenant_id``, with their rows, and restore the settings.
 
-        The e2e stack's database outlives the scenario, so a tenant left there stays for
-        every later run.
+        The e2e stack's database outlives the scenario: ``_reset_e2e_db`` in
+        tests/bdd/conftest.py empties it before the next e2e scenario, and no fixture
+        empties it after the last one.
         """
         with self._cleanups:
             super()._cleanup()

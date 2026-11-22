@@ -58,9 +58,9 @@ the least role that may send a write, unless the scenario names another. T-ADMIN
 and T-ADMIN-SCOPE-012 name one, because the OIDC test route asks for `admin`. The three rows
 the membership lookup must not match (the target tenant's other member, the caller's row in
 another tenant, and the caller's inactive row) hold `admin`, which passes the role check of
-all five routes, so a refusal on those rows is the lookup's. The env deletes the tenants it
-created when it exits. The feature file is the one statement of the contract: the pytest
-twins that once ran the same assertions in-process and against the
+all five routes, so a refusal on those rows is the lookup's. When it exits, the env deletes
+the target tenant and the home tenant it created. The feature file is the one statement of
+the contract: the pytest twins that once ran the same assertions in-process and against the
 Docker stack were deleted once `AdminTransport.E2E` carried the Gherkin, as
 BR-ADMIN-ACCOUNTS' own `test_admin_bdd_e2e.py` had been.
 
