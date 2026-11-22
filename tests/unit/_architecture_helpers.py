@@ -377,7 +377,7 @@ def import_map(relpath: str, tree: ast.Module) -> dict[str, tuple[str, str]]:
 
 
 #: The models module's dotted name: what an ORM-class import binding must come from.
-ORM_MODELS_MODULE = module_name_for(str(MODELS_MODULE.relative_to(REPO_ROOT)))
+ORM_MODELS_MODULE = module_name_for(rel(MODELS_MODULE))
 
 
 def orm_bindings(relpath: str, tree: ast.Module) -> dict[str, str]:
@@ -1008,7 +1008,7 @@ def extract_select_calls(
         statement can span multiple lines).
     """
     tree = parse_module(source_path)
-    lines = source_path.read_text().splitlines()
+    lines = source_path.read_text(encoding="utf-8").splitlines()
     references = orm_references(rel(source_path), tree)
 
     target_nodes: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
