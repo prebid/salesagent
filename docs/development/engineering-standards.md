@@ -79,14 +79,17 @@ defines it, and nothing outside it. Every standard in this document
 applies in full to the code the change writes; none of them is optional
 there.
 
-- **Must fix:** a defect anywhere in the change's scope, or a standard
+- **Must fix:** a defect anywhere in the change's scope (code that
+  behaves wrongly for an input the changed code reaches), or a standard
   the code the change writes breaks — including a changed behavior not
   proven by a live BDD scenario on all transports
   ([§ Verify the change](#verify-the-change), item 6). Name the line, the
   concrete impact, and the standard.
 - **Follow-up:** a real problem outside the change's scope, or a
-  pre-existing standards gap in a caller or callee the change does not
-  edit. Name it so it becomes an issue; it is never a merge blocker.
+  pre-existing standards violation in a caller or callee the change does
+  not edit, including one that standard's own section calls a defect,
+  unless it makes the changed code behave wrongly. Name it so it becomes
+  an issue; it is never a merge blocker.
 - **An unverified concern is a question**, not a finding.
 - **Raise each concern once.** Group related findings into one comment,
   rather than a summary plus the same point inline.
