@@ -90,6 +90,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     curl \
     nginx
 
+# The app runs from the uv-built /opt/venv; nothing in the runtime image uses the base
+# image's pip, and shipping it only carries pip's own CVEs into the image scan.
+RUN python -m pip uninstall -y pip
+
 # Install supercronic for cron jobs (container-friendly cron), built from source above.
 COPY --from=supercronic /go/bin/supercronic /usr/local/bin/supercronic
 RUN chmod +x /usr/local/bin/supercronic
