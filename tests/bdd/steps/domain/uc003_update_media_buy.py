@@ -3787,3 +3787,98 @@ def assert_update_not_persisted(ctx: dict) -> None:
     assert stored is None or float(stored) != _requested_budget(ctx), (
         f"the update was rejected but the stored budget is the requested {_requested_budget(ctx)}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# One request, one atomic mutation (#2647)
+# ═══════════════════════════════════════════════════════════════════════
+# update_media_buy.mdx @ v3.2.7 line 25: "One `update_media_buy` request is one atomic
+# mutation." A request that changes several things is applied as a whole or not at all, and
+# the buyer reads the outcome back with get_media_buys. These steps seed the starting values
+# the readback compares against and read each value off the get_media_buys wire.
+
+
+@given(parsers.parse('package "{label}" holds a budget of {budget:d} and is not paused'))
+def given_package_budget_not_paused(ctx: dict, label: str, budget: int) -> None:
+    """Store *budget* and ``paused: false`` on package *label*, the values a readback compares against.
+
+    Both are written rather than left to defaults: ``get_media_buys`` serves ``paused`` from
+    ``package_config`` and omits it when unset, so a readback of "not paused" needs the stored
+    ``false`` to compare with, and a distinctive budget is what separates "unchanged" from a
+    factory default.
+    """
+    from decimal import Decimal
+
+    from tests.factories import MediaPackageFactory
+
+    _stored_budget, config = _stored_package(ctx, label)
+    MediaPackageFactory(
+        media_buy=_existing_media_buy(ctx),
+        package_id=_resolve_package_id(ctx, label),
+        budget=Decimal(budget),
+        package_config={**config, "budget": float(budget), "paused": False},
+    )
+    ctx["env"]._commit_factory_data()  # noqa: SLF001 — the harness's commit seam, as given_package_exists uses
+
+
+@given(parsers.parse('the ad server refuses the "{action}" update'))
+def given_ad_server_refuses_update_action(ctx: dict, action: str) -> None:
+    """The ad server refuses the ``update_media_buy`` call carrying *action* and accepts the others."""
+    ctx["env"].refuse_adapter_update_action(action)
+
+
+@then(parsers.parse("the response should contain a revision greater than {floor:d}"))
+def then_response_revision_above(ctx: dict, floor: int) -> None:
+    """The update response's wire ``revision`` moved past *floor*, the revision the buy was seeded at.
+
+    update_media_buy.mdx @ v3.2.7 line 274: "Every mutating update increments `revision` and
+    returns the new value in the success response." The pin does not say by how much, so the
+    bound is strict but not an exact value.
+    """
+    actual = wire_dict(ctx).get("revision")
+    assert isinstance(actual, int) and actual > floor, (
+        f"the update response carries revision {actual!r}; a mutating update must return one above {floor}"
+    )
+
+
+@then(parsers.parse('get_media_buys reports package "{label}" with budget {budget:d}'))
+def then_readback_package_budget(ctx: dict, label: str, budget: int) -> None:
+    """The package's ``budget`` on the get_media_buys wire is *budget*."""
+    from tests.bdd.steps.domain.uc019_query_media_buys import _wire_package
+
+    reported = _wire_package(ctx, _resolve_package_id(ctx, label)).get("budget")
+    assert reported == budget, f"get_media_buys reports package {label!r} with budget {reported!r}, expected {budget}"
+
+
+@then(parsers.parse('get_media_buys reports package "{label}" with paused {paused}'))
+def then_readback_package_paused(ctx: dict, label: str, paused: str) -> None:
+    """The package's ``paused`` on the get_media_buys wire is *paused*."""
+    from tests.bdd.steps.domain.uc019_query_media_buys import _wire_package
+
+    expected = as_bool(paused)
+    reported = _wire_package(ctx, _resolve_package_id(ctx, label)).get("paused")
+    assert reported is expected, (
+        f"get_media_buys reports package {label!r} with paused {reported!r}, expected {expected}"
+    )
+
+
+@then(parsers.parse('get_media_buys reports media buy "{label}" at a revision greater than {floor:d}'))
+def then_readback_revision_above(ctx: dict, label: str, floor: int) -> None:
+    """The buy's ``revision`` on the get_media_buys wire moved past *floor*: the update was stored."""
+    from tests.bdd.steps.domain.uc019_query_media_buys import _wire_media_buy
+
+    reported = _wire_media_buy(ctx, label).get("revision")
+    assert isinstance(reported, int) and reported > floor, (
+        f"get_media_buys reports media buy {label!r} at revision {reported!r}; the update must have moved it past {floor}"
+    )
+
+
+@then(parsers.parse('get_media_buys reports media buy "{label}" at revision {revision:d}'))
+def then_readback_revision_exact(ctx: dict, label: str, revision: int) -> None:
+    """The buy's ``revision`` on the get_media_buys wire is exactly *revision*."""
+    from tests.bdd.steps.domain.uc019_query_media_buys import _wire_media_buy
+
+    reported = _wire_media_buy(ctx, label).get("revision")
+    assert reported == revision, (
+        f"get_media_buys reports media buy {label!r} at revision {reported!r}, expected {revision}"
+    )

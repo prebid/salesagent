@@ -6535,6 +6535,10 @@ _UC003_INLINE_CREATIVES_READBACK_TAGS = frozenset(
         "T-UC-003-alt-creatives-inline",
         "T-UC-003-storyboard-creative-fate-after-cancellation",
         "T-UC-003-media-buy-name",
+        # #2647: they read the stored budgets, pause and revision back with get_media_buys.
+        "T-UC-003-local-atomic-two-package-budgets",
+        "T-UC-003-local-atomic-budget-and-campaign-pause",
+        "T-UC-003-local-atomic-refused-midway",
     }
 )
 
