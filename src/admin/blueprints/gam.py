@@ -134,6 +134,26 @@ def safe_get(obj, key, default=None):
     return getattr(obj, key, default)
 
 
+def _service_account_key_issue(key_data: object) -> str | None:
+    """What is wrong with a parsed service-account key document, or ``None`` when it can be stored.
+
+    Its ``client_email`` becomes ``gam_service_account_email`` (the ``AdapterConfig`` setter),
+    which ``tenant_status`` needs, so an empty or null one is refused rather than stored.
+    """
+    if not isinstance(key_data, dict):
+        return "Service account JSON must be a JSON object"
+    required_fields = ["type", "project_id", "private_key_id", "private_key", "client_email"]
+    missing_fields = [field for field in required_fields if field not in key_data]
+    if missing_fields:
+        return f"Service account JSON missing required fields: {', '.join(missing_fields)}"
+    if key_data.get("type") != "service_account":
+        return "Service account JSON must be of type 'service_account'"
+    client_email = key_data.get("client_email")
+    if not isinstance(client_email, str) or not client_email.strip():
+        return "Service account JSON client_email must not be empty"
+    return None
+
+
 def validate_gam_config(data: dict) -> None:
     """Refuse GAM configuration data with one :class:`FormIssue` per field that cannot be saved."""
     errors: list[FormIssue] = []
@@ -168,19 +188,8 @@ def validate_gam_config(data: dict) -> None:
                 import json
 
                 key_data = json.loads(service_account_json)
-                required_fields = ["type", "project_id", "private_key_id", "private_key", "client_email"]
-                missing_fields = [field for field in required_fields if field not in key_data]
-                if missing_fields:
-                    errors.append(
-                        FormIssue(
-                            "service_account_json",
-                            f"Service account JSON missing required fields: {', '.join(missing_fields)}",
-                        )
-                    )
-                elif key_data.get("type") != "service_account":
-                    errors.append(
-                        FormIssue("service_account_json", "Service account JSON must be of type 'service_account'")
-                    )
+                if issue := _service_account_key_issue(key_data):
+                    errors.append(FormIssue("service_account_json", issue))
             except json.JSONDecodeError:
                 errors.append(FormIssue("service_account_json", "Invalid JSON format in service account JSON"))
 
