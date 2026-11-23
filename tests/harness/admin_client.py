@@ -34,6 +34,10 @@ BROWSER_PAGE_HEADERS = {
     "Sec-Fetch-Mode": "navigate",
 }
 
+#: What a client that is not a browser sends: no ``Accept``, ``Origin`` or ``Sec-Fetch-*``
+#: header (``requests`` would add ``Accept: */*`` itself). The admin app answers it with JSON.
+NO_BROWSER_HEADERS: dict[str, str | None] = {"Accept": None}
+
 
 class _CaseInsensitiveHeaders(dict):
     """Header mapping that looks up regardless of case, on either transport.
@@ -276,6 +280,13 @@ class AdminOperatorMixin:
         *,
         data: dict[str, str] | None = None,
         json: dict[str, Any] | None = None,
+        headers: dict[str, str | None] | None = None,
     ) -> AdminResponse:
-        """One authenticated request to *tenant_id*'s admin route at *path*, with a form or JSON body."""
-        return self.admin_client(tenant_id).request(method, f"/tenant/{tenant_id}/{path}", data=data, json=json)
+        """One request on the operator's client to *tenant_id*'s admin route at *path*.
+
+        The body and *headers* are as :meth:`AdminClient.request` takes them. The client is the
+        super admin's unless the env stated another caller's session on it.
+        """
+        return self.admin_client(tenant_id).request(
+            method, f"/tenant/{tenant_id}/{path}", data=data, json=json, headers=headers
+        )

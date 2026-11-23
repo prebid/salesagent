@@ -79,7 +79,7 @@
                 {% if not key.revoked_at %}
                 <form method="POST"
                       action="{{ url_for('signing_keys.revoke_signing_key_route', tenant_id=tenant_id, kid=key.kid) }}"
-                      onsubmit="return confirm('Revoke {{ key.kid }}? Signatures made with it will stop being produced immediately.');">
+                      onsubmit="return confirm({{ ('Revoke ' ~ key.kid ~ '? Signatures made with it will stop being produced immediately.')|tojson|forceescape }});">
                     <button type="submit" class="btn btn-danger">Revoke</button>
                 </form>
                 {% endif %}

@@ -24,7 +24,7 @@ from flask import redirect
 
 import src.core.config as config_module
 from src.core.database.models import TenantAuthConfig, User, UserRole
-from tests.helpers.admin_session import tenant_user_session
+from tests.helpers.admin_session import cached_super_admin, tenant_user_session
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -156,20 +156,19 @@ def test_a_super_admin_email_from_a_tenant_sso_reaches_no_other_tenant(sso_tenan
     assert client.get(f"/tenant/{TENANT}/users").status_code == 200
 
 
-#: The keys ``google_callback`` writes for a super admin (``is_super_admin`` adds ``admin_email``).
+#: The keys ``google_callback`` writes for a super admin, with the cache ``is_super_admin`` keeps.
 _DEPLOYMENT_SUPER_ADMIN_SESSION = {
     "user": SUPER_ADMIN_EMAIL,
-    "is_super_admin": True,
-    "admin_email": SUPER_ADMIN_EMAIL,
     "role": "super_admin",
+    **cached_super_admin(SUPER_ADMIN_EMAIL),
 }
 
 
 def test_a_tenant_sso_sign_in_drops_an_earlier_super_admin_session(sso_tenants, test_admin_app, monkeypatch):
-    """The ``role == "super_admin"`` gates (``core.index``) never ask is_super_admin(); only the reset closes them."""
+    """No key of the earlier super admin's identity survives a tenant SSO sign-in in the same browser."""
     from src.core.config import get_settings
 
-    monkeypatch.setattr(get_settings().runtime, "adcp_multi_tenant", True)  # core.index's role gate
+    monkeypatch.setattr(get_settings().runtime, "adcp_multi_tenant", True)  # core.index's super-admin branch
     _StubIdentityProvider.asserted = {"email": TENANT_ADMIN, "email_verified": True}
     client = test_admin_app.test_client()
     with client.session_transaction() as sess:
@@ -178,7 +177,7 @@ def test_a_tenant_sso_sign_in_drops_an_earlier_super_admin_session(sso_tenants, 
     assert client.get("/auth/oidc/callback").status_code == 302
 
     with client.session_transaction() as sess:
-        assert {"role", "is_super_admin", "admin_email"}.isdisjoint(sess)
+        assert {"role", *cached_super_admin(SUPER_ADMIN_EMAIL)}.isdisjoint(sess)
         assert (sess["user"], sess["auth_method"]) == (TENANT_ADMIN, "oidc")
     assert client.get("/").status_code == 403
 

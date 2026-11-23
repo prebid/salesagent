@@ -177,7 +177,7 @@ def update_admin_settings():
 
 
 @settings_bp.route("/general", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 @log_admin_action("update_general_settings")
 def update_general(tenant_id):
     """Update general tenant settings."""
@@ -322,7 +322,7 @@ class NoAdapterConfigured(StateConflict):
 
 
 @settings_bp.route("/adapter", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 @log_admin_action(
     "update_adapter",
     extract_details=lambda r, **kw: {
@@ -481,7 +481,7 @@ def update_adapter(tenant_id):
 
 @settings_bp.route("/slack", methods=["POST"])
 @log_admin_action("update_slack")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def update_slack(tenant_id):
     """Update Slack integration settings."""
     webhook_url = request.form.get("slack_webhook_url", "").strip()
@@ -520,7 +520,7 @@ def update_slack(tenant_id):
 
 @settings_bp.route("/ai", methods=["POST"])
 @log_admin_action("update_ai")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def update_ai(tenant_id):
     """Update AI services settings (multi-provider configuration)."""
     provider = request.form.get("ai_provider", "gemini").strip()
@@ -828,11 +828,6 @@ def add_authorized_domain(tenant_id):
 
     if not domain:
         flash("Domain is required", "error")
-        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
-
-    # Basic domain validation
-    if not domain or "." not in domain or "@" in domain:
-        flash("Please enter a valid domain (e.g., company.com)", "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="access"))
 
     if add_domain(tenant_id, domain):
@@ -1279,7 +1274,7 @@ def check_approximated_domain_status(tenant_id):
 
 
 @settings_bp.route("/approximated-register-domain", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 @log_admin_action("register_approximated_domain")
 def register_approximated_domain(tenant_id):
     """Register a domain with Approximated for TLS and routing."""
@@ -1303,7 +1298,7 @@ def register_approximated_domain(tenant_id):
 
 
 @settings_bp.route("/approximated-unregister-domain", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 @log_admin_action("unregister_approximated_domain")
 def unregister_approximated_domain(tenant_id):
     """Unregister a domain from Approximated."""
