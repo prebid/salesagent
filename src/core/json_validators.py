@@ -9,7 +9,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.orm import validates
 
 from src.core.http_utils import authorized_domain
@@ -58,14 +58,22 @@ class TargetingTemplateModel(BaseModel):
 
 
 class PolicySettingsModel(BaseModel):
-    """Model for tenant.policy_settings."""
+    """Model for tenant.policy_settings: the advertising policy the Policy page saves.
 
-    enabled: bool = Field(default=False)
-    require_approval: bool = Field(default=False)
-    max_daily_budget: float | None = Field(None, gt=0)
-    blocked_categories: list[str] = Field(default_factory=list)
-    allowed_advertisers: list[str] = Field(default_factory=list)
-    custom_rules: dict[str, Any] = Field(default_factory=dict)
+    The fields are the ones ``policy.update`` writes and the Policy page and policy agent
+    read. Undeclared keys are kept: the validator used to drop them, so every list the
+    page saved was discarded while the save reported success.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    enabled: bool = False
+    require_manual_review: bool = False
+    prohibited_advertisers: list[str] = Field(default_factory=list)
+    prohibited_categories: list[str] = Field(default_factory=list)
+    prohibited_tactics: list[str] = Field(default_factory=list)
+    default_prohibited_categories: list[str] = Field(default_factory=list)
+    default_prohibited_tactics: list[str] = Field(default_factory=list)
 
 
 class DeliveryDataModel(BaseModel):
@@ -199,8 +207,10 @@ class JSONValidatorMixin:
             raise ValueError(f"{key} must be a dictionary")
 
         # Validate using Pydantic
+        # Only what was written is stored: a default added here would replace the
+        # defaults the Policy page applies to a key the tenant never saved.
         validated = PolicySettingsModel(**value)
-        return validated.model_dump(mode="json")
+        return validated.model_dump(mode="json", exclude_unset=True)
 
     @validates("delivery_data")
     def validate_delivery_data(self, key, value):

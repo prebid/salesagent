@@ -222,10 +222,8 @@ class TestJSONValidation:
             # Retrieve and verify
             retrieved = session.scalars(select(Tenant).filter_by(tenant_id="json_test")).first()
             assert retrieved.authorized_emails == ["test@example.com"]
-            # PolicySettingsModel adds default values
-            assert retrieved.policy_settings["enabled"] is True
-            assert "require_approval" in retrieved.policy_settings  # Default added
-            assert "blocked_categories" in retrieved.policy_settings  # Default added
+            # Stored as written: the validator adds no defaults
+            assert retrieved.policy_settings == {"enabled": True}
 
     def test_principal_platform_mappings(self, test_db):
         """Test Principal platform_mappings validation."""
