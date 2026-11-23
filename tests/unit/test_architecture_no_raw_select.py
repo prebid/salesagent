@@ -103,7 +103,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/gam.py", "test_gam_connection"),
     ("src/admin/blueprints/gam.py", "view_gam_line_item"),
     ("src/admin/blueprints/inventory.py", "analyze_ad_server_inventory"),
-    ("src/admin/blueprints/inventory.py", "check_inventory_sync"),
+    # check_inventory_sync removed — its count and last sync come from GAMInventoryRepository
     ("src/admin/blueprints/inventory.py", "get_inventory_list"),
     ("src/admin/blueprints/inventory.py", "get_inventory_sizes"),
     ("src/admin/blueprints/inventory.py", "_batch_fetch_ancestors"),  # FIXME(#1119): extract to repository

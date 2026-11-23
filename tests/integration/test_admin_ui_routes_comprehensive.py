@@ -232,6 +232,24 @@ class TestInventoryRoutes:
         response = authenticated_admin_session.get(f"/tenant/{tenant_id}/check-inventory-sync", follow_redirects=True)
         assert response.status_code in [200, 404]
 
+    def test_check_inventory_sync_reports_the_latest_sync(self, authenticated_admin_session, factory_session):
+        """last_sync is the latest sync of any item, as on every other inventory view, not the newest
+        item's creation time: a re-sync moves it without creating anything."""
+        tenant = TenantFactory()
+        latest = datetime.now(UTC).replace(microsecond=0)
+        GAMInventoryFactory(tenant=tenant, created_at=latest - timedelta(days=10), last_synced=latest)
+        GAMInventoryFactory(
+            tenant=tenant, created_at=latest - timedelta(days=5), last_synced=latest - timedelta(days=5)
+        )
+        GAMInventoryFactory(created_at=latest, last_synced=latest + timedelta(days=1))  # another tenant's
+
+        response = authenticated_admin_session.get(f"/tenant/{tenant.tenant_id}/check-inventory-sync")
+
+        assert response.status_code == 200
+        body = response.get_json()
+        assert (body["has_inventory"], body["inventory_count"]) == (True, 2)
+        assert datetime.fromisoformat(body["last_sync"]) == latest
+
     def test_sync_status_counts_every_status_and_reads_the_latest_sync_per_type(
         self, authenticated_admin_session, factory_session
     ):

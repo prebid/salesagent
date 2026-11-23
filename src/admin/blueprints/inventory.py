@@ -497,30 +497,18 @@ def check_inventory_sync(tenant_id):
         return jsonify({"error": "Access denied"}), 403
 
     with get_db_session() as db_session:
+        inventory = GAMInventoryRepository(db_session, tenant_id)
         # Count inventory items
-        inventory_count = db_session.scalar(
-            select(func.count()).select_from(GAMInventory).filter_by(tenant_id=tenant_id)
-        )
-
-        has_inventory = inventory_count > 0
+        inventory_count = sum(sum(statuses.values()) for statuses in inventory.counts_by_type_and_status().values())
 
         # Get last sync time if available
-        last_sync = None
-        if has_inventory:
-            stmt = (
-                select(GAMInventory)
-                .filter(GAMInventory.tenant_id == tenant_id)
-                .order_by(GAMInventory.created_at.desc())
-            )
-            latest = db_session.scalars(stmt).first()
-            if latest and latest.created_at:
-                last_sync = latest.created_at.isoformat()
+        last_sync = inventory.last_synced_at()
 
         return jsonify(
             {
-                "has_inventory": has_inventory,
+                "has_inventory": inventory_count > 0,
                 "inventory_count": inventory_count,
-                "last_sync": last_sync,
+                "last_sync": last_sync.isoformat() if last_sync else None,
             }
         )
 
@@ -788,10 +776,13 @@ def _unit_to_dict(unit, *, matched_search=False):
     }
 
 
-def _get_inventory_stats(db_session, tenant_id):
-    """Get counts of ACTIVE items for the non-ad-unit inventory types, and the last sync time."""
-    inventory = GAMInventoryRepository(db_session, tenant_id)
-    counts = inventory.counts_by_type_and_status()
+def _get_inventory_stats(
+    inventory: GAMInventoryRepository, counts: dict[str, dict[str, int]]
+) -> dict[str, int | str | None]:
+    """Get counts of ACTIVE items for the non-ad-unit inventory types, and the last sync time.
+
+    *counts* is *inventory*'s ``counts_by_type_and_status()``, which the caller has read already.
+    """
     stats: dict[str, int | str | None] = {
         key: counts.get(inv_type, {}).get("ACTIVE", 0)
         for inv_type, key in [
@@ -962,9 +953,6 @@ def get_inventory_tree(tenant_id):
             GAMInventory.status == "ACTIVE",
         ]
 
-        # Count total active ad units (for truncation warning)
-        total_active_count = db_session.scalar(select(func.count()).select_from(GAMInventory).where(*base_where)) or 0
-
         if search:
             # --- Mode 3: Search with ancestors ---
             search_stmt = (
@@ -1018,12 +1006,17 @@ def get_inventory_tree(tenant_id):
             )
             roots, truncated = execute_limited(db_session, root_stmt, _TREE_LIMIT)
 
+            inventory = GAMInventoryRepository(db_session, tenant_id)
+            counts = inventory.counts_by_type_and_status()
+            # Count total active ad units (for truncation warning)
+            total_active_count = counts.get("ad_unit", {}).get("ACTIVE", 0)
+
             root_units = [_unit_to_dict(u) for u in roots]
             logger.info(
                 f"Returning {len(root_units)} root units (total active: {total_active_count}, truncated: {truncated})"
             )
 
-            stats = _get_inventory_stats(db_session, tenant_id)
+            stats = _get_inventory_stats(inventory, counts)
 
             result = jsonify(
                 {
@@ -1083,19 +1076,11 @@ def get_inventory_list(tenant_id):
     )
 
     with get_db_session() as db_session:
-        # First, get total counts before filtering (for diagnostics)
-        total_stmt = select(func.count()).select_from(GAMInventory).filter(GAMInventory.tenant_id == tenant_id)
-        total_count = db_session.scalar(total_stmt) or 0
+        # First, get counts by type before filtering (for diagnostics)
+        counts = GAMInventoryRepository(db_session, tenant_id).counts_by_type_and_status()
+        type_counts = {inventory_type: sum(statuses.values()) for inventory_type, statuses in counts.items()}
 
-        # Get counts by type before filtering
-        type_counts_stmt = (
-            select(GAMInventory.inventory_type, func.count())
-            .filter(GAMInventory.tenant_id == tenant_id)
-            .group_by(GAMInventory.inventory_type)
-        )
-        type_counts = dict(db_session.execute(type_counts_stmt).all())
-
-        logger.info(f"Total inventory in DB: {total_count}, by type: {type_counts}")
+        logger.info(f"Total inventory in DB: {sum(type_counts.values())}, by type: {type_counts}")
 
         # Build query
         stmt = select(GAMInventory).filter(GAMInventory.tenant_id == tenant_id)
