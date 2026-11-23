@@ -304,6 +304,13 @@ def is_tenant_admin(email, tenant_id=None):
         return user is not None
 
 
+#: The attribute an access decorator sets on the wrapper it returns: the check, as its module,
+#: its name and the arguments it was given. ``functools.wraps`` copies it to every outer
+#: wrapper, as it does the ``csrf_exempt`` mark. scripts/generate_admin_route_reference.py
+#: reads it for the Access check column.
+ACCESS_CHECK_ATTRIBUTE = "access_check"
+
+
 def require_auth(admin_only=False):
     """Decorator to require authentication for routes."""
 
@@ -332,6 +339,7 @@ def require_auth(admin_only=False):
 
             return f(*args, **kwargs)
 
+        setattr(decorated_function, ACCESS_CHECK_ATTRIBUTE, f"{__name__}.require_auth(admin_only={admin_only})")
         return decorated_function
 
     return decorator
@@ -517,6 +525,9 @@ def require_tenant_access(*, role: UserRole = UserRole.VIEWER):
                 _forbid("Your role does not allow this")
             return f(tenant_id, *args, **kwargs)
 
+        setattr(
+            decorated_function, ACCESS_CHECK_ATTRIBUTE, f"{__name__}.require_tenant_access(role=UserRole.{role.name})"
+        )
         return decorated_function
 
     return decorator

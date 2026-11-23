@@ -17,12 +17,14 @@ The paths are relative to the admin application. A deployment serves the applica
 
 Each table has the following columns:
 
-- **Access check** is the decorator that decides who reaches the view. `role=UserRole.ADMIN`
-  marks a route that only a tenant admin or a super admin reaches. `none` means the view
-  function carries no access decorator. Such a view is public, or it checks the session in
-  its own body.
-- **Audit operation** is the name the view passes to `log_admin_action`. `-` means the view
-  writes no audit log row through that decorator.
+- **Access check** is what the access decorator on the view records about itself: its module,
+  its name, and the arguments the route passes it. `role` is the least tenant role the route
+  needs, and a tenant user's request other than `GET`, `HEAD` or `OPTIONS` needs at least
+  `UserRole.MANAGER` whatever `role` says. `role=UserRole.ADMIN` marks a route that only a
+  tenant admin or a super admin reaches. `none` means that no decorator on the view records
+  an access check. Such a view is public, or it checks the session in its own body.
+- **Audit operation** is the operation that `log_admin_action` records on the view. `-` means
+  the view writes no audit log row through that decorator.
 - **View** is the Flask endpoint name, the value `url_for` takes.
 
 ## Flask built-in
@@ -35,59 +37,59 @@ Each table has the following columns:
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/api/tenant/<tenant_id>/gam/reporting` | GET | `require_tenant_access()` | - | `gam_reporting_api.get_gam_reporting` |
-| `/api/tenant/<tenant_id>/gam/reporting/ad-units` | GET | `require_tenant_access()` | - | `gam_reporting_api.get_ad_unit_breakdown` |
-| `/api/tenant/<tenant_id>/gam/reporting/advertiser/<advertiser_id>/summary` | GET | `require_tenant_access()` | - | `gam_reporting_api.get_advertiser_summary` |
-| `/api/tenant/<tenant_id>/gam/reporting/countries` | GET | `require_tenant_access()` | - | `gam_reporting_api.get_country_breakdown` |
-| `/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting` | GET | `require_tenant_access()` | - | `gam_reporting_api.get_principal_reporting` |
-| `/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting/summary` | GET | `require_tenant_access()` | - | `gam_reporting_api.get_principal_summary` |
+| `/api/tenant/<tenant_id>/gam/reporting` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `gam_reporting_api.get_gam_reporting` |
+| `/api/tenant/<tenant_id>/gam/reporting/ad-units` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `gam_reporting_api.get_ad_unit_breakdown` |
+| `/api/tenant/<tenant_id>/gam/reporting/advertiser/<advertiser_id>/summary` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `gam_reporting_api.get_advertiser_summary` |
+| `/api/tenant/<tenant_id>/gam/reporting/countries` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `gam_reporting_api.get_country_breakdown` |
+| `/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `gam_reporting_api.get_principal_reporting` |
+| `/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting/summary` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `gam_reporting_api.get_principal_summary` |
 
 ## `src/admin/blueprints/accounts.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/accounts/` | GET | `require_tenant_access()` | - | `accounts.list_accounts` |
-| `/tenant/<tenant_id>/accounts/<account_id>` | GET | `require_tenant_access()` | - | `accounts.account_detail` |
-| `/tenant/<tenant_id>/accounts/<account_id>/edit` | GET, POST | `require_tenant_access()` | `edit_account` | `accounts.edit_account` |
-| `/tenant/<tenant_id>/accounts/<account_id>/status` | POST | `require_tenant_access()` | `change_account_status` | `accounts.change_status` |
-| `/tenant/<tenant_id>/accounts/create` | GET, POST | `require_tenant_access()` | `create_account` | `accounts.create_account` |
+| `/tenant/<tenant_id>/accounts/` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `accounts.list_accounts` |
+| `/tenant/<tenant_id>/accounts/<account_id>` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `accounts.account_detail` |
+| `/tenant/<tenant_id>/accounts/<account_id>/edit` | GET, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `edit_account` | `accounts.edit_account` |
+| `/tenant/<tenant_id>/accounts/<account_id>/status` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `change_account_status` | `accounts.change_status` |
+| `/tenant/<tenant_id>/accounts/create` | GET, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `create_account` | `accounts.create_account` |
 
 ## `src/admin/blueprints/activity_stream.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/activities` | GET | `require_tenant_access()` | - | `activity_stream.get_activities_api` |
-| `/tenant/<tenant_id>/activity` | GET | `require_tenant_access()` | - | `activity_stream.activity_feed` |
-| `/tenant/<tenant_id>/events` | GET | `require_tenant_access()` | - | `activity_stream.activity_events` |
+| `/tenant/<tenant_id>/activities` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `activity_stream.get_activities_api` |
+| `/tenant/<tenant_id>/activity` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `activity_stream.activity_feed` |
+| `/tenant/<tenant_id>/events` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `activity_stream.activity_events` |
 
 ## `src/admin/blueprints/adapters.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/adapter/<adapter_name>/inventory_schema` | GET | `require_tenant_access()` | - | `adapters.adapter_adapter_name_inventory_schema` |
-| `/adapters/mock/config/<tenant_id>/<product_id>` | GET, POST | `require_tenant_access()` | - | `adapters.mock_config` |
-| `/api/adapters/<adapter_type>/capabilities` | GET | `require_tenant_access()` | - | `adapters.get_adapter_capabilities` |
-| `/api/tenant/<tenant_id>/adapter-config` | POST | `require_tenant_access()` | `update_adapter_config` | `adapters.save_adapter_config` |
-| `/api/tenant/<tenant_id>/adapters/broadstreet/test-connection` | POST | `require_tenant_access()` | - | `adapters.test_broadstreet_connection` |
-| `/api/tenant/<tenant_id>/adapters/broadstreet/zones` | GET | `require_tenant_access()` | - | `adapters.list_broadstreet_zones` |
-| `/setup_adapter` | POST | `require_tenant_access()` | `setup_adapter` | `adapters.setup_adapter` |
+| `/adapter/<adapter_name>/inventory_schema` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `adapters.adapter_adapter_name_inventory_schema` |
+| `/adapters/mock/config/<tenant_id>/<product_id>` | GET, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `adapters.mock_config` |
+| `/api/adapters/<adapter_type>/capabilities` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `adapters.get_adapter_capabilities` |
+| `/api/tenant/<tenant_id>/adapter-config` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `update_adapter_config` | `adapters.save_adapter_config` |
+| `/api/tenant/<tenant_id>/adapters/broadstreet/test-connection` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `adapters.test_broadstreet_connection` |
+| `/api/tenant/<tenant_id>/adapters/broadstreet/zones` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `adapters.list_broadstreet_zones` |
+| `/setup_adapter` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `setup_adapter` | `adapters.setup_adapter` |
 
 ## `src/admin/blueprints/api.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/api/gam/get-advertisers` | POST | `require_auth()` | `gam_get_advertisers` | `api.gam_get_advertisers` |
+| `/api/gam/get-advertisers` | POST | `src.admin.utils.helpers.require_auth(admin_only=False)` | `gam_get_advertisers` | `api.gam_get_advertisers` |
 | `/api/health` | GET | none | - | `api.api_health` |
-| `/api/oauth/status` | GET | `require_auth()` | - | `api.oauth_status` |
-| `/api/tenant/<tenant_id>/products` | GET | `require_tenant_access()` | - | `api.get_tenant_products` |
-| `/api/tenant/<tenant_id>/products/suggestions` | GET | `require_tenant_access()` | - | `api.get_product_suggestions` |
-| `/api/tenant/<tenant_id>/revenue-chart` | GET | `require_tenant_access()` | - | `api.revenue_chart_api` |
+| `/api/oauth/status` | GET | `src.admin.utils.helpers.require_auth(admin_only=False)` | - | `api.oauth_status` |
+| `/api/tenant/<tenant_id>/products` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `api.get_tenant_products` |
+| `/api/tenant/<tenant_id>/products/suggestions` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `api.get_product_suggestions` |
+| `/api/tenant/<tenant_id>/revenue-chart` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `api.revenue_chart_api` |
 
 ## `src/admin/blueprints/auth.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/auth/gam/authorize/<tenant_id>` | GET | `require_tenant_access()` | - | `auth.gam_authorize` |
+| `/auth/gam/authorize/<tenant_id>` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `auth.gam_authorize` |
 | `/auth/gam/callback` | GET | none | - | `auth.gam_callback` |
 | `/auth/google` | GET | none | - | `auth.google_auth` |
 | `/auth/google/callback` | GET | none | - | `auth.google_callback` |
@@ -101,10 +103,10 @@ Each table has the following columns:
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/authorized-properties` | GET | `require_tenant_access()` | - | `authorized_properties.list_authorized_properties` |
-| `/tenant/<tenant_id>/authorized-properties/api/list` | GET | `require_tenant_access()` | - | `authorized_properties.list_authorized_properties_api` |
-| `/tenant/<tenant_id>/property-tags` | GET | `require_tenant_access()` | - | `authorized_properties.list_property_tags` |
-| `/tenant/<tenant_id>/property-tags/create` | POST | `require_tenant_access()` | `create_property_tag` | `authorized_properties.create_property_tag` |
+| `/tenant/<tenant_id>/authorized-properties` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `authorized_properties.list_authorized_properties` |
+| `/tenant/<tenant_id>/authorized-properties/api/list` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `authorized_properties.list_authorized_properties_api` |
+| `/tenant/<tenant_id>/property-tags` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `authorized_properties.list_property_tags` |
+| `/tenant/<tenant_id>/property-tags/create` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `create_property_tag` | `authorized_properties.create_property_tag` |
 
 ## `src/admin/blueprints/core.py`
 
@@ -113,8 +115,8 @@ Each table has the following columns:
 | `/` | GET | none | - | `core.index` |
 | `/admin` | GET | none | - | `core.admin_index` |
 | `/admin/` | GET | none | - | `core.admin_index` |
-| `/admin/tenant/<tenant_id>/reactivate` | POST | `require_auth(admin_only=True)` | `reactivate_tenant` | `core.reactivate_tenant` |
-| `/create_tenant` | GET, POST | `require_auth(admin_only=True)` | `create_tenant` | `core.create_tenant` |
+| `/admin/tenant/<tenant_id>/reactivate` | POST | `src.admin.utils.helpers.require_auth(admin_only=True)` | `reactivate_tenant` | `core.reactivate_tenant` |
+| `/create_tenant` | GET, POST | `src.admin.utils.helpers.require_auth(admin_only=True)` | `create_tenant` | `core.create_tenant` |
 | `/debug/headers` | GET | none | - | `core.debug_headers` |
 | `/health` | GET | none | - | `core.health` |
 | `/health/config` | GET | none | - | `core.health_config` |
@@ -125,82 +127,82 @@ Each table has the following columns:
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/creative-agents/` | GET | `require_tenant_access()` | - | `creative_agents.list_creative_agents` |
-| `/tenant/<tenant_id>/creative-agents/<int:agent_id>/delete` | DELETE | `require_tenant_access()` | - | `creative_agents.delete_creative_agent` |
-| `/tenant/<tenant_id>/creative-agents/<int:agent_id>/edit` | GET, POST | `require_tenant_access()` | `edit_creative_agent` | `creative_agents.edit_creative_agent` |
-| `/tenant/<tenant_id>/creative-agents/<int:agent_id>/test` | POST | `require_tenant_access()` | `test_creative_agent` | `creative_agents.test_creative_agent` |
-| `/tenant/<tenant_id>/creative-agents/add` | GET, POST | `require_tenant_access()` | `add_creative_agent` | `creative_agents.add_creative_agent` |
-| `/tenant/<tenant_id>/creative-agents/default-agent` | POST | `require_tenant_access()` | `update_default_creative_agent` | `creative_agents.update_default_creative_agent` |
+| `/tenant/<tenant_id>/creative-agents/` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `creative_agents.list_creative_agents` |
+| `/tenant/<tenant_id>/creative-agents/<int:agent_id>/delete` | DELETE | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `creative_agents.delete_creative_agent` |
+| `/tenant/<tenant_id>/creative-agents/<int:agent_id>/edit` | GET, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `edit_creative_agent` | `creative_agents.edit_creative_agent` |
+| `/tenant/<tenant_id>/creative-agents/<int:agent_id>/test` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `test_creative_agent` | `creative_agents.test_creative_agent` |
+| `/tenant/<tenant_id>/creative-agents/add` | GET, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `add_creative_agent` | `creative_agents.add_creative_agent` |
+| `/tenant/<tenant_id>/creative-agents/default-agent` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `update_default_creative_agent` | `creative_agents.update_default_creative_agent` |
 
 ## `src/admin/blueprints/creatives.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/creatives/` | GET | `require_tenant_access()` | - | `creatives.index` |
-| `/tenant/<tenant_id>/creatives/analyze` | POST | `require_tenant_access()` | `analyze` | `creatives.analyze` |
-| `/tenant/<tenant_id>/creatives/list` | GET | `require_tenant_access()` | - | `creatives.list_creatives` |
-| `/tenant/<tenant_id>/creatives/review` | GET | `require_tenant_access()` | - | `creatives.review_creatives` |
-| `/tenant/<tenant_id>/creatives/review/<creative_id>/ai-review` | POST | `require_tenant_access()` | `ai_review_creative` | `creatives.ai_review_creative` |
-| `/tenant/<tenant_id>/creatives/review/<creative_id>/approve` | POST | `require_tenant_access()` | `approve_creative` | `creatives.approve_creative` |
-| `/tenant/<tenant_id>/creatives/review/<creative_id>/reject` | POST | `require_tenant_access()` | `reject_creative` | `creatives.reject_creative` |
+| `/tenant/<tenant_id>/creatives/` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `creatives.index` |
+| `/tenant/<tenant_id>/creatives/analyze` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `analyze` | `creatives.analyze` |
+| `/tenant/<tenant_id>/creatives/list` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `creatives.list_creatives` |
+| `/tenant/<tenant_id>/creatives/review` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `creatives.review_creatives` |
+| `/tenant/<tenant_id>/creatives/review/<creative_id>/ai-review` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `ai_review_creative` | `creatives.ai_review_creative` |
+| `/tenant/<tenant_id>/creatives/review/<creative_id>/approve` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `approve_creative` | `creatives.approve_creative` |
+| `/tenant/<tenant_id>/creatives/review/<creative_id>/reject` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `reject_creative` | `creatives.reject_creative` |
 
 ## `src/admin/blueprints/format_search.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/api/formats/agents` | GET | `require_auth()` | - | `format_search.list_creative_agents` |
-| `/api/formats/list` | GET | `require_auth()` | - | `format_search.list_all_formats` |
-| `/api/formats/search` | GET | `require_auth()` | - | `format_search.search_formats` |
-| `/api/formats/templates` | GET | `require_auth()` | - | `format_search.get_format_templates` |
+| `/api/formats/agents` | GET | `src.admin.utils.helpers.require_auth(admin_only=False)` | - | `format_search.list_creative_agents` |
+| `/api/formats/list` | GET | `src.admin.utils.helpers.require_auth(admin_only=False)` | - | `format_search.list_all_formats` |
+| `/api/formats/search` | GET | `src.admin.utils.helpers.require_auth(admin_only=False)` | - | `format_search.search_formats` |
+| `/api/formats/templates` | GET | `src.admin.utils.helpers.require_auth(admin_only=False)` | - | `format_search.get_format_templates` |
 
 ## `src/admin/blueprints/gam.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/gam/api/custom-targeting-keys` | GET | `require_tenant_access()` | - | `gam.get_gam_custom_targeting_keys` |
-| `/tenant/<tenant_id>/gam/api/line-item/<line_item_id>` | GET | `require_tenant_access()` | - | `gam.get_gam_line_item_api` |
-| `/tenant/<tenant_id>/gam/configure` | POST | `require_tenant_access()` | `configure_gam` | `gam.configure_gam` |
-| `/tenant/<tenant_id>/gam/create-service-account` | POST | `require_tenant_access()` | `create_gam_service_account` | `gam.create_service_account` |
-| `/tenant/<tenant_id>/gam/detect-network` | POST | `require_tenant_access()` | `detect_gam_network` | `gam.detect_gam_network` |
-| `/tenant/<tenant_id>/gam/get-service-account-email` | GET | `require_tenant_access()` | - | `gam.get_service_account_email` |
-| `/tenant/<tenant_id>/gam/line-item/<line_item_id>` | GET | `require_tenant_access()` | - | `gam.view_gam_line_item` |
-| `/tenant/<tenant_id>/gam/reset-stuck-sync` | POST | `require_tenant_access()` | `reset_stuck_gam_sync` | `gam.reset_stuck_sync` |
-| `/tenant/<tenant_id>/gam/sync-status/<sync_id>` | GET | `require_tenant_access()` | - | `gam.get_sync_status` |
-| `/tenant/<tenant_id>/gam/sync-status/latest` | GET | `require_tenant_access()` | - | `gam.get_latest_sync_status` |
-| `/tenant/<tenant_id>/gam/test-connection` | POST | `require_tenant_access()` | `test_gam_connection` | `gam.test_gam_connection` |
+| `/tenant/<tenant_id>/gam/api/custom-targeting-keys` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `gam.get_gam_custom_targeting_keys` |
+| `/tenant/<tenant_id>/gam/api/line-item/<line_item_id>` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `gam.get_gam_line_item_api` |
+| `/tenant/<tenant_id>/gam/configure` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `configure_gam` | `gam.configure_gam` |
+| `/tenant/<tenant_id>/gam/create-service-account` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `create_gam_service_account` | `gam.create_service_account` |
+| `/tenant/<tenant_id>/gam/detect-network` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `detect_gam_network` | `gam.detect_gam_network` |
+| `/tenant/<tenant_id>/gam/get-service-account-email` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `gam.get_service_account_email` |
+| `/tenant/<tenant_id>/gam/line-item/<line_item_id>` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `gam.view_gam_line_item` |
+| `/tenant/<tenant_id>/gam/reset-stuck-sync` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `reset_stuck_gam_sync` | `gam.reset_stuck_sync` |
+| `/tenant/<tenant_id>/gam/sync-status/<sync_id>` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `gam.get_sync_status` |
+| `/tenant/<tenant_id>/gam/sync-status/latest` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `gam.get_latest_sync_status` |
+| `/tenant/<tenant_id>/gam/test-connection` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `test_gam_connection` | `gam.test_gam_connection` |
 
 ## `src/admin/blueprints/inventory.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/api/tenant/<tenant_id>/inventory-list` | GET | `require_tenant_access()` | - | `inventory.get_inventory_list` |
-| `/api/tenant/<tenant_id>/inventory-stats` | GET | `require_tenant_access()` | - | `inventory.get_inventory_stats` |
-| `/api/tenant/<tenant_id>/inventory/sizes` | GET | `require_tenant_access()` | - | `inventory.get_inventory_sizes` |
-| `/api/tenant/<tenant_id>/inventory/sync` | POST | `require_tenant_access()` | `sync_inventory` | `inventory.sync_inventory` |
-| `/api/tenant/<tenant_id>/inventory/tree` | GET | `require_tenant_access()` | - | `inventory.get_inventory_tree` |
-| `/api/tenant/<tenant_id>/orders` | GET | `require_tenant_access()` | - | `inventory.get_orders` |
-| `/api/tenant/<tenant_id>/orders/<order_id>` | GET | `require_tenant_access()` | - | `inventory.get_order_details` |
-| `/api/tenant/<tenant_id>/sync-status` | GET | `require_tenant_access()` | - | `inventory.get_sync_status` |
-| `/api/tenant/<tenant_id>/sync/orders` | POST | `require_tenant_access()` | `sync_orders` | `inventory.sync_orders` |
-| `/api/tenant/<tenant_id>/targeting/all` | GET | `require_tenant_access()` | - | `inventory.get_targeting_data` |
-| `/api/tenant/<tenant_id>/targeting/values/<key_id>` | GET | `require_tenant_access()` | - | `inventory.get_targeting_values` |
-| `/tenant/<tenant_id>/analyze-ad-server` | GET | `require_auth()` | - | `inventory.analyze_ad_server_inventory` |
-| `/tenant/<tenant_id>/check-inventory-sync` | GET | `require_auth()` | - | `inventory.check_inventory_sync` |
-| `/tenant/<tenant_id>/inventory` | GET | `require_tenant_access()` | - | `inventory.inventory_browser` |
-| `/tenant/<tenant_id>/orders` | GET | `require_auth()` | - | `inventory.orders_browser` |
-| `/tenant/<tenant_id>/targeting` | GET | `require_tenant_access()` | - | `inventory.targeting_browser` |
+| `/api/tenant/<tenant_id>/inventory-list` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `inventory.get_inventory_list` |
+| `/api/tenant/<tenant_id>/inventory-stats` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `inventory.get_inventory_stats` |
+| `/api/tenant/<tenant_id>/inventory/sizes` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `inventory.get_inventory_sizes` |
+| `/api/tenant/<tenant_id>/inventory/sync` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `sync_inventory` | `inventory.sync_inventory` |
+| `/api/tenant/<tenant_id>/inventory/tree` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `inventory.get_inventory_tree` |
+| `/api/tenant/<tenant_id>/orders` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `inventory.get_orders` |
+| `/api/tenant/<tenant_id>/orders/<order_id>` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `inventory.get_order_details` |
+| `/api/tenant/<tenant_id>/sync-status` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `inventory.get_sync_status` |
+| `/api/tenant/<tenant_id>/sync/orders` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `sync_orders` | `inventory.sync_orders` |
+| `/api/tenant/<tenant_id>/targeting/all` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `inventory.get_targeting_data` |
+| `/api/tenant/<tenant_id>/targeting/values/<key_id>` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `inventory.get_targeting_values` |
+| `/tenant/<tenant_id>/analyze-ad-server` | GET | `src.admin.utils.helpers.require_auth(admin_only=False)` | - | `inventory.analyze_ad_server_inventory` |
+| `/tenant/<tenant_id>/check-inventory-sync` | GET | `src.admin.utils.helpers.require_auth(admin_only=False)` | - | `inventory.check_inventory_sync` |
+| `/tenant/<tenant_id>/inventory` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `inventory.inventory_browser` |
+| `/tenant/<tenant_id>/orders` | GET | `src.admin.utils.helpers.require_auth(admin_only=False)` | - | `inventory.orders_browser` |
+| `/tenant/<tenant_id>/targeting` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `inventory.targeting_browser` |
 
 ## `src/admin/blueprints/inventory_profiles.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/inventory-profiles/` | GET | `require_tenant_access()` | - | `inventory_profiles.list_inventory_profiles` |
-| `/tenant/<tenant_id>/inventory-profiles/<int:profile_id>/api` | GET | `require_tenant_access()` | - | `inventory_profiles.get_inventory_profile_api` |
-| `/tenant/<tenant_id>/inventory-profiles/<int:profile_id>/delete` | DELETE, POST | `require_tenant_access()` | `delete_inventory_profile` | `inventory_profiles.delete_inventory_profile` |
-| `/tenant/<tenant_id>/inventory-profiles/<int:profile_id>/edit` | GET, POST | `require_tenant_access()` | `update_inventory_profile` | `inventory_profiles.edit_inventory_profile` |
-| `/tenant/<tenant_id>/inventory-profiles/<int:profile_id>/preview` | GET | `require_tenant_access()` | - | `inventory_profiles.preview_inventory_profile` |
-| `/tenant/<tenant_id>/inventory-profiles/add` | GET, POST | `require_tenant_access()` | `create_inventory_profile` | `inventory_profiles.add_inventory_profile` |
-| `/tenant/<tenant_id>/inventory-profiles/api/list` | GET | `require_tenant_access()` | - | `inventory_profiles.list_inventory_profiles_api` |
+| `/tenant/<tenant_id>/inventory-profiles/` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `inventory_profiles.list_inventory_profiles` |
+| `/tenant/<tenant_id>/inventory-profiles/<int:profile_id>/api` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `inventory_profiles.get_inventory_profile_api` |
+| `/tenant/<tenant_id>/inventory-profiles/<int:profile_id>/delete` | DELETE, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `delete_inventory_profile` | `inventory_profiles.delete_inventory_profile` |
+| `/tenant/<tenant_id>/inventory-profiles/<int:profile_id>/edit` | GET, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `update_inventory_profile` | `inventory_profiles.edit_inventory_profile` |
+| `/tenant/<tenant_id>/inventory-profiles/<int:profile_id>/preview` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `inventory_profiles.preview_inventory_profile` |
+| `/tenant/<tenant_id>/inventory-profiles/add` | GET, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `create_inventory_profile` | `inventory_profiles.add_inventory_profile` |
+| `/tenant/<tenant_id>/inventory-profiles/api/list` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `inventory_profiles.list_inventory_profiles_api` |
 
 ## `src/admin/blueprints/oidc.py`
 
@@ -208,61 +210,61 @@ Each table has the following columns:
 |---|---|---|---|---|
 | `/auth/oidc/callback` | GET | none | - | `oidc.callback` |
 | `/auth/oidc/login/<tenant_id>` | GET | none | - | `oidc.login` |
-| `/auth/oidc/tenant/<tenant_id>/config` | GET | `require_tenant_access()` | - | `oidc.get_config` |
-| `/auth/oidc/tenant/<tenant_id>/config` | POST | `require_tenant_access(role=UserRole.ADMIN)` | - | `oidc.save_config` |
-| `/auth/oidc/tenant/<tenant_id>/disable` | POST | `require_tenant_access(role=UserRole.ADMIN)` | - | `oidc.disable` |
-| `/auth/oidc/tenant/<tenant_id>/enable` | POST | `require_tenant_access(role=UserRole.ADMIN)` | - | `oidc.enable` |
-| `/auth/oidc/test/<tenant_id>` | POST | `require_tenant_access(role=UserRole.ADMIN)` | - | `oidc.test_initiate` |
+| `/auth/oidc/tenant/<tenant_id>/config` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `oidc.get_config` |
+| `/auth/oidc/tenant/<tenant_id>/config` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | - | `oidc.save_config` |
+| `/auth/oidc/tenant/<tenant_id>/disable` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | - | `oidc.disable` |
+| `/auth/oidc/tenant/<tenant_id>/enable` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | - | `oidc.enable` |
+| `/auth/oidc/test/<tenant_id>` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | - | `oidc.test_initiate` |
 
 ## `src/admin/blueprints/operations.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/media-buy/<media_buy_id>` | GET | `require_tenant_access()` | - | `operations.media_buy_detail` |
-| `/tenant/<tenant_id>/media-buy/<media_buy_id>/approve` | POST | `require_tenant_access()` | - | `operations.approve_media_buy` |
-| `/tenant/<tenant_id>/media-buy/<media_buy_id>/trigger-delivery-webhook` | POST | `require_tenant_access()` | - | `operations.trigger_delivery_webhook` |
-| `/tenant/<tenant_id>/reporting` | GET | `require_auth()` | - | `operations.reporting` |
-| `/tenant/<tenant_id>/webhooks` | GET | `require_tenant_access()` | - | `operations.webhooks` |
+| `/tenant/<tenant_id>/media-buy/<media_buy_id>` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `operations.media_buy_detail` |
+| `/tenant/<tenant_id>/media-buy/<media_buy_id>/approve` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `operations.approve_media_buy` |
+| `/tenant/<tenant_id>/media-buy/<media_buy_id>/trigger-delivery-webhook` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `operations.trigger_delivery_webhook` |
+| `/tenant/<tenant_id>/reporting` | GET | `src.admin.utils.helpers.require_auth(admin_only=False)` | - | `operations.reporting` |
+| `/tenant/<tenant_id>/webhooks` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `operations.webhooks` |
 
 ## `src/admin/blueprints/policy.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/policy/` | GET | `require_auth()` | - | `policy.index` |
-| `/tenant/<tenant_id>/policy/review/<task_id>` | GET, POST | `require_auth()` | `review_policy_task` | `policy.review_task` |
-| `/tenant/<tenant_id>/policy/rules` | GET, POST | `require_tenant_access()` | - | `policy.rules` |
-| `/tenant/<tenant_id>/policy/update` | POST | `require_auth()` | `update_policy` | `policy.update` |
+| `/tenant/<tenant_id>/policy/` | GET | `src.admin.utils.helpers.require_auth(admin_only=False)` | - | `policy.index` |
+| `/tenant/<tenant_id>/policy/review/<task_id>` | GET, POST | `src.admin.utils.helpers.require_auth(admin_only=False)` | `review_policy_task` | `policy.review_task` |
+| `/tenant/<tenant_id>/policy/rules` | GET, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `policy.rules` |
+| `/tenant/<tenant_id>/policy/update` | POST | `src.admin.utils.helpers.require_auth(admin_only=False)` | `update_policy` | `policy.update` |
 
 ## `src/admin/blueprints/principals.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/api/gam/get-advertisers` | POST | `require_tenant_access()` | `get_gam_advertisers` | `principals.get_gam_advertisers` |
-| `/tenant/<tenant_id>/api/principal/<principal_id>/config` | GET | `require_tenant_access()` | - | `principals.get_principal_config` |
-| `/tenant/<tenant_id>/api/principal/<principal_id>/testing-config` | POST | `require_tenant_access()` | `save_testing_config` | `principals.save_testing_config` |
-| `/tenant/<tenant_id>/principal/<principal_id>` | GET | `require_tenant_access()` | - | `principals.get_principal` |
-| `/tenant/<tenant_id>/principal/<principal_id>/rotate-token` | POST | `require_tenant_access()` | `rotate_principal_token` | `principals.rotate_token` |
-| `/tenant/<tenant_id>/principal/<principal_id>/update_mappings` | POST | `require_tenant_access()` | `update_mappings` | `principals.update_mappings` |
-| `/tenant/<tenant_id>/principals` | GET | `require_tenant_access()` | - | `principals.list_principals` |
-| `/tenant/<tenant_id>/principals/<principal_id>/delete` | DELETE, POST | `require_tenant_access()` | `delete_principal` | `principals.delete_principal` |
-| `/tenant/<tenant_id>/principals/<principal_id>/edit` | GET, POST | `require_tenant_access()` | `edit_principal` | `principals.edit_principal` |
-| `/tenant/<tenant_id>/principals/<principal_id>/webhooks` | GET | `require_tenant_access()` | - | `principals.manage_webhooks` |
-| `/tenant/<tenant_id>/principals/<principal_id>/webhooks/<config_id>/delete` | POST | `require_tenant_access()` | `delete_webhook` | `principals.delete_webhook` |
-| `/tenant/<tenant_id>/principals/<principal_id>/webhooks/<config_id>/toggle` | POST | `require_tenant_access()` | `toggle_webhook` | `principals.toggle_webhook` |
-| `/tenant/<tenant_id>/principals/<principal_id>/webhooks/register` | POST | `require_tenant_access()` | `register_webhook` | `principals.register_webhook` |
-| `/tenant/<tenant_id>/principals/create` | GET, POST | `require_tenant_access()` | `create_principal` | `principals.create_principal` |
+| `/tenant/<tenant_id>/api/gam/get-advertisers` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `get_gam_advertisers` | `principals.get_gam_advertisers` |
+| `/tenant/<tenant_id>/api/principal/<principal_id>/config` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `principals.get_principal_config` |
+| `/tenant/<tenant_id>/api/principal/<principal_id>/testing-config` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `save_testing_config` | `principals.save_testing_config` |
+| `/tenant/<tenant_id>/principal/<principal_id>` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `principals.get_principal` |
+| `/tenant/<tenant_id>/principal/<principal_id>/rotate-token` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `rotate_principal_token` | `principals.rotate_token` |
+| `/tenant/<tenant_id>/principal/<principal_id>/update_mappings` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `update_mappings` | `principals.update_mappings` |
+| `/tenant/<tenant_id>/principals` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `principals.list_principals` |
+| `/tenant/<tenant_id>/principals/<principal_id>/delete` | DELETE, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `delete_principal` | `principals.delete_principal` |
+| `/tenant/<tenant_id>/principals/<principal_id>/edit` | GET, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `edit_principal` | `principals.edit_principal` |
+| `/tenant/<tenant_id>/principals/<principal_id>/webhooks` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `principals.manage_webhooks` |
+| `/tenant/<tenant_id>/principals/<principal_id>/webhooks/<config_id>/delete` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `delete_webhook` | `principals.delete_webhook` |
+| `/tenant/<tenant_id>/principals/<principal_id>/webhooks/<config_id>/toggle` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `toggle_webhook` | `principals.toggle_webhook` |
+| `/tenant/<tenant_id>/principals/<principal_id>/webhooks/register` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `register_webhook` | `principals.register_webhook` |
+| `/tenant/<tenant_id>/principals/create` | GET, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `create_principal` | `principals.create_principal` |
 
 ## `src/admin/blueprints/products.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/products/` | GET | `require_tenant_access()` | - | `products.list_products` |
-| `/tenant/<tenant_id>/products/<product_id>/delete` | DELETE | `require_tenant_access()` | - | `products.delete_product` |
-| `/tenant/<tenant_id>/products/<product_id>/edit` | GET, POST | `require_tenant_access()` | `edit_product` | `products.edit_product` |
-| `/tenant/<tenant_id>/products/<product_id>/inventory` | GET | `require_tenant_access()` | - | `products.get_product_inventory` |
-| `/tenant/<tenant_id>/products/<product_id>/inventory` | POST | `require_tenant_access()` | `assign_inventory_to_product` | `products.assign_inventory_to_product` |
-| `/tenant/<tenant_id>/products/<product_id>/inventory/<int:mapping_id>` | DELETE | `require_tenant_access()` | `unassign_inventory_from_product` | `products.unassign_inventory_from_product` |
-| `/tenant/<tenant_id>/products/add` | GET, POST | `require_tenant_access()` | `add_product` | `products.add_product` |
+| `/tenant/<tenant_id>/products/` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `products.list_products` |
+| `/tenant/<tenant_id>/products/<product_id>/delete` | DELETE | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `products.delete_product` |
+| `/tenant/<tenant_id>/products/<product_id>/edit` | GET, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `edit_product` | `products.edit_product` |
+| `/tenant/<tenant_id>/products/<product_id>/inventory` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `products.get_product_inventory` |
+| `/tenant/<tenant_id>/products/<product_id>/inventory` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `assign_inventory_to_product` | `products.assign_inventory_to_product` |
+| `/tenant/<tenant_id>/products/<product_id>/inventory/<int:mapping_id>` | DELETE | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `unassign_inventory_from_product` | `products.unassign_inventory_from_product` |
+| `/tenant/<tenant_id>/products/add` | GET, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `add_product` | `products.add_product` |
 
 ## `src/admin/blueprints/public.py`
 
@@ -299,104 +301,104 @@ Each table has the following columns:
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/settings` | GET | `require_auth(admin_only=True)` | - | `tenant_management_settings.tenant_management_settings` |
-| `/settings/update` | POST | `require_auth(admin_only=True)` | - | `tenant_management_settings.update_admin_settings` |
-| `/tenant/<tenant_id>/settings/access/test` | POST | `require_tenant_access()` | `test_domain_access` | `settings.test_domain_access` |
-| `/tenant/<tenant_id>/settings/adapter` | POST | `require_tenant_access()` | `update_adapter` | `settings.update_adapter` |
-| `/tenant/<tenant_id>/settings/ai` | POST | `require_tenant_access()` | `update_ai` | `settings.update_ai` |
-| `/tenant/<tenant_id>/settings/ai/models` | GET | `require_tenant_access()` | - | `settings.get_ai_models` |
-| `/tenant/<tenant_id>/settings/ai/test` | POST | `require_tenant_access()` | - | `settings.test_ai_connection` |
-| `/tenant/<tenant_id>/settings/ai/test-logfire` | POST | `require_tenant_access()` | - | `settings.test_logfire_connection` |
-| `/tenant/<tenant_id>/settings/approximated-domain-status` | POST | `require_tenant_access()` | - | `settings.check_approximated_domain_status` |
-| `/tenant/<tenant_id>/settings/approximated-register-domain` | POST | `require_tenant_access()` | `register_approximated_domain` | `settings.register_approximated_domain` |
-| `/tenant/<tenant_id>/settings/approximated-token` | POST | `require_tenant_access()` | - | `settings.get_approximated_token` |
-| `/tenant/<tenant_id>/settings/approximated-unregister-domain` | POST | `require_tenant_access()` | `unregister_approximated_domain` | `settings.unregister_approximated_domain` |
-| `/tenant/<tenant_id>/settings/business-rules` | POST | `require_tenant_access()` | `update_business_rules` | `settings.update_business_rules` |
-| `/tenant/<tenant_id>/settings/domains/add` | POST | `require_tenant_access(role=UserRole.ADMIN)` | `add_authorized_domain` | `settings.add_authorized_domain` |
-| `/tenant/<tenant_id>/settings/domains/remove` | POST | `require_tenant_access(role=UserRole.ADMIN)` | `remove_authorized_domain` | `settings.remove_authorized_domain` |
-| `/tenant/<tenant_id>/settings/emails/add` | POST | `require_tenant_access(role=UserRole.ADMIN)` | `add_authorized_email` | `settings.add_authorized_email` |
-| `/tenant/<tenant_id>/settings/emails/remove` | POST | `require_tenant_access(role=UserRole.ADMIN)` | `remove_authorized_email` | `settings.remove_authorized_email` |
-| `/tenant/<tenant_id>/settings/general` | POST | `require_tenant_access()` | `update_general_settings` | `settings.update_general` |
-| `/tenant/<tenant_id>/settings/slack` | POST | `require_tenant_access()` | `update_slack` | `settings.update_slack` |
+| `/settings` | GET | `src.admin.utils.helpers.require_auth(admin_only=True)` | - | `tenant_management_settings.tenant_management_settings` |
+| `/settings/update` | POST | `src.admin.utils.helpers.require_auth(admin_only=True)` | - | `tenant_management_settings.update_admin_settings` |
+| `/tenant/<tenant_id>/settings/access/test` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `test_domain_access` | `settings.test_domain_access` |
+| `/tenant/<tenant_id>/settings/adapter` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `update_adapter` | `settings.update_adapter` |
+| `/tenant/<tenant_id>/settings/ai` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `update_ai` | `settings.update_ai` |
+| `/tenant/<tenant_id>/settings/ai/models` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `settings.get_ai_models` |
+| `/tenant/<tenant_id>/settings/ai/test` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `settings.test_ai_connection` |
+| `/tenant/<tenant_id>/settings/ai/test-logfire` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `settings.test_logfire_connection` |
+| `/tenant/<tenant_id>/settings/approximated-domain-status` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `settings.check_approximated_domain_status` |
+| `/tenant/<tenant_id>/settings/approximated-register-domain` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `register_approximated_domain` | `settings.register_approximated_domain` |
+| `/tenant/<tenant_id>/settings/approximated-token` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `settings.get_approximated_token` |
+| `/tenant/<tenant_id>/settings/approximated-unregister-domain` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `unregister_approximated_domain` | `settings.unregister_approximated_domain` |
+| `/tenant/<tenant_id>/settings/business-rules` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `update_business_rules` | `settings.update_business_rules` |
+| `/tenant/<tenant_id>/settings/domains/add` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | `add_authorized_domain` | `settings.add_authorized_domain` |
+| `/tenant/<tenant_id>/settings/domains/remove` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | `remove_authorized_domain` | `settings.remove_authorized_domain` |
+| `/tenant/<tenant_id>/settings/emails/add` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | `add_authorized_email` | `settings.add_authorized_email` |
+| `/tenant/<tenant_id>/settings/emails/remove` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | `remove_authorized_email` | `settings.remove_authorized_email` |
+| `/tenant/<tenant_id>/settings/general` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `update_general_settings` | `settings.update_general` |
+| `/tenant/<tenant_id>/settings/slack` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `update_slack` | `settings.update_slack` |
 
 ## `src/admin/blueprints/signals_agents.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/signals-agents/` | GET | `require_tenant_access()` | - | `signals_agents.list_signals_agents` |
-| `/tenant/<tenant_id>/signals-agents/<int:agent_id>/delete` | DELETE | `require_tenant_access()` | - | `signals_agents.delete_signals_agent` |
-| `/tenant/<tenant_id>/signals-agents/<int:agent_id>/edit` | GET, POST | `require_tenant_access()` | `edit_signals_agent` | `signals_agents.edit_signals_agent` |
-| `/tenant/<tenant_id>/signals-agents/<int:agent_id>/test` | POST | `require_tenant_access()` | `test_signals_agent` | `signals_agents.test_signals_agent` |
-| `/tenant/<tenant_id>/signals-agents/add` | GET, POST | `require_tenant_access()` | `add_signals_agent` | `signals_agents.add_signals_agent` |
+| `/tenant/<tenant_id>/signals-agents/` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `signals_agents.list_signals_agents` |
+| `/tenant/<tenant_id>/signals-agents/<int:agent_id>/delete` | DELETE | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `signals_agents.delete_signals_agent` |
+| `/tenant/<tenant_id>/signals-agents/<int:agent_id>/edit` | GET, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `edit_signals_agent` | `signals_agents.edit_signals_agent` |
+| `/tenant/<tenant_id>/signals-agents/<int:agent_id>/test` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `test_signals_agent` | `signals_agents.test_signals_agent` |
+| `/tenant/<tenant_id>/signals-agents/add` | GET, POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `add_signals_agent` | `signals_agents.add_signals_agent` |
 
 ## `src/admin/blueprints/signing_keys.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/signing-keys/` | GET | `require_tenant_access()` | - | `signing_keys.list_signing_keys` |
-| `/tenant/<tenant_id>/signing-keys/<kid>/revoke` | POST | `require_tenant_access()` | `revoke_signing_key` | `signing_keys.revoke_signing_key_route` |
-| `/tenant/<tenant_id>/signing-keys/create` | POST | `require_tenant_access()` | `provision_signing_key` | `signing_keys.create_signing_key` |
+| `/tenant/<tenant_id>/signing-keys/` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `signing_keys.list_signing_keys` |
+| `/tenant/<tenant_id>/signing-keys/<kid>/revoke` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `revoke_signing_key` | `signing_keys.revoke_signing_key_route` |
+| `/tenant/<tenant_id>/signing-keys/create` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `provision_signing_key` | `signing_keys.create_signing_key` |
 
 ## `src/admin/blueprints/tenants.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>` | GET | `require_tenant_access()` | - | `tenants.dashboard` |
-| `/tenant/<tenant_id>/deactivate` | POST | `require_tenant_access(role=UserRole.ADMIN)` | `deactivate_tenant` | `tenants.deactivate_tenant` |
-| `/tenant/<tenant_id>/media-buys` | GET | `require_tenant_access()` | - | `tenants.media_buys_list` |
-| `/tenant/<tenant_id>/remove_favicon` | POST | `require_tenant_access()` | `remove_favicon` | `tenants.remove_favicon` |
-| `/tenant/<tenant_id>/settings` | GET | `require_tenant_access()` | - | `tenants.tenant_settings` |
-| `/tenant/<tenant_id>/settings/<section>` | GET | `require_tenant_access()` | - | `tenants.tenant_settings` |
-| `/tenant/<tenant_id>/settings/auth` | GET | `require_tenant_access()` | - | `tenants.auth_settings` |
-| `/tenant/<tenant_id>/setup-checklist` | GET | `require_tenant_access()` | - | `tenants.setup_checklist` |
-| `/tenant/<tenant_id>/test_slack` | POST | `require_tenant_access()` | `test_slack` | `tenants.test_slack` |
-| `/tenant/<tenant_id>/update` | POST | `require_tenant_access()` | `update` | `tenants.update` |
-| `/tenant/<tenant_id>/update_favicon_url` | POST | `require_tenant_access()` | `update_favicon_url` | `tenants.update_favicon_url` |
-| `/tenant/<tenant_id>/upload_favicon` | POST | `require_tenant_access()` | `upload_favicon` | `tenants.upload_favicon` |
+| `/tenant/<tenant_id>` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `tenants.dashboard` |
+| `/tenant/<tenant_id>/deactivate` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | `deactivate_tenant` | `tenants.deactivate_tenant` |
+| `/tenant/<tenant_id>/media-buys` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `tenants.media_buys_list` |
+| `/tenant/<tenant_id>/remove_favicon` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `remove_favicon` | `tenants.remove_favicon` |
+| `/tenant/<tenant_id>/settings` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `tenants.tenant_settings` |
+| `/tenant/<tenant_id>/settings/<section>` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `tenants.tenant_settings` |
+| `/tenant/<tenant_id>/settings/auth` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `tenants.auth_settings` |
+| `/tenant/<tenant_id>/setup-checklist` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `tenants.setup_checklist` |
+| `/tenant/<tenant_id>/test_slack` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `test_slack` | `tenants.test_slack` |
+| `/tenant/<tenant_id>/update` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `update` | `tenants.update` |
+| `/tenant/<tenant_id>/update_favicon_url` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `update_favicon_url` | `tenants.update_favicon_url` |
+| `/tenant/<tenant_id>/upload_favicon` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `upload_favicon` | `tenants.upload_favicon` |
 
 ## `src/admin/blueprints/users.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/users` | GET | `require_tenant_access()` | - | `users.list_users` |
-| `/tenant/<tenant_id>/users/<user_id>/toggle` | POST | `require_tenant_access(role=UserRole.ADMIN)` | `toggle_user` | `users.toggle_user` |
-| `/tenant/<tenant_id>/users/<user_id>/update_role` | POST | `require_tenant_access(role=UserRole.ADMIN)` | `update_role` | `users.update_role` |
-| `/tenant/<tenant_id>/users/add` | POST | `require_tenant_access(role=UserRole.ADMIN)` | `add_user` | `users.add_user` |
-| `/tenant/<tenant_id>/users/disable-setup-mode` | POST | `require_tenant_access(role=UserRole.ADMIN)` | `disable_auth_setup_mode` | `users.disable_setup_mode` |
-| `/tenant/<tenant_id>/users/domains` | DELETE | `require_tenant_access(role=UserRole.ADMIN)` | `remove_domain` | `users.remove_domain` |
-| `/tenant/<tenant_id>/users/domains` | POST | `require_tenant_access(role=UserRole.ADMIN)` | `add_domain` | `users.add_domain` |
-| `/tenant/<tenant_id>/users/enable-setup-mode` | POST | `require_tenant_access(role=UserRole.ADMIN)` | `enable_auth_setup_mode` | `users.enable_setup_mode` |
+| `/tenant/<tenant_id>/users` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `users.list_users` |
+| `/tenant/<tenant_id>/users/<user_id>/toggle` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | `toggle_user` | `users.toggle_user` |
+| `/tenant/<tenant_id>/users/<user_id>/update_role` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | `update_role` | `users.update_role` |
+| `/tenant/<tenant_id>/users/add` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | `add_user` | `users.add_user` |
+| `/tenant/<tenant_id>/users/disable-setup-mode` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | `disable_auth_setup_mode` | `users.disable_setup_mode` |
+| `/tenant/<tenant_id>/users/domains` | DELETE | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | `remove_domain` | `users.remove_domain` |
+| `/tenant/<tenant_id>/users/domains` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | `add_domain` | `users.add_domain` |
+| `/tenant/<tenant_id>/users/enable-setup-mode` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.ADMIN)` | `enable_auth_setup_mode` | `users.enable_setup_mode` |
 
 ## `src/admin/blueprints/workflows.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/workflows` | GET | `require_tenant_access()` | - | `workflows.list_workflows` |
-| `/tenant/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/approve` | POST | `require_tenant_access()` | `approve_workflow_step` | `workflows.approve_workflow_step` |
-| `/tenant/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/reject` | POST | `require_tenant_access()` | `reject_workflow_step` | `workflows.reject_workflow_step` |
-| `/tenant/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/review` | GET | `require_tenant_access()` | - | `workflows.review_workflow_step` |
+| `/tenant/<tenant_id>/workflows` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `workflows.list_workflows` |
+| `/tenant/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/approve` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `approve_workflow_step` | `workflows.approve_workflow_step` |
+| `/tenant/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/reject` | POST | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | `reject_workflow_step` | `workflows.reject_workflow_step` |
+| `/tenant/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/review` | GET | `src.admin.utils.helpers.require_tenant_access(role=UserRole.VIEWER)` | - | `workflows.review_workflow_step` |
 
 ## `src/admin/sync_api.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/api/sync/history/<tenant_id>` | GET | `require_sync_api_key` | - | `sync_api.get_sync_history` |
-| `/api/sync/stats` | GET | `require_sync_api_key` | - | `sync_api.get_sync_stats` |
-| `/api/sync/status/<sync_id>` | GET | `require_sync_api_key` | - | `sync_api.get_sync_status` |
-| `/api/sync/tenant/<tenant_id>/line-items` | GET | `require_sync_api_key` | - | `sync_api.get_tenant_line_items` |
-| `/api/sync/tenant/<tenant_id>/orders` | GET | `require_sync_api_key` | - | `sync_api.get_tenant_orders` |
-| `/api/sync/tenant/<tenant_id>/orders/<order_id>` | GET | `require_sync_api_key` | - | `sync_api.get_order_details` |
-| `/api/sync/tenant/<tenant_id>/orders/sync` | POST | `require_sync_api_key` | - | `sync_api.sync_tenant_orders` |
-| `/api/sync/tenants` | GET | `require_sync_api_key` | - | `sync_api.list_tenants` |
-| `/api/sync/trigger/<tenant_id>` | POST | `require_sync_api_key` | - | `sync_api.trigger_sync` |
+| `/api/sync/history/<tenant_id>` | GET | `src.admin.auth_helpers.require_api_key_auth(setting='sync_api_key', config_key='api_key', header='X-API-Key')` | - | `sync_api.get_sync_history` |
+| `/api/sync/stats` | GET | `src.admin.auth_helpers.require_api_key_auth(setting='sync_api_key', config_key='api_key', header='X-API-Key')` | - | `sync_api.get_sync_stats` |
+| `/api/sync/status/<sync_id>` | GET | `src.admin.auth_helpers.require_api_key_auth(setting='sync_api_key', config_key='api_key', header='X-API-Key')` | - | `sync_api.get_sync_status` |
+| `/api/sync/tenant/<tenant_id>/line-items` | GET | `src.admin.auth_helpers.require_api_key_auth(setting='sync_api_key', config_key='api_key', header='X-API-Key')` | - | `sync_api.get_tenant_line_items` |
+| `/api/sync/tenant/<tenant_id>/orders` | GET | `src.admin.auth_helpers.require_api_key_auth(setting='sync_api_key', config_key='api_key', header='X-API-Key')` | - | `sync_api.get_tenant_orders` |
+| `/api/sync/tenant/<tenant_id>/orders/<order_id>` | GET | `src.admin.auth_helpers.require_api_key_auth(setting='sync_api_key', config_key='api_key', header='X-API-Key')` | - | `sync_api.get_order_details` |
+| `/api/sync/tenant/<tenant_id>/orders/sync` | POST | `src.admin.auth_helpers.require_api_key_auth(setting='sync_api_key', config_key='api_key', header='X-API-Key')` | - | `sync_api.sync_tenant_orders` |
+| `/api/sync/tenants` | GET | `src.admin.auth_helpers.require_api_key_auth(setting='sync_api_key', config_key='api_key', header='X-API-Key')` | - | `sync_api.list_tenants` |
+| `/api/sync/trigger/<tenant_id>` | POST | `src.admin.auth_helpers.require_api_key_auth(setting='sync_api_key', config_key='api_key', header='X-API-Key')` | - | `sync_api.trigger_sync` |
 
 ## `src/admin/tenant_management_api.py`
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/api/v1/tenant-management/health` | GET | `require_tenant_management_api_key` | - | `tenant_management_api.health_check` |
-| `/api/v1/tenant-management/tenants` | GET | `require_tenant_management_api_key` | - | `tenant_management_api.list_tenants` |
-| `/api/v1/tenant-management/tenants` | POST | `require_tenant_management_api_key` | - | `tenant_management_api.create_tenant` |
-| `/api/v1/tenant-management/tenants/<tenant_id>` | DELETE | `require_tenant_management_api_key` | - | `tenant_management_api.delete_tenant` |
-| `/api/v1/tenant-management/tenants/<tenant_id>` | GET | `require_tenant_management_api_key` | - | `tenant_management_api.get_tenant` |
-| `/api/v1/tenant-management/tenants/<tenant_id>` | PUT | `require_tenant_management_api_key` | - | `tenant_management_api.update_tenant` |
+| `/api/v1/tenant-management/health` | GET | `src.admin.auth_helpers.require_api_key_auth(setting='tenant_management_api_key', config_key='tenant_management_api_key', header='X-Tenant-Management-API-Key')` | - | `tenant_management_api.health_check` |
+| `/api/v1/tenant-management/tenants` | GET | `src.admin.auth_helpers.require_api_key_auth(setting='tenant_management_api_key', config_key='tenant_management_api_key', header='X-Tenant-Management-API-Key')` | - | `tenant_management_api.list_tenants` |
+| `/api/v1/tenant-management/tenants` | POST | `src.admin.auth_helpers.require_api_key_auth(setting='tenant_management_api_key', config_key='tenant_management_api_key', header='X-Tenant-Management-API-Key')` | - | `tenant_management_api.create_tenant` |
+| `/api/v1/tenant-management/tenants/<tenant_id>` | DELETE | `src.admin.auth_helpers.require_api_key_auth(setting='tenant_management_api_key', config_key='tenant_management_api_key', header='X-Tenant-Management-API-Key')` | - | `tenant_management_api.delete_tenant` |
+| `/api/v1/tenant-management/tenants/<tenant_id>` | GET | `src.admin.auth_helpers.require_api_key_auth(setting='tenant_management_api_key', config_key='tenant_management_api_key', header='X-Tenant-Management-API-Key')` | - | `tenant_management_api.get_tenant` |
+| `/api/v1/tenant-management/tenants/<tenant_id>` | PUT | `src.admin.auth_helpers.require_api_key_auth(setting='tenant_management_api_key', config_key='tenant_management_api_key', header='X-Tenant-Management-API-Key')` | - | `tenant_management_api.update_tenant` |

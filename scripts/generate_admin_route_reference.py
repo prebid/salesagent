@@ -3,7 +3,9 @@
 
 The page lists every route the Flask admin application serves, with the access
 check and the audit operation its view function declares. Both come from the
-code: the URL map of `create_app()`, and the decorators on each view function.
+code: the routes from the URL map of `create_app()` (scripts/admin_routes.py),
+and the access check and audit operation from what the decorators on each view
+record on the wrappers they return.
 
 Usage:
     uv run python scripts/generate_admin_route_reference.py           # rewrite the page
@@ -16,7 +18,6 @@ tests/unit/test_admin_route_reference_current.py, which reports and never writes
 from __future__ import annotations
 
 import argparse
-import ast
 import inspect
 import sys
 from collections import defaultdict
@@ -29,16 +30,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.admin_routes import iter_admin_routes
+from src.admin.utils.audit_decorator import AUDIT_OPERATION_ATTRIBUTE
+from src.admin.utils.helpers import ACCESS_CHECK_ATTRIBUTE
 
 PAGE = ROOT / "docs" / "development" / "admin-ui-routes.md"
-
-# The decorators that decide who reaches a view, most specific first.
-ACCESS_DECORATORS = (
-    "require_tenant_access",
-    "require_auth",
-    "require_sync_api_key",
-    "require_tenant_management_api_key",
-)
 
 HEADER = """\
 # Admin UI route reference
@@ -60,12 +55,14 @@ The paths are relative to the admin application. A deployment serves the applica
 
 Each table has the following columns:
 
-- **Access check** is the decorator that decides who reaches the view. `role=UserRole.ADMIN`
-  marks a route that only a tenant admin or a super admin reaches. `none` means the view
-  function carries no access decorator. Such a view is public, or it checks the session in
-  its own body.
-- **Audit operation** is the name the view passes to `log_admin_action`. `-` means the view
-  writes no audit log row through that decorator.
+- **Access check** is what the access decorator on the view records about itself: its module,
+  its name, and the arguments the route passes it. `role` is the least tenant role the route
+  needs, and a tenant user's request other than `GET`, `HEAD` or `OPTIONS` needs at least
+  `UserRole.MANAGER` whatever `role` says. `role=UserRole.ADMIN` marks a route that only a
+  tenant admin or a super admin reaches. `none` means that no decorator on the view records
+  an access check. Such a view is public, or it checks the session in its own body.
+- **Audit operation** is the operation that `log_admin_action` records on the view. `-` means
+  the view writes no audit log row through that decorator.
 - **View** is the Flask endpoint name, the value `url_for` takes.
 """
 
@@ -78,52 +75,31 @@ class Route(NamedTuple):
     audit: str
 
 
-def _decorator_text(node: ast.expr) -> str:
-    return ast.unparse(node).replace("\n", " ")
+def _declared(view: Callable[..., Any], attribute: str, absent: str) -> str:
+    """The table cell for what the decorators on *view* record under *attribute*.
 
-
-def _decorators(view: Callable[..., Any], trees: dict[str, ast.Module]) -> list[str]:
-    """The decorator expressions on a view function, read from its source file."""
-    inner = inspect.unwrap(view)
-    code = inner.__code__
-    if code.co_filename not in trees:
-        trees[code.co_filename] = ast.parse(Path(code.co_filename).read_text(encoding="utf-8"))
-    for node in ast.walk(trees[code.co_filename]):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == inner.__name__:
-            first_line = min([node.lineno, *(d.lineno for d in node.decorator_list)])
-            if first_line == code.co_firstlineno:
-                return [_decorator_text(d) for d in node.decorator_list]
-    return []
-
-
-def _access(decorators: list[str]) -> str:
-    for name in ACCESS_DECORATORS:
-        for text in decorators:
-            if text == name or text.startswith(f"{name}("):
-                return f"`{text}`"
-    return "none"
-
-
-def _audit(decorators: list[str]) -> str:
-    for text in decorators:
-        if text.startswith("log_admin_action("):
-            call = ast.parse(text, mode="eval").body
-            if isinstance(call, ast.Call) and call.args and isinstance(call.args[0], ast.Constant):
-                return f"`{call.args[0].value}`"
-    return "-"
+    Each decorator sets the attribute on the wrapper it returns, and ``functools.wraps`` copies
+    it to every wrapper outside that one, so the ``__wrapped__`` chain repeats a value. The cell
+    lists each value once, outermost first, or reads *absent* when no decorator recorded one.
+    """
+    values: dict[str, None] = {}
+    wrapper: Any = view
+    while wrapper is not None:
+        if (value := getattr(wrapper, attribute, None)) is not None:
+            values[value] = None
+        wrapper = getattr(wrapper, "__wrapped__", None)
+    return ", ".join(f"`{value}`" for value in values) or absent
 
 
 def collect_routes() -> dict[str, list[Route]]:
     """Every route of the admin application, grouped by the source file of its view."""
-    trees: dict[str, ast.Module] = {}
     groups: dict[str, list[Route]] = defaultdict(list)
     for route in iter_admin_routes():
         source = Path(inspect.unwrap(route.view).__code__.co_filename)
         group = source.relative_to(ROOT).as_posix() if source.is_relative_to(ROOT / "src") else "Flask"
-        decorators = _decorators(route.view, trees) if group != "Flask" else []
-        groups[group].append(
-            Route(route.path, ", ".join(route.methods), route.endpoint, _access(decorators), _audit(decorators))
-        )
+        access = _declared(route.view, ACCESS_CHECK_ATTRIBUTE, "none")
+        audit = _declared(route.view, AUDIT_OPERATION_ATTRIBUTE, "-")
+        groups[group].append(Route(route.path, ", ".join(route.methods), route.endpoint, access, audit))
     return groups
 
 
