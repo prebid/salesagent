@@ -16,6 +16,7 @@ from sqlalchemy.orm import attributes
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, Tenant
+from src.core.schemas.advertising_policy import AdvertisingPolicy
 from src.core.utils.naming import DEFAULT_ORDER_NAME_TEMPLATE
 
 
@@ -80,8 +81,8 @@ class PolicySettings:
     # AI policy
     ai_policy: dict[str, Any] = field(default_factory=dict)
 
-    # Advertising policy
-    advertising_policy: dict[str, Any] = field(default_factory=dict)
+    # Advertising policy: None when the tenant saved none
+    advertising_policy: AdvertisingPolicy | None = None
 
     # Features
     enable_axe_signals: bool = False
@@ -292,7 +293,7 @@ class PolicyService:
                 creative_auto_approve_threshold=tenant.creative_auto_approve_threshold or 0.9,
                 creative_auto_reject_threshold=tenant.creative_auto_reject_threshold or 0.1,
                 ai_policy=tenant.ai_policy or {},
-                advertising_policy=tenant.advertising_policy or {},
+                advertising_policy=tenant.advertising_policy,
                 enable_axe_signals=tenant.enable_axe_signals or False,
                 brand_manifest_policy=tenant.brand_manifest_policy or "public",
             )
@@ -396,10 +397,16 @@ class PolicyService:
                 tenant.ai_policy = updates["ai_policy"]
                 attributes.flag_modified(tenant, "ai_policy")
 
-            # Update advertising policy
+            # Update advertising policy: the fields the Settings form edits, completed with
+            # the ones it does not edit from the policy the tenant saved, or with the values
+            # a policy that never set them has.
             if "advertising_policy" in updates:
-                tenant.advertising_policy = updates["advertising_policy"]
-                attributes.flag_modified(tenant, "advertising_policy")
+                saved = tenant.advertising_policy
+                tenant.advertising_policy = AdvertisingPolicy(
+                    **updates["advertising_policy"],
+                    require_manual_review=saved.require_manual_review if saved is not None else False,
+                    description=saved.description if saved is not None else None,
+                )
 
             # Update features
             if "enable_axe_signals" in updates:

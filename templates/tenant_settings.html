@@ -1723,13 +1723,13 @@ REJECT - Creative cannot be approved:
                     <div class="form-group">
                         <label for="policy_check_enabled">
                             <input type="checkbox" id="policy_check_enabled" name="policy_check_enabled"
-                                   {% if tenant.advertising_policy and tenant.advertising_policy.get('enabled') != False %}checked{% endif %}>
+                                   {% if tenant.advertising_policy and tenant.advertising_policy.enabled %}checked{% endif %}>
                             Enable automated advertising policy checks
                         </label>
                         <small>AI-powered analysis of advertiser briefs during product discovery</small>
                     </div>
 
-                    <div id="advertising-policy-config" style="{% if tenant.advertising_policy and tenant.advertising_policy.get('enabled') == False %}display: none;{% endif %}">
+                    <div id="advertising-policy-config" style="{% if tenant.advertising_policy and not tenant.advertising_policy.enabled %}display: none;{% endif %}">
                         {% if not seller_ai_enabled %}
                         <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-bottom: 1rem;">
                             <strong>⚠️ AI Configuration Required</strong>
@@ -1740,14 +1740,14 @@ REJECT - Creative cannot be approved:
                         <div class="form-group">
                             <label for="default_prohibited_categories">Baseline Protected Categories</label>
                             <textarea id="default_prohibited_categories" name="default_prohibited_categories" class="form-control" rows="5"
-                                      placeholder="Enter one category per line">{{ (tenant.advertising_policy.get('default_prohibited_categories', []) if tenant.advertising_policy else ['Targeting of vulnerable populations (children, elderly, disabled)', 'Discriminatory content based on protected characteristics', 'Illegal products/services', 'Misleading or deceptive claims', 'Harmful content that could exploit users'])|join('\n') }}</textarea>
+                                      placeholder="Enter one category per line">{{ (tenant.advertising_policy.default_prohibited_categories if tenant.advertising_policy else ['Targeting of vulnerable populations (children, elderly, disabled)', 'Discriminatory content based on protected characteristics', 'Illegal products/services', 'Misleading or deceptive claims', 'Harmful content that could exploit users'])|join('\n') }}</textarea>
                             <small>Core policy categories that apply to all campaigns. These are always enforced when policy checks are enabled. Edit to match your standards.</small>
                         </div>
 
                         <div class="form-group">
                             <label for="default_prohibited_tactics">Baseline Prohibited Tactics</label>
                             <textarea id="default_prohibited_tactics" name="default_prohibited_tactics" class="form-control" rows="3"
-                                      placeholder="Enter one tactic per line">{{ (tenant.advertising_policy.get('default_prohibited_tactics', []) if tenant.advertising_policy else ['Clickbait or sensationalist content', 'False urgency or scarcity claims', 'Hidden or deceptive pricing'])|join('\n') }}</textarea>
+                                      placeholder="Enter one tactic per line">{{ (tenant.advertising_policy.default_prohibited_tactics if tenant.advertising_policy else ['Clickbait or sensationalist content', 'False urgency or scarcity claims', 'Hidden or deceptive pricing'])|join('\n') }}</textarea>
                             <small>Core advertising tactics that are never permitted. Edit to match your standards.</small>
                         </div>
 
@@ -1756,21 +1756,21 @@ REJECT - Creative cannot be approved:
                         <div class="form-group">
                             <label for="prohibited_categories">Additional Prohibited Categories</label>
                             <textarea id="prohibited_categories" name="prohibited_categories" class="form-control" rows="4"
-                                      placeholder="Enter one category per line (e.g., tobacco, gambling, adult content)">{{ (tenant.advertising_policy.get('prohibited_categories', []) if tenant.advertising_policy else [])|join('\n') }}</textarea>
+                                      placeholder="Enter one category per line (e.g., tobacco, gambling, adult content)">{{ (tenant.advertising_policy.prohibited_categories if tenant.advertising_policy else [])|join('\n') }}</textarea>
                             <small>Additional content categories to block beyond the baseline. Examples: tobacco, gambling, cannabis, alcohol, political ads, cryptocurrency.</small>
                         </div>
 
                         <div class="form-group">
                             <label for="prohibited_tactics">Additional Prohibited Tactics</label>
                             <textarea id="prohibited_tactics" name="prohibited_tactics" class="form-control" rows="3"
-                                      placeholder="Enter one tactic per line">{{ (tenant.advertising_policy.get('prohibited_tactics', []) if tenant.advertising_policy else [])|join('\n') }}</textarea>
+                                      placeholder="Enter one tactic per line">{{ (tenant.advertising_policy.prohibited_tactics if tenant.advertising_policy else [])|join('\n') }}</textarea>
                             <small>Additional advertising tactics to prohibit beyond the baseline.</small>
                         </div>
 
                         <div class="form-group">
                             <label for="prohibited_advertisers">Blocked Advertisers/Domains</label>
                             <textarea id="prohibited_advertisers" name="prohibited_advertisers" class="form-control" rows="3"
-                                      placeholder="Enter one domain or advertiser name per line (e.g., competitor.com)">{{ (tenant.advertising_policy.get('prohibited_advertisers', []) if tenant.advertising_policy else [])|join('\n') }}</textarea>
+                                      placeholder="Enter one domain or advertiser name per line (e.g., competitor.com)">{{ (tenant.advertising_policy.prohibited_advertisers if tenant.advertising_policy else [])|join('\n') }}</textarea>
                             <small>Specific advertisers or domains to block. One per line.</small>
                         </div>
 

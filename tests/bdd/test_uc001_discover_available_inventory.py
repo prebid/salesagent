@@ -1,6 +1,6 @@
 """BDD binding for the generated UC-001 discovery feature, one scenario at a time.
 
-The feature carries 121 scenarios and most have no step definitions yet, so this module
+The feature carries 119 scenarios and most have no step definitions yet, so this module
 binds by NAME the ones that run, rather than collecting the whole file with
 ``scenarios()``: a collected scenario with a missing step reads as dormant coverage. Bind
 the next scenario here when its steps exist.
@@ -39,6 +39,11 @@ def test_policy_fails_open() -> None:
 @scenario(FEATURE, "BR-RULE-002 INV-5 holds - policy evaluation returns ALLOWED")
 def test_policy_allows_the_brief() -> None:
     """The seller's policy model allows the brief, and the request proceeds."""
+
+
+@scenario(FEATURE, "BR-RULE-002 - the saved prohibitions reach the policy model")
+def test_policy_prompt_names_the_saved_prohibitions() -> None:
+    """Every list the seller saved reaches the policy model's prompt."""
 
 
 @scenario(FEATURE, "BR-RULE-005 INV-1 violated - product below 0.1 threshold excluded")

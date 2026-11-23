@@ -17,6 +17,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 from src.core.config_loader import safe_json_loads
+from src.core.schemas.advertising_policy import AdvertisingPolicy
 from src.services.ai.config import SellerAIConfig, TenantAIConfig
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,8 @@ class TenantContext(BaseModel):
     order_name_template: str | None = None
     creative_review_criteria: str | None = None
     brand_manifest_policy: str = "require_auth"
-    advertising_policy: dict[str, Any] | None = None
+    #: The complete policy the operator saved; None means the tenant saved none.
+    advertising_policy: AdvertisingPolicy | None = None
     product_ranking_prompt: str | None = None
     # #1592 T1a: implementation-backed AdCP capability declaration blocks.
     # None = nothing declared = the pre-#1592 capabilities wire.
@@ -159,7 +161,7 @@ class TenantContext(BaseModel):
             order_name_template=tenant.order_name_template,
             creative_review_criteria=tenant.creative_review_criteria,
             brand_manifest_policy=tenant.brand_manifest_policy or "require_auth",
-            advertising_policy=safe_json_loads(tenant.advertising_policy, None),
+            advertising_policy=tenant.advertising_policy,
             product_ranking_prompt=tenant.product_ranking_prompt,
             capability_declarations=safe_json_loads(tenant.capability_declarations, None),
         )

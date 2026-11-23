@@ -15,7 +15,13 @@ from src.core.resolved_identity import PublicIdentity, ResolvedIdentity
 from src.core.tenant_context import TenantContext
 from src.services.ai.factory import AIProviderError
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
-from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories import (
+    AdvertisingPolicyFactory,
+    PricingOptionFactory,
+    PrincipalFactory,
+    ProductFactory,
+    TenantFactory,
+)
 from tests.harness._identity import make_identity
 from tests.harness.product import ProductEnv
 
@@ -225,7 +231,7 @@ class TestBriefPolicyBlocked:
             tenant = TenantFactory(
                 tenant_id="bp-blocked",
                 subdomain="bp-blocked",
-                advertising_policy={"enabled": True},
+                advertising_policy=AdvertisingPolicyFactory(),
                 gemini_api_key="test-key",
             )
             PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -265,7 +271,7 @@ class TestBriefPolicyRestrictedManualReview:
             tenant = TenantFactory(
                 tenant_id="bp-restrict",
                 subdomain="bp-restrict",
-                advertising_policy={"enabled": True, "require_manual_review": True},
+                advertising_policy=AdvertisingPolicyFactory(require_manual_review=True),
                 gemini_api_key="test-key",
             )
             PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -306,7 +312,7 @@ class TestBriefPolicyApproved:
             tenant = TenantFactory(
                 tenant_id="bp-approved",
                 subdomain="bp-approved",
-                advertising_policy={"enabled": True},
+                advertising_policy=AdvertisingPolicyFactory(),
                 gemini_api_key="test-key",
             )
             PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -346,7 +352,7 @@ class TestBriefPolicyServiceUnavailable:
             tenant = TenantFactory(
                 tenant_id="bp-failopen",
                 subdomain="bp-failopen",
-                advertising_policy={"enabled": True},
+                advertising_policy=AdvertisingPolicyFactory(),
                 gemini_api_key="test-key",
             )
             PrincipalFactory(tenant=tenant, principal_id="p1")
