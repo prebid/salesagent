@@ -64,11 +64,12 @@ from src.core.schemas import (
     CreateMediaBuySuccess,
     PricingOption,
 )
-from tests.factories import stamp_format_identity
+from tests.factories import CreativeFactory, stamp_format_identity
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.helpers.envelope_assertions import assert_envelope_shape, raises_adcp
+from tests.helpers.media_buy_approval import uploadable_creative
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -359,29 +360,6 @@ def _request_naming_the_unpushed_creative() -> CreateMediaBuyRequest:
     )
 
 
-def _seed_unpushed_creative(tenant, principal) -> None:
-    """A creative the upload path will try to push: approved, with no ad_server_creative_id.
-
-    Extractable url/dimensions, so _build_adapter_asset_from_creative succeeds and the
-    upload runs. status matters: media_buy_create.py holds pending_review creatives back
-    from the adapter upload (#1038), so the upload only runs for a creative that is NOT
-    pending_review. It used to run by accident — CreativeFactory defaulted to the
-    non-spec "pending", which fell through to the upload branch. Now that the factory
-    writes a real AdCP status, the state has to be stated (salesagent-zm5l).
-    """
-    from tests.factories import CreativeFactory
-
-    CreativeFactory(
-        tenant=tenant,
-        principal=principal,
-        creative_id=_UNPUSHED_CREATIVE_ID,
-        format="display_300x250",
-        agent_url="https://creative.adcontextprotocol.org",
-        status="approved",
-        data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
-    )
-
-
 class TestCreativeUploadFailure:
     """GAP-004: Creative upload failure raises CREATIVE_UPLOAD_FAILED.
 
@@ -405,7 +383,13 @@ class TestCreativeUploadFailure:
         with MediaBuyCreateEnv() as env:
             tenant, principal = env.setup_default_data()
             env.setup_product_chain(tenant)
-            _seed_unpushed_creative(tenant, principal)
+            uploadable_creative(
+                CreativeFactory,
+                tenant=tenant,
+                principal=principal,
+                creative_id=_UNPUSHED_CREATIVE_ID,
+                status="approved",
+            )
 
             # Adapter create succeeds; the creative upload raises a generic exception.
             mock_adapter = env.mock["adapter"].return_value
@@ -425,6 +409,8 @@ class TestCreativeUploadFailure:
         completes, but the push placed nothing, so the row must keep no
         ``ad_server_creative_id``, whatever id the status names: that field is what the
         next push reads to decide between creating the creative and associating an id.
+        The push reports another creative's result first, so the status is the one matched
+        by this creative's id and not the first one.
         """
         from src.core.database.repositories.uow import CreativeUoW
 
@@ -433,14 +419,21 @@ class TestCreativeUploadFailure:
         with MediaBuyCreateEnv() as env:
             tenant, principal = env.setup_default_data()
             env.setup_product_chain(tenant)
-            _seed_unpushed_creative(tenant, principal)
+            uploadable_creative(
+                CreativeFactory,
+                tenant=tenant,
+                principal=principal,
+                creative_id=_UNPUSHED_CREATIVE_ID,
+                status="approved",
+            )
             env.mock["adapter"].return_value.add_creative_assets.return_value = [
+                AssetStatus(creative_id="another_creative", platform_creative_id="gam_other", status="approved"),
                 AssetStatus(
                     creative_id=_UNPUSHED_CREATIVE_ID,
                     platform_creative_id="gam_creative_4242",
                     status="failed",
                     message="no native template",
-                )
+                ),
             ]
 
             env.call_impl(req=req)

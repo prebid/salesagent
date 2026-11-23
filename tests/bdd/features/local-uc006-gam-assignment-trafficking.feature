@@ -41,6 +41,31 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
     And Google Ad Manager associated that creative with line items "5000001"
 
+  # A seller whose GAM connection requires manual approval (gam_manual_approval_required) still
+  # has a creative the sync clears created in GAM: the push carries the creative's approval
+  # (already_approved), so the adapter's manual-approval gate does not queue it again.
+  @T-UC-006-local-gam-manual-approval-assignment-traffics
+  Scenario: Under manual approval of GAM operations, a synced creative assigned to a booked package is created in GAM
+    Given the seller requires manual approval of its Google Ad Manager operations
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" is assigned to package "pkg-banner-a"
+    And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
+    And Google Ad Manager associated that creative with line items "5000001"
+
+  # The same seller with the creative held for its review: the seller's approval of the creative
+  # is the approval its push carries.
+  @T-UC-006-local-gam-manual-approval-held-creative
+  Scenario: Under manual approval of GAM operations, a creative held for review is created in GAM when the seller approves it
+    Given the seller requires manual approval of its Google Ad Manager operations
+    And the tenant has approval_mode "require-human"
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
+    When the Buyer Agent syncs the creative with assignments
+    Then Google Ad Manager created no creative
+    When the seller approves creative "cr-banner"
+    Then Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
+    And Google Ad Manager associated that creative with line items "5000001"
+
   # sync_creatives records the creative agent's preview link as an HTML creative's URL. The
   # markup is what GAM serves; the preview page is not sent to GAM as an image.
   @T-UC-006-local-gam-html-creative

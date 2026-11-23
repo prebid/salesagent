@@ -27,6 +27,24 @@ from typing import Any
 ADAPTER_BOUNDARY = "src.core.tools.media_buy_create._execute_adapter_media_buy_creation"
 
 
+def adapter_declaring(capabilities: Any) -> Any:
+    """An ad server adapter stand-in shaped by ``AdServerAdapter``, declaring *capabilities*.
+
+    Spec'd on the contract, so a call off it fails, and carrying an adapter's real
+    capabilities, so a gate on them is graded rather than answered by a truthy child mock.
+    ``orders_manager`` is GAM's, which the approval reads when an adapter has one.
+    """
+    from unittest.mock import MagicMock, create_autospec
+
+    from src.adapters.base import AdServerAdapter
+
+    adapter = create_autospec(AdServerAdapter, instance=True)
+    adapter.capabilities = capabilities
+    adapter.orders_manager = MagicMock()
+    adapter.orders_manager.approve_order.return_value = True
+    return adapter
+
+
 def adapter_success(*_args: Any, **_kwargs: Any) -> Any:
     """What a healthy adapter hands back: an order id and no packages to map.
 

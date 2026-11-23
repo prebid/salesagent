@@ -28,13 +28,15 @@ session, so a test that stubbed it would grade nothing.
 
 from __future__ import annotations
 
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import ANY, patch
 
 import pytest
 
+from src.adapters.google_ad_manager import GoogleAdManager
+from src.adapters.mock_ad_server import MockAdServer
 from src.core.schemas import AssetStatus
-from src.core.tools.media_buy_create import push_creative_to_existing_buy
-from tests.helpers.media_buy_approval import uploadable_creative
+from src.core.tools.media_buy_create import CreativePushFailure, push_creative_to_existing_buy
+from tests.helpers.media_buy_approval import adapter_declaring, uploadable_creative
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -83,9 +85,9 @@ def _seed_live_buy_with_assigned_creative():
     return tenant.tenant_id, creative.creative_id, media_buy.media_buy_id, principal.principal_id
 
 
-def _adapter_reporting(creative_id: str) -> MagicMock:
-    """An adapter whose push accepts the asset and reports enrichment back."""
-    adapter = MagicMock()
+def _adapter_reporting(creative_id: str):
+    """A GAM-capable adapter whose push accepts the asset and reports enrichment back."""
+    adapter = adapter_declaring(GoogleAdManager.capabilities)
     adapter.add_creative_assets.return_value = [
         AssetStatus(
             creative_id=creative_id,
@@ -147,3 +149,15 @@ def test_push_persists_the_adapter_enrichment(integration_db, factory_session):
         "ad_server_creative_id is what the function's own re-approval guard reads; without "
         "it a second approval pushes this creative to the ad server again"
     )
+
+
+def test_an_adapter_that_traffics_no_creatives_is_not_pushed_to(integration_db, factory_session):
+    """The push refuses an adapter that declares no creative trafficking, and calls nothing on it."""
+    tenant_id, creative_id, media_buy_id, _principal_id = _seed_live_buy_with_assigned_creative()
+    adapter = adapter_declaring(MockAdServer.capabilities)
+
+    with patch("src.core.tools.media_buy_create.get_adapter", return_value=adapter):
+        failure = push_creative_to_existing_buy(creative_id=creative_id, media_buy_id=media_buy_id, tenant_id=tenant_id)
+
+    assert failure == CreativePushFailure("Adapter does not support creative upload")
+    adapter.add_creative_assets.assert_not_called()

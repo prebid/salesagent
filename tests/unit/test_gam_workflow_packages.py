@@ -227,9 +227,16 @@ class TestGAMCreativePushApprovalGate:
         ):
             statuses = adapter.add_creative_assets("9000001", _PUSHED_ASSETS, datetime.now(UTC))
 
-        assert [status.status for status in statuses] == ["submitted"]
+        assert [(status.creative_id, status.status) for status in statuses] == [("cr_1", "submitted")]
         step.assert_called_once_with("9000001", "creative_assets_approval")
         push.assert_not_called()
+
+    def test_a_push_an_unconfigured_adapter_refuses_names_each_creative(self, adapter):
+        """The refusal names its creative, so a caller matching statuses by creative_id reads its message."""
+        with patch.object(adapter, "creatives_manager", None):
+            statuses = adapter.add_creative_assets("9000001", _PUSHED_ASSETS, datetime.now(UTC), already_approved=True)
+
+        assert [(status.creative_id, status.status) for status in statuses] == [("cr_1", "failed")]
 
     def test_an_already_approved_push_passes_the_gate(self, adapter):
         """The buy's manual approval, or the creative's own, is the approval: queueing it again would loop."""

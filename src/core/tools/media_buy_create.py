@@ -423,19 +423,22 @@ def _merge_creative_enrichment(existing_data: dict | None, status: AssetStatus) 
 
 def _record_push_status(
     creatives: CreativeRepository, creative: DBCreative, statuses: Sequence[AssetStatus] | None
-) -> AssetStatus | None:
-    """Fold what an ad server push reported for ``creative`` into its row; return that status.
+) -> "CreativePushFailure | None":
+    """Fold what an ad server push reported for ``creative`` into its row: None, or the refusal.
 
     The one reading of a push result, shared by all three GAM push paths (auto-approval
     create, manual-approval execution, and retroactive per-creative push — #1506). The status
-    is the one whose ``creative_id`` is the creative's. ``failed`` is a refusal and records
-    nothing; what a refusal means is the caller's to decide on its path. Any other status is
-    merged (:func:`_merge_creative_enrichment`) and, when that adds something, persisted
-    through ``CreativeRepository.update_data``. None when the push reported nothing for it.
+    is the one whose ``creative_id`` is the creative's. A ``failed`` status is a refusal, and
+    so is no status for the creative at all; either records nothing, and what a refusal means
+    is the caller's to decide on its path. Any other status is merged
+    (:func:`_merge_creative_enrichment`) and, when that adds something, persisted through
+    ``CreativeRepository.update_data``.
     """
     status = next((s for s in statuses or () if s.creative_id == creative.creative_id), None)
-    if status is None or status.status == "failed":
-        return status
+    if status is None:
+        return CreativePushFailure(f"Adapter did not report status for creative {creative.creative_id}")
+    if status.status == "failed":
+        return CreativePushFailure(status.message or "Adapter reported upload failure", status.error)
     merged = _merge_creative_enrichment(creative.data, status)
     if merged != (creative.data or {}):
         logger.info(
@@ -446,7 +449,7 @@ def _record_push_status(
             )
         )
         creatives.update_data(creative, merged)
-    return status
+    return None
 
 
 def _determine_media_buy_status(
@@ -1875,13 +1878,12 @@ def execute_approved_media_buy(
                             creatives_repo = CreativeRepository(session, tenant_id)
                             for asset in assets:
                                 creative = creative_map[asset["creative_id"]]
-                                status = _record_push_status(creatives_repo, creative, asset_statuses)
-                                if status is None or status.status == "failed":
+                                failure = _record_push_status(creatives_repo, creative, asset_statuses)
+                                if failure is not None:
                                     # FIXME(#1566): logged only; the order is still approved and the buy goes active.
                                     logger.error(
                                         log_safe(
-                                            f"[APPROVAL] Failed to upload creative {creative.creative_id}: "
-                                            f"{status.message if status else 'the adapter reported no status'}"
+                                            f"[APPROVAL] Failed to upload creative {creative.creative_id}: {failure.reason}"
                                         )
                                     )
                         else:
@@ -2112,11 +2114,9 @@ def push_creative_to_existing_buy(
                 )
                 return CreativePushFailure(str(e), adcp_error_for(e))
 
-            status = _record_push_status(uow.creatives, creative, asset_statuses)
-            if status is None:
-                return CreativePushFailure(f"Adapter did not report status for creative {creative_id}")
-            if status.status == "failed":
-                return CreativePushFailure(status.message or "Adapter reported upload failure", status.error)
+            failure = _record_push_status(uow.creatives, creative, asset_statuses)
+            if failure is not None:
+                return failure
             logger.info(
                 log_safe(
                     f"[GATE-PUSH] Pushed creative {creative_id} to live buy "
@@ -4366,18 +4366,17 @@ async def _create_media_buy_impl(
                                         [asset],
                                         datetime.now(UTC),
                                     )
-                                    uploaded_status = _record_push_status(
+                                    failure = _record_push_status(
                                         CreativeRepository(session, tenant.tenant_id), creative, upload_result
                                     )
-                                    if uploaded_status is not None and uploaded_status.status == "failed":
+                                    if failure is not None:
                                         # Not created in GAM: no ad server id to record. Logged, as on
                                         # the approval path; the assignment below keeps the creative
                                         # pushable later.
                                         # FIXME(#1566): logged only; the response carries no signal.
                                         logger.error(
                                             log_safe(
-                                                f"Failed to upload creative {creative_id} to GAM: "
-                                                f"{uploaded_status.message}"
+                                                f"Failed to upload creative {creative_id} to GAM: {failure.reason}"
                                             )
                                         )
                                     else:

@@ -75,3 +75,20 @@ Feature: A Google Ad Manager seller books the buyer's media buy in Google Ad Man
       | status                       | associated         |
       | approved                     | creative "7000001" |
       | awaiting the seller's review | no creative        |
+
+  # A native slot names the creative template its creatives are built against: the product's
+  # native_style_id, booked on the NATIVE placeholder, which is where the creative push reads it
+  # back (GH #1516). The display slot beside it names none. The package selects both of the
+  # product's canonical format options by format_option_refs (media-buy/package-request.json).
+  @T-UC-002-local-gam-native-template @extension
+  Scenario: A native slot is booked with the product's native_style_id as its creative template, and the display slot with none
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", selling a native format beside its display format, with product settings '{"native_style_id": "987654"}'
+    And the buyer's package selects the product's display and native format options
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And Google Ad Manager received one line item, whose creative placeholders are:
+      | size    | creativeSizeType | creativeTemplateId |
+      | 300x250 | PIXEL            |                    |
+      | 1x1     | NATIVE           | 987654             |

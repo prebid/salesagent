@@ -26,15 +26,17 @@ model to plant an attribute.
 """
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import ANY, call, patch
 
 import pytest
 
 from src.adapters.base import AdapterCreateResult
+from src.adapters.google_ad_manager import GoogleAdManager
+from src.adapters.mock_ad_server import MockAdServer
 from src.core.database.database_session import get_db_session, get_engine
 from src.core.database.models import MediaPackage as DBMediaPackage
 from tests.helpers.gam_client import build_gam_adapter, gam_line_item, stub_gam_client_manager
-from tests.helpers.media_buy_approval import run_approval
+from tests.helpers.media_buy_approval import ADAPTER_BOUNDARY, adapter_declaring, run_approval
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -440,6 +442,22 @@ def pending_media_buy_with_approved_creative(pending_media_buy_with_package):
     return {**data, "principal_id": principal.principal_id, "creative_id": creative.creative_id}
 
 
+def _approve_with(adapter, *, media_buy_id: str, tenant_id: str, order_id: str, asset: dict):
+    """Run the approval with *adapter* standing in for the ad server, which books *order_id*.
+
+    Returns the approval's result and the ``get_adapter`` and ad-server-boundary stand-ins,
+    so a test can grade which adapter each step ran on. The creative gate and the asset
+    builder are stubbed: the approval's creative upload is the subject, not either of them.
+    """
+    with (
+        patch(ADAPTER_BOUNDARY, return_value=AdapterCreateResult(media_buy_id=order_id, packages=[])) as creation,
+        patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
+        patch("src.core.tools.media_buy_create._build_adapter_asset_from_creative", return_value=(asset, None)),
+        patch("src.core.tools.media_buy_create.get_adapter", return_value=adapter) as get_adapter,
+    ):
+        return run_approval(media_buy_id, tenant_id), get_adapter, creation
+
+
 class TestExecuteApprovedEnrichesSellerConcept:
     """execute_approved_media_buy — the manual-approval GAM push path — enriches
     trafficked creatives with the seller-side concept + platform id (#1506), and the
@@ -503,10 +521,8 @@ class TestExecuteApprovedEnrichesSellerConcept:
         # (2) ...fed through the REAL execute_approved_media_buy writeback. The adapter
         # response carries the GAM order id; the adapter itself is a stand-in whose push
         # returns the real producer's output.
-        adapter_response = AdapterCreateResult(media_buy_id=gam_order_id, packages=[])
-        mock_adapter = MagicMock()
+        mock_adapter = adapter_declaring(GoogleAdManager.capabilities)
         mock_adapter.add_creative_assets.return_value = produced
-        mock_adapter.orders_manager.approve_order.return_value = True
         valid_asset = {
             "creative_id": creative_id,
             "package_assignments": [{"package_id": fixture["package_id"], "weight": 100}],
@@ -517,19 +533,9 @@ class TestExecuteApprovedEnrichesSellerConcept:
             "asset_type": "image",
             "name": "Test Creative",
         }
-        with (
-            patch(
-                "src.core.tools.media_buy_create._execute_adapter_media_buy_creation",
-                return_value=adapter_response,
-            ),
-            patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
-            patch(
-                "src.core.tools.media_buy_create._build_adapter_asset_from_creative",
-                return_value=(valid_asset, None),
-            ),
-            patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
-        ):
-            result = run_approval(media_buy_id, tenant_id)
+        result, _get_adapter, _creation = _approve_with(
+            mock_adapter, media_buy_id=media_buy_id, tenant_id=tenant_id, order_id=gam_order_id, asset=valid_asset
+        )
 
         assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
         # The buy's approval is what this push carries, so the adapter's own gate must not queue it again.
@@ -559,3 +565,35 @@ class TestExecuteApprovedEnrichesSellerConcept:
             assert creative_id in returned, (
                 f"list_creatives concept_ids filter did not return the enriched creative; got {returned!r}"
             )
+
+
+class TestExecuteApprovedRunsOnItsOneAdapter:
+    """The approval books, pushes and approves on the one adapter it builds."""
+
+    @pytest.mark.parametrize(
+        ("capabilities", "pushed"),
+        [
+            pytest.param(GoogleAdManager.capabilities, True, id="trafficking"),
+            pytest.param(MockAdServer.capabilities, False, id="not-trafficking"),
+        ],
+    )
+    def test_the_push_reaches_only_an_adapter_that_traffics_creatives(
+        self, pending_media_buy_with_approved_creative, capabilities, pushed
+    ):
+        """Only an adapter that declares creative trafficking is pushed to, on the one adapter the approval built."""
+        fixture = pending_media_buy_with_approved_creative
+        adapter = adapter_declaring(capabilities)
+        adapter.add_creative_assets.return_value = []
+        asset = {"creative_id": fixture["creative_id"], "package_assignments": []}
+
+        result, get_adapter, creation = _approve_with(
+            adapter, media_buy_id=fixture["media_buy_id"], tenant_id=fixture["tenant_id"], order_id="555", asset=asset
+        )
+
+        assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
+        get_adapter.assert_called_once_with(ANY)
+        creation.assert_called_once_with(ANY, ANY, ANY, ANY, ANY, adapter)
+        adapter.orders_manager.approve_order.assert_called_once_with("555")
+        assert adapter.add_creative_assets.call_args_list == (
+            [call("555", [asset], ANY, already_approved=True)] if pushed else []
+        )

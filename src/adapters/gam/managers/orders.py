@@ -9,12 +9,13 @@ import logging
 import math
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from googleads import ad_manager
 
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
 from src.adapters.gam.utils.error_handler import map_gam_exception
+from src.adapters.gam.utils.fields import gam_field
 from src.adapters.gam.utils.formatters import format_datetime_for_gam
 from src.adapters.gam.utils.timeout_handler import timeout
 from src.core.errors.details import CapabilityRefusalDetails
@@ -1057,32 +1058,6 @@ class GAMOrdersManager:
 
         return created_line_item_ids
 
-    @staticmethod
-    def _safe_get_nested(obj, *keys, default=None):
-        """Safely get nested attribute/dict value from GAM API response.
-
-        Handles both dict and object responses from GAM API.
-
-        Args:
-            obj: Dict or object to traverse
-            *keys: Keys/attributes to traverse (e.g., 'costPerUnit', 'microAmount')
-            default: Default value if key not found
-
-        Returns:
-            Value at nested path, or default if not found
-        """
-        current = obj
-        for key in keys:
-            if current is None:
-                return default
-            if isinstance(current, dict):
-                current = current.get(key)
-            else:
-                current = getattr(current, key, None)
-            if current is None:
-                return default
-        return current if current is not None else default
-
     def update_line_item_budget(
         self, line_item_id: str, new_budget: float, pricing_model: str, currency: str = "USD", max_retries: int = 5
     ) -> bool:
@@ -1123,8 +1098,8 @@ class GAMOrdersManager:
                 # Budget = (costPerUnit / 1000) * goal_units for CPM
                 # Budget = costPerUnit * goal_units for CPC
                 # Use helper function to handle both dict and object responses from GAM API
-                current_cost_per_unit_micro = self._safe_get_nested(line_item, "costPerUnit", "microAmount", default=0)
-                current_cost_per_unit = float(current_cost_per_unit_micro) / 1_000_000
+                current_cost_per_unit_micro = gam_field(line_item, "costPerUnit", "microAmount", default=0)
+                current_cost_per_unit = float(cast(int, current_cost_per_unit_micro)) / 1_000_000
 
                 if current_cost_per_unit <= 0:
                     logger.error(f"Invalid costPerUnit for line item {line_item_id}: {current_cost_per_unit}")
@@ -1139,7 +1114,7 @@ class GAMOrdersManager:
                     new_goal_units = int(new_budget / current_cost_per_unit)
                 elif pricing_model == "flat_rate":
                     # FLAT_RATE: Keep existing goal units (100% for sponsorship)
-                    new_goal_units = self._safe_get_nested(line_item, "primaryGoal", "units", default=100)
+                    new_goal_units = cast(int, gam_field(line_item, "primaryGoal", "units", default=100))
                 else:
                     logger.error(f"Unsupported pricing model for budget update: {pricing_model}")
                     return False

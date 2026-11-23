@@ -35,6 +35,12 @@ GAM_CLIENT_PATCH: dict[str, str] = {
 #: The trafficker and ad unit a GAM seller has when the scenario does not name them.
 DEFAULT_GAM_TRAFFICKER_ID = "2000001"
 DEFAULT_GAM_AD_UNIT_ID = "4000001"
+#: The format options a GAM seller selling native beside display declares on each product
+#: (``sell_through_gam(native=True)``): its 300x250 display slot, then a native in-feed slot.
+GAM_FORMAT_OPTIONS: tuple[dict[str, Any], ...] = (
+    {"format_kind": "image", "format_option_id": "gam_display_300x250", "params": {"width": 300, "height": 250}},
+    {"format_kind": "native_in_feed", "format_option_id": "gam_native_in_feed", "params": {}},
+)
 
 
 def _live_server_builds_its_own_adapter(self: Any) -> None:
@@ -122,6 +128,7 @@ class GamSellerMixin:
         network_time_zone: str | None = None,
         network_fault: str | None = None,
         implementation_config: Mapping[str, Any] | None = None,
+        native: bool = False,
     ) -> None:
         """Make this env's tenant a Google Ad Manager seller selling *products* on one ad unit.
 
@@ -149,6 +156,8 @@ class GamSellerMixin:
 
         ``implementation_config`` is what the seller wrote over each product's generated GAM
         configuration (``_sell_product_through_gam``): its keys replace the generated ones.
+        ``native`` has each product also declare the canonical ``GAM_FORMAT_OPTIONS``, a native
+        in-feed slot beside the display one.
         """
         from tests.factories import GAMInventoryFactory
         from tests.utils.tenant_setup import onboard_gam
@@ -165,7 +174,7 @@ class GamSellerMixin:
         }
         GAMInventoryFactory(tenant=tenant, inventory_id=ad_unit_id)
         for product in products:
-            self._sell_product_through_gam(product, ad_unit_id, implementation_config or {})
+            self._sell_product_through_gam(product, ad_unit_id, implementation_config or {}, native=native)
         self._commit_factory_data()
         self.sell_through_tenant_adapter()
 
@@ -269,7 +278,7 @@ class GamSellerMixin:
         assert response.status_code == 200, f"approving creative {creative_id} answered {response.status_code}"
 
     def _sell_product_through_gam(
-        self, product: Any, ad_unit_id: str, implementation_config: Mapping[str, Any]
+        self, product: Any, ad_unit_id: str, implementation_config: Mapping[str, Any], *, native: bool = False
     ) -> None:
         """Configure *product* for GAM on one ad unit.
 
@@ -281,6 +290,8 @@ class GamSellerMixin:
           for its delivery type and format, the generator the Admin UI's product form calls,
           plus the ad unit, with *implementation_config* (the keys the seller wrote by hand)
           over both.
+        * With *native*, it also declares ``GAM_FORMAT_OPTIONS`` on its canonical arm, which a
+          package selecting them by ``format_option_refs`` records as its snapshots.
         """
         from src.core.format_cache import DEFAULT_AGENT_URL
         from src.services.gam_product_config_service import GAMProductConfigService
@@ -291,6 +302,18 @@ class GamSellerMixin:
             "targeted_ad_unit_ids": [ad_unit_id],
             **implementation_config,
         }
+        if native:
+            product.format_options = [dict(option) for option in GAM_FORMAT_OPTIONS]
+
+    def require_manual_approval_of_gam_operations(self) -> None:
+        """The seller's GAM connection requires manual approval (``gam_manual_approval_required``).
+
+        The adapter then queues the orders, line item changes and creative pushes it is asked
+        for, for the seller to approve, unless the call carries an approval already given.
+        """
+        tenant, _principal = self.setup_default_data()
+        tenant.adapter_config.gam_manual_approval_required = True
+        self._commit_factory_data()
 
     def refuse_gam_association(self, line_item_id: str, reason: str) -> None:
         """The stand-in GAM network refuses creative associations on *line_item_id*, with this ``ApiError`` reason."""

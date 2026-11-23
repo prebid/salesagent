@@ -21,6 +21,7 @@ from src.core.exceptions import (
 from src.core.schemas import AssetStatus
 
 from ..utils.error_handler import map_gam_exception
+from ..utils.fields import gam_field
 from ..utils.validation import GAMValidator
 
 logger = logging.getLogger(__name__)
@@ -45,13 +46,6 @@ def _line_item_weights(package_assignments: list[dict[str, Any]]) -> list[tuple[
         else:
             logger.warning(f"Package {assignment.get('package_id')} has no GAM line item; assignment skipped")
     return result
-
-
-def _get_attr(obj: object, name: str, default: object = None) -> object:
-    """Read a field off a GAM object: a Zeep object in production, a dict in tests."""
-    if isinstance(obj, dict):
-        return obj.get(name, default)
-    return getattr(obj, name, default)
 
 
 class GAMCreativesManager:
@@ -470,17 +464,17 @@ class GAMCreativesManager:
         matching_placeholders_found = False
         for placeholder in placeholders:
             # Placeholder can be a Zeep object or dict (in tests)
-            placeholder_size = _get_attr(placeholder, "size", None)
+            placeholder_size = gam_field(placeholder, "size")
             if not placeholder_size:
                 continue
-            placeholder_width = _get_attr(placeholder_size, "width", 0)
-            placeholder_height = _get_attr(placeholder_size, "height", 0)
+            placeholder_width = gam_field(placeholder_size, "width", default=0)
+            placeholder_height = gam_field(placeholder_size, "height", default=0)
 
             # 1x1 placeholders are wildcards in GAM (native templates or programmatic)
             # They accept creatives of any size
             if placeholder_width == 1 and placeholder_height == 1:
                 matching_placeholders_found = True
-                template_id = _get_attr(placeholder, "creativeTemplateId", None)
+                template_id = gam_field(placeholder, "creativeTemplateId")
                 if template_id:
                     logger.info(
                         f"Creative {asset_width}x{asset_height} matches 1x1 placeholder "
@@ -501,9 +495,11 @@ class GAMCreativesManager:
         if not matching_placeholders_found:
             available_sizes = []
             for placeholder in placeholders:
-                size = _get_attr(placeholder, "size", None)
+                size = gam_field(placeholder, "size")
                 if size:
-                    available_sizes.append(f"{_get_attr(size, 'width', 0)}x{_get_attr(size, 'height', 0)}")
+                    available_sizes.append(
+                        f"{gam_field(size, 'width', default=0)}x{gam_field(size, 'height', default=0)}"
+                    )
 
             validation_errors.append(
                 f"Creative size {asset_width}x{asset_height} does not match any LineItem placeholders. "
@@ -791,7 +787,7 @@ class GAMCreativesManager:
         and ``add_creative_assets`` reports the error on the asset's status, where a caller
         answering a buyer reads it as that creative's error. There is no fallback id.
         """
-        template_ids = sorted({str(t) for t in (_get_attr(p, "creativeTemplateId") for p in placeholders or []) if t})
+        template_ids = sorted({str(t) for t in (gam_field(p, "creativeTemplateId") for p in placeholders or []) if t})
         if len(template_ids) == 1:
             return template_ids[0]
         logger.error(

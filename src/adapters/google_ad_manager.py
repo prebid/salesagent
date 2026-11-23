@@ -815,7 +815,7 @@ class GoogleAdManager(AdServerAdapter):
                     asset_id=asset.get("asset_id", f"failed_{i}"),
                     status="failed",
                     message=error_msg,
-                    creative_id=None,
+                    creative_id=asset["creative_id"],
                 )
                 for i, asset in enumerate(assets)
             ]
@@ -837,7 +837,7 @@ class GoogleAdManager(AdServerAdapter):
                             asset_id=asset.get("asset_id", f"pending_{len(asset_statuses)}"),
                             status="submitted",
                             message=f"Creative asset submitted for approval. Workflow step: {step_id}",
-                            creative_id=None,
+                            creative_id=asset["creative_id"],
                         )
                     )
                 return asset_statuses
@@ -850,7 +850,7 @@ class GoogleAdManager(AdServerAdapter):
                             asset_id=asset.get("asset_id", f"failed_{len(asset_statuses)}"),
                             status="failed",
                             message="Failed to create approval workflow step",
-                            creative_id=None,
+                            creative_id=asset["creative_id"],
                         )
                     )
                 return asset_statuses
