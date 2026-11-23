@@ -891,7 +891,7 @@ VERIFIER_RESULT = "__verifier_result__"
 #: (``adcp/signing/verifier.py`` :197/:203/:213/:390 at step 1, :245/:251/:407/:414 at
 #: step 2, :230 at 5, :317 at 6, :325 at 8), and the whole malformed-signature rule
 #: turns on step 1 versus the rest. A test that reads only
-#: ``samples_with(FAILED_METRIC, code=...)`` therefore cannot tell the step-1 pre-check
+#: ``tests.helpers.metrics.samples_with(FAILED_METRIC, code=...)`` therefore cannot tell the step-1 pre-check
 #: family from a step-2 checklist failure on a well-formed header, and a row claiming
 #: to grade one of them would silently be graded by the other.
 VERIFIER_ERROR = "__verifier_error__"
@@ -1021,8 +1021,8 @@ _SCRAPED_UNESCAPES = (("\\\\", "\\"), ('\\"', '"'), ("\\n", "\n"))
 def scraped_counter_samples(text: str, sample_name: str, **labels: str) -> dict[tuple[tuple[str, str], ...], float]:
     """Samples named *sample_name* in SCRAPED Prometheus text, filtered to a label superset.
 
-    The cross-container analogue of :func:`samples_with`, and deliberately NOT folded
-    into it. :func:`counter_samples` collects ``prometheus_client.REGISTRY`` inside THIS
+    The cross-container analogue of :func:`tests.helpers.metrics.samples_with`, and deliberately NOT folded
+    into it. :func:`tests.helpers.metrics.counter_samples` collects ``prometheus_client.REGISTRY`` inside THIS
     process; this parses the ``text/plain`` exposition a test scraped over TLS from
     another container's ``GET /metrics``. Same vocabulary, genuinely different operation
     — the CLAUDE.md DRY carve-out — and an e2e module cannot reach the in-process
@@ -1033,7 +1033,7 @@ def scraped_counter_samples(text: str, sample_name: str, **labels: str) -> dict[
     ``# HELP``/``# TYPE`` lines reports a delta of zero, which looks exactly like "the
     mechanism did not run" — the failure this whole grading exists to tell apart.
 
-    Returns the same shape as :func:`counter_samples` (label tuple -> value) so a caller
+    Returns the same shape as :func:`tests.helpers.metrics.counter_samples` (label tuple -> value) so a caller
     can sum, compare or diff two scrape windows without learning a second vocabulary.
     """
     wanted = labels.items()
@@ -1149,52 +1149,6 @@ def _unescape_label_value(value: str) -> str:
     for escaped, literal in _SCRAPED_UNESCAPES:
         value = value.replace(escaped, literal)
     return value
-
-
-def counter_samples(sample_name: str) -> dict[tuple[tuple[str, str], ...], float]:
-    """All Prometheus samples named *sample_name*, keyed by their label set."""
-    from prometheus_client import REGISTRY
-
-    out: dict[tuple[tuple[str, str], ...], float] = {}
-    for family in REGISTRY.collect():
-        for sample in family.samples:
-            if sample.name == sample_name:
-                out[tuple(sorted(sample.labels.items()))] = sample.value
-    return out
-
-
-@contextmanager
-def assert_counter_delta(metric: str, expected: int, *, why: str = "") -> Iterator[None]:
-    """Assert *metric* moved by exactly *expected* across the block.
-
-    The before/after counter-delta idiom was open-coded at six sites across three
-    signing test modules, each re-deriving the same two reads and the same
-    message (salesagent-z6nr.40's DRY finding). One helper so a seventh cannot
-    drift: the reads are always the same distance apart, and the failure message
-    always names the metric and both values.
-
-    ``expected=0`` is a first-class case, not a degenerate one — "production did
-    NOT count this" is exactly as much of an observable as "it counted once", and
-    is what distinguishes a mechanism that declined to engage from one that never
-    ran.
-    """
-    before = counter_total(metric)
-    yield
-    after = counter_total(metric)
-    detail = f" {why}" if why else ""
-    assert after == before + expected, (
-        f"{metric} must move by {expected} across this block; it went {before} -> {after}.{detail}"
-    )
-
-
-def counter_total(sample_name: str) -> float:
-    return sum(counter_samples(sample_name).values())
-
-
-def samples_with(sample_name: str, **labels: str) -> dict[tuple[tuple[str, str], ...], float]:
-    """Samples of *sample_name* whose labels are a superset of *labels*."""
-    wanted = labels.items()
-    return {key: value for key, value in counter_samples(sample_name).items() if wanted <= dict(key).items()}
 
 
 # ---------------------------------------------------------------------------

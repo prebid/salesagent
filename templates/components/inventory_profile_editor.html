@@ -377,8 +377,7 @@ Then call: window.inventoryProfileEditor.open(profileData)
                 const contentType = response.headers.get('content-type') || '';
                 try {
                     if (contentType.includes('application/json')) {
-                        const error = await response.json();
-                        message = error.error || error.message || message;
+                        message = adminErrorText(await response.json());
                     } else {
                         const text = await response.text();
                         if (text) {

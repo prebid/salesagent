@@ -870,7 +870,7 @@ async function pollActivities() {
         }
 
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+            throw new Error(adminErrorText(await response.json()));
         }
 
         const data = await response.json();

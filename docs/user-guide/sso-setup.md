@@ -25,7 +25,8 @@ This guide describes how to configure SSO for your tenant using OpenID Connect (
 
 New tenants start in **Setup Mode**, which lets you complete an OIDC login for a tenant
 *before* that tenant's SSO is switched on — so you can verify a provider works without
-locking yourself out if it does not.
+locking yourself out if it does not. The demo tenant that `CREATE_DEMO_TENANT` creates
+starts with Setup Mode off.
 
 1. **Configure the deployment's own sign-in** first: set `GOOGLE_CLIENT_ID` /
    `GOOGLE_CLIENT_SECRET` (or the generic `OAUTH_*` variables) and put your address in
@@ -33,11 +34,13 @@ locking yourself out if it does not.
 2. **Start the system** with `docker compose up -d`.
 3. **Log in** at `/admin` with that account.
 4. **Configure the tenant's SSO** following this guide.
-5. **Test your SSO login** works — Setup Mode allows it before you enable it.
-6. **Enable SSO and turn Setup Mode off** from Users & Access.
-5. **Disable Setup Mode** - after this, only SSO authentication works.
+5. **Test your SSO login**: click **Test Connection** on **Users & Access**. A successful
+   test enables SSO.
+6. **Turn Setup Mode off**: sign in through **Sign in with SSO**, then click
+   **Disable Setup Mode** on **Users & Access**. After this, **Sign in with SSO** works
+   only while the tenant's SSO is enabled.
 
-> **Important**: Setup Mode is only for initial configuration. Always disable it once SSO is working to ensure production security.
+> **Important**: Setup Mode lets **Sign in with SSO** run before the tenant's SSO is enabled. Disable Setup Mode once SSO works.
 
 ## Overview
 
@@ -68,11 +71,15 @@ sequenceDiagram
     Browser->>Agent: Callback request carrying the code
     Agent->>IdP: Exchange the code for tokens (using client ID and secret)
     IdP-->>Agent: ID token containing the email claim
-    Agent->>Agent: Check the email against tenant users and allowed domains
-    Agent-->>Browser: Log the user in (test flow: mark SSO verified and enable it)
+    alt Sign in with SSO
+        Agent->>Agent: Check the email against tenant users and allowed domains
+        Agent-->>Browser: Log the user in
+    else Test Connection
+        Agent-->>Browser: Mark SSO verified, enable it, and show a confirmation
+    end
 ```
 
-The sales agent fetches the provider's discovery document server-side, so the discovery URL and logout URL you enter are validated by the outbound egress policy. See [Outbound egress](../security/outbound-egress.md).
+The sales agent fetches the provider's discovery document server-side. When you save the configuration, the sales agent checks the discovery URL you enter against the outbound egress policy. See [Outbound egress](../security/outbound-egress.md).
 
 ## Prerequisites
 
@@ -84,16 +91,20 @@ Before configuring SSO, you need the following:
 
 ## Quick start
 
-1. Go to **Users & Access** in your tenant dashboard.
-2. Note your **Redirect URI** (you need this when creating the OAuth app).
-3. Create an OAuth application in your identity provider (see the [provider setup guides](#provider-setup-guides)).
-4. Enter the **Client ID** and **Client Secret** in the SSO configuration form.
-5. **Add yourself**: Either add your email as a user OR add your email domain to Allowed Domains.
-6. Click **Save Configuration**, then **Test Connection**.
-7. Complete the login flow - SSO is automatically enabled on success.
-8. Click **Disable Setup Mode** to require SSO for all logins.
+1. In **Settings > Account**, set **Custom Domain** to the host where you open the Admin UI, for example `localhost:8000` or `sales.example.com`. **Users & Access** builds the **Required Redirect URI** from that field.
+2. Open **Settings > Users & Access**.
+3. Note your **Required Redirect URI** (you need this when creating the OAuth app).
+4. Create an OAuth application in your identity provider (see the [provider setup guides](#provider-setup-guides)).
+5. Enter the **Client ID** and **Client Secret** in the SSO configuration form.
+6. **Add yourself**: Either add your email as a user with the **Admin** role OR add your email domain to Allowed Domains (people who sign in from an allowed domain are created as admins).
+7. Click **Save Configuration**, then **Test Connection**.
+8. Complete the login flow - SSO is automatically enabled on success.
+9. Sign out, then sign in again with **Sign in with SSO**. If the header shows no **Logout** link, open `/admin/logout` to sign out.
+10. On **Users & Access**, click **Disable Setup Mode**. After this, **Sign in with SSO** works only while the tenant's SSO is enabled.
 
-> **Important**: You must add yourself as a user or add your email domain BEFORE testing. Otherwise you see "Access denied" after authenticating with your identity provider.
+> **Important**: Add yourself as a user, or add your email domain to **Allowed Domains**, before you use **Sign in with SSO**. Otherwise, sign-in ends with "Access denied".
+
+> **Super admins**: you can add your own address or domain here like anyone else. Signing in through this tenant's SSO gives you only the role this tenant gives you, in this tenant: super-admin powers come only from the deployment's own sign-in, never from a tenant's SSO.
 
 ---
 
@@ -179,7 +190,7 @@ In the [Azure portal](https://portal.azure.com/):
 | Client ID | Application (client) ID from the app's Overview page |
 | Client Secret | Secret value from step 3 |
 
-The Microsoft provider uses the multi-organization discovery endpoint automatically (`https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration`), which accepts sign-ins from any Microsoft directory.
+The Microsoft provider uses the multi-organization discovery endpoint automatically (`https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration`).
 
 To restrict sign-ins to your directory only (a **Single tenant** app registration), select **Custom OIDC** as the provider instead and enter your directory-specific discovery URL:
 
@@ -213,9 +224,8 @@ Replace `{tenant-id}` with the **Directory (tenant) ID** from the app's Overview
 1. App integration name: "Prebid Sales Agent"
 2. Grant type: Ensure **Authorization Code** is selected
 3. Sign-in redirect URIs: Add your tenant's redirect URI
-4. Sign-out redirect URIs: (optional) Add your logout URL
-5. Assignments: Choose who can access (specific groups, or everyone)
-6. Click **Save**.
+4. Assignments: Choose who can access (specific groups, or everyone)
+5. Click **Save**.
 
 #### Step 3: Get the credentials
 
@@ -253,9 +263,7 @@ Replace `your-domain` with your Okta domain.
 
 1. Go to the **Settings** tab.
 2. Note your **Domain**, **Client ID**, and **Client Secret**.
-3. Under **Application URIs**:
-   - Allowed Callback URLs: Add your tenant's redirect URI
-   - Allowed Logout URLs: (optional) Add your logout URL
+3. Under **Application URIs**, in **Allowed Callback URLs**, add your tenant's redirect URI.
 4. Click **Save Changes**.
 
 #### Step 3: Enter in the sales agent
@@ -295,8 +303,7 @@ Replace `your-tenant` with your Auth0 tenant name.
 #### Step 3: Configure URIs
 
 1. Valid redirect URIs: Add your tenant's redirect URI
-2. Web origins: Add your tenant's base URL (for CORS)
-3. Click **Save**.
+2. Click **Save**.
 
 #### Step 4: Get the credentials
 
@@ -320,7 +327,7 @@ Replace `your-server` and `your-realm` with your Keycloak server URL and realm n
 
 After entering your SSO configuration:
 
-1. **Add yourself first**: Add your email as a user OR add your email domain to Allowed Domains.
+1. **Add yourself first**: Add your email as a user with the **Admin** role OR add your email domain to Allowed Domains.
 2. Click **Save Configuration**.
 3. Click **Test Connection** - this redirects you to your identity provider.
 4. Complete the login in your identity provider.
@@ -330,14 +337,13 @@ After entering your SSO configuration:
 
 ## Transition to production
 
-Once SSO is working:
+Once SSO is working, follow these steps:
 
 1. **Verify test logins work** - Have team members test the SSO flow (add them as users or add their domain first).
-2. **Click "Disable Setup Mode"** on the Users & Access page.
-3. After disabling Setup Mode:
-   - Only this tenant's own SSO is accepted
-   - Only SSO authentication is allowed
-   - You can re-enable Setup Mode if needed for troubleshooting
+2. Sign in through **Sign in with SSO**. **Disable Setup Mode** requires an SSO sign-in, so you know SSO works before it becomes the only way in.
+3. **Click "Disable Setup Mode"** on the Users & Access page.
+
+After you disable Setup Mode, **Sign in with SSO** works only while the tenant's SSO is enabled. To troubleshoot, click **Re-enable Setup Mode** on the **Users & Access** page.
 
 ## Troubleshooting
 
@@ -360,7 +366,7 @@ This typically means you haven't added yourself as an authorized user:
 1. **Add yourself first**: Go to Users & Access and either:
    - Add your email address under "Add User", OR
    - Add your email domain under "Allowed Domains"
-2. Try the SSO test again.
+2. Sign in again with **Sign in with SSO**.
 
 If you've already added yourself:
 
@@ -370,8 +376,8 @@ If you've already added yourself:
 
 ### Users not recognized after SSO
 
-- Ensure the identity provider returns the `email` claim.
-- Add the user's email to authorized domains or emails in tenant settings.
+- Ensure the identity provider returns the user's email address. The sales agent reads the `email` claim, or else `preferred_username`, `upn`, or `sub`.
+- Add the user on **Users & Access**, or add the user's email domain to **Allowed Domains**. The **Authorized Emails** list in the **Account** section does not apply to **Sign in with SSO**.
 - Check that the email domain matches your authorized domains.
 
 ### SSO works but Setup Mode can't be disabled
@@ -379,6 +385,7 @@ If you've already added yourself:
 - SSO must be **enabled** before Setup Mode can be disabled.
 - SSO is automatically enabled when you successfully complete the test flow.
 - If SSO shows as "Not Verified", click **Test Connection** and complete the login flow.
+- **Disable Setup Mode** works only in a session that **Sign in with SSO** started, and **Test Connection** does not start one. Follow steps 9 and 10 of the [quick start](#quick-start).
 
 ## Security best practices
 

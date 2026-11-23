@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot
 
-from flask import Flask
 from pydantic import ValidationError
 
 from src.adapters.base import (
@@ -1477,25 +1476,6 @@ class GoogleAdManager(AdServerAdapter):
                 accepted_values=["approve_order", "activate_order", "update_package_budget"],
             ),
         )
-
-    def get_config_ui_endpoint(self) -> str | None:
-        """Return the endpoint for GAM-specific configuration UI."""
-        return "/adapters/gam/config"
-
-    def register_ui_routes(self, app: Flask) -> None:
-        """Register GAM-specific configuration routes."""
-        from flask import jsonify, render_template, request
-
-        @app.route("/adapters/gam/config/<tenant_id>/<product_id>", methods=["GET", "POST"])
-        def gam_config_ui(tenant_id: str, product_id: str):
-            """GAM adapter configuration UI."""
-            if request.method == "POST":
-                # Handle configuration updates
-                return jsonify({"success": True})
-
-            return render_template(
-                "gam_config.html", tenant_id=tenant_id, product_id=product_id, title="Google Ad Manager Configuration"
-            )
 
     def validate_product_config(self, config: dict[str, Any]) -> tuple[bool, str | None]:
         """Validate GAM-specific product configuration."""

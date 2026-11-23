@@ -36,13 +36,16 @@ The environment comes before the database, so the check works before database in
 
 ### Tenant access guard
 
-`require_tenant_access()` protects the tenant routes. It decides in the following order:
+`require_tenant_access()` protects the tenant routes. `tenant_access()` makes the decision, in the following order:
 
 1. Outside production, a session that carries the `test_user` key passes for the tenant it names, or for every tenant when it names the super admin role. Only the test helpers sign such a session; no route creates one.
-2. The guard redirects a request with no signed-in user to the tenant login page. In API mode, or when the caller reads JSON, it answers `401`.
-3. A super admin passes for every tenant.
-4. Any other user needs an active `User` row for the tenant. Without one, the guard answers `403`.
-5. The role on that row must permit the request, as [Tenant users](#tenant-users) describes. Otherwise the guard answers `403`.
+2. The guard redirects a request with no signed-in user to the tenant login page. When the caller reads JSON, it answers `401` instead.
+3. A session from a tenant's own SSO reaches only the tenant it was issued for. For any other tenant, the guard answers `403`.
+4. A super admin passes for every tenant.
+5. Any other user needs an active `User` row for the tenant. Without one, the guard answers `403`.
+6. The role on that row must permit the request, as [Tenant users](#tenant-users) describes. Otherwise the guard answers `403`.
+
+The caller reads JSON unless the request asks for a page: a browser navigation, which sends `Sec-Fetch-Mode: navigate`, or a request whose `Accept` header ranks `text/html` above `application/json`. To a caller that reads JSON, the `401` and each `403` carry the body `{"success": false, "error": ...}`. A browser gets the login redirect or an HTML page.
 
 ### Cross-site request forgery
 
@@ -80,6 +83,8 @@ The landing page of a tenant without a configured ad server shows a "Pending Con
 
 Super admins pass `require_tenant_access` for every tenant, and they pass `require_auth(admin_only=True)`. In the Admin UI, they create, deactivate, and reactivate tenants, and they add users, change user roles, and deactivate users. No Admin UI route deletes a tenant or a user; the Tenant Management API deletes tenants. You configure super admins through environment variables or the database.
 
+Super-admin powers come only from the deployment's own sign-in (Google, or the global `OAUTH_*` provider). A tenant's own SSO is configured by that tenant's admin, so the email its provider asserts is only as trustworthy as that admin. A session signed in through a tenant's SSO is therefore bound to that tenant: it is never a super admin, whatever email it carries, and it reaches no other tenant. A super admin can still be a user of a tenant and sign in through that tenant's SSO, but that session has only the role the tenant gave them, in that tenant. A deployment with no global sign-in configured has no way to sign in as a super admin.
+
 ### Tenant users
 
 Tenant users have access to specific tenants through the `User` model. On admin routes decorated with `require_tenant_access`, that decorator refuses a user with no active `User` row in the tenant, and checks the role on the row on every request:
@@ -88,9 +93,9 @@ Tenant users have access to specific tenants through the `User` model. On admin 
 | --- | --- |
 | `viewer` | Read only: no `POST`, `PUT`, `PATCH` or `DELETE` |
 | `manager` | Change everything except the admin-only routes |
-| `admin` | Everything, including the admin-only routes: managing users and roles, authorized domains and emails, setup mode, SSO configuration, and deactivating the tenant |
+| `admin` | Everything, including the admin-only routes: managing users and roles, authorized domains and emails, setup mode, SSO configuration and its connection test, and deactivating the tenant |
 
-A route is admin-only when it is decorated `require_tenant_access(role=UserRole.ADMIN)` (the least role the route needs). A refusal is a 403, with a JSON `{"error": ...}` body when the caller reads JSON (an API-mode route, a JSON request, or a `fetch`). The Users page adds people as viewers by default; admins choose a role when adding someone and can change it later. A person who signs in from an authorized domain without an invitation becomes an admin. So does a person on the authorized email list who signs in through the deployment's OAuth client. That is why changing those lists is admin-only. The Users page refuses to demote or deactivate a tenant's last active admin. Super admins pass every check.
+A route is admin-only when it is decorated `require_tenant_access(role=UserRole.ADMIN)` (the least role the route needs). The role follows what the request can change: the SSO connection test is admin-only because a successful test turns SSO on, and it is a `POST` so a link from another site cannot start one. A refusal is a 403, in the form that [Tenant access guard](#tenant-access-guard) describes. The Users page adds people as viewers by default; admins choose a role when adding someone and can change it later. A person who signs in from an authorized domain without an invitation becomes an admin. So does a person on the authorized email list who signs in through the deployment's OAuth client. That is why changing those lists is admin-only. The Users page refuses to demote or deactivate a tenant's last active admin. Super admins signed in through the deployment's own sign-in pass every check; a session from a tenant's SSO never counts as a super admin.
 
 Some admin routes do not use `require_tenant_access` and so do not get these checks; #2203, #2233 and #2496 track them.
 

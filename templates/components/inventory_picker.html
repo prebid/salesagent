@@ -184,7 +184,8 @@ Then in your template, add browse buttons:
             })
             .then(data => {
                 if (data.error) {
-                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">${data.error}</div>`;
+                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;"></div>`;
+                    list.firstChild.textContent = adminErrorText(data);
                     return;
                 }
 

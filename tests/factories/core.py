@@ -8,6 +8,7 @@ seed_property_tag_selection (the property-tag rows the admin product form requir
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -21,6 +22,7 @@ from src.core.database.models import (
     GAMInventory,
     PropertyTag,
     SignalsAgent,
+    SyncJob,
     Tenant,
 )
 from src.core.tenant_context import TenantContext
@@ -184,6 +186,26 @@ class GAMInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):
             "sizes": [{"width": 300, "height": 250}],
         }
     )
+
+
+class SyncJobFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """An inventory sync the admin UI started a moment ago, still running and reporting progress."""
+
+    class Meta:
+        model = SyncJob
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    sync_id = Sequence(lambda n: f"sync_{n:04d}")
+    adapter_type = "google_ad_manager"
+    sync_type = "inventory"
+    status = "running"
+    started_at = factory.LazyFunction(lambda: datetime.now(UTC))
+    triggered_by = "admin_ui"
+    # A running sync with progress is never taken for a dead one (start_inventory_sync_background).
+    progress = factory.LazyFunction(lambda: {"phase": "Starting"})
 
 
 class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):

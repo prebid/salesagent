@@ -49,6 +49,8 @@ def _client_as(app, role):
     client = app.test_client()
     # signed in through SSO, which disable-setup-mode requires of its caller
     tenant_user_session(client, EMAILS[role], auth_method="oidc")
+    with client.session_transaction() as sess:
+        sess["tenant_id"] = TENANT_ID  # an SSO sign-in is bound to the tenant it was made for
     return client
 
 
@@ -76,12 +78,16 @@ def test_a_viewer_may_not_change_tenant_settings_but_a_manager_may(rbac_tenant, 
 
 
 # --- Admin-only routes ----------------------------------------------------------------
-# Every route marked require_tenant_access(role=UserRole.ADMIN). Signing in from an
-# authorized domain (OIDC or Google) or an authorized email (Google) with no User row
-# creates the user as an admin, so the sign-in lists and SSO are admin-only along with
-# user management: a manager who could add an address they control could make
-# themselves an admin. A viewer or manager gets 403 and nothing changes; an admin gets
-# the route's own answer.
+# Every route marked require_tenant_access(role=UserRole.ADMIN) except oidc.test_initiate.
+# Signing in from an authorized domain (OIDC or Google) or an authorized email (Google)
+# with no User row creates the user as an admin, so the sign-in lists and SSO are
+# admin-only along with user management: a manager who could add an address they control
+# could make themselves an admin. A viewer or manager gets 403 and nothing changes; an
+# admin gets the route's own answer.
+#
+# oidc.test_initiate is left to tests/bdd/features/BR-ADMIN-TENANT-SCOPING.feature
+# (T-ADMIN-SCOPE-011 and T-ADMIN-SCOPE-012): with the SSO client this tenant has, the
+# route sends an admin on to the identity provider, and the feature's tenant has none.
 
 
 class AdminRoute(NamedTuple):
@@ -173,7 +179,7 @@ def test_a_refused_fetch_gets_a_json_error(rbac_tenant, test_admin_app):
     """templates/users.html reads the answer with response.json() and shows its error."""
     response = _call(test_admin_app, "manager", ADMIN_ONLY_ROUTES["users.add_domain"])
     assert response.status_code == 403
-    assert response.get_json() == {"error": "Your role does not allow this"}
+    assert response.get_json() == {"success": False, "error": "Your role does not allow this"}
 
 
 # --- The last active admin ------------------------------------------------------------
