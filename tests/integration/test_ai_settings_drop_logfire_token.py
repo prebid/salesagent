@@ -15,7 +15,7 @@ from tests.helpers.admin_session import tenant_user_session
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 TENANT_ID = "logfire_drop_tenant"
-MANAGER = "manager@logfire-drop.example"
+ADMIN = "admin@logfire-drop.example"
 
 
 def test_saving_ai_settings_drops_the_tenant_logfire_token(integration_db, test_admin_app):
@@ -28,10 +28,10 @@ def test_saving_ai_settings_drops_the_tenant_logfire_token(integration_db, test_
             subdomain="logfire-drop",
             ai_config={"provider": "anthropic", "model": "claude-x", "logfire_token": "pylf_v1_us_stored"},
         )
-        UserFactory(tenant=tenant, user_id="logfire_drop_manager", email=MANAGER, role=UserRole.MANAGER)
+        UserFactory(tenant=tenant, user_id="logfire_drop_admin", email=ADMIN, role=UserRole.ADMIN)
 
         client = test_admin_app.test_client()
-        tenant_user_session(client, MANAGER)
+        tenant_user_session(client, ADMIN)
         response = client.post(
             f"/tenant/{TENANT_ID}/settings/ai",
             data={"ai_provider": "anthropic", "ai_model": "claude-x", "logfire_token": "pylf_v1_us_submitted"},
