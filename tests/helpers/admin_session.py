@@ -299,3 +299,10 @@ def no_configured_super_admins() -> Iterator[None]:
 
     with mock.patch.multiple(get_settings().auth, super_admin_emails="", super_admin_domains=""):
         yield
+
+
+def tenant_user_client(app: Any, email: str, *, auth_method: str | None = None) -> Any:
+    """A new Flask test client for *app*, signed in as the ordinary tenant user *email*."""
+    client = app.test_client()
+    tenant_user_session(client, email, auth_method=auth_method)
+    return client

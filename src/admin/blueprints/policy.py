@@ -2,19 +2,33 @@
 
 import logging
 
-from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
 
 from src.admin.utils import get_tenant_config_from_db, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.core.audit_logger import AuditLogger
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AuditLog, Context, Tenant, UserRole, WorkflowStep
+from src.core.database.models import AuditLog, Tenant, UserRole
+from src.core.database.repositories.uow import WorkflowUoW
+from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.operator_errors import OperatorRefusal, RecordNotFound
 
 logger = logging.getLogger(__name__)
 
 # Create blueprint
 policy_bp = Blueprint("policy", __name__)
+
+
+class PolicyReviewNotFound(RecordNotFound):
+    """The step is not in this tenant's pending policy review queue (or another reviewer just settled it)."""
+
+    MESSAGE = "Policy review task not found"
+
+
+class InvalidReviewAction(OperatorRefusal):
+    """The review form posted an action other than approve or reject."""
+
+    MESSAGE = "Choose approve or reject"
 
 
 @policy_bp.route("/", methods=["GET"])
@@ -86,23 +100,9 @@ def index(tenant_id):
                 }
             )
 
-        # Get pending policy review tasks
-        # Query workflow steps instead of tasks (tasks table was removed)
-        # WorkflowStep has no tenant_id column — must join through Context for tenant isolation
-        from src.core.database.models import Context as DBContext
-
+        # The pending policy review queue: the same definition review_task settles.
         pending_reviews = []
-        stmt = (
-            select(WorkflowStep)
-            .join(DBContext)
-            .where(
-                DBContext.tenant_id == tenant_id,
-                WorkflowStep.step_type == "policy_review",
-                WorkflowStep.status == "pending",
-            )
-            .order_by(WorkflowStep.created_at.desc())
-        )
-        workflow_steps = db_session.scalars(stmt).all()
+        workflow_steps = WorkflowRepository(db_session, tenant_id).list_pending_policy_reviews()
 
         for step in workflow_steps:
             request_data = step.request_data or {}
@@ -193,65 +193,37 @@ def rules(tenant_id):
 
 @policy_bp.route("/review/<task_id>", methods=["GET", "POST"])
 @require_tenant_access()
-@log_admin_action("review_policy_task")
+@log_admin_action("review_policy_task", extract_details=lambda r, **kw: {"task_id": kw.get("task_id")})
 def review_task(tenant_id, task_id):
-    """Review and approve/reject a policy review task."""
-    with get_db_session() as db_session:
+    """Review and approve/reject a pending policy review task.
+
+    Only a ``policy_review`` step still ``pending`` is reachable here; any other step of
+    the tenant (a media buy or creative approval, an ad server step) answers 404, so this
+    route cannot settle a decision that belongs to another workflow. Any user of the tenant
+    may read the form; the POST that decides needs a manager (``role_permits``), as the
+    media buy, creative and workflow approval routes do.
+    """
+    with WorkflowUoW(tenant_id) as uow:
+        assert uow.workflows is not None
+        step = uow.workflows.get_pending_policy_review(task_id)
+        if step is None:
+            raise PolicyReviewNotFound(task_id)
+
         if request.method == "POST":
-            # Handle approval/rejection
             action = request.form.get("action")
-            notes = request.form.get("notes", "")
-
-            # Get the workflow step (tenant-scoped via Context join)
-            stmt = (
-                select(WorkflowStep)
-                .join(Context, WorkflowStep.context_id == Context.context_id)
-                .filter(Context.tenant_id == tenant_id, WorkflowStep.step_id == task_id)
-            )
-            step = db_session.scalars(stmt).first()
-
-            if not step:
-                return "Task not found", 404
-
-            # Update status based on action
-            if action == "approve":
-                step.status = "completed"
-                step.response_data = {"approved": True, "notes": notes}
-            elif action == "reject":
-                step.status = "failed"
-                step.response_data = {"approved": False, "notes": notes}
-
-            db_session.commit()
-
-            # Log the action
-            audit_logger = AuditLogger()
-            audit_logger.log(
-                tenant_id=tenant_id,
-                operation="policy_review",
-                principal_id=session.get("user"),
-                success=True,
-                details={"task_id": task_id, "action": action, "notes": notes},
-            )
-
+            if action not in ("approve", "reject"):
+                raise InvalidReviewAction(action)
+            # Conditional on the queue, so a step another reviewer settled meanwhile is not rewritten.
+            if not uow.workflows.settle_pending_policy_review(
+                task_id, approved=action == "approve", notes=request.form.get("review_notes", "")
+            ):
+                raise PolicyReviewNotFound(task_id)
             return redirect(url_for("policy.index", tenant_id=tenant_id))
-
-        # GET request - show review form
-        stmt = (
-            select(WorkflowStep)
-            .join(Context, WorkflowStep.context_id == Context.context_id)
-            .filter(Context.tenant_id == tenant_id, WorkflowStep.step_id == task_id)
-        )
-        step = db_session.scalars(stmt).first()
-
-        if not step:
-            return "Task not found", 404
-
-        request_data = step.request_data or {}
 
         return render_template(
             "policy_review.html",
             tenant_id=tenant_id,
             task_id=task_id,
-            task_details=request_data,
+            details=step.request_data or {},
             created_at=step.created_at,
         )
