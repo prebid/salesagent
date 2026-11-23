@@ -73,6 +73,7 @@ pytest_plugins = [
     "tests.bdd.steps.generic.then_error",
     "tests.bdd.steps.generic.then_payload",
     "tests.bdd.steps.generic.then_schema",
+    "tests.bdd.steps.generic.then_media_buy_readback",
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc002_nfr",

@@ -50,7 +50,7 @@ Feature: UC-003 update_media_buy — one request is one atomic mutation (local)
     | pkg_002    | budget | 7000  |
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "completed"
-    And the response should contain a revision greater than 7
+    And the response should include "revision" with an integer value of at least 8
     When the Buyer Agent reads media buy "mb_existing" back with get_media_buys
     Then get_media_buys reports package "pkg_001" with budget 6000
     And get_media_buys reports package "pkg_002" with budget 7000
@@ -74,7 +74,7 @@ Feature: UC-003 update_media_buy — one request is one atomic mutation (local)
     | budget     | 6000    |
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "completed"
-    And the response should contain a revision greater than 7
+    And the response should include "revision" with an integer value of at least 8
     When the Buyer Agent reads media buy "mb_existing" back with get_media_buys
     Then get_media_buys reports package "pkg_001" with budget 6000
     And get_media_buys reports media buy "mb_existing" at a revision greater than 7
@@ -106,4 +106,4 @@ Feature: UC-003 update_media_buy — one request is one atomic mutation (local)
     When the Buyer Agent reads media buy "mb_existing" back with get_media_buys
     Then get_media_buys reports package "pkg_001" with paused false
     And get_media_buys reports package "pkg_002" with budget 5000
-    And get_media_buys reports media buy "mb_existing" at revision 7
+    And the media buy "mb_existing" revision should be 7

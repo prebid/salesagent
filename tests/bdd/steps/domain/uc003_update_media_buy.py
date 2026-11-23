@@ -33,6 +33,12 @@ from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import as_bool, drop_header_if
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
+from tests.bdd.steps.generic.then_media_buy_readback import (
+    _is_wire_integer,
+    _reported_creative_ids,
+    _wire_media_buy,
+    _wire_package,
+)
 from tests.factories.mint import mint, mint_id
 from tests.factories.request import OMIT
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
@@ -1750,8 +1756,6 @@ def when_read_back_media_buy(ctx: dict, media_buy_id: str) -> None:
 def then_package_reports_exactly(ctx: dict, package_id: str, creative_ids: str) -> None:
     """The package's ``creative_approvals`` on the get_media_buys wire name exactly *creative_ids*."""
     import json
-
-    from tests.bdd.steps.domain.uc019_query_media_buys import _reported_creative_ids
 
     expected = sorted(json.loads(creative_ids))
     reported = _reported_creative_ids(ctx, _resolve_package_id(ctx, package_id))
@@ -3831,25 +3835,9 @@ def given_ad_server_refuses_update_action(ctx: dict, action: str) -> None:
     ctx["env"].refuse_adapter_update_action(action)
 
 
-@then(parsers.parse("the response should contain a revision greater than {floor:d}"))
-def then_response_revision_above(ctx: dict, floor: int) -> None:
-    """The update response's wire ``revision`` moved past *floor*, the revision the buy was seeded at.
-
-    update_media_buy.mdx @ v3.2.7 line 274: "Every mutating update increments `revision` and
-    returns the new value in the success response." The pin does not say by how much, so the
-    bound is strict but not an exact value.
-    """
-    actual = wire_dict(ctx).get("revision")
-    assert isinstance(actual, int) and actual > floor, (
-        f"the update response carries revision {actual!r}; a mutating update must return one above {floor}"
-    )
-
-
 @then(parsers.parse('get_media_buys reports package "{label}" with budget {budget:d}'))
 def then_readback_package_budget(ctx: dict, label: str, budget: int) -> None:
     """The package's ``budget`` on the get_media_buys wire is *budget*."""
-    from tests.bdd.steps.domain.uc019_query_media_buys import _wire_package
-
     reported = _wire_package(ctx, _resolve_package_id(ctx, label)).get("budget")
     assert reported == budget, f"get_media_buys reports package {label!r} with budget {reported!r}, expected {budget}"
 
@@ -3857,8 +3845,6 @@ def then_readback_package_budget(ctx: dict, label: str, budget: int) -> None:
 @then(parsers.parse('get_media_buys reports package "{label}" with paused {paused}'))
 def then_readback_package_paused(ctx: dict, label: str, paused: str) -> None:
     """The package's ``paused`` on the get_media_buys wire is *paused*."""
-    from tests.bdd.steps.domain.uc019_query_media_buys import _wire_package
-
     expected = as_bool(paused)
     reported = _wire_package(ctx, _resolve_package_id(ctx, label)).get("paused")
     assert reported is expected, (
@@ -3869,20 +3855,7 @@ def then_readback_package_paused(ctx: dict, label: str, paused: str) -> None:
 @then(parsers.parse('get_media_buys reports media buy "{label}" at a revision greater than {floor:d}'))
 def then_readback_revision_above(ctx: dict, label: str, floor: int) -> None:
     """The buy's ``revision`` on the get_media_buys wire moved past *floor*: the update was stored."""
-    from tests.bdd.steps.domain.uc019_query_media_buys import _wire_media_buy
-
     reported = _wire_media_buy(ctx, label).get("revision")
-    assert isinstance(reported, int) and reported > floor, (
+    assert _is_wire_integer(reported) and reported > floor, (
         f"get_media_buys reports media buy {label!r} at revision {reported!r}; the update must have moved it past {floor}"
-    )
-
-
-@then(parsers.parse('get_media_buys reports media buy "{label}" at revision {revision:d}'))
-def then_readback_revision_exact(ctx: dict, label: str, revision: int) -> None:
-    """The buy's ``revision`` on the get_media_buys wire is exactly *revision*."""
-    from tests.bdd.steps.domain.uc019_query_media_buys import _wire_media_buy
-
-    reported = _wire_media_buy(ctx, label).get("revision")
-    assert reported == revision, (
-        f"get_media_buys reports media buy {label!r} at revision {reported!r}, expected {revision}"
     )

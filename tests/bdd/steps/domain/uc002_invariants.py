@@ -416,7 +416,7 @@ def when_read_back_created_buy(ctx: dict) -> None:
 @then("the created package should report creative approvals for exactly the inline creatives")
 def then_created_package_reports_inline_creatives(ctx: dict) -> None:
     """The readback names exactly the creatives the create carried inline, on the wire."""
-    from tests.bdd.steps.domain.uc019_query_media_buys import _reported_creative_ids
+    from tests.bdd.steps.generic.then_media_buy_readback import _reported_creative_ids
 
     reported = _reported_creative_ids(ctx, ctx["created_package_id"])
     assert reported == _requested_creative_ids(ctx), (

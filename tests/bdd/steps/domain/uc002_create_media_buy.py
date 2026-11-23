@@ -2290,12 +2290,11 @@ def then_response_field_integer_at_least(ctx: dict, field: str, minimum: int) ->
     violation and is reported as one rather than quietly coerced.
     """
     from tests.bdd.steps._outcome_helpers import wire_dict
+    from tests.bdd.steps.generic.then_media_buy_readback import _is_wire_integer
 
     value = wire_dict(ctx).get(field)
     assert value is not None, f"{field} is absent from the wire response"
-    assert isinstance(value, int | float) and float(value).is_integer(), (
-        f"{field} must be an integer on the wire, got {value!r}"
-    )
+    assert _is_wire_integer(value), f"{field} must be an integer on the wire, got {value!r}"
     assert int(value) >= minimum, f"{field} must be at least {minimum} per the pinned schema, got {value!r}"
 
 
