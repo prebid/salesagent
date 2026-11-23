@@ -16,23 +16,21 @@ This document is the reference for the security architecture of the sales agent:
 
 ## Admin authentication architecture
 
-Three functions in `src/admin/utils/helpers.py` decide admin access. `is_super_admin()` decides whether a user is a super admin. `require_tenant_access()` decides whether a signed-in user reaches a tenant. `require_auth()` checks that a user is signed in and, with `admin_only=True`, that the user is a super admin.
+Three functions in `src/admin/utils/helpers.py` decide admin access. `is_super_admin()` decides whether a user is a super admin. `require_tenant_access()` decides whether a signed-in user reaches a tenant. `require_auth()` checks that a user is signed in and, with `admin_only=True`, that the user is a super admin. On a route that takes a `tenant_id`, it also refuses a tenant SSO session for any tenant but its own.
 
 ### Super admin check
 
-`is_super_admin()` reads the following sources in order and stops at the first match:
+`is_super_admin()` decides in the following order:
 
-1. The session cache, when it holds a positive result for the same email.
-2. The `SUPER_ADMIN_EMAILS` list from the environment.
-3. The `SUPER_ADMIN_DOMAINS` list from the environment, compared with the domain of the email.
-4. The `super_admin_emails` row of the `superadmin_config` table, which the `TenantManagementConfig` model maps.
-5. The `super_admin_domains` row of the same table.
+1. A session from a tenant's own SSO, whose `auth_method` session key is `oidc`, is never a super admin, whatever email it carries. [Super admins](#super-admins) explains why.
+2. A positive result in the session cache for the same email makes the user a super admin.
+3. Otherwise the user is a super admin when the email is in the `SUPER_ADMIN_EMAILS` list or the `super_admin_emails` row, or when its domain is in the `SUPER_ADMIN_DOMAINS` list or the `super_admin_domains` row.
 
-The environment comes before the database, so the check works before database initialization runs. The function logs a database error and treats it as no match.
+`super_admin_grants()` reads the two settings and the two rows of the `superadmin_config` table, which the `TenantManagementConfig` model maps, into one set of emails and one set of domains. No source takes precedence over another. Every call that reaches the third step reads the database, and a failed read fails the request rather than counting as no match.
 
 ### Session caching
 
-`is_super_admin()` writes its result to the session keys `is_super_admin` and `admin_email`. Only a cached positive result ends the check early. After a negative result, the next request reads the environment and the database again.
+`is_super_admin()` writes its result to the session keys `is_super_admin` and `admin_email`. Only a cached positive result ends the check early. After a negative result, the next request reads the settings and the database again. Each sign-in first clears the identity keys that an earlier sign-in left in the session, these two included.
 
 ### Tenant access guard
 
@@ -97,7 +95,7 @@ Tenant users have access to specific tenants through the `User` model. On admin 
 
 A route is admin-only when it is decorated `require_tenant_access(role=UserRole.ADMIN)` (the least role the route needs). The role follows what the request can change: the SSO connection test is admin-only because a successful test turns SSO on, and it is a `POST` so a link from another site cannot start one. A refusal is a 403, in the form that [Tenant access guard](#tenant-access-guard) describes. The Users page adds people as viewers by default; admins choose a role when adding someone and can change it later. A person who signs in from an authorized domain without an invitation becomes an admin. So does a person on the authorized email list who signs in through the deployment's OAuth client. That is why changing those lists is admin-only. The Users page refuses to demote or deactivate a tenant's last active admin. Super admins signed in through the deployment's own sign-in pass every check; a session from a tenant's SSO never counts as a super admin.
 
-Some admin routes do not use `require_tenant_access` and so do not get these checks; #2203, #2233 and #2496 track them.
+Some tenant routes check the tenant inline or not at all instead of using `require_tenant_access`, so they do not get these checks. #2233 and #2496 track them, and the `EXEMPT` set in `tests/unit/test_architecture_admin_tenant_scoping.py` names each one.
 
 ### Principal isolation
 
@@ -180,7 +178,8 @@ For the full architecture, including how to add a new outbound call, see
 
 All authentication changes must include tests for the following:
 
-- Environment versus database precedence
+- Each super admin source: the two settings and the two `superadmin_config` rows
+- The binding of a tenant SSO session to its tenant
 - A new state-changing admin route carries `log_admin_action`
 - The session cookie attributes that `create_app` sets
 - The cross-site request check in `src/admin/csrf.py`
@@ -188,7 +187,7 @@ All authentication changes must include tests for the following:
 
 The Admin UI sets no session lifetime, so the session cookie has no expiry date. Flask still rejects a session cookie signed more than 31 days earlier, which is its default `PERMANENT_SESSION_LIFETIME`. Unless you set `FLASK_SECRET_KEY`, each process signs sessions with its own random key, so a restart ends every session. Besides the origin check that [Cross-site request forgery](#cross-site-request-forgery) describes, the OAuth `state` parameter protects the sign-in flows and the Google Ad Manager authorization flow.
 
-**Test locations**: `TestEnvironmentFirstAuthentication` in `tests/integration/test_product_deletion.py` checks that each of the `SUPER_ADMIN_EMAILS` list, the `SUPER_ADMIN_DOMAINS` list, and the `super_admin_emails` row grants super admin on its own, and that a database match writes the session cache. No test checks the source order, the `super_admin_domains` row, or the database-error path. `tests/integration/test_audit_decorator.py` checks the rows that `log_admin_action` writes. `tests/unit/test_admin_csrf_protection.py` checks the cross-site request check, and that the production session cookie is `SameSite=Lax`, `HttpOnly`, and `Secure`. No test checks `SESSION_COOKIE_PATH` or `SESSION_COOKIE_DOMAIN`.
+**Test locations**: `TestEnvironmentFirstAuthentication` in `tests/integration/test_product_deletion.py` checks that each of the `SUPER_ADMIN_EMAILS` list, the `SUPER_ADMIN_DOMAINS` list, and the `super_admin_emails` row grants super admin on its own, and that a database match writes the session cache. No test checks that the `super_admin_domains` row grants super admin, or what a failed database read does. `tests/unit/test_admin_tenant_sso_scope.py` and `tests/integration/test_tenant_sso_privilege.py` check that a tenant SSO session is never a super admin and reaches no other tenant, and that each sign-in clears the identity an earlier one left. `test_tenant_sso_privilege.py` also covers each check of the SSO connection test. `tests/integration/test_audit_decorator.py` checks the rows that `log_admin_action` writes. `tests/unit/test_admin_csrf_protection.py` checks the cross-site request check, and that the production session cookie is `SameSite=Lax`, `HttpOnly`, and `Secure`. No test checks `SESSION_COOKIE_PATH` or `SESSION_COOKIE_DOMAIN`.
 
 ## OAuth cross-domain authentication
 
@@ -315,11 +314,13 @@ When you create the OAuth application in your identity provider, use the followi
 
 ### Claim mapping
 
-The system automatically handles different claim formats from various providers:
+`extract_user_info()` in `src/admin/auth_utils.py` reads the claims only from the ID token that Authlib verified, and handles different claim formats from various providers:
 
-- **Email**: `email`, `preferred_username`, `upn`, `sub`
+- **Email**: `email`, or else `preferred_username` or `upn` when the value is an email address. `sub` is never used as the email.
 - **Name**: `name`, `display_name`, or `given_name` and `family_name` combined
 - **Picture**: `picture`, `avatar_url`, `photo`
+
+A sign-in whose `email_verified` claim is `false` is refused. A sign-in without that claim is accepted, because some providers, such as Microsoft Entra ID, do not send it.
 
 ### Priority order
 
