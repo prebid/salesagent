@@ -11,6 +11,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog, Tenant, UserRole
 from src.core.database.repositories.uow import WorkflowUoW
 from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.json_validators import PolicySettingsModel
 from src.core.operator_errors import OperatorRefusal, RecordNotFound
 
 logger = logging.getLogger(__name__)
@@ -48,34 +49,8 @@ def index(tenant_id):
         if not config:
             return "Tenant config not found", 404
 
-        # Define default policies that all publishers start with
-        default_policies = {
-            "enabled": True,
-            "require_manual_review": False,
-            "default_prohibited_categories": [
-                "illegal_content",
-                "hate_speech",
-                "violence",
-                "adult_content",
-                "misleading_health_claims",
-                "financial_scams",
-            ],
-            "default_prohibited_tactics": [
-                "targeting_children_under_13",
-                "discriminatory_targeting",
-                "deceptive_claims",
-                "impersonation",
-                "privacy_violations",
-            ],
-            "prohibited_advertisers": [],
-            "prohibited_categories": [],
-            "prohibited_tactics": [],
-        }
-
-        # Get tenant policy settings, using defaults where not specified
-        tenant_policies = config.get("policy_settings", {})
-        policy_settings = default_policies.copy()
-        policy_settings.update(tenant_policies)
+        # The stored policy over the baseline every tenant starts with
+        policy_settings = PolicySettingsModel.model_validate(config.get("policy_settings") or {})
 
         # Get recent policy checks from audit log
         stmt = (
@@ -141,38 +116,15 @@ def update(tenant_id):
         text = request.form.get(field_name, "")
         return [line.strip() for line in text.strip().split("\n") if line.strip()]
 
-    # Update policy settings
+    # The form's keys over the stored row; a key the tenant never saved keeps its default
     policy_settings = {
+        **config.get("policy_settings", {}),
         "enabled": request.form.get("enabled") == "on",
         "require_manual_review": request.form.get("require_manual_review") == "on",
         "prohibited_advertisers": parse_textarea_lines("prohibited_advertisers"),
         "prohibited_categories": parse_textarea_lines("prohibited_categories"),
         "prohibited_tactics": parse_textarea_lines("prohibited_tactics"),
-        # Keep default policies (they don't change from form)
-        "default_prohibited_categories": config.get("policy_settings", {}).get(
-            "default_prohibited_categories",
-            [
-                "illegal_content",
-                "hate_speech",
-                "violence",
-                "adult_content",
-                "misleading_health_claims",
-                "financial_scams",
-            ],
-        ),
-        "default_prohibited_tactics": config.get("policy_settings", {}).get(
-            "default_prohibited_tactics",
-            [
-                "targeting_children_under_13",
-                "discriminatory_targeting",
-                "deceptive_claims",
-                "impersonation",
-                "privacy_violations",
-            ],
-        ),
     }
-
-    config["policy_settings"] = policy_settings
 
     # Update database
     with get_db_session() as db_session:

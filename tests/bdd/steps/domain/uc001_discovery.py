@@ -1,4 +1,4 @@
-"""Domain step definitions for UC-001 discovery: the BR-RULE-002 policy and BR-RULE-005 ranking scenarios.
+"""Domain step definitions for UC-001 discovery: BR-RULE-002 policy, BR-RULE-005 ranking, channels filters.
 
 Bound scenario by scenario from ``tests/bdd/test_uc001_discover_available_inventory.py``.
 
@@ -13,6 +13,11 @@ live server's Gemini client reaches the compose ``scripted-llm`` origin. The sel
 key is ``env.scripted_model_key``, which is the key the e2e origin answers; any other key is
 refused there, which is what makes "ranking ran on the seller's configuration" a wire fact.
 
+The channels partitions (``@T-UC-001-partition-channels``) grade ``filters.channels``
+(``core/product-filters.json`` at the pinned 3.2.7, whose ``filters`` sellers "MUST exclude
+products that do not satisfy"): a product declaring channels matches on them, one declaring
+none on the tenant ad server's defaults (GH #1532). No model runs in them.
+
 Every Then reads the WIRE (``wire_field``), never ``env.mock`` call args. The one fact with
 no wire surface, which of ``rank_products_async``'s two text arguments received the seller's
 prompt and which the buyer's brief, is graded where the call lands: inside the scripted
@@ -26,10 +31,11 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import wire_product_ids
+from tests.bdd.steps._outcome_helpers import assert_wire_rejection, wire_product_ids
 from tests.bdd.steps.domain.uc_get_products_inventory import given_tenant
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import PricingOptionFactory, ProductFactory
+from tests.helpers.pinned_schema import recovery_by_code
 from tests.helpers.settings_injection import KEYLESS_AI_CONFIG
 
 #: The products the scenarios name, in catalog order. ``ProductRepository.list_all`` orders
@@ -44,14 +50,14 @@ _BRIEF = "video campaign for a sports launch"
 _RANKING_PROMPT = "Prefer video inventory"
 
 
-def _add_catalog_product(ctx: dict, product_id: str, name: str) -> None:
+def _add_catalog_product(ctx: dict, product_id: str, name: str, **columns: Any) -> None:
     """Create a priced product (pricing so it survives conversion) at the end of the catalog."""
     catalog: list[str] = ctx.setdefault("catalog", [])
     assert not catalog or product_id > catalog[-1], (
         f"{product_id!r} does not sort after {catalog[-1]!r}; ProductRepository.list_all orders by "
         "product_id, so a product added 'after it in catalog order' must sort after it"
     )
-    product = ProductFactory(tenant=ctx["tenant"], product_id=product_id, name=name)
+    product = ProductFactory(tenant=ctx["tenant"], product_id=product_id, name=name, **columns)
     PricingOptionFactory(product=product)
     catalog.append(product_id)
 
@@ -204,6 +210,12 @@ def given_second_product_score(ctx: dict, score: float) -> None:
     _score(ctx, product_id, score)
 
 
+@given(parsers.parse('the catalog also holds "{product_id}" declaring the channel {channel}'))
+def given_product_declaring_a_channel(ctx: dict, product_id: str, channel: str) -> None:
+    """A priced product after the Background's one, its channel written through the column's rule."""
+    _add_catalog_product(ctx, product_id, f"{channel} inventory", channels=[channel])
+
+
 # ── When steps ──────────────────────────────────────────────────────
 
 
@@ -222,7 +234,40 @@ def when_get_products_with_brief(ctx: dict) -> None:
     dispatch_request(ctx, brief=ctx["env"].scripted_brief(_BRIEF))
 
 
+@when(parsers.parse("the Buyer Agent sends a get_products request with channels filter {partition}"))
+def when_get_products_with_channels_filter(ctx: dict, partition: str) -> None:
+    """Dispatch get_products filtering on one channel, on none, or on a list the schema refuses."""
+    brief = ctx["env"].scripted_brief(_BRIEF)
+    if partition == "not_provided":
+        dispatch_request(ctx, brief=brief)
+    elif partition == "empty_array":
+        dispatch_request(ctx, brief=brief, filters={"channels": []})
+    elif partition == "unknown_channel":
+        # In no version of enums/channels.json.
+        dispatch_request(ctx, brief=brief, filters={"channels": ["hologram"]})
+    else:
+        dispatch_request(ctx, brief=brief, filters={"channels": [partition]})
+
+
 # ── Then steps ──────────────────────────────────────────────────────
+
+
+@then(parsers.parse("the filter result should be {outcome}"))
+def then_filter_result(ctx: dict, outcome: str) -> None:
+    """products[] is exactly the products the row names, or the request is refused as it says.
+
+    ``products a, b`` and ``no products`` read products[], whose order is not graded;
+    ``error CODE naming FIELD`` reads the error envelope, with the recovery the pinned
+    error-code enum gives CODE.
+    """
+    if outcome.startswith("error "):
+        code, field = outcome.removeprefix("error ").split(" naming ")
+        assert_wire_rejection(ctx, code, recovery=recovery_by_code()[code], field=field)
+    else:
+        assert outcome == "no products" or outcome.startswith("products "), f"no grading for {outcome!r}"
+        expected = [] if outcome == "no products" else outcome.removeprefix("products ").split(", ")
+        actual = wire_product_ids(ctx)
+        assert sorted(actual) == sorted(expected), f"Expected products {expected}, got {actual}"
 
 
 @then("the product should be excluded from results")

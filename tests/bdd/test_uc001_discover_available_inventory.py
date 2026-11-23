@@ -6,10 +6,12 @@ binds by NAME the ones that run, rather than collecting the whole file with
 the next scenario here when its steps exist.
 
 The bound scenarios are BR-RULE-002 (advertising-policy check) and BR-RULE-005 (AI
-ranking), both on the seller's own AI configuration. Steps:
-``tests/bdd/steps/domain/uc001_discovery.py``. Spec grounding: neither rule is in AdCP
-3.1.1, so no storyboard grades them; ``POLICY_VIOLATION`` is in the pinned 3.1 error-code
-enum.
+ranking), both on the seller's own AI configuration, and the channels filter partitions.
+Steps: ``tests/bdd/steps/domain/uc001_discovery.py``. Spec grounding: neither rule is in
+AdCP 3.1.1, so no storyboard grades them; ``POLICY_VIOLATION`` is in the pinned 3.1
+error-code enum. ``filters.channels`` is ``core/product-filters.json#/properties/channels``
+at the pinned 3.2.7, graded upstream by the ``media_buy_seller/product_filter_behavior``
+storyboard.
 """
 
 from __future__ import annotations
@@ -52,3 +54,8 @@ def test_ranking_orders_by_score() -> None:
 @scenario(FEATURE, "BR-RULE-005 INV-4 holds - ranking cannot run, products returned unranked")
 def test_ranking_falls_back_to_catalog_order() -> None:
     """A failing model or an unusable seller configuration returns catalog order."""
+
+
+@scenario(FEATURE, "channels partition validation - <partition>")
+def test_channels_filter_partitions() -> None:
+    """A product matches on the channels it stores; one storing none, on the tenant ad server's defaults."""

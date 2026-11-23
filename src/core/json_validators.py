@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import validates
 
 from src.core.http_utils import authorized_domain
+from src.core.media_channels import parse_media_channels
 from src.core.operator_errors import InvalidDomainNameError
 
 # Pydantic models for JSON field validation
@@ -58,14 +59,38 @@ class TargetingTemplateModel(BaseModel):
 
 
 class PolicySettingsModel(BaseModel):
-    """Model for tenant.policy_settings."""
+    """Model for tenant.policy_settings: the advertising policy the Policy page saves.
 
-    enabled: bool = Field(default=False)
-    require_approval: bool = Field(default=False)
-    max_daily_budget: float | None = Field(None, gt=0)
-    blocked_categories: list[str] = Field(default_factory=list)
-    allowed_advertisers: list[str] = Field(default_factory=list)
-    custom_rules: dict[str, Any] = Field(default_factory=dict)
+    The one owner of the column's shape. The fields are the ones ``policy.update`` writes
+    and the Policy page and policy agent read; the defaults are the baseline a tenant has
+    for a key it never saved. A stored row holds only what was written, and the Policy page
+    reads it back through this model. Undeclared keys are dropped.
+    """
+
+    enabled: bool = True
+    require_manual_review: bool = False
+    prohibited_advertisers: list[str] = Field(default_factory=list)
+    prohibited_categories: list[str] = Field(default_factory=list)
+    prohibited_tactics: list[str] = Field(default_factory=list)
+    default_prohibited_categories: list[str] = Field(
+        default_factory=lambda: [
+            "illegal_content",
+            "hate_speech",
+            "violence",
+            "adult_content",
+            "misleading_health_claims",
+            "financial_scams",
+        ]
+    )
+    default_prohibited_tactics: list[str] = Field(
+        default_factory=lambda: [
+            "targeting_children_under_13",
+            "discriminatory_targeting",
+            "deceptive_claims",
+            "impersonation",
+            "privacy_violations",
+        ]
+    )
 
 
 class DeliveryDataModel(BaseModel):
@@ -101,6 +126,11 @@ class JSONValidatorMixin:
         except ValueError:
             raise InvalidDomainNameError() from None
         return [checked_authorized_domain(domain) for domain in values]
+
+    @validates("channels")
+    def validate_channels(self, key, value):
+        """``Product.channels``: every write goes through the one rule, ``parse_media_channels`` (GH #1532)."""
+        return parse_media_channels(value or ())
 
     @validates("request_data", "response_data", "transaction_details")
     def validate_json_object_fields(self, key, value):
@@ -200,7 +230,7 @@ class JSONValidatorMixin:
 
         # Validate using Pydantic
         validated = PolicySettingsModel(**value)
-        return validated.model_dump(mode="json")
+        return validated.model_dump(mode="json", exclude_unset=True)
 
     @validates("delivery_data")
     def validate_delivery_data(self, key, value):

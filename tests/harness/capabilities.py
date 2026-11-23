@@ -224,13 +224,20 @@ class CapabilitiesEnv(PublisherAdagentsMixin, AdminOperatorMixin, IntegrationEnv
         product would not exercise it.
         """
         from src.core.database.models import Tenant
+        from src.core.media_channels import MEDIA_CHANNEL_VALUES
         from tests.factories import ProductFactory
+        from tests.factories.product import store_channel_residue
 
         tenant = self.get_session().get(Tenant, self._tenant_id)
         for channel in channels:
             # Channels only: an authorizing publisher would add a publisher to the portfolio
             # the scenario did not declare.
-            ProductFactory(tenant=tenant, channels=[channel], authorize_publisher=False)
+            if channel in MEDIA_CHANNEL_VALUES:
+                ProductFactory(tenant=tenant, channels=[channel], authorize_publisher=False)
+            else:
+                # Outside the enum, which the column refuses on write: only residue of the
+                # channel repair holds one (GH #1532).
+                store_channel_residue(ProductFactory(tenant=tenant, authorize_publisher=False), [channel])
         self._commit_factory_data()
 
     def declare_signing(
