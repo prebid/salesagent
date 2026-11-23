@@ -25,6 +25,7 @@ from tests.integration.migration_helpers import (
     run_alembic_downgrade,
     run_alembic_upgrade,
     seed_inventory_profile,
+    seed_product,
     stored_format_options,
 )
 from tests.utils.database_helpers import vhost_for
@@ -43,20 +44,15 @@ _PROPERTIES = [{"publisher_domain": "news-psatest.com", "selection_type": "all"}
 
 
 def _insert_product(engine, product_id: str, format_options: list[dict]) -> None:
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO products (tenant_id, product_id, name, description, delivery_type, targeting_template, "
-                "delivery_measurement, format_options, properties) VALUES (:tid, :pid, :pid, 'test', 'guaranteed', "
-                "'{}'::jsonb, '{\"provider\": \"publisher\"}'::jsonb, CAST(:options AS jsonb), CAST(:properties AS jsonb))"
-            ),
-            {
-                "tid": _TENANT,
-                "pid": product_id,
-                "options": json.dumps(format_options),
-                "properties": json.dumps(_PROPERTIES),
-            },
-        )
+    seed_product(
+        engine,
+        tenant_id=_TENANT,
+        product_id=product_id,
+        format_ids=None,
+        delivery_measurement={"provider": "publisher"},
+        format_options=format_options,
+        properties=_PROPERTIES,
+    )
 
 
 _options = stored_format_options
