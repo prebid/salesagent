@@ -1121,36 +1121,53 @@ Feature: BR-UC-001 Discover Available Inventory
   @T-UC-001-partition-channels @partition @channels @analysis-2026-03-09 @schema-v3.1
   Scenario Outline: channels partition validation - <partition>
     Given the Buyer is authenticated with a valid principal_id
+    And the catalog also holds "prod_olv" declaring the channel olv
+    And the catalog also holds "prod_retail_media" declaring the channel retail_media
     When the Buyer Agent sends a get_products request with channels filter <partition>
     Then the filter result should be <outcome>
+    # The Background's product, prod_a_banner, declares no channels, so it offers the tenant
+    # ad server's defaults (MockAdServer.default_channels: display, olv, streaming_audio,
+    # social); a product that declares channels offers exactly those. A declared product
+    # matched on the defaults instead would come back for display, social and streaming_audio,
+    # and would not for retail_media, which no default names (GH #1532). The outcomes name the
+    # exact products; their order is not graded.
+    # The invalid rows break the request schema (an item outside enums/channels.json, an
+    # empty array under minItems 1), which the pinned error-code enum calls INVALID_REQUEST:
+    # "violates schema constraints". The storyboard step
+    # media_buy_seller/product_filter_behavior get_filtered_brief_products grades the same
+    # filter with a controller-seeded catalog.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-filters.json pointer=/properties/channels
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json pointer=/properties/filters/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_REQUEST
 
     Examples: Valid partitions
-      | partition            | outcome                                |
-      | display              | products matching display returned     |
-      | olv                  | products matching olv returned         |
-      | social               | products matching social returned      |
-      | search               | products matching search returned      |
-      | ctv                  | products matching ctv returned         |
-      | linear_tv            | products matching linear_tv returned   |
-      | radio                | products matching radio returned       |
-      | streaming_audio      | products matching streaming_audio returned |
-      | podcast              | products matching podcast returned     |
-      | dooh                 | products matching dooh returned        |
-      | ooh                  | products matching ooh returned         |
-      | print                | products matching print returned       |
-      | cinema               | products matching cinema returned      |
-      | email                | products matching email returned       |
-      | gaming               | products matching gaming returned      |
-      | retail_media         | products matching retail_media returned|
-      | influencer           | products matching influencer returned  |
-      | affiliate            | products matching affiliate returned   |
-      | product_placement    | products matching product_placement returned |
-      | not_provided         | all channels returned                  |
+      | partition              | outcome                                             |
+      | display                | products prod_a_banner                              |
+      | olv                    | products prod_a_banner, prod_olv                    |
+      | social                 | products prod_a_banner                              |
+      | search                 | no products                                         |
+      | ctv                    | no products                                         |
+      | linear_tv              | no products                                         |
+      | radio                  | no products                                         |
+      | streaming_audio        | products prod_a_banner                              |
+      | podcast                | no products                                         |
+      | dooh                   | no products                                         |
+      | ooh                    | no products                                         |
+      | print                  | no products                                         |
+      | cinema                 | no products                                         |
+      | email                  | no products                                         |
+      | gaming                 | no products                                         |
+      | retail_media           | products prod_retail_media                          |
+      | influencer             | no products                                         |
+      | affiliate              | no products                                         |
+      | product_placement      | no products                                         |
+      | sponsored_intelligence | no products                                         |
+      | not_provided           | products prod_a_banner, prod_olv, prod_retail_media |
 
     Examples: Invalid partitions
-      | partition            | outcome                                |
-      | unknown_channel      | error: unknown channel value            |
-      | empty_array          | error: channels minItems 1 violated     |
+      | partition       | outcome                                          |
+      | unknown_channel | error INVALID_REQUEST naming filters.channels[0] |
+      | empty_array     | error INVALID_REQUEST naming filters.channels    |
 
   @T-UC-001-boundary-buying-mode @boundary @buying_mode @analysis-2026-03-09 @schema-v3.1
   Scenario Outline: buying_mode boundary validation - <boundary_point>

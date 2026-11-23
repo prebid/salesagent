@@ -215,7 +215,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     # is_super_admin and require_tenant_access fixed — the super-admin rows go through
     # TenantManagementConfigRepository, the caller's User row through TenantConfigRepository
     ("src/admin/utils/helpers.py", "get_tenant_config_from_db"),
-    ("src/admin/utils/helpers.py", "is_tenant_admin"),
     # ── Core ──
     ("src/core/audit_logger.py", "log_operation"),
     ("src/core/audit_logger.py", "log_security_violation"),
