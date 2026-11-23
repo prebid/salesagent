@@ -810,7 +810,7 @@ class GAMCreativesManager:
         source must name the same one.
 
         No template from either source, or two different ones, is a seller misconfiguration
-        the buyer cannot correct: CONFIGURATION_ERROR, terminal (AdCP 3.1.1,
+        the buyer cannot correct: CONFIGURATION_ERROR, terminal (AdCP 3.2.7,
         ``docs/building/by-layer/L3/error-handling.mdx``). There is no fallback id.
 
         On this surface the error classifies an internal failure that ``add_creative_assets``
