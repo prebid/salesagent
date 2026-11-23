@@ -29,9 +29,7 @@ from src.adapters.base import (
     AdapterCreateResult,
     AdapterUpdateResult,
     AdServerAdapter,
-    StoredPackage,
     TargetingCapabilities,
-    stored_package,
 )
 
 # Import modular components
@@ -58,7 +56,6 @@ from src.core.audit_logger import AuditLogger
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.details import (
     AdapterFailureDetails,
-    BudgetDetails,
     CapabilityRefusalDetails,
     ConfigurationDetails,
     EntityRefDetails,
@@ -68,7 +65,6 @@ from src.core.errors.details import (
 from src.core.exceptions import (
     AdCPActivationWorkflowError,
     AdCPAuthorizationError,
-    AdCPBudgetExceededError,
     AdCPBulkUpdateError,
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
@@ -88,6 +84,7 @@ from src.core.schemas import (
     MediaPackage,
     ReportingPeriod,
 )
+from src.core.stored_package import StoredPackage, stored_package
 from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 from src.services.ai.config import SellerAIConfig
 
@@ -1312,23 +1309,10 @@ class GoogleAdManager(AdServerAdapter):
 
             self.log(f"[GAM] Updating package {package_id} budget to {budget} (with delivery validation)")
 
+            # No below-spend refusal here: it compared against a package_config key nothing
+            # writes, so the spend it read was always 0 and it never fired. A spend rule
+            # belongs in the update tool's budget validation, before any ad-server call.
             stored = stored_package(packages, media_buy_id, package_id)
-
-            # Validate budget isn't less than delivery to date
-            current_spend = stored.spend
-            if budget < current_spend:
-                self.log(
-                    f"[red]Cannot set budget ${budget} below current spend ${current_spend} for package {package_id}[/red]"
-                )
-                raise AdCPBudgetExceededError(
-                    # "budget" and "requested_budget" were the same value under two
-                    # names; one channel per fact.
-                    details=BudgetDetails(
-                        requested_budget=str(budget),
-                        current_spend=str(current_spend),
-                        package_id=package_id,
-                    ),
-                )
 
             platform_line_item_id = stored.platform_line_item_id
             if not platform_line_item_id:

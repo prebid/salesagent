@@ -48,7 +48,6 @@ logger = logging.getLogger(__name__)
 
 from adcp.types.domains.creative.sync_creatives_request import Assignment
 
-from src.adapters.base import StoredPackage
 from src.core.audit_logger import get_audit_logger
 from src.core.context_manager import get_context_manager
 from src.core.database.models import (
@@ -61,6 +60,7 @@ from src.core.database.models import (
     Product as DBProduct,
 )
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
+from src.core.database.repositories.media_buy import stored_package_of
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import (
     AdapterFailureDetails,
@@ -85,6 +85,7 @@ from src.core.schemas import (
     UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
+from src.core.stored_package import StoredPackage
 from src.core.tools.creatives import sync_creatives
 from src.core.tools.creatives._assignments import assignments_by_package, require_package_covered
 from src.core.tools.financial_validation import (
@@ -273,7 +274,7 @@ def _affected_package(
     # ``_package_product``), so by here a package they touched has one.
     stored = uow.media_buys.get_package(media_buy_id, package_id)
     config = (stored.package_config or {}) if stored is not None else {}
-    stored_budget = float(stored.budget) if stored is not None and stored.budget is not None else None
+    projected = stored_package_of(stored) if stored is not None else None
     stored_bid_price = float(stored.bid_price) if stored is not None and stored.bid_price is not None else None
     assert uow.assignments is not None
     assignments = assignments_by_package(uow.assignments.get_by_media_buy_and_package(media_buy_id, package_id)).get(
@@ -281,13 +282,13 @@ def _affected_package(
     )
     return AffectedPackage(
         package_id=package_id,
-        paused=bool(config.get("paused", False)) if changes.paused is None else changes.paused,
-        budget=stored_budget if changes.budget is None else changes.budget,
+        paused=(projected.paused if projected is not None else False) if changes.paused is None else changes.paused,
+        budget=(projected.budget if projected is not None else None) if changes.budget is None else changes.budget,
         bid_price=stored_bid_price,
         # Re-read rather than carried: ``update_package_fields`` writes the column inside
         # THIS session, so the row already answers with what this update applied.
         pacing=stored.pacing if stored is not None else None,
-        product_id=config.get("product_id"),
+        product_id=projected.product_id if projected is not None else None,
         pricing_option_id=config.get("pricing_option_id"),
         creative_assignments=assignments,
         # Written by create_media_buy from the validated request and by the catalogs branch
@@ -550,7 +551,7 @@ def _stored_packages(uow: "MediaBuyUoW", media_buy_id: str) -> list[StoredPackag
     its own, opened inside this unit, would close the unit's session (#1644, #2647).
     """
     assert uow.media_buys is not None
-    return [StoredPackage.of(row) for row in uow.media_buys.get_packages(media_buy_id)]
+    return uow.media_buys.get_stored_packages(media_buy_id)
 
 
 def _package_product(uow: "MediaBuyUoW", media_buy_id: str, package_id: str, pkg_index: int) -> "DBProduct | None":
@@ -1635,11 +1636,8 @@ def _update_media_buy_impl(
                         # back with a later refusal of the same request. The mock used to
                         # commit it in a session of its own, which survived that refusal, and
                         # GAM, Kevel and Triton recorded no pause at all (#2647).
-                        paused_package = uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
-                        uow.media_buys.update_package_config(
-                            req.media_buy_id,
-                            pkg_update.package_id,
-                            {**(paused_package.package_config or {}), "paused": pkg_update.paused},
+                        uow.media_buys.set_package_config_keys(
+                            req.media_buy_id, pkg_update.package_id, paused=pkg_update.paused
                         )
 
                         # This branch modified a package, so the response says which one
@@ -1753,15 +1751,12 @@ def _update_media_buy_impl(
                     if pkg_update.catalogs is not None:
                         if not pkg_update.package_id:
                             raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
-                        catalog_pkg = uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
                         # Through the repository's own writer rather than a mutate +
-                        # flag_modified pair: it replaces the document, bumps the buy's
+                        # flag_modified pair: it replaces the catalogs key, bumps the buy's
                         # revision (the buyer's optimistic-concurrency token, which an
                         # applied update owes them) and flushes, in one call.
-                        uow.media_buys.update_package_config(
-                            req.media_buy_id,
-                            pkg_update.package_id,
-                            {**(catalog_pkg.package_config or {}), "catalogs": pkg_update.catalogs},
+                        uow.media_buys.set_package_config_keys(
+                            req.media_buy_id, pkg_update.package_id, catalogs=pkg_update.catalogs
                         )
                         _package_changes(changes_by_package, pkg_update.package_id)
 

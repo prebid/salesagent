@@ -11,12 +11,14 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.adapters.base import AdapterUpdateResult, StoredPackage
+from src.adapters.base import AdapterUpdateResult
+from src.core.database.repositories.media_buy import stored_package_of
+from src.core.stored_package import StoredPackage
 
 
 def _stored(package_id: str, package_config: dict) -> StoredPackage:
-    """The stored package the update tool passes the adapter (``packages=``)."""
-    return StoredPackage.of(SimpleNamespace(package_id=package_id, package_config=package_config, budget=None))
+    """The stored package the update tool passes the adapter (``packages=``), read by the repository's projection."""
+    return stored_package_of(SimpleNamespace(package_id=package_id, package_config=package_config, budget=None))
 
 
 def test_update_package_budget_syncs_the_line_item():
@@ -38,7 +40,9 @@ def test_update_package_budget_syncs_the_line_item():
         "budget": 19000,
         "product_id": "prod_1",
         "platform_line_item_id": "123456",  # Add platform ID for GAM sync
-        "pricing": {"model": "cpm", "currency": "USD"},  # Add pricing info
+        # The terms the create path stores (pricing_helpers): a CPC package in EUR, so a
+        # read of any other key falls back to cpm/USD and the assertion below fails.
+        "pricing_info": {"pricing_model": "cpc", "currency": "EUR"},
     }
 
     # Create a minimal mock adapter with orders_manager
@@ -67,8 +71,8 @@ def test_update_package_budget_syncs_the_line_item():
     mock_adapter.orders_manager.update_line_item_budget.assert_called_once_with(
         line_item_id="123456",
         new_budget=float(new_budget),
-        pricing_model="cpm",
-        currency="USD",
+        pricing_model="cpc",
+        currency="EUR",
     )
 
     # The adapter hands back its own carrier; the tool builds the buyer's
@@ -280,46 +284,6 @@ def test_pause_resume_media_buy_actions_work():
     assert result.media_buy_id == media_buy_id
 
 
-def test_update_package_budget_rejects_budget_below_delivery():
-    """Test that update_package_budget rejects budget less than current spend."""
-    from src.adapters.google_ad_manager import GoogleAdManager
-
-    media_buy_id = "mb_test123"
-    package_id = "pkg_test456"
-    current_spend = 15000.0
-    new_budget = 10000  # Less than current spend
-
-    # Mock database session and MediaPackage with delivery metrics
-    mock_package = Mock()
-    mock_package.package_id = package_id
-    mock_package.package_config = {
-        "budget": 19000,
-        "product_id": "prod_1",
-        "delivery_metrics": {"spend": current_spend, "impressions_delivered": 50000},
-    }
-
-    # Create a minimal mock adapter
-    mock_adapter = Mock(spec=GoogleAdManager)
-    mock_adapter.log = Mock()
-    mock_adapter.tenant_id = "tenant_test123"
-    mock_adapter._is_admin_principal = Mock(return_value=False)
-    mock_adapter._requires_manual_approval = Mock(return_value=False)
-    mock_adapter.workflow_manager = Mock()
-
-    from src.core.exceptions import AdCPBudgetExceededError
-
-    with pytest.raises(AdCPBudgetExceededError) as exc_info:
-        GoogleAdManager.update_media_buy(
-            mock_adapter,
-            media_buy_id=media_buy_id,
-            action="update_package_budget",
-            package_id=package_id,
-            budget=new_budget,
-            today=datetime.now(UTC),
-            packages=[_stored(package_id, mock_package.package_config)],
-        )
-
-
 class TestGAMUpdateMediaBuyTaxonomyRaiseSites:
     """Drive the GAM update_media_buy raise sites for the adapter-taxonomy
     classes so a class-swap at the site is caught.
@@ -382,7 +346,7 @@ class TestGAMUpdateMediaBuyTaxonomyRaiseSites:
         mock_package.package_config = {
             "budget": 19000,
             "platform_line_item_id": "123456",
-            "pricing": {"model": "cpm", "currency": "USD"},
+            "pricing_info": {"pricing_model": "cpm", "currency": "USD"},
         }
 
         mock_adapter = self._build_mock_adapter()

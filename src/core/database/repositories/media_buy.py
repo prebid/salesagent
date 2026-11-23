@@ -29,6 +29,7 @@ from src.core.database.models import (
 from src.core.database.repositories.effects import SessionEffectsMixin
 from src.core.errors.details import EntityRefDetails
 from src.core.idempotency_canonical import canonical_request_hash
+from src.core.stored_package import StoredPackage
 
 if TYPE_CHECKING:
     from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
@@ -64,6 +65,27 @@ class RequestedPackage:
 def stored_line_item_id(package: MediaPackage) -> str | None:
     """The ad server line item a package row stores, None for a package not booked as one."""
     return (package.package_config or {}).get("platform_line_item_id")
+
+
+def stored_package_of(package: MediaPackage) -> StoredPackage:
+    """The adapter's view of the package *package*: the one reader of the row for ``StoredPackage``.
+
+    Pricing comes from ``pricing_info``, the terms ``_requested_package_row`` stores
+    (``pricing_helpers`` writes ``pricing_model`` and ``currency``). A package stored without
+    them is read as CPM in USD, the defaults the GAM budget sync has always applied.
+    """
+    config = package.package_config or {}
+    pricing = config.get("pricing_info") or {}
+    return StoredPackage(
+        package_id=package.package_id,
+        platform_line_item_id=stored_line_item_id(package),
+        pricing_model=str(pricing.get("pricing_model") or "cpm").lower(),
+        currency=pricing.get("currency") or "USD",
+        paused=bool(config.get("paused", False)),
+        product_id=config.get("product_id"),
+        budget=float(package.budget) if package.budget is not None else None,
+        broadstreet_advertisement_ids=tuple(config.get("broadstreet_advertisement_ids") or ()),
+    )
 
 
 class MediaBuyRepository(SessionEffectsMixin):
@@ -241,6 +263,10 @@ class MediaBuyRepository(SessionEffectsMixin):
                 )
             ).all()
         )
+
+    def get_stored_packages(self, media_buy_id: str) -> list[StoredPackage]:
+        """Every package of the buy as an adapter reads it (``stored_package_of``)."""
+        return [stored_package_of(package) for package in self.get_packages(media_buy_id)]
 
     def buy_packages_of_creative(self, creative_id: str, principal_id: str) -> list[tuple[MediaBuy, MediaPackage]]:
         """Each package of the principal's own buys that the principal's creative is assigned to, with its buy."""
@@ -807,6 +833,18 @@ class MediaBuyRepository(SessionEffectsMixin):
         if package is None:
             return None
         package.package_config = package_config
+        self._bump_parent_revision(media_buy_id)
+        self._session.flush()
+        return package
+
+    def set_package_config_keys(self, media_buy_id: str, package_id: str, **keys: Any) -> MediaPackage:
+        """Set *keys* in the package's ``package_config``, keep the rest, and move the buy's revision.
+
+        Raises ``AdCPPackageNotFoundError`` when the buy holds no such package. A new
+        document is assigned, so the JSON column records the change without ``flag_modified``.
+        """
+        package = self.get_package_or_raise(media_buy_id, package_id)
+        package.package_config = {**(package.package_config or {}), **keys}
         self._bump_parent_revision(media_buy_id)
         self._session.flush()
         return package

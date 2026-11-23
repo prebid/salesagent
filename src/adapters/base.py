@@ -8,7 +8,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 if TYPE_CHECKING:
-    from src.core.database.models import MediaPackage as DBMediaPackage
     from src.core.schemas import Snapshot, Targeting
 
 from adcp.types import BrandReference
@@ -25,7 +24,7 @@ from rich.console import Console
 from src.core.audit_logger import get_audit_logger
 from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
-from src.core.errors.details import EntityRefDetails, ErrorProblem
+from src.core.errors.details import ErrorProblem
 from src.core.exceptions import AdCPConfigurationError
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -39,6 +38,7 @@ from src.core.schemas import (
     PushNotificationConfig,
     ReportingPeriod,
 )
+from src.core.stored_package import StoredPackage
 from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 from src.core.validation_helpers import package_field_path
 
@@ -317,59 +317,6 @@ class AdapterUpdateResult(BaseModel):
 
     media_buy_id: str
     affected_packages: list[AffectedPackage]
-
-
-@dataclass(frozen=True)
-class StoredPackage:
-    """What an adapter's ``update_media_buy`` reads of one stored package of the buy.
-
-    The core reads every package through its unit of work and passes them in, so the
-    adapter opens no session of its own: inside the core's open unit, the first
-    ``get_db_session()`` closes that unit's session (#1644, #2647). The fields are exactly
-    the ones the adapters read off the row; an adapter that needs another adds it here.
-    """
-
-    package_id: str
-    #: ``package_config["platform_line_item_id"]``: the GAM line item booked for the package.
-    platform_line_item_id: str | None
-    #: ``package_config["pricing"]["model"]``, lower-cased; ``cpm`` when unset.
-    pricing_model: str
-    #: ``package_config["pricing"]["currency"]``; ``USD`` when unset.
-    currency: str
-    #: ``package_config["delivery_metrics"]["spend"]``; 0 when nothing has delivered.
-    spend: float
-    #: ``package_config["paused"]``: the pause state the seller recorded.
-    paused: bool
-    #: ``package_config["product_id"]``.
-    product_id: str | None
-    #: The ``budget`` column: the budget the seller recorded.
-    budget: float | None
-
-    @classmethod
-    def of(cls, row: DBMediaPackage) -> StoredPackage:
-        """The stored values of the package *row*."""
-        config = row.package_config or {}
-        pricing = config.get("pricing") or {}
-        return cls(
-            package_id=row.package_id,
-            platform_line_item_id=config.get("platform_line_item_id"),
-            pricing_model=str(pricing.get("model", "cpm")).lower(),
-            currency=pricing.get("currency", "USD"),
-            spend=float((config.get("delivery_metrics") or {}).get("spend", 0)),
-            paused=bool(config.get("paused", False)),
-            product_id=config.get("product_id"),
-            budget=float(row.budget) if row.budget is not None else None,
-        )
-
-
-def stored_package(packages: Sequence[StoredPackage], media_buy_id: str, package_id: str) -> StoredPackage:
-    """The package *package_id* among *packages*, or ``AdCPPackageNotFoundError`` when the buy holds none."""
-    from src.core.exceptions import AdCPPackageNotFoundError
-
-    for package in packages:
-        if package.package_id == package_id:
-            return package
-    raise AdCPPackageNotFoundError(details=EntityRefDetails(package_id=package_id, media_buy_id=media_buy_id))
 
 
 class CreativeEngineAdapter(ABC):

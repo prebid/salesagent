@@ -17,9 +17,7 @@ from src.adapters.base import (
     AdServerAdapter,
     BaseConnectionConfig,
     BaseProductConfig,
-    StoredPackage,
     TargetingCapabilities,
-    stored_package,
 )
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.adapters.utils.pricing import resolve_package_rate
@@ -52,6 +50,7 @@ from src.core.schemas import (
     Snapshot,
 )
 from src.core.security.webhook_egress import deliver_webhook
+from src.core.stored_package import StoredPackage, stored_package
 from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 from src.core.validation_helpers import package_field_path
 from src.services.ai.config import SellerAIConfig
