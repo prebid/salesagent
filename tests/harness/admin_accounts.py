@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from enum import StrEnum
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
@@ -24,7 +24,6 @@ from sqlalchemy.orm import Session
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Account, MediaBuy, Product, Tenant
 from tests.harness.admin_client import AdminClient, AdminResponse
-from tests.helpers.media_buy_approval import SeededBuy
 from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
 
 
@@ -48,6 +47,15 @@ class AdminTransport(StrEnum):
 
     INTEGRATION = "admin_integration"  # Flask test_client, in-process
     E2E = "e2e_admin"  # requests.Session against the live stack
+
+
+class PendingApproval(NamedTuple):
+    """The ids of a media buy awaiting the seller's approval, and of its approval step."""
+
+    tenant_id: str
+    media_buy_id: str
+    context_id: str
+    step_id: str
 
 
 class AdminAccountEnv:
@@ -776,12 +784,15 @@ class AdminAccountEnv:
         finally:
             session.close()
 
-    def seed_media_buy_awaiting_approval(self, *, accepted_image_size: tuple[int, int] | None = None) -> SeededBuy:
+    def seed_media_buy_awaiting_approval(
+        self, *, accepted_image_size: tuple[int, int] | None = None
+    ) -> PendingApproval:
         """A tenant of its own on the mock ad server, holding a media buy that awaits the seller's approval.
 
         With *accepted_image_size*, the buy's product also publishes an image format option
         accepting only that size (formats/canonical/image.json ``sizes``). Returns the seeded
-        rows' ids (``seed_pending_buy``), which address the workflow approval route.
+        rows' ids (``seed_pending_buy``), read while their session is open: the rows detach when
+        it closes.
         """
         from tests.helpers.media_buy_approval import seed_pending_buy
 
@@ -798,10 +809,11 @@ class AdminAccountEnv:
                     "params": {"sizes": [{"width": width, "height": height}]},
                 }
                 product.format_options = [*(product.format_options or []), option]
-        return seeded
+            pending = PendingApproval(seeded.tenant_id, seeded.media_buy_id, seeded.context_id, seeded.step_id)
+        return pending
 
     def assign_image_creative_to_pending_buy(
-        self, seeded: SeededBuy, creative_id: str, *, size: tuple[int, int]
+        self, pending: PendingApproval, creative_id: str, *, size: tuple[int, int]
     ) -> None:
         """Store the buyer's approved canonical image creative *creative_id* at *size*, assigned to the buy's package."""
         from tests.factories import CreativeAssignmentFactory, CreativeFactory
@@ -809,8 +821,8 @@ class AdminAccountEnv:
 
         width, height = size
         with self._approval_seeding() as session:
-            media_buy = session.get(MediaBuy, seeded.media_buy_id)
-            assert media_buy is not None, f"no media buy {seeded.media_buy_id!r}"
+            media_buy = session.get(MediaBuy, pending.media_buy_id)
+            assert media_buy is not None, f"no media buy {pending.media_buy_id!r}"
             creative = CreativeFactory(
                 tenant=media_buy.tenant,
                 principal=media_buy.principal,
@@ -843,10 +855,10 @@ class AdminAccountEnv:
                 tenant=tenant, adapter_type="mock", config_json={"test_behavior": {"fail_on_create": True}}
             )
 
-    def approve_workflow_step(self, seeded: SeededBuy) -> AdminResponse:
+    def approve_workflow_step(self, pending: PendingApproval) -> AdminResponse:
         """Approve the buy's approval step as the workflow review page's script does with fetch()."""
         return self.fetch_tenant_route(
-            seeded.tenant_id, f"workflows/{seeded.context_id}/steps/{seeded.step_id}/approve"
+            pending.tenant_id, f"workflows/{pending.context_id}/steps/{pending.step_id}/approve"
         )
 
     def media_buy_status(self, media_buy_id: str) -> str:
