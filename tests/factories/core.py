@@ -120,6 +120,10 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
     # reproduces the pre-declaration capabilities wire. Scenarios opt in through
     # CapabilitiesEnv.declare_capabilities(), never by overriding this directly.
     capability_declarations = None
+    # A saved policy that checks no brief, so the tenant serves products (#2698). Checks on
+    # also need an AI configuration of the seller's own, so scenarios that grade the check
+    # opt in; pass ``advertising_policy=None`` for a tenant that has saved none.
+    advertising_policy = SubFactory("tests.factories.core.AdvertisingPolicyFactory", enabled=False)
 
     @classmethod
     def make_tenant(cls, tenant_id: str = "test_tenant", **overrides: Any) -> TenantContext:
@@ -142,6 +146,7 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
                 # the ORM factory's Sequence does.
                 "virtual_host": tenant_virtual_host(tenant_id),
                 "ad_server": "mock",
+                "advertising_policy": AdvertisingPolicyFactory(enabled=False),
                 **overrides,
             }
         )

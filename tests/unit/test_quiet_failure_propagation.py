@@ -14,6 +14,7 @@ import pytest
 
 from src.core.database.repositories.product import OfferedProduct
 from src.core.schemas import GetProductsRequest
+from tests.factories import AdvertisingPolicyFactory
 from tests.helpers.unit_identity import fabricated_identity
 
 
@@ -30,7 +31,9 @@ def _make_identity(tenant_id="test-tenant", **tenant_fields):
         tenant_id=tenant_id,
         name="Test",
         ad_server="mock",
-        advertising_policy=None,
+        # A saved policy that checks no brief: with none, get_products refuses before the
+        # step these tests break (#2698).
+        advertising_policy=AdvertisingPolicyFactory(enabled=False),
         **tenant_fields,
     )
 

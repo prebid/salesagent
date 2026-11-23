@@ -224,9 +224,16 @@ def tenant_ai_enabled(tenant: "Tenant", *, platform_fallback: bool = True) -> bo
     the creative-review page told a seller who had configured AI in the `ai_config` column
     that it needed a Gemini key, while the AI steps ran for it.
     """
-    return (
-        AIServiceFactory().resolve(TenantAIConfig.from_tenant(tenant), platform_fallback=platform_fallback) is not None
-    )
+    return seller_ai_enabled(TenantAIConfig.from_tenant(tenant), platform_fallback=platform_fallback)
+
+
+def seller_ai_enabled(seller_ai: SellerAIConfig, *, platform_fallback: bool = True) -> bool:
+    """`tenant_ai_enabled` for a caller that already holds the resolved `SellerAIConfig`.
+
+    `TenantContext.ai_config` is that answer, resolved once per request, so the request
+    path asks this rather than going back to the row.
+    """
+    return AIServiceFactory().resolve(seller_ai, platform_fallback=platform_fallback) is not None
 
 
 @lru_cache(maxsize=1)

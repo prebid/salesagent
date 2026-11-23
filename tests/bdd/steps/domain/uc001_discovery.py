@@ -256,6 +256,26 @@ def when_get_products_with_brief(ctx: dict) -> None:
     dispatch_request(ctx, brief=ctx["env"].scripted_brief(_BRIEF))
 
 
+#: One request per buying mode, each valid for that mode at the pinned 3.2.7
+#: (media-buy/get-products-request.json: ``brief`` is required in brief mode and must be
+#: absent in wholesale and refine; ``refine`` carries the change requests).
+_BUYING_MODE_REQUESTS: dict[str, Callable[[str], dict[str, Any]]] = {
+    "brief": lambda brief: {"buying_mode": "brief", "brief": brief},
+    "wholesale": lambda brief: {"buying_mode": "wholesale", "brand": {"domain": "acme.com"}},
+    "refine": lambda brief: {
+        "buying_mode": "refine",
+        "brand": {"domain": "acme.com"},
+        "refine": [{"scope": "request", "ask": "more video inventory"}],
+    },
+}
+
+
+@when(parsers.parse("the Buyer Agent sends a get_products request in {buying_mode} buying mode"))
+def when_get_products_in_buying_mode(ctx: dict, buying_mode: str) -> None:
+    """Dispatch get_products in the named buying mode through the current transport."""
+    dispatch_request(ctx, **_BUYING_MODE_REQUESTS[buying_mode](ctx["env"].scripted_brief(_BRIEF)))
+
+
 @when(parsers.parse("the Buyer Agent sends a get_products request with channels filter {partition}"))
 def when_get_products_with_channels_filter(ctx: dict, partition: str) -> None:
     """Dispatch get_products filtering on one channel, on none, or on a list the schema refuses."""
@@ -318,7 +338,6 @@ def then_products_sorted_by_score(ctx: dict) -> None:
 
 @then("products should be returned unranked with no threshold applied")
 @then("the request should proceed to product discovery without policy check")
-@then("the request should proceed (fail-open behavior)")
 @then("the request should proceed with full product catalog")
 def then_full_catalog_in_catalog_order(ctx: dict) -> None:
     """products[] is the whole catalog, in catalog order: nothing ranked, filtered or blocked."""

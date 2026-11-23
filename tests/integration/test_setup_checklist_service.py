@@ -26,7 +26,7 @@ from src.services.setup_checklist_service import (
     get_incomplete_critical_tasks,
     validate_setup_complete,
 )
-from tests.factories import TenantFactory
+from tests.factories import AdvertisingPolicyFactory, TenantFactory
 from tests.factories.principal import plaintext_token_for
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.adcp_factories import create_test_db_product
@@ -123,6 +123,7 @@ def setup_complete_tenant(integration_db, test_tenant_id):
             enable_axe_signals=True,
             authorized_emails=["test@example.com"],  # Required for access control
             auth_setup_mode=False,  # SSO configured, setup mode disabled
+            advertising_policy=AdvertisingPolicyFactory(enabled=False),  # Policy saved (#2698)
             created_at=now,
             updated_at=now,
             is_active=True,
@@ -429,6 +430,7 @@ class TestSetupChecklistService:
                 updated_at=now,
                 is_active=True,
                 authorized_domains=["example.com"],
+                advertising_policy=AdvertisingPolicyFactory(enabled=False),  # Policy saved (#2698)
             )
             db_session.add(tenant3)
 
@@ -675,6 +677,38 @@ class TestTaskDetails:
             "AI features enabled" if is_complete else "Optional: Configure an AI provider API key for AI features"
         )
 
+    @pytest.mark.parametrize(
+        ("policy", "tenant_fields", "is_complete"),
+        [
+            (None, {}, False),
+            ({"enabled": False}, {}, True),
+            ({"enabled": True}, {"ai_config": ADMIN_UI_AI_CONFIG}, True),
+            ({"enabled": True}, {}, False),
+            ({"enabled": True}, {"ai_config": KEYLESS_AI_CONFIG}, False),
+        ],
+        ids=[
+            "no-policy-saved",
+            "checks-off",
+            "checks-on-with-the-sellers-ai",
+            "checks-on-with-no-ai-the-platform-key-is-not-the-sellers",
+            "checks-on-with-a-keyless-row",
+        ],
+    )
+    def test_advertising_policy_task(self, integration_db, policy, tenant_fields, is_complete):
+        """The critical policy task is done when a saved policy can be enforced (#2698).
+
+        No saved policy is incomplete. Checks on are complete only with the seller's own AI
+        configuration, the ``ai_provider_key`` task's answer; the platform key is declared to
+        show it does not count. Both enumeration paths must grade the task the same way.
+        """
+        saved = None if policy is None else AdvertisingPolicyFactory(**policy)
+        with PlatformAICredential("platform-key"), BareIntegrationEnv() as env:
+            TenantFactory(tenant_id="chk-policy", advertising_policy=saved, **tenant_fields)
+            env._commit_factory_data()
+            task = checklist_task_on_both_paths("chk-policy", "critical", "advertising_policy")
+
+        assert task["is_complete"] is is_complete, task["details"]
+
     def test_currency_count_in_details(self, integration_db, test_tenant_id):
         """Test that currency count is shown in task details."""
         from datetime import UTC, datetime
@@ -771,6 +805,7 @@ class TestTaskDetails:
                 subdomain="test_mtp",
                 virtual_host=f"{test_tenant_id}.adcp.test",
                 ad_server="mock",
+                advertising_policy=AdvertisingPolicyFactory(enabled=False),  # Policy saved (#2698)
                 created_at=now,
                 updated_at=now,
                 is_active=True,

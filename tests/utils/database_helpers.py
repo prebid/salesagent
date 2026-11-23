@@ -381,6 +381,13 @@ def create_tenant_with_timestamps(
     # timestamps are — a caller grading something else should not have to name it — and a
     # caller that IS grading the host passes its own.
     kwargs.setdefault("virtual_host", vhost_for(tenant_id))
+    # A saved policy that checks no brief, as TenantFactory saves: a tenant with none serves
+    # no products and takes no media buy (#2698). Pass ``advertising_policy=None`` for one
+    # that has saved none.
+    if "advertising_policy" not in kwargs:
+        from tests.factories import AdvertisingPolicyFactory
+
+        kwargs["advertising_policy"] = AdvertisingPolicyFactory(enabled=False)
 
     return Tenant(tenant_id=tenant_id, name=name, subdomain=subdomain, billing_plan=billing_plan, **kwargs)
 

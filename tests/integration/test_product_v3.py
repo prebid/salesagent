@@ -57,6 +57,7 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPAuthRequiredError,
     AdCPPolicyViolationError,
+    AdCPServiceUnavailableError,
 )
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.resolved_identity import ResolvedIdentity
@@ -612,8 +613,8 @@ class TestExtensionA:
                 )
 
     @pytest.mark.asyncio
-    async def test_policy_service_unavailable_fail_open(self, uc001_products):
-        """When policy service is unreachable, pipeline continues.
+    async def test_policy_service_unavailable_refuses(self, uc001_products):
+        """When policy service is unreachable, the request is refused SERVICE_UNAVAILABLE (#2698).
 
         Covers: UC-001-EXT-A-03
         """
@@ -622,15 +623,14 @@ class TestExtensionA:
             # What the real service raises when the provider fails the check (run_agent).
             mock_instance.check_brief_compliance = AsyncMock(side_effect=AIProviderError("Service unavailable"))
 
-            # Should NOT raise - fail open
-            result = await _call_get_products(
-                brief="safe advertising",
-                tenant_overrides={
-                    "advertising_policy": AdvertisingPolicyFactory(),
-                    "gemini_api_key": "test-key",
-                },
-            )
-            assert len(result.products) > 0
+            with raises_adcp(AdCPServiceUnavailableError):
+                await _call_get_products(
+                    brief="safe advertising",
+                    tenant_overrides={
+                        "advertising_policy": AdvertisingPolicyFactory(),
+                        "gemini_api_key": "test-key",
+                    },
+                )
 
     @pytest.mark.asyncio
     async def test_policy_blocked_error_carries_recovery_the_buyer_can_act_on(self, uc001_products):

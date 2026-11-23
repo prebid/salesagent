@@ -27,6 +27,7 @@ from tests.integration.conftest_ci_seed import ci_test_principal  # noqa: F401
 admin_app = create_app()
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, MediaPackage, ProductPublisherSelection, Tenant
+from tests.factories import AdvertisingPolicyFactory
 from tests.fixtures import TenantFactory
 from tests.helpers.local_http_origin import run_local_origin
 from tests.helpers.local_mcp_origin import MCPOrigin, run_mcp_origin
@@ -231,6 +232,7 @@ def test_tenant_with_data(integration_db):
             auto_approve_format_ids=[],  # JSONType expects list, not json.dumps()
             human_review_required=False,
             policy_settings={},  # JSONType expects dict, not json.dumps()
+            advertising_policy=AdvertisingPolicyFactory(enabled=False),  # policy saved (#2698)
             authorized_emails=["test@example.com"],  # Required for access control
             created_at=now,
             updated_at=now,
@@ -360,6 +362,7 @@ def sample_tenant(integration_db):
             authorized_domains=["example.com"],
             auto_approve_format_ids=["display_300x250"],
             human_review_required=False,
+            advertising_policy=AdvertisingPolicyFactory(enabled=False),  # policy saved (#2698)
             created_at=now,
             updated_at=now,
         )
@@ -947,6 +950,9 @@ def add_required_setup_data(session, tenant_id: str):
         tenant.auth_setup_mode = False
         if tenant.ad_server is None:
             tenant.ad_server = "mock"
+        # A tenant with no saved policy fails the advertising_policy task (#2698).
+        if tenant.advertising_policy is None:
+            tenant.advertising_policy = AdvertisingPolicyFactory(enabled=False)
         session.flush()
 
     # TenantAuthConfig

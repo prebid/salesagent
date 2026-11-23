@@ -7,7 +7,7 @@ to help new users understand what they need to do before taking their first orde
 import logging
 import time
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NoReturn
 
 from sqlalchemy import func, select
 
@@ -29,8 +29,10 @@ from src.core.database.repositories.publisher import (
 from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.database.repositories.tenant_counts import count_by_tenant
 from src.core.database.repositories.tenant_lookup import TenantLookupRepository
+from src.core.schemas.advertising_policy import AdvertisingPolicy
 from src.core.signing.posture import KeyBacking, signing_key_backed
-from src.services.ai.factory import tenant_ai_enabled
+from src.services.ai.config import SellerAIConfig, TenantAIConfig
+from src.services.ai.factory import seller_ai_enabled, tenant_ai_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +123,44 @@ def _ai_features_task(tenant_id: str, tenant: Tenant) -> "SetupTask":
         details=(
             "AI features enabled" if ai_configured else "Optional: Configure an AI provider API key for AI features"
         ),
+    )
+
+
+#: The critical task a tenant completes by saving an advertising policy; ``get_products``
+#: refuses with exactly this key until it does (:func:`require_advertising_policy`).
+ADVERTISING_POLICY_TASK = "advertising_policy"
+
+
+def _advertising_policy_task(
+    tenant_id: str, policy: AdvertisingPolicy | None, seller_ai: SellerAIConfig
+) -> "SetupTask":
+    """The critical "Advertising Policy" task: done when the saved policy can be enforced.
+
+    Incomplete while the tenant has saved no policy (``None``), and while the saved policy
+    turns checks on but the seller has no AI configuration of its own that can run them:
+    a check that cannot run is a policy the seller believes is enforced and is not. "Can
+    run" is the ``ai_provider_key`` task's answer (``seller_ai_enabled`` without the
+    platform fallback), the same seller-only rule the check itself runs on. Owner
+    decision, #2694 and #2698.
+
+    Takes the policy and the resolved AI configuration rather than a row, because the
+    dashboard holds the ORM row and ``get_products`` holds a ``TenantContext``: one
+    function, so the two cannot come to disagree.
+    """
+    if policy is None:
+        is_complete, details = False, "No advertising policy saved"
+    elif policy.enabled and not seller_ai_enabled(seller_ai, platform_fallback=False):
+        is_complete, details = False, "Policy checks are on, but no AI provider of your own is configured to run them"
+    else:
+        is_complete = True
+        details = "Briefs are checked against your policy" if policy.enabled else "Briefs are accepted without checks"
+    return SetupTask(
+        key=ADVERTISING_POLICY_TASK,
+        name="Advertising Policy",
+        description="Save an advertising policy: buyers get no products until you do",
+        is_complete=is_complete,
+        action_url=f"/tenant/{tenant_id}/policy",
+        details=details,
     )
 
 
@@ -532,6 +572,11 @@ class SetupChecklistService:
             )
         )
 
+        # 7. Advertising Policy
+        tasks.append(
+            _advertising_policy_task(self.tenant_id, tenant.advertising_policy, TenantAIConfig.from_tenant(tenant))
+        )
+
         return tasks
 
     def _check_recommended_tasks(self, session, tenant: Tenant) -> list[SetupTask]:
@@ -913,6 +958,11 @@ class SetupChecklistService:
             )
         )
 
+        # 7. Advertising Policy
+        tasks.append(
+            _advertising_policy_task(self.tenant_id, tenant.advertising_policy, TenantAIConfig.from_tenant(tenant))
+        )
+
         return tasks
 
     def _build_recommended_tasks(self, tenant: Tenant, budget_limit_count: int, currency_count: int) -> list[SetupTask]:
@@ -1245,8 +1295,32 @@ def validate_setup_complete(tenant_id: str, *, sandbox: bool = False) -> None:
     if incomplete:
         # ``key``, not ``name``: ``name`` is admin-UI display text -- two of the critical tasks
         # carry a "⚠️" prefix, and ``inventory_synced`` has three names for the one key.
-        #
-        # No ``setup_checklist_url``. It was an f-string built here, which is recovery guidance
-        # authored at the raise site, and CODE_TABLE's suggestion already owns that; it also
-        # pointed at a seller admin path the buyer cannot open.
-        raise AdCPConfigurationError(details=ConfigurationDetails(missing_tasks=[t["key"] for t in incomplete]))
+        _refuse_incomplete([t["key"] for t in incomplete])
+
+
+def require_advertising_policy(tenant_id: str, policy: AdvertisingPolicy | None, seller_ai: SellerAIConfig) -> None:
+    """Refuse a request while the tenant's ``advertising_policy`` task is incomplete.
+
+    ``get_products`` gates on this one task, in every buying mode: a seller that has not
+    saved a policy, or saved one it cannot enforce, serves no products. The other critical
+    tasks gate ``create_media_buy`` through :func:`validate_setup_complete` and not
+    discovery, so this does not read them (and costs no query: the request already holds
+    the policy and the resolved AI configuration).
+
+    AdCP 3.2.7 ``enums/error-code.json`` line 137: ``CONFIGURATION_ERROR`` is "The seller's
+    deployment is misconfigured in a way that prevents handling the request -- the buyer
+    cannot fix it, retrying will not help, and reporting to the seller's operator is the
+    only remediation."
+    """
+    if not _advertising_policy_task(tenant_id, policy, seller_ai).is_complete:
+        _refuse_incomplete([ADVERTISING_POLICY_TASK])
+
+
+def _refuse_incomplete(missing_tasks: list[str]) -> NoReturn:
+    """The refusal for incomplete critical setup tasks, named by ``key``.
+
+    No ``setup_checklist_url``. It was an f-string built at the raise site, which is recovery
+    guidance authored there, and CODE_TABLE's suggestion already owns that; it also pointed
+    at a seller admin path the buyer cannot open.
+    """
+    raise AdCPConfigurationError(details=ConfigurationDetails(missing_tasks=missing_tasks))

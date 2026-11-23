@@ -129,6 +129,7 @@ def init_db_ci():
         from sqlalchemy import select
 
         from scripts.ops.migrate import run_migrations
+        from scripts.setup.seed_advertising_policy import unchecked_advertising_policy
         from scripts.setup.seed_products import canonical_declaration
         from src.core.credentials import hash_token
         from src.core.database.database_session import get_db_session
@@ -168,6 +169,12 @@ def init_db_ci():
                     existing_tenant.authorized_emails = ["ci-test@example.com"]
                     session.flush()
                     print("   ✓ Access control configured")
+
+                # A tenant with no saved policy serves no products (#2698).
+                if existing_tenant.advertising_policy is None:
+                    existing_tenant.advertising_policy = unchecked_advertising_policy()
+                    session.flush()
+                    print("   ✓ Advertising policy saved")
 
                 # Check if principal exists GLOBALLY by token hash (it's unique across all tenants)
                 existing_principal = find_principal_by_token_hash(session, hash_token(CI_TEST_TOKEN))
@@ -248,6 +255,7 @@ def init_db_ci():
                     authorized_emails=["ci-test@example.com"],  # Required by setup checklist
                     authorized_domains=None,  # Optional when emails are set
                     policy_settings=None,  # SQL NULL
+                    advertising_policy=unchecked_advertising_policy(),  # serves no products without one (#2698)
                     signals_agent_config=None,  # SQL NULL
                     ai_policy=None,  # SQL NULL
                     auto_approve_format_ids=["display_300x250_image", "display_728x90_image"],
@@ -556,6 +564,9 @@ def init_db_ci():
 
             if existing_iso:
                 iso_tenant_id = existing_iso.tenant_id
+                if existing_iso.advertising_policy is None:
+                    existing_iso.advertising_policy = unchecked_advertising_policy()
+                    iso_session.commit()
                 print(f"Isolation tenant already exists (ID: {iso_tenant_id})")
             else:
                 iso_tenant_id = str(uuid.uuid4())
@@ -572,6 +583,7 @@ def init_db_ci():
                     authorized_emails=["iso-test@example.com"],
                     authorized_domains=None,
                     policy_settings=None,
+                    advertising_policy=unchecked_advertising_policy(),
                     signals_agent_config=None,
                     ai_policy=None,
                     auto_approve_format_ids=["display_300x250_image"],

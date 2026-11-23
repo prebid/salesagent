@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.core.exceptions import AdCPAuthorizationError
+from src.core.exceptions import AdCPAuthorizationError, AdCPServiceUnavailableError
 from src.core.resolved_identity import PublicIdentity, ResolvedIdentity
 from src.core.tenant_context import TenantContext
 from src.services.ai.factory import AIProviderError
@@ -336,17 +336,18 @@ class TestBriefPolicyApproved:
 
 
 class TestBriefPolicyServiceUnavailable:
-    """advertising_policy enabled + LLM service unavailable fails open.
+    """advertising_policy enabled + LLM service unavailable refuses with SERVICE_UNAVAILABLE.
 
     Covers: BR-RULE-002-01, CONSTR-BRIEF-POLICY-01
     """
 
     @pytest.mark.asyncio
-    async def test_service_unavailable_fails_open(self, integration_db):
+    async def test_service_unavailable_refuses(self, integration_db):
         """Covers: BR-RULE-002-01, CONSTR-BRIEF-POLICY-01
 
-        When advertising_policy is enabled but the LLM policy service raises
-        an exception, the system fails open and products are still returned.
+        When advertising_policy is enabled but the LLM policy service fails, the request
+        is refused with SERVICE_UNAVAILABLE rather than answered with unchecked products
+        (#2698).
         """
         with ProductEnv(tenant_id="bp-failopen", principal_id="p1") as env:
             tenant = TenantFactory(
@@ -366,10 +367,8 @@ class TestBriefPolicyServiceUnavailable:
             mock_policy_inst.check_brief_compliance = AsyncMock(side_effect=AIProviderError("Gemini API timeout"))
             env.mock["policy_service"].return_value = mock_policy_inst
 
-            response = await env.call_impl(brief="Normal campaign brief")
-
-        assert len(response.products) >= 1
-        assert response.products[0].product_id == "p1"
+            with pytest.raises(AdCPServiceUnavailableError):
+                await env.call_impl(brief="Normal campaign brief")
 
 
 class TestBriefPolicyDisabled:

@@ -858,12 +858,14 @@ _SKIP_MARKER = "# structural-guard:"  # same marker as test_architecture_no_erro
 
 _PRODUCTS_REL = "src/core/tools/products.py"
 
-# The five straight-line degradations in `_get_products_impl`, identified by a
+# The straight-line degradations in `_get_products_impl`, identified by a
 # distinctive substring of the handler BODY rather than a line number: the
 # same change also deletes the dead `policy_disabled_reason` variable in
 # the first handler, which shifts every line below it. Order is source order.
 _PRODUCTS_DEGRADATION_SUBJECTS = (
-    "Policy check failed for tenant",  # policy service unreachable -> fail open
+    # "Policy check failed for tenant" is gone: a failed policy check now raises
+    # SERVICE_UNAVAILABLE instead of returning unchecked products (#2698), so the
+    # handler surfaces its failure and is no longer a degradation.
     "Failed to generate dynamic product variants",  # variants dropped
     "Failed to enrich products with dynamic pricing",  # pricing enrichment dropped
     "Failed to apply AI product ranking",  # ranking dropped (superset still returned)
@@ -925,7 +927,7 @@ class TestStraightLineScopeCoversResponseErrors:
 
     @pytest.mark.arch_guard
     def test_products_straight_line_degradations_are_in_scope(self):
-        """All five `_get_products_impl` degradations are seen by the straight-line rule.
+        """Every known `_get_products_impl` degradation is seen by the straight-line rule.
 
         `GetProductsResponse` carries errors[], so every straight-line handler in
         `_get_products_impl` that drops content from it is this guard's business —

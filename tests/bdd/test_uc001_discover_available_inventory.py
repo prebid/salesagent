@@ -6,7 +6,8 @@ binds by NAME the ones that run, rather than collecting the whole file with
 the next scenario here when its steps exist.
 
 The bound scenarios are BR-RULE-002 (advertising-policy check) and BR-RULE-005 (AI
-ranking), both on the seller's own AI configuration, and the channels filter partitions.
+ranking), both on the seller's own AI configuration, the no-saved-policy refusal, and the
+channels filter partitions.
 Steps: ``tests/bdd/steps/domain/uc001_discovery.py``. Spec grounding: neither rule is in
 AdCP 3.1.1, so no storyboard grades them; ``POLICY_VIOLATION`` is in the pinned 3.1
 error-code enum. ``filters.channels`` is ``core/product-filters.json#/properties/channels``
@@ -26,14 +27,24 @@ def test_policy_blocks_the_brief() -> None:
     """The policy check runs on the seller's own AI configuration, wherever it is stored."""
 
 
-@scenario(FEATURE, "BR-RULE-002 INV-3 holds - policy disabled or no usable seller AI, check skipped")
+@scenario(FEATURE, "BR-RULE-002 INV-3 holds - policy disabled, check skipped")
 def test_policy_check_skipped() -> None:
-    """Disabled, or no AI configuration of the seller's own that can run the check."""
+    """Checks off: the brief is not checked, whatever the model would answer."""
 
 
-@scenario(FEATURE, "BR-RULE-002 INV-4 holds - policy service unavailable, fail-open")
-def test_policy_fails_open() -> None:
-    """The seller's policy model fails, and the request proceeds."""
+@scenario(FEATURE, "BR-RULE-002 INV-3 violated - policy enabled with no usable seller AI, CONFIGURATION_ERROR")
+def test_policy_check_without_seller_ai_refused() -> None:
+    """Checks on with no AI configuration of the seller's own that can run them: setup is incomplete."""
+
+
+@scenario(FEATURE, "BR-RULE-002 INV-4 holds - policy service unavailable, SERVICE_UNAVAILABLE")
+def test_policy_model_unavailable_refused() -> None:
+    """The seller's policy model fails, and the request is refused rather than served unchecked."""
+
+
+@scenario(FEATURE, "Extension - the tenant has saved no advertising policy, <buying_mode> mode")
+def test_no_saved_policy_serves_no_products() -> None:
+    """No saved policy: CONFIGURATION_ERROR naming the advertising_policy task, in every buying mode."""
 
 
 @scenario(FEATURE, "BR-RULE-002 INV-5 holds - policy evaluation returns ALLOWED")
