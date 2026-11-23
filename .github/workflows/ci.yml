@@ -10,11 +10,13 @@ on:
 permissions: {}
 
 concurrency:
-  # One run per PR head ref; a superseded push cancels the in-flight run.
-  # push/dispatch events get per-sha groups so runs on main never cancel or
-  # queue behind each other.
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # One run per PR head ref or pushed branch; a newer push cancels the
+  # superseded run, on main too, since the newer commit contains it.
+  # Two kinds of run get a per-sha group and are never cancelled: manual
+  # dispatches, and release commits, whose exact-sha CI run the D47 gate in
+  # release-please.yml waits on before it publishes the image.
+  group: "${{ github.workflow }}-${{ (github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'chore(main): release ')) && github.sha || github.ref }}"
+  cancel-in-progress: "${{ github.event_name != 'workflow_dispatch' && !startsWith(github.event.head_commit.message, 'chore(main): release ') }}"
 
 env:
   DATABASE_URL: postgresql://adcp_user:test_password@127.0.0.1:5432/adcp_test
