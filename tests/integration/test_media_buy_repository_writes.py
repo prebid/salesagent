@@ -410,6 +410,43 @@ class TestSetPackageConfigKeys:
             assert fetched is not None
             assert fetched.package_config == new_config
 
+    def test_update_config_nonexistent_raises(self, tenant_a, principal_a):
+        """Setting keys on a nonexistent package raises PACKAGE_NOT_FOUND."""
+        from src.core.exceptions import AdCPPackageNotFoundError
+
+        with MediaBuyUoW(tenant_a) as uow:
+            mb = make_media_buy(tenant_a, principal_a, "mb_no_pkg_cfg")
+            uow.media_buys.create(mb)
+
+        with pytest.raises(AdCPPackageNotFoundError):
+            with MediaBuyUoW(tenant_a) as uow:
+                uow.media_buys.set_package_config_keys("mb_no_pkg_cfg", "nonexistent")
+
+    def test_update_config_other_tenant_raises(self, tenant_a, tenant_b, principal_a, principal_b):
+        """Cannot set package config keys via another tenant's repository."""
+        from src.core.exceptions import AdCPPackageNotFoundError
+
+        with MediaBuyUoW(tenant_a) as uow:
+            mb = make_media_buy(tenant_a, principal_a, "mb_cfg_iso")
+            uow.media_buys.create(mb)
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create_package(
+                media_buy_id="mb_cfg_iso",
+                package_id="pkg_cfg_iso",
+                package_config={"original": True},
+            )
+
+        with pytest.raises(AdCPPackageNotFoundError):
+            with MediaBuyUoW(tenant_b) as uow:
+                uow.media_buys.set_package_config_keys("mb_cfg_iso", "pkg_cfg_iso", hacked=True)
+
+        # Verify original unchanged
+        with MediaBuyUoW(tenant_a) as uow:
+            fetched = uow.media_buys.get_package("mb_cfg_iso", "pkg_cfg_iso")
+            assert fetched is not None
+            assert fetched.package_config == {"original": True}
+
 
 # ---------------------------------------------------------------------------
 # MediaPackage.update_package_fields
