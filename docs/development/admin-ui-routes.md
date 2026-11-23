@@ -36,12 +36,12 @@ Each table has the following columns:
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/api/tenant/<tenant_id>/gam/reporting` | GET | `require_auth` | - | `gam_reporting_api.get_gam_reporting` |
-| `/api/tenant/<tenant_id>/gam/reporting/ad-units` | GET | `require_auth` | - | `gam_reporting_api.get_ad_unit_breakdown` |
-| `/api/tenant/<tenant_id>/gam/reporting/advertiser/<advertiser_id>/summary` | GET | `require_auth` | - | `gam_reporting_api.get_advertiser_summary` |
-| `/api/tenant/<tenant_id>/gam/reporting/countries` | GET | `require_auth` | - | `gam_reporting_api.get_country_breakdown` |
-| `/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting` | GET | `require_auth` | - | `gam_reporting_api.get_principal_reporting` |
-| `/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting/summary` | GET | `require_auth` | - | `gam_reporting_api.get_principal_summary` |
+| `/api/tenant/<tenant_id>/gam/reporting` | GET | `require_tenant_access()` | - | `gam_reporting_api.get_gam_reporting` |
+| `/api/tenant/<tenant_id>/gam/reporting/ad-units` | GET | `require_tenant_access()` | - | `gam_reporting_api.get_ad_unit_breakdown` |
+| `/api/tenant/<tenant_id>/gam/reporting/advertiser/<advertiser_id>/summary` | GET | `require_tenant_access()` | - | `gam_reporting_api.get_advertiser_summary` |
+| `/api/tenant/<tenant_id>/gam/reporting/countries` | GET | `require_tenant_access()` | - | `gam_reporting_api.get_country_breakdown` |
+| `/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting` | GET | `require_tenant_access()` | - | `gam_reporting_api.get_principal_reporting` |
+| `/api/tenant/<tenant_id>/principals/<principal_id>/gam/reporting/summary` | GET | `require_tenant_access()` | - | `gam_reporting_api.get_principal_summary` |
 
 ## `src/admin/blueprints/accounts.py`
 
@@ -58,8 +58,8 @@ Each table has the following columns:
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
 | `/tenant/<tenant_id>/activities` | GET | `require_tenant_access()` | - | `activity_stream.get_activities_api` |
-| `/tenant/<tenant_id>/activity` | GET | `require_tenant_access(api_mode=False)` | - | `activity_stream.activity_feed` |
-| `/tenant/<tenant_id>/events` | GET | `require_tenant_access(api_mode=True)` | - | `activity_stream.activity_events` |
+| `/tenant/<tenant_id>/activity` | GET | `require_tenant_access()` | - | `activity_stream.activity_feed` |
+| `/tenant/<tenant_id>/events` | GET | `require_tenant_access()` | - | `activity_stream.activity_events` |
 
 ## `src/admin/blueprints/adapters.py`
 
@@ -78,12 +78,11 @@ Each table has the following columns:
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
 | `/api/gam/get-advertisers` | POST | `require_auth()` | `gam_get_advertisers` | `api.gam_get_advertisers` |
-| `/api/gam/test-connection` | POST | `require_auth()` | `test_gam_connection` | `api.test_gam_connection` |
 | `/api/health` | GET | none | - | `api.api_health` |
 | `/api/oauth/status` | GET | `require_auth()` | - | `api.oauth_status` |
-| `/api/tenant/<tenant_id>/products` | GET | `require_auth()` | - | `api.get_tenant_products` |
-| `/api/tenant/<tenant_id>/products/suggestions` | GET | `require_auth()` | - | `api.get_product_suggestions` |
-| `/api/tenant/<tenant_id>/revenue-chart` | GET | `require_auth()` | - | `api.revenue_chart_api` |
+| `/api/tenant/<tenant_id>/products` | GET | `require_tenant_access()` | - | `api.get_tenant_products` |
+| `/api/tenant/<tenant_id>/products/suggestions` | GET | `require_tenant_access()` | - | `api.get_product_suggestions` |
+| `/api/tenant/<tenant_id>/revenue-chart` | GET | `require_tenant_access()` | - | `api.revenue_chart_api` |
 
 ## `src/admin/blueprints/auth.py`
 
@@ -104,7 +103,7 @@ Each table has the following columns:
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
 | `/tenant/<tenant_id>/authorized-properties` | GET | `require_tenant_access()` | - | `authorized_properties.list_authorized_properties` |
-| `/tenant/<tenant_id>/authorized-properties/api/list` | GET | `require_tenant_access(api_mode=True)` | - | `authorized_properties.list_authorized_properties_api` |
+| `/tenant/<tenant_id>/authorized-properties/api/list` | GET | `require_tenant_access()` | - | `authorized_properties.list_authorized_properties_api` |
 | `/tenant/<tenant_id>/property-tags` | GET | `require_tenant_access()` | - | `authorized_properties.list_property_tags` |
 | `/tenant/<tenant_id>/property-tags/create` | POST | `require_tenant_access()` | `create_property_tag` | `authorized_properties.create_property_tag` |
 
@@ -159,12 +158,12 @@ Each table has the following columns:
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/tenant/<tenant_id>/gam/api/custom-targeting-keys` | GET | `require_tenant_access(api_mode=True)` | - | `gam.get_gam_custom_targeting_keys` |
-| `/tenant/<tenant_id>/gam/api/line-item/<line_item_id>` | GET | `require_tenant_access(api_mode=True)` | - | `gam.get_gam_line_item_api` |
+| `/tenant/<tenant_id>/gam/api/custom-targeting-keys` | GET | `require_tenant_access()` | - | `gam.get_gam_custom_targeting_keys` |
+| `/tenant/<tenant_id>/gam/api/line-item/<line_item_id>` | GET | `require_tenant_access()` | - | `gam.get_gam_line_item_api` |
 | `/tenant/<tenant_id>/gam/configure` | POST | `require_tenant_access()` | `configure_gam` | `gam.configure_gam` |
 | `/tenant/<tenant_id>/gam/create-service-account` | POST | `require_tenant_access()` | `create_gam_service_account` | `gam.create_service_account` |
 | `/tenant/<tenant_id>/gam/detect-network` | POST | `require_tenant_access()` | `detect_gam_network` | `gam.detect_gam_network` |
-| `/tenant/<tenant_id>/gam/get-service-account-email` | GET | `require_tenant_access(api_mode=True)` | - | `gam.get_service_account_email` |
+| `/tenant/<tenant_id>/gam/get-service-account-email` | GET | `require_tenant_access()` | - | `gam.get_service_account_email` |
 | `/tenant/<tenant_id>/gam/line-item/<line_item_id>` | GET | `require_tenant_access()` | - | `gam.view_gam_line_item` |
 | `/tenant/<tenant_id>/gam/reset-stuck-sync` | POST | `require_tenant_access()` | `reset_stuck_gam_sync` | `gam.reset_stuck_sync` |
 | `/tenant/<tenant_id>/gam/sync-status/<sync_id>` | GET | `require_tenant_access()` | - | `gam.get_sync_status` |
@@ -175,17 +174,17 @@ Each table has the following columns:
 
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
-| `/api/tenant/<tenant_id>/inventory-list` | GET | `require_tenant_access(api_mode=True)` | - | `inventory.get_inventory_list` |
-| `/api/tenant/<tenant_id>/inventory-stats` | GET | `require_tenant_access(api_mode=True)` | - | `inventory.get_inventory_stats` |
-| `/api/tenant/<tenant_id>/inventory/sizes` | GET | `require_tenant_access(api_mode=True)` | - | `inventory.get_inventory_sizes` |
-| `/api/tenant/<tenant_id>/inventory/sync` | POST | `require_tenant_access(api_mode=True)` | `sync_inventory` | `inventory.sync_inventory` |
-| `/api/tenant/<tenant_id>/inventory/tree` | GET | `require_tenant_access(api_mode=True)` | - | `inventory.get_inventory_tree` |
-| `/api/tenant/<tenant_id>/orders` | GET | `require_tenant_access(api_mode=True)` | - | `inventory.get_orders` |
-| `/api/tenant/<tenant_id>/orders/<order_id>` | GET | `require_tenant_access(api_mode=True)` | - | `inventory.get_order_details` |
-| `/api/tenant/<tenant_id>/sync-status` | GET | `require_tenant_access(api_mode=True)` | - | `inventory.get_sync_status` |
-| `/api/tenant/<tenant_id>/sync/orders` | POST | `require_tenant_access(api_mode=True)` | `sync_orders` | `inventory.sync_orders` |
-| `/api/tenant/<tenant_id>/targeting/all` | GET | `require_tenant_access(api_mode=True)` | - | `inventory.get_targeting_data` |
-| `/api/tenant/<tenant_id>/targeting/values/<key_id>` | GET | `require_tenant_access(api_mode=True)` | - | `inventory.get_targeting_values` |
+| `/api/tenant/<tenant_id>/inventory-list` | GET | `require_tenant_access()` | - | `inventory.get_inventory_list` |
+| `/api/tenant/<tenant_id>/inventory-stats` | GET | `require_tenant_access()` | - | `inventory.get_inventory_stats` |
+| `/api/tenant/<tenant_id>/inventory/sizes` | GET | `require_tenant_access()` | - | `inventory.get_inventory_sizes` |
+| `/api/tenant/<tenant_id>/inventory/sync` | POST | `require_tenant_access()` | `sync_inventory` | `inventory.sync_inventory` |
+| `/api/tenant/<tenant_id>/inventory/tree` | GET | `require_tenant_access()` | - | `inventory.get_inventory_tree` |
+| `/api/tenant/<tenant_id>/orders` | GET | `require_tenant_access()` | - | `inventory.get_orders` |
+| `/api/tenant/<tenant_id>/orders/<order_id>` | GET | `require_tenant_access()` | - | `inventory.get_order_details` |
+| `/api/tenant/<tenant_id>/sync-status` | GET | `require_tenant_access()` | - | `inventory.get_sync_status` |
+| `/api/tenant/<tenant_id>/sync/orders` | POST | `require_tenant_access()` | `sync_orders` | `inventory.sync_orders` |
+| `/api/tenant/<tenant_id>/targeting/all` | GET | `require_tenant_access()` | - | `inventory.get_targeting_data` |
+| `/api/tenant/<tenant_id>/targeting/values/<key_id>` | GET | `require_tenant_access()` | - | `inventory.get_targeting_values` |
 | `/tenant/<tenant_id>/analyze-ad-server` | GET | `require_auth()` | - | `inventory.analyze_ad_server_inventory` |
 | `/tenant/<tenant_id>/check-inventory-sync` | GET | `require_auth()` | - | `inventory.check_inventory_sync` |
 | `/tenant/<tenant_id>/inventory` | GET | `require_tenant_access()` | - | `inventory.inventory_browser` |
@@ -197,12 +196,12 @@ Each table has the following columns:
 | Path | Methods | Access check | Audit operation | View |
 |---|---|---|---|---|
 | `/tenant/<tenant_id>/inventory-profiles/` | GET | `require_tenant_access()` | - | `inventory_profiles.list_inventory_profiles` |
-| `/tenant/<tenant_id>/inventory-profiles/<int:profile_id>/api` | GET | `require_tenant_access(api_mode=True)` | - | `inventory_profiles.get_inventory_profile_api` |
+| `/tenant/<tenant_id>/inventory-profiles/<int:profile_id>/api` | GET | `require_tenant_access()` | - | `inventory_profiles.get_inventory_profile_api` |
 | `/tenant/<tenant_id>/inventory-profiles/<int:profile_id>/delete` | DELETE, POST | `require_tenant_access()` | `delete_inventory_profile` | `inventory_profiles.delete_inventory_profile` |
 | `/tenant/<tenant_id>/inventory-profiles/<int:profile_id>/edit` | GET, POST | `require_tenant_access()` | `update_inventory_profile` | `inventory_profiles.edit_inventory_profile` |
-| `/tenant/<tenant_id>/inventory-profiles/<int:profile_id>/preview` | GET | `require_tenant_access(api_mode=True)` | - | `inventory_profiles.preview_inventory_profile` |
+| `/tenant/<tenant_id>/inventory-profiles/<int:profile_id>/preview` | GET | `require_tenant_access()` | - | `inventory_profiles.preview_inventory_profile` |
 | `/tenant/<tenant_id>/inventory-profiles/add` | GET, POST | `require_tenant_access()` | `create_inventory_profile` | `inventory_profiles.add_inventory_profile` |
-| `/tenant/<tenant_id>/inventory-profiles/api/list` | GET | `require_tenant_access(api_mode=True)` | - | `inventory_profiles.list_inventory_profiles_api` |
+| `/tenant/<tenant_id>/inventory-profiles/api/list` | GET | `require_tenant_access()` | - | `inventory_profiles.list_inventory_profiles_api` |
 
 ## `src/admin/blueprints/oidc.py`
 
@@ -210,11 +209,11 @@ Each table has the following columns:
 |---|---|---|---|---|
 | `/auth/oidc/callback` | GET | none | - | `oidc.callback` |
 | `/auth/oidc/login/<tenant_id>` | GET | none | - | `oidc.login` |
-| `/auth/oidc/tenant/<tenant_id>/config` | GET | `require_tenant_access(api_mode=True)` | - | `oidc.get_config` |
-| `/auth/oidc/tenant/<tenant_id>/config` | POST | `require_tenant_access(api_mode=True, role=UserRole.ADMIN)` | - | `oidc.save_config` |
-| `/auth/oidc/tenant/<tenant_id>/disable` | POST | `require_tenant_access(api_mode=True, role=UserRole.ADMIN)` | - | `oidc.disable` |
-| `/auth/oidc/tenant/<tenant_id>/enable` | POST | `require_tenant_access(api_mode=True, role=UserRole.ADMIN)` | - | `oidc.enable` |
-| `/auth/oidc/test/<tenant_id>` | GET | none | - | `oidc.test_initiate` |
+| `/auth/oidc/tenant/<tenant_id>/config` | GET | `require_tenant_access()` | - | `oidc.get_config` |
+| `/auth/oidc/tenant/<tenant_id>/config` | POST | `require_tenant_access(role=UserRole.ADMIN)` | - | `oidc.save_config` |
+| `/auth/oidc/tenant/<tenant_id>/disable` | POST | `require_tenant_access(role=UserRole.ADMIN)` | - | `oidc.disable` |
+| `/auth/oidc/tenant/<tenant_id>/enable` | POST | `require_tenant_access(role=UserRole.ADMIN)` | - | `oidc.enable` |
+| `/auth/oidc/test/<tenant_id>` | POST | `require_tenant_access(role=UserRole.ADMIN)` | - | `oidc.test_initiate` |
 
 ## `src/admin/blueprints/operations.py`
 
@@ -232,7 +231,7 @@ Each table has the following columns:
 |---|---|---|---|---|
 | `/tenant/<tenant_id>/policy/` | GET | `require_auth()` | - | `policy.index` |
 | `/tenant/<tenant_id>/policy/review/<task_id>` | GET, POST | `require_auth()` | `review_policy_task` | `policy.review_task` |
-| `/tenant/<tenant_id>/policy/rules` | GET, POST | `require_auth()` | - | `policy.rules` |
+| `/tenant/<tenant_id>/policy/rules` | GET, POST | `require_tenant_access()` | - | `policy.rules` |
 | `/tenant/<tenant_id>/policy/update` | POST | `require_auth()` | `update_policy` | `policy.update` |
 
 ## `src/admin/blueprints/principals.py`
@@ -261,9 +260,9 @@ Each table has the following columns:
 | `/tenant/<tenant_id>/products/` | GET | `require_tenant_access()` | - | `products.list_products` |
 | `/tenant/<tenant_id>/products/<product_id>/delete` | DELETE | `require_tenant_access()` | - | `products.delete_product` |
 | `/tenant/<tenant_id>/products/<product_id>/edit` | GET, POST | `require_tenant_access()` | `edit_product` | `products.edit_product` |
-| `/tenant/<tenant_id>/products/<product_id>/inventory` | GET | `require_tenant_access(api_mode=True)` | - | `products.get_product_inventory` |
-| `/tenant/<tenant_id>/products/<product_id>/inventory` | POST | `require_tenant_access(api_mode=True)` | `assign_inventory_to_product` | `products.assign_inventory_to_product` |
-| `/tenant/<tenant_id>/products/<product_id>/inventory/<int:mapping_id>` | DELETE | `require_tenant_access(api_mode=True)` | `unassign_inventory_from_product` | `products.unassign_inventory_from_product` |
+| `/tenant/<tenant_id>/products/<product_id>/inventory` | GET | `require_tenant_access()` | - | `products.get_product_inventory` |
+| `/tenant/<tenant_id>/products/<product_id>/inventory` | POST | `require_tenant_access()` | `assign_inventory_to_product` | `products.assign_inventory_to_product` |
+| `/tenant/<tenant_id>/products/<product_id>/inventory/<int:mapping_id>` | DELETE | `require_tenant_access()` | `unassign_inventory_from_product` | `products.unassign_inventory_from_product` |
 | `/tenant/<tenant_id>/products/add` | GET, POST | `require_tenant_access()` | `add_product` | `products.add_product` |
 
 ## `src/admin/blueprints/public.py`
@@ -306,9 +305,9 @@ Each table has the following columns:
 | `/tenant/<tenant_id>/settings/access/test` | POST | `require_tenant_access()` | `test_domain_access` | `settings.test_domain_access` |
 | `/tenant/<tenant_id>/settings/adapter` | POST | `require_tenant_access()` | `update_adapter` | `settings.update_adapter` |
 | `/tenant/<tenant_id>/settings/ai` | POST | `require_tenant_access()` | `update_ai` | `settings.update_ai` |
-| `/tenant/<tenant_id>/settings/ai/models` | GET | `require_tenant_access(api_mode=True)` | - | `settings.get_ai_models` |
-| `/tenant/<tenant_id>/settings/ai/test` | POST | `require_tenant_access(api_mode=True)` | - | `settings.test_ai_connection` |
-| `/tenant/<tenant_id>/settings/ai/test-logfire` | POST | `require_tenant_access(api_mode=True)` | - | `settings.test_logfire_connection` |
+| `/tenant/<tenant_id>/settings/ai/models` | GET | `require_tenant_access()` | - | `settings.get_ai_models` |
+| `/tenant/<tenant_id>/settings/ai/test` | POST | `require_tenant_access()` | - | `settings.test_ai_connection` |
+| `/tenant/<tenant_id>/settings/ai/test-logfire` | POST | `require_tenant_access()` | - | `settings.test_logfire_connection` |
 | `/tenant/<tenant_id>/settings/approximated-domain-status` | POST | `require_tenant_access()` | - | `settings.check_approximated_domain_status` |
 | `/tenant/<tenant_id>/settings/approximated-register-domain` | POST | `require_tenant_access()` | `register_approximated_domain` | `settings.register_approximated_domain` |
 | `/tenant/<tenant_id>/settings/approximated-token` | POST | `require_tenant_access()` | - | `settings.get_approximated_token` |
