@@ -266,12 +266,11 @@ fixture by way of `_admin_env_builder`.
 3. **The conftest applies the `admin` entity marker automatically** to any
    scenario carrying a `T-ADMIN-` tag, so `pytest tests/bdd/ -m admin` selects
    the admin scenarios. `make test-entity` does not collect `tests/bdd`.
-4. **A missing step binding xfails at runtime — there is no `@pending` tag.**
-   pytest-bdd reports the missing definition and the conftest converts the
-   failure, so the code is the source of truth and no metadata goes stale
-   (the `pytest_runtest_makereport` hook in `tests/bdd/conftest.py`). A scenario
-   that falls dormant still fails, since `tests/bdd/dormant_scenarios.txt` is a
-   shrink-only baseline enforced per test. Declare an intent the live stack
+4. **A missing step binding fails the run; there is no `@pending` tag.**
+   Only scenarios already recorded in the shrink-only
+   `tests/bdd/dormant_scenarios.txt` are reported as dormant instead of failing
+   (`_record_dormancy`, called by the `pytest_runtest_makereport` hook in
+   `tests/bdd/conftest.py`). Declare an intent the live stack
    cannot serve at the env method with `e2e_unsupported(...)` instead
    (defined in `tests/harness/_realize.py`); it arrives as a non-strict xfail
    carrying its reason, set by the same hook.
