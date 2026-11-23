@@ -161,6 +161,10 @@ class OrderNotFound(RecordNotFound):
     MESSAGE = "Order not found"
 
 
+class LineItemNotFound(RecordNotFound):
+    MESSAGE = "Line item not found"
+
+
 class SyncJobNotFound(RecordNotFound):
     MESSAGE = "Sync job not found"
 

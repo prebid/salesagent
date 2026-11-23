@@ -22,7 +22,6 @@ from src.core.database.models import AdapterConfig, SyncJob, Tenant
 from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.operator_errors import FormIssue, InvalidFormInput
 from src.services.gam_inventory_service import db_session as gam_db_session
-from src.services.sync_jobs import recording_failure
 
 logger = logging.getLogger(__name__)
 
@@ -423,64 +422,14 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
 
         adapter_config = AdapterConfigRepository(db_session(), tenant_id).require_gam_config()
 
-        # Create sync job
-        sync_id = f"orders_sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"
-        sync_job = SyncJob(
-            sync_id=sync_id,
-            tenant_id=tenant_id,
-            adapter_type="google_ad_manager",
-            sync_type="orders",
-            status="running",
-            started_at=datetime.now(UTC),
-            triggered_by="api",
-            triggered_by_id="tenant_management_api",
-        )
-
-        db_session.add(sync_job)
-        db_session.commit()
-
         # A failure marks the job failed and raises SyncFailed, which the admin error
         # handler answers with the text the job stores.
-        with recording_failure(db_session(), sync_job, f"Orders sync failed for tenant {tenant_id}"):
-            # Initialize GAM client
-            from src.adapters.google_ad_manager import GoogleAdManager
-            from src.core.schemas import Principal
-            from src.services.gam_orders_service import GAMOrdersService
+        from src.services.gam_orders_service import GAMOrdersService
 
-            # Create dummy principal for sync (no advertiser needed for order discovery)
-            principal = Principal(
-                principal_id="system",
-                name="System",
-                platform_mappings={},  # No advertiser_id needed for order discovery
-            )
-
-            # Build GAM config
-            from src.adapters.gam import build_gam_config_from_adapter
-
-            gam_config = build_gam_config_from_adapter(adapter_config)
-
-            adapter = GoogleAdManager(
-                gam_config,
-                principal,
-                network_code=adapter_config.gam_network_code or "",
-                advertiser_id=None,  # Not needed for order discovery
-                trafficker_id=adapter_config.gam_trafficker_id or None,
-                tenant_id=tenant_id,
-                tenant_ai_config=None,  # names no order, so no AI configuration is read
-            )
-
-            # Perform sync
-            service = GAMOrdersService(db_session())
-            summary = service.sync_tenant_orders(tenant_id, adapter.client)
-
-            # Update sync job with results
-            sync_job.status = "completed"
-            # Type ignore for SQLAlchemy DateTime column assignment
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.summary = json.dumps(summary)
-            db_session.commit()
-
-        return jsonify({"sync_id": sync_id, "status": "completed", "summary": summary}), 200
+        answer = GAMOrdersService(db_session()).sync_tenant_orders_as_job(
+            adapter_config, triggered_by="api", triggered_by_id="tenant_management_api"
+        )
+        return jsonify(answer), 200
 
     finally:
         db_session.remove()

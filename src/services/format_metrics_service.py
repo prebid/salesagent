@@ -278,7 +278,6 @@ def aggregate_all_tenants(period_days: int = 30) -> dict[str, Any]:
     Returns:
         Summary of aggregation across all tenants
     """
-    from src.adapters.gam.auth import GAMAuthManager
     from src.adapters.gam.client import GAMClientManager
     from src.core.database.models import AdapterConfig
 
@@ -310,14 +309,7 @@ def aggregate_all_tenants(period_days: int = 30) -> dict[str, Any]:
             logger.info(f"Processing tenant: {tenant.name} ({tenant_id})")
 
             try:
-                # Initialize GAM client via repository
-                from src.core.database.repositories.adapter_config import AdapterConfigRepository
-
-                adapter_repo = AdapterConfigRepository(db_session, tenant_id)
-                gam_config = adapter_repo.get_gam_config(adapter_config)
-                auth_manager = GAMAuthManager(gam_config)
-                client_manager = GAMClientManager(gam_config, adapter_config.gam_network_code)
-                gam_client = client_manager.get_client()
+                gam_client = GAMClientManager.for_adapter_config(adapter_config).get_client()
 
                 # Aggregate metrics
                 service = FormatMetricsAggregationService(db_session)

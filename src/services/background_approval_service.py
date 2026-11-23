@@ -96,12 +96,9 @@ def _run_approval_polling_thread(
             with get_db_session() as db:
                 from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-                adapter_repo = AdapterConfigRepository(db, tenant_id)
-                adapter_config = adapter_repo.require_gam_config()
-                gam_config = adapter_repo.get_gam_config(adapter_config)
+                adapter_config = AdapterConfigRepository(db, tenant_id).require_gam_config()
+                client_manager = GAMClientManager.for_adapter_config(adapter_config)
 
-            # Initialize GAM client and orders manager
-            client_manager = GAMClientManager(gam_config, gam_config["network_code"])
             orders_manager = GAMOrdersManager(client_manager)
 
         except GAMNotConnected:

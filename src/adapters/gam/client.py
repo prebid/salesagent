@@ -6,11 +6,14 @@ Provides centralized access to GAM API services with health checking.
 """
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from googleads import ad_manager
 
 from src.core.exceptions import AdCPConfigurationError
+
+if TYPE_CHECKING:
+    from src.core.database.models import AdapterConfig
 
 from .auth import GAMAuthManager
 from .utils.error_handler import map_gam_exception
@@ -46,6 +49,19 @@ class GAMClientManager:
         self.auth_manager = GAMAuthManager(config)
         self._client: ad_manager.AdManagerClient | None = None
         self._health_checker: GAMHealthChecker | None = None
+
+    @classmethod
+    def for_adapter_config(cls, adapter_config: "AdapterConfig") -> "GAMClientManager":
+        """The client manager for a tenant's stored GAM connection, OAuth or service account.
+
+        The one way to build a GAM client from an ``AdapterConfig``: its credentials are
+        chosen by ``build_gam_config_from_adapter``. Pass a config that
+        ``AdapterConfigRepository.require_gam_config`` returned.
+        """
+        from src.adapters.gam import build_gam_config_from_adapter
+
+        config = build_gam_config_from_adapter(adapter_config)
+        return cls(config, config["network_code"])
 
     def get_client(self) -> ad_manager.AdManagerClient:
         """Get or create the GAM API client.

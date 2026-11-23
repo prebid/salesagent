@@ -196,27 +196,22 @@ def _run_approval_thread(
         logger.info(f"[{approval_id}] Starting order approval polling for order {order_id}")
 
         # Import here to avoid circular dependencies
+        from src.adapters.gam.client import GAMClientManager
         from src.adapters.gam.managers.orders import GAMOrdersManager
 
         # Get adapter config via repository
         with get_db_session() as db:
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-            adapter_repo = AdapterConfigRepository(db, tenant_id)
             try:
-                adapter_config = adapter_repo.require_gam_config()
+                adapter_config = AdapterConfigRepository(db, tenant_id).require_gam_config()
             except GAMNotConnected:
                 _mark_approval_failed(
                     approval_id, GAMNotConnected.MESSAGE, webhook_url, tenant_id, principal_id, media_buy_id
                 )
                 return
+            client_manager = GAMClientManager.for_adapter_config(adapter_config)
 
-            gam_config = adapter_repo.get_gam_config(adapter_config)
-
-        # Create GAM client
-        from src.adapters.gam.client import GAMClientManager
-
-        client_manager = GAMClientManager(gam_config, gam_config["network_code"])
         orders_manager = GAMOrdersManager(client_manager)
 
         # Poll GAM approval endpoint

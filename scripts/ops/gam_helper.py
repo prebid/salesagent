@@ -14,23 +14,18 @@ logger = logging.getLogger(__name__)
 def get_ad_manager_client_for_tenant(tenant_id: str) -> ad_manager.AdManagerClient:
     """A Google Ad Manager client for *tenant_id*, authenticated by its stored connection.
 
-    The connection is the tenant's OAuth refresh token or its service account, built into
-    credentials by ``GAMAuthManager`` as every other GAM call site does. Token problems
-    surface at the first API call.
+    Built by ``GAMClientManager.for_adapter_config``, the one way to build a client from the
+    tenant's OAuth refresh token or service account. Token problems surface at the first
+    API call.
 
     Raises:
         GAMNotConnected: If the tenant has no GAM network code or no credentials.
     """
-    from src.adapters.gam import build_gam_config_from_adapter
-    from src.adapters.gam.auth import GAMAuthManager
+    from src.adapters.gam.client import GAMClientManager
 
     with get_db_session() as db_session:
         adapter_config = AdapterConfigRepository(db_session, tenant_id).require_gam_config()
-        network_code = adapter_config.gam_network_code
-        credentials = GAMAuthManager(build_gam_config_from_adapter(adapter_config)).get_credentials()
-
-    logger.info(f"Created GAM client for tenant {tenant_id} (network: {network_code})")
-    return ad_manager.AdManagerClient(credentials, "Prebid Sales Agent", network_code=network_code)
+        return GAMClientManager.for_adapter_config(adapter_config).get_client()
 
 
 def test_gam_connection(tenant_id: str) -> dict:

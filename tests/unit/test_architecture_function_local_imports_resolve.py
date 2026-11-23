@@ -65,26 +65,17 @@ SCANNED = ("src", "tests", "scripts")
 
 #: Modules that DO NOT EXIST YET and are deliberately referenced ahead of implementation.
 #: MAY ONLY SHRINK -- an entry comes off when the module lands, never on for a new dangling
-#: name. Both entries here PRE-DATE this guard and are absent from every ref in the RFC 9421
-#: merge (the merge base, both parents and the result), so neither is a merge regression;
-#: they are the standing debt the guard found on its first run.
+#: name. The entry here PRE-DATES this guard and is absent from every ref in the RFC 9421
+#: merge (the merge base, both parents and the result), so it is not a merge regression;
+#: it is the standing debt the guard found on its first run.
 #:
 #: ``src.core.tools.property_list`` -- 71 sites across three integration modules whose own
 #: docstring says "Tests for unimplemented _impl functions are marked xfail". Tests written
 #: ahead of the implementation, which is the sanctioned stub shape; the resolver that DOES
 #: exist is ``src.core.property_list_resolver``.
-#:
-#: ``src.adapters.gam_order_sync`` -- ONE site, and unlike the others it is PRODUCTION:
-#: ``src/admin/blueprints/inventory.py:400`` imports ``sync_gam_orders`` inside the
-#: order-sync endpoint. The module has never existed on any of these refs, so that endpoint
-#: raises ImportError into its own ``except Exception`` and answers 500. It is dead, not
-#: merely unimplemented, and it wants a GitHub issue -- recorded here rather than silently
-#: tolerated, because the point of this guard is that a deferred crash should be visible
-#: before a user finds it.
 _ABSENT_MODULES: frozenset[str] = frozenset(
     {
         "src.core.tools.property_list",
-        "src.adapters.gam_order_sync",
     }
 )
 

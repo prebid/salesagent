@@ -12,7 +12,6 @@ from typing import Any
 
 from sqlalchemy import select
 
-from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
 from src.core.operator_errors import GAMNotConnected, StateConflict, safe_error_message
@@ -177,9 +176,7 @@ def _run_sync_thread(
         logger.info(f"[{sync_id}] Starting inventory sync for {tenant_id}")
 
         # Import here to avoid circular dependencies
-        import google.oauth2.service_account
-        from googleads import ad_manager, oauth2
-
+        from src.adapters.gam.client import GAMClientManager
         from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
         from src.core.database.models import Tenant
         from src.services.gam_inventory_service import GAMInventoryService
@@ -199,30 +196,7 @@ def _run_sync_thread(
                 record_sync_failure(tenant_id, sync_id, GAMNotConnected.MESSAGE)
                 return
 
-            # The service account when the tenant authenticates with one, else OAuth, as
-            # build_gam_config_from_adapter chooses.
-            service_account_json_str = adapter_config.gam_service_account_json
-            if adapter_config.gam_auth_method == "service_account" and service_account_json_str:
-                import json as json_mod
-
-                service_account_info = json_mod.loads(service_account_json_str)
-                credentials = google.oauth2.service_account.Credentials.from_service_account_info(
-                    service_account_info, scopes=["https://www.googleapis.com/auth/dfp"]
-                )
-                oauth2_client = oauth2.GoogleCredentialsClient(credentials)
-                client = ad_manager.AdManagerClient(
-                    oauth2_client, "Prebid Sales Agent", network_code=adapter_config.gam_network_code
-                )
-            else:  # OAuth
-                auth_settings = get_settings().auth
-                oauth2_client = oauth2.GoogleRefreshTokenClient(
-                    client_id=auth_settings.gam_oauth_client_id,
-                    client_secret=auth_settings.gam_oauth_client_secret,
-                    refresh_token=adapter_config.gam_refresh_token,
-                )
-                client = ad_manager.AdManagerClient(
-                    oauth2_client, "Prebid Sales Agent", network_code=adapter_config.gam_network_code
-                )
+            client = GAMClientManager.for_adapter_config(adapter_config).get_client()
 
         # Get last successful sync time for incremental mode
         last_sync_time = None
