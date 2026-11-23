@@ -59,6 +59,7 @@ from src.core.schemas import (
     UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
+from src.core.stored_package import StoredPackage
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.factories.creative import stamp_format_identity
 from tests.factories.media_buy import (
@@ -85,6 +86,19 @@ def _stored_assignment(creative_id: str) -> CreativeAssignment:
     mock whose unset columns answer with another mock.
     """
     return CreativeAssignment(creative_id=creative_id, weight=100)
+
+
+#: The one stored package the update fixtures below hold: what the tool reads through its unit
+#: (``get_stored_packages``) and must pass the adapter unchanged.
+_STORED_PACKAGE = StoredPackage(
+    package_id="pkg_1",
+    platform_line_item_id="li_1",
+    pricing_model="cpm",
+    currency="USD",
+    paused=False,
+    product_id="prod_1",
+    budget=5000.0,
+)
 
 
 def _stub_media_buy_reads(repo, row, media_buy_id: str | None = None):
@@ -1505,6 +1519,7 @@ class TestUpdateMediaBuyPauseResume:
             _stub_mb.name = None
             _stub_mb.status = "active"
             _stub_media_buy_reads(mock_uow.media_buys, _stub_mb)
+            mock_uow.media_buys.get_stored_packages.return_value = [_STORED_PACKAGE]
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -1514,7 +1529,12 @@ class TestUpdateMediaBuyPauseResume:
         assert isinstance(result, UpdateMediaBuySuccess)
         # Adapter should be called with pause action
         adapter.update_media_buy.assert_called_once_with(
-            media_buy_id=ANY, action="pause_media_buy", package_id=ANY, budget=ANY, today=ANY, packages=[]
+            media_buy_id=ANY,
+            action="pause_media_buy",
+            package_id=ANY,
+            budget=ANY,
+            today=ANY,
+            packages=[_STORED_PACKAGE],
         )
 
     def test_resume_paused_media_buy(self):
@@ -1567,6 +1587,7 @@ class TestUpdateMediaBuyPauseResume:
             _stub_mb.name = None
             _stub_mb.status = "paused"
             _stub_media_buy_reads(mock_uow.media_buys, _stub_mb)
+            mock_uow.media_buys.get_stored_packages.return_value = [_STORED_PACKAGE]
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -1575,7 +1596,12 @@ class TestUpdateMediaBuyPauseResume:
 
         assert isinstance(result, UpdateMediaBuySuccess)
         adapter.update_media_buy.assert_called_once_with(
-            media_buy_id=ANY, action="resume_media_buy", package_id=ANY, budget=ANY, today=ANY, packages=[]
+            media_buy_id=ANY,
+            action="resume_media_buy",
+            package_id=ANY,
+            budget=ANY,
+            today=ANY,
+            packages=[_STORED_PACKAGE],
         )
 
     def test_pause_skips_budget_validation(self):
@@ -2685,6 +2711,7 @@ class TestUpdateMediaBuyAdapterFailure:
             mock_uow_cls.return_value = mock_uow
 
             _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
+            mock_uow.media_buys.get_stored_packages.return_value = [_STORED_PACKAGE]
 
             with pytest.raises(AdCPAdapterError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
@@ -2697,7 +2724,7 @@ class TestUpdateMediaBuyAdapterFailure:
             package_id="pkg_1",
             budget=3000,
             today=ANY,
-            packages=[],
+            packages=[_STORED_PACKAGE],
         )
         assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
         # Nothing was applied: the branch hands the change to the adapter before it writes
