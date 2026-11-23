@@ -471,7 +471,7 @@ Target users based on local weather conditions for maximum relevance.</div>
             </small>
             {% if product and product.product_card and product.product_card.manifest and product.product_card.manifest.product_image %}
             <div style="margin-top: 0.5rem;">
-                <img src="{{ product.product_card.manifest.product_image }}" alt="Current product image" style="max-width: 200px; border: 1px solid #ddd; border-radius: 4px;">
+                <img src="{{ product.product_card.manifest.product_image|safe_url }}" alt="Current product image" style="max-width: 200px; border: 1px solid #ddd; border-radius: 4px;">
             </div>
             {% endif %}
         </div>
@@ -627,7 +627,7 @@ async function extractSizesFromInventory() {
         try {
             const idsParam = allIds.join(',');
             const response = await fetch(
-                `{{ url_for('inventory.get_inventory_sizes', tenant_id=tenant_id) }}?ids=${encodeURIComponent(idsParam)}`,
+                `${ {{ url_for('inventory.get_inventory_sizes', tenant_id=tenant_id)|tojson }} }?ids=${encodeURIComponent(idsParam)}`,
                 { credentials: 'same-origin' }
             );
             const data = await response.json();
@@ -683,9 +683,9 @@ function updateSizeChipsPanel() {
         const displaySize = sizeKey.replace('x', '×');
 
         return `
-            <button type="button" class="size-chip active" data-size="${sizeKey}">
-                <span class="size-label">${displaySize}</span>
-                <span class="unit-count">(${count} ${count === 1 ? 'unit' : 'units'})</span>
+            <button type="button" class="size-chip active" data-size="${escapeHtml(sizeKey)}">
+                <span class="size-label">${escapeHtml(displaySize)}</span>
+                <span class="unit-count">(${escapeHtml(count)} ${count === 1 ? 'unit' : 'units'})</span>
             </button>
         `;
     }).join('');
@@ -829,7 +829,7 @@ function updateSelectedDisplay(containerId, names, ids) {
     } else {
         container.innerHTML = names.map((name, idx) => {
             const id = ids[idx];
-            let sizesText = '';
+            let sizesHtml = ''; // markup; every value in it goes through escapeHtml
 
             // Show sizes inline for ad units
             if (isAdUnit) {
@@ -842,21 +842,21 @@ function updateSelectedDisplay(containerId, names, ids) {
                     const sizeStrings = itemSizes
                         .map(s => `${s.width}×${s.height}`)
                         .join(', ');
-                    sizesText = ` <small style="color: #28a745; font-weight: 500;">(${sizeStrings})</small>`;
+                    sizesHtml = ` <small style="color: #28a745; font-weight: 500;">(${escapeHtml(sizeStrings)})</small>`;
                 }
             } else {
                 // Show ad unit count for placements
                 const item = inventoryCache.placements.get(id);
                 if (item && item.metadata && item.metadata.ad_unit_ids) {
                     const count = item.metadata.ad_unit_ids.length;
-                    sizesText = ` <small style="color: #666;">(${count} ad ${count === 1 ? 'unit' : 'units'})</small>`;
+                    sizesHtml = ` <small style="color: #666;">(${escapeHtml(count)} ad ${count === 1 ? 'unit' : 'units'})</small>`;
                 }
             }
 
             return `
                 <span class="selected-item" style="display: inline-block; background: #e7f3ff; color: #000; padding: 0.25rem 0.5rem; margin: 0.25rem; border-radius: 4px;">
-                    ${name} <small style="color: #666;">(${id})</small>${sizesText}
-                    <button type="button" onclick="removeSelectedItem('${containerId}', '${id}')" style="border: none; background: none; color: #666; cursor: pointer; margin-left: 0.25rem;">×</button>
+                    ${escapeHtml(name)} <small style="color: #666;">(${escapeHtml(id)})</small>${sizesHtml}
+                    <button type="button" onclick="removeSelectedItem(${jsArg(containerId)}, ${jsArg(String(id))})" style="border: none; background: none; color: #666; cursor: pointer; margin-left: 0.25rem;">×</button>
                 </span>
             `;
         }).join('');
@@ -912,7 +912,7 @@ async function autoSuggestFormats(selectedCheckboxes) {
     // If "include children" is checked, fetch all ad units and find children
     if (includeChildren && selectedPaths.length > 0) {
         try {
-            const url = `{{ url_for('inventory.get_inventory_list', tenant_id=tenant_id) }}?type=ad_unit`;
+            const url = `${ {{ url_for('inventory.get_inventory_list', tenant_id=tenant_id)|tojson }} }?type=ad_unit`;
             const response = await fetch(url, { credentials: 'same-origin' });
             const data = await response.json();
 
@@ -997,18 +997,18 @@ async function autoSuggestFormats(selectedCheckboxes) {
     });
 
     // Display search targets grouped by type
-    const searchTargetHTML = Object.entries(constraintsByType)
+    const searchTargetHtml = Object.entries(constraintsByType)
         .map(([type, sizes]) => {
             // Get unique sizes
             const uniqueSizes = [...new Set(sizes)];
             return `
                 <span style="background: #1565c0; color: white; padding: 0.4rem 0.75rem; border-radius: 4px; font-size: 0.9rem;">
-                    ${type} formats ≤ ${uniqueSizes.join(', ')}
+                    ${escapeHtml(type)} formats ≤ ${escapeHtml(uniqueSizes.join(', '))}
                 </span>
             `;
         }).join('');
 
-    searchTargetList.innerHTML = searchTargetHTML;
+    searchTargetList.innerHTML = searchTargetHtml;
     searchTargets.style.display = 'block';
 
     // Filter and display matching formats
@@ -1244,7 +1244,7 @@ function handleProfileChange(profileId) {
 // Load and display inventory profile preview
 async function loadProfilePreview(profileId) {
     try {
-        const url = `{{ url_for('inventory_profiles.preview_inventory_profile', tenant_id=tenant_id, profile_id=0) }}`.replace('/0/', `/${profileId}/`);
+        const url = `${ {{ url_for('inventory_profiles.preview_inventory_profile', tenant_id=tenant_id, profile_id=0)|tojson }} }`.replace('/0/', `/${profileId}/`);
         const response = await fetch(url, { credentials: 'same-origin' });
         const data = await response.json();
 
@@ -1258,21 +1258,22 @@ async function loadProfilePreview(profileId) {
         document.getElementById('profile-preview-description').textContent = data.description || 'No description';
 
         // Build details HTML
-        const details = [];
+        const detailPartsHtml = [];
         if (data.ad_unit_count > 0) {
-            details.push(`<span><strong>${data.ad_unit_count}</strong> ad unit${data.ad_unit_count !== 1 ? 's' : ''}</span>`);
+            detailPartsHtml.push(`<span><strong>${escapeHtml(data.ad_unit_count)}</strong> ad unit${data.ad_unit_count !== 1 ? 's' : ''}</span>`);
         }
         if (data.placement_count > 0) {
-            details.push(`<span><strong>${data.placement_count}</strong> placement${data.placement_count !== 1 ? 's' : ''}</span>`);
+            detailPartsHtml.push(`<span><strong>${escapeHtml(data.placement_count)}</strong> placement${data.placement_count !== 1 ? 's' : ''}</span>`);
         }
         if (data.format_count > 0) {
-            details.push(`<span><strong>${data.format_count}</strong> format${data.format_count !== 1 ? 's' : ''}</span>`);
+            detailPartsHtml.push(`<span><strong>${escapeHtml(data.format_count)}</strong> format${data.format_count !== 1 ? 's' : ''}</span>`);
         }
-        document.getElementById('profile-preview-details').innerHTML = details.join('<span style="color: #ccc;">|</span>');
+        const detailsHtml = detailPartsHtml.join('<span style="color: #ccc;">|</span>');
+        document.getElementById('profile-preview-details').innerHTML = detailsHtml;
 
         // Update edit link
         const editLink = document.getElementById('profile-preview-edit-link');
-        editLink.href = `{{ url_for('inventory_profiles.edit_inventory_profile', tenant_id=tenant_id, profile_id=0) }}`.replace('/0/', `/${profileId}/`);
+        editLink.href = `${ {{ url_for('inventory_profiles.edit_inventory_profile', tenant_id=tenant_id, profile_id=0)|tojson }} }`.replace('/0/', `/${profileId}/`);
 
     } catch (e) {
         console.error('Failed to load profile preview:', e);
@@ -1286,27 +1287,28 @@ let pricingOptionIndex = 0;
 function addPricingOption(existingData = null) {
     const container = document.getElementById('pricing-options-container');
     const index = pricingOptionIndex++;
+    const model = existingData && existingData.pricing_model ? existingData.pricing_model.toLowerCase() : '';
 
     const optionHtml = `
-        <div class="pricing-option" id="pricing-option-${index}" style="border: 1px solid #dee2e6; border-radius: 4px; padding: 1rem; margin-bottom: 1rem; background: white;">
+        <div class="pricing-option" id="pricing-option-${escapeHtml(index)}" style="border: 1px solid #dee2e6; border-radius: 4px; padding: 1rem; margin-bottom: 1rem; background: white;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                <h5 style="margin: 0;">Pricing Option #${index + 1}</h5>
-                <button type="button" class="btn btn-secondary" onclick="removePricingOption(${index})" style="padding: 0.25rem 0.5rem; font-size: 0.85rem;">Remove</button>
+                <h5 style="margin: 0;">Pricing Option #${escapeHtml(index + 1)}</h5>
+                <button type="button" class="btn btn-secondary" onclick="removePricingOption(${jsArg(index)})" style="padding: 0.25rem 0.5rem; font-size: 0.85rem;">Remove</button>
             </div>
 
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
                 <div class="form-group">
                     <label>Pricing Model *</label>
-                    <select name="pricing_model_${index}" class="pricing-model-select" onchange="updatePricingFields${index}()" required>
+                    <select name="pricing_model_${escapeHtml(index)}" class="pricing-model-select" onchange="updatePricingFields${jsArg(index)}()" required>
                         <option value="">Select...</option>
                         <optgroup label="Guaranteed (Fixed Price)">
-                            <option value="cpm_fixed" ${existingData && existingData.pricing_model?.toLowerCase() === 'cpm' && existingData.is_fixed === true ? 'selected' : ''}>CPM - Fixed Rate (Cost per 1,000 impressions)</option>
-                            <option value="flat_rate" ${existingData && existingData.pricing_model?.toLowerCase() === 'flat_rate' ? 'selected' : ''}>Flat Rate - Fixed Campaign Cost (Sponsorship)</option>
+                            <option value="cpm_fixed" ${model === 'cpm' && existingData.is_fixed === true ? 'selected' : ''}>CPM - Fixed Rate (Cost per 1,000 impressions)</option>
+                            <option value="flat_rate" ${model === 'flat_rate' ? 'selected' : ''}>Flat Rate - Fixed Campaign Cost (Sponsorship)</option>
                         </optgroup>
                         <optgroup label="Non-Guaranteed (Auction/Bidding)">
-                            <option value="cpm_auction" ${existingData && existingData.pricing_model?.toLowerCase() === 'cpm' && existingData.is_fixed === false ? 'selected' : ''}>CPM - Auction (Floor price bidding)</option>
-                            <option value="vcpm" ${existingData && existingData.pricing_model?.toLowerCase() === 'vcpm' ? 'selected' : ''}>VCPM - Auction (Viewable impressions)</option>
-                            <option value="cpc" ${existingData && existingData.pricing_model?.toLowerCase() === 'cpc' ? 'selected' : ''}>CPC - Auction (Cost per click)</option>
+                            <option value="cpm_auction" ${model === 'cpm' && existingData.is_fixed === false ? 'selected' : ''}>CPM - Auction (Floor price bidding)</option>
+                            <option value="vcpm" ${model === 'vcpm' ? 'selected' : ''}>VCPM - Auction (Viewable impressions)</option>
+                            <option value="cpc" ${model === 'cpc' ? 'selected' : ''}>CPC - Auction (Cost per click)</option>
                         </optgroup>
                     </select>
                     <small style="color: #666;">All pricing models shown are supported by Google Ad Manager.</small>
@@ -1314,30 +1316,30 @@ function addPricingOption(existingData = null) {
 
                 <div class="form-group">
                     <label>Currency *</label>
-                    <select name="currency_${index}" required>
+                    <select name="currency_${escapeHtml(index)}" required>
                         {% for currency in currencies %}
-                        <option value="{{ currency }}" ${existingData && existingData.currency === '{{ currency }}' ? 'selected' : ''}>{{ currency }}</option>
+                        <option value="${escapeHtml({{ currency|tojson }})}" ${existingData && existingData.currency === {{ currency|tojson }} ? 'selected' : ''}>${escapeHtml({{ currency|tojson }})}</option>
                         {% endfor %}
                     </select>
                 </div>
             </div>
 
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-                <div class="form-group" id="rate-group-${index}">
+                <div class="form-group" id="rate-group-${escapeHtml(index)}">
                     <label>Rate *</label>
-                    <input type="number" name="rate_${index}" step="0.01" min="0" placeholder="e.g., 12.50" value="${existingData && existingData.rate ? existingData.rate : ''}">
+                    <input type="number" name="rate_${escapeHtml(index)}" step="0.01" min="0" placeholder="e.g., 12.50" value="${escapeHtml(existingData && existingData.rate ? existingData.rate : '')}">
                     <small style="color: #666;">Price per unit: CPM=$12.50 per 1K imps, CPC=$2.50 per click, FLAT_RATE=$5000 total campaign</small>
                 </div>
 
-                <div class="form-group" id="floor-group-${index}" style="display: none;">
+                <div class="form-group" id="floor-group-${escapeHtml(index)}" style="display: none;">
                     <label>Floor Price *</label>
-                    <input type="number" name="floor_${index}" step="0.01" min="0" placeholder="Minimum bid" value="${existingData && existingData.price_guidance ? existingData.price_guidance.floor : ''}">
+                    <input type="number" name="floor_${escapeHtml(index)}" step="0.01" min="0" placeholder="Minimum bid" value="${escapeHtml(existingData && existingData.price_guidance ? existingData.price_guidance.floor : '')}">
                     <small style="color: #666;">Minimum acceptable price</small>
                 </div>
 
                 <div class="form-group">
                     <label>Min Spend Per Package</label>
-                    <input type="number" name="min_spend_${index}" step="0.01" min="0" placeholder="Optional" value="${existingData && existingData.min_spend_per_package ? existingData.min_spend_per_package : ''}">
+                    <input type="number" name="min_spend_${escapeHtml(index)}" step="0.01" min="0" placeholder="Optional" value="${escapeHtml(existingData && existingData.min_spend_per_package ? existingData.min_spend_per_package : '')}">
                     <small style="color: #666;">Minimum spend required for this pricing option</small>
                 </div>
             </div>
@@ -1552,7 +1554,7 @@ function filterGAMFormats() {
 
         // Fetch TREE data (not flat list) to get hierarchical structure with children
         // This is critical for size extraction from child ad units
-        fetch(`{{ url_for('inventory.get_inventory_tree', tenant_id=tenant_id) }}`, { credentials: 'same-origin' })
+        fetch(`${ {{ url_for('inventory.get_inventory_tree', tenant_id=tenant_id)|tojson }} }`, { credentials: 'same-origin' })
             .then(response => response.json())
             .then(data => {
                 console.log('[DEBUG] Tree API returned', data.root_units ? data.root_units.length : 0, 'root units');
@@ -1610,7 +1612,7 @@ function filterGAMFormats() {
 
         // Fetch specific placement names by ID (bypasses 500-item limit)
         const placementIdsParam = placementIds.join(',');
-        fetch(`{{ url_for('inventory.get_inventory_list', tenant_id=tenant_id) }}?type=placement&ids=${encodeURIComponent(placementIdsParam)}`, { credentials: 'same-origin' })
+        fetch(`${ {{ url_for('inventory.get_inventory_list', tenant_id=tenant_id)|tojson }} }?type=placement&ids=${encodeURIComponent(placementIdsParam)}`, { credentials: 'same-origin' })
             .then(response => response.json())
             .then(data => {
                 if (data.items) {
@@ -1691,7 +1693,7 @@ function filterGAMFormats() {
 // Initialize pricing options on page load
 {% if product %}
 // Edit mode: Load existing pricing options
-const existingOptions = {{ product.pricing_options | tojson if product.pricing_options else '[]' }};
+const existingOptions = {{ (product.pricing_options or [])|tojson }};
 if (existingOptions.length > 0) {
     existingOptions.forEach((option, idx) => {
         addPricingOption(option);
@@ -1777,7 +1779,7 @@ function showFormatInfo(name, description, previewUrl, agentUrl, formatId) {
     const noPreview = document.getElementById('format-no-preview');
 
     if (previewUrl) {
-        previewImg.src = previewUrl;
+        previewImg.src = checkedUrl(previewUrl);
         previewImg.style.display = 'block';
         noPreview.style.display = 'none';
     } else {
@@ -1790,7 +1792,7 @@ function showFormatInfo(name, description, previewUrl, agentUrl, formatId) {
     if (agentUrl && formatId) {
         // Construct URL to format details on agent (most agents follow this pattern)
         const detailsUrl = `${agentUrl}/formats/${formatId}`;
-        moreInfoLink.href = detailsUrl;
+        moreInfoLink.href = checkedUrl(detailsUrl);
         moreInfoLink.style.display = 'inline-block';
     } else {
         moreInfoLink.style.display = 'none';

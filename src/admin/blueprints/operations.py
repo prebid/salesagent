@@ -8,7 +8,7 @@ from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from flask import Blueprint, request
 from sqlalchemy import select
 
-from src.admin.utils import approve_media_buy_through_writer, require_auth, require_tenant_access
+from src.admin.utils import approve_media_buy_through_writer, require_tenant_access
 from src.core.database.models import PersistedMediaBuyStatus, PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
@@ -52,20 +52,15 @@ operations_bp = Blueprint("operations", __name__)
 # @operations_bp.route("/workflows", methods=["GET"]) - DISABLED: Conflicts with workflows.list_workflows
 
 
-# FIXME(#2233): inline session["tenant_id"] compare stands in for require_tenant_access.
 @operations_bp.route("/reporting", methods=["GET"])
-@require_auth()
+@require_tenant_access()
 def reporting(tenant_id):
     """Display GAM reporting dashboard."""
     # Import needed for this function
-    from flask import render_template, session
+    from flask import render_template
 
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Tenant
-
-    # Verify tenant access
-    if session.get("role") != "super_admin" and session.get("tenant_id") != tenant_id:
-        return "Access denied", 403
 
     with get_db_session() as db_session:
         tenant_obj = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()

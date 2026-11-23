@@ -5,6 +5,10 @@ adagents.json, which ``src/services/publisher_ingest.py`` fetches and stores. Ad
 publisher ingests it at once, "Sync All" ingests every publisher (the scheduled refresh
 does the same every six hours), and the properties view reads the stored document. No
 route here reads a publisher's file except through the ingest service.
+
+Every route requires access to the tenant (``require_tenant_access``): any user of the
+tenant may read, and adding, removing and syncing are writes, which need at least the
+``manager`` role.
 """
 
 import logging
@@ -14,6 +18,7 @@ from typing import Any
 from flask import Blueprint, Response, jsonify
 
 from src.admin.form_validation import json_object_body
+from src.admin.utils import require_tenant_access
 from src.core.database.models import Publisher
 from src.core.database.repositories.uow import PublisherUoW
 from src.core.http_utils import canonical_publisher_domain
@@ -50,8 +55,8 @@ def _publisher_json(publisher: Publisher, now: datetime) -> dict[str, Any]:
     }
 
 
-# FIXME(#2075): no require_tenant_access() on this route until that PR merges.
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["GET"])
+@require_tenant_access()
 def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
     """The tenant's publishers, with what each one's stored adagents.json authorizes now."""
     now = datetime.now(UTC)
@@ -68,8 +73,8 @@ def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
     )
 
 
-# FIXME(#2075): no require_tenant_access() on this route until that PR merges.
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["POST"])
+@require_tenant_access()
 def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
     """Add a publisher by its domain, and ingest its adagents.json."""
     data = json_object_body()
@@ -86,8 +91,8 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
     return jsonify({**_outcome_json(outcome), "message": "Publisher added"}), 201
 
 
-# FIXME(#2075): no require_tenant_access() on this route until that PR merges.
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<path:domain>", methods=["DELETE"])
+@require_tenant_access()
 def delete_publisher_partner(tenant_id: str, domain: str) -> Response | tuple[Response, int]:
     """Remove a publisher; its derived properties and every selection of it go with it."""
     with PublisherUoW(tenant_id) as uow:
@@ -97,8 +102,8 @@ def delete_publisher_partner(tenant_id: str, domain: str) -> Response | tuple[Re
     return jsonify({"message": "Publisher deleted successfully"})
 
 
-# FIXME(#2075): no require_tenant_access() on this route until that PR merges.
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/sync", methods=["POST"])
+@require_tenant_access()
 def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
     """Ingest every publisher's adagents.json now."""
     with PublisherUoW(tenant_id) as uow:
@@ -116,8 +121,8 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
     )
 
 
-# FIXME(#2075): no require_tenant_access() on this route until that PR merges.
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<path:domain>/properties", methods=["GET"])
+@require_tenant_access()
 def get_publisher_properties(tenant_id: str, domain: str) -> Response | tuple[Response, int]:
     """What the publisher's stored adagents.json authorizes this agent for now. Fetches nothing."""
     now = datetime.now(UTC)

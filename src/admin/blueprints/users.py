@@ -15,7 +15,7 @@ from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig, User, UserRole
 from src.core.database.repositories.tenant_config import UserChange
 from src.core.database.repositories.uow import TenantConfigUoW
-from src.core.operator_errors import FormIssue, InvalidFormInput, StateConflict, TenantNotFound
+from src.core.operator_errors import StateConflict, TenantNotFound
 
 logger = logging.getLogger(__name__)
 
@@ -229,10 +229,6 @@ def _requested_domain() -> str:
 def add_domain(tenant_id):
     """Add an authorized domain for the tenant."""
     domain = _requested_domain()
-
-    # Basic domain validation
-    if "." not in domain or domain.startswith(".") or domain.endswith("."):
-        raise InvalidFormInput(FormIssue("domain", "Invalid domain format"))
 
     # Atomic append: the membership check rides in the UPDATE's WHERE
     # clause, so a concurrent add can be neither lost nor duplicated.
