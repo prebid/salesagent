@@ -42,9 +42,12 @@ Users and access levels are managed **per-tenant** via the **Users & Access** pa
 Once configured, AI agents connect via MCP:
 
 ```python
+import uuid
+
 from fastmcp.client import Client, StreamableHttpTransport
 
-# Get your endpoint and token from Admin UI > Advertisers > View Token
+# The Admin UI shows an advertiser's token once: when you add the advertiser
+# (Settings > Advertisers > Add Advertiser) or rotate its token.
 transport = StreamableHttpTransport(
     url="https://your-domain.com/mcp/",
     headers={"Authorization": "Bearer your-principal-token"}
@@ -54,12 +57,19 @@ async with Client(transport=transport) as client:
     # List available products
     products = await client.call_tool("get_products", {"brief": "video ads"})
 
-    # Create a media buy
+    # Create a media buy. Each package names a product and one of its pricing options.
     result = await client.call_tool("create_media_buy", {
-        "product_ids": ["prod_123"],
-        "budget": {"amount": 10000, "currency": "USD"},
-        "flight_start": "2024-02-01",
-        "flight_end": "2024-02-28"
+        # A fresh UUID v4 per request; resend the same key only to retry the identical payload.
+        "idempotency_key": str(uuid.uuid4()),
+        "account": {"account_id": "acc_123"},  # from sync_accounts or list_accounts
+        "brand": {"domain": "acme.example"},
+        "start_time": "2030-02-01T00:00:00Z",  # ISO 8601, or "asap"
+        "end_time": "2030-02-28T23:59:59Z",
+        "packages": [{
+            "product_id": "prod_123",
+            "pricing_option_id": "cpm_usd_fixed",  # from the product's pricing_options
+            "budget": 10000
+        }]
     })
 ```
 
