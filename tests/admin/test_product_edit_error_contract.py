@@ -15,12 +15,13 @@ converting a programming error into a plausible-looking answer is one defect wit
 surfaces.
 
 WHY ``KeyError`` IS THE INJECTED FAULT: it is the exception class of that recorded instance,
-and it is injected at ``parse_pricing_options_from_form``, whose call site guards only
-``ValueError`` -- so it reaches the outer handler the way a real programming error would,
-rather than being routed by a local ``except``.
+and it is injected at ``parse_pricing_options_from_form``, whose call site catches nothing
+-- so it reaches the admin error handler the way a real programming error would, rather than
+being routed by a local ``except``.
 
-WHY AN ADMIN TEST. The contract under test is the HTTP answer a Flask handler gives, which
-only a request can observe. No registry tool edits a product, so no BDD transport reaches it.
+WHY AN ADMIN TEST. The contract under test is the HTTP answer a Flask handler gives to a
+programming error, which a request can only reach by injecting one. A refused value needs no
+injection: BR-ADMIN-OPERATOR-REFUSALS T-ADMIN-REFUSAL-021 posts one through the edit form.
 """
 
 from __future__ import annotations
@@ -74,10 +75,12 @@ def operator(editable_product):
         yield client
 
 
+def _edit_path(tenant_id):
+    return f"/tenant/{tenant_id}/products/edit_me/edit"
+
+
 def _post_edit(client, tenant_id):
-    return client.post(
-        f"/tenant/{tenant_id}/products/edit_me/edit", data=minimal_product_edit_form(), follow_redirects=False
-    )
+    return client.post(_edit_path(tenant_id), data=minimal_product_edit_form(), follow_redirects=False)
 
 
 def test_a_programming_error_is_not_answered_as_an_operator_mistake(operator, editable_product):
@@ -143,22 +146,3 @@ def test_the_create_handler_does_not_answer_a_programming_error_either(operator,
 
     assert response.status_code == 500, f"a programming error on the create path answered {response.status_code}"
     assert FAULT_TEXT not in response.get_data(as_text=True)
-
-
-def test_an_operator_input_error_still_flashes_and_redirects(operator, editable_product):
-    """The path that WAS correct stays correct: a ValueError is the operator's to fix.
-
-    ``parse_pricing_options_from_form`` raises ``ValueError`` for a malformed pricing block,
-    and its call site catches exactly that, flashes the message and redirects. Without this
-    assertion, narrowing the outer handler could turn every input mistake into a 500 and the
-    two tests above would still pass.
-    """
-    with patch(
-        "src.admin.blueprints.products.parse_pricing_options_from_form",
-        side_effect=ValueError("rate must be a positive number"),
-    ):
-        response = _post_edit(operator, editable_product.tenant_id)
-
-    assert response.status_code in (302, 303), (
-        f"an operator input error answered {response.status_code} instead of redirecting with a message"
-    )

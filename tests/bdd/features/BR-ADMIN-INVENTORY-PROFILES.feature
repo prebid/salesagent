@@ -34,8 +34,11 @@ Feature: The inventory page's profile modal authors canonical format declaration
 
   @T-ADMIN-INVPROF-004 @error-path
   Scenario: A browser form is still redirected with its refusal
+    # Graded by the text on the page it goes back to: an unexpected failure goes back too.
     When a browser form submits a new profile "form_refused" declaring no format options
-    Then the form is redirected
+    Then the page returns status 200
+    And the page shows the "InvalidFormInput" refusal
+    And the page contains "At least one canonical format declaration (format_options) is required"
     And no profile "form_refused" is stored
 
   @T-ADMIN-INVPROF-005 @main-flow

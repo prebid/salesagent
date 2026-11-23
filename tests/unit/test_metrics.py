@@ -1,5 +1,12 @@
 """Tests for Prometheus metrics module."""
 
+from collections.abc import Callable
+from types import ModuleType
+
+import pytest
+
+from tests.helpers.metrics import ISOLATION_METRIC, STATUS_SCHEDULER, assert_counter_delta
+
 
 def test_metrics_are_registered():
     """Test that all metrics are registered with Prometheus."""
@@ -9,6 +16,7 @@ def test_metrics_are_registered():
         ai_review_duration,
         ai_review_errors,
         ai_review_total,
+        scheduler_isolation_errors,
         webhook_delivery_attempts,
         webhook_delivery_duration,
         webhook_delivery_total,
@@ -27,24 +35,7 @@ def test_metrics_are_registered():
     assert webhook_delivery_attempts._name == "webhook_delivery_attempts"
     assert webhook_queue_size._name == "webhook_queue_size"
 
-
-def test_ai_review_counter_increments():
-    """Test that AI review counter increments correctly."""
-    from src.core.metrics import ai_review_total
-
-    # Get initial value
-    initial_value = ai_review_total.labels(
-        tenant_id="test_tenant", decision="approved", policy_triggered="auto_approve"
-    )._value.get()
-
-    # Increment counter
-    ai_review_total.labels(tenant_id="test_tenant", decision="approved", policy_triggered="auto_approve").inc()
-
-    # Verify increment
-    new_value = ai_review_total.labels(
-        tenant_id="test_tenant", decision="approved", policy_triggered="auto_approve"
-    )._value.get()
-    assert new_value == initial_value + 1
+    assert scheduler_isolation_errors._name == "scheduler_isolation_errors"
 
 
 def test_ai_review_duration_observes():
@@ -72,21 +63,61 @@ def test_ai_review_confidence_observes():
     assert metric._sum.get() >= 0.95
 
 
-def test_ai_review_errors_increments():
-    """AI review error counter increments via the bounded recording helper.
+#: ``record_ai_review`` label sets; the recorder's kwargs are the series' labels.
+_AI_REVIEW_LABELS = [
+    {"tenant_id": "tenant1", "decision": "approved", "policy_triggered": "auto_approve"},
+    {"tenant_id": "tenant1", "decision": "pending", "policy_triggered": "sensitive_category"},
+    {"tenant_id": "tenant2", "decision": "rejected", "policy_triggered": "auto_reject"},
+    {"tenant_id": "tenant2", "decision": "pending", "policy_triggered": "uncertain"},
+]
 
-    ``error_type`` is the categorized enum value (e.g. ``ValueError`` ->
-    ``validation``), never the raw exception class name.
-    """
-    from src.core.metrics import ai_review_errors, record_ai_review_error
 
-    # ValueError categorizes to "validation"
-    initial_value = ai_review_errors.labels(tenant_id="test_tenant", error_type="validation")._value.get()
+def _calls(name: str, **kwargs: object) -> Callable[[ModuleType], None]:
+    return lambda metrics: getattr(metrics, name)(**kwargs)
 
-    record_ai_review_error(tenant_id="test_tenant", error=ValueError("bad input"))
 
-    new_value = ai_review_errors.labels(tenant_id="test_tenant", error_type="validation")._value.get()
-    assert new_value == initial_value + 1
+#: One row per counter write: the call that makes it, and the one series it must move by one.
+_RECORDING_CASES = [
+    *(
+        pytest.param(_calls("record_ai_review", **labels), "ai_review_total", labels, id=f"ai_review-{i}")
+        for i, labels in enumerate(_AI_REVIEW_LABELS)
+    ),
+    # ValueError categorizes to "validation": the enum value is recorded, never the class name.
+    pytest.param(
+        _calls("record_ai_review_error", tenant_id="test_tenant", error=ValueError("bad input")),
+        "ai_review_errors_total",
+        {"tenant_id": "test_tenant", "error_type": "validation"},
+        id="ai_review_error",
+    ),
+    pytest.param(
+        _calls(
+            "record_scheduler_isolation_error",
+            scheduler=STATUS_SCHEDULER,
+            tenant_id="test_tenant",
+            error_type="db_error",
+        ),
+        ISOLATION_METRIC,
+        {"scheduler": STATUS_SCHEDULER, "tenant_id": "test_tenant", "error_type": "db_error"},
+        id="scheduler_isolation_error",
+    ),
+    # No recording helper exists for this counter; production increments the series directly.
+    pytest.param(
+        lambda metrics: metrics.webhook_delivery_total.labels(
+            tenant_id="test_tenant", event_type="creative_approved", status="success"
+        ).inc(),
+        "webhook_delivery_total",
+        {"tenant_id": "test_tenant", "event_type": "creative_approved", "status": "success"},
+        id="webhook_delivery",
+    ),
+]
+
+
+@pytest.mark.parametrize(("record", "sample_name", "labels"), _RECORDING_CASES)
+def test_one_write_moves_its_series_by_one(record, sample_name, labels):
+    from src.core import metrics
+
+    with assert_counter_delta(sample_name, 1, **labels):
+        record(metrics)
 
 
 def test_active_ai_reviews_gauge():
@@ -103,25 +134,6 @@ def test_active_ai_reviews_gauge():
     # Decrement gauge
     active_ai_reviews.labels(tenant_id="test_tenant").dec()
     assert active_ai_reviews.labels(tenant_id="test_tenant")._value.get() == initial_value
-
-
-def test_webhook_delivery_counter():
-    """Test that webhook delivery counter increments correctly."""
-    from src.core.metrics import webhook_delivery_total
-
-    # Get initial value
-    initial_value = webhook_delivery_total.labels(
-        tenant_id="test_tenant", event_type="creative_approved", status="success"
-    )._value.get()
-
-    # Increment counter
-    webhook_delivery_total.labels(tenant_id="test_tenant", event_type="creative_approved", status="success").inc()
-
-    # Verify increment
-    new_value = webhook_delivery_total.labels(
-        tenant_id="test_tenant", event_type="creative_approved", status="success"
-    )._value.get()
-    assert new_value == initial_value + 1
 
 
 def test_webhook_delivery_duration():
@@ -191,29 +203,6 @@ def test_get_metrics_text():
     assert "ai_review_total" in metrics_text
 
 
-def test_metrics_labels():
-    """Test that metrics support different label combinations."""
-    from src.core.metrics import ai_review_total
-
-    # Test different label combinations
-    labels = [
-        ("tenant1", "approved", "auto_approve"),
-        ("tenant1", "pending", "sensitive_category"),
-        ("tenant2", "rejected", "auto_reject"),
-        ("tenant2", "pending", "uncertain"),
-    ]
-
-    for tenant_id, decision, policy_triggered in labels:
-        initial = ai_review_total.labels(
-            tenant_id=tenant_id, decision=decision, policy_triggered=policy_triggered
-        )._value.get()
-        ai_review_total.labels(tenant_id=tenant_id, decision=decision, policy_triggered=policy_triggered).inc()
-        new = ai_review_total.labels(
-            tenant_id=tenant_id, decision=decision, policy_triggered=policy_triggered
-        )._value.get()
-        assert new == initial + 1
-
-
 def test_histogram_buckets():
     """Test that histograms have correct bucket definitions."""
     from src.core.metrics import ai_review_confidence, ai_review_duration, webhook_delivery_duration
@@ -235,37 +224,22 @@ def test_histogram_buckets():
 
 
 def test_metrics_thread_safety():
-    """Test that metrics can be safely incremented from multiple threads."""
+    """Increments from ten threads are all recorded."""
     import threading
 
-    from src.core.metrics import ai_review_total
+    from src.core.metrics import record_ai_review
 
-    # Get initial value
-    tenant_id = "test_thread_safety"
-    initial_value = ai_review_total.labels(
-        tenant_id=tenant_id, decision="approved", policy_triggered="auto_approve"
-    )._value.get()
-
-    # Increment from multiple threads
+    labels = {"tenant_id": "test_thread_safety", "decision": "approved", "policy_triggered": "auto_approve"}
     num_threads = 10
     increments_per_thread = 100
-    threads = []
 
     def increment_counter():
         for _ in range(increments_per_thread):
-            ai_review_total.labels(tenant_id=tenant_id, decision="approved", policy_triggered="auto_approve").inc()
+            record_ai_review(**labels)
 
-    for _ in range(num_threads):
-        t = threading.Thread(target=increment_counter)
-        threads.append(t)
-        t.start()
-
-    for t in threads:
-        t.join()
-
-    # Verify all increments were recorded
-    final_value = ai_review_total.labels(
-        tenant_id=tenant_id, decision="approved", policy_triggered="auto_approve"
-    )._value.get()
-    expected_value = initial_value + (num_threads * increments_per_thread)
-    assert final_value == expected_value
+    with assert_counter_delta("ai_review_total", num_threads * increments_per_thread, **labels):
+        threads = [threading.Thread(target=increment_counter) for _ in range(num_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()

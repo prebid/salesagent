@@ -61,57 +61,49 @@ def list_authorized_properties(tenant_id: str) -> str | Response:
 @require_tenant_access()
 def list_property_tags(tenant_id: str) -> str | Response:
     """List and manage property tags for a tenant."""
-    try:
-        with get_db_session() as db_session:
-            # Get tenant info
-            stmt = select(Tenant).where(Tenant.tenant_id == tenant_id)
-            tenant = db_session.scalars(stmt).first()
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.admin_dashboard"))
+    with get_db_session() as db_session:
+        # Get tenant info
+        stmt = select(Tenant).where(Tenant.tenant_id == tenant_id)
+        tenant = db_session.scalars(stmt).first()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("core.admin_dashboard"))
 
-            # Ensure 'all_inventory' tag exists (default tag for all properties)
-            tag_stmt = select(PropertyTag).where(
-                PropertyTag.tenant_id == tenant_id, PropertyTag.tag_id == "all_inventory"
+        # Ensure 'all_inventory' tag exists (default tag for all properties)
+        tag_stmt = select(PropertyTag).where(PropertyTag.tenant_id == tenant_id, PropertyTag.tag_id == "all_inventory")
+        all_inventory_tag = PropertyTag(
+            tag_id="all_inventory",
+            tenant_id=tenant_id,
+            name="All Inventory",
+            description="Default tag that applies to all properties. Used when no specific targeting is needed.",
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        # Auto-create the default tag; a concurrent viewer that created it first
+        # leaves it present, which is all this branch wanted.
+        if (
+            resolve_or_write(
+                db_session,
+                conflict=lambda: db_session.scalars(tag_stmt).first(),
+                write=lambda: db_session.add(all_inventory_tag),
+                constraint="property_tags_pkey",
             )
-            all_inventory_tag = PropertyTag(
-                tag_id="all_inventory",
-                tenant_id=tenant_id,
-                name="All Inventory",
-                description="Default tag that applies to all properties. Used when no specific targeting is needed.",
-                created_at=datetime.now(UTC),
-                updated_at=datetime.now(UTC),
-            )
-            # Auto-create the default tag; a concurrent viewer that created it first
-            # leaves it present, which is all this branch wanted.
-            if (
-                resolve_or_write(
-                    db_session,
-                    conflict=lambda: db_session.scalars(tag_stmt).first(),
-                    write=lambda: db_session.add(all_inventory_tag),
-                    constraint="property_tags_pkey",
-                )
-                is None
-            ):
-                db_session.commit()
-                logger.info(f"Auto-created 'all_inventory' tag for tenant {tenant_id}")
+            is None
+        ):
+            db_session.commit()
+            logger.info(f"Auto-created 'all_inventory' tag for tenant {tenant_id}")
 
-            # Get all tags for this tenant
-            all_tags_stmt = select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.name)
-            tags = db_session.scalars(all_tags_stmt).all()
+        # Get all tags for this tenant
+        all_tags_stmt = select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.name)
+        tags = db_session.scalars(all_tags_stmt).all()
 
-            return render_template(
-                "property_tags_list.html",
-                tenant=tenant,
-                tags=tags,
-                session=session,
-                user=session.get("user"),
-            )
-
-    except Exception as e:
-        logger.error(f"Error listing property tags: {e}")
-        flash(f"Error loading tags: {str(e)}", "error")
-        return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+        return render_template(
+            "property_tags_list.html",
+            tenant=tenant,
+            tags=tags,
+            session=session,
+            user=session.get("user"),
+        )
 
 
 @authorized_properties_bp.route("/<tenant_id>/property-tags/create", methods=["POST"])
@@ -119,65 +111,60 @@ def list_property_tags(tenant_id: str) -> str | Response:
 @require_tenant_access()
 def create_property_tag(tenant_id: str) -> Response:
     """Create a new property tag."""
-    try:
-        tag_id = request.form.get("tag_id", "").strip()
-        name = request.form.get("name", "").strip()
-        description = request.form.get("description", "").strip()
+    tag_id = request.form.get("tag_id", "").strip()
+    name = request.form.get("name", "").strip()
+    description = request.form.get("description", "").strip()
 
-        if not tag_id or not name or not description:
-            flash(PROPERTY_ERROR_MESSAGES["all_fields_required"], "error")
+    if not tag_id or not name or not description:
+        flash(PROPERTY_ERROR_MESSAGES["all_fields_required"], "error")
+        return redirect(url_for("authorized_properties.list_property_tags", tenant_id=tenant_id))
+
+    # Validate tag_id format (lowercase, underscores only)
+    if not tag_id.replace("_", "").replace("-", "").isalnum():
+        flash(PROPERTY_ERROR_MESSAGES["invalid_tag_id"], "error")
+        return redirect(url_for("authorized_properties.list_property_tags", tenant_id=tenant_id))
+
+    tag_id = tag_id.lower().replace("-", "_")
+
+    with get_db_session() as db_session:
+        # Check if tag already exists. The primary key is the authority, so this
+        # same answer serves the loser of a concurrent create (see resolve_or_write)
+        # rather than a flash carrying the driver's message.
+        stmt = select(PropertyTag).where(PropertyTag.tenant_id == tenant_id, PropertyTag.tag_id == tag_id)
+
+        def tag_already_exists() -> Response | None:
+            if db_session.scalars(stmt).first() is None:
+                return None
+            flash(PROPERTY_ERROR_MESSAGES["tag_already_exists"].format(tag_id=tag_id), "error")
             return redirect(url_for("authorized_properties.list_property_tags", tenant_id=tenant_id))
 
-        # Validate tag_id format (lowercase, underscores only)
-        if not tag_id.replace("_", "").replace("-", "").isalnum():
-            flash(PROPERTY_ERROR_MESSAGES["invalid_tag_id"], "error")
-            return redirect(url_for("authorized_properties.list_property_tags", tenant_id=tenant_id))
+        # Create new tag
+        new_tag = PropertyTag(
+            tag_id=tag_id,
+            tenant_id=tenant_id,
+            name=name,
+            description=description,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
 
-        tag_id = tag_id.lower().replace("-", "_")
+        taken = resolve_or_write(
+            db_session,
+            conflict=tag_already_exists,
+            write=lambda: db_session.add(new_tag),
+            constraint="property_tags_pkey",
+        )
+        if taken is not None:
+            return taken
 
-        with get_db_session() as db_session:
-            # Check if tag already exists. The primary key is the authority, so this
-            # same answer serves the loser of a concurrent create (see resolve_or_write)
-            # rather than a flash carrying the driver's message.
-            stmt = select(PropertyTag).where(PropertyTag.tenant_id == tenant_id, PropertyTag.tag_id == tag_id)
-
-            def tag_already_exists() -> Response | None:
-                if db_session.scalars(stmt).first() is None:
-                    return None
-                flash(PROPERTY_ERROR_MESSAGES["tag_already_exists"].format(tag_id=tag_id), "error")
-                return redirect(url_for("authorized_properties.list_property_tags", tenant_id=tenant_id))
-
-            # Create new tag
-            new_tag = PropertyTag(
-                tag_id=tag_id,
-                tenant_id=tenant_id,
-                name=name,
-                description=description,
-                created_at=datetime.now(UTC),
-                updated_at=datetime.now(UTC),
-            )
-
-            taken = resolve_or_write(
-                db_session,
-                conflict=tag_already_exists,
-                write=lambda: db_session.add(new_tag),
-                constraint="property_tags_pkey",
-            )
-            if taken is not None:
-                return taken
-
-            db_session.commit()
-            flash(f"Tag '{name}' created successfully", "success")
-
-    except Exception as e:
-        logger.error(f"Error creating property tag: {e}")
-        flash(f"Error creating tag: {str(e)}", "error")
+        db_session.commit()
+        flash(f"Tag '{name}' created successfully", "success")
 
     return redirect(url_for("authorized_properties.list_property_tags", tenant_id=tenant_id))
 
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties/api/list")
-@require_tenant_access(api_mode=True)
+@require_tenant_access()
 def list_authorized_properties_api(tenant_id: str):
     """The properties the publishers authorize this agent for now, as JSON for the inventory profile editor.
 

@@ -6,7 +6,8 @@ from datetime import UTC, datetime, timedelta
 from flask import Blueprint, jsonify, request
 from sqlalchemy import select, text
 
-from src.admin.utils import require_auth
+from src.admin.gam_utils import GAMOAuthNotConfigured
+from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -26,17 +27,13 @@ api_bp = Blueprint("api", __name__)
 @api_bp.route("/health", methods=["GET"])
 def api_health():
     """API health check endpoint."""
-    try:
-        with get_db_session() as db_session:
-            db_session.execute(text("SELECT 1"))
-            return jsonify({"status": "healthy"})
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return jsonify({"status": "unhealthy"}), 500
+    with get_db_session() as db_session:
+        db_session.execute(text("SELECT 1"))
+        return jsonify({"status": "healthy"})
 
 
 @api_bp.route("/tenant/<tenant_id>/revenue-chart")
-@require_auth()
+@require_tenant_access()
 def revenue_chart_api(tenant_id):
     """API endpoint for revenue chart data."""
     period = request.args.get("period", "7d")
@@ -75,192 +72,164 @@ def revenue_chart_api(tenant_id):
 @require_auth()
 def oauth_status():
     """Check if OAuth credentials are properly configured for GAM."""
-    try:
-        # Check for GAM OAuth credentials using validated configuration
-        try:
-            from src.core.logging_config import oauth_structured_logger
+    from src.core.logging_config import oauth_structured_logger
 
-            gam_auth = get_settings().auth
-            if not gam_auth.gam_oauth_configured:
-                raise ValueError("GAM OAuth credentials not configured")
-            client_id = gam_auth.gam_oauth_client_id
-
-            # Log configuration check
-            oauth_structured_logger.log_gam_oauth_config_load(
-                success=True, client_id_prefix=client_id[:20] + "..." if len(client_id) > 20 else client_id
-            )
-
-            # Credentials exist and are validated
-            return jsonify(
-                {
-                    "configured": True,
-                    "client_id_prefix": client_id[:20] + "..." if len(client_id) > 20 else client_id,
-                    "has_secret": True,
-                    "source": "validated_environment",
-                }
-            )
-        except Exception as config_error:
-            # Configuration validation failed
-            oauth_structured_logger.log_gam_oauth_config_load(success=False, error=str(config_error))
-            return jsonify(
-                {
-                    "configured": False,
-                    "error": f"GAM OAuth configuration error: {str(config_error)}",
-                    "help": "Check GAM_OAUTH_CLIENT_ID and GAM_OAUTH_CLIENT_SECRET environment variables.",
-                }
-            )
-
-    except Exception as e:
-        logger.error(f"Error checking OAuth status: {e}")
-        return (
-            jsonify(
-                {
-                    "configured": False,
-                    "error": f"Error checking OAuth configuration: {str(e)}",
-                }
-            ),
-            500,
+    # Check for GAM OAuth credentials using validated configuration
+    gam_auth = get_settings().auth
+    if not gam_auth.gam_oauth_configured:
+        not_configured = GAMOAuthNotConfigured.MESSAGE
+        oauth_structured_logger.log_gam_oauth_config_load(success=False, error=not_configured)
+        return jsonify(
+            {
+                "configured": False,
+                "error": not_configured,
+                "help": "Check GAM_OAUTH_CLIENT_ID and GAM_OAUTH_CLIENT_SECRET environment variables.",
+            }
         )
+    client_id = gam_auth.gam_oauth_client_id
+    client_id_prefix = client_id[:20] + "..." if len(client_id) > 20 else client_id
+
+    # Log configuration check
+    oauth_structured_logger.log_gam_oauth_config_load(success=True, client_id_prefix=client_id_prefix)
+
+    # Credentials exist and are validated
+    return jsonify(
+        {
+            "configured": True,
+            "client_id_prefix": client_id_prefix,
+            "has_secret": True,
+            "source": "validated_environment",
+        }
+    )
 
 
 @api_bp.route("/tenant/<tenant_id>/products", methods=["GET"])
-@require_auth()
+@require_tenant_access()
 def get_tenant_products(tenant_id):
     """API endpoint to list all products for a tenant."""
-    try:
-        with get_db_session() as db_session:
-            from sqlalchemy import select
+    with get_db_session() as db_session:
+        from sqlalchemy import select
 
-            from src.core.database.models import Product
+        from src.core.database.models import Product
 
-            stmt = select(Product).filter_by(tenant_id=tenant_id).order_by(Product.name)
-            products = db_session.scalars(stmt).all()
+        stmt = select(Product).filter_by(tenant_id=tenant_id).order_by(Product.name)
+        products = db_session.scalars(stmt).all()
 
-            products_data = []
-            for product in products:
-                products_data.append(
-                    {
-                        "product_id": product.product_id,
-                        "name": product.name,
-                        "description": product.description or "",
-                        "delivery_type": product.delivery_type,
-                    }
-                )
+        products_data = []
+        for product in products:
+            products_data.append(
+                {
+                    "product_id": product.product_id,
+                    "name": product.name,
+                    "description": product.description or "",
+                    "delivery_type": product.delivery_type,
+                }
+            )
 
-            return jsonify({"products": products_data})
-
-    except Exception as e:
-        logger.error(f"Error getting products for tenant {tenant_id}: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"products": products_data})
 
 
 @api_bp.route("/tenant/<tenant_id>/products/suggestions", methods=["GET"])
-@require_auth()
+@require_tenant_access()
 def get_product_suggestions(tenant_id):
     """API endpoint to get product suggestions based on industry and criteria."""
-    try:
-        from src.services.default_products import (
-            get_default_products,
-            get_industry_specific_products,
-        )
+    from src.services.default_products import (
+        get_default_products,
+        get_industry_specific_products,
+    )
 
-        # Get query parameters
-        industry = request.args.get("industry")
-        include_standard = request.args.get("include_standard", "true").lower() == "true"
-        delivery_type = request.args.get("delivery_type")  # 'guaranteed', 'non_guaranteed', or None for all
-        max_cpm = request.args.get("max_cpm", type=float)
-        formats = request.args.getlist("formats")  # Can specify multiple format IDs
+    # Get query parameters
+    industry = request.args.get("industry")
+    include_standard = request.args.get("include_standard", "true").lower() == "true"
+    delivery_type = request.args.get("delivery_type")  # 'guaranteed', 'non_guaranteed', or None for all
+    max_cpm = request.args.get("max_cpm", type=float)
+    formats = request.args.getlist("formats")  # Can specify multiple format IDs
 
-        # Get suggestions
-        suggestions = []
+    # Get suggestions
+    suggestions = []
 
-        # Get industry-specific products if industry specified
-        if industry:
-            industry_products = get_industry_specific_products(industry)
-            suggestions.extend(industry_products)
-        elif include_standard:
-            # If no industry specified but standard requested, get default products
-            suggestions.extend(get_default_products())
+    # Get industry-specific products if industry specified
+    if industry:
+        industry_products = get_industry_specific_products(industry)
+        suggestions.extend(industry_products)
+    elif include_standard:
+        # If no industry specified but standard requested, get default products
+        suggestions.extend(get_default_products())
 
-        # Filter suggestions based on criteria
-        filtered_suggestions = []
-        for product in suggestions:
-            # Filter by delivery type
-            if delivery_type and product.get("delivery_type") != delivery_type:
+    # Filter suggestions based on criteria
+    filtered_suggestions = []
+    for product in suggestions:
+        # Filter by delivery type
+        if delivery_type and product.get("delivery_type") != delivery_type:
+            continue
+
+        # Filter by max CPM
+        if max_cpm:
+            if product.get("cpm") and product["cpm"] > max_cpm:
+                continue
+            elif product.get("price_guidance"):
+                if product["price_guidance"]["min"] > max_cpm:
+                    continue
+
+        # Filter by formats
+        if formats:
+            product_formats = set(product.get("formats", []))
+            requested_formats = set(formats)
+            if not product_formats.intersection(requested_formats):
                 continue
 
-            # Filter by max CPM
-            if max_cpm:
-                if product.get("cpm") and product["cpm"] > max_cpm:
-                    continue
-                elif product.get("price_guidance"):
-                    if product["price_guidance"]["min"] > max_cpm:
-                        continue
+        filtered_suggestions.append(product)
 
-            # Filter by formats
-            if formats:
-                product_formats = set(product.get("formats", []))
-                requested_formats = set(formats)
-                if not product_formats.intersection(requested_formats):
-                    continue
-
-            filtered_suggestions.append(product)
-
-        # Sort suggestions by relevance
-        # Prioritize: 1) Industry-specific, 2) Lower CPM, 3) More formats
-        def sort_key(product):
-            is_industry_specific = product["product_id"] not in [p["product_id"] for p in get_default_products()]
-            avg_cpm = (
-                product.get("cpm", 0)
-                or (product.get("price_guidance", {}).get("min", 0) + product.get("price_guidance", {}).get("max", 0))
-                / 2
-            )
-            format_count = len(product.get("formats", []))
-            return (-int(is_industry_specific), avg_cpm, -format_count)
-
-        filtered_suggestions.sort(key=sort_key)
-
-        # Check existing products to mark which are already created
-        with get_db_session() as db_session:
-            stmt = select(Product.product_id).filter_by(tenant_id=tenant_id)
-            existing_products = db_session.scalars(stmt).all()
-            existing_ids = {product[0] for product in existing_products}
-
-        # Add metadata to suggestions
-        for suggestion in filtered_suggestions:
-            suggestion["already_exists"] = suggestion["product_id"] in existing_ids
-            suggestion["is_industry_specific"] = suggestion["product_id"] not in [
-                p["product_id"] for p in get_default_products()
-            ]
-
-            # Calculate match score (0-100)
-            score = 100
-            if delivery_type and suggestion.get("delivery_type") == delivery_type:
-                score += 20
-            if formats:
-                matching_formats = len(set(suggestion.get("formats", [])).intersection(set(formats)))
-                score += matching_formats * 10
-            if industry and suggestion["is_industry_specific"]:
-                score += 30
-
-            suggestion["match_score"] = min(score, 100)
-
-        return jsonify(
-            {
-                "suggestions": filtered_suggestions,
-                "total_count": len(filtered_suggestions),
-                "criteria": {
-                    "industry": industry,
-                    "delivery_type": delivery_type,
-                    "max_cpm": max_cpm,
-                    "formats": formats,
-                },
-            }
+    # Sort suggestions by relevance
+    # Prioritize: 1) Industry-specific, 2) Lower CPM, 3) More formats
+    def sort_key(product):
+        is_industry_specific = product["product_id"] not in [p["product_id"] for p in get_default_products()]
+        avg_cpm = (
+            product.get("cpm", 0)
+            or (product.get("price_guidance", {}).get("min", 0) + product.get("price_guidance", {}).get("max", 0)) / 2
         )
+        format_count = len(product.get("formats", []))
+        return (-int(is_industry_specific), avg_cpm, -format_count)
 
-    except Exception as e:
-        logger.error(f"Error getting product suggestions: {e}")
-        return jsonify({"error": str(e)}), 500
+    filtered_suggestions.sort(key=sort_key)
+
+    # Check existing products to mark which are already created
+    with get_db_session() as db_session:
+        stmt = select(Product.product_id).filter_by(tenant_id=tenant_id)
+        existing_products = db_session.scalars(stmt).all()
+        existing_ids = {product[0] for product in existing_products}
+
+    # Add metadata to suggestions
+    for suggestion in filtered_suggestions:
+        suggestion["already_exists"] = suggestion["product_id"] in existing_ids
+        suggestion["is_industry_specific"] = suggestion["product_id"] not in [
+            p["product_id"] for p in get_default_products()
+        ]
+
+        # Calculate match score (0-100)
+        score = 100
+        if delivery_type and suggestion.get("delivery_type") == delivery_type:
+            score += 20
+        if formats:
+            matching_formats = len(set(suggestion.get("formats", [])).intersection(set(formats)))
+            score += matching_formats * 10
+        if industry and suggestion["is_industry_specific"]:
+            score += 30
+
+        suggestion["match_score"] = min(score, 100)
+
+    return jsonify(
+        {
+            "suggestions": filtered_suggestions,
+            "total_count": len(filtered_suggestions),
+            "criteria": {
+                "industry": industry,
+                "delivery_type": delivery_type,
+                "max_cpm": max_cpm,
+                "formats": formats,
+            },
+        }
+    )
 
 
 @api_bp.route("/gam/get-advertisers", methods=["POST"])
@@ -271,167 +240,3 @@ def gam_get_advertisers():
     GAM advertiser fetching - implement in phase 2."""
     # Placeholder implementation
     return jsonify({"error": "Not yet implemented"}), 501
-
-
-@api_bp.route("/gam/test-connection", methods=["POST"])
-@require_auth()
-@log_admin_action("test_gam_connection")
-def test_gam_connection():
-    """Test GAM connection with refresh token and fetch available resources."""
-    try:
-        refresh_token = request.json.get("refresh_token")
-        if not refresh_token:
-            return jsonify({"error": "Refresh token is required"}), 400
-
-        # Get OAuth credentials from the settings
-        gam_auth = get_settings().auth
-        client_id = gam_auth.gam_oauth_client_id
-        client_secret = gam_auth.gam_oauth_client_secret
-
-        if not client_id or not client_secret:
-            return (
-                jsonify(
-                    {
-                        "error": "GAM OAuth credentials not configured. Please set GAM_OAUTH_CLIENT_ID and GAM_OAUTH_CLIENT_SECRET environment variables."
-                    }
-                ),
-                400,
-            )
-
-        # Test by creating credentials and making a simple API call
-        from googleads import ad_manager, oauth2
-
-        # Create GoogleAds OAuth2 client with refresh token
-        oauth2_client = oauth2.GoogleRefreshTokenClient(
-            client_id=client_id,
-            client_secret=client_secret,
-            refresh_token=refresh_token,
-        )
-
-        # Test if credentials are valid by trying to refresh
-        try:
-            # This will attempt to refresh the token
-            oauth2_client.Refresh()
-        except Exception as e:
-            return jsonify({"error": f"Invalid refresh token: {str(e)}"}), 400
-
-        # Initialize GAM client to get network info
-        # Note: We don't need to specify network_code for getAllNetworks call
-        client = ad_manager.AdManagerClient(oauth2_client, "AdCP-Sales-Agent-Setup")
-
-        # Get network service
-        network_service = client.GetService("NetworkService")
-
-        # Get all networks user has access to
-        try:
-            # Try to get all networks first
-            logger.info("Attempting to call getAllNetworks()")
-            all_networks = network_service.getAllNetworks()
-            logger.info(f"getAllNetworks() returned: {all_networks}")
-            networks = []
-            if all_networks:
-                logger.info(f"Processing {len(all_networks)} networks")
-                for network in all_networks:
-                    logger.info(f"Network data: {network}")
-                    networks.append(
-                        {
-                            "id": network["id"],
-                            "displayName": network["displayName"],
-                            "networkCode": network["networkCode"],
-                        }
-                    )
-            else:
-                logger.info("getAllNetworks() returned empty/None")
-        except AttributeError as e:
-            # getAllNetworks might not be available, fall back to getCurrentNetwork
-            logger.info(f"getAllNetworks not available (AttributeError: {e}), falling back to getCurrentNetwork")
-            try:
-                current_network = network_service.getCurrentNetwork()
-                logger.info(f"getCurrentNetwork() returned: {current_network}")
-                networks = [
-                    {
-                        "id": current_network["id"],
-                        "displayName": current_network["displayName"],
-                        "networkCode": current_network["networkCode"],
-                    }
-                ]
-            except Exception as e:
-                logger.error(f"Failed to get network info: {e}")
-                networks = []
-        except Exception as e:
-            logger.error(f"Failed to get networks: {e}")
-            logger.exception("Full exception details:")
-            networks = []
-
-        result = {
-            "success": True,
-            "message": "Successfully connected to Google Ad Manager",
-            "networks": networks,
-        }
-
-        # If we got a network, fetch companies and users
-        if networks:
-            try:
-                # Reinitialize client with network code for subsequent calls
-                network_code = networks[0]["networkCode"]
-                logger.info(f"Reinitializing client with network code: {network_code}")
-
-                client = ad_manager.AdManagerClient(oauth2_client, "AdCP-Sales-Agent-Setup", network_code=network_code)
-
-                # Use GoogleAdManager adapter to fetch advertisers (eliminates code duplication)
-                from src.adapters.google_ad_manager import GoogleAdManager
-                from src.core.schemas import Principal
-
-                # Create mock principal for adapter initialization (not used for get_advertisers)
-                mock_principal = Principal(
-                    principal_id="system",
-                    name="System",
-                    platform_mappings={
-                        "google_ad_manager": {
-                            "advertiser_id": "system_temp",
-                            "advertiser_name": "System (temp)",
-                        }
-                    },
-                )
-
-                # Build GAM config from OAuth credentials
-                gam_config = {
-                    "oauth_credentials": {
-                        "client_id": oauth_client_id,
-                        "client_secret": oauth_client_secret,
-                        "refresh_token": refresh_token,
-                    }
-                }
-
-                # Initialize adapter
-                adapter = GoogleAdManager(
-                    config=gam_config,
-                    principal=mock_principal,
-                    network_code=network_code,
-                    advertiser_id=None,
-                    trafficker_id=None,
-                    tenant_id=tenant_id,
-                    tenant_ai_config=None,  # names no order, so no AI configuration is read
-                )
-
-                # Fetch ALL advertisers using shared implementation (with pagination)
-                companies = adapter.get_advertisers(fetch_all=True)
-                result["companies"] = companies
-
-                # Get current user info
-                user_service = client.GetService("UserService")
-                current_user = user_service.getCurrentUser()
-                result["current_user"] = {
-                    "id": current_user.id,
-                    "name": current_user.name,
-                    "email": current_user.email,
-                }
-
-            except Exception as e:
-                # It's okay if we can't fetch companies/users
-                result["warning"] = f"Connected but couldn't fetch all resources: {str(e)}"
-
-        return jsonify(result)
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
