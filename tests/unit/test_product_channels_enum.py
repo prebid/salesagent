@@ -126,10 +126,17 @@ class TestProductChannelsConversion:
         assert product.channels[1] == MediaChannel.olv
 
     def test_invalid_db_channel_handled_gracefully(self):
-        """Invalid channel strings in DB should be skipped, not crash."""
+        """Invalid channel strings in DB should be skipped, not crash.
+
+        Such a row was stored before the column's validator refused them (GH #1532), or left as
+        it was by the repair migration, so it is set the way a loaded row arrives: past the validator.
+        """
+        from sqlalchemy.orm.attributes import set_committed_value
+
         from src.core.product_conversion import convert_product_model_to_schema
 
-        product_model = self._make_db_product(channels=["display", "invalid_channel_xyz", "olv"])
+        product_model = self._make_db_product()
+        set_committed_value(product_model, "channels", ["display", "invalid_channel_xyz", "olv"])
 
         # Should not raise -- invalid channels are skipped
         product = convert_product_model_to_schema(
@@ -155,14 +162,12 @@ class TestProductChannelsConversion:
     def test_every_picker_value_round_trips_through_conversion(self, member):
         """Every value the admin picker can emit reaches ``Product.channels`` as its enum member.
 
-        Tied to the picker's options rather than the enum alone, so what a publisher can
-        actually tag is what is graded (GH #1532). Green by construction for the twenty
+        The picker offers exactly the enum (``test_architecture_channel_selector_enum.py``), so
+        every member is what a publisher can tag (GH #1532). Green by construction for the twenty
         members; it pins that an SDK enum bump the conversion did not follow shows up.
         """
-        from src.core.helpers.channel_helpers import media_channel_options
         from src.core.product_conversion import convert_product_model_to_schema
 
-        assert member.value in dict(media_channel_options())
         product_model = self._make_db_product(channels=[member.value])
         product = convert_product_model_to_schema(
             product_model, publisher_properties=product_model.resolve_publisher_properties(ONE_AUTHORIZED_PROPERTY)

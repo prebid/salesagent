@@ -86,6 +86,14 @@ class JSONValidatorMixin:
         """Validate that these fields are JSON arrays."""
         return ensure_json_array(value, default=[])
 
+    @validates("channels")
+    def validate_channels(self, key, value):
+        """``Product.channels``: every write goes through the one rule, ``parse_media_channels`` (GH #1532)."""
+        # Imported here: src.core.helpers imports the adapters, which import the models this mixin serves.
+        from src.core.helpers.channel_helpers import parse_media_channels
+
+        return parse_media_channels(value or ())
+
     @validates("request_data", "response_data", "transaction_details")
     def validate_json_object_fields(self, key, value):
         """Validate that these fields are JSON objects or None."""

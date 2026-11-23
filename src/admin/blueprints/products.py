@@ -1126,13 +1126,9 @@ def add_product(tenant_id):
                 if countries is not None:
                     product_kwargs["countries"] = countries
 
-                # Handle channels field (AdCP 2.5 - advertising channels). The picker offers
-                # only MediaChannel values; anything else is a stale form or a crafted post.
-                from src.core.helpers.channel_helpers import parse_media_channels
-
-                channels = parse_media_channels(request.form.getlist("channels"))
-                if channels:
-                    product_kwargs["channels"] = channels
+                # Advertising channels. The column's validator owns the rule: it refuses a value
+                # outside MediaChannel and stores an empty selection as NULL.
+                product_kwargs["channels"] = request.form.getlist("channels")
 
                 # Handle principal access control (allowed_principal_ids)
                 # Empty list or no selection means visible to all (default)
@@ -1439,14 +1435,9 @@ def edit_product(tenant_id, product_id):
 
                 attributes.flag_modified(product, "countries")
 
-            # Handle channels field (AdCP 2.5 - advertising channels). The picker offers
-            # only MediaChannel values; anything else is a stale form or a crafted post.
-            from sqlalchemy.orm import attributes
-
-            from src.core.helpers.channel_helpers import parse_media_channels
-
-            product.channels = parse_media_channels(request.form.getlist("channels")) or None
-            attributes.flag_modified(product, "channels")
+            # Advertising channels. The column's validator owns the rule: it refuses a value
+            # outside MediaChannel, which the error handler answers on this page.
+            product.channels = request.form.getlist("channels")
 
             # Handle principal access control (allowed_principal_ids)
             # Empty list or no selection means visible to all (default)

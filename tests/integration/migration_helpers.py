@@ -191,30 +191,32 @@ def seed_account(
         )
 
 
-def seed_product(engine, *, tenant_id: str, product_id: str, channels: list[Any] | None) -> None:
+def seed_product(engine, *, tenant_id: str, product_id: str, **jsonb_columns: Any) -> None:
     """Insert a products row directly -- a migration's subject is rows, not callers.
 
-    Raw SQL for the same reason as :func:`seed_account`: the channel-repair revision's
-    subject is a string the admin picker could once write and the enum-typed read path
-    refuses, so no factory can produce it. Columns as the revision before the channel repair
-    has them: ``'[]'`` satisfies the format_ids validator (zero iterations), and the property
-    selection lives in its own table from e2af0c242a7f on, so no column states one; server
-    defaults cover the rest. ``channels=None`` writes SQL NULL, what production stores for
-    "no channels declared"; a list is written as given, non-string elements included.
+    Raw SQL for the same reason as :func:`seed_account`: a revision's subject is a row as an
+    older schema holds it -- a channel string the column's validator now refuses, a NULL
+    ``delivery_measurement`` -- so no factory can produce it. Each keyword names a JSONB
+    column of the schema at the caller's revision and is written as given: None is SQL NULL,
+    what production stores for "nothing declared", and a list keeps its non-string elements.
+    A column not named takes its server default. ``format_ids`` defaults to ``[]``, which
+    satisfies its validator (zero iterations), and ``targeting_template`` to ``{}``. The
+    column names are interpolated, so they come from the calling test, never from data.
     """
+    columns = {"format_ids": [], "targeting_template": {}, **jsonb_columns}
+    names = ", ".join(columns)
+    casts = ", ".join(f"CAST(:{name} AS jsonb)" for name in columns)
     with engine.begin() as conn:
         conn.execute(
             text(
-                "INSERT INTO products (tenant_id, product_id, name, description, delivery_type, "
-                "format_ids, targeting_template, channels) "
-                "VALUES (:tid, :pid, :name, 'test', 'guaranteed', '[]'::jsonb, '{}'::jsonb, "
-                "CAST(:channels AS jsonb))"
+                f"INSERT INTO products (tenant_id, product_id, name, description, delivery_type, {names}) "
+                f"VALUES (:tid, :pid, :name, 'test', 'guaranteed', {casts})"
             ),
             {
                 "tid": tenant_id,
                 "pid": product_id,
                 "name": f"Product {product_id}",
-                "channels": None if channels is None else json.dumps(channels),
+                **{name: None if value is None else json.dumps(value) for name, value in columns.items()},
             },
         )
 

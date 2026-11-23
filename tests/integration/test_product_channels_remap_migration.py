@@ -21,7 +21,7 @@ import pytest
 from adcp.types._generated import MediaChannel
 from sqlalchemy import text
 
-from src.core.helpers.channel_helpers import media_channel_options, parse_media_channels
+from src.core.helpers.channel_helpers import parse_media_channels
 from tests.integration.migration_helpers import (
     reset_to_revision,
     row_xmins,
@@ -73,10 +73,9 @@ def _xmins(engine) -> dict[str, str]:
     return row_xmins(engine, table="products", key_column="product_id", tenant_id=_TENANT)
 
 
-def _as_the_form_writes(*values: str) -> list[str]:
-    """What saving the edit form with *values* selected stores: the picker posts its options in
-    enum order and ``parse_media_channels`` keeps that order."""
-    return parse_media_channels(value for value, _ in media_channel_options() if value in values)
+def _as_the_form_writes(*values: str) -> list[str] | None:
+    """What saving the edit form with *values* selected stores: the column's rule."""
+    return parse_media_channels(values)
 
 
 class TestLegacyPickerValuesAreRemapped:

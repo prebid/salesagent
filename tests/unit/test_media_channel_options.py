@@ -38,11 +38,13 @@ class TestMediaChannelOptions:
 
 
 class TestParseMediaChannels:
-    def test_members_pass_through_in_order_without_duplicates(self):
-        assert parse_media_channels(["olv", "display", "olv"]) == ["olv", "display"]
+    def test_members_come_back_in_enum_order_without_duplicates(self):
+        """Whatever order they were posted in: enum order is what the picker posts and the repair writes."""
+        assert parse_media_channels(["olv", "display", "olv"]) == ["display", "olv"]
 
-    def test_empty_is_empty(self):
-        assert parse_media_channels([]) == []
+    def test_empty_is_none(self):
+        """SQL NULL is what the column stores for "no channels declared"."""
+        assert parse_media_channels([]) is None
 
     @pytest.mark.parametrize("posted", [["video"], ["display", "retail"]])
     def test_a_non_member_refuses_the_whole_post(self, posted: list[str]):

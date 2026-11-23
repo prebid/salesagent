@@ -12,7 +12,8 @@ in tests/unit cannot see them:
 * the edit handler refuses one and leaves the stored channels untouched -- the stale-tab
   path, where a form opened before a deploy re-posts a value the repair migration removed.
   The refusal is ``InvalidFormInput``, so the admin error handler answers it on the page the
-  form came from.
+  form came from;
+* saving the edit form unchanged writes the stored channels back as they were.
 """
 
 from __future__ import annotations
@@ -21,7 +22,6 @@ import json
 
 import pytest
 from adcp.types._generated import MediaChannel
-from bs4 import BeautifulSoup
 
 from src.core.database.repositories.uow import ProductUoW
 from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
@@ -29,6 +29,7 @@ from tests.factories.core import seed_property_tag_selection
 from tests.harness.admin_client import BROWSER_PAGE_HEADERS
 from tests.helpers.admin_product_form import minimal_product_create_form, minimal_product_edit_form
 from tests.helpers.admin_session import admin_auth_session
+from tests.helpers.channel_picker import picker_options
 from tests.integration._egress_ingest_helpers import flashes
 
 pytestmark = [pytest.mark.admin, pytest.mark.requires_db]
@@ -45,14 +46,6 @@ def tenant(factory_session):
     return TenantFactory(tenant_id=_TENANT_ID)
 
 
-def _picker_options(response) -> dict[str, bool]:
-    """``value -> selected`` for every option of the page's channel picker."""
-    soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
-    select = soup.select_one("select#channels")
-    assert select is not None, "the page carries no channel picker"
-    return {option["value"]: option.has_attr("selected") for option in select.find_all("option")}
-
-
 def _stored_channels(product_id: str) -> list[str] | None:
     with ProductUoW(_TENANT_ID) as uow:
         assert uow.products is not None
@@ -66,7 +59,8 @@ def test_add_product_page_offers_exactly_the_media_channel_enum(admin_client, te
     response = admin_client.get(f"/tenant/{_TENANT_ID}/products/add")
 
     assert response.status_code == 200
-    assert set(_picker_options(response)) == {member.value for member in MediaChannel}
+    offered = {value for value, _ in picker_options(response.get_data(as_text=True))}
+    assert offered == {member.value for member in MediaChannel}
 
 
 def test_add_product_refuses_a_channel_outside_the_enum(admin_client, tenant, factory_session):
@@ -110,3 +104,31 @@ def test_edit_product_refuses_a_channel_outside_the_enum_and_keeps_the_stored_va
     assert response.headers["Location"].endswith(edit_path)
     assert [category for category, message in flashes(admin_client) if _REFUSAL in message] == ["error"]
     assert _stored_channels("picker_edit") == ["olv"]
+
+
+def test_saving_the_edit_form_unchanged_keeps_the_stored_channels(admin_client, tenant):
+    """Open the edit page and post back what its picker selects: the stored array does not move.
+
+    Seeded out of enum order on purpose. The column's rule stores enum order, which is the
+    order the picker renders and a browser posts, so a stored product survives a no-op save.
+    """
+    product = ProductFactory(tenant=tenant, product_id="picker_noop", channels=["retail_media", "olv"])
+    PricingOptionFactory(product=product)
+    admin_auth_session(admin_client, _TENANT_ID)
+    stored = _stored_channels("picker_noop")
+
+    edit_path = f"/tenant/{_TENANT_ID}/products/picker_noop/edit"
+    page = admin_client.get(edit_path)
+    selected = [value for value, is_selected in picker_options(page.get_data(as_text=True)) if is_selected]
+    response = admin_client.post(
+        edit_path,
+        headers={**BROWSER_PAGE_HEADERS, "Referer": f"https://localhost{edit_path}"},
+        data=minimal_product_edit_form(channels=selected),
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302, response.data[:2000]
+    # To the list: a refusal goes back to the edit page and writes nothing.
+    assert response.headers["Location"].endswith(f"/tenant/{_TENANT_ID}/products/")
+    assert stored == [MediaChannel.olv.value, MediaChannel.retail_media.value]
+    assert _stored_channels("picker_noop") == stored
