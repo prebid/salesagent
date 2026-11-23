@@ -22,8 +22,9 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Account, Tenant
+from src.core.database.models import Account, MediaBuy, Product, Tenant
 from tests.harness.admin_client import AdminClient, AdminResponse
+from tests.helpers.media_buy_approval import SeededBuy
 from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
 
 
@@ -754,6 +755,106 @@ class AdminAccountEnv:
     def fetch_tenant_route(self, tenant_id: str, path: str, body: dict[str, Any] | None = None) -> AdminResponse:
         """POST *body* (none: ``{}``) to *tenant_id*'s ``/tenant/<id>/<path>``, as its page's script does with fetch()."""
         return self.client.request("post", f"/tenant/{tenant_id}/{path}", json=body or {})
+
+    # ── Media buy approval (BR-ADMIN-OPERATOR-REFUSALS) ──
+
+    @contextmanager
+    def _approval_seeding(self) -> Iterator[Session]:
+        """A session of its own for the factories, committed when the block exits.
+
+        Not :meth:`_factory_session`: ``seed_pending_buy`` writes the approval step through
+        ``ContextManager``, which opens ``get_db_session()``, and that exit closes the
+        thread-scoped session :meth:`_factory_session` would still be writing through.
+        """
+        from src.core.database.database_session import get_engine
+
+        session = Session(bind=get_engine())
+        try:
+            with bind_factories_to_session(session):
+                yield session
+                session.commit()
+        finally:
+            session.close()
+
+    def seed_media_buy_awaiting_approval(self, *, accepted_image_size: tuple[int, int] | None = None) -> SeededBuy:
+        """A tenant of its own on the mock ad server, holding a media buy that awaits the seller's approval.
+
+        With *accepted_image_size*, the buy's product also publishes an image format option
+        accepting only that size (formats/canonical/image.json ``sizes``). Returns the seeded
+        rows' ids (``seed_pending_buy``), which address the workflow approval route.
+        """
+        from tests.helpers.media_buy_approval import seed_pending_buy
+
+        with self._approval_seeding() as session:
+            seeded = seed_pending_buy(starts_in_days=7)
+            if accepted_image_size is not None:
+                (package,) = seeded.media_buy.packages
+                product = session.get(Product, (seeded.tenant_id, package.package_config["product_id"]))
+                assert product is not None, "the seeded buy names no stored product"
+                width, height = accepted_image_size
+                option = {
+                    "format_option_id": f"image_{width}x{height}",
+                    "format_kind": "image",
+                    "params": {"sizes": [{"width": width, "height": height}]},
+                }
+                product.format_options = [*(product.format_options or []), option]
+        return seeded
+
+    def assign_image_creative_to_pending_buy(
+        self, seeded: SeededBuy, creative_id: str, *, size: tuple[int, int]
+    ) -> None:
+        """Store the buyer's approved canonical image creative *creative_id* at *size*, assigned to the buy's package."""
+        from tests.factories import CreativeAssignmentFactory, CreativeFactory
+        from tests.factories.creative_asset import build_assets, image_spec
+
+        width, height = size
+        with self._approval_seeding() as session:
+            media_buy = session.get(MediaBuy, seeded.media_buy_id)
+            assert media_buy is not None, f"no media buy {seeded.media_buy_id!r}"
+            creative = CreativeFactory(
+                tenant=media_buy.tenant,
+                principal=media_buy.principal,
+                creative_id=creative_id,
+                status="approved",
+                canonical_kind="image",
+                data={
+                    "assets": build_assets(
+                        image_spec(
+                            "image_main", url=f"https://cdn.example.com/{creative_id}.png", width=width, height=height
+                        )
+                    )
+                },
+            )
+            CreativeAssignmentFactory(creative=creative, media_buy=media_buy)
+
+    def fail_ad_server_creation(self, tenant_id: str) -> None:
+        """The mock ad server of *tenant_id* fails every media buy it is asked to create.
+
+        Through the row the live server's mock adapter reads its injected behavior from
+        (``AdapterConfig.config_json["test_behavior"]``, ``mock_ad_server._read_test_behavior``),
+        so both admin transports reach the same failure.
+        """
+        from tests.factories import AdapterConfigFactory
+
+        with self._approval_seeding() as session:
+            tenant = session.get(Tenant, tenant_id)
+            assert tenant is not None, f"no tenant {tenant_id!r}"
+            AdapterConfigFactory(
+                tenant=tenant, adapter_type="mock", config_json={"test_behavior": {"fail_on_create": True}}
+            )
+
+    def approve_workflow_step(self, seeded: SeededBuy) -> AdminResponse:
+        """Approve the buy's approval step as the workflow review page's script does with fetch()."""
+        return self.fetch_tenant_route(
+            seeded.tenant_id, f"workflows/{seeded.context_id}/steps/{seeded.step_id}/approve"
+        )
+
+    def media_buy_status(self, media_buy_id: str) -> str:
+        """The stored status of *media_buy_id*, read fresh."""
+        with get_db_session() as session:
+            media_buy = session.get(MediaBuy, media_buy_id)
+            assert media_buy is not None, f"no media buy {media_buy_id!r}"
+            return str(media_buy.status)
 
     def post_ai_connection_test(self, body: Any) -> AdminResponse:
         """POST *body* as JSON to this tenant's AI connection test, as the settings page does with fetch()."""
