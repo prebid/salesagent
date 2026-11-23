@@ -6,7 +6,9 @@ refusal is answered with is read off its class, so no scenario restates it.
 
 from __future__ import annotations
 
+import base64
 import json
+from urllib.parse import parse_qs
 
 from pytest_bdd import given, parsers, then, when
 
@@ -18,9 +20,14 @@ from tests.bdd.steps.domain.admin_accounts import (
     _require_admin_page,
 )
 from tests.bdd.steps.domain.admin_inventory_profiles import IMAGE_300X250, _modal_form
-from tests.bdd.steps.domain.admin_unexpected_errors import _other_tenant_id, script_accept
+from tests.bdd.steps.domain.admin_unexpected_errors import (
+    _assert_json_error_is_logged_failure,
+    _other_tenant_id,
+    script_accept,
+)
 from tests.harness.admin_client import BROWSER_PAGE_HEADERS
 from tests.helpers.admin_product_form import minimal_product_create_form, minimal_product_edit_form
+from tests.helpers.gam_credentials import service_account_email, service_account_json
 from tests.helpers.operator_refusals import operator_refusal_classes
 
 
@@ -218,6 +225,7 @@ _ABSENT_RECORD_REQUESTS: dict[str, tuple[str, str, dict[str, str] | None]] = {
     "signals agent": ("delete", f"/tenant/{{tenant}}/signals-agents/{_ABSENT_ROW_ID}/delete", None),
     "workflow step": ("post", "/tenant/{tenant}/workflows/bdd_absent_context/steps/bdd_absent_step/approve", {}),
     "GAM order": ("get", "/api/tenant/{tenant}/orders/bdd_absent_order", None),
+    "GAM line item": ("get", "/tenant/{tenant}/gam/api/line-item/bdd_absent_line_item", None),
     "sync job": ("get", "/tenant/{tenant}/gam/sync-status/bdd_absent_sync", None),
 }
 
@@ -353,11 +361,9 @@ def given_another_tenant_on_gam_without_credentials(ctx: dict) -> None:
 
 
 #: For each request that needs the tenant's GAM connection, as a page's script sends it:
-#: (method, path, JSON body). ``{tenant}`` is the scenario's other tenant. No line item is stored,
-#: so the line item routes go on to GAM.
+#: (method, path, JSON body). ``{tenant}`` is the scenario's other tenant.
 _GAM_REQUESTS: dict[str, tuple[str, str, dict[str, str] | None]] = {
     "the GAM custom targeting keys": ("get", "/tenant/{tenant}/gam/api/custom-targeting-keys", None),
-    "a GAM line item": ("get", "/tenant/{tenant}/gam/api/line-item/1001", None),
     "an orders sync": ("post", "/api/tenant/{tenant}/sync/orders", {}),
     "an inventory sync": ("post", "/api/tenant/{tenant}/inventory/sync", {"mode": "incremental"}),
     "the GAM advertisers": ("post", "/tenant/{tenant}/api/gam/get-advertisers", {}),
@@ -387,9 +393,63 @@ def when_sync_api_asked_for_gam_sync(ctx: dict, sync: str) -> None:
         ctx["admin_page"] = env.sync_orders_by_api(tenant_id)
 
 
-@when("the operator opens that tenant's GAM line item page with no page to go back to")
-def when_open_gam_line_item_page(ctx: dict) -> None:
-    ctx["admin_page"] = _env(ctx).open_page(f"/tenant/{_other_tenant_id(ctx)}/gam/line-item/1001")
+#: The project of the GAM service account a scenario seeds; its ``client_email`` follows from it.
+_SERVICE_ACCOUNT_PROJECT = "bdd-gam-service-account"
+
+
+@given("another tenant of this seller, on a GAM service account whose token endpoint refuses its token")
+def given_another_tenant_on_gam_service_account(ctx: dict) -> None:
+    env = _env(ctx)
+    document = service_account_json(project_id=_SERVICE_ACCOUNT_PROJECT, token_uri=env.gam_token_endpoint().url)
+    ctx["admin_other_tenant_id"] = env.seed_tenant()
+    env.onboard_gam(tenant_id=ctx["admin_other_tenant_id"], service_account_json=document)
+
+
+@then("the service account's token endpoint was asked for a token as that service account")
+def then_token_requested_as_service_account(ctx: dict) -> None:
+    """A JWT-bearer grant whose assertion names the seeded account as its issuer (RFC 7523 section 2.1)."""
+    bodies = _env(ctx).gam_token_endpoint().request_bodies()
+    assert bodies, "No token request reached the service account's token endpoint"
+    form = parse_qs(bodies[0].decode())
+    assert form.get("grant_type") == ["urn:ietf:params:oauth:grant-type:jwt-bearer"], (
+        f"Not a JWT-bearer grant: {form!r}"
+    )
+    payload_segment = form["assertion"][0].split(".")[1]
+    claims = json.loads(base64.urlsafe_b64decode(payload_segment + "=" * (-len(payload_segment) % 4)))
+    expected = service_account_email(_SERVICE_ACCOUNT_PROJECT)
+    assert claims.get("iss") == expected, f"The assertion's issuer is {claims.get('iss')!r}, not {expected!r}"
+
+
+@then("the JSON error is that tenant's orders sync failure with a reference")
+def then_json_error_is_orders_sync_failure(ctx: dict) -> None:
+    # The context GAMOrdersService.sync_tenant_orders_as_job gives recording_failure.
+    _assert_json_error_is_logged_failure(ctx, f"Orders sync failed for tenant {_other_tenant_id(ctx)}")
+
+
+@given(parsers.parse('the orders sync stored the GAM line item "{line_item_id}" with:'))
+def given_stored_gam_line_item(ctx: dict, line_item_id: str, datatable: list) -> None:
+    columns = {str(row[0]): json.loads(str(row[1])) for row in datatable[1:]}
+    _env(ctx).seed_gam_line_item(line_item_id, **columns)
+
+
+@when(parsers.parse('a page\'s script asks for the stored GAM line item "{line_item_id}"'))
+def when_script_asks_for_stored_line_item(ctx: dict, line_item_id: str) -> None:
+    env = _env(ctx)
+    ctx["admin_page"] = env.fetch("get", f"/tenant/{env.tenant_id}/gam/api/line-item/{line_item_id}")
+
+
+@then("the JSON line item has:")
+def then_json_line_item_has(ctx: dict, datatable: list) -> None:
+    line_item = _require_admin_page(ctx).get_json()["line_item"]
+    for row in datatable[1:]:
+        field, expected = str(row[0]), json.loads(str(row[1]))
+        assert line_item.get(field) == expected, f"line_item[{field!r}] is {line_item.get(field)!r}, not {expected!r}"
+
+
+@when("the operator opens the page of a GAM line item that is not stored, with no page to go back to")
+def when_open_absent_gam_line_item_page(ctx: dict) -> None:
+    env = _env(ctx)
+    ctx["admin_page"] = env.open_page(f"/tenant/{env.tenant_id}/gam/line-item/bdd_absent_line_item")
 
 
 @when(parsers.parse('the users page adds the authorized domain "{domain}" to that tenant'))

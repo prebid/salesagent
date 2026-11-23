@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -47,6 +48,22 @@ class AdminTransport(StrEnum):
 
     INTEGRATION = "admin_integration"  # Flask test_client, in-process
     E2E = "e2e_admin"  # requests.Session against the live stack
+
+
+@dataclass(frozen=True)
+class GamTokenEndpoint:
+    """The token endpoint a seeded GAM service account names as its ``token_uri``.
+
+    It records every token request and refuses it, so a GAM call made with the account
+    fails right after asking for its token, without reaching Google's token service.
+    """
+
+    url: str
+    _request_bodies: Callable[[], list[bytes]]
+
+    def request_bodies(self) -> list[bytes]:
+        """The body of each token request the endpoint received, oldest first."""
+        return self._request_bodies()
 
 
 class AdminAccountEnv:
@@ -99,8 +116,10 @@ class AdminAccountEnv:
         self._database_faults: list[tuple[str, str]] = []
         #: The in-process scripted model origin (:meth:`script_ai_connection_test`), once started.
         self._llm_origin: str | None = None
-        #: What ``__exit__`` closes besides the client: the in-process origin and its variable.
-        self._llm_cleanups = ExitStack()
+        #: The GAM service-account token endpoint (:meth:`gam_token_endpoint`), once started.
+        self._token_endpoint: GamTokenEndpoint | None = None
+        #: What ``__exit__`` closes besides the client: the in-process origins and the LLM variable.
+        self._origin_cleanups = ExitStack()
 
     @property
     def mode(self) -> str:
@@ -138,8 +157,9 @@ class AdminAccountEnv:
 
     def _cleanup(self) -> None:
         """Release what ``_setup`` and the scenario's steps left behind."""
-        self._llm_cleanups.close()
+        self._origin_cleanups.close()
         self._llm_origin = None
+        self._token_endpoint = None
         self._drop_database_faults()
         self._cleanup_accounts()
 
@@ -525,21 +545,68 @@ class AdminAccountEnv:
             PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
 
     def onboard_gam(
-        self, *, tenant_id: str | None = None, service_account_email: str | None = None, connected: bool = True
+        self,
+        *,
+        tenant_id: str | None = None,
+        service_account_email: str | None = None,
+        connected: bool = True,
+        service_account_json: str | None = None,
     ) -> None:
         """Leave *tenant_id* (this env's tenant by default) with the rows GAM onboarding writes.
 
         The service account email is stored if given; GAM onboarding stores none. A tenant
         not *connected* keeps its network code and stores no credentials, as one whose
-        connection was never authorized or was removed.
+        connection was never authorized or was removed. With *service_account_json*, the
+        tenant authenticates with that service account instead of an OAuth refresh token.
         """
         from tests.utils.tenant_setup import onboard_gam
 
         with self._seeding(tenant_id) as (_, tenant):
             config = onboard_gam(tenant, trafficker_id="bdd_trafficker")
             config.gam_service_account_email = service_account_email
-            if not connected:
+            if not connected or service_account_json is not None:
                 config.gam_refresh_token = None
+            if service_account_json is not None:
+                config.gam_auth_method = "service_account"
+                config.gam_service_account_json = service_account_json
+
+    def seed_gam_line_item(self, line_item_id: str, **columns: Any) -> None:
+        """Store the GAM line item *line_item_id* of this env's tenant, as an orders sync does; *columns* are ``GAMLineItem`` columns."""
+        from tests.factories import GAMLineItemFactory
+
+        with self._seeding() as (_, tenant):
+            GAMLineItemFactory(tenant=tenant, line_item_id=line_item_id, **columns)
+
+    def gam_token_endpoint(self) -> GamTokenEndpoint:
+        """The token endpoint for a GAM service account this env seeds, started on first use.
+
+        It refuses every token request with 400, as Google refuses an assertion it does not
+        accept. In process: a loopback origin of this env's own. Over e2e: the compose
+        ``webhook-capture`` service under a fresh key, at the plain-HTTP address the server
+        reaches it by. The service records any body, and answers a form post, which is not
+        JSON, with 400.
+        """
+        if self._token_endpoint is None:
+            self._token_endpoint = (
+                self._e2e_token_endpoint() if self._mode == "e2e" else self._in_process_token_endpoint()
+            )
+        return self._token_endpoint
+
+    def _e2e_token_endpoint(self) -> GamTokenEndpoint:
+        from tests.e2e._webhook_capture import CAPTURE_READBACK_ORIGIN, register_capture_key
+        from tests.e2e.webhook_capture_service import webhook_path
+
+        key, received = register_capture_key()
+        return GamTokenEndpoint(
+            f"{CAPTURE_READBACK_ORIGIN}{webhook_path(key)}", lambda: [request.content for request in received.raw()]
+        )
+
+    def _in_process_token_endpoint(self) -> GamTokenEndpoint:
+        from tests.helpers.local_http_origin import run_local_origin
+
+        origin = self._origin_cleanups.enter_context(run_local_origin())
+        origin.respond_with(400, body=b'{"error": "invalid_grant"}')
+        return GamTokenEndpoint(f"{origin.base_url}/token", lambda: [request.body for request in origin.requests])
 
     def seed_running_inventory_sync(self, sync_id: str, *, tenant_id: str | None = None) -> None:
         """Store an inventory sync *sync_id* of *tenant_id* (this env's by default), started a moment ago, still running."""
@@ -808,6 +875,6 @@ class AdminAccountEnv:
 
             from tests.e2e.scripted_llm_origin_service import run_scripted_llm_origin
 
-            self._llm_origin = self._llm_cleanups.enter_context(run_scripted_llm_origin(host="127.0.0.1", port=0))
-            self._llm_cleanups.enter_context(patch.dict(os.environ, {"GOOGLE_GEMINI_BASE_URL": self._llm_origin}))
+            self._llm_origin = self._origin_cleanups.enter_context(run_scripted_llm_origin(host="127.0.0.1", port=0))
+            self._origin_cleanups.enter_context(patch.dict(os.environ, {"GOOGLE_GEMINI_BASE_URL": self._llm_origin}))
         return self._llm_origin

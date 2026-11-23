@@ -31,17 +31,27 @@ def throwaway_private_key() -> str:
     ).decode()
 
 
-def service_account_json(*, project_id: str = "test-project") -> str:
-    """The JSON string a GAM adapter's ``service_account_json`` config takes."""
+def service_account_email(project_id: str = "test-project") -> str:
+    """The ``client_email`` of :func:`service_account_json`'s account for *project_id*."""
+    return f"test@{project_id}.iam.gserviceaccount.com"
+
+
+def service_account_json(
+    *, project_id: str = "test-project", token_uri: str = "https://oauth2.googleapis.com/token"
+) -> str:
+    """The JSON string a GAM adapter's ``service_account_json`` config takes.
+
+    *token_uri* is where the google auth library asks for the account's access token.
+    """
     return json.dumps(
         {
             "type": "service_account",
             "project_id": project_id,
             "private_key_id": "key123",
             "private_key": throwaway_private_key(),
-            "client_email": f"test@{project_id}.iam.gserviceaccount.com",
+            "client_email": service_account_email(project_id),
             "client_id": "123456789",
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
+            "token_uri": token_uri,
         }
     )

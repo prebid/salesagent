@@ -438,6 +438,7 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
       | signals agent | SignalsAgentNotFound |
       | workflow step | WorkflowStepNotFound |
       | GAM order     | OrderNotFound        |
+      | GAM line item | LineItemNotFound     |
       | sync job      | SyncJobNotFound      |
 
   @T-ADMIN-REFUSAL-037 @json @authorized-domains
@@ -487,7 +488,6 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     Examples:
       | request                       |
       | the GAM custom targeting keys |
-      | a GAM line item               |
       | an orders sync                |
       | an inventory sync             |
       | the GAM advertisers           |
@@ -509,10 +509,62 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
       | an inventory sync |
       | an orders sync    |
 
-  @T-ADMIN-REFUSAL-055 @gam-not-connected
-  Scenario: A GAM line item page of a tenant whose GAM is not connected shows the refusal on the error page
-    Given another tenant of this seller, on Google Ad Manager with no credentials
-    When the operator opens that tenant's GAM line item page with no page to go back to
-    Then the page returns status 409
+  # The line item routes show what the orders sync stored; they never ask GAM. A line item
+  # it did not store is refused by GAMLineItemRepository.require, as a script's request is
+  # in T-ADMIN-REFUSAL-040.
+  @T-ADMIN-REFUSAL-055 @record-not-found
+  Scenario: The page of a GAM line item the orders sync did not store shows the refusal on the error page
+    When the operator opens the page of a GAM line item that is not stored, with no page to go back to
+    Then the page returns status 404
     And the page is the error page
-    And the page shows the "GAMNotConnected" refusal
+    And the page shows the "LineItemNotFound" refusal
+
+  # A stored line item is answered from its own columns: the goal from primary_goal_units, the
+  # delivery from the stats_* columns.
+  @T-ADMIN-REFUSAL-059 @json @gam-line-item
+  Scenario: A GAM line item the orders sync stored is answered with its goal and delivery
+    Given the orders sync stored the GAM line item "987654" with:
+      | column             | value  |
+      | primary_goal_units | 100000 |
+      | stats_impressions  | 4200   |
+      | stats_clicks       | 21     |
+      | stats_ctr          | 0.005  |
+    When a page's script asks for the stored GAM line item "987654"
+    Then the page returns status 200
+    And the JSON line item has:
+      | field                 | value    |
+      | id                    | "987654" |
+      | goal_units            | 100000   |
+      | impressions_delivered | 4200     |
+      | clicks_delivered      | 21       |
+      | ctr                   | 0.005    |
+
+  # Every GAM client is built from the tenant's stored connection, so a tenant on a service
+  # account asks GAM as that account (GAMClientManager.for_adapter_config). Its token endpoint
+  # here records the JWT-bearer request and refuses it, so the GAM call fails right after.
+  @T-ADMIN-REFUSAL-060 @json @gam-service-account
+  Scenario Outline: A request for <request> of a tenant on a GAM service account asks GAM as that account
+    Given another tenant of this seller, on a GAM service account whose token endpoint refuses its token
+    When a page's script asks for <request> of that tenant
+    Then the page returns status 500
+    And the JSON response has "success" as false
+    And the JSON error is an unexpected error with a reference
+    And the service account's token endpoint was asked for a token as that service account
+
+    Examples:
+      | request                       |
+      | the GAM custom targeting keys |
+      | the GAM reporting             |
+
+  # The orders browser's Sync Orders button runs the same orders sync as the sync API
+  # (GAMOrdersService.sync_tenant_orders_as_job): a recorded job, failed when GAM fails.
+  @T-ADMIN-REFUSAL-061 @json @gam-service-account
+  Scenario: An orders sync for a tenant on a GAM service account is recorded as failed when GAM refuses the account
+    Given another tenant of this seller, on a GAM service account whose token endpoint refuses its token
+    When a page's script asks for an orders sync of that tenant
+    Then the page returns status 500
+    And the JSON response has "success" as false
+    And the JSON response has "status" as "failed"
+    And the JSON error is that tenant's orders sync failure with a reference
+    And the sync API reports the answered sync job as failed, with the answered error
+    And the service account's token endpoint was asked for a token as that service account
