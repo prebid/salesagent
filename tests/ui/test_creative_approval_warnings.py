@@ -16,45 +16,38 @@ real), checks the route answered a clean approval, and adds the warnings to the 
 the browser receives. No production code is patched.
 """
 
-import uuid
-from collections.abc import Iterator
+from typing import NamedTuple
 
 import pytest
 from playwright.sync_api import Page, Route
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
 
-from src.core.database.models import Tenant
 from tests.factories import CreativeFactory, PrincipalFactory
-from tests.utils.database_helpers import bind_factories_to_session
+from tests.factories.mint import mint_id
 
 pytestmark = pytest.mark.ui
 
-TENANT_ID = "default"
+
+class PendingCreatives(NamedTuple):
+    tenant_id: str
+    creative_ids: list[str]
 
 
 @pytest.fixture
-def pending_creative_ids(server_db_url) -> Iterator[list[str]]:
-    """Two creatives awaiting review on the default tenant, in the server's database."""
-    run = uuid.uuid4().hex[:8]
-    engine = create_engine(server_db_url)
-    session = Session(bind=engine)
-    try:
-        with bind_factories_to_session(session):
-            tenant = session.get(Tenant, TENANT_ID)
-            assert tenant is not None, f"tenant {TENANT_ID!r} is not in the server's database"
-            principal = PrincipalFactory(tenant=tenant, principal_id=f"ui-approval-{run}")
-            ids = [
-                CreativeFactory(tenant=tenant, principal=principal, creative_id=f"cr-ui-approval-{run}-{n}").creative_id
-                for n in range(2)
-            ]
-        yield ids
-    finally:
-        session.close()
-        engine.dispose()
+def pending_creatives(server_seeding, server_tenant) -> PendingCreatives:
+    """A tenant of its own (``server_tenant``) holding two creatives awaiting review."""
+    with server_seeding():
+        tenant = server_tenant("ui_approval")
+        principal = PrincipalFactory(tenant=tenant, principal_id=mint_id("ui_approval"))
+        ids = [
+            CreativeFactory(tenant=tenant, principal=principal, creative_id=mint_id("cr_ui_approval")).creative_id
+            for _ in range(2)
+        ]
+        return PendingCreatives(tenant.tenant_id, ids)
 
 
-def _approve_on_page(page: Page, base_url: str, creative_id: str, added_warnings: list[str] | None) -> list[str]:
+def _approve_on_page(
+    page: Page, base_url: str, tenant_id: str, creative_id: str, added_warnings: list[str] | None
+) -> list[str]:
     """Click the creative's Approve button, accept every dialog, and return their messages.
 
     ``added_warnings`` is appended to the route's real answer, which must itself be a clean
@@ -71,7 +64,7 @@ def _approve_on_page(page: Page, base_url: str, creative_id: str, added_warnings
         else:
             route.fulfill(response=response, json={**body, "warnings": added_warnings})
 
-    page.route(f"**/tenant/{TENANT_ID}/creatives/review/{creative_id}/approve", amend)
+    page.route(f"**/tenant/{tenant_id}/creatives/review/{creative_id}/approve", amend)
 
     dialogs: list[str] = []
 
@@ -81,9 +74,10 @@ def _approve_on_page(page: Page, base_url: str, creative_id: str, added_warnings
 
     page.on("dialog", accept)
 
-    page.goto(f"{base_url}/tenant/{TENANT_ID}/creatives/review")
+    page.goto(f"{base_url}/tenant/{tenant_id}/creatives/review")
     page.wait_for_load_state("networkidle")
-    button = page.locator(f"button[onclick=\"approveCreative('{creative_id}')\"]")
+    card = page.locator(f'.creative-card[data-creative-id="{creative_id}"]')
+    button = card.get_by_role("button", name="✅ Approve", exact=True)
     # The page reloads once the seller has dismissed the answer, so the reload marks the end.
     with page.expect_navigation():
         button.click()
@@ -94,14 +88,14 @@ def _approve_on_page(page: Page, base_url: str, creative_id: str, added_warnings
     return dialogs
 
 
-def test_seller_sees_each_push_warning_after_approving(authenticated_page: Page, base_url, pending_creative_ids):
-    creative_id = pending_creative_ids[0]
+def test_seller_sees_each_push_warning_after_approving(authenticated_page: Page, base_url, pending_creatives):
+    creative_id = pending_creatives.creative_ids[0]
     warnings = [
         f"Creative {creative_id} was not pushed to buy mb-ui-live: CREATIVE_SIZE_MISMATCH",
         "Creative push to buy mb-ui-other failed — see server logs for details",
     ]
 
-    dialogs = _approve_on_page(authenticated_page, base_url, creative_id, warnings)
+    dialogs = _approve_on_page(authenticated_page, base_url, pending_creatives.tenant_id, creative_id, warnings)
 
     assert len(dialogs) == 2, f"expected the confirmation and one answer, got {dialogs}"
     answer = dialogs[1]
@@ -111,8 +105,9 @@ def test_seller_sees_each_push_warning_after_approving(authenticated_page: Page,
     assert authenticated_page.js_errors == [], f"JS errors: {authenticated_page.js_errors}"
 
 
-def test_approval_without_warnings_reports_success(authenticated_page: Page, base_url, pending_creative_ids):
-    dialogs = _approve_on_page(authenticated_page, base_url, pending_creative_ids[1], added_warnings=None)
+def test_approval_without_warnings_reports_success(authenticated_page: Page, base_url, pending_creatives):
+    tenant_id, (_, creative_id) = pending_creatives
+    dialogs = _approve_on_page(authenticated_page, base_url, tenant_id, creative_id, added_warnings=None)
 
     assert dialogs == ["Are you sure you want to approve this creative?", "✅ Creative approved successfully!"]
     assert authenticated_page.js_errors == [], f"JS errors: {authenticated_page.js_errors}"
