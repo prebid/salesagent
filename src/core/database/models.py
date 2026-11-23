@@ -46,6 +46,7 @@ from src.core.exceptions import AdCPConfigurationError, AdCPPersistedStateError
 from src.core.http_utils import canonical_publisher_domain, is_publisher_domain
 from src.core.json_validators import PLACEMENTS_ARE_EXPLICIT_CHECK, PLACEMENTS_ARE_EXPLICIT_SQL, JSONValidatorMixin
 from src.core.operator_errors import InvalidDomainNameError
+from src.core.schemas.advertising_policy import AdvertisingPolicy
 
 # The ONE NotificationConfig, whose authentication block is the one Authentication class
 # (src/core/schemas/notification.py): a stored row reads back as the same type the request
@@ -151,8 +152,9 @@ class Tenant(Base, JSONValidatorMixin):
     ai_policy: Mapped[dict | None] = mapped_column(
         JSONType, nullable=True, comment="AI review policy configuration with confidence thresholds"
     )
-    advertising_policy: Mapped[dict | None] = mapped_column(
-        JSONType,
+    # The complete policy the operator saved; NULL means the tenant saved none.
+    advertising_policy: Mapped[AdvertisingPolicy | None] = mapped_column(
+        JSONType(model=AdvertisingPolicy),
         nullable=True,
         comment="Advertising policy configuration with prohibited categories, tactics, and advertisers",
     )
