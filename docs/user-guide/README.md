@@ -28,9 +28,9 @@ following pages:
 The sales agent records delivery webhooks in a separate delivery log, which the **Webhooks**
 page does not read. Known issue: [#2604](https://github.com/prebid/salesagent/issues/2604).
 
-The settings page has a navigation menu. **Setup Checklist** and **Users & Access** open
-separate pages, and each other entry opens a section of the settings page. The menu has the
-following entries:
+The settings page has a navigation menu. **Setup Checklist**, **Users & Access**,
+**Signing Keys**, and **Buyer Accounts** open separate pages, and each other entry opens a
+section of the settings page. The menu has the following entries:
 
 - **Account** - Organization name, branding, custom domain, and authorized domains and emails
 - **Setup Checklist** - Every setup task and whether it is complete, including the critical tasks that must be complete before the tenant can take orders
@@ -38,10 +38,12 @@ following entries:
 - **Ad Server** - The ad server adapter and its connection
 - **Policies & Workflows** - Budget controls, brand manifest policy, naming conventions, measurement providers, approval workflow, creative review, advertising policy, and product ranking
 - **Integrations** - Slack, AI services, creative agents, and signals agents
+- **Signing Keys** - The RFC 9421 keys that the tenant signs with, published at `/.well-known/jwks.json`
 - **Publishers** - The publishers you represent
 - **Products** - The product catalog
 - **Inventory** - For a Google Ad Manager tenant, the inventory sync status and links to the inventory browser and the targeting browser
 - **Advertisers** - Principals, the first characters of each API token, and token rotation
+- **Buyer Accounts** - Buyers' accounts, with their brand, operator, billing, and status
 - **Danger Zone** - Deactivation of the sales agent, hidden in single-tenant mode
 
 In multi-tenant mode, `/admin` opens the **Accounts** page for a super admin. The page lists
@@ -51,7 +53,7 @@ every active tenant, 50 per page, and has a **Create New Account** button.
 
 The Admin UI recognizes two kinds of user:
 
-- **Super admin** - An address listed in `SUPER_ADMIN_EMAILS`, or an address in a domain listed in `SUPER_ADMIN_DOMAINS`. A super admin reaches every tenant and passes every role check.
+- **Super admin** - An address listed in `SUPER_ADMIN_EMAILS`, or an address in a domain listed in `SUPER_ADMIN_DOMAINS`. A super admin reaches every tenant and passes every role check. Super-admin access comes only from the deployment's own sign-in: through a tenant's SSO, the same address gets only the role that tenant gives it.
 - **Tenant user** - An active user on the tenant's **Users & Access** page. You add a user by email address, or admit a whole email domain. A tenant user reaches that tenant only.
 
 A tenant user's role decides what that user can do in the tenant:
