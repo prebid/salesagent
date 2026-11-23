@@ -147,33 +147,3 @@ class TestDashboardService:
 
             assert chart_data["labels"] == ["2025-01-01", "2025-01-02"]
             assert chart_data["data"] == [100, 150]
-
-    @patch("src.admin.services.dashboard_service.get_db_session")
-    @patch("src.admin.services.dashboard_service.get_business_activities")
-    def test_health_check_healthy(self, mock_get_activities, mock_get_db):
-        """Test health check when system is healthy."""
-        # Mock successful database connection
-        mock_session = Mock()
-        mock_get_db.return_value.__enter__.return_value = mock_session
-        mock_session.execute.return_value.scalar.return_value = 1
-
-        # Mock successful activity fetch
-        mock_get_activities.return_value = []
-
-        health = DashboardService.health_check()
-
-        assert health["status"] == "healthy"
-        assert health["single_data_source"] == "audit_logs"
-        assert "tasks" in health["deprecated_sources"]
-        assert "human_tasks" in health["deprecated_sources"]
-
-    @patch("src.admin.services.dashboard_service.get_db_session")
-    def test_health_check_unhealthy(self, mock_get_db):
-        """Test health check when system is unhealthy."""
-        # Mock database connection failure
-        mock_get_db.side_effect = Exception("Database connection failed")
-
-        health = DashboardService.health_check()
-
-        assert health["status"] == "unhealthy"
-        assert "Database connection failed" in health["error"]

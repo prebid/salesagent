@@ -196,6 +196,11 @@ class TenantConfigRepository:
         user.is_active = not user.is_active
         return UserChange("changed", user.email, user.is_active)
 
+    def get_active_user_by_email(self, email: str) -> User | None:
+        """The tenant's active user with *email* (compared lower-cased), or None."""
+        stmt = select(User).filter_by(tenant_id=self._tenant_id, email=email.lower(), is_active=True)
+        return self._session.scalars(stmt).first()
+
     def _get_user(self, user_id: str) -> User | None:
         stmt = select(User).filter_by(tenant_id=self._tenant_id, user_id=user_id)
         return self._session.scalars(stmt).first()

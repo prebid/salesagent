@@ -15,7 +15,9 @@ from sqlalchemy import select
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
+from src.core.operator_errors import StateConflict, safe_error_message
 from src.core.thread_registry import ThreadRegistry
+from src.services.sync_jobs import record_sync_failure
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,23 @@ logger = logging.getLogger(__name__)
 # otherwise pin captured DB sessions, GAM clients, and result payloads (leak
 # triage #5 from the production OOM-cycle).
 _active_syncs = ThreadRegistry()
+
+
+class SyncAlreadyRunning(StateConflict):
+    """An inventory sync is already running for the tenant; ``sync_id`` names it.
+
+    ``MESSAGE`` is the operator-facing text; the exception's own text carries
+    the tenant and start time for the log.
+    """
+
+    MESSAGE = "A sync is already running for this tenant"
+
+    def __init__(self, tenant_id: str, sync_id: str, started_at: datetime):
+        super().__init__(f"Sync already running for tenant {tenant_id}: {sync_id} (started {started_at})")
+        self.sync_id = sync_id
+
+    def response_fields(self) -> dict[str, object]:
+        return {"sync_id": self.sync_id}
 
 
 def start_inventory_sync_background(
@@ -48,7 +67,7 @@ def start_inventory_sync_background(
         sync_id: The sync job ID for tracking progress
 
     Raises:
-        ValueError: If a sync is already running for this tenant
+        SyncAlreadyRunning: If a sync is already running for this tenant
     """
 
     # Create sync job record
@@ -81,10 +100,7 @@ def start_inventory_sync_background(
 
             if is_stale:
                 # Mark stale sync as failed and allow new sync to start
-                existing_sync.status = "failed"
-                # SQLAlchemy DateTime column accepts datetime objects
-                existing_sync.completed_at = datetime.now(UTC)
-                existing_sync.error_message = (
+                existing_sync.mark_failed(
                     "Sync thread died (stale after 1+ hour with no progress) - marked as failed to allow fresh sync"
                 )
                 db.commit()
@@ -93,9 +109,7 @@ def start_inventory_sync_background(
                 )
             else:
                 # Sync is actually running, raise error
-                raise ValueError(
-                    f"Sync already running for tenant {tenant_id}: {existing_sync.sync_id} (started {started_at_value})"
-                )
+                raise SyncAlreadyRunning(tenant_id, existing_sync.sync_id, started_at_value)
 
         # Create new sync job
         sync_id = f"sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"
@@ -174,7 +188,7 @@ def _run_sync_thread(
         with get_db_session() as db:
             tenant = db.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
             if not tenant:
-                _mark_sync_failed(sync_id, "Tenant not found")
+                record_sync_failure(tenant_id, sync_id, "Tenant not found")
                 return
 
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
@@ -187,7 +201,7 @@ def _run_sync_thread(
                 or adapter_config.adapter_type != "google_ad_manager"
                 or not adapter_config.gam_network_code
             ):
-                _mark_sync_failed(sync_id, "GAM not configured")
+                record_sync_failure(tenant_id, sync_id, "GAM not configured")
                 return
 
             # Determine auth method
@@ -198,14 +212,14 @@ def _run_sync_thread(
                 elif hasattr(adapter_config, "gam_service_account_json") and adapter_config.gam_service_account_json:
                     auth_method = "service_account"
                 else:
-                    _mark_sync_failed(sync_id, "No GAM authentication configured")
+                    record_sync_failure(tenant_id, sync_id, "No GAM authentication configured")
                     return
 
             # Create GAM client based on auth method
             if auth_method == "service_account":
                 service_account_json_str = adapter_config.gam_service_account_json
                 if not service_account_json_str:
-                    _mark_sync_failed(sync_id, "Service account JSON not found")
+                    record_sync_failure(tenant_id, sync_id, "Service account JSON not found")
                     return
 
                 import json as json_mod
@@ -476,8 +490,7 @@ def _run_sync_thread(
             logger.warning(f"[{sync_id}] Failed to invalidate cache: {cache_error}")
 
     except Exception as e:
-        logger.error(f"[{sync_id}] Sync failed: {e}", exc_info=True)
-        _mark_sync_failed(sync_id, str(e))
+        record_sync_failure(tenant_id, sync_id, safe_error_message(e, f"Inventory sync {sync_id} failed"))
 
     finally:
         # Remove from active syncs
@@ -514,24 +527,6 @@ def _mark_sync_complete(sync_id: str, summary: dict[str, Any]):
                 db.commit()
     except Exception as e:
         logger.error(f"Failed to mark sync complete: {e}")
-
-
-def _mark_sync_failed(sync_id: str, error_message: str):
-    """Mark sync as failed with error message."""
-    try:
-        with get_db_session() as db:
-            stmt = select(SyncJob).where(SyncJob.sync_id == sync_id)
-            sync_job = db.scalars(stmt).first()
-            if sync_job:
-                sync_job.status = "failed"
-                # SQLAlchemy DateTime column accepts datetime objects
-                completed_at = datetime.now(UTC)
-                sync_job.completed_at = completed_at
-                sync_job.error_message = error_message
-                # Note: SyncJob doesn't have duration_seconds field - duration is calculated from started_at/completed_at
-                db.commit()
-    except Exception as e:
-        logger.error(f"Failed to mark sync failed: {e}")
 
 
 def get_active_syncs() -> list[str]:

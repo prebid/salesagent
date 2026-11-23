@@ -166,7 +166,7 @@ function deleteProfile(profileId, profileName) {
         if (data.success) {
             location.reload();
         } else {
-            alert('Error: ' + (data.error || 'Failed to delete profile'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {

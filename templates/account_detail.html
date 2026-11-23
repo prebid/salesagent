@@ -110,7 +110,7 @@ function changeStatus(newStatus) {
     .then(r => r.json())
     .then(data => {
         if (data.success) { window.location.reload(); }
-        else { alert(data.error || 'Failed to change status'); }
+        else { alert(adminErrorText(data)); }
     })
     .catch(err => alert('Error: ' + err));
 }

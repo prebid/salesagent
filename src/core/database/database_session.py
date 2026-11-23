@@ -245,6 +245,17 @@ def _worth_retrying(e: SQLAlchemyError) -> bool:
     return _connection_lost(e) or (_sqlstate(e) or "").startswith("40")
 
 
+def session_unusable(e: BaseException) -> bool:
+    """Whether *e* leaves the session it was raised on unusable, so it must reach ``get_db_session``.
+
+    A dropped connection, or a connect the server never answered (which also trips the
+    fail-fast). A loop that isolates per-item failures re-raises when this is True and
+    keeps going otherwise: a data or statement failure is the server answering on a live
+    connection, and only that item's savepoint is lost.
+    """
+    return isinstance(e, SQLAlchemyError) and (_connection_lost(e) or _server_never_answered(e))
+
+
 @contextmanager
 def get_db_session() -> Generator[Session, None, None]:
     """

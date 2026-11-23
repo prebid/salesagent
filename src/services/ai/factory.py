@@ -5,7 +5,7 @@ import pkgutil
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from pydantic_ai.exceptions import AgentRunError, UserError
+from pydantic_ai.exceptions import AgentRunError, ModelHTTPError, UserError
 
 from src.core.logging_config import log_safe
 from src.core.security.outbound_http import is_transport_failure
@@ -183,8 +183,14 @@ class AIProviderError(Exception):
 
     Raised by :func:`run_agent` so a consumer that degrades when the model is unavailable
     (ranking, the policy check, order naming) catches this one type, while a defect in its
-    own code still propagates.
+    own code still propagates. ``status_code`` is the HTTP status the provider answered
+    with (pydantic-ai's ``ModelHTTPError``), or ``None`` when it answered none, so a
+    caller decides on the cause without reading the provider's text.
     """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 async def run_agent[OutputT](agent: "Agent[None, OutputT]", prompt: str) -> "AgentRunResult[OutputT]":
@@ -203,7 +209,8 @@ async def run_agent[OutputT](agent: "Agent[None, OutputT]", prompt: str) -> "Age
         return await agent.run(prompt)
     except Exception as e:
         if isinstance(e, AgentRunError | UserError) or is_transport_failure(e):
-            raise AIProviderError(f"{type(e).__name__}: {e}") from e
+            status_code = e.status_code if isinstance(e, ModelHTTPError) else None
+            raise AIProviderError(f"{type(e).__name__}: {e}", status_code=status_code) from e
         raise
 
 

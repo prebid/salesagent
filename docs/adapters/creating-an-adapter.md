@@ -131,16 +131,12 @@ An adapter participates in two ways:
    is the most complete example, including custom-targeting key and value
    resolution.
 
-## Optional: Provide a configuration UI
+## Optional: Validate product configuration
 
-An adapter can ship its own admin configuration pages:
-
-- `get_config_ui_endpoint()` — returns the endpoint path for the adapter's
-  configuration UI, or `None` when the adapter has none.
-- `register_ui_routes(app)` — registers Flask routes for those pages during
-  app initialization.
-- `validate_product_config(config)` — validates adapter-specific product
-  configuration and returns `(is_valid, error_message)`.
+`validate_product_config(config)` validates adapter-specific product
+configuration and returns `(is_valid, error_message)`. An adapter's admin
+configuration page is a route in an admin blueprint, like the mock adapter's
+in `src/admin/blueprints/adapters.py`.
 
 ## Rules that bind every adapter
 

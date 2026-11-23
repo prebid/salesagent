@@ -69,21 +69,21 @@ class TestDisableSetupModeEndpoint:
     """
 
     def test_disable_setup_mode_rejects_when_not_sso_logged_in(self, make_users_test_client):
-        """POST disable-setup-mode returns 403 when session auth_method is not 'oidc'."""
+        """POST disable-setup-mode returns 409 when session auth_method is not 'oidc'."""
         with make_users_test_client(auth_setup_mode=True, oidc_enabled=True) as (client, _):
             response = client.post("/tenant/default/users/disable-setup-mode")
-        assert response.status_code == 403
+        assert response.status_code == 409
         body = response.get_json()
         assert body["success"] is False
         assert "logged in via SSO" in body["error"]
 
     def test_disable_setup_mode_rejects_when_sso_not_enabled(self, make_users_test_client):
-        """POST disable-setup-mode returns 400 when tenant auth_config has oidc_enabled=False."""
+        """POST disable-setup-mode returns 409 when tenant auth_config has oidc_enabled=False."""
         with make_users_test_client(auth_setup_mode=True, oidc_enabled=False) as (client, _):
             with client.session_transaction() as sess:
                 sess["auth_method"] = "oidc"
             response = client.post("/tenant/default/users/disable-setup-mode")
-        assert response.status_code == 400
+        assert response.status_code == 409
         body = response.get_json()
         assert body["success"] is False
         assert "SSO must be configured" in body["error"]

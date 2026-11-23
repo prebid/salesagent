@@ -275,23 +275,19 @@ def _mutate_authorized_list(op: AuthorizedListOp, column: AuthorizedListColumn, 
     Both mutations go through TenantConfigRepository's single-statement
     UPDATE (membership test in the WHERE clause), so concurrent edits cannot
     erase each other. These helpers keep their historical contract: idempotent
-    True on duplicate/absent, False only when the tenant is missing or the
-    write errors.
+    True on duplicate/absent, False only when the tenant is missing. A failed
+    write raises, and the admin app's error handler answers it.
     """
-    try:
-        outcome: AddOutcome | RemoveOutcome
-        with TenantConfigUoW(tenant_id) as uow:
-            assert uow.tenant_config is not None
-            if op == "add":
-                outcome = uow.tenant_config.add_to_authorized_list(column, value)
-            else:
-                outcome = uow.tenant_config.remove_from_authorized_list(column, value)
-        if outcome in ("added", "removed"):
-            logger.info(f"{op} {value} on {column} for tenant {tenant_id}")
-        return outcome != "missing_tenant"
-    except Exception as e:
-        logger.error(f"Error on {op} {value} ({column}) for tenant {tenant_id}: {e}")
-        return False
+    outcome: AddOutcome | RemoveOutcome
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        if op == "add":
+            outcome = uow.tenant_config.add_to_authorized_list(column, value)
+        else:
+            outcome = uow.tenant_config.remove_from_authorized_list(column, value)
+    if outcome in ("added", "removed"):
+        logger.info(f"{op} {value} on {column} for tenant {tenant_id}")
+    return outcome != "missing_tenant"
 
 
 def add_authorized_domain(tenant_id: str, domain: str) -> bool:
