@@ -39,10 +39,10 @@ class TestCoreRoutes:
         response = authenticated_admin_session.get("/metrics")
         assert response.status_code in [200, 501]  # May not be implemented
 
-    def test_debug_headers(self, authenticated_admin_session):
-        """Test /debug/headers endpoint."""
+    def test_debug_headers_is_gone(self, authenticated_admin_session):
+        """/debug/headers echoed the session cookie back; it is removed, even for a super admin."""
         response = authenticated_admin_session.get("/debug/headers")
-        assert response.status_code == 200
+        assert response.status_code == 404
 
     def test_create_tenant_page(self, authenticated_admin_session):
         """Test /create_tenant page renders."""

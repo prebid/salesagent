@@ -30,6 +30,7 @@ from tests.bdd.steps._outcome_helpers import wire_product_ids
 from tests.bdd.steps.domain.uc_get_products_inventory import given_tenant
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import PricingOptionFactory, ProductFactory
+from tests.helpers.settings_injection import KEYLESS_AI_CONFIG
 
 #: The products the scenarios name, in catalog order. ``ProductRepository.list_all`` orders
 #: by ``product_id``, so "catalog order" is a claim about production, checked as each
@@ -73,11 +74,8 @@ _SELLER_AI: dict[str, Callable[[Any], None]] = {
     ),
     "in the legacy gemini_api_key column": lambda env: _configure_seller_ai(env, None, env.scripted_model_key),
     "nowhere": lambda env: _configure_seller_ai(env, None),
-    # What the settings page stores when the seller leaves the key blank, telling the
-    # seller "AI features will be disabled" as it saves it.
-    "in an ai_config row without an API key": lambda env: _configure_seller_ai(
-        env, {"provider": "gemini", "model": "gemini-2.0-flash"}
-    ),
+    # What the settings page stores when the seller leaves the key blank.
+    "in an ai_config row without an API key": lambda env: _configure_seller_ai(env, KEYLESS_AI_CONFIG),
     # A provider other than the platform's (Google) with a blank model: the platform's
     # default model belongs to another vendor and may not fill in, so no model resolves
     # and the factory refuses to build one.

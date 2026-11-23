@@ -12,7 +12,7 @@ from src.admin.form_validation import form_number, json_object_body, required_va
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig, Product
+from src.core.database.models import AdapterConfig, Product, UserRole
 from src.core.operator_errors import ConnectionTestFailed, FormIssue, InvalidFormInput
 
 logger = logging.getLogger(__name__)
@@ -103,26 +103,9 @@ def mock_config(tenant_id, product_id, **kwargs):
         )
 
 
-@adapters_bp.route("/adapter/<adapter_name>/inventory_schema", methods=["GET"])
-@require_tenant_access()
-def adapter_adapter_name_inventory_schema(tenant_id, **kwargs):
-    """TODO: Extract implementation from admin_ui.py."""
-    # Placeholder implementation
-    return jsonify({"error": "Not yet implemented"}), 501
-
-
-@adapters_bp.route("/setup_adapter", methods=["POST"])
-@log_admin_action("setup_adapter")
-@require_tenant_access()
-def setup_adapter(tenant_id, **kwargs):
-    """TODO: Extract implementation from admin_ui.py."""
-    # Placeholder implementation
-    return jsonify({"error": "Not yet implemented"}), 501
-
-
 @adapters_bp.route("/api/tenant/<tenant_id>/adapter-config", methods=["POST"])
-@log_admin_action("update_adapter_config")
-@require_tenant_access()
+@log_admin_action("update_adapter_config", audit_fields=("adapter_type",))
+@require_tenant_access(role=UserRole.ADMIN)
 def save_adapter_config(tenant_id, **kwargs):
     """Save adapter connection configuration.
 
@@ -183,25 +166,6 @@ def save_adapter_config(tenant_id, **kwargs):
         logger.info(f"Saved adapter config for tenant {tenant_id}: {adapter_type}")
 
     return jsonify({"success": True, "adapter_type": adapter_type})
-
-
-@adapters_bp.route("/api/adapters/<adapter_type>/capabilities", methods=["GET"])
-@require_tenant_access()
-def get_adapter_capabilities(adapter_type, tenant_id, **kwargs):
-    """Get capabilities for an adapter type.
-
-    Returns the AdapterCapabilities for UI to show/hide sections.
-    """
-    from dataclasses import asdict
-
-    schemas = get_adapter_schemas(adapter_type)
-    if not schemas:
-        return jsonify({"error": f"Unknown adapter type: {adapter_type}"}), 404
-
-    if schemas.capabilities:
-        return jsonify(asdict(schemas.capabilities))
-    else:
-        return jsonify({})
 
 
 # Broadstreet-specific endpoints

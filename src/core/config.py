@@ -251,6 +251,20 @@ class AuthSettings(BaseSettings):
     google_application_credentials: str | None = None
     google_application_credentials_json: str | None = None
 
+    @field_validator("super_admin_domains", "tenant_management_domains")
+    @classmethod
+    def _domain_lists_hold_domain_names(cls, v: str | None, info: ValidationInfo) -> str | None:
+        """Start-up fails naming the variable: these lists become tenants' authorized domains."""
+        # Imported here: http_utils reaches src.core.operator_errors, which imports this module.
+        from src.core.http_utils import authorized_domain
+
+        if any(authorized_domain(domain) is None for domain in split_csv(v)):
+            raise ValueError(
+                f"{(info.field_name or '').upper()} holds a value that is not a domain name; "
+                "enter internationalized names in their xn-- form"
+            )
+        return v
+
     @field_validator("gam_oauth_client_id")
     @classmethod
     def _gam_client_id_shape(cls, v: str) -> str:
