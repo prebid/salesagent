@@ -77,16 +77,9 @@ The form offers only the properties that your publishers authorize in their
 
 ### Inventory on Google Ad Manager
 
-On the Google Ad Manager form, **Inventory Configuration** takes one of two inputs:
-
-- An inventory profile, which supplies the ad units, the placements, the creative
-  formats, and the publisher properties. Click **Create New** to add a profile.
-- The ad units and placements you pick with **Browse Ad Units** and **Browse Placements**.
-
-Both buttons stay inactive until you sync the Google Ad Manager inventory. The sales agent
-picks each line item's type from the package's pricing model and the product's configured
-type. The priority follows from the line item type. See
-[GAM product configuration](../adapters/gam/product-configuration.md) for the details.
+On the Google Ad Manager form, **Inventory Configuration** sets the product's inventory, as
+[GAM settings on the product form](../adapters/gam/product-configuration.md#gam-settings-on-the-product-form)
+describes.
 
 ### Targeting
 
@@ -123,9 +116,11 @@ The sales agent offers a product only when both of these conditions hold:
 A product that fails a condition is absent from `get_products`, and `create_media_buy`
 refuses it.
 
-The sales agent uses a publisher's `adagents.json` for 24 hours after the last successful
-fetch. A scheduled job fetches every publisher's file again every 6 hours. To fetch the
-files immediately, click **Sync All Publishers** on the **Publishers & Properties** tab.
+A publisher whose `adagents.json` the sales agent cannot fetch stops authorizing the product
+once its last fetched file expires. For how long a fetched file counts and how often the
+sales agent fetches it again, see
+[Publisher adagents.json](../deployment/vm.md#step-11-publisher-adagentsjson). To fetch every
+publisher's file at once, click **Sync All Publishers** on the **Publishers & Properties** tab.
 
 ## Sample products
 

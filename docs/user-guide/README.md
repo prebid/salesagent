@@ -26,7 +26,7 @@ following pages:
 - **Settings** - Configure the tenant
 
 The sales agent records delivery webhooks in a separate delivery log, which the **Webhooks**
-page does not read.
+page does not read. Known issue: [#2604](https://github.com/prebid/salesagent/issues/2604).
 
 The settings page has a navigation menu. **Setup Checklist** and **Users & Access** open
 separate pages, and each other entry opens a section of the settings page. The menu has the
@@ -76,29 +76,8 @@ See [SSO setup](sso-setup.md) for configuring authentication, and
 
 ## Connect AI agents
 
-Once configured, AI agents connect via MCP:
-
-```python
-from fastmcp.client import Client, StreamableHttpTransport
-
-# Get your endpoint and token from Admin UI > Advertisers > View Token
-transport = StreamableHttpTransport(
-    url="https://your-domain.com/mcp/",
-    headers={"Authorization": "Bearer your-principal-token"}
-)
-
-async with Client(transport=transport) as client:
-    # List available products
-    products = await client.call_tool("get_products", {"brief": "video ads"})
-
-    # Create a media buy
-    result = await client.call_tool("create_media_buy", {
-        "product_ids": ["prod_123"],
-        "budget": {"amount": 10000, "currency": "USD"},
-        "flight_start": "2024-02-01",
-        "flight_end": "2024-02-28"
-    })
-```
+An AI agent connects over MCP with an advertiser's API token, as
+[MCP client configuration](advertisers.md#mcp-client-configuration) shows.
 
 ## Related documentation
 
