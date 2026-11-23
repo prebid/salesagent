@@ -304,7 +304,6 @@ def tenant_settings(tenant_id, section=None):
         ai_config = tenant.ai_config or {}
         current_provider = ai_config.get("provider", "")
         current_model = ai_config.get("model", "")
-        has_logfire = bool(ai_config.get("logfire_token"))
 
         # Get setup checklist status
         setup_status = _setup_status_tile(tenant_id)
@@ -321,7 +320,6 @@ def tenant_settings(tenant_id, section=None):
             seller_ai_enabled=seller_ai_enabled,
             current_provider=current_provider,
             current_model=current_model,
-            has_logfire=has_logfire,
             tenant_id=tenant_id,
             section=section or "general",
             active_adapter=active_adapter,

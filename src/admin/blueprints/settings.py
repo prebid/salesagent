@@ -531,7 +531,6 @@ def update_ai(tenant_id):
     provider = request.form.get("ai_provider", "gemini").strip()
     model = request.form.get("ai_model", "").strip()
     api_key = request.form.get("ai_api_key", "").strip()
-    logfire_token = request.form.get("logfire_token", "").strip()
 
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -561,12 +560,8 @@ def update_ai(tenant_id):
         if existing_config.get("settings"):
             new_config["settings"] = existing_config["settings"]
 
-        # Handle Logfire token: use new one if provided, otherwise keep existing
-        # Skip placeholder value that indicates existing token
-        if logfire_token and logfire_token != "••••••••":
-            new_config["logfire_token"] = logfire_token
-        elif existing_config.get("logfire_token"):
-            new_config["logfire_token"] = existing_config["logfire_token"]
+        # No logfire_token: a tenant token is not used. Logfire export is configured once,
+        # for the whole process, from the deployment's own LOGFIRE_TOKEN.
 
         # Update the tenant
         tenant.ai_config = new_config
@@ -710,37 +705,6 @@ def ai_refusal_for(status_code: int | None) -> type[OperatorRefusal] | None:
     if status_code is None or not 400 <= status_code < 500:
         return None
     return _AI_REFUSAL_BY_STATUS.get(status_code, AIProviderRefusedRequest)
-
-
-@settings_bp.route("/ai/test-logfire", methods=["POST"])
-@require_tenant_access()
-def test_logfire_connection(tenant_id):
-    """Test Logfire connection with provided token."""
-    [logfire_token] = required_values(json_object_body(), "logfire_token")
-
-    # A dependency of this app (pyproject.toml), so it is always importable.
-    import logfire
-
-    # No token is refused here: logfire.configure accepts any string and checks the token
-    # on a background thread, where it only warns. What it does raise
-    # (LogfireConfigError) is about this deployment's own Logfire settings, not the
-    # operator's token, so the admin error handler answers it as an unexpected failure.
-    logfire.configure(
-        token=logfire_token,
-        service_name="adcp-sales-agent-test",
-    )
-
-    # Send a test span to verify the token works
-    with logfire.span("test_connection", _level="info") as span:
-        span.set_attribute("test", True)
-        span.set_attribute("tenant_id", tenant_id)
-
-    return jsonify(
-        {
-            "success": True,
-            "message": "Logfire connection successful! Check your Logfire dashboard for the test span.",
-        }
-    )
 
 
 @settings_bp.route("/ai/models", methods=["GET"])

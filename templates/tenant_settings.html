@@ -2318,23 +2318,6 @@ Exclude any products that don't match the brand's tone.</pre>
                         </small>
                     </div>
 
-                    <div class="form-group">
-                        <label for="logfire_token">Logfire Token (Optional)</label>
-                        <div style="display: flex; gap: 0.5rem; align-items: flex-start;">
-                            <input type="password" id="logfire_token" name="logfire_token"
-                                   placeholder="Enter Logfire token for AI observability"
-                                   autocomplete="new-password"
-                                   style="flex: 1;"
-                                   {% if has_logfire %}value="••••••••"{% endif %}>
-                            <button type="button" onclick="testLogfireConnection()" class="btn btn-secondary btn-sm" style="white-space: nowrap;">Test Logfire</button>
-                        </div>
-                        <small>
-                            Optional. Enable <a href="https://logfire.pydantic.dev/" target="_blank">Logfire</a> for AI request tracing and observability.
-                            {% if has_logfire %}<span style="color: #10b981;">Configured</span>{% endif %}
-                        </small>
-                        <div id="logfire-test-result" style="display: none; margin-top: 0.5rem; padding: 0.5rem; border-radius: 4px; font-size: 0.875rem;"></div>
-                    </div>
-
                     <div class="button-group">
                         <button type="submit" class="btn btn-primary">Save AI Settings</button>
                         <button type="button" onclick="testAIConnection()" class="btn btn-secondary">Test AI Connection</button>
@@ -2490,57 +2473,6 @@ Exclude any products that don't match the brand's tone.</pre>
                         });
 
                         // Handle authentication errors
-                        if (response.status === 401) {
-                            resultDiv.style.background = '#fef3c7';
-                            resultDiv.style.border = '1px solid #fbbf24';
-                            resultDiv.innerHTML = '<strong>Session expired.</strong> Please <a href="' + scriptRoot + '/login">log in again</a>.';
-                            return;
-                        }
-
-                        const data = await response.json();
-
-                        if (data.success) {
-                            resultDiv.style.background = '#d1fae5';
-                            resultDiv.style.border = '1px solid #34d399';
-                            resultDiv.innerHTML = '<strong>Success!</strong> ' + escapeHtml(data.message);
-                        } else {
-                            resultDiv.style.background = '#fee2e2';
-                            resultDiv.style.border = '1px solid #f87171';
-                            resultDiv.innerHTML = '<strong>Failed:</strong> ';
-                            resultDiv.append(adminErrorText(data));
-                        }
-                    } catch (error) {
-                        resultDiv.style.background = '#fee2e2';
-                        resultDiv.style.border = '1px solid #f87171';
-                        resultDiv.innerHTML = '<strong>Error:</strong> ' + escapeHtml(error.message);
-                    }
-                }
-
-                async function testLogfireConnection() {
-                    const resultDiv = document.getElementById('logfire-test-result');
-                    const logfireToken = document.getElementById('logfire_token').value;
-
-                    if (!logfireToken || logfireToken === '••••••••') {
-                        resultDiv.style.display = 'block';
-                        resultDiv.style.background = '#fef3c7';
-                        resultDiv.style.border = '1px solid #fbbf24';
-                        resultDiv.innerHTML = 'Enter a Logfire token to test, or save first to test the existing token.';
-                        return;
-                    }
-
-                    resultDiv.style.display = 'block';
-                    resultDiv.style.background = '#f3f4f6';
-                    resultDiv.style.border = '1px solid #d1d5db';
-                    resultDiv.innerHTML = 'Testing Logfire connection...';
-
-                    try {
-                        const response = await fetch(scriptRoot + '/tenant/' + {{ tenant.tenant_id|tojson }} + '/settings/ai/test-logfire', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            credentials: 'same-origin',
-                            body: JSON.stringify({ logfire_token: logfireToken })
-                        });
-
                         if (response.status === 401) {
                             resultDiv.style.background = '#fef3c7';
                             resultDiv.style.border = '1px solid #fbbf24';
