@@ -183,34 +183,17 @@ def _resolve_tenant_id_and_fallback_adapter(tenant: TenantLike) -> tuple[str, st
 def resolve_tenant_adapter_type(tenant: TenantLike) -> str:
     """Resolve the authoritative ad-server adapter type for a tenant.
 
-    Single source of truth for adapter-TYPE resolution: ``AdapterConfig.adapter_type``
-    (via ``AdapterConfigRepository``) wins when a row exists, falling back to
-    ``tenant.ad_server``/``tenant["ad_server"]`` otherwise. ``get_adapter()`` and the
-    principal-free ``get_adapter_class_for_tenant()`` read path both route through
-    this function so the two can never diverge (salesagent-dn2s: divergent
-    tenant-adapter-type resolution copies would only half-close INV-4).
+    ``AdapterConfig.adapter_type`` wins when a row exists, falling back to
+    ``tenant.ad_server``/``tenant["ad_server"]`` otherwise. The rule is
+    :func:`adapter_context_of`'s, which ``get_adapter()`` (through ``build_adapter``) and the
+    principal-free ``get_adapter_class_for_tenant()`` read path both apply, so the two can
+    never diverge (salesagent-dn2s: divergent tenant-adapter-type resolution copies would
+    only half-close INV-4).
 
     Args:
         tenant: Tenant context (dict or ORM model).
     """
-    from src.core.database.repositories.adapter_config import read_adapter_config
-
-    tenant_id, _fallback = _resolve_tenant_id_and_fallback_adapter(tenant)
-    return _adapter_type_of(tenant, read_adapter_config(tenant_id))
-
-
-def _adapter_type_of(tenant: TenantLike, config_row: DBAdapterConfig | None) -> str:
-    """The adapter type *config_row* selects for *tenant*: the row's ``adapter_type``, else ``tenant.ad_server``.
-
-    The one selection rule, for callers that read the row themselves (``build_adapter``) and
-    for the ones that let :func:`resolve_tenant_adapter_type` read it.
-    """
-    _tenant_id, selected_adapter = _resolve_tenant_id_and_fallback_adapter(tenant)
-    logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
-    if config_row and config_row.adapter_type:
-        selected_adapter = config_row.adapter_type
-        logger.info(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
-    return selected_adapter or "mock"
+    return resolve_adapter_context(tenant).adapter_type
 
 
 @dataclass(frozen=True)
@@ -230,11 +213,29 @@ class AdapterContext:
 
 
 def resolve_adapter_context(tenant: TenantLike) -> AdapterContext:
-    """The ONE resolve every adapter helper starts from (#1721 Lane B, step 4.1)."""
-    resolved_tenant = tenant
-    adapter_type = resolve_tenant_adapter_type(resolved_tenant)
-    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
-    return AdapterContext(tenant=resolved_tenant, adapter_type=adapter_type, tenant_id=tenant_id)
+    """The ONE resolve every adapter helper starts from (#1721 Lane B, step 4.1).
+
+    Reads the tenant's ``adapter_config`` row in a session of its own; a caller that holds the
+    row already calls :func:`adapter_context_of`.
+    """
+    from src.core.database.repositories.adapter_config import read_adapter_config
+
+    tenant_id, _fallback = _resolve_tenant_id_and_fallback_adapter(tenant)
+    return adapter_context_of(tenant, read_adapter_config(tenant_id))
+
+
+def adapter_context_of(tenant: TenantLike, config_row: DBAdapterConfig | None) -> AdapterContext:
+    """The context *config_row* gives *tenant*: the row's ``adapter_type``, else ``tenant.ad_server``.
+
+    The one selection rule, for :func:`resolve_adapter_context`, which reads the row, and for
+    ``build_adapter``, whose caller read it inside its own unit of work.
+    """
+    tenant_id, selected_adapter = _resolve_tenant_id_and_fallback_adapter(tenant)
+    logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
+    if config_row and config_row.adapter_type:
+        selected_adapter = config_row.adapter_type
+        logger.info(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
+    return AdapterContext(tenant=tenant, adapter_type=selected_adapter or "mock", tenant_id=tenant_id)
 
 
 def get_adapter_class_for_tenant(tenant: TenantLike) -> type[AdServerAdapter]:
@@ -410,8 +411,9 @@ def build_adapter(
 
     principal = identity.principal
     tenant = identity.tenant
-    tenant_id, _fallback = _resolve_tenant_id_and_fallback_adapter(tenant)
-    selected_adapter = _adapter_type_of(tenant, config_row)
+    ctx = adapter_context_of(tenant, config_row)
+    tenant_id = ctx.tenant_id
+    selected_adapter = ctx.adapter_type
 
     targeting_config: dict[str, object] | None = None
     naming_templates: tuple[str | None, str | None] | None = None
