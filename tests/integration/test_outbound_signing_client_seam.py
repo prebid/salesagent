@@ -67,7 +67,7 @@ import pytest
 
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.egress_backoff import set_flags
-from tests.helpers.signing import deployment_kek, provision_key, signing_key_repo
+from tests.helpers.signing import TEST_KEK_VARIABLE, deployment_kek, install_kek, provision_key, signing_key_repo
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -256,15 +256,7 @@ class TestRequestSignerForTenantPostureGate:
         # The deployment KEK the private half was wrapped under is now the wrong
         # one: the row, the posture and the origin are all still perfectly good, so
         # the gate still says this tenant signs.
-        monkeypatch.setenv("SALESAGENT_TEST_SIGNING_KEK", "not-the-key-this-was-wrapped-under")
-        # Drop the cached settings so nothing built before this point can keep
-        # serving the old ``SigningSettings``. ``key_passphrase`` itself re-reads the
-        # environment per use, so this is belt-and-braces rather than the mechanism --
-        # but it is spelled WITHOUT ``raising=False``: ``_settings`` is the real module
-        # global on this boundary (the predecessor named ``_config``, which no longer
-        # exists), and a silently-created attribute would make this test pass for
-        # having asserted nothing about the KEK at all.
-        monkeypatch.setattr("src.core.config._settings", None)
+        install_kek(monkeypatch, TEST_KEK_VARIABLE, "not-the-key-this-was-wrapped-under")
         clear_signing_provider_cache()
 
         with pytest.raises(AdCPConfigurationError):

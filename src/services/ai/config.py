@@ -60,8 +60,8 @@ class TenantAIConfig(BaseModel):
     # API key (encrypted in database, decrypted when loaded)
     api_key: str | None = None
 
-    # Observability
-    logfire_token: str | None = None
+    # No logfire_token: Logfire export is configured once, for the whole process, from the
+    # deployment's LOGFIRE_TOKEN. A legacy stored key is dropped on read (extra="ignore").
 
     # Model behavior settings
     settings: ModelSettings = Field(default_factory=ModelSettings)

@@ -67,12 +67,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/gam/managers/targeting.py", "_load_axe_keys"),
     ("src/adapters/gam/managers/targeting.py", "_load_custom_targeting_key_ids"),
     # sync_custom_targeting_keys removed — uses AdapterConfigRepository
-    ("src/adapters/gam_reporting_api.py", "get_ad_unit_breakdown"),
-    ("src/adapters/gam_reporting_api.py", "get_advertiser_summary"),
-    ("src/adapters/gam_reporting_api.py", "get_country_breakdown"),
-    ("src/adapters/gam_reporting_api.py", "get_gam_reporting"),
-    ("src/adapters/gam_reporting_api.py", "get_principal_reporting"),
-    ("src/adapters/gam_reporting_api.py", "get_principal_summary"),
     ("src/adapters/google_ad_manager.py", "create_media_buy"),
     ("src/adapters/google_ad_manager.py", "get_packages_snapshot"),
     ("src/adapters/xandr.py", "_create_human_task"),
@@ -143,7 +137,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/operations.py", "media_buy_detail"),
     ("src/admin/blueprints/operations.py", "reporting"),
     ("src/admin/blueprints/policy.py", "index"),
-    ("src/admin/blueprints/policy.py", "review_task"),
     ("src/admin/blueprints/policy.py", "update"),
     ("src/admin/blueprints/principals.py", "create_principal"),
     # delete_principal removed — the lookup goes through PrincipalRepository.get()
@@ -224,7 +217,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     # is_super_admin and require_tenant_access fixed — the super-admin rows go through
     # TenantManagementConfigRepository, the caller's User row through TenantConfigRepository
     ("src/admin/utils/helpers.py", "get_tenant_config_from_db"),
-    ("src/admin/utils/helpers.py", "is_tenant_admin"),
     # ── Core ──
     ("src/core/audit_logger.py", "log_operation"),
     ("src/core/audit_logger.py", "log_security_violation"),

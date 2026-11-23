@@ -208,7 +208,6 @@ function loadProfilePreview(profileId) {
         return;
     }
 
-    const scriptRoot = '{{ request.script_root }}' || '';
     fetch(`${scriptRoot}/api/inventory-profiles/${safeProfileId}`, {
         credentials: 'same-origin'
     })
@@ -225,7 +224,7 @@ function loadProfilePreview(profileId) {
         details.textContent = `Ad Units: ${adUnitCount} | Formats: ${formatCount}`;
 
         document.getElementById('profile-preview-edit-link').href =
-            `${scriptRoot}/tenant/{{ tenant_id }}/inventory-profiles/${safeProfileId}/edit`;
+            `${scriptRoot}/tenant/${ {{ tenant_id|tojson }} }/inventory-profiles/${safeProfileId}/edit`;
     })
     .catch(error => {
         console.error('Error loading profile:', error);

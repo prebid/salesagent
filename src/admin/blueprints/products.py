@@ -1128,10 +1128,9 @@ def add_product(tenant_id):
                 if countries is not None:
                     product_kwargs["countries"] = countries
 
-                # Handle channels field (advertising channels)
-                channels = request.form.getlist("channels")
-                if channels:
-                    product_kwargs["channels"] = channels
+                # Advertising channels. The column's validator owns the rule: it refuses a value
+                # outside MediaChannel and stores an empty selection as NULL.
+                product_kwargs["channels"] = request.form.getlist("channels")
 
                 # Handle principal access control (allowed_principal_ids)
                 # Empty list or no selection means visible to all (default)
@@ -1438,15 +1437,9 @@ def edit_product(tenant_id, product_id):
 
                 attributes.flag_modified(product, "countries")
 
-            # Handle channels field (advertising channels)
-            from sqlalchemy.orm import attributes
-
-            channels = request.form.getlist("channels")
-            if channels:
-                product.channels = channels
-            else:
-                product.channels = None
-            attributes.flag_modified(product, "channels")
+            # Advertising channels. The column's validator owns the rule: it refuses a value
+            # outside MediaChannel, which the error handler answers on this page.
+            product.channels = request.form.getlist("channels")
 
             # Handle principal access control (allowed_principal_ids)
             # Empty list or no selection means visible to all (default)

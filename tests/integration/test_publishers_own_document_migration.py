@@ -30,7 +30,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import text
 
-from tests.integration.migration_helpers import run_alembic_downgrade, run_alembic_upgrade
+from tests.integration.migration_helpers import run_alembic_downgrade, run_alembic_upgrade, seed_product
 from tests.utils.database_helpers import vhost_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -99,23 +99,15 @@ def _seed_authorized(engine, properties) -> None:
 
 
 def _seed_product(engine, product_id: str, *, property_tags=None, property_ids=None, properties=None) -> None:
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO products (tenant_id, product_id, name, description, delivery_type, format_ids, "
-                "targeting_template, delivery_measurement, properties, property_tags, property_ids) "
-                "VALUES (:tid, :pid, :pid, 'x', 'guaranteed', '[]'::jsonb, '{}'::jsonb, "
-                '\'{"provider": "publisher"}\'::jsonb, CAST(:props AS jsonb), CAST(:tags AS jsonb), '
-                "CAST(:ids AS jsonb))"
-            ),
-            {
-                "tid": _TENANT,
-                "pid": product_id,
-                "props": None if properties is None else json.dumps(properties),
-                "tags": None if property_tags is None else json.dumps(property_tags),
-                "ids": None if property_ids is None else json.dumps(property_ids),
-            },
-        )
+    seed_product(
+        engine,
+        tenant_id=_TENANT,
+        product_id=product_id,
+        delivery_measurement={"provider": "publisher"},
+        properties=properties,
+        property_tags=property_tags,
+        property_ids=property_ids,
+    )
 
 
 def _rows(engine, sql: str, **params) -> list[tuple]:

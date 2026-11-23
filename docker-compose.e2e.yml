@@ -109,6 +109,10 @@ services:
       # against api.anthropic.com and letting the consumer fail open.
       ANTHROPIC_BASE_URL: http://scripted-llm:8080
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
+      # The operator's own domain, which no tenant may authorize.
+      # BR-ADMIN-OPERATOR-REFUSALS.feature and tests/ui/test_admin_error_answers.py name
+      # this value, so the three change together.
+      SUPER_ADMIN_DOMAIN: "operator.bdd-refusals.example"
       ADCP_TESTING: ${ADCP_TESTING:-true}
       # The status-sweep scenarios run their own tick. At the 60-second default the
       # server's scheduler can flip the unpoisoned siblings first, and the scenario
@@ -1100,7 +1104,7 @@ networks:
   # succeeds once and the SECOND stack on the box fails with "Pool overlaps with
   # other one on this address space" — even for a /28 inside the held /24. This
   # repo runs stacks concurrently BY DESIGN (scripts/test-stack.sh sets
-  # COMPOSE_PROJECT_NAME="adcp-test-$$"), so the allocator hands each stack a
+  # a per-run COMPOSE_PROJECT_NAME="adcp-test-<random>"), so the allocator hands each stack a
   # DISJOINT slice the same way it hands out host ports.
   #
   # SIZED FROM THE PEAK CONTAINER COUNT, not guessed. A full run is NOT the 8

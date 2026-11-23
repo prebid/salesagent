@@ -350,3 +350,19 @@ def when_send_slack_test_for_absent_tenant(ctx: dict) -> None:
 @when(parsers.parse('the users page adds the authorized domain "{domain}" to that tenant'))
 def when_add_authorized_domain(ctx: dict, domain: str) -> None:
     ctx["admin_page"] = _env(ctx).fetch_tenant_route(_other_tenant_id(ctx), "users/domains", {"domain": domain})
+
+
+@given(parsers.parse('the deployment\'s super-admin domain is "{domain}"'))
+def given_super_admin_domain(ctx: dict, domain: str) -> None:
+    _env(ctx).name_super_admin_domain(domain)
+
+
+@when(parsers.parse('the settings page\'s form adds the authorized domain "{domain}" to that tenant, from no page'))
+def when_settings_form_adds_authorized_domain(ctx: dict, domain: str) -> None:
+    ctx["admin_page"] = _env(ctx).submit_tenant_form(_other_tenant_id(ctx), "settings/domains/add", {"domain": domain})
+
+
+@then(parsers.parse('that tenant authorizes only the domain "{domain}"'))
+def then_tenant_authorizes_only(ctx: dict, domain: str) -> None:
+    stored = _env(ctx).authorized_domains_of(_other_tenant_id(ctx))
+    assert stored == [domain], f"Expected the tenant to authorize only {domain!r}, it authorizes {stored!r}"
