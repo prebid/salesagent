@@ -323,7 +323,7 @@ def set_adapter_test_behavior(env: Any, tenant_id: str, **behavior: Any) -> Adap
     ``fail_on_create``, ``fail_on_update``, ``fail_on_update_action``, ``error_message``, ``error_details``,
     ``recovery``, ``reject_on_create``/``rejection_reason`` — from
     ``AdapterConfig.config_json["test_behavior"]`` (see
-    ``mock_ad_server._read_test_behavior``). In-process transports use the env's
+    ``adapter_helpers._simulating_adapter_config``). In-process transports use the env's
     MagicMock adapter directly and ignore this row; it exists so the same BDD Given
     steps also drive the real adapter over E2E.
 

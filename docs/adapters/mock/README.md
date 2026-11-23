@@ -211,8 +211,8 @@ with a random reason from `rejection_reasons`.
 
 Containerized tests cannot patch an in-process mock, so BDD Given steps
 persist failure injection into the `adapter_config` table's `config_json`
-under a `test_behavior` key. On the next matching operation the adapter reads
-it and raises a typed error:
+under a `test_behavior` key. The adapter factory passes it to the adapter it
+builds for each request, and the next matching operation raises a typed error:
 
 - `fail_on_create`, `fail_on_update`, and `fail_on_upload` flag which
   operation fails.

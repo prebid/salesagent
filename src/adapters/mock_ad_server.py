@@ -338,31 +338,17 @@ class MockAdServer(AdServerAdapter):
             if self.hitl_mode == "mixed":
                 self.log(f"   Operation overrides: {self.operation_modes}")
 
-    def _read_test_behavior(self) -> dict:
-        """Read test_behavior from AdapterConfig for this tenant.
+    @property
+    def _test_behavior(self) -> dict[str, Any]:
+        """The tenant's injected ``test_behavior``, as the adapter factory read it off ``adapter_config``.
 
-        BDD Given steps write test_behavior via AdapterConfigFactory so the
-        Docker-hosted mock adapter can pick up error/failure injection that
-        was previously only possible via in-process mock patching.
-
-        Returns the test_behavior dict, or {} if not configured.
+        BDD Given steps write it via ``AdapterConfigFactory`` so the Docker-hosted mock adapter
+        raises the faults the in-process mock raises through ``side_effect``. It arrives in
+        ``self.config`` (``_simulating_adapter_config``) rather than through a read of the
+        adapter's own: the adapter runs inside the caller's open unit of work, and the first
+        ``get_db_session()`` opened there closes that unit's session (#1644, #2647).
         """
-        if not self.tenant_id:
-            return {}
-        try:
-            from src.core.database.database_session import get_db_session
-            from src.core.database.repositories.adapter_config import AdapterConfigRepository
-
-            with get_db_session() as session:
-                repo = AdapterConfigRepository(session, self.tenant_id)
-                row = repo.find_by_tenant()
-                if row and isinstance(row.config_json, dict):
-                    result = row.config_json.get("test_behavior", {})
-                    if isinstance(result, dict):
-                        return result
-        except Exception:
-            logger.debug("Failed to load test behavior from DB", exc_info=True)
-        return {}
+        return self.config.get("test_behavior") or {}
 
     def _raise_injected_failure(self, flag: str, *, update_action: str | None = None) -> None:
         """Raise the DB-injected adapter failure when ``flag`` is set.
@@ -397,7 +383,7 @@ class MockAdServer(AdServerAdapter):
             AdCPRateLimitError,
         )
 
-        test_behavior = self._read_test_behavior()
+        test_behavior = self._test_behavior
         fires = bool(test_behavior.get(flag))
         targeted = test_behavior.get("fail_on_update_action")
         if update_action is not None and targeted is not None:
@@ -462,7 +448,7 @@ class MockAdServer(AdServerAdapter):
         ``_create_media_buy_immediate`` — so it cannot serve a scenario that dispatches an
         immediate create.
         """
-        test_behavior = self._read_test_behavior()
+        test_behavior = self._test_behavior
         if not test_behavior.get("reject_on_create"):
             return
         from src.core.exceptions import AdCPMediaBuyRejectedError

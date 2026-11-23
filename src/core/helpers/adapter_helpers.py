@@ -344,6 +344,10 @@ def _simulating_adapter_config(config_row: DBAdapterConfig) -> dict[str, object]
     return {
         "enabled": True,
         "manual_approval_required": config_row.mock_manual_approval_required,
+        # The fault injection the simulating adapter raises (docs/adapters/mock/README.md),
+        # carried from the row the caller read so the adapter never reads it again: a read
+        # of its own inside the caller's open unit of work would close that unit's session.
+        "test_behavior": (config_row.config_json or {}).get("test_behavior", {}),
     }
 
 

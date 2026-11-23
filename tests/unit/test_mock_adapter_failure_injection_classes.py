@@ -44,13 +44,14 @@ from src.core.exceptions import (
 
 
 def _adapter_with_behavior(monkeypatch: pytest.MonkeyPatch, behavior: dict) -> MockAdServer:
-    """A MockAdServer whose DB-backed test_behavior is *behavior*.
+    """A MockAdServer whose configured test_behavior is *behavior*.
 
-    Patches only the DB read: the mapping under test is pure, and standing up an
-    AdapterConfig row would grade the repository rather than the classification.
+    Seeds only the config the adapter factory would pass: the mapping under test is
+    pure, and building the adapter from an AdapterConfig row would grade the factory
+    rather than the classification.
     """
     adapter = MockAdServer.__new__(MockAdServer)
-    monkeypatch.setattr(MockAdServer, "_read_test_behavior", lambda self: behavior)
+    adapter.config = {"test_behavior": behavior}
     return adapter
 
 
