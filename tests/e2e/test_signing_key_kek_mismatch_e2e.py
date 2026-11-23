@@ -37,6 +37,7 @@ from tests.e2e._signing_e2e import (
     tls_base_url,
 )
 from tests.e2e.utils import live_db_env
+from tests.helpers.signing import install_kek
 
 _SLUG = "dn4ie2e"
 _TENANT_ID = "dn4i_e2e"
@@ -67,14 +68,7 @@ def _build_tenant_and_mint_under_runner_kek(
     from src.core.signing.keys import provision_signing_key
     from tests.factories import TenantFactory
 
-    monkeypatch.setenv("ADCP_SIGNING_KEY_PASSPHRASE_ENV", _RUNNER_KEK_ENV_NAME)
-    monkeypatch.setenv(_RUNNER_KEK_ENV_NAME, _RUNNER_KEK_VALUE)
-    # Force the next ``get_settings()`` to rebuild from the environment just set:
-    # ``key_passphrase_env`` is a settings FIELD (read once at build), and only the
-    # passphrase itself is re-read per use via ``SigningSettings.secret_from_env``.
-    # The cache is ``_settings`` — ``raising`` stays at its default so a rename here
-    # fails loudly instead of leaving the runner minting under the container's KEK.
-    monkeypatch.setattr("src.core.config._settings", None)
+    install_kek(monkeypatch, _RUNNER_KEK_ENV_NAME, _RUNNER_KEK_VALUE)
 
     with live_db_env(live_server) as env:
         TenantFactory(tenant_id=tenant_id, subdomain=f"seller-{_SLUG}", virtual_host=host)

@@ -57,6 +57,16 @@ def _refuse(
     raise AdCPConfigurationError(details=details, internal_detail=cause) from cause
 
 
+class PublishedJwkMismatch(Exception):
+    """The cause of the published-JWK tripwire's refusal: the private half decrypts, but
+    no longer derives the public JWK the row publishes.
+
+    A type of its own so a caller can tell this refusal from the wrong-passphrase one
+    (whose cause is the key loader's ``ValueError``) without reading message text;
+    ``src.core.signing.posture`` gives the two different advice (#2288).
+    """
+
+
 class SigningMaterial(NamedTuple):
     """The loaded private half of one signing key, plus how to name it on the wire.
 
@@ -168,6 +178,7 @@ def assert_pem_publishes_jwk(
             "publishes — the row's key material has changed. Signatures made with "
             "it would be rejected by every counterparty.",
             details=ConfigurationDetails(tenant_id=tenant_id, capability="signing_key", rejected_value=kid),
+            cause=PublishedJwkMismatch(kid),
         )
     return private_key
 

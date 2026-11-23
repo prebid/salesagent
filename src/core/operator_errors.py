@@ -121,6 +121,30 @@ class TenantNotFound(RecordNotFound):
     MESSAGE = "Tenant not found"
 
 
+class InvalidDomainNameError(OperatorRefusal):
+    """A value stored as a domain name (a tenant's authorized domain, a publisher's domain) is not one.
+
+    Raised by the write seams only: the ``authorized_domains`` column validator,
+    ``TenantConfigRepository.add_to_authorized_list`` and the ``Publisher.domain`` validator,
+    so no route checks the grammar itself. Internationalized names are refused rather than
+    converted: an email's domain is matched against the stored value exactly, so the stored
+    form is the one entered.
+    """
+
+    MESSAGE = "Enter a domain name such as news.example.com; enter an internationalized name in its xn-- form"
+
+
+class SuperAdminDomainRefused(OperatorRefusal):
+    """A tenant may not authorize the deployment's ``SUPER_ADMIN_DOMAIN``, which is its operator's own.
+
+    Raised by ``TenantConfigRepository.add_to_authorized_list``, the one path that appends
+    to a tenant's authorized domains, on the domain in the form it would be stored in, so
+    every spelling of the configured domain is refused.
+    """
+
+    MESSAGE = "This domain is the deployment operator's, and no tenant can authorize it"
+
+
 class RecordedFailure(Exception):
     """A failure already logged and already worded for the operator, raised in place of its cause.
 

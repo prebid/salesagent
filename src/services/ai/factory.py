@@ -62,6 +62,9 @@ _logfire_configured = False
 def configure_logfire(token: str | None = None) -> bool:
     """Configure Logfire for AI observability.
 
+    This configures the whole PROCESS: every tenant's AI spans go to the project the token
+    names. Only the platform's own token belongs here, never a tenant's ``logfire_token``.
+
     Args:
         token: Optional Logfire token. If not provided, uses LOGFIRE_TOKEN env var
                or attempts to use default credentials from ~/.logfire/
@@ -165,9 +168,6 @@ class AIServiceFactory:
         resolved = self.resolve(seller_ai, platform_fallback=platform_fallback)
         if resolved is None:
             return None
-        if isinstance(seller_ai, TenantAIConfig) and seller_ai.logfire_token:
-            configure_logfire(seller_ai.logfire_token)
-
         logger.debug("Creating Pydantic AI model: %s:%s", resolved.provider, resolved.model)
         model_path, provider_path = PROVIDER_MODELS[resolved.provider]
         try:
