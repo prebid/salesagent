@@ -13,14 +13,18 @@ revision ever runs.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from tests.integration.migration_helpers import reset_to_revision, run_alembic_downgrade, run_alembic_upgrade
+from tests.integration.migration_helpers import (
+    reset_to_revision,
+    run_alembic_downgrade,
+    run_alembic_upgrade,
+    seed_product,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -37,16 +41,9 @@ def _at(migration_db, revision: str):
 
 
 def _insert_product(engine, product_id: str, placements: Any) -> None:
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO products (tenant_id, product_id, name, description, delivery_type, "
-                "format_ids, targeting_template, property_tags, placements) "
-                "VALUES (:tid, :pid, :pid, 'test', 'guaranteed', '[]'::jsonb, '{}'::jsonb, "
-                "'[\"all_inventory\"]'::jsonb, CAST(:placements AS jsonb))"
-            ),
-            {"tid": _TENANT, "pid": product_id, "placements": None if placements is None else json.dumps(placements)},
-        )
+    seed_product(
+        engine, tenant_id=_TENANT, product_id=product_id, property_tags=["all_inventory"], placements=placements
+    )
 
 
 def _placements(engine, product_id: str) -> Any:
