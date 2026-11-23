@@ -15,6 +15,11 @@ from adcp.types._generated import MediaChannel
 
 from src.core.operator_errors import FormIssue, InvalidFormInput
 
+#: The values ``Product.channels`` accepts. ``parse_media_channels`` decides membership with it,
+#: and a caller that branches on membership (the UC-010 harness) imports it rather than
+#: rebuilding the set.
+MEDIA_CHANNEL_VALUES: frozenset[str] = frozenset(member.value for member in MediaChannel)
+
 #: Labels for the admin picker where title-casing the value is unreadable ("Olv", "Dooh");
 #: every other member title-cases its value. Keyed by member, so mypy refuses a non-member.
 MEDIA_CHANNEL_LABELS: dict[MediaChannel, str] = {
@@ -52,8 +57,7 @@ def parse_media_channels(values: Iterable[str]) -> list[str] | None:
     stores for "no channels declared".
     """
     posted = dict.fromkeys(values)
-    members = {member.value for member in MediaChannel}
-    unknown = [value for value in posted if value not in members]
+    unknown = [value for value in posted if value not in MEDIA_CHANNEL_VALUES]
     if unknown:
         raise InvalidFormInput(
             *(FormIssue("channels", f"channels: '{value}' is not an AdCP media channel") for value in unknown)

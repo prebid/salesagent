@@ -231,18 +231,16 @@ class CapabilitiesEnv(PublisherAdagentsMixin, AdminOperatorMixin, IntegrationEnv
         production rule is a UNION ACROSS products, and a single multi-channel
         product would not exercise it.
         """
-        from adcp.types._generated import MediaChannel
-
         from src.core.database.models import Tenant
+        from src.core.media_channels import MEDIA_CHANNEL_VALUES
         from tests.factories import ProductFactory
         from tests.factories.product import store_channel_residue
 
-        members = {member.value for member in MediaChannel}
         tenant = self.get_session().get(Tenant, self._tenant_id)
         for channel in channels:
             # Channels only: an authorizing publisher would add a publisher to the portfolio
             # the scenario did not declare.
-            if channel in members:
+            if channel in MEDIA_CHANNEL_VALUES:
                 ProductFactory(tenant=tenant, channels=[channel], authorize_publisher=False)
             else:
                 # Outside the enum, which the column refuses on write: only residue of the
