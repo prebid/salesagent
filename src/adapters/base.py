@@ -597,9 +597,14 @@ class AdServerAdapter(ABC):
 
     @abstractmethod
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime, *, already_approved: bool = False
     ) -> list[AssetStatus]:
-        """Adds creative assets to an existing media buy."""
+        """Adds creative assets to an existing media buy.
+
+        ``already_approved`` says the push carries an approval already given -- the buy's manual
+        approval, or the creative's own -- so an adapter that gates creative pushes on manual
+        approval must not queue it again (``AdapterCreateRequest.already_approved`` for buys).
+        """
         pass
 
     @abstractmethod

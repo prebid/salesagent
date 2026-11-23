@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
-from src.core.errors.details import ConfigurationDetails, CreativeRejectionDetails
+from src.core.errors.details import CreativeRejectionDetails
 from src.core.exceptions import (
     AdCPConfigurationError,
     AdCPCreativeRejectedError,
@@ -78,7 +78,6 @@ class GAMCreativesManager:
         assets: list[dict[str, Any]],
         today: datetime,
         placement_targeting_map: dict[str, str] | None = None,
-        native_template_ids: dict[str, str] | None = None,
     ) -> list[AssetStatus]:
         """Creates new Creatives in GAM and associates them with LineItems.
 
@@ -94,10 +93,6 @@ class GAMCreativesManager:
                 creative-level targeting. Built from product impl_config.placement_targeting.
                 When provided, creatives with placement_ids will have their LICAs created
                 with the corresponding targetingName for GAM creative-level targeting.
-            native_template_ids: Optional map of package_id → GAM creative template id,
-                built from each product's impl_config.native_style_id. A native asset is
-                built against the template its packages name; none, or two different ones,
-                is refused with CONFIGURATION_ERROR (GH #1516).
 
         Returns:
             List of AssetStatus objects indicating success/failure for each creative
@@ -196,9 +191,7 @@ class GAMCreativesManager:
                 # is read-only after creation, so a changed size is not expected to take effect.
                 gam_creative_id = asset.get("platform_creative_id")
                 if not gam_creative_id or asset.get("platform_creative_outdated"):
-                    creative = self._create_gam_creative(
-                        asset, creative_type, asset_placeholders, native_template_ids=native_template_ids
-                    )
+                    creative = self._create_gam_creative(asset, creative_type, asset_placeholders)
                     if not creative:
                         logger.warning(
                             f"Skipping unsupported creative {asset['creative_id']} with type: {creative_type}"
@@ -520,11 +513,7 @@ class GAMCreativesManager:
         return validation_errors
 
     def _create_gam_creative(
-        self,
-        asset: dict[str, Any],
-        creative_type: str,
-        placeholders: list[dict] = None,
-        native_template_ids: dict[str, str] | None = None,
+        self, asset: dict[str, Any], creative_type: str, placeholders: list[dict] = None
     ) -> dict[str, Any] | None:
         """Create a GAM creative object based on the asset type.
 
@@ -533,8 +522,6 @@ class GAMCreativesManager:
             creative_type: Type of creative to create
             placeholders: The creative placeholders of the asset's line items, as GAM reports
                 them; a native one carries the creative template its creatives use
-            native_template_ids: package_id → GAM creative template id (the product's
-                ``native_style_id``); consulted only for a native asset
 
         Returns:
             GAM creative dictionary or None if unsupported
@@ -542,9 +529,7 @@ class GAMCreativesManager:
         if creative_type == "third_party_tag":
             return self._create_third_party_creative(asset)
         elif creative_type == "native":
-            return self._create_native_creative(
-                asset, self._get_native_template_id(asset, placeholders, native_template_ids)
-            )
+            return self._create_native_creative(asset, self._get_native_template_id(asset, placeholders))
         elif creative_type == "html5":
             return self._create_html5_creative(asset)
         elif creative_type == "hosted_asset":
@@ -790,57 +775,30 @@ class GAMCreativesManager:
         else:
             return "image"
 
-    def _get_native_template_id(
-        self,
-        asset: dict[str, Any],
-        placeholders: list[Any] | None,
-        native_template_ids: dict[str, str] | None,
-    ) -> str:
-        """Resolve the GAM creative template a native asset is built against.
+    def _get_native_template_id(self, asset: dict[str, Any], placeholders: list[Any] | None) -> str:
+        """The GAM creative template a native asset is built against.
 
-        Two sources, which must agree. GAM's own: the ``creativeTemplateId`` a native line
-        item's placeholder carries (set from the format's
-        ``creative_placeholder.creative_template_id`` when the line item was created; a
-        programmatic 1x1 placeholder carries none). The seller's: the product's
-        ``implementation_config.native_style_id``, carried here per package by the adapter
-        (``GoogleAdManager.create_media_buy`` builds the map, ``push_creative_assets`` forwards
-        it). GAM's answer settles a package the seller left unconfigured, the seller's settles
-        a placeholder that carries none, and a typo in either shows as a disagreement. One GAM
-        creative carries one template and serves every package it is assigned to, so every
-        source must name the same one.
+        GAM's own answer: the ``creativeTemplateId`` on the native placeholders of the asset's
+        line items. ``GAMOrdersManager.create_line_items`` sets it when it books a line item,
+        from the format's ``creative_placeholder.creative_template_id`` or else the product's
+        ``implementation_config.native_style_id``; a programmatic 1x1 placeholder carries none.
+        One GAM creative carries one template and serves every line item it is placed on, so
+        those placeholders must name exactly one.
 
-        No template from either source, or two different ones, is a seller misconfiguration
-        the buyer cannot correct: CONFIGURATION_ERROR, terminal (AdCP 3.2.7,
-        ``docs/building/by-layer/L3/error-handling.mdx``). There is no fallback id.
-
-        On this surface the error classifies an internal failure that ``add_creative_assets``
-        reports per asset (``AssetStatus.message``); it is never emitted as an AdCP error
-        object, so that row's transport-marker MUST is not engaged. The citation grounds the
-        terminal classification and the no-credentials rule only.
+        None, or two different ones, is a seller misconfiguration the buyer cannot correct:
+        CONFIGURATION_ERROR, terminal (AdCP 3.2.7, ``docs/building/by-layer/L3/error-handling.mdx``),
+        which carries no ``details``. The template ids are the seller's, so they go to the log,
+        and ``add_creative_assets`` reports the error on the asset's status, where a caller
+        answering a buyer reads it as that creative's error. There is no fallback id.
         """
-        # The packages the creative is placed on: those with a GAM line item (_line_item_weights).
-        package_ids = [
-            a.get("package_id") for a in asset.get("package_assignments", []) if a.get("platform_line_item_id")
-        ]
-        configured = {pkg: (native_template_ids or {}).get(pkg) for pkg in package_ids}
-        from_gam = [str(t) for t in (_get_attr(p, "creativeTemplateId") for p in placeholders or []) if t]
-        # A package without a configured template is only a gap when GAM names none either.
-        missing = [] if from_gam else [pkg for pkg, value in configured.items() if not value]
-        # Deduped in order of appearance, then sorted so rejected_value reads the same whatever
-        # the package order.
-        template_ids = sorted(dict.fromkeys([*from_gam, *(value for value in configured.values() if value)]))
-        if not missing and len(template_ids) == 1:
+        template_ids = sorted({str(t) for t in (_get_attr(p, "creativeTemplateId") for p in placeholders or []) if t})
+        if len(template_ids) == 1:
             return template_ids[0]
-        raise AdCPConfigurationError(
-            field="native_style_id",
-            details=ConfigurationDetails(
-                creative_id=asset.get("creative_id"),
-                # The first package whose product names no template; None when every source
-                # names one and they disagree. rejected_value carries whatever WAS named.
-                package_id=missing[0] if missing else None,
-                rejected_value=template_ids or None,
-            ),
+        logger.error(
+            f"Native creative {asset.get('creative_id')}: no single GAM creative template, "
+            f"found {template_ids or 'none'} on its line items' placeholders; set native_style_id on the product"
         )
+        raise AdCPConfigurationError(field="native_style_id")
 
     def _build_native_template_variables(self, asset: dict[str, Any]) -> list[dict[str, Any]]:
         """Build native template variables from asset."""

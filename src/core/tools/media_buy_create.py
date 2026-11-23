@@ -26,7 +26,6 @@ if TYPE_CHECKING:
     from src.core.database.models import CreativeAssignment
     from src.core.database.models import MediaPackage as DBMediaPackage
     from src.core.database.repositories.media_buy import MediaBuyRepository
-    from src.core.database.repositories.product import ProductRepository
     from src.core.database.repositories.uow import MediaBuyUoW as _MediaBuyUoWType
     from src.core.format_satisfaction import SelectorResolution
 
@@ -422,31 +421,32 @@ def _merge_creative_enrichment(existing_data: dict | None, status: AssetStatus) 
     return data
 
 
-def _apply_creative_enrichment(creative: DBCreative, status: AssetStatus) -> dict | None:
-    """Merge an adapter push result into a creative's ``data`` blob, ready to persist.
+def _record_push_status(
+    creatives: CreativeRepository, creative: DBCreative, statuses: Sequence[AssetStatus] | None
+) -> AssetStatus | None:
+    """Fold what an ad server push reported for ``creative`` into its row; return that status.
 
-    Wraps :func:`_merge_creative_enrichment` with the change detection + provenance log
-    shared by all three GAM push paths (auto-approval create, manual-approval execution,
-    and retroactive per-creative push — #1506). Returns the merged dict when the merge
-    adds something the caller must persist, or ``None`` when it is a no-op (nothing to
-    write). Callers persist the returned dict through ``CreativeRepository.update_data``
-    so the enrichment has a single persistence path::
-
-        merged = _apply_creative_enrichment(creative, status)
-        if merged is not None:
-            creatives_repo.update_data(creative, merged)
+    The one reading of a push result, shared by all three GAM push paths (auto-approval
+    create, manual-approval execution, and retroactive per-creative push — #1506). The status
+    is the one whose ``creative_id`` is the creative's. ``failed`` is a refusal and records
+    nothing; what a refusal means is the caller's to decide on its path. Any other status is
+    merged (:func:`_merge_creative_enrichment`) and, when that adds something, persisted
+    through ``CreativeRepository.update_data``. None when the push reported nothing for it.
     """
+    status = next((s for s in statuses or () if s.creative_id == creative.creative_id), None)
+    if status is None or status.status == "failed":
+        return status
     merged = _merge_creative_enrichment(creative.data, status)
-    if merged == (creative.data or {}):
-        return None
-    logger.info(
-        log_safe(
-            f"Enriched creative {creative.creative_id} from adapter push "
-            f"(ad_server_creative_id={merged.get('ad_server_creative_id')}, "
-            f"concept_source={merged.get('concept_source')})"
+    if merged != (creative.data or {}):
+        logger.info(
+            log_safe(
+                f"Enriched creative {creative.creative_id} from adapter push "
+                f"(ad_server_creative_id={merged.get('ad_server_creative_id')}, "
+                f"concept_source={merged.get('concept_source')})"
+            )
         )
-    )
-    return merged
+        creatives.update_data(creative, merged)
+    return status
 
 
 def _determine_media_buy_status(
@@ -1039,9 +1039,9 @@ def _execute_adapter_media_buy_creation(
         end_time: Resolved campaign end datetime
         package_pricing_info: Pricing model info per package
         adapter: The caller's adapter, which pushes the buy's creatives afterwards. Taken
-            rather than built here: GAM fills per-order state in create_media_buy (placement
-            targeting, native creative templates) that the push reads back on the same
-            instance, so a second instance would hand the push empty maps (GH #1516).
+            rather than built here: GAM fills its placement targeting map (adcp#208) in
+            create_media_buy and the push reads it back on the same instance, so a second
+            instance would hand the push an empty map.
 
     Returns:
         AdapterCreateResult from the adapter
@@ -1732,9 +1732,9 @@ def execute_approved_media_buy(
         # is separate from this line.
         identity = identity_of(tenant_id, buy_principal_id, buy_account_id)
 
-        # One adapter for the order, the creative push and the approval below: GAM fills
-        # per-order state in create_media_buy that the push reads back on the same instance
-        # (GH #1516). Built before adapter_ran is set, so a failure here is "never attempted",
+        # One adapter for the order, the creative push and the approval below: GAM fills its
+        # placement targeting map in create_media_buy and the push reads it back on the same
+        # instance. Built before adapter_ran is set, so a failure here is "never attempted",
         # and before the unit below opens: get_adapter reads the adapter config in a session of
         # its own, which would close the unit's session and lose the enrichment written there.
         adapter = get_adapter(identity)
@@ -1859,21 +1859,12 @@ def execute_approved_media_buy(
 
                     # For GAM, the media_buy_id is the GAM order ID
                     try:
-                        # push_creative_assets, not add_creative_assets: this buy IS the approval,
-                        # so the adapter's manual-approval gate must not queue the push again.
-                        if hasattr(adapter, "push_creative_assets") and order_id:
-                            # An order an earlier create booked was placed by another adapter
-                            # instance, so its native creative templates come from the products.
-                            assert uow2.products is not None
-                            native_template_ids = (
-                                _native_template_ids_for(
-                                    uow2.media_buys, uow2.products, media_buy_id, [a.package_id for a in assignments]
-                                )
-                                if stored_order_id
-                                else None
-                            )
-                            asset_statuses = adapter.push_creative_assets(
-                                order_id, assets, datetime.now(UTC), native_template_ids=native_template_ids
+                        # This buy IS the approval, so the push says so and the adapter's own
+                        # manual-approval gate does not queue it again. Pushed only to an adapter
+                        # that declares creative trafficking.
+                        if adapter.capabilities.supports_creative_trafficking and order_id:
+                            asset_statuses = adapter.add_creative_assets(
+                                order_id, assets, datetime.now(UTC), already_approved=True
                             )
                             logger.info(f"[APPROVAL] Creative upload completed: {len(asset_statuses)} assets processed")
 
@@ -1882,23 +1873,17 @@ def execute_approved_media_buy(
                             # sites, wired here so admin-approved buys enrich like the other two
                             # (#1506). uow2 commits the writeback on block exit.
                             creatives_repo = CreativeRepository(session, tenant_id)
-                            for status in asset_statuses:
-                                if status.status == "failed":
+                            for asset in assets:
+                                creative = creative_map[asset["creative_id"]]
+                                status = _record_push_status(creatives_repo, creative, asset_statuses)
+                                if status is None or status.status == "failed":
                                     # FIXME(#1566): logged only; the order is still approved and the buy goes active.
                                     logger.error(
                                         log_safe(
-                                            f"[APPROVAL] Failed to upload creative {status.creative_id}: {status.message}"
+                                            f"[APPROVAL] Failed to upload creative {creative.creative_id}: "
+                                            f"{status.message if status else 'the adapter reported no status'}"
                                         )
                                     )
-                                    continue
-                                if not status.creative_id:
-                                    continue
-                                creative = creative_map.get(status.creative_id)
-                                if creative is None:
-                                    continue
-                                merged = _apply_creative_enrichment(creative, status)
-                                if merged is not None:
-                                    creatives_repo.update_data(creative, merged)
                         else:
                             logger.warning("[APPROVAL] Adapter does not support creative upload, skipping")
                     except Exception as creative_error:
@@ -2005,30 +1990,6 @@ def execute_approved_media_buy(
         return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
 
 
-def _native_template_ids_for(
-    media_buys: "MediaBuyRepository",
-    products: "ProductRepository",
-    media_buy_id: str,
-    package_ids: list[str],
-) -> dict[str, str]:
-    """package_id -> the product's native_style_id, for the packages whose product names one.
-
-    What GoogleAdManager.create_media_buy derives for an order it places. The retroactive
-    push, and the approval of an order an earlier create booked (#1690), run later on an
-    adapter that never placed this order, so they re-derive the map from the products here
-    (GH #1516).
-    """
-    template_ids: dict[str, str] = {}
-    for package_id in package_ids:
-        package = media_buys.get_package(media_buy_id, package_id)
-        product_id = (package.package_config or {}).get("product_id") if package else None
-        product = products.get_by_id(product_id) if product_id else None
-        native_style_id = (product.implementation_config or {}).get("native_style_id") if product else None
-        if native_style_id:
-            template_ids[package_id] = str(native_style_id)
-    return template_ids
-
-
 @dataclass(frozen=True)
 class CreativePushFailure:
     """Why a push did not place a creative.
@@ -2098,7 +2059,6 @@ def push_creative_to_existing_buy(
             assert uow.creatives is not None
             assert uow.assignments is not None
             assert uow.media_buys is not None
-            assert uow.products is not None
             assert uow.tenant_config is not None
 
             tenant_obj = uow.tenant_config.get_tenant()
@@ -2123,7 +2083,7 @@ def push_creative_to_existing_buy(
                 return CreativePushFailure(f"No assignment of creative {creative_id} to media buy {media_buy_id}")
 
             # Resolved above, outside every unit. See the comment at the top of the try.
-            if not hasattr(adapter, "push_creative_assets"):
+            if not adapter.capabilities.supports_creative_trafficking:
                 return CreativePushFailure("Adapter does not support creative upload")
 
             packages = uow.media_buys.get_packages(media_buy_id)
@@ -2140,16 +2100,10 @@ def push_creative_to_existing_buy(
             assert asset is not None
 
             try:
-                # push_creative_assets, past the adapter's manual-approval gate: the creative's
-                # approval is what this push is. This adapter never placed the order, so the
-                # native template map comes from the products rather than from it.
-                asset_statuses = adapter.push_creative_assets(
-                    platform_order_id,
-                    [asset],
-                    datetime.now(UTC),
-                    native_template_ids=_native_template_ids_for(
-                        uow.media_buys, uow.products, media_buy_id, [a.package_id for a in matching]
-                    ),
+                # The creative's approval is what this push carries, so the adapter's own
+                # manual-approval gate does not queue it again.
+                asset_statuses = adapter.add_creative_assets(
+                    platform_order_id, [asset], datetime.now(UTC), already_approved=True
                 )
             except Exception as e:
                 logger.error(
@@ -2158,21 +2112,18 @@ def push_creative_to_existing_buy(
                 )
                 return CreativePushFailure(str(e), adcp_error_for(e))
 
-            for status in asset_statuses:
-                if status.creative_id == creative_id:
-                    if status.status == "failed":
-                        return CreativePushFailure(status.message or "Adapter reported upload failure", status.error)
-                    merged_data = _apply_creative_enrichment(creative, status)
-                    if merged_data is not None:
-                        uow.creatives.update_data(creative, merged_data)
-                    logger.info(
-                        log_safe(
-                            f"[GATE-PUSH] Pushed creative {creative_id} to live buy "
-                            f"{media_buy_id} (platform order {platform_order_id})"
-                        )
-                    )
-                    return None
-            return CreativePushFailure(f"Adapter did not report status for creative {creative_id}")
+            status = _record_push_status(uow.creatives, creative, asset_statuses)
+            if status is None:
+                return CreativePushFailure(f"Adapter did not report status for creative {creative_id}")
+            if status.status == "failed":
+                return CreativePushFailure(status.message or "Adapter reported upload failure", status.error)
+            logger.info(
+                log_safe(
+                    f"[GATE-PUSH] Pushed creative {creative_id} to live buy "
+                    f"{media_buy_id} (platform order {platform_order_id})"
+                )
+            )
+            return None
 
     except Exception as e:
         logger.error(
@@ -4415,7 +4366,9 @@ async def _create_media_buy_impl(
                                         [asset],
                                         datetime.now(UTC),
                                     )
-                                    uploaded_status = upload_result[0] if upload_result else None
+                                    uploaded_status = _record_push_status(
+                                        CreativeRepository(session, tenant.tenant_id), creative, upload_result
+                                    )
                                     if uploaded_status is not None and uploaded_status.status == "failed":
                                         # Not created in GAM: no ad server id to record. Logged, as on
                                         # the approval path; the assignment below keeps the creative
@@ -4433,12 +4386,6 @@ async def _create_media_buy_impl(
                                                 f"Successfully uploaded creative {creative_id} to GAM: {upload_result}"
                                             )
                                         )
-                                        if uploaded_status is not None:
-                                            merged_data = _apply_creative_enrichment(creative, uploaded_status)
-                                            if merged_data is not None:
-                                                CreativeRepository(session, tenant.tenant_id).update_data(
-                                                    creative, merged_data
-                                                )
                                 except AdCPSalesAgentError:
                                     raise
                                 except Exception as upload_error:

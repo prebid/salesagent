@@ -208,6 +208,43 @@ class TestGAMManualApprovalPath:
             assert exc_info.value.error_code == "WORKFLOW_CREATION_FAILED"
 
 
+_PUSHED_ASSETS = [
+    {
+        "creative_id": "cr_1",
+        "package_assignments": [{"package_id": "pkg_1", "weight": 100, "platform_line_item_id": "1001"}],
+    }
+]
+
+
+class TestGAMCreativePushApprovalGate:
+    """A creative push the seller must approve is queued, unless it carries an approval already given."""
+
+    def test_a_push_the_seller_must_approve_is_queued(self, adapter):
+        with (
+            patch.object(adapter, "_requires_manual_approval", return_value=True),
+            patch.object(adapter.workflow_manager, "create_approval_workflow_step", return_value="step_1") as step,
+            patch.object(adapter.creatives_manager, "add_creative_assets") as push,
+        ):
+            statuses = adapter.add_creative_assets("9000001", _PUSHED_ASSETS, datetime.now(UTC))
+
+        assert [status.status for status in statuses] == ["submitted"]
+        step.assert_called_once_with("9000001", "creative_assets_approval")
+        push.assert_not_called()
+
+    def test_an_already_approved_push_passes_the_gate(self, adapter):
+        """The buy's manual approval, or the creative's own, is the approval: queueing it again would loop."""
+        today = datetime.now(UTC)
+        with (
+            patch.object(adapter, "_requires_manual_approval", return_value=True),
+            patch.object(adapter.workflow_manager, "create_approval_workflow_step") as step,
+            patch.object(adapter.creatives_manager, "add_creative_assets", return_value=[]) as push,
+        ):
+            adapter.add_creative_assets("9000001", _PUSHED_ASSETS, today, already_approved=True)
+
+        step.assert_not_called()
+        push.assert_called_once_with("9000001", _PUSHED_ASSETS, today, placement_targeting_map={})
+
+
 class TestGAMActivationWorkflowPath:
     """Test GAM adapter activation workflow path returns packages correctly."""
 

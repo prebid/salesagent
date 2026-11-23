@@ -176,10 +176,6 @@ class GoogleAdManager(AdServerAdapter):
         self._line_item_name_template: str | None = naming_templates[1] if naming_templates else None
         self._tenant_ai_config = tenant_ai_config
         self._placement_targeting_map: dict[str, str] = {}
-        # package_id -> GAM creative template id, from each product's
-        # implementation_config.native_style_id. Rebuilt per order in create_media_buy and
-        # handed to the creatives manager by add_creative_assets (GH #1516).
-        self._native_template_ids: dict[str, str] = {}
 
         if not self.key_file and not self.service_account_json and not self.refresh_token:
             raise AdCPConfigurationError(
@@ -643,19 +639,13 @@ class GoogleAdManager(AdServerAdapter):
 
         self.log(f"✓ Created GAM Order ID: {order_id}")
 
-        # Build the per-order creative maps from all products' impl_configs:
-        # _placement_targeting_map (placement_id -> targeting_name, creative-level targeting,
-        # adcp#208) and _native_template_ids (package_id -> native_style_id, the GAM creative
-        # template every native creative of that package is built against, GH #1516).
+        # Build placement_targeting_map from all products' impl_configs (adcp#208)
+        # This maps placement_id → targeting_name for creative-level targeting
         self._placement_targeting_map.clear()  # Reset for this order
-        self._native_template_ids.clear()
-        for pkg_id, prod_info in products_map.items():
+        for _pid, prod_info in products_map.items():
             if not prod_info or not isinstance(prod_info, dict):
                 continue
             prod_impl_config = cast(dict[str, Any], prod_info.get("implementation_config", {}) or {})
-            native_style_id = prod_impl_config.get("native_style_id")
-            if native_style_id:
-                self._native_template_ids[pkg_id] = str(native_style_id)
             placement_targeting = cast(list[dict[str, Any]], prod_impl_config.get("placement_targeting", []))
             for pt in placement_targeting:
                 placement_id = pt.get("placement_id")
@@ -805,7 +795,7 @@ class GoogleAdManager(AdServerAdapter):
         return self.orders_manager.get_advertisers(search_query=search_query, limit=limit, fetch_all=fetch_all)
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime, *, already_approved: bool = False
     ) -> list[AssetStatus]:
         """Create and associate creatives with line items (delegated to creatives manager)."""
 
@@ -830,8 +820,9 @@ class GoogleAdManager(AdServerAdapter):
                 for i, asset in enumerate(assets)
             ]
 
-        # Check if manual approval is required for creative assets
-        if self._requires_manual_approval("add_creative_assets"):
+        # Check if manual approval is required for creative assets; a push that carries an
+        # approval already given (the buy's, or the creative's) would only be queued again
+        if not already_approved and self._requires_manual_approval("add_creative_assets"):
             self.log("[yellow]Manual approval mode - creating workflow step for creative asset approval[/yellow]")
 
             # Create approval workflow step
@@ -865,32 +856,10 @@ class GoogleAdManager(AdServerAdapter):
                 return asset_statuses
 
         # Automatic mode - process creatives directly
-        return self.push_creative_assets(media_buy_id, assets, today)
-
-    def push_creative_assets(
-        self,
-        media_buy_id: str,
-        assets: list[dict[str, Any]],
-        today: datetime,
-        *,
-        native_template_ids: dict[str, str] | None = None,
-    ) -> list[AssetStatus]:
-        """Create the creatives in GAM and associate them: add_creative_assets past its approval gate.
-
-        The two approval-side push paths call this rather than add_creative_assets, whose
-        manual-approval gate would queue the push again: the manual-approval execution (the
-        buy IS the approval) and the retroactive push of a creative approved later. Forwards
-        the per-order maps this instance built in create_media_buy: placement targeting
-        (adcp#208) and the native creative template per package (GH #1516). The retroactive
-        push, and the approval of an order an earlier create booked, run on a fresh instance
-        in a later process, so they hand in the native template map re-derived from the products.
-        """
-        return self._require_creatives_manager().add_creative_assets(
-            media_buy_id,
-            assets,
-            today,
-            placement_targeting_map=self._placement_targeting_map,
-            native_template_ids=self._native_template_ids if native_template_ids is None else native_template_ids,
+        # Pass placement_targeting_map for creative-level targeting (adcp#208)
+        placement_targeting_map = getattr(self, "_placement_targeting_map", None)
+        return self.creatives_manager.add_creative_assets(
+            media_buy_id, assets, today, placement_targeting_map=placement_targeting_map
         )
 
     def associate_creatives(self, line_item_ids: list[str], platform_creative_ids: list[str]) -> list[dict[str, Any]]:

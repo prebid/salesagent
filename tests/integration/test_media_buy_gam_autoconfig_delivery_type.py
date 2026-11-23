@@ -13,9 +13,9 @@ value through ``enum_value()``.
 
 This drives the real ``_create_media_buy_impl`` GAM auto-config path and calls
 through to the real config generator; only the captured arguments/output are
-asserted. It also pins that one adapter instance serves the whole create_media_buy
-(#1516): the adapter that places the order is the adapter whose per-order state the
-creative push reads.
+asserted. It also pins that one adapter instance serves the whole create_media_buy:
+the adapter that places the order is the adapter whose per-order state the creative
+push reads.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -219,10 +219,10 @@ class TestGAMAutoConfigDeliveryTypeNormalization:
 def test_create_media_buy_builds_one_adapter_per_request(integration_db):
     """The order and its creatives go through one adapter instance.
 
-    GAM fills per-order state in create_media_buy (``_placement_targeting_map``,
-    ``_native_template_ids``) that add_creative_assets reads back on the same object. A
-    second get_adapter call between the two hands the upload an instance whose maps are
-    empty, so the inline path must reuse the adapter it already built.
+    GAM fills its placement targeting map (``_placement_targeting_map``, adcp#208) in
+    create_media_buy and add_creative_assets reads it back on the same object. A second
+    get_adapter call between the two hands the upload an instance whose map is empty, so
+    the inline path must reuse the adapter it already built.
 
     The package names an approved creative GAM does not hold yet, so the upload RUNS: the
     two call counts on the one instance are what make the adapter count an assertion

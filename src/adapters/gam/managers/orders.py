@@ -834,6 +834,14 @@ class GAMOrdersManager:
             elif not creative_placeholders:
                 log("  [yellow]No creatives and no format_ids - line item will have no creative placeholders[/yellow]")
 
+            # A native placeholder names the creative template its creatives are built against, and
+            # the creative push reads it back off the line item; one the format did not name takes
+            # the product's (GH #1516).
+            if native_style_id := impl_config.get("native_style_id"):
+                for placeholder in creative_placeholders:
+                    if placeholder.get("creativeSizeType") == "NATIVE":
+                        placeholder.setdefault("creativeTemplateId", native_style_id)
+
             # Apply line item naming template
             from src.adapters.gam.utils.constants import GAM_NAME_LIMITS
             from src.adapters.gam.utils.naming import truncate_name_with_suffix

@@ -505,7 +505,7 @@ class TestExecuteApprovedEnrichesSellerConcept:
         # returns the real producer's output.
         adapter_response = AdapterCreateResult(media_buy_id=gam_order_id, packages=[])
         mock_adapter = MagicMock()
-        mock_adapter.push_creative_assets.return_value = produced
+        mock_adapter.add_creative_assets.return_value = produced
         mock_adapter.orders_manager.approve_order.return_value = True
         valid_asset = {
             "creative_id": creative_id,
@@ -532,7 +532,8 @@ class TestExecuteApprovedEnrichesSellerConcept:
             result = run_approval(media_buy_id, tenant_id)
 
         assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
-        mock_adapter.push_creative_assets.assert_called_once_with(gam_order_id, ANY, ANY, native_template_ids=None)
+        # The buy's approval is what this push carries, so the adapter's own gate must not queue it again.
+        mock_adapter.add_creative_assets.assert_called_once_with(gam_order_id, ANY, ANY, already_approved=True)
 
         # (3) The concept is PERSISTED to the creative's data blob (the Finding 1 fix —
         # without the writeback wiring, these keys are absent).
@@ -558,46 +559,3 @@ class TestExecuteApprovedEnrichesSellerConcept:
             assert creative_id in returned, (
                 f"list_creatives concept_ids filter did not return the enriched creative; got {returned!r}"
             )
-
-
-class TestExecuteApprovedBookedOrderNativeTemplates:
-    """A buy create already booked (#1690) is pushed on an adapter that never placed its order."""
-
-    def test_booked_order_push_carries_the_products_native_template(self, pending_media_buy_with_approved_creative):
-        """The approval hands the push the native creative template the buy's product names (GH #1516).
-
-        The adapter instance that booked the order kept its template map; the approval runs
-        later on a fresh one, so the map is re-derived from the products, keyed by package.
-        """
-        from sqlalchemy import select
-
-        from src.core.database.models import Product as DBProduct
-        from tests.factories import MediaBuyFactory
-
-        fixture = pending_media_buy_with_approved_creative
-        # Booked at create: the package carries the order, and its product names the template.
-        session = MediaBuyFactory._meta.sqlalchemy_session
-        package = session.scalars(select(DBMediaPackage).filter_by(media_buy_id=fixture["media_buy_id"])).one()
-        package.package_config = {**package.package_config, "platform_order_id": "777"}
-        product = session.scalars(
-            select(DBProduct).filter_by(tenant_id=fixture["tenant_id"], product_id="guaranteed_display")
-        ).one()
-        product.implementation_config = {"native_style_id": 987654}
-        session.commit()
-
-        mock_adapter = MagicMock()
-        mock_adapter.push_creative_assets.return_value = []
-        mock_adapter.orders_manager.approve_order.return_value = True
-        asset = {"creative_id": fixture["creative_id"], "package_assignments": []}
-        with (
-            patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
-            patch("src.core.tools.media_buy_create._build_adapter_asset_from_creative", return_value=(asset, None)),
-            patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
-        ):
-            result = run_approval(fixture["media_buy_id"], fixture["tenant_id"])
-
-        assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
-        mock_adapter.create_media_buy.assert_not_called()
-        mock_adapter.push_creative_assets.assert_called_once_with(
-            "777", [asset], ANY, native_template_ids={fixture["package_id"]: "987654"}
-        )
