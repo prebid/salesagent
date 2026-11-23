@@ -165,7 +165,8 @@ def test_incremental_sync_should_skip_stale_marking():
     mocks = _setup_mock_dependencies()
     _run_sync_with_mode("incremental", mocks)
     # The sync reached its writes, so the stale marking it skipped was not skipped by a failure.
-    mocks["inventory_service"]._write_inventory_batch.assert_called()
+    written = [c.args[1] for c in mocks["inventory_service"]._write_inventory_batch.call_args_list]
+    assert "ad_unit" in written, f"The incremental sync wrote no ad units; it wrote {written}"
     mocks["inventory_service"]._mark_stale_inventory.assert_not_called()
 
 
