@@ -84,14 +84,14 @@ def create_signing_key(tenant_id: str) -> ResponseReturnValue:
             assert uow.signing_keys is not None
             kid = provision_signing_key(uow.signing_keys, tenant_id=tenant_id, alg=alg)
     except AdCPConfigurationError as exc:
-        # ``str(exc)`` is CODE_TABLE's sentence for CONFIGURATION_ERROR, and that
+        # ``exc.message`` is CODE_TABLE's sentence for CONFIGURATION_ERROR, and that
         # sentence names no knob. The operator-actionable part — which setting to
         # change, e.g. key_passphrase_env — travels in ConfigurationDetails.tracked_by,
         # so it is read off the typed details rather than hoped for in the text: a
         # generic "could not provision" leaves the operator with nothing to act on.
         tracked_by = exc.details.tracked_by if exc.details is not None else None
         flash(
-            f"Could not provision a signing key: {exc}" + (f" {tracked_by}" if tracked_by else ""),
+            f"Could not provision a signing key: {exc.message}" + (f" {tracked_by}" if tracked_by else ""),
             "error",
         )
         return redirect(url_for("signing_keys.list_signing_keys", tenant_id=tenant_id))
