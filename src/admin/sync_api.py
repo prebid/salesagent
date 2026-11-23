@@ -19,6 +19,7 @@ from src.adapters.google_ad_manager import GoogleAdManager
 from src.admin.auth_helpers import api_key_prefix, mint_stored_api_key, require_api_key_auth
 from src.admin.form_validation import json_object_body
 from src.core.database.models import AdapterConfig, SyncJob, Tenant
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.operator_errors import FormIssue, InvalidFormInput
 from src.services.gam_inventory_service import db_session as gam_db_session
 from src.services.sync_jobs import recording_failure
@@ -72,11 +73,7 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
         if tenant.ad_server != "google_ad_manager":
             return jsonify({"error": "Only Google Ad Manager sync is currently supported"}), 400
 
-        adapter_stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-        adapter_config = db_session.scalars(adapter_stmt).first()
-
-        if not adapter_config:
-            return jsonify({"error": "Adapter not configured"}), 400
+        adapter_config = AdapterConfigRepository(db_session(), tenant_id).require_gam_config()
 
         # Get request parameters
         data = json_object_body()
@@ -424,14 +421,7 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
         if not tenant:
             return jsonify({"error": "Tenant not found"}), 404
 
-        adapter_stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
-        adapter_config = db_session.scalars(adapter_stmt).first()
-
-        if not adapter_config or not adapter_config.gam_network_code:
-            return (
-                jsonify({"error": "Please connect your GAM account first. Go to Ad Server settings to configure GAM."}),
-                400,
-            )
+        adapter_config = AdapterConfigRepository(db_session(), tenant_id).require_gam_config()
 
         # Create sync job
         sync_id = f"orders_sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"

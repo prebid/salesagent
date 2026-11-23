@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session as SASession
 
 from src.core.database.models import SyncJob
+from src.core.operator_errors import GAMNotConnected
 from src.services.order_approval_service import (
     get_approval_status,
     start_order_approval_background,
@@ -159,7 +160,7 @@ def test_start_approval_persists_job_then_worker_marks_it_failed_without_gam_con
 
     # Terminal state, reached through the real AdapterConfigRepository lookup.
     assert status["status"] == "failed"
-    assert status["error_message"] == "GAM not configured for tenant"
+    assert status["error_message"] == GAMNotConnected.MESSAGE
     assert status["completed_at"] is not None
 
     # Tracking payload production wrote at INSERT time; the worker never rewrites it.

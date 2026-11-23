@@ -15,7 +15,7 @@ from sqlalchemy import select
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
-from src.core.operator_errors import StateConflict, safe_error_message
+from src.core.operator_errors import GAMNotConnected, StateConflict, safe_error_message
 from src.core.thread_registry import ThreadRegistry
 from src.services.sync_jobs import record_sync_failure
 
@@ -193,35 +193,16 @@ def _run_sync_thread(
 
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-            adapter_repo = AdapterConfigRepository(db, tenant_id)
-            adapter_config = adapter_repo.find_by_tenant()
-
-            if (
-                not adapter_config
-                or adapter_config.adapter_type != "google_ad_manager"
-                or not adapter_config.gam_network_code
-            ):
-                record_sync_failure(tenant_id, sync_id, "GAM not configured")
+            try:
+                adapter_config = AdapterConfigRepository(db, tenant_id).require_gam_config()
+            except GAMNotConnected:
+                record_sync_failure(tenant_id, sync_id, GAMNotConnected.MESSAGE)
                 return
 
-            # Determine auth method
-            auth_method = getattr(adapter_config, "gam_auth_method", None)
-            if not auth_method:
-                if adapter_config.gam_refresh_token:
-                    auth_method = "oauth"
-                elif hasattr(adapter_config, "gam_service_account_json") and adapter_config.gam_service_account_json:
-                    auth_method = "service_account"
-                else:
-                    record_sync_failure(tenant_id, sync_id, "No GAM authentication configured")
-                    return
-
-            # Create GAM client based on auth method
-            if auth_method == "service_account":
-                service_account_json_str = adapter_config.gam_service_account_json
-                if not service_account_json_str:
-                    record_sync_failure(tenant_id, sync_id, "Service account JSON not found")
-                    return
-
+            # The service account when the tenant authenticates with one, else OAuth, as
+            # build_gam_config_from_adapter chooses.
+            service_account_json_str = adapter_config.gam_service_account_json
+            if adapter_config.gam_auth_method == "service_account" and service_account_json_str:
                 import json as json_mod
 
                 service_account_info = json_mod.loads(service_account_json_str)

@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
-from src.core.operator_errors import safe_error_message
+from src.core.operator_errors import GAMNotConnected, safe_error_message
 from src.core.security.webhook_egress import deliver_webhook
 from src.core.signing.outbound import delivery_signer_for_tenant
 from src.core.thread_registry import ThreadRegistry
@@ -203,11 +203,11 @@ def _run_approval_thread(
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
             adapter_repo = AdapterConfigRepository(db, tenant_id)
-            adapter_config = adapter_repo.find_by_tenant()
-
-            if not adapter_config or not adapter_config.gam_network_code:
+            try:
+                adapter_config = adapter_repo.require_gam_config()
+            except GAMNotConnected:
                 _mark_approval_failed(
-                    approval_id, "GAM not configured for tenant", webhook_url, tenant_id, principal_id, media_buy_id
+                    approval_id, GAMNotConnected.MESSAGE, webhook_url, tenant_id, principal_id, media_buy_id
                 )
                 return
 
@@ -216,7 +216,7 @@ def _run_approval_thread(
         # Create GAM client
         from src.adapters.gam.client import GAMClientManager
 
-        client_manager = GAMClientManager(gam_config, adapter_config.gam_network_code)
+        client_manager = GAMClientManager(gam_config, gam_config["network_code"])
         orders_manager = GAMOrdersManager(client_manager)
 
         # Poll GAM approval endpoint

@@ -19,7 +19,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import AdapterConfig, GAMLineItem, GAMOrder, Tenant
+from src.core.database.models import GAMLineItem, GAMOrder, Tenant
 from src.core.database.repositories.adapter_config import AdapterConfigRepository, read_adapter_config
 from src.core.database.repositories.sync_job import SyncJobRepository
 from src.core.operator_errors import (
@@ -67,18 +67,6 @@ class _GamLineItemView:
     stats_ctr: float
     targeting: dict | None
     last_synced: datetime
-
-
-def _validate_gam_config(session, tenant_id: str) -> tuple[AdapterConfig | None, str | None]:
-    """Validate that a tenant has a complete GAM configuration.
-
-    Returns (adapter_config, None) on success, or (None, error_message) on failure.
-    """
-    repo = AdapterConfigRepository(session, tenant_id)
-    config = repo.find_by_tenant()
-    if not config or not config.gam_network_code or not repo.has_gam_credentials(config):
-        return None, "Please connect your GAM account first. Go to Ad Server settings to configure GAM."
-    return config, None
 
 
 def _presented_or_stored_refresh_token(tenant_id: str, presented: object) -> str:
@@ -493,10 +481,7 @@ def view_gam_line_item(tenant_id, line_item_id):
             if not tenant:
                 return render_template("error.html", error="Tenant not found"), 404
 
-            # Validate GAM configuration via repository
-            adapter_config, gam_error = _validate_gam_config(db_session, tenant_id)
-            if gam_error:
-                return render_template("error.html", error=gam_error), 400
+            adapter_config = AdapterConfigRepository(db_session, tenant_id).require_gam_config()
 
             # Initialize GAM reporting service
             reporting_service = GAMReportingService(
@@ -578,10 +563,7 @@ def get_gam_custom_targeting_keys(tenant_id):
         if not tenant:
             return jsonify({"error": "Tenant not found"}), 404
 
-        # Validate GAM configuration via repository
-        adapter_config, gam_error = _validate_gam_config(db_session, tenant_id)
-        if gam_error:
-            return jsonify({"error": gam_error}), 400
+        adapter_config = AdapterConfigRepository(db_session, tenant_id).require_gam_config()
 
         # Create OAuth2 client
         gam_auth = get_settings().auth
@@ -1021,10 +1003,7 @@ def get_gam_line_item_api(tenant_id, line_item_id):
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
 
-            # Validate GAM configuration via repository
-            adapter_config, gam_error = _validate_gam_config(db_session, tenant_id)
-            if gam_error:
-                return jsonify({"error": gam_error}), 400
+            adapter_config = AdapterConfigRepository(db_session, tenant_id).require_gam_config()
 
             # Initialize GAM reporting service
             reporting_service = GAMReportingService(
