@@ -18,7 +18,7 @@ from werkzeug.exceptions import Forbidden
 from src.admin.csrf import SAFE_METHODS
 from src.core.config import get_settings, split_csv
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant, User, UserRole
+from src.core.database.models import Tenant, UserRole
 from src.core.database.repositories.tenant_management_config import TenantManagementConfigRepository
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.logging_config import log_safe
@@ -287,35 +287,6 @@ def _cache_admin_status(email, is_admin):
     except (RuntimeError, KeyError):
         # Session not available or read-only
         pass
-
-
-def is_tenant_admin(email, tenant_id=None):
-    """Check if user is a tenant admin.
-
-    Args:
-        email: User's email address
-        tenant_id: Optional tenant ID to check admin status for specific tenant
-
-    Returns:
-        bool: True if user is a tenant admin
-    """
-    if not email:
-        return False
-
-    # Super admins are implicitly tenant admins
-    if is_super_admin(email):
-        return True
-
-    # Check if user is a tenant admin in the database
-    with get_db_session() as db_session:
-        stmt = select(User).filter_by(email=email.lower(), is_active=True, is_admin=True)
-
-        if tenant_id:
-            # Check for specific tenant
-            stmt = stmt.filter_by(tenant_id=tenant_id)
-
-        user = db_session.scalars(stmt).first()
-        return user is not None
 
 
 def require_auth(admin_only=False):

@@ -222,10 +222,8 @@ class TestJSONValidation:
             # Retrieve and verify
             retrieved = session.scalars(select(Tenant).filter_by(tenant_id="json_test")).first()
             assert retrieved.authorized_emails == ["test@example.com"]
-            # PolicySettingsModel adds default values
-            assert retrieved.policy_settings["enabled"] is True
-            assert "require_approval" in retrieved.policy_settings  # Default added
-            assert "blocked_categories" in retrieved.policy_settings  # Default added
+            # Stored as written: the validator adds no defaults
+            assert retrieved.policy_settings == {"enabled": True}
 
     def test_principal_platform_mappings(self, test_db):
         """Test Principal platform_mappings validation."""
@@ -326,7 +324,7 @@ class TestIntegration:
                     authorized_emails=["admin@workflow.com"],
                     authorized_domains=["workflow.com"],
                     auto_approve_format_ids=["display_300x250", "video_16x9"],
-                    policy_settings={"enabled": True, "require_approval": False, "max_daily_budget": 10000.0},
+                    policy_settings={"enabled": True, "prohibited_advertisers": ["blocked.example"]},
                     created_at=now,
                     updated_at=now,
                 )
@@ -379,7 +377,7 @@ class TestIntegration:
             t = session.scalars(select(Tenant).filter_by(tenant_id="workflow_test")).first()
             assert t is not None
             assert t.auto_approve_format_ids == ["display_300x250", "video_16x9"]
-            assert t.policy_settings["max_daily_budget"] == 10000.0
+            assert t.policy_settings == {"enabled": True, "prohibited_advertisers": ["blocked.example"]}
 
             # Check product
             p = session.scalars(select(Product).filter_by(product_id="prod_1")).first()
