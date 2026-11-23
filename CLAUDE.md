@@ -444,8 +444,10 @@ Follow these rules:
 
 ## Configuration
 
-Local secrets live in `.env.secrets` (required for a working stack: Gemini, Google OAuth,
-GAM OAuth, super-admin emails, Approximated).
+Local secrets live in `.env` (required for a working stack: Gemini, Google OAuth,
+GAM OAuth, super-admin emails, Approximated);
+[Secrets configuration](docs/security.md#secrets-configuration) says which file each Docker
+Compose file reads.
 [docs/deployment/environment-variables.md](docs/deployment/environment-variables.md) documents
 every variable — read it before touching credentials or auth configuration.
 

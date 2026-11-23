@@ -43,7 +43,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _ENV = SettingsConfigDict(env_prefix="", case_sensitive=False, extra="ignore", env_ignore_empty=True)
 
 
-def _csv(value: str | None) -> list[str]:
+def split_csv(value: str | None) -> list[str]:
+    """The non-empty, stripped items of a comma-separated *value*."""
     return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
@@ -102,7 +103,7 @@ class RuntimeSettings(BaseSettings):
 
     @property
     def allowed_origin_list(self) -> list[str]:
-        return _csv(self.allowed_origins)
+        return split_csv(self.allowed_origins)
 
     @property
     def admin_domain_or_derived(self) -> str | None:
@@ -266,11 +267,11 @@ class AuthSettings(BaseSettings):
 
     @property
     def super_admin_email_list(self) -> list[str]:
-        return [e.lower() for e in _csv(self.super_admin_emails)]
+        return [e.lower() for e in split_csv(self.super_admin_emails)]
 
     @property
     def super_admin_domain_list(self) -> list[str]:
-        return [d.lower() for d in _csv(self.super_admin_domains)]
+        return [d.lower() for d in split_csv(self.super_admin_domains)]
 
     @property
     def gam_oauth_configured(self) -> bool:

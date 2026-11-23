@@ -27,6 +27,7 @@ from tests.bdd.steps._outcome_helpers import (
 )
 from tests.bdd.steps.generic._create_request import build_create_request_kwargs
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import bracket_list
 from tests.bdd.steps.generic.then_error import _wire_code, _wire_error_object, _wire_suggestion
 from tests.factories import (
     CreativeAssignmentFactory,
@@ -372,6 +373,28 @@ def given_owns_media_buy_with_status(ctx: dict, principal_id: str, mb_id: str, s
     (mid-flight) window: "active" stays active; terminal states pass through.
     """
     _seed_simple_media_buy(ctx, principal_id, mb_id, status)
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with returned wire status "{status}"'))
+def given_owns_media_buy_with_returned_wire_status(ctx: dict, principal_id: str, mb_id: str, status: str) -> None:
+    """Seed a buy that get_media_buys reports with wire status *status* (BR-RULE-290).
+
+    Not stacked on ``with status``: that seed uses the factory's past-start window, and
+    on e2e_rest the live status scheduler promotes a past-start ``pending_start`` buy
+    with no creatives to ``active`` within a minute. Every status except the
+    date-refined serving state keeps the far-future pre-flight window; ``active`` gets
+    a window around the real today, so all transports judge it the same.
+    """
+    from src.core.database.models import PersistedMediaBuyStatus
+    from src.core.tools._media_buy_status import CANONICAL_SERVING, PERSISTED_STATUS_TO_CANONICAL
+
+    assert PERSISTED_STATUS_TO_CANONICAL[PersistedMediaBuyStatus(status)] == status, (
+        f"persisted status {status!r} is not returned as itself on the wire"
+    )
+    if status == CANONICAL_SERVING:
+        _seed_relative_media_buy(ctx, principal_id, mb_id, "30 days ago", "in 30 days")
+    else:
+        _seed_media_buy_with_persisted_status(ctx, principal_id, mb_id, status)
 
 
 @given(
@@ -3319,6 +3342,15 @@ def then_raw_request_advisory_code_and_recovery(ctx: dict, mb_id: str, field: st
         f"expected advisory recovery {recovery!r} — the code alone leaves the buyer "
         f"inferring retry semantics; got {advisory.get('recovery')!r}"
     )
+
+
+@then(parsers.parse('the media buy "{mb_id}" valid_actions set should equal {expected_actions}'))
+def then_media_buy_valid_actions_set_equal(ctx: dict, mb_id: str, expected_actions: str) -> None:
+    """Compare the buyer-visible valid_actions set with the scenario's expected values."""
+    expected = bracket_list(expected_actions)
+    actual = _wire_media_buy(ctx, mb_id).get("valid_actions")
+    assert isinstance(actual, list), f"Expected valid_actions array on the wire, got {actual!r}"
+    assert sorted(actual) == sorted(expected), f"valid_actions for {mb_id!r}: {actual!r} != {expected!r}"
 
 
 def _wire_media_buy(ctx: dict, mb_id: str) -> dict:

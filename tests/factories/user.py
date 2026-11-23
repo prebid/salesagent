@@ -1,6 +1,6 @@
 """Factory_boy factories for user and tenant auth config models.
 
-Factories: UserFactory, TenantAuthConfigFactory
+Factories: UserFactory, TenantAuthConfigFactory, TenantManagementConfigFactory
 """
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ from __future__ import annotations
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
-from src.core.database.models import TenantAuthConfig, User
+from src.core.database.models import TenantAuthConfig, TenantManagementConfig, User
 from tests.factories.core import TenantFactory
 
 
@@ -40,3 +40,16 @@ class TenantAuthConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
     oidc_discovery_url = "https://accounts.google.com/.well-known/openid-configuration"
     oidc_client_id = Sequence(lambda n: f"client-id-{n:04d}.apps.googleusercontent.com")
     oidc_scopes = "openid email profile"
+
+
+class TenantManagementConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """A deployment-wide ``superadmin_config`` row, such as ``super_admin_domains``."""
+
+    class Meta:
+        model = TenantManagementConfig
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    config_key = Sequence(lambda n: f"config_key_{n:04d}")
+    config_value = ""
+    updated_by = "test"

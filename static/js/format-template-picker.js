@@ -210,7 +210,7 @@ class FormatTemplatePicker {
             const data = await response.json();
 
             if (data.error) {
-                console.warn('[FormatTemplatePicker] Error loading agent formats:', data.error);
+                console.warn('[FormatTemplatePicker] Error loading agent formats:', adminErrorText(data));
                 return;
             }
 

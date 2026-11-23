@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pydantic import JsonValue
 
 from src.core.database.models import Tenant
+from src.core.operator_errors import OperatorRefusal
 from src.core.security.egress.destination import VendorConstant
 from src.core.security.outbound_http import OutboundError, OutboundResult, send
 
@@ -43,12 +44,14 @@ def _api(method: str, path: str, api_key: str, *, json_body: JsonValue | None = 
     )
 
 
-class DomainNotOwned(Exception):
+class DomainNotOwned(OperatorRefusal):
     """The acting tenant does not own the domain the request named.
 
     Raised by :func:`tenant_owns_domain`, which is the only producer of the
     :class:`OwnedDomain` every domain-bearing operation below requires.
     """
+
+    MESSAGE = "Domain must match tenant's virtual_host"
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,7 +91,7 @@ def tenant_owns_domain(tenant: Tenant, domain: str | None) -> OwnedDomain:
     not own a domain it is served at.
     """
     if not isinstance(domain, str) or not domain or (tenant.virtual_host or "").lower() != domain.lower():
-        raise DomainNotOwned("Domain must match tenant's virtual_host")
+        raise DomainNotOwned(DomainNotOwned.MESSAGE)
     return OwnedDomain(domain=domain)
 
 

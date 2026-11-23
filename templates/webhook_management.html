@@ -464,7 +464,7 @@ function toggleWebhook(configId) {
                 btnEl.textContent = 'Enable';
             }
         } else {
-            alert('Error toggling webhook: ' + data.error);
+            alert('Error toggling webhook: ' + adminErrorText(data));
         }
     })
     .catch(error => {
