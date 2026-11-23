@@ -191,7 +191,7 @@ def seed_account(
         )
 
 
-def seed_product(engine, *, tenant_id: str, product_id: str, channels: list[str] | None) -> None:
+def seed_product(engine, *, tenant_id: str, product_id: str, channels: list[Any] | None) -> None:
     """Insert a products row directly -- a migration's subject is rows, not callers.
 
     Raw SQL for the same reason as :func:`seed_account`: the channel-repair revision's
@@ -200,7 +200,7 @@ def seed_product(engine, *, tenant_id: str, product_id: str, channels: list[str]
     has them: ``'[]'`` satisfies the format_ids validator (zero iterations), and the property
     selection lives in its own table from e2af0c242a7f on, so no column states one; server
     defaults cover the rest. ``channels=None`` writes SQL NULL, what production stores for
-    "no channels declared".
+    "no channels declared"; a list is written as given, non-string elements included.
     """
     with engine.begin() as conn:
         conn.execute(

@@ -15,10 +15,13 @@ states its own starting revision through ``reset_to_revision``.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from adcp.types._generated import MediaChannel
 from sqlalchemy import text
 
+from src.core.helpers.channel_helpers import media_channel_options, parse_media_channels
 from tests.integration.migration_helpers import (
     reset_to_revision,
     row_xmins,
@@ -50,7 +53,7 @@ def at_previous(migration_db):
     )
 
 
-def _seed(engine, product_id: str, channels: list[str] | None) -> None:
+def _seed(engine, product_id: str, channels: list[Any] | None) -> None:
     seed_product(engine, tenant_id=_TENANT, product_id=product_id, channels=channels)
 
 
@@ -70,6 +73,12 @@ def _xmins(engine) -> dict[str, str]:
     return row_xmins(engine, table="products", key_column="product_id", tenant_id=_TENANT)
 
 
+def _as_the_form_writes(*values: str) -> list[str]:
+    """What saving the edit form with *values* selected stores: the picker posts its options in
+    enum order and ``parse_media_channels`` keeps that order."""
+    return parse_media_channels(value for value, _ in media_channel_options() if value in values)
+
+
 class TestLegacyPickerValuesAreRemapped:
     @pytest.mark.parametrize(
         ("legacy", "member"),
@@ -80,13 +89,27 @@ class TestLegacyPickerValuesAreRemapped:
         ],
     )
     def test_each_picker_alias_is_remapped_onto_its_enum_member(self, at_previous, legacy, member):
-        """Expected spelled from the SDK member, so a typo in the revision cannot be mirrored here."""
+        """Expected spelled from the SDK member, so a typo in the revision cannot be mirrored here.
+
+        Exact order, the form's: saving a repaired product unchanged then writes the same array
+        back. ``affiliate`` sorts before each target alphabetically and after it by enum
+        position, so a repair that orders alphabetically fails here.
+        """
         engine, db_url = at_previous
-        _seed(engine, f"prod_{legacy}", ["display", legacy])
+        _seed(engine, f"prod_{legacy}", ["affiliate", legacy])
 
         run_alembic_upgrade(db_url, _REVISION)
 
-        assert sorted(_stored(engine, f"prod_{legacy}").channels) == sorted(["display", member.value])
+        assert _stored(engine, f"prod_{legacy}").channels == _as_the_form_writes(member.value, "affiliate")
+
+    def test_a_non_string_element_is_left_as_it_is(self, at_previous):
+        """Not cast to text and not dropped; it sorts after the members, so the array stays deterministic."""
+        engine, db_url = at_previous
+        _seed(engine, "prod_mixed", ["video", 1, None])
+
+        run_alembic_upgrade(db_url, _REVISION)
+
+        assert _stored(engine, "prod_mixed").channels == [MediaChannel.olv.value, None, 1]
 
     def test_native_is_dropped_and_the_other_channels_kept(self, at_previous):
         """``native`` is a format category, orthogonal to channels; exact equality also refuses native->social."""

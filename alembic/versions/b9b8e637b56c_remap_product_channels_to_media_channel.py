@@ -14,33 +14,26 @@ on the adapter's default channels instead of the publisher's tag, while
 advertised a channel the filter refused (GH #1532). The picker is enum-driven and the
 handlers refuse a non-member now; the rows already written are this revision's job.
 
-Three values have one member they stood for and are remapped: ``video -> olv``,
-``audio -> streaming_audio`` (the aliases ``CHANNEL_MAPPING`` already applies),
-``retail -> retail_media``. ``native`` is dropped: the pinned taxonomy
-(docs/reference/media-channel-taxonomy.mdx @ v3.1.1) calls it a format category,
-"orthogonal to channels", and lists native units under both ``display`` and ``social``,
-so no single channel is inferable from it. A row left with no channel becomes NULL, which
-hands it to the "absence of a claim" rule in ``channel_helpers.effective_channel_names``
--- the rule ``get_products`` was already applying to it. The rebuilt array is
-de-duplicated because ``core/product.json#/properties/channels`` is ``uniqueItems``.
+What each legacy value becomes is declared once, in ``_REMAP`` and ``_DROPPED`` below, with
+the spec's reason beside it; every statement here is generated from them. A row left with no
+channel becomes NULL, which hands it to the "absence of a claim" rule in
+``channel_helpers.effective_channel_names`` -- the rule ``get_products`` was already applying
+to it. The rebuilt array is de-duplicated, because ``core/product.json#/properties/channels``
+is ``uniqueItems``, and ordered by enum position, the order the picker posts and
+``parse_media_channels`` keeps, so saving a repaired product unchanged writes the same array.
 
-Detection query (runnable standalone by an operator)::
+Every element outside the enum is surveyed and logged with its row and what becomes of it
+before the UPDATE, and the UPDATE touches only rows holding a legacy value. An element that is
+none of those (``Video``, a typo, a non-string) is left as it is -- the read path already
+skips it, and rewriting a tenant's live row on a guess is not this revision's call. Such an
+element sorts after the members, by jsonb order, so a row always gets the same array.
 
-    SELECT tenant_id, product_id, channels
-      FROM products
-     WHERE jsonb_typeof(channels) = 'array'
-       AND channels ?| array['video', 'audio', 'retail', 'native'];
-
-Every element outside the enum is surveyed and logged with its row before the UPDATE, the
-four legacy values included; the UPDATE touches only rows holding one of the four. An
-element that is none of those (``Video``, a typo) is left as it is and logged -- the read
-path already skips it, and rewriting a tenant's live row on a guess is not this revision's
-call. shortcut: non-string array elements are neither surveyed (``NULL NOT IN`` is NULL)
-nor rewritten; every writer stores strings, revisit if a writer ever does not.
+Detection: ``_SURVEY_SQL`` is the query, runnable standalone by an operator; print it with
+``python -c "import runpy; print(runpy.run_path('<this file>')['_SURVEY_SQL'])"``.
 """
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 import sqlalchemy as sa
 
@@ -79,32 +72,74 @@ _MEMBERS = (
     "sponsored_intelligence",
 )
 
+#: docs/reference/migration/channels.mdx @ v3.2.7, the spec's channel migration guide.
+#: ``retail`` is "Renamed for clarity". ``video`` and ``audio`` are "Split by distribution",
+#: into ``olv``, ``linear_tv`` and ``cinema``, and into ``radio`` and ``streaming_audio``. One
+#: target is right for this seller: the old picker offered ``ctv`` and ``podcast`` as options of
+#: their own, so its ``video`` and ``audio`` meant the rest of each, and ``olv`` and
+#: ``streaming_audio`` are the only channels of those splits any adapter here reports
+#: (``default_channels``; none names ``linear_tv``, ``cinema`` or ``radio``).
+_REMAP = {"video": "olv", "audio": "streaming_audio", "retail": "retail_media"}
+
+#: The same guide: ``native`` is "Removed | Use format-level properties instead", assigned per
+#: product "based on how the budget is planned" (``display``, ``social`` or ``affiliate``),
+#: which a stored row does not say -- "Do not derive the declaration from creative format
+#: alone". media-channel-taxonomy.mdx's legacy table maps it to ``display``; the guide, the
+#: document written for this migration, governs.
+_DROPPED = ("native",)
+
+
+def _sql_list(values: Iterable[str]) -> str:
+    """*values* as a comma-separated list of SQL string literals; each is a constant of this module."""
+    return ", ".join(f"'{value}'" for value in values)
+
+
+#: An element's text; NULL for a JSON null.
+_TEXT = "e #>> '{}'"
+_MEMBER_ARRAY = f"ARRAY[{_sql_list(_MEMBERS)}]::text[]"
+
 _SURVEY_SQL = f"""
-    SELECT p.tenant_id, p.product_id, e.value AS channel
-      FROM products p, jsonb_array_elements_text(p.channels) AS e(value)
+    SELECT p.tenant_id, p.product_id, jsonb_typeof(e) AS kind, {_TEXT} AS value, e::text AS literal
+      FROM products p, jsonb_array_elements(p.channels) AS e
      WHERE jsonb_typeof(p.channels) = 'array'
-       AND e.value NOT IN ({", ".join(f"'{member}'" for member in _MEMBERS)})
-     ORDER BY p.tenant_id, p.product_id, e.value
+       AND (jsonb_typeof(e) <> 'string' OR {_TEXT} NOT IN ({_sql_list(_MEMBERS)}))
+     ORDER BY p.tenant_id, p.product_id, e
 """
 
-#: ORDER BY inside the aggregate: a DISTINCT aggregate happens to sort, but nothing
-#: promises it, and the wire list must be deterministic for the same row on every read.
-_REMAP_SQL = """
+_REMAP_ARMS = "\n".join(
+    f"                                              WHEN '{legacy}' THEN to_jsonb('{member}'::text)"
+    for legacy, member in _REMAP.items()
+)
+
+#: Only a string goes through the CASE (``jsonb_array_elements_text`` would cast ``1`` to
+#: ``"1"`` and drop ``null``). ORDER BY inside the aggregate: a DISTINCT aggregate happens to
+#: sort, but nothing promises it, and the wire list must be deterministic for the same row.
+_REMAP_SQL = f"""
     UPDATE products
        SET channels = (
-           SELECT jsonb_agg(c ORDER BY c)
-             FROM (SELECT DISTINCT CASE e.value
-                                     WHEN 'video' THEN 'olv'
-                                     WHEN 'audio' THEN 'streaming_audio'
-                                     WHEN 'retail' THEN 'retail_media'
-                                     ELSE e.value
+           SELECT jsonb_agg(c ORDER BY array_position({_MEMBER_ARRAY}, c #>> '{{}}') NULLS LAST, c)
+             FROM (SELECT DISTINCT CASE
+                                     WHEN jsonb_typeof(e) <> 'string' THEN e
+                                     ELSE CASE {_TEXT}
+{_REMAP_ARMS}
+                                              ELSE e
+                                          END
                                    END AS c
-                     FROM jsonb_array_elements_text(products.channels) AS e(value)
-                    WHERE e.value <> 'native') AS remapped
+                     FROM jsonb_array_elements(products.channels) AS e
+                    WHERE jsonb_typeof(e) <> 'string' OR {_TEXT} NOT IN ({_sql_list(_DROPPED)})) AS remapped
        )
      WHERE jsonb_typeof(channels) = 'array'
-       AND channels ?| array['video', 'audio', 'retail', 'native']
+       AND channels ?| array[{_sql_list((*_REMAP, *_DROPPED))}]
 """
+
+
+def _fate(row: sa.Row) -> str:
+    """What the UPDATE does to one surveyed element, for the log."""
+    if row.kind == "string" and row.value in _REMAP:
+        return f"{row.value!r} -> {_REMAP[row.value]!r}"
+    if row.kind == "string" and row.value in _DROPPED:
+        return f"{row.value!r} dropped"
+    return f"{row.literal} left as it is"
 
 
 def upgrade() -> None:
@@ -118,10 +153,10 @@ def upgrade() -> None:
 
     for row in outside_enum:
         logger.info(
-            "products.channels outside the MediaChannel enum: tenant=%s product=%s channel=%r",
+            "products.channels outside the MediaChannel enum: tenant=%s product=%s %s",
             row.tenant_id,
             row.product_id,
-            row.channel,
+            _fate(row),
         )
     result = bind.execute(sa.text(_REMAP_SQL))
     logger.info("Remapped legacy picker channels on %d product(s).", result.rowcount)
