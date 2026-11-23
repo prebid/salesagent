@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.secret_fields import KEEP, submitted_secret
 from src.admin.utils.url_policy import redirect_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CreativeAgent, Tenant
@@ -179,7 +180,7 @@ def edit_creative_agent(tenant_id, agent_id):
                 "enabled": agent.enabled,
                 "priority": agent.priority,
                 "auth_type": agent.auth_type,
-                "auth_credentials": agent.auth_credentials,
+                "has_auth": bool(agent.auth_credentials),
             }
 
             return render_template(
@@ -213,10 +214,9 @@ def edit_creative_agent(tenant_id, agent_id):
         agent.priority = int(request.form.get("priority", "10"))
         agent.auth_type = request.form.get("auth_type", "").strip() or None
 
-        # Only update credentials if provided
-        new_credentials = request.form.get("auth_credentials", "").strip()
-        if new_credentials:
-            agent.auth_credentials = new_credentials
+        # Write-only: blank keeps the saved credential, the clear checkbox removes it.
+        if (credentials := submitted_secret(request.form, "auth_credentials")) is not KEEP:
+            agent.auth_credentials = credentials
 
         if not agent.agent_url:
             flash("Agent URL is required", "error")

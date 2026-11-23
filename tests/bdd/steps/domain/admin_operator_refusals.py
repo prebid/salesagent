@@ -388,3 +388,19 @@ def then_json_details_only_code_line(ctx: dict, code: str) -> None:
 def then_pending_buy_still_awaits_approval(ctx: dict) -> None:
     status = _env(ctx).media_buy_status(ctx["admin_pending_buy"].media_buy_id)
     assert status == "pending_approval", f"Expected the media buy to await approval, it is {status!r}"
+
+
+@given(parsers.parse('the deployment\'s super-admin domain is "{domain}"'))
+def given_super_admin_domain(ctx: dict, domain: str) -> None:
+    _env(ctx).name_super_admin_domain(domain)
+
+
+@when(parsers.parse('the settings page\'s form adds the authorized domain "{domain}" to that tenant, from no page'))
+def when_settings_form_adds_authorized_domain(ctx: dict, domain: str) -> None:
+    ctx["admin_page"] = _env(ctx).submit_tenant_form(_other_tenant_id(ctx), "settings/domains/add", {"domain": domain})
+
+
+@then(parsers.parse('that tenant authorizes only the domain "{domain}"'))
+def then_tenant_authorizes_only(ctx: dict, domain: str) -> None:
+    stored = _env(ctx).authorized_domains_of(_other_tenant_id(ctx))
+    assert stored == [domain], f"Expected the tenant to authorize only {domain!r}, it authorizes {stored!r}"

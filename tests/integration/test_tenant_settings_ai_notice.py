@@ -15,13 +15,11 @@ from __future__ import annotations
 import pytest
 
 from tests.factories import TenantFactory
-from tests.helpers.settings_injection import PlatformAICredential
+from tests.helpers.settings_injection import ADMIN_UI_AI_CONFIG, KEYLESS_AI_CONFIG, PlatformAICredential
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 _NOTICE = "AI Configuration Required"
-
-_SELLER_AI_CONFIG = {"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "sk-ant-seller"}
 
 
 def _notices(client, ai_config, platform_key):
@@ -36,10 +34,10 @@ def _notices(client, ai_config, platform_key):
 @pytest.mark.parametrize(
     ("ai_config", "platform_key", "expected"),
     [
-        (_SELLER_AI_CONFIG, None, 0),
+        (ADMIN_UI_AI_CONFIG, None, 0),
         (None, None, 3),
         (None, "platform-key", 1),
-        ({"provider": "anthropic", "model": "claude-sonnet-4-20250514"}, "platform-key", 3),
+        (KEYLESS_AI_CONFIG, "platform-key", 3),
     ],
     ids=[
         "seller-ai-config-no-platform-key",

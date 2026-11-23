@@ -13,14 +13,11 @@ from typing import Literal, cast
 
 import pytz
 from flask import Blueprint, jsonify, request
-from sqlalchemy import select
 
 from scripts.ops.gam_helper import get_ad_manager_client_for_tenant
 from src.adapters.gam_reporting_service import GAMReportingService
 from src.admin.utils.helpers import require_tenant_access
-from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig, Tenant
-from src.core.database.repositories.principal import PrincipalRepository
+from src.core.database.repositories.uow import PrincipalUoW, TenantConfigUoW
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +54,27 @@ def validate_timezone(tz_str: str) -> bool:
         return False
 
 
+_DEFAULT_NETWORK_TIMEZONE = "America/New_York"
+
+
+def _tenant_uses_gam(tenant_id: str) -> bool:
+    """Whether the tenant exists and its ad server is Google Ad Manager."""
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        tenant = uow.tenant_config.get_tenant()
+        return tenant is not None and tenant.is_gam_tenant
+
+
+def _principal_gam_advertiser_id(tenant_id: str, principal_id: str) -> tuple[bool, str | None]:
+    """(whether the principal exists, its GAM advertiser id or None)."""
+    with PrincipalUoW(tenant_id) as uow:
+        assert uow.principals is not None
+        principal = uow.principals.get(principal_id)
+        if principal is None:
+            return False, None
+        return True, principal.get_adapter_id("gam")
+
+
 @gam_reporting_api.route("/api/tenant/<tenant_id>/gam/reporting", methods=["GET"])
 @require_tenant_access()
 def get_gam_reporting(tenant_id: str):
@@ -74,12 +92,7 @@ def get_gam_reporting(tenant_id: str):
     if not validate_tenant_id(tenant_id):
         return jsonify({"error": "Invalid tenant ID format"}), 400
 
-    # Check if tenant is using GAM
-    with get_db_session() as db_session:
-        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-        tenant = db_session.scalars(stmt).first()
-
-    if not tenant or tenant.ad_server != "google_ad_manager":
+    if not _tenant_uses_gam(tenant_id):
         return jsonify({"error": "GAM reporting is only available for tenants using Google Ad Manager"}), 400
 
     # Get query parameters
@@ -170,12 +183,7 @@ def get_advertiser_summary(tenant_id: str, advertiser_id: str):
     if not validate_numeric_id(advertiser_id):
         return jsonify({"error": "Invalid advertiser ID format"}), 400
 
-    # Check if tenant is using GAM
-    with get_db_session() as db_session:
-        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-        tenant = db_session.scalars(stmt).first()
-
-    if not tenant or tenant.ad_server != "google_ad_manager":
+    if not _tenant_uses_gam(tenant_id):
         return jsonify({"error": "GAM reporting is only available for tenants using Google Ad Manager"}), 400
 
     # Get query parameters
@@ -228,18 +236,9 @@ def get_principal_reporting(tenant_id: str, principal_id: str):
         return jsonify({"error": "Invalid principal ID format"}), 400
 
     # Get the principal's advertiser_id
-    with get_db_session() as db_session:
-        principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
-
-    if not principal:
+    found, advertiser_id = _principal_gam_advertiser_id(tenant_id, principal_id)
+    if not found:
         return jsonify({"error": "Principal not found"}), 404
-
-    import json
-
-    platform_mappings = principal.platform_mappings
-    if isinstance(platform_mappings, str):
-        platform_mappings = json.loads(platform_mappings)
-    advertiser_id = platform_mappings.get("gam_advertiser_id")
 
     if not advertiser_id:
         return jsonify({"error": "Principal does not have a GAM advertiser ID configured"}), 400
@@ -266,18 +265,9 @@ def get_principal_reporting(tenant_id: str, principal_id: str):
     # Get the GAM client for this tenant
     gam_client = get_ad_manager_client_for_tenant(tenant_id)
 
-    # Get the network timezone from adapter config
-    with get_db_session() as db_session:
-        stmt_config = select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
-        adapter_config = db_session.scalars(stmt_config).first()
-
-    if not adapter_config:
-        # Default to America/New_York if no config found
-        network_timezone = "America/New_York"
-    else:
-        # TODO: Add gam_network_timezone field to adapter_config table if timezone configuration is needed
-        # For now, use default timezone since config field no longer exists
-        network_timezone = "America/New_York"
+    # The adapter config stores no network timezone, so every network is read in the default.
+    # TODO: add gam_network_timezone to adapter_config if timezone configuration is needed.
+    network_timezone = _DEFAULT_NETWORK_TIMEZONE
 
     # Create reporting service
     reporting_service = GAMReportingService(gam_client, network_timezone)
@@ -331,12 +321,7 @@ def get_country_breakdown(tenant_id: str):
     if not validate_tenant_id(tenant_id):
         return jsonify({"error": "Invalid tenant ID format"}), 400
 
-    # Check if tenant is using GAM
-    with get_db_session() as db_session:
-        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-        tenant = db_session.scalars(stmt).first()
-
-    if not tenant or tenant.ad_server != "google_ad_manager":
+    if not _tenant_uses_gam(tenant_id):
         return jsonify({"error": "GAM reporting is only available for tenants using Google Ad Manager"}), 400
 
     # Get query parameters
@@ -408,12 +393,7 @@ def get_ad_unit_breakdown(tenant_id: str):
     if not validate_tenant_id(tenant_id):
         return jsonify({"error": "Invalid tenant ID format"}), 400
 
-    # Check if tenant is using GAM
-    with get_db_session() as db_session:
-        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-        tenant = db_session.scalars(stmt).first()
-
-    if not tenant or tenant.ad_server != "google_ad_manager":
+    if not _tenant_uses_gam(tenant_id):
         return jsonify({"error": "GAM reporting is only available for tenants using Google Ad Manager"}), 400
 
     # Get query parameters
@@ -488,18 +468,9 @@ def get_principal_summary(tenant_id: str, principal_id: str):
         return jsonify({"error": "Invalid principal ID format"}), 400
 
     # Get the principal's advertiser_id
-    with get_db_session() as db_session:
-        principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
-
-    if not principal:
+    found, advertiser_id = _principal_gam_advertiser_id(tenant_id, principal_id)
+    if not found:
         return jsonify({"error": "Principal not found"}), 404
-
-    import json
-
-    platform_mappings = principal.platform_mappings
-    if isinstance(platform_mappings, str):
-        platform_mappings = json.loads(platform_mappings)
-    advertiser_id = platform_mappings.get("gam_advertiser_id")
 
     if not advertiser_id:
         return jsonify({"error": "Principal does not have a GAM advertiser ID configured"}), 400
@@ -516,18 +487,9 @@ def get_principal_summary(tenant_id: str, principal_id: str):
     # Get the GAM client for this tenant
     gam_client = get_ad_manager_client_for_tenant(tenant_id)
 
-    # Get the network timezone from adapter config
-    with get_db_session() as db_session:
-        stmt_config = select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
-        adapter_config = db_session.scalars(stmt_config).first()
-
-    if not adapter_config:
-        # Default to America/New_York if no config found
-        network_timezone = "America/New_York"
-    else:
-        # TODO: Add gam_network_timezone field to adapter_config table if timezone configuration is needed
-        # For now, use default timezone since config field no longer exists
-        network_timezone = "America/New_York"
+    # The adapter config stores no network timezone, so every network is read in the default.
+    # TODO: add gam_network_timezone to adapter_config if timezone configuration is needed.
+    network_timezone = _DEFAULT_NETWORK_TIMEZONE
 
     # Create reporting service
     reporting_service = GAMReportingService(gam_client, network_timezone)

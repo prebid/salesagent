@@ -43,8 +43,9 @@ from src.core.credentials import hash_token, mint_token, token_prefix
 from src.core.database.json_type import JSONType
 from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError, AdCPPersistedStateError
-from src.core.http_utils import canonical_publisher_domain
+from src.core.http_utils import canonical_publisher_domain, is_publisher_domain
 from src.core.json_validators import PLACEMENTS_ARE_EXPLICIT_CHECK, PLACEMENTS_ARE_EXPLICIT_SQL, JSONValidatorMixin
+from src.core.operator_errors import InvalidDomainNameError
 
 # The ONE NotificationConfig, whose authentication block is the one Authentication class
 # (src/core/schemas/notification.py): a stored row reads back as the same type the request
@@ -2715,6 +2716,13 @@ class Publisher(Base, JSONValidatorMixin):
     format_options: Mapped[list["PublisherFormatOption"]] = relationship(
         back_populates="publisher", cascade="all, delete-orphan", passive_deletes=True
     )
+
+    @validates("domain")
+    def _require_host(self, _key: str, value: str) -> str:
+        """A publisher domain is a hostname, optionally with a port: the host its document is fetched from."""
+        if not is_publisher_domain(value):
+            raise InvalidDomainNameError()
+        return value
 
     def is_fresh(self, now: datetime) -> bool:
         """Whether the stored document may still be used at *now* (:data:`PUBLISHER_DOCUMENT_FRESHNESS`)."""

@@ -15,6 +15,7 @@ from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.tools.media_buy_create import ApprovalOutcome
+from src.core.webhooks.write_only import scrub_webhook_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,6 @@ def list_workflows(tenant_id, **kwargs):
                     "principal_name": principal.name if principal else "Unknown",
                     "assigned_to": step.assigned_to,
                     "error_message": step.error_message,
-                    "request_data": step.request_data,
                 }
             )
 
@@ -128,11 +128,9 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
         if context and context.principal_id:
             principal = PrincipalRepository(db, tenant_id).get(context.principal_id)
 
-        # Parse request data
-        request_data = step.request_data if step.request_data else {}
-
-        # Format the data for display
-        formatted_request = json.dumps(request_data, indent=2)
+        # The stored documents keep the buyer's webhook secrets, because delivery reads
+        # them back from the step; the page shows copies without them (GHSA-2968-2px9-6rjm).
+        formatted_request = json.dumps(scrub_webhook_secrets(step.request_data or {}), indent=2)
 
         return render_template(
             "workflow_review.html",
@@ -140,8 +138,8 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
             workflow_id=workflow_id,
             step=step,
             principal=principal,
-            request_data=request_data,
             formatted_request=formatted_request,
+            response_data=scrub_webhook_secrets(step.response_data),
         )
 
 
