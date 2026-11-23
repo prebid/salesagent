@@ -1514,7 +1514,7 @@ class TestUpdateMediaBuyPauseResume:
         assert isinstance(result, UpdateMediaBuySuccess)
         # Adapter should be called with pause action
         adapter.update_media_buy.assert_called_once_with(
-            media_buy_id=ANY, action="pause_media_buy", package_id=ANY, budget=ANY, today=ANY, packages=ANY
+            media_buy_id=ANY, action="pause_media_buy", package_id=ANY, budget=ANY, today=ANY, packages=[]
         )
 
     def test_resume_paused_media_buy(self):
@@ -1575,7 +1575,7 @@ class TestUpdateMediaBuyPauseResume:
 
         assert isinstance(result, UpdateMediaBuySuccess)
         adapter.update_media_buy.assert_called_once_with(
-            media_buy_id=ANY, action="resume_media_buy", package_id=ANY, budget=ANY, today=ANY, packages=ANY
+            media_buy_id=ANY, action="resume_media_buy", package_id=ANY, budget=ANY, today=ANY, packages=[]
         )
 
     def test_pause_skips_budget_validation(self):
@@ -2697,7 +2697,7 @@ class TestUpdateMediaBuyAdapterFailure:
             package_id="pkg_1",
             budget=3000,
             today=ANY,
-            packages=ANY,
+            packages=[],
         )
         assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
         # Nothing was applied: the branch hands the change to the adapter before it writes
