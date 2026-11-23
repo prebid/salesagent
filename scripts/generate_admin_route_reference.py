@@ -25,6 +25,11 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.admin_routes import iter_admin_routes
+
 PAGE = ROOT / "docs" / "development" / "admin-ui-routes.md"
 
 # The decorators that decide who reaches a view, most specific first.
@@ -110,19 +115,15 @@ def _audit(decorators: list[str]) -> str:
 
 def collect_routes() -> dict[str, list[Route]]:
     """Every route of the admin application, grouped by the source file of its view."""
-    sys.path.insert(0, str(ROOT))
-    from src.admin.app import create_app
-
-    app = create_app()
     trees: dict[str, ast.Module] = {}
     groups: dict[str, list[Route]] = defaultdict(list)
-    for rule in app.url_map.iter_rules():
-        view = app.view_functions[rule.endpoint]
-        source = Path(inspect.unwrap(view).__code__.co_filename)
+    for route in iter_admin_routes():
+        source = Path(inspect.unwrap(route.view).__code__.co_filename)
         group = source.relative_to(ROOT).as_posix() if source.is_relative_to(ROOT / "src") else "Flask"
-        decorators = _decorators(view, trees) if group != "Flask" else []
-        methods = ", ".join(sorted((rule.methods or set()) - {"HEAD", "OPTIONS"}))
-        groups[group].append(Route(str(rule), methods, rule.endpoint, _access(decorators), _audit(decorators)))
+        decorators = _decorators(route.view, trees) if group != "Flask" else []
+        groups[group].append(
+            Route(route.path, ", ".join(route.methods), route.endpoint, _access(decorators), _audit(decorators))
+        )
     return groups
 
 
