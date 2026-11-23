@@ -461,7 +461,7 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
   # validation, point 6). 169.254.169.254 is a cloud metadata address: the policy refuses it
   # whatever the deployment's egress settings.
 
-  @T-ADMIN-REFUSAL-056 @browser @egress
+  @T-ADMIN-REFUSAL-056 @browser
   Scenario: An agent URL the egress policy refuses is shown on the add form with its field
     When the operator submits the add creative agent form from its page with:
       | field     | value                         |
@@ -473,7 +473,7 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the page flashes the error "Agent URL"
     And the answer does not echo the submitted "agent_url"
 
-  @T-ADMIN-REFUSAL-057 @json @egress
+  @T-ADMIN-REFUSAL-057 @json
   Scenario: A fetch() caller is told which URL the egress policy refused
     When the operator saves an OIDC configuration with:
       | field         | value                                                    |
@@ -489,7 +489,7 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
       | OIDC discovery URL |
     And the answer does not echo the submitted "discovery_url"
 
-  @T-ADMIN-REFUSAL-058 @json @egress
+  @T-ADMIN-REFUSAL-058 @json
   Scenario: An API caller is told which webhook URL the egress policy refused
     When the tenant management API is asked to create a tenant with:
       | field             | value                        |
