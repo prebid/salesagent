@@ -1629,6 +1629,19 @@ def _update_media_buy_impl(
                             packages=_stored_packages(uow, req.media_buy_id),
                         )
 
+                        # The seller's record of the pause, written here inside this unit of
+                        # work once the ad server has accepted it, as the budget below is:
+                        # get_media_buys serves package_config["paused"], and the write rolls
+                        # back with a later refusal of the same request. The mock used to
+                        # commit it in a session of its own, which survived that refusal, and
+                        # GAM, Kevel and Triton recorded no pause at all (#2647).
+                        paused_package = uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
+                        uow.media_buys.update_package_config(
+                            req.media_buy_id,
+                            pkg_update.package_id,
+                            {**(paused_package.package_config or {}), "paused": pkg_update.paused},
+                        )
+
                         # This branch modified a package, so the response says which one
                         # and in what state. It used to apply the pause through the adapter
                         # and record NOTHING, which is the one shape the pin's
@@ -1657,18 +1670,14 @@ def _update_media_buy_impl(
 
                         # The seller's budget column is written HERE, inside this request's
                         # unit of work, once the ad server has accepted the change, and
-                        # nowhere else: no adapter writes media_packages.budget. It was left
-                        # to each adapter, and they disagreed: Kevel wrote nothing, GAM and
-                        # Broadstreet wrote only package_config["budget"] while get_media_buys
-                        # reads the column, and the mock wrote both in its own session. Pinned
+                        # nowhere else: no adapter writes a package's record (#2647). Pinned
                         # update_media_buy.mdx (v3.2.7) makes the request "one atomic mutation"
                         # in which no package field from a rejected update may change, and
                         # "every mutating update increments revision": update_package_fields
                         # writes the column and moves the revision, and both roll back with
-                        # the UoW. The UoW owns only that: the adapter call above has already
-                        # reached the ad server when a later branch refuses, and GAM and
-                        # Broadstreet still commit package_config["budget"] in their own
-                        # sessions.
+                        # the UoW. What the UoW cannot roll back is the ad server itself: the
+                        # adapter call above has already reached it when a later branch
+                        # refuses.
                         uow.media_buys.update_package_fields(
                             req.media_buy_id,
                             pkg_update.package_id,
