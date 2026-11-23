@@ -38,6 +38,7 @@ from src.core.database.models import AdapterConfig, CurrencyLimit, PricingOption
 from src.core.database.repositories.principal_lookup import find_principal_by_token_hash
 from tests.factories import TenantFactory
 from tests.helpers.credentials import credential_headers
+from tests.helpers.envelope_assertions import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -184,6 +185,46 @@ def test_the_demo_tenant_answers_a_buyer_with_the_printed_token(bound_factory_se
     refused = client.post(
         "/api/v1/accounts", json={}, headers=credential_headers(token="tok_not-the-demo-token", tenant=DEMO_TENANT_ID)
     )
-    assert refused.status_code in (401, 403), (
-        f"a wrong token was answered {refused.status_code}; the 200 above proves nothing about the token"
-    )
+    # Presented and rejected: AUTH_INVALID (401, terminal), refused by the resolver before
+    # the tool runs. Without it the 200 above proves nothing about the token.
+    assert refused.status_code == 401, refused.text
+    assert_envelope_shape(refused.json(), "AUTH_INVALID", recovery="terminal")
+
+
+@pytest.fixture
+def single_tenant_admin(admin_client, monkeypatch):
+    """The Admin UI of a single-tenant deployment (the default), requested from a host naming no tenant."""
+    monkeypatch.setattr("src.core.config_loader.is_single_tenant_mode", lambda: True)
+    return admin_client
+
+
+def test_the_single_tenant_admin_entry_reaches_the_tenant_setup_created(bound_factory_session, single_tenant_admin):
+    """``/admin/`` names the deployment's one tenant, whatever its id: nothing creates ``default`` (#2260).
+
+    The request's host (the test client's ``localhost``) names no tenant, so this grades the
+    fallback to the one active tenant, and that its sign-in page exists rather than 404ing.
+    """
+    create_tenant(TenantSetup(name="Acme", virtual_host="acme.adcp.test", tenant_id="acme"))
+
+    entry = single_tenant_admin.get("/admin/")
+    assert entry.status_code == 302, entry.text
+    assert entry.headers["Location"].endswith("/tenant/acme"), entry.headers["Location"]
+
+    dashboard = single_tenant_admin.get("/tenant/acme")
+    assert dashboard.status_code == 302, "an unauthenticated visitor is sent to sign in"
+    sign_in = single_tenant_admin.get(dashboard.headers["Location"])
+    assert sign_in.status_code in (200, 302), f"the tenant's sign-in answered {sign_in.status_code}"
+
+
+@pytest.mark.parametrize("tenants", [0, 2], ids=["empty-database", "two-tenants-host-names-neither"])
+def test_the_single_tenant_admin_entry_without_one_tenant_goes_to_sign_in(
+    bound_factory_session, single_tenant_admin, tenants
+):
+    """No tenant to name: ``/admin/`` sends the visitor to sign in, where a super admin creates one."""
+    for i in range(tenants):
+        create_tenant(TenantSetup(name=f"Seller {i}", virtual_host=f"seller{i}.adcp.test", tenant_id=f"seller{i}"))
+
+    entry = single_tenant_admin.get("/admin/")
+    assert entry.status_code == 302, entry.text
+    assert entry.headers["Location"].endswith("/login"), entry.headers["Location"]
+    assert single_tenant_admin.get("/login").status_code in (200, 302)

@@ -22,8 +22,9 @@ from typing import Any
 
 from sqlalchemy import select
 
-from src.core.database.models import PricingOption, Product, ProductPublisherSelection
+from src.core.database.models import Product, ProductPublisherSelection
 from src.core.database.repositories.publisher import PublisherRepository
+from src.services.tenant_provisioning import ProductSpec, seeded_product
 
 #: The canonical creative agent, which the pin names as the namespace for IAB-standard
 #: ``v1_format_ref`` entries (core/product-format-declaration.json, "AAO-hosted convention").
@@ -45,55 +46,18 @@ def canonical_declaration(format_kind: str, v1_format_id: str, **params: Any) ->
     }
 
 
-#: A product spec as the seeders write it: the Product's own fields plus a ``pricing``
-#: block. Kept a plain dict because that is what the seeders' literals already are -- and
-#: what ``seed_storyboard_tenant`` derives from the pinned bundle's test kit.
-ProductSpec = dict[str, Any]
-
-
 def seed_product(session, tenant_id: str, spec: ProductSpec) -> bool:
     """Create *spec* in *tenant_id*'s catalogue, unless it is already there.
 
     Returns True when it created the product, False when one with that id existed. Does
-    NOT commit: the caller owns the transaction, because each seeder batches its own.
-
-    Every JSONB column the model does not default is set to None explicitly -- the table's
-    constraints distinguish SQL NULL from an absent key, and a seeder that omits one gets
-    an IntegrityError that names the constraint rather than the field.
+    NOT commit: the caller owns the transaction, because each seeder batches its own. The
+    rows are :func:`src.services.tenant_provisioning.seeded_product`'s.
     """
     exists = session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=spec["product_id"])).first()
     if exists:
         return False
 
-    session.add(
-        Product(
-            tenant_id=tenant_id,
-            product_id=spec["product_id"],
-            name=spec["name"],
-            description=spec["description"],
-            format_options=spec["format_options"],
-            targeting_template=spec["targeting_template"],
-            delivery_type=spec["delivery_type"],
-            measurement=None,
-            creative_policy=None,
-            price_guidance=None,
-            countries=None,
-            implementation_config=None,
-            publisher_selections=whole_publisher_selections(session, tenant_id),
-        )
-    )
-    pricing = spec["pricing"]
-    session.add(
-        PricingOption.create(
-            tenant_id=tenant_id,
-            product_id=spec["product_id"],
-            pricing_model=pricing["model"],
-            rate=pricing["rate"],
-            currency=pricing.get("currency", "USD"),
-            is_fixed=pricing["is_fixed"],
-            price_guidance=None,  # Not used for fixed-price products
-        )
-    )
+    session.add(seeded_product(tenant_id, spec, publishers_whole(session, tenant_id)))
     return True
 
 

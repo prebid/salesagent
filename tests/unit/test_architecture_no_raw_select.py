@@ -92,7 +92,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     # get_tenant_from_hostname fixed — the admin plane's one host -> tenant lookup now goes
     # through TenantLookupRepository.find_active_by_virtual_host, and public.landing and
     # auth.login call it instead of each hand-rolling the same select (#2263)
-    ("src/admin/blueprints/core.py", "index"),
+    # index fixed — single-tenant mode resolves its tenant through single_tenant_admin_tenant
+    # (TenantLookupRepository), not a select of a "default" tenant (#2260)
     ("src/admin/blueprints/core.py", "reactivate_tenant"),
     ("src/admin/blueprints/core.py", "render_super_admin_index"),
     ("src/admin/blueprints/creative_agents.py", "add_creative_agent"),

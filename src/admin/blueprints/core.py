@@ -48,11 +48,34 @@ def get_tenant_from_hostname():
 
     A host under ``admin.`` names the admin domain itself, not a tenant.
     """
-    host = requested_host(request.headers)
-    if not host or host.startswith("admin."):
+    host = _tenant_host()
+    if host is None:
         return None
     with get_db_session() as db_session:
         return TenantLookupRepository(db_session).find_active_by_virtual_host(host)
+
+
+def _tenant_host() -> str | None:
+    """The request's host when it could name a tenant: present and not the ``admin.`` domain."""
+    host = requested_host(request.headers)
+    if not host or host.startswith("admin."):
+        return None
+    return host
+
+
+def single_tenant_admin_tenant():
+    """The tenant a single-tenant deployment's Admin UI serves, or None.
+
+    The tenant this request's host names, else the deployment's one active tenant whatever
+    its id. Nothing creates a ``default`` tenant any more (#2260): the first one comes from
+    ``setup_tenant``, the demo profile (``demo``) or a super admin. None means the database
+    holds no active tenant, or several and the host names none of them; the caller then
+    takes the multi-tenant path (sign in, then the super admin's tenant list).
+    """
+    host = _tenant_host()
+    with get_db_session() as db_session:
+        lookup = TenantLookupRepository(db_session)
+        return (host and lookup.find_active_by_virtual_host(host)) or lookup.find_sole_active()
 
 
 def render_super_admin_index():
@@ -195,8 +218,7 @@ def index():
     # Single-tenant mode: root URL ALWAYS shows the landing page (public API info)
     # Admin UI is only accessible at /admin/
     if is_single_tenant_mode():
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id="default")).first()
+        tenant = single_tenant_admin_tenant()
         if tenant:
             from src.landing.landing_page import generate_tenant_landing_page
 
@@ -210,7 +232,7 @@ def index():
             }
             html_content = generate_tenant_landing_page(tenant_dict)
             return Response(html_content, mimetype="text/html")
-        # No default tenant yet - redirect to login to set up
+        # No tenant to show yet: sign in, where a super admin can create one
         return redirect(url_for("auth.login"))
 
     # Multi-tenant mode below - behavior depends on authentication
@@ -277,10 +299,14 @@ def admin_index():
 
     logger.debug("admin_index hit, session_keys=%s, has_user=%s", list(session.keys()), "user" in session)
 
-    # Single-tenant mode: always redirect to default tenant dashboard
-    # (the @require_tenant_access decorator handles auth redirect)
+    # Single-tenant mode: redirect to the deployment's tenant dashboard (the
+    # @require_tenant_access decorator handles the auth redirect). With no tenant to name --
+    # an empty database, or several tenants and a host naming none -- fall through to the
+    # multi-tenant path: sign in, then a super admin sees the tenant list and can create one.
     if is_single_tenant_mode():
-        return redirect(url_for("tenants.dashboard", tenant_id="default"))
+        tenant = single_tenant_admin_tenant()
+        if tenant is not None:
+            return redirect(url_for("tenants.dashboard", tenant_id=tenant.tenant_id))
 
     # Multi-tenant mode: check authentication
     if "user" not in session:

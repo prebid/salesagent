@@ -14,18 +14,15 @@ from __future__ import annotations
 
 import argparse
 import sys
-from dataclasses import dataclass
 
-from sqlalchemy import func, select
-
-from scripts.setup.seed_products import canonical_declaration, seed_product, seed_verified_website
-from scripts.setup.setup_tenant import CreatedTenant, TenantSetup, add_tenant, print_created
-from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant
+from scripts.setup.seed_products import canonical_declaration
+from scripts.setup.setup_tenant import print_created
+from src.services.tenant_provisioning import CreatedTenant, DemoCatalogue, TenantSetup
+from src.services.tenant_provisioning import provision_demo as provision_demo_tenant
 
 DEMO_TENANT_ID = "demo"
 
-#: The publisher the sample products sell, whole. Stored without a fetch (seed_verified_website).
+#: The publisher the sample products sell, whole. Its adagents.json is stored without a fetch.
 DEMO_PUBLISHER = "psatest.com"
 
 DEMO_PRODUCTS = (
@@ -50,35 +47,24 @@ DEMO_PRODUCTS = (
 )
 
 
-@dataclass(frozen=True)
-class DemoTenant:
-    setup: TenantSetup
-    created: CreatedTenant
-
-
-def provision_demo(virtual_host: str) -> DemoTenant | None:
-    """Create the demo tenant served at *virtual_host*, or nothing when any tenant exists.
-
-    Returns ``None`` when the database already holds a tenant. Otherwise creates, in one
-    transaction, what :func:`scripts.setup.setup_tenant.add_tenant` creates for a mock tenant
-    plus one stored publisher and the :data:`DEMO_PRODUCTS` selling it.
-    """
-    setup = TenantSetup(
+def demo_setup(virtual_host: str) -> TenantSetup:
+    """The demo tenant served at *virtual_host*: id ``demo``, mock adapter, auto-approved formats."""
+    return TenantSetup(
         name="Demo Sales Agent",
         virtual_host=virtual_host,
         tenant_id=DEMO_TENANT_ID,
         adapter="mock",
         auto_approve_all=True,
     )
-    with get_db_session() as session:
-        if session.scalar(select(func.count()).select_from(Tenant)):
-            return None
-        created = add_tenant(session, setup)
-        seed_verified_website(session, created.tenant_id, DEMO_PUBLISHER, name="Demo Publisher")
-        for spec in DEMO_PRODUCTS:
-            seed_product(session, created.tenant_id, spec)
-        session.commit()
-    return DemoTenant(setup=setup, created=created)
+
+
+def provision_demo(virtual_host: str) -> CreatedTenant | None:
+    """Create the demo tenant served at *virtual_host*, or nothing (``None``) when any tenant exists.
+
+    The write is :func:`src.services.tenant_provisioning.provision_demo`'s, in one transaction.
+    """
+    catalogue = DemoCatalogue(publisher_domain=DEMO_PUBLISHER, publisher_name="Demo Publisher", products=DEMO_PRODUCTS)
+    return provision_demo_tenant(demo_setup(virtual_host), catalogue)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -96,11 +82,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.virtual_host:
         parser.error("--virtual-host is required: this production deployment declares no host")
 
-    demo = provision_demo(args.virtual_host)
-    if demo is None:
+    created = provision_demo(args.virtual_host)
+    if created is None:
         print("Already set up: the database holds a tenant. The demo tenant was not created.")
         return 0
-    print_created(demo.setup, demo.created)
+    print_created(demo_setup(args.virtual_host), created)
     print(f"Sample catalogue: {len(DEMO_PRODUCTS)} products selling {DEMO_PUBLISHER}.")
     return 0
 
