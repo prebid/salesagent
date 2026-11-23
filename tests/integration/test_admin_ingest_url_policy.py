@@ -254,7 +254,7 @@ def test_signals_agent_add_refusal_reason_reaches_the_logs(
     Behaviour change (a): the flash no longer interpolates the reason, so the
     logs are now the only place it exists. Two records are required together —
     ``outbound_http`` knows why the address was refused but not which field it
-    came from, and ``url_policy`` knows the field and the URL but not the
+    came from, and ``url_policy`` knows the field and the URL's host but not the
     reason. Either alone leaves an operator unable to act.
     """
     set_flags(monkeypatch)
@@ -270,7 +270,7 @@ def test_signals_agent_add_refusal_reason_reaches_the_logs(
         f"the seam did not log the real refusal reason; got {[r.getMessage() for r in caplog.records]}"
     )
     admin_records = [r.getMessage() for r in caplog.records if r.name == "src.admin.utils.url_policy"]
-    assert admin_records == [f"[SECURITY] Rejected Agent URL at ingest: {METADATA_URL!r}"]
+    assert admin_records == ["[SECURITY] Rejected Agent URL at ingest: https://169.254.169.254/..."]
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +314,7 @@ def test_create_tenant_refuses_blocked_webhook_url(field, label, management_api_
     assert response.status_code == 400
     assert response.get_json() == {"error": f"{label} is not allowed by outbound egress policy."}
     assert [r.getMessage() for r in caplog.records if r.name == "src.admin.utils.url_policy"] == [
-        f"[SECURITY] Rejected {label} at ingest: {METADATA_URL!r}"
+        f"[SECURITY] Rejected {label} at ingest: https://169.254.169.254/..."
     ]
 
 
