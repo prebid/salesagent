@@ -71,7 +71,7 @@ from src.core.errors.details import (
     InvalidStateDetails,
     ValidationDetails,
 )
-from src.core.helpers.adapter_helpers import get_adapter
+from src.core.helpers.adapter_helpers import build_adapter
 from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
 from src.core.schemas import (
     AdCPPackageUpdate,
@@ -1025,7 +1025,12 @@ def _update_media_buy_impl(
 
             principal = identity.principal
 
-            adapter = get_adapter(identity)
+            # The config row is read on this unit's session. get_adapter would read it in a
+            # session of its own, and the first get_db_session() inside an open unit closes the
+            # unit's session: the revision lock _refuse_stale_revision took would go with it,
+            # before any write it guards (#1644, #2647).
+            assert uow.adapter_configs is not None
+            adapter = build_adapter(identity, uow.adapter_configs.find_by_tenant())
             today = date.today()
 
             # spec (core/product.json `property_targeting_allowed`): reject property_list targeting

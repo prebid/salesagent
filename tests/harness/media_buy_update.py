@@ -1,7 +1,7 @@
 """MediaBuyUpdateEnv — unit test environment for _update_media_buy_impl.
 
 Patches: MediaBuyUoW, _verify_principal,
-         get_context_manager, get_adapter, get_audit_logger,
+         get_context_manager, build_adapter, get_audit_logger,
          ensure_tenant_context, get_db_session.
 
 Usage::
@@ -19,7 +19,7 @@ Available mocks via env.mock:
     "uow"       -- MediaBuyUoW class mock (env.mock["uow"].return_value is the UoW instance)
     "verify"    -- _verify_principal mock
     "ctx_mgr"   -- get_context_manager mock
-    "adapter"   -- get_adapter mock
+    "adapter"   -- build_adapter mock
     "audit"     -- get_audit_logger mock
     "db"        -- get_db_session mock
 
@@ -88,7 +88,7 @@ class MediaBuyUpdateEnv(BaseTestEnv):
 
     Inspect interactions via:
         env.mock["uow"].return_value  -- the mock UoW instance (media_buys, currency_limits repos)
-        env.mock["adapter"]           -- get_adapter mock
+        env.mock["adapter"]           -- build_adapter mock
         env.mock["ctx_mgr"]           -- get_context_manager mock
     """
 
@@ -97,7 +97,7 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         "uow": f"{_MODULE}.MediaBuyUoW",
         "verify": f"{_MODULE}._verify_principal",
         "ctx_mgr": f"{_MODULE}.get_context_manager",
-        "adapter": f"{_MODULE}.get_adapter",
+        "adapter": f"{_MODULE}.build_adapter",
         "audit": f"{_MODULE}.get_audit_logger",
         "db": f"{_DB_MODULE}.get_db_session",
     }

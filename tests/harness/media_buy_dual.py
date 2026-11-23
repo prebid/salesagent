@@ -52,7 +52,7 @@ def _refuse_update_action_on_the_live_stack(self: MediaBuyDualEnv, action: str) 
 
 
 _UPDATE_PATCHES = {
-    "update_adapter": f"{_UPDATE_MODULE}.get_adapter",
+    "update_adapter": f"{_UPDATE_MODULE}.build_adapter",
     "update_audit": f"{_UPDATE_MODULE}.get_audit_logger",
     "update_context_mgr": f"{_UPDATE_MODULE}.get_context_manager",
 }

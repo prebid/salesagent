@@ -1399,7 +1399,7 @@ class TestUpdateMediaBuyMainFlow:
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
+            patch("src.core.tools.media_buy_update.build_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
             ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
@@ -1480,7 +1480,7 @@ class TestUpdateMediaBuyPauseResume:
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
+            patch("src.core.tools.media_buy_update.build_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
             ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
@@ -1542,7 +1542,7 @@ class TestUpdateMediaBuyPauseResume:
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
+            patch("src.core.tools.media_buy_update.build_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
             ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
@@ -1603,7 +1603,7 @@ class TestUpdateMediaBuyPauseResume:
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
+            patch("src.core.tools.media_buy_update.build_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
             ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
@@ -1697,7 +1697,7 @@ class TestUpdateMediaBuyTiming:
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
+            patch("src.core.tools.media_buy_update.build_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
             ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
@@ -1771,7 +1771,7 @@ class TestUpdateMediaBuyTiming:
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
+            patch("src.core.tools.media_buy_update.build_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
             ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
@@ -1862,7 +1862,7 @@ class TestUpdateMediaBuyCreativeIds:
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
+            patch("src.core.tools.media_buy_update.build_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
             ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
@@ -1945,7 +1945,7 @@ class TestUpdateMediaBuyCreativeIds:
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
+            patch("src.core.tools.media_buy_update.build_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
             ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
@@ -2028,7 +2028,7 @@ class TestUpdateMediaBuyCreativeIds:
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
+            patch("src.core.tools.media_buy_update.build_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
             ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
@@ -2126,7 +2126,7 @@ class TestUpdateMediaBuyCreativeIds:
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
+            patch("src.core.tools.media_buy_update.build_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
             ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
@@ -2368,7 +2368,7 @@ class TestUpdateMediaBuyManualApproval:
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
+            patch("src.core.tools.media_buy_update.build_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
             ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
@@ -2440,7 +2440,7 @@ class TestUpdateMediaBuyManualApproval:
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
+            patch("src.core.tools.media_buy_update.build_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
             ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
@@ -2570,7 +2570,7 @@ class TestUpdateMediaBuyAdapterFailure:
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
+            patch("src.core.tools.media_buy_update.build_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
             ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")
@@ -2656,7 +2656,7 @@ class TestUpdateMediaBuyAdapterFailure:
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
+            patch("src.core.tools.media_buy_update.build_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
             ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_1")

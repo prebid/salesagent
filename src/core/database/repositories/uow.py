@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.account import AccountRepository
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.effects import begin_effects, drain_after_commit, end_effects
@@ -251,6 +252,9 @@ class MediaBuyUoW(_OffersProducts, BaseUoW):
     assignments: CreativeAssignmentRepository | None
     currency_limits: CurrencyLimitRepository | None
     idempotency_attempts: IdempotencyAttemptRepository | None
+    # The tenant's adapter_config row, read on this unit's session so building the adapter
+    # inside the unit opens no session of its own (``build_adapter``, #2647).
+    adapter_configs: AdapterConfigRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
@@ -261,6 +265,7 @@ class MediaBuyUoW(_OffersProducts, BaseUoW):
         self.assignments = CreativeAssignmentRepository(self._session, self._tenant_id)
         self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
         self.idempotency_attempts = IdempotencyAttemptRepository(self._session, self._tenant_id)
+        self.adapter_configs = AdapterConfigRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.media_buys = None
@@ -270,6 +275,7 @@ class MediaBuyUoW(_OffersProducts, BaseUoW):
         self.assignments = None
         self.currency_limits = None
         self.idempotency_attempts = None
+        self.adapter_configs = None
 
 
 class ProductUoW(_OffersProducts, BaseUoW):

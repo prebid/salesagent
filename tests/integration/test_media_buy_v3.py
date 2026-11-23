@@ -902,7 +902,7 @@ class TestUpdateMediaBuyAdapterError:
             # MediaBuyUoW auto-commits on clean exit
 
         # Mock adapter to simulate network failure
-        with patch("src.core.tools.media_buy_update.get_adapter") as mock_get_adapter:
+        with patch("src.core.tools.media_buy_update.build_adapter") as mock_get_adapter:
             mock_adapter = MagicMock()
             mock_adapter.update_media_buy.side_effect = ConnectionError("Simulated network failure")
             mock_adapter.manual_approval_required = False

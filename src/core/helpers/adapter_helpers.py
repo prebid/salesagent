@@ -193,19 +193,23 @@ def resolve_tenant_adapter_type(tenant: TenantLike) -> str:
     Args:
         tenant: Tenant context (dict or ORM model).
     """
-    logger = logging.getLogger(__name__)
-
-    resolved_tenant = tenant
-    tenant_id, selected_adapter = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
-    logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
-
     from src.core.database.repositories.adapter_config import read_adapter_config
 
-    config_row = read_adapter_config(tenant_id)
+    tenant_id, _fallback = _resolve_tenant_id_and_fallback_adapter(tenant)
+    return _adapter_type_of(tenant, read_adapter_config(tenant_id))
+
+
+def _adapter_type_of(tenant: TenantLike, config_row: DBAdapterConfig | None) -> str:
+    """The adapter type *config_row* selects for *tenant*: the row's ``adapter_type``, else ``tenant.ad_server``.
+
+    The one selection rule, for callers that read the row themselves (``build_adapter``) and
+    for the ones that let :func:`resolve_tenant_adapter_type` read it.
+    """
+    _tenant_id, selected_adapter = _resolve_tenant_id_and_fallback_adapter(tenant)
+    logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
     if config_row and config_row.adapter_type:
         selected_adapter = config_row.adapter_type
         logger.info(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
-
     return selected_adapter or "mock"
 
 
@@ -378,20 +382,35 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
     An identity carrying NO account is unchanged: the tenant's configured adapter
     answers. That is the only honest reading — a sandbox account is a thing the
     request named, and a request that named none made no such claim.
+
+    Reads the tenant's ``adapter_config`` row in a session of its own. A caller holding a
+    unit of work open reads the row through it and calls :func:`build_adapter` instead:
+    the first ``get_db_session()`` opened inside an open unit closes that unit's session
+    (#1644, #2647).
     """
+    from src.core.database.repositories.adapter_config import read_adapter_config
+
+    tenant_id, _fallback = _resolve_tenant_id_and_fallback_adapter(identity.tenant)
+    return build_adapter(identity, read_adapter_config(tenant_id))
+
+
+def build_adapter(
+    identity: ResolvedIdentity, config_row: DBAdapterConfig | None
+) -> MockAdServerAdapter | GoogleAdManager | Kevel | TritonDigital:
+    """The ad-server adapter that acts for *identity*, built from the *config_row* the caller read.
+
+    :func:`get_adapter` states the selection rules. This opens no database session:
+    every input is the identity or the row.
+    """
+    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
     principal = identity.principal
     tenant = identity.tenant
-    ctx = resolve_adapter_context(tenant)
-    selected_adapter = ctx.adapter_type
-    tenant_id = ctx.tenant_id
-
-    # Get adapter config via repository
-    from src.core.database.repositories.adapter_config import AdapterConfigRepository, read_adapter_config
+    tenant_id, _fallback = _resolve_tenant_id_and_fallback_adapter(tenant)
+    selected_adapter = _adapter_type_of(tenant, config_row)
 
     targeting_config: dict[str, object] | None = None
     naming_templates: tuple[str | None, str | None] | None = None
-
-    config_row = read_adapter_config(tenant_id)
 
     # A SANDBOX account never reaches a live ad server. Returned HERE, before the
     # live config assembly below reads a credential and before any live client is
