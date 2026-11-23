@@ -29,8 +29,10 @@ directory and what the gaps cost.
   it, so an id stays unique in a database that outlives the test, such as the e2e stack's.
 - **Build a parent only when no id names it.** factory_boy evaluates every parent
   `SubFactory`, `Meta.exclude` included, so a caller that passes `tenant_id=` still gets the
-  factory's own tenant row. Declare the parent with `unless_id_given` and derive its ids in
-  `_adjust_kwargs` with `fill_from_parents`, both in `core.py`.
+  factory's own tenant row. Subclass `ParentRowsFactory` and declare each parent once, as
+  `ParentRow(keys, SubFactory(...))`, both in `core.py`: the parent is built only when the
+  caller passes none of its keys, and the base fills the keys from the parent it built or was
+  given.
 
 ## Multi-row facts belong in a seeder, not in each caller
 

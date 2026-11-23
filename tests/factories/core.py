@@ -1,6 +1,7 @@
 """Factory_boy factories for core tenant-related models.
 
 Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory
+Base: ParentRowsFactory, whose ParentRow declarations build a parent only when no key names it
 Helpers: set_adapter_test_behavior (persist adapter test-behavior to AdapterConfig),
 get_or_create (idempotent factory seeding for shared-DB e2e_rest scenarios),
 seed_property_tag_selection (the property-tag rows the admin product form requires)
@@ -66,30 +67,64 @@ def tenant_subdomain(tenant_id: str) -> str:
     return f"pub-{tenant_id}".replace("_", "-")
 
 
-def unless_id_given(id_field: str, parent: Any) -> factory.Maybe:
-    """Declare a parent ``SubFactory`` that runs only when the caller names no ``id_field``.
+class ParentRow(factory.Maybe):
+    """A parent ``SubFactory`` that runs only when the caller names none of its *keys*.
 
     factory_boy evaluates every declaration, ``Meta.exclude`` included, so a plain parent
     ``SubFactory`` commits its row even when the caller passes the parent's id instead (#2658).
-    Declare ``id_field`` as ``None`` beside it, and derive it with :func:`fill_from_parents`.
+    *keys* are the columns the row takes from this parent. Passing any of them names the
+    parent, so it is not built, and :class:`ParentRowsFactory` fills the rest from a parent the
+    factory built or the caller passed.
+
+    *routed_from* names a sibling parent whose tenant a built row goes in: the ``SubFactory``
+    reads ``..<sibling>.tenant``. When the caller names that sibling by id there is no tenant to
+    read, so this parent counts as named too, and the caller passes its keys.
     """
-    return factory.Maybe(id_field, yes_declaration=None, no_declaration=parent)
+
+    def __init__(self, keys: tuple[str, ...], parent: factory.SubFactory, *, routed_from: str | None = None) -> None:
+        def named(row: Any) -> bool:
+            if any(getattr(row, key, None) is not None for key in keys):
+                return True
+            return routed_from is not None and getattr(row, routed_from) is None
+
+        super().__init__(factory.LazyAttribute(named), yes_declaration=None, no_declaration=parent)
+        self.keys = keys
 
 
-def fill_from_parents(kwargs: dict[str, Any], **derived: tuple[str, ...]) -> dict[str, Any]:
-    """Copy each field the caller left ``None`` from its parent, then drop every ``None`` parent.
+#: ``SubFactory`` arguments that put a parent the row builds in the row's own tenant, whether the
+#: caller passed that tenant or only its id. The routed factory must be a ``ParentRowsFactory``,
+#: so that it takes the id without building a tenant of its own.
+IN_ROW_TENANT = {"tenant": factory.SelfAttribute("..tenant"), "tenant_id": factory.SelfAttribute("..tenant_id", None)}
 
-    Call it from ``_adjust_kwargs``: factory_boy runs that hook before it removes the
-    ``Meta.exclude`` names, so the parent object is still in ``kwargs``. A ``None`` parent means
-    the caller named it by id, so the model gets the id and never a relationship set to ``None``.
+
+class ParentRowsFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """Base for a factory whose parents are :class:`ParentRow` declarations.
+
+    Its one ``_adjust_kwargs`` reads those declarations, so a factory states each parent, and the
+    keys the row takes from it, once. factory_boy runs that hook before it removes the
+    ``Meta.exclude`` names, so a parent the factory built or the caller passed is still in
+    ``kwargs``.
     """
-    for parent, fields in derived.items():
-        for field in fields:
-            if kwargs[field] is None:
-                kwargs[field] = getattr(kwargs[parent], field)
-        if kwargs[parent] is None:
-            del kwargs[parent]
-    return kwargs
+
+    class Meta:
+        abstract = True
+
+    @classmethod
+    def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
+        for name, declaration in cls._meta.declarations.items():
+            if not isinstance(declaration, ParentRow):
+                continue
+            parent = kwargs.get(name)
+            missing = [key for key in declaration.keys if kwargs.get(key) is None]
+            if parent is None:
+                # Removed, never passed as ``None``: on a relationship, ``None`` says the row has
+                # no parent, and SQLAlchemy blanks the foreign key at flush.
+                kwargs.pop(name, None)
+                if missing:
+                    raise TypeError(f"{cls.__name__} builds no {name} here: pass {' and '.join(missing)}, or {name}")
+            for key in missing:
+                kwargs[key] = getattr(parent, key)
+        return kwargs
 
 
 class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -191,14 +226,13 @@ class AdapterConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
     adapter_type = "mock"
 
 
-class GAMInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):
+class GAMInventoryFactory(ParentRowsFactory):
     class Meta:
         model = GAMInventory
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
 
-    tenant_id = None
-    tenant = unless_id_given("tenant_id", SubFactory(TenantFactory))
+    tenant = ParentRow(("tenant_id",), SubFactory(TenantFactory))
     inventory_type = "ad_unit"
     inventory_id = Sequence(lambda n: f"au_{n:04d}")
     name = LazyAttribute(lambda o: f"Ad Unit {o.inventory_id}")
@@ -212,10 +246,6 @@ class GAMInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):
             "sizes": [{"width": 300, "height": 250}],
         }
     )
-
-    @classmethod
-    def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
-        return fill_from_parents(kwargs, tenant=("tenant_id",))
 
 
 class SyncJobFactory(factory.alchemy.SQLAlchemyModelFactory):

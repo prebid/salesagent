@@ -14,7 +14,7 @@ from src.core.format_resolver import creative_identity_of, find_format
 from src.core.schemas import CreativeFormatIdentity, Format, FormatId
 from src.core.schemas.creative import CreativeAssetRequest
 
-from .core import TenantFactory, fill_from_parents, unless_id_given
+from .core import ParentRow, ParentRowsFactory, TenantFactory
 from .creative_asset import build_assets, image_spec
 from .media_buy import MediaBuyFactory
 from .principal import PrincipalFactory
@@ -328,7 +328,7 @@ class CreativeFactory(SQLAlchemyModelFactory):
         approved = factory.Trait(status="approved")
 
 
-class CreativeAssignmentFactory(SQLAlchemyModelFactory):
+class CreativeAssignmentFactory(ParentRowsFactory):
     class Meta:
         model = CreativeAssignment
         sqlalchemy_session = None
@@ -336,19 +336,12 @@ class CreativeAssignmentFactory(SQLAlchemyModelFactory):
         exclude = ("creative", "media_buy")
 
     assignment_id = factory.Sequence(lambda n: f"assignment_{n:04d}")
-    tenant_id = None
-    creative_id = None
-    principal_id = None
-    media_buy_id = None
-    creative = unless_id_given("creative_id", factory.SubFactory(CreativeFactory))
-    media_buy = unless_id_given(
-        "media_buy_id", factory.SubFactory(MediaBuyFactory, tenant=factory.SelfAttribute("..creative.tenant"))
+    creative = ParentRow(("tenant_id", "creative_id", "principal_id"), factory.SubFactory(CreativeFactory))
+    #: A buy built here goes in the creative's tenant, which a creative named by id does not supply.
+    media_buy = ParentRow(
+        ("media_buy_id",),
+        factory.SubFactory(MediaBuyFactory, tenant=factory.SelfAttribute("..creative.tenant")),
+        routed_from="creative",
     )
     package_id = factory.Sequence(lambda n: f"pkg_{n:04d}")
     weight = 100
-
-    @classmethod
-    def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
-        return fill_from_parents(
-            kwargs, creative=("tenant_id", "creative_id", "principal_id"), media_buy=("media_buy_id",)
-        )

@@ -20,7 +20,7 @@ from src.core.database.models import MediaBuy, MediaPackage, PricingOption, is_m
 from src.core.helpers.pricing_helpers import pricing_info_for
 from src.core.schemas import GetMediaBuysMediaBuy
 from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
-from tests.factories.core import TenantFactory
+from tests.factories.core import ParentRow, ParentRowsFactory, TenantFactory
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import DEFAULT_PRICING_OPTION_ID, PricingOptionFactory
 from tests.factories.request import PackageRequestFactory
@@ -328,7 +328,7 @@ def _source_package(o) -> dict[str, Any]:
     return named[0] if named else (packages[0] if packages else {})
 
 
-class MediaPackageFactory(factory.alchemy.SQLAlchemyModelFactory):
+class MediaPackageFactory(ParentRowsFactory):
     class Meta:
         model = MediaPackage
         sqlalchemy_session = None
@@ -350,18 +350,6 @@ class MediaPackageFactory(factory.alchemy.SQLAlchemyModelFactory):
         session.commit()
         return existing
 
-    @classmethod
-    def _adjust_kwargs(cls, **kwargs):
-        """A row built without its buy (``media_buy=None``) names the buy by ``media_buy_id`` alone.
-
-        The key is removed, never passed as ``None``: an explicit ``None`` on the
-        relationship says the row has no parent, and SQLAlchemy blanks the foreign key
-        at flush (the same reason as ``PricingOptionFactory._adjust_kwargs``).
-        """
-        if kwargs.get("media_buy") is None:
-            kwargs.pop("media_buy", None)
-        return kwargs
-
     class Params:
         #: The request package this row is the stored form of. Read off the buy's
         #: ``raw_request`` by default; ``package_rows_for`` passes it for a row built
@@ -371,8 +359,7 @@ class MediaPackageFactory(factory.alchemy.SQLAlchemyModelFactory):
         #: its ``pricing_option_id`` selects by default (``package_config_for``).
         pricing_option = None
 
-    media_buy = SubFactory(MediaBuyFactory)
-    media_buy_id = LazyAttribute(lambda o: o.media_buy.media_buy_id)
+    media_buy = ParentRow(("media_buy_id",), SubFactory(MediaBuyFactory))
     package_id = LazyAttribute(
         lambda o: next(
             (pkg["package_id"] for pkg in persisted_request_packages(_request_packages(o.media_buy))), "pkg_001"
