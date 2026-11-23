@@ -419,7 +419,7 @@ async function syncTargetingData() {
 
         if (!response.ok) {
             const error = await response.json();
-            throw new Error(error.error || 'Sync failed');
+            throw new Error(adminErrorText(error));
         }
 
         const result = await response.json();
@@ -459,9 +459,7 @@ async function loadTargetingData() {
         }
 
         if (!response.ok) {
-            const errorText = await response.text();
-            console.error('API Error:', errorText);
-            throw new Error(`Failed to load targeting data: ${response.status}`);
+            throw new Error(`Failed to load targeting data: ${adminErrorText(await response.json())}`);
         }
 
         const data = await response.json();
@@ -741,9 +739,7 @@ async function loadCustomValues(keyId) {
         }
 
         if (!response.ok) {
-            const errorText = await response.text();
-            console.error('API Error:', errorText);
-            throw new Error(`Failed to load values: ${response.status}`);
+            throw new Error(`Failed to load values: ${adminErrorText(await response.json())}`);
         }
 
         const data = await response.json();
@@ -947,7 +943,7 @@ async function saveAxeKey(keyType) {
         });
 
         if (!response.ok) {
-            throw new Error('Failed to save configuration');
+            throw new Error(adminErrorText(await response.json()));
         }
 
         // Update hidden field

@@ -24,6 +24,7 @@ from tests.factories.core import (
     GAMInventoryFactory,
     PropertyTagFactory,
     SignalsAgentFactory,
+    SyncJobFactory,
     TenantFactory,
 )
 from tests.factories.creative import (
@@ -63,7 +64,7 @@ from tests.factories.targeting import (
     PropertyListReferenceFactory,
     TargetingFactory,
 )
-from tests.factories.user import TenantAuthConfigFactory, UserFactory
+from tests.factories.user import TenantAuthConfigFactory, TenantManagementConfigFactory, UserFactory
 from tests.factories.webhook import PushNotificationConfigFactory, WebhookDeliveryLogFactory, WebhookTaskContextFactory
 from tests.factories.workflow import ContextFactory, WorkflowStepFactory
 
@@ -84,6 +85,7 @@ ALL_FACTORIES = [
     PublisherFactory,
     CreativeAgentFactory,
     SignalsAgentFactory,
+    SyncJobFactory,
     PrincipalFactory,
     InventoryProfileFactory,
     ProductFactory,
@@ -98,6 +100,7 @@ ALL_FACTORIES = [
     FormatPerformanceMetricsFactory,
     UserFactory,
     TenantAuthConfigFactory,
+    TenantManagementConfigFactory,
     SigningKeyFactory,
     ContextFactory,
     WorkflowStepFactory,
@@ -146,8 +149,10 @@ __all__ = [
     "SigningKeyFactory",
     "SyncAccountsRequestFactory",
     "SyncCreativesRequestFactory",
+    "SyncJobFactory",
     "TargetingFactory",
     "TenantAuthConfigFactory",
+    "TenantManagementConfigFactory",
     "TenantFactory",
     "UserFactory",
     "WebhookDeliveryLogFactory",

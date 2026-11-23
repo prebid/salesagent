@@ -564,7 +564,7 @@ function approveCreative(creativeId) {
                 location.reload();
             }
         } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -615,7 +615,7 @@ function confirmReject() {
                 location.reload();
             }
         } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -659,7 +659,8 @@ function runAIReview(creativeId) {
                 </div>
             `;
         } else {
-            aiContent.innerHTML = `<p style="margin: 0; color: #dc3545;"><strong>Error:</strong> ${data.error}</p>`;
+            aiContent.innerHTML = '<p style="margin: 0; color: #dc3545;"><strong>Error:</strong> </p>';
+            aiContent.querySelector('p').append(adminErrorText(data));
         }
     })
     .catch(error => {

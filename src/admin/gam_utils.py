@@ -3,7 +3,18 @@
 import logging
 from datetime import datetime
 
+from src.core.operator_errors import ServerNotConfigured
+
 logger = logging.getLogger(__name__)
+
+
+class GAMOAuthNotConfigured(ServerNotConfigured):
+    """This deployment has no GAM OAuth client (``GAM_OAUTH_CLIENT_ID`` and ``GAM_OAUTH_CLIENT_SECRET``)."""
+
+    MESSAGE = (
+        "GAM OAuth credentials not configured. "
+        "Please set GAM_OAUTH_CLIENT_ID and GAM_OAUTH_CLIENT_SECRET environment variables."
+    )
 
 
 def extract_frequency_caps(line_item):

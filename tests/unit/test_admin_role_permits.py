@@ -42,20 +42,22 @@ def test_viewer_and_unknown_roles_are_read_only(role):
 
 # A refusal answers in the form the caller reads: templates/users.html calls the Users-page
 # routes with fetch() and response.json(), so an HTML 403 page there shows only a generic alert.
+# Only a browser asking for a page reads HTML; every other caller, curl included, reads JSON.
 @pytest.mark.parametrize(
-    ("headers", "api_mode", "json_body"),
+    ("headers", "json_body"),
     [
-        ({"Accept": "*/*", "Sec-Fetch-Mode": "cors"}, False, True),  # a browser fetch() with no Accept of its own
-        ({"X-Requested-With": "XMLHttpRequest"}, False, True),
-        ({"Accept": "application/json"}, False, True),
-        ({"Content-Type": "application/json"}, False, True),
-        ({"Accept": "*/*"}, False, False),  # curl or an HTTP library: a tie, answered as before
-        ({"Accept": "text/html", "Sec-Fetch-Mode": "navigate"}, False, False),  # a page load
-        ({"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}, False, False),  # a page
-        ({"Accept": "text/html"}, True, True),  # an API-mode route always answers JSON
+        ({"Accept": "*/*", "Sec-Fetch-Mode": "cors"}, True),  # a browser fetch() with no Accept of its own
+        ({"X-Requested-With": "XMLHttpRequest"}, True),
+        ({"Accept": "application/json"}, True),
+        ({"Content-Type": "application/json"}, True),
+        ({"Accept": "*/*"}, True),  # curl or an HTTP library: a tie, which is JSON
+        ({}, True),  # no Accept at all
+        ({"Sec-Fetch-Mode": "navigate"}, False),  # a current browser's page load or form post
+        ({"Accept": "text/html", "Sec-Fetch-Mode": "navigate"}, False),  # a page load
+        ({"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}, False),  # an older browser
     ],
 )
-def test_a_refusal_is_json_for_a_caller_that_reads_json(headers, api_mode, json_body):
+def test_a_refusal_is_json_for_a_caller_that_reads_json(headers, json_body):
     from flask import Flask
     from werkzeug.exceptions import Forbidden
 
@@ -63,11 +65,11 @@ def test_a_refusal_is_json_for_a_caller_that_reads_json(headers, api_mode, json_
 
     with Flask(__name__).test_request_context("/", method="POST", headers=headers):
         with pytest.raises(Forbidden) as refused:
-            _forbid("Your role does not allow this", api_mode=api_mode)
+            _forbid("Your role does not allow this")
     response = refused.value.get_response()
     assert response.status_code == 403
     if json_body:
-        assert response.get_json() == {"error": "Your role does not allow this"}
+        assert response.get_json() == {"success": False, "error": "Your role does not allow this"}
     else:
         assert response.mimetype == "text/html"
 
@@ -95,11 +97,11 @@ def test_the_role_check_constraint_is_derived_from_user_role():
     [
         ({"Accept": "*/*", "Sec-Fetch-Mode": "cors"}, True),  # a Users-page fetch() whose session has expired
         ({"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}, False),  # a page
-        ({"Accept": "*/*"}, False),  # curl: the login redirect, as before
+        ({"Accept": "*/*"}, True),  # curl: a JSON 401, not a login page it cannot use
     ],
 )
 def test_a_signed_out_caller_is_answered_in_the_form_it_reads(headers, json_body):
-    """No session: a fetch gets a JSON 401 it can read; a page gets the login redirect."""
+    """No session: a script gets a JSON 401 it can read; a page gets the login redirect."""
     from flask import Flask
 
     from src.admin.utils.helpers import require_tenant_access
@@ -119,7 +121,7 @@ def test_a_signed_out_caller_is_answered_in_the_form_it_reads(headers, json_body
     response = app.test_client().post("/tenant/t1/thing", headers=headers)
     if json_body:
         assert response.status_code == 401
-        assert response.get_json() == {"error": "Authentication required"}
+        assert response.get_json() == {"success": False, "error": "Authentication required"}
     else:
         assert response.status_code == 302
         assert "/tenant/t1/login" in response.headers["Location"]
