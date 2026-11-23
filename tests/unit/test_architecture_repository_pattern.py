@@ -976,7 +976,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_media_buy_repository_writes.py", "test_roundtrip_update_status"),
     ("tests/integration/test_media_buy_repository_writes.py", "test_tenant_isolation_on_create"),
     ("tests/integration/test_media_buy_repository_writes.py", "test_uow_rollback_on_exception"),
-    ("tests/integration/test_media_buy_repository_writes.py", "test_update_config_other_tenant_returns_none"),
     ("tests/integration/test_media_buy_repository_writes.py", "test_update_fields_tenant_isolation"),
     ("tests/integration/test_media_buy_repository_writes.py", "test_update_status_other_tenant_returns_none"),
     ("tests/integration/test_media_buy_v3.py", "mb_creatives"),
