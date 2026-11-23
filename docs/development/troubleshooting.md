@@ -300,20 +300,16 @@ docker compose exec postgres psql -U adcp_user adcp -c \
   "SELECT tenant_id, role, is_active FROM users WHERE email='you@example.com';"
 ```
 
-The Admin UI admits a signed-in address in either of the following cases:
+**Cause**: your address is neither a super admin nor an active user of the
+tenant. [Super admin check](../security.md#super-admin-check) and
+[Tenant access guard](../security.md#tenant-access-guard) describe both
+checks. The checks ignore `SUPER_ADMIN_DOMAIN` (singular). A session from a
+tenant's own SSO never counts as a super admin and reaches no other tenant, as
+[Super admins](../security.md#super-admins) explains.
 
-- The address is a super admin. `SUPER_ADMIN_EMAILS` lists it,
-  `SUPER_ADMIN_DOMAINS` lists its domain, or a super admin row in the database
-  lists either. The access checks ignore `SUPER_ADMIN_DOMAIN` (singular).
-- The tenant has an active user row for the address. An admin adds one on the
-  **Users & Access** page. A sign-in through the deployment's OAuth client
-  adds one when the tenant authorizes the address or its domain.
-
-A sign-in through a tenant's own SSO checks only that tenant's user rows and
-authorized domains. The session it starts reaches no other tenant and never
-counts as a super admin, as [Super admins](../security.md#super-admins)
-explains. A `403` page can also come from the role check; see
-[Your role does not allow this](#your-role-does-not-allow-this).
+**Fix**: ask an admin of the tenant, or a super admin, to add your address on
+the **Users & Access** page. A `403` page can also come from the role check;
+see [Your role does not allow this](#your-role-does-not-allow-this).
 
 ### OAuth callback 404
 
@@ -322,17 +318,8 @@ sign-in request. A 404 at that address means that the URI names a host or a
 path that doesn't reach the Admin UI. To see the URI, read the `redirect_uri`
 parameter in the address of Google's sign-in page.
 
-The app builds the URI as follows:
-
-- When you set `GOOGLE_OAUTH_REDIRECT_URI`, the app sends it, except for a
-  tenant sign-in outside production.
-- Otherwise, outside production, as in the local Docker stack, the app builds
-  the URI from the address you opened. That is
-  `http://localhost:8000/admin/auth/google/callback` under `/admin/`, and
-  `http://localhost:8000/auth/google/callback` at the root.
-- Otherwise, in production, a tenant sign-in sends
-  `https://<SALES_AGENT_DOMAIN>/admin/auth/google/callback`. The deployment-wide
-  sign-in sends the host you opened, followed by `/admin/auth/google/callback`.
+[Deployment OAuth](../deployment/environment-variables.md#deployment-oauth)
+describes how the app builds the URI for each kind of sign-in.
 
 Correct `GOOGLE_OAUTH_REDIRECT_URI` or `SALES_AGENT_DOMAIN`, or route the path
 to the app in your proxy, so that the URI reaches this deployment. Register the
