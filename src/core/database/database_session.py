@@ -6,7 +6,7 @@ management across the entire application.
 """
 
 import logging
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import Any
 from urllib.parse import urlparse
@@ -273,6 +273,57 @@ def get_db_session() -> Generator[Session, None, None]:
 
     Note: Query timeout is enforced at the database level via statement_timeout.
     Queries exceeding DATABASE_QUERY_TIMEOUT will raise OperationalError.
+
+    This is the THREAD'S scoped session. Inside an open unit of work it is the unit's
+    session, and this exit closes it and takes it out of the registry (#1644). A write
+    that must not touch the caller's transaction uses :func:`get_separate_session`.
+    """
+    scoped: scoped_session[Session] | None = None
+
+    def acquire() -> Session:
+        nonlocal scoped
+        scoped = get_scoped_session()
+        return scoped()
+
+    def release(session: Session) -> None:
+        session.close()
+        assert scoped is not None
+        scoped.remove()
+
+    with _guarded_session(acquire, release) as session:
+        yield session
+
+
+@contextmanager
+def get_separate_session() -> Generator[Session, None, None]:
+    """A session of its own, outside the thread's scoped registry, for a write that stands alone.
+
+    For a record that must neither join nor end the caller's transaction: an audit
+    receipt of an ad-server call is written while the request that made the call holds
+    its unit of work open, and must stay recorded if that request is refused. Through
+    :func:`get_db_session` the receipt would be written on the unit's own session, and the
+    exit would close it, releasing the unit's locks and detaching its rows (#1644).
+    Commits are the caller's, as with :func:`get_db_session`.
+    """
+    with _guarded_session(_new_unscoped_session, Session.close) as session:
+        yield session
+
+
+def _new_unscoped_session() -> Session:
+    get_engine()  # initializes the session factory
+    assert _session_factory is not None
+    return _session_factory()
+
+
+@contextmanager
+def _guarded_session(
+    acquire: Callable[[], Session], release: Callable[[Session], None]
+) -> Generator[Session, None, None]:
+    """The fail-fast, rollback and health bookkeeping every session opener shares.
+
+    Refuses while the database is marked unhealthy, rolls back on a database error
+    (marking the database unhealthy when the server never answered), and releases the
+    session however the block ends.
     """
     import time
 
@@ -284,8 +335,7 @@ def get_db_session() -> Generator[Session, None, None]:
         if time_since_check < FAIL_FAST_WINDOW_S:
             raise RuntimeError("Database is unhealthy - failing fast to prevent cascading failures")
 
-    scoped = get_scoped_session()
-    session = scoped()
+    session = acquire()
     try:
         yield session
     except SQLAlchemyError as e:
@@ -296,8 +346,7 @@ def get_db_session() -> Generator[Session, None, None]:
             _last_health_check = time.time()
         raise
     finally:
-        session.close()
-        scoped.remove()
+        release(session)
 
 
 def execute_with_retry(func, max_retries: int = 3) -> Any:

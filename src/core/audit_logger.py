@@ -18,8 +18,15 @@ from typing import Any
 from sqlalchemy import select
 
 from src.core.config import RuntimeSettings
-from src.core.database.database_session import _pydantic_json_serializer, get_db_session
+from src.core.database.database_session import _pydantic_json_serializer, get_separate_session
 from src.core.database.models import AuditLog
+
+# Every session this module opens is a SEPARATE one (get_separate_session), never the
+# thread's scoped session. Audit records are written while a tool or an adapter call holds
+# the request's unit of work open, and the first get_db_session() opened inside an open unit
+# closes that unit's session: it released update_media_buy's revision lock and committed
+# whatever the unit had flushed (#1644, #2647). A receipt also has to stay recorded when the
+# request that made the call is refused, so it cannot join the unit either.
 from src.core.logging_config import LineSafeFormatter
 
 # Directory holding the FILE BACKUP of the audit trail. The database is the
@@ -238,7 +245,7 @@ class AuditLogger:
 
         # Write to database
         try:
-            with get_db_session() as db_session:
+            with get_separate_session() as db_session:
                 audit_log = AuditLog(
                     tenant_id=tenant_id,
                     timestamp=datetime.now(UTC),
@@ -275,7 +282,7 @@ class AuditLogger:
             tenant_name = None
             if tenant_id:
                 try:
-                    with get_db_session() as db_session:
+                    with get_separate_session() as db_session:
                         from src.core.database.models import Tenant
 
                         stmt = select(Tenant).filter_by(tenant_id=tenant_id)
@@ -348,7 +355,7 @@ class AuditLogger:
                 tenant_config = None
                 if tenant_id:
                     try:
-                        with get_db_session() as db_session:
+                        with get_separate_session() as db_session:
                             from src.core.database.models import Tenant
 
                             stmt = select(Tenant).filter_by(tenant_id=tenant_id)
@@ -388,7 +395,7 @@ class AuditLogger:
 
         # Write to database
         try:
-            with get_db_session() as db_session:
+            with get_separate_session() as db_session:
                 audit_log = AuditLog(
                     tenant_id=tenant_id,
                     timestamp=datetime.now(UTC),
@@ -420,7 +427,7 @@ class AuditLogger:
             tenant_config = None
             if tenant_id:
                 try:
-                    with get_db_session() as db_session:
+                    with get_separate_session() as db_session:
                         from src.core.database.models import Tenant
 
                         stmt = select(Tenant).filter_by(tenant_id=tenant_id)

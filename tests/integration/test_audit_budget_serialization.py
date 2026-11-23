@@ -45,7 +45,7 @@ _BUDGET = Decimal("12345.67")
 def _read_back_details(env: BareIntegrationEnv, tenant_id: str) -> dict:
     """Fetch the persisted AuditLog.details through the env session (round-trip).
 
-    ``log_operation()`` writes + commits through its OWN ``get_db_session()``,
+    ``log_operation()`` writes + commits through its OWN ``get_separate_session()``,
     so reading via the env's separate session observes the actual DB-serialized
     JSONB (not an identity-mapped Python dict). ``expire_all()`` guards against
     the session serving a stale snapshot from an already-loaded row.
