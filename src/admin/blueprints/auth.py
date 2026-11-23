@@ -707,7 +707,7 @@ def logout():
 
 # GAM OAuth Flow endpoints
 @auth_bp.route("/auth/gam/authorize/<tenant_id>")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def gam_authorize(tenant_id):
     """Initiate GAM OAuth flow for tenant.
 

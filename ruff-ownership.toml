@@ -52,7 +52,6 @@ select = ["TID251"]
 "scripts/**" = ["TID251"]
 "src/core/tools/accounts.py" = ["TID251"]
 "src/core/database/database.py" = ["TID251"]
-"src/adapters/gam_reporting_api.py" = ["TID251"]
 "src/routes/health.py" = ["TID251"]
 "src/services/setup_checklist_service.py" = ["TID251"]
 
@@ -60,6 +59,7 @@ select = ["TID251"]
 # The modules that can load a principal row or resolve a token or stored id to one. The ORM
 # Principal model itself is banned in ruff-boundary.toml (see the header).
 "src.core.database.repositories.principal".msg = "A tool holds the principal the resolver loaded (identity.principal) and loads no other. PrincipalRepository is for the admin surfaces that manage principals as data."
+"src.core.database.repositories.uow.PrincipalUoW".msg = "A tool holds the principal the resolver loaded (identity.principal) and loads no other. PrincipalUoW is for the admin surfaces that manage principals as data."
 "src.core.database.repositories.principal_lookup".msg = "A tool holds the principal the resolver loaded (identity.principal). The cross-tenant reads here serve the CI seed and the setup checklist, not business logic."
 "src.core.auth_utils".msg = "The resolver's primitives resolve a token or a stored id to a principal once, in src/core/resolved_identity.py. A tool reads identity.principal; a job with stored ids calls identity_of."
 

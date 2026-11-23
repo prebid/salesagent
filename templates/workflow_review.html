@@ -128,7 +128,7 @@ async function approveStep() {
     }
 
     try {
-        const response = await fetch('{{ script_name }}/tenant/{{ tenant_id }}/workflows/{{ workflow_id }}/steps/{{ step.step_id }}/approve', {
+        const response = await fetch(scriptRoot + '/tenant/' + {{ tenant_id|tojson }} + '/workflows/' + {{ workflow_id|tojson }} + '/steps/' + {{ step.step_id|tojson }} + '/approve', {
             method: 'POST',
             credentials: 'same-origin',
             headers: {
@@ -138,7 +138,7 @@ async function approveStep() {
 
         if (response.ok) {
             alert('Workflow step approved successfully!');
-            window.location.href = '{{ script_name }}/tenant/{{ tenant_id }}';
+            window.location.href = scriptRoot + '/tenant/' + {{ tenant_id|tojson }};
         } else {
             alert(`Failed to approve: ${adminErrorText(await response.json())}`);
         }
@@ -156,7 +156,7 @@ function showRejectDialog() {
 
 async function rejectStep(reason) {
     try {
-        const response = await fetch('{{ script_name }}/tenant/{{ tenant_id }}/workflows/{{ workflow_id }}/steps/{{ step.step_id }}/reject', {
+        const response = await fetch(scriptRoot + '/tenant/' + {{ tenant_id|tojson }} + '/workflows/' + {{ workflow_id|tojson }} + '/steps/' + {{ step.step_id|tojson }} + '/reject', {
             method: 'POST',
             credentials: 'same-origin',
             headers: {
@@ -167,7 +167,7 @@ async function rejectStep(reason) {
 
         if (response.ok) {
             alert('Workflow step rejected successfully!');
-            window.location.href = '{{ script_name }}/tenant/{{ tenant_id }}';
+            window.location.href = scriptRoot + '/tenant/' + {{ tenant_id|tojson }};
         } else {
             alert(`Failed to reject: ${adminErrorText(await response.json())}`);
         }

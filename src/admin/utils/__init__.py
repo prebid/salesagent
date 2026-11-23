@@ -15,6 +15,7 @@ from src.admin.utils.helpers import (
     parse_json_config,
     require_auth,
     require_tenant_access,
+    tenant_access_refusal,
     translate_custom_targeting,
     validate_gam_network_response,
     validate_gam_user_response,
@@ -29,6 +30,7 @@ __all__ = [
     "is_super_admin",
     "require_auth",
     "require_tenant_access",
+    "tenant_access_refusal",
     # Utility functions
     "parse_json_config",
     "get_tenant_config_from_db",
