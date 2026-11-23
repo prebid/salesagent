@@ -145,7 +145,7 @@ class TestPlacementIdsValidation:
         with (
             patch(f"{MODULE}._verify_principal"),
             patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
-            patch(f"{MODULE}.get_adapter") as m_adapter,
+            patch(f"{MODULE}.build_adapter") as m_adapter,
             patch(f"{MODULE}.get_audit_logger", return_value=MagicMock()),
             patch(f"{MODULE}.MediaBuyUoW", return_value=mock_uow),
             patch(f"{DB_MODULE}.get_db_session", return_value=mock_cm),
@@ -258,7 +258,7 @@ class TestPlacementIdsValidation:
         with (
             patch(f"{MODULE}._verify_principal"),
             patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
-            patch(f"{MODULE}.get_adapter") as m_adapter,
+            patch(f"{MODULE}.build_adapter") as m_adapter,
             patch(f"{MODULE}.get_audit_logger", return_value=MagicMock()),
             patch(f"{MODULE}.MediaBuyUoW", return_value=mock_uow),
             patch(f"{DB_MODULE}.get_db_session", return_value=mock_cm),
