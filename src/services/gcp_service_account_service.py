@@ -227,7 +227,7 @@ class GCPServiceAccountService:
                 logger.info(f"Successfully created service account key for: {service_account_email}")
 
                 # Store in database
-                adapter_config.gam_service_account_email = service_account_email
+                # The setter also stores the key's client_email as gam_service_account_email
                 adapter_config.gam_service_account_json = service_account_json
                 adapter_config.gam_auth_method = "service_account"
                 session.commit()

@@ -31,17 +31,20 @@ def throwaway_private_key() -> str:
     ).decode()
 
 
-def service_account_json(*, project_id: str = "test-project") -> str:
+def service_account_key(*, project_id: str = "test-project", client_email: str | None = None) -> dict[str, str]:
+    """The service-account key document; ``client_email`` defaults to an address in *project_id*."""
+    return {
+        "type": "service_account",
+        "project_id": project_id,
+        "private_key_id": "key123",
+        "private_key": throwaway_private_key(),
+        "client_email": client_email or f"test@{project_id}.iam.gserviceaccount.com",
+        "client_id": "123456789",
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+
+
+def service_account_json(*, project_id: str = "test-project", client_email: str | None = None) -> str:
     """The JSON string a GAM adapter's ``service_account_json`` config takes."""
-    return json.dumps(
-        {
-            "type": "service_account",
-            "project_id": project_id,
-            "private_key_id": "key123",
-            "private_key": throwaway_private_key(),
-            "client_email": f"test@{project_id}.iam.gserviceaccount.com",
-            "client_id": "123456789",
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-        }
-    )
+    return json.dumps(service_account_key(project_id=project_id, client_email=client_email))
