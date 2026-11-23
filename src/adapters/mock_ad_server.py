@@ -1,5 +1,6 @@
 import logging
 import random
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -16,7 +17,9 @@ from src.adapters.base import (
     AdServerAdapter,
     BaseConnectionConfig,
     BaseProductConfig,
+    StoredPackage,
     TargetingCapabilities,
+    stored_package,
 )
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.adapters.utils.pricing import resolve_package_rate
@@ -34,7 +37,6 @@ from src.core.exceptions import (
     AdCPCreativeRejectedError,
     AdCPMediaBuyNotFoundError,
     AdCPMediaBuyRejectedError,
-    AdCPPackageNotFoundError,
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
@@ -1439,6 +1441,8 @@ class MockAdServer(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
+        *,
+        packages: Sequence[StoredPackage],
     ) -> AdapterUpdateResult:
         """Apply the update in the simulated ad server and report the package it changed.
 
@@ -1451,22 +1455,18 @@ class MockAdServer(AdServerAdapter):
         packages". This method used to return ``[]`` unconditionally — including out of
         the branch that had just rewritten a package's budget.
 
-        The mock's simulated ad server IS the stored package: ``paused`` in
-        ``package_config`` is what ``get_media_buys`` serves back (``media_buy_list.py:343``).
-        The two package-level actions report that package, and the actions that touch no
-        package report the empty array the pin permits, because for them it is true:
+        The mock's simulated ad server keeps no state of its own, and it writes nothing: the
+        update tool records the package's ``budget`` and ``paused`` inside the request's unit
+        of work once this call returns, so both roll back with a later refusal. The mock used
+        to commit ``paused`` in a session of its own, which survived the refusal of the same
+        request (#2647). It reads the package from *packages*, which the tool passes. The two
+        package-level actions report that package, and the actions that touch no package
+        report the empty array the pin permits, because for them it is true:
 
-        * ``update_package_budget`` — writes NOTHING and reports that package with the
-          budget it was called with. The update tool writes ``media_packages.budget``
-          inside the request's unit of work after this call returns, so the write rolls
-          back with a later refusal; a second write here, committed in its own session,
-          survived that rollback and could store a different value (``budget`` arrives
-          as an ``int``).
-        * ``pause_package`` / ``resume_package`` — write ``paused``, report that package.
-          Nothing recorded a package's pause state on update before this (no update path
-          under ``src/`` wrote ``package_config["paused"]``), so a pause neither stuck nor
-          could be reported; GAM, Kevel and Broadstreet all report the resulting state
-          here, and the mock was the one adapter that did not.
+        * ``update_package_budget`` — reports that package with the budget it was called
+          with and the pause state the seller recorded.
+        * ``pause_package`` / ``resume_package`` — report that package with the pause state
+          this call applies and the budget the seller recorded.
         * ``pause_media_buy`` / ``resume_media_buy`` — the tool persists the buy's own
           ``is_paused``; no package record changes, so ``[]``. The pin's own worked example
           for a campaign-level ``paused: true`` returns exactly that
@@ -1484,70 +1484,30 @@ class MockAdServer(AdServerAdapter):
             success=True,
             details={"media_buy_id": media_buy_id, "action": action, "package_id": package_id},
         )
-        import logging
-
-        from sqlalchemy.orm import attributes
-
-        from src.core.database.database_session import get_db_session
-        from src.core.database.repositories.media_buy import MediaBuyRepository
-
-        logger = logging.getLogger(__name__)
-
-        assert self.tenant_id is not None, "tenant_id required for DB operations"
-
         # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
         self._raise_injected_failure("fail_on_update", update_action=action)
 
-        # One place decides which package this action reports and whether the mock writes
-        # its pause state, so the write and the report below cannot disagree.
-        paused_value: bool | None = None
+        reported_budget: float | None
         if action == "update_package_budget" and package_id and budget is not None:
-            changed_package_id = package_id
+            changed = stored_package(packages, media_buy_id, package_id)
+            paused, reported_budget = changed.paused, float(budget)
         elif action in ("pause_package", "resume_package") and package_id:
-            changed_package_id = package_id
-            paused_value = action == "pause_package"
+            changed = stored_package(packages, media_buy_id, package_id)
+            paused, reported_budget = action == "pause_package", changed.budget
         else:
             return AdapterUpdateResult(media_buy_id=media_buy_id, affected_packages=[])
 
-        with get_db_session() as session:
-            repo = MediaBuyRepository(session, self.tenant_id)
-            media_package = repo.get_package(media_buy_id, changed_package_id)
-            if media_package is None:
-                # A refusal, not a logged warning followed by a successful-looking result:
-                # the three real adapters all raise AdCPPackageNotFoundError for this exact
-                # condition (google_ad_manager.py:1289, kevel.py:461,
-                # broadstreet/adapter.py:620), the tool's budget path already pre-checks it
-                # with get_package_or_raise and raises the same code, and reporting success
-                # for a package that does not exist is the quiet failure CLAUDE.md bans.
-                raise AdCPPackageNotFoundError(
-                    details=EntityRefDetails(package_id=changed_package_id, media_buy_id=media_buy_id)
+        return AdapterUpdateResult(
+            media_buy_id=media_buy_id,
+            affected_packages=[
+                AffectedPackage(
+                    package_id=changed.package_id,
+                    paused=paused,
+                    budget=reported_budget,
+                    product_id=changed.product_id,
                 )
-
-            if paused_value is not None:
-                media_package.package_config["paused"] = paused_value
-                # Flag the JSON field as modified so SQLAlchemy persists it
-                attributes.flag_modified(media_package, "package_config")
-                session.commit()
-                logger.info(f"[MockAdapter] Set package {changed_package_id} paused to {paused_value}")
-
-            return AdapterUpdateResult(
-                media_buy_id=media_buy_id,
-                affected_packages=[
-                    AffectedPackage(
-                        package_id=changed_package_id,
-                        # Read off the record, never a plausible default: a budget update
-                        # reports the pause state the package really has, and a pause
-                        # reports the value this call stored.
-                        paused=bool(media_package.package_config.get("paused", False)),
-                        # A budget update reports the budget it was called with (the tool
-                        # writes the record); a pause reports the stored one.
-                        budget=float(budget)
-                        if budget is not None
-                        else (float(media_package.budget) if media_package.budget is not None else None),
-                        product_id=media_package.package_config.get("product_id"),
-                    )
-                ],
-            )
+            ],
+        )
 
     def validate_product_config(self, config: dict[str, Any]) -> tuple[bool, str | None]:
         """Validate mock adapter configuration."""

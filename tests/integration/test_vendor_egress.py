@@ -377,6 +377,7 @@ def test_kevel_update_does_not_retry_a_failing_origin(local_origin_tls, monkeypa
             package_id=None,
             budget=None,
             today=_TODAY,
+            packages=(),
         )
 
     assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
@@ -762,6 +763,7 @@ def test_kevel_pause_succeeds_against_a_local_origin(local_origin_tls, monkeypat
         package_id=None,
         budget=None,
         today=_TODAY,
+        packages=(),
     )
 
     assert response.media_buy_id == "kevel_999"

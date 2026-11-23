@@ -12,6 +12,7 @@ from src.adapters.base import (
     AdapterUpdateResult,
     AdServerAdapter,
     CreativeEngineAdapter,
+    StoredPackage,
 )
 from src.adapters.constants import require_supported_update_action
 from src.adapters.utils.pricing import resolve_package_rate
@@ -454,6 +455,8 @@ class Kevel(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
+        *,
+        packages: Sequence[StoredPackage],
     ) -> AdapterUpdateResult:
         """Updates a media buy in Kevel using standardized actions."""
 

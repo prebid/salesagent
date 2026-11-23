@@ -5,13 +5,20 @@ Implements the AdServerAdapter interface for Microsoft's Xandr platform.
 """
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from dateutil import parser as dateutil_parser
 from pydantic import JsonValue
 
-from src.adapters.base import AdapterCreateRequest, AdapterCreateResult, AdapterUpdateResult, AdServerAdapter
+from src.adapters.base import (
+    AdapterCreateRequest,
+    AdapterCreateResult,
+    AdapterUpdateResult,
+    AdServerAdapter,
+    StoredPackage,
+)
 from src.adapters.utils.pricing import resolve_package_rate
 from src.adapters.vendor_http import VendorHttpClient, require_vendor
 from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPInternalError
@@ -644,6 +651,8 @@ class XandrAdapter(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
+        *,
+        packages: Sequence[StoredPackage],
     ) -> AdapterUpdateResult:
         """Update insertion order in Xandr."""
         # NOTE: This is a stub implementation - needs full refactor to match current API

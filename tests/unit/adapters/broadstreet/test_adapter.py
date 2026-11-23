@@ -325,6 +325,7 @@ class TestBroadstreetAdapterUpdates:
                 package_id=None,
                 budget=None,
                 today=datetime.now(UTC),
+                packages=(),
             )
 
         assert isinstance(result, AdapterUpdateResult)
@@ -348,6 +349,7 @@ class TestBroadstreetAdapterUpdates:
                 package_id=None,
                 budget=None,
                 today=datetime.now(UTC),
+                packages=(),
             )
 
         assert isinstance(result, AdapterUpdateResult)
@@ -376,6 +378,7 @@ class TestBroadstreetAdapterUpdates:
                     package_id=None,
                     budget=None,
                     today=datetime.now(UTC),
+                    packages=(),
                 )
         assert exc_info.value.error_code == "PACKAGE_NOT_FOUND"
 
@@ -392,6 +395,7 @@ class TestBroadstreetAdapterUpdates:
                 package_id="pkg_1",
                 budget=None,
                 today=datetime.now(UTC),
+                packages=(),
             )
 
         assert isinstance(result, AdapterUpdateResult)
@@ -418,6 +422,7 @@ class TestBroadstreetAdapterUpdates:
                 package_id=None,
                 budget=None,
                 today=datetime.now(UTC),
+                packages=(),
             )
         assert exc_info.value.error_code == "UNSUPPORTED_FEATURE"
 
@@ -483,6 +488,7 @@ class TestBroadstreetAdapterBulkUpdateRaiseSites:
                     package_id=None,
                     budget=None,
                     today=datetime.now(UTC),
+                    packages=(),
                 )
 
         assert exc_info.value.error_code == "PARTIAL_FAILURE"
@@ -503,6 +509,7 @@ class TestBroadstreetAdapterBulkUpdateRaiseSites:
                     package_id="pkg_1",
                     budget=None,
                     today=datetime.now(UTC),
+                    packages=(),
                 )
 
         assert exc_info.value.error_code == "PARTIAL_FAILURE"

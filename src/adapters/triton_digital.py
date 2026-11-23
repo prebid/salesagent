@@ -11,6 +11,7 @@ from src.adapters.base import (
     AdapterUpdateResult,
     AdServerAdapter,
     CreativeEngineAdapter,
+    StoredPackage,
 )
 from src.adapters.constants import require_supported_update_action
 from src.adapters.utils.pricing import resolve_package_rate
@@ -416,6 +417,8 @@ class TritonDigital(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
+        *,
+        packages: Sequence[StoredPackage],
     ) -> AdapterUpdateResult:
         """Updates a media buy in Triton Digital using standardized actions."""
         self.log(f"TritonDigital.update_media_buy for {media_buy_id} with action {action}")

@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 from adcp.types.domains.creative.sync_creatives_request import Assignment
 
+from src.adapters.base import StoredPackage
 from src.core.audit_logger import get_audit_logger
 from src.core.context_manager import get_context_manager
 from src.core.database.models import (
@@ -539,6 +540,17 @@ def _patched_overlay(package: MediaPackage | None, overlay: TargetingInput) -> T
     stored = (package.package_config.get("targeting_overlay") or {}) if package is not None else {}
     kept = {name: value for name, value in stored.items() if value is not None}
     return TargetingInput.model_validate(kept | {name: getattr(overlay, name) for name in overlay.model_fields_set})
+
+
+def _stored_packages(uow: "MediaBuyUoW", media_buy_id: str) -> list[StoredPackage]:
+    """Every package of the buy as this request's unit of work holds it, for the adapter.
+
+    Read before each adapter call rather than once, so a call sees the writes the request
+    made before it. The adapter takes them instead of reading the rows itself: a session of
+    its own, opened inside this unit, would close the unit's session (#1644, #2647).
+    """
+    assert uow.media_buys is not None
+    return [StoredPackage.of(row) for row in uow.media_buys.get_packages(media_buy_id)]
 
 
 def _package_product(uow: "MediaBuyUoW", media_buy_id: str, package_id: str, pkg_index: int) -> "DBProduct | None":
@@ -1614,6 +1626,7 @@ def _update_media_buy_impl(
                             package_id=pkg_update.package_id,
                             budget=None,
                             today=utc_flight_start(today),
+                            packages=_stored_packages(uow, req.media_buy_id),
                         )
 
                         # This branch modified a package, so the response says which one
@@ -1639,6 +1652,7 @@ def _update_media_buy_impl(
                             package_id=pkg_update.package_id,
                             budget=int(budget_amount),
                             today=utc_flight_start(today),
+                            packages=_stored_packages(uow, req.media_buy_id),
                         )
 
                         # The seller's budget column is written HERE, inside this request's
@@ -1762,6 +1776,7 @@ def _update_media_buy_impl(
                     package_id=None,
                     budget=None,
                     today=utc_flight_start(today),
+                    packages=_stored_packages(uow, req.media_buy_id),
                 )
                 # A package the adapter paused with the buy goes through the one assembly
                 # point below like any other modified package, so it is reported as a full

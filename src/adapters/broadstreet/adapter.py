@@ -14,6 +14,7 @@ Entity Mapping:
 """
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -34,6 +35,7 @@ from src.adapters.base import (
     AdapterUpdateResult,
     AdServerAdapter,
     CreativeEngineAdapter,
+    StoredPackage,
     TargetingCapabilities,
 )
 from src.adapters.broadstreet.client import BroadstreetClient
@@ -595,7 +597,14 @@ class BroadstreetAdapter(AdServerAdapter):
         )
 
     def update_media_buy(
-        self, media_buy_id: str, action: str, package_id: str | None, budget: int | None, today: datetime
+        self,
+        media_buy_id: str,
+        action: str,
+        package_id: str | None,
+        budget: int | None,
+        today: datetime,
+        *,
+        packages: Sequence[StoredPackage],
     ) -> AdapterUpdateResult:
         """Update a media buy with a specific action.
 
