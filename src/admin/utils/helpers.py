@@ -21,6 +21,7 @@ from src.core.database.models import Tenant, User, UserRole
 from src.core.database.repositories.tenant_management_config import TenantManagementConfigRepository
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.logging_config import log_safe
+from src.core.operator_errors import OperatorRefusal, StateConflict, UpstreamFailure
 
 T = TypeVar("T")
 
@@ -744,23 +745,60 @@ def approve_media_buy_through_writer(media_buy_id: str, tenant_id: str, *, appro
     return approval
 
 
-def describe_approval_error(error: AdCPSalesAgentError[Any] | None) -> str:
-    """The seller's line for an approval's typed error: its code and message, the field it names, each problem.
+def approval_error_lines(error: AdCPSalesAgentError[Any]) -> list[str]:
+    """The seller's lines for an approval's typed error: its code and message, the field it names, each problem.
 
     Read off the error, which is the one carrier (``ApprovalResult.error``): a refusal before
     booking is the object a create answers the buyer with, so the seller sees its code,
-    ``field`` and ``details.problems`` as the buyer would.
+    ``field`` and ``details.problems`` as the buyer would. Every caller reads these lines: the
+    refusal a JSON route raises carries them as its details, and a flash or a log line joins
+    them (:func:`describe_approval_error`).
     """
     from src.core.errors.details import ProblemsDetails
 
-    if error is None:
-        return ""
-    parts = [f"{error.error_code}: {error.message}"]
+    lines = [f"{error.error_code}: {error.message}"]
     if error.field:
-        parts.append(f"field {error.field}")
+        lines.append(f"field {error.field}")
     if isinstance(error.details, ProblemsDetails):
-        parts.extend(
+        lines.extend(
             f"{problem.subject_type or 'problem'} {problem.subject_id or ''} {problem.code or ''}".strip()
             for problem in error.details.problems or ()
         )
-    return "; ".join(parts)
+    return lines
+
+
+def describe_approval_error(error: AdCPSalesAgentError[Any] | None) -> str:
+    """The approval error's lines (:func:`approval_error_lines`) as one line, for a flash or a log record."""
+    return "; ".join(approval_error_lines(error)) if error is not None else ""
+
+
+class MediaBuyApprovalFailed(OperatorRefusal, abstract=True):
+    """A media buy the operator approved was not booked; its details are the typed error's lines.
+
+    The error the approval stopped on decides the class, so no route chooses a status:
+    :func:`approval_refusal` builds the one that fits, and the admin error handler answers it.
+    """
+
+
+class MediaBuyBookingFailed(MediaBuyApprovalFailed, UpstreamFailure):
+    """The ad server failed to book the approved media buy (``AdCPAdapterError``)."""
+
+    MESSAGE = "The ad server could not book the approved media buy"
+
+
+class MediaBuyApprovalRefused(MediaBuyApprovalFailed, StateConflict):
+    """The approved media buy cannot be booked as it stands, and still awaits approval.
+
+    A refusal before booking: a creative its product refuses, a kind the ad server does not
+    traffic. The buy's own state conflicts with booking it, which no form value changes.
+    """
+
+    MESSAGE = "The media buy cannot be booked as it stands, so it still awaits approval"
+
+
+def approval_refusal(media_buy_id: str, error: AdCPSalesAgentError[Any]) -> MediaBuyApprovalFailed:
+    """The refusal an approval that stopped on *error* answers the operator with, carrying *error*'s lines."""
+    from src.core.exceptions import AdCPAdapterError
+
+    refusal = MediaBuyBookingFailed if isinstance(error, AdCPAdapterError) else MediaBuyApprovalRefused
+    return refusal(f"Media buy {media_buy_id}: {error.error_code}", details=approval_error_lines(error))
