@@ -216,6 +216,11 @@ it and raises a typed error:
 
 - `fail_on_create`, `fail_on_update`, and `fail_on_upload` flag which
   operation fails.
+- `fail_on_update_action` names one `update_media_buy` action (for example
+  `update_package_budget`) to fail, leaving the others to succeed. An update
+  request makes one adapter call per package change, so this fails a later call
+  of a request after an earlier one has reached the ad server. A value that
+  names no update action raises `CONFIGURATION_ERROR`.
 - `recovery` selects the exception class by its recovery classification:
   `transient` (`SERVICE_UNAVAILABLE`), `terminal` (`CONFIGURATION_ERROR`), or
   `correctable` (`VALIDATION_ERROR`).

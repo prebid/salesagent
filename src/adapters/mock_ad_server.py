@@ -18,6 +18,7 @@ from src.adapters.base import (
     BaseProductConfig,
     TargetingCapabilities,
 )
+from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.adapters.utils.pricing import resolve_package_rate
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import (
@@ -363,7 +364,7 @@ class MockAdServer(AdServerAdapter):
             logger.debug("Failed to load test behavior from DB", exc_info=True)
         return {}
 
-    def _raise_injected_failure(self, flag: str) -> None:
+    def _raise_injected_failure(self, flag: str, *, update_action: str | None = None) -> None:
         """Raise the DB-injected adapter failure when ``flag`` is set.
 
         BDD Given steps persist failure injection (fail_on_create /
@@ -371,6 +372,13 @@ class MockAdServer(AdServerAdapter):
         AdapterConfig test_behavior so the Docker-hosted adapter reproduces
         the same fault the in-process mock raises via side_effect. No-op when
         the flag is absent.
+
+        ``fail_on_update_action`` names ONE ``update_media_buy`` action to fail, so a
+        request can reach the ad server once and be refused on a later call: the
+        update tool calls the adapter once per package change and once for the
+        campaign pause. *update_action* is the action of the call being made. A value
+        that names no update action is refused rather than never matching, because a
+        knob that silently never fires turns a refusal scenario green for nothing.
 
         The buyer suggestion reaches error.json's top-level position on its own,
         because the raised code resolves it from CODE_TABLE. This used to pass a
@@ -383,14 +391,21 @@ class MockAdServer(AdServerAdapter):
         pin classifies terminal". ``error_details``/``error_message`` from test
         behavior are server-side diagnostics and ride ``internal_detail``.
         """
-        test_behavior = self._read_test_behavior()
-        if not test_behavior.get(flag):
-            return
         from src.core.exceptions import (
             AdCPAdapterError,
             AdCPConfigurationError,
             AdCPRateLimitError,
         )
+
+        test_behavior = self._read_test_behavior()
+        fires = bool(test_behavior.get(flag))
+        targeted = test_behavior.get("fail_on_update_action")
+        if update_action is not None and targeted is not None:
+            if targeted not in REQUIRED_UPDATE_ACTIONS:
+                raise AdCPConfigurationError()
+            fires = fires or targeted == update_action
+        if not fires:
+            return
 
         # A throttled ad server is its own fault, not a recovery class: RATE_LIMITED shares
         # ``transient`` with SERVICE_UNAVAILABLE, so the recovery knob below cannot select it.
@@ -1495,7 +1510,7 @@ class MockAdServer(AdServerAdapter):
         assert self.tenant_id is not None, "tenant_id required for DB operations"
 
         # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
-        self._raise_injected_failure("fail_on_update")
+        self._raise_injected_failure("fail_on_update", update_action=action)
 
         # One place decides which package this action reports and whether the mock writes
         # its pause state, so the write and the report below cannot disagree.

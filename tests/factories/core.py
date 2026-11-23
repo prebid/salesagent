@@ -320,7 +320,7 @@ def set_adapter_test_behavior(env: Any, tenant_id: str, **behavior: Any) -> Adap
     """Upsert the mock-adapter ``test_behavior`` for a tenant (BDD/E2E support).
 
     The Docker-hosted mock adapter reads injected behavior — ``manual_approval_required``,
-    ``fail_on_create``, ``fail_on_update``, ``error_message``, ``error_details``,
+    ``fail_on_create``, ``fail_on_update``, ``fail_on_update_action``, ``error_message``, ``error_details``,
     ``recovery``, ``reject_on_create``/``rejection_reason`` — from
     ``AdapterConfig.config_json["test_behavior"]`` (see
     ``mock_ad_server._read_test_behavior``). In-process transports use the env's
