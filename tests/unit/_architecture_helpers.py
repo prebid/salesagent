@@ -401,11 +401,13 @@ def orm_bindings(relpath: str, tree: ast.Module) -> dict[str, str]:
 #
 # Each question a guard asks about a query is answered here, once: which classes are
 # mapped (``orm_classes``), which local names denote one (``orm_bindings``), what a
-# scope sees (``iter_scopes``), how a chain is walked (``select_chain``), which statement
-# a local name holds (``fold_name``), which class a ``select(...)`` addresses
-# (``select_entity``) and which class any node denotes (``orm_references``). A guard that
-# answers one of them itself is a second answer, and the two drift: one line was a
-# raw-select violation in one guard and unresolved in another.
+# scope sees and which function holds it (``iter_scopes``), how a chain is walked
+# (``select_chain``), which statement a local name holds (``fold_name``), where a
+# statement starts and which class it addresses (``statement_root``,
+# ``statement_entity``), which class a ``select(...)`` addresses (``select_entity``)
+# and which class any node denotes (``orm_references``). A guard that answers one of
+# them itself is a second answer, and the two drift: one line was a raw-select
+# violation in one guard and unresolved in another.
 # ---------------------------------------------------------------------------
 
 
@@ -634,7 +636,7 @@ class Fold(NamedTuple):
     opaque: bool
 
 
-def _statement_root(expr: ast.expr, bindings: QueryBindings) -> ast.Call | None:
+def statement_root(expr: ast.expr, bindings: QueryBindings) -> ast.Call | None:
     """*expr* when a statement starts there: SQLAlchemy's ``select(...)`` by import, or a legacy
     ``<session>.query(...)``. Else None."""
     if isinstance(expr, ast.Call):
@@ -646,13 +648,27 @@ def _statement_root(expr: ast.expr, bindings: QueryBindings) -> ast.Call | None:
     return None
 
 
+def statement_entity(root: ast.Call, bindings: QueryBindings) -> str | None:
+    """The ORM class the statement starting at *root* (:func:`statement_root`) addresses, else None.
+
+    ``select(M)`` and ``select(M.column)`` through :func:`select_entity`, ``<session>.query(M)``
+    and ``.query(M.column)`` through :func:`orm_entity` on the first argument. Each root
+    :func:`statement_root` accepts has rows in
+    ``test_architecture_helpers_contract.py::test_statement_entity_answers_for_each_statement_root``.
+    """
+    if isinstance(root.func, ast.Attribute) and root.func.attr == "query":
+        return orm_entity(root.args[0], bindings.orm) if root.args else None
+    return select_entity(root, bindings)
+
+
 def fold_name(name: str, assigned: Mapping[str, list[ast.expr]], bindings: QueryBindings) -> Fold | None:
     """The statement local *name* holds, folded from its bindings in source order, else None.
 
     *assigned* is the scope's :func:`scope_bindings`, *bindings* the imports it sees
     (:func:`iter_scopes`). A binding whose chain (:func:`select_chain`) starts at a statement
-    starts the fold, and so does one that starts at another name holding one
-    (``stmt = base.where(...)``); ``name = name.<chain>`` folds its calls onto the earlier ones.
+    (:func:`statement_root`) starts the fold, and so does one that starts at another name
+    holding one (``stmt = base.where(...)``); ``name = name.<chain>`` folds its calls onto the
+    earlier ones.
     The fold is ``opaque`` when a read of *name* may see a statement other than the one
     returned: after a rebind it cannot read (``s = wrap(s)``), whose calls folded so far are
     kept, or when the name holds a second statement (bound in a branch, or reused). What
@@ -676,7 +692,7 @@ def _fold(
             else:
                 fold = fold._replace(calls=calls + fold.calls)
             continue
-        if (root := _statement_root(base, bindings)) is not None:
+        if (root := statement_root(base, bindings)) is not None:
             start = Fold(root, calls, opaque=False)
         elif isinstance(base, ast.Name) and (other := _fold(base.id, assigned, bindings, resolving | {name})):
             start = Fold(other.root, calls + other.calls, other.opaque)
@@ -688,8 +704,9 @@ def _fold(
     return fold._replace(opaque=opaque) if fold else None
 
 
-def iter_scopes(tree: ast.Module, bindings: QueryBindings) -> Iterator[tuple[ast.AST, QueryBindings]]:
-    """Every scope in *tree*, the module first, each with the query bindings it sees.
+def iter_scopes(tree: ast.Module, bindings: QueryBindings) -> Iterator[tuple[ast.AST, QueryBindings, str]]:
+    """Every scope in *tree*, the module first, each with the query bindings it sees and the
+    function that holds it.
 
     *bindings* is the module's view (:func:`query_bindings`). A nested scope sees what its
     enclosing scope sees minus what it binds itself (:meth:`QueryBindings.in_scope`), so
@@ -697,16 +714,22 @@ def iter_scopes(tree: ast.Module, bindings: QueryBindings) -> Iterator[tuple[ast
     body is the exception Python makes: what it binds is invisible to the functions nested in
     it, so they see what the class's enclosing scope sees. With :func:`scope_nodes`, every
     node is visited under exactly one scope.
+
+    The function is a ``def``'s own name, else the innermost ``def`` around the scope, else
+    ``"<module>"``: a lambda, comprehension or class body is held by the function around it.
+    It is the name :func:`walk_with_enclosing_function` gives each node the scope owns, and
+    the one a guard keys a row by.
     """
-    # (scope, what it sees, what the scopes nested in it inherit)
-    pending: list[tuple[ast.AST, QueryBindings, QueryBindings]] = [(tree, bindings, bindings)]
+    # (scope, what it sees, what the scopes nested in it inherit, the function that holds it)
+    pending: list[tuple[ast.AST, QueryBindings, QueryBindings, str]] = [(tree, bindings, bindings, "<module>")]
     while pending:
-        scope, view, inherited = pending.pop()
-        yield scope, view
+        scope, view, inherited, function = pending.pop()
+        yield scope, view, function
         nested = [node for node in scope_nodes(scope) if isinstance(node, SCOPE_NODES)]
         for node in reversed(nested):
             node_view = inherited.in_scope(node)
-            pending.append((node, node_view, inherited if isinstance(node, ast.ClassDef) else node_view))
+            holder = node.name if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) else function
+            pending.append((node, node_view, inherited if isinstance(node, ast.ClassDef) else node_view, holder))
 
 
 def orm_references(relpath: str, tree: ast.Module) -> dict[int, str]:
@@ -721,7 +744,7 @@ def orm_references(relpath: str, tree: ast.Module) -> dict[int, str]:
     denotes asks here.
     """
     references: dict[int, str] = {}
-    for scope, view in iter_scopes(tree, query_bindings(relpath, tree)):
+    for scope, view, _ in iter_scopes(tree, query_bindings(relpath, tree)):
         for node in scope_nodes(scope):
             if isinstance(node, ast.Name) and node.id in view.orm:
                 references[id(node)] = view.orm[node.id]

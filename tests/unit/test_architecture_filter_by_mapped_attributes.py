@@ -10,11 +10,11 @@ strings, which is exactly what a static scan can check against the live mapper.
 
 Which entity a keyword is looked up on follows ``Select._filter_by_zero``: the last
 ``join`` / ``outerjoin`` / ``join_from`` target, else the first ``select_from``, else
-the selected entity -- ``select(M)``, ``select(M.column)`` or a legacy
-``<session>.query(M)``. Resolution is closed-world, on the helpers every ORM guard
-shares (``tests/unit/_architecture_helpers.py``):
+the entity the statement root addresses (``statement_entity``) -- ``select(M)``,
+``select(M.column)`` or a legacy ``<session>.query(M)``. Resolution is closed-world, on
+the helpers every ORM guard shares (``tests/unit/_architecture_helpers.py``):
 
-- ``select`` and ``M`` resolve by IMPORT (``query_bindings`` / ``select_entity``):
+- ``select`` and ``M`` resolve by IMPORT (``query_bindings`` / ``statement_entity``):
   ``select`` must come from ``sqlalchemy``, ``M`` from ``models.py`` (``... import User as
   DBUser`` included), and neither may be rebound in the module or the scope. A Pydantic
   ``Product``, a module-local ``def select``, ``sa.select(M)``, ``select(models.M)`` and
@@ -38,8 +38,10 @@ hybrids, the names ``filter_by`` can look up on the entity -- and only the insta
 mapper (``orm_classes``) is consulted, so the inventory cannot go stale.
 
 Scanned: every scope under ``src/`` and ``scripts/`` (``iter_module_trees``; vendored
-source binds no model and grades nothing). ``TestDetectorMetaTests`` pins one row per
-shape above, including the valid queries an earlier version of this scan misreported.
+source binds no model and grades nothing). A row names the function ``iter_scopes`` gives
+the site's scope: a site in a lambda, comprehension or class body is reported under the
+function that holds it. ``TestDetectorMetaTests`` pins one row per shape above, including
+the valid queries an earlier version of this scan misreported.
 
 No allowlist: the only violation at creation was the #2206 site, deleted in the same
 change. A row added here needs a ``# FIXME(#<gh-issue>)`` at the source.
@@ -64,44 +66,37 @@ from tests.unit._architecture_helpers import (
     iter_module_trees,
     iter_scopes,
     orm_classes,
-    orm_entity,
     parse_module,
     query_bindings,
     repo_root,
     scope_bindings,
     scope_nodes,
     select_chain,
-    select_entity,
+    statement_entity,
+    statement_root,
 )
 
-# (relpath, enclosing scope, "Model.kwarg"). Shrink-only.
+# (relpath, enclosing function per ``iter_scopes``, "Model.kwarg"). Shrink-only.
 ALLOWLIST: set[tuple[str, str, str]] = set()
 
 
-def _anchor(base: ast.expr, calls: list[ast.Call]) -> tuple[str, ast.expr | None]:
-    """What ``Select._filter_by_zero`` picks on a statement: a fold over its *calls*, outermost first.
+def _anchor(calls: list[ast.Call]) -> tuple[bool, ast.expr | None]:
+    """What ``Select._filter_by_zero`` takes from a statement's *calls*, outermost first, ahead
+    of the entity its root addresses.
 
-    ``("join", target)``: the first join met is the LAST in source order, so it decides.
-    ``("select_from", entity)``: the last met is the FIRST in source order, so it
-    overwrites. Otherwise the statement's *base*: ``("select", call)`` for a bare-name call,
-    ``("query", call)`` for ``<x>.query(...)``, ``("other", node)`` for anything else.
+    ``(True, target)``: the first join met is the LAST in source order, so it decides; else the
+    last ``select_from`` met, which is the FIRST in source order. ``(False, None)`` when the
+    calls hold neither, and the root decides (``statement_entity``).
     """
     select_from: ast.expr | None = None
     for call in calls:
         method, args = call_callee_name(call), call.args
         if method in SELECT_JOIN_METHODS:
             position = 1 if method == "join_from" else 0  # join_from(left, right)
-            return "join", args[position] if len(args) > position else None
+            return True, args[position] if len(args) > position else None
         if method == "select_from" and args:
             select_from = args[0]
-    if select_from is not None:
-        return "select_from", select_from
-    if isinstance(base, ast.Call):
-        if isinstance(base.func, ast.Name):
-            return "select", base
-        if isinstance(base.func, ast.Attribute) and base.func.attr == "query":
-            return "query", base
-    return "other", base
+    return select_from is not None, select_from
 
 
 class _Scope:
@@ -124,43 +119,35 @@ class _Scope:
             if fold is None or fold.opaque:
                 return None  # the name may hold another statement: skipped, never guessed
             base, calls = fold.root, calls + fold.calls
-        kind, node = _anchor(base, calls)
-        name: str | None = None
-        if kind in {"join", "select_from"}:
+        anchored, node = _anchor(calls)
+        if anchored:
             name = self._imported(node)
-        elif kind == "select" and isinstance(node, ast.Call):
-            name = select_entity(node, self._imports)
-        elif kind == "query" and isinstance(node, ast.Call) and node.args:
-            name = orm_entity(node.args[0], self._imports.orm)
+        elif (root := statement_root(base, self._imports)) is not None:
+            name = statement_entity(root, self._imports)
+        else:
+            name = None
         return orm_classes().get(name) if name else None
 
 
-def _scope_name(scope: ast.AST) -> str:
-    if isinstance(scope, ast.Module):
-        return "<module>"
-    if isinstance(scope, ast.Lambda):
-        return "<lambda>"
-    return getattr(scope, "name", "<comprehension>")
-
-
 def _graded_sites(tree: ast.Module, relpath: str) -> Iterator[tuple[str, type[Any], ast.Call]]:
-    """``(scope name, model, filter_by call)`` for every site whose target resolves."""
-    for scope_node, imports in iter_scopes(tree, query_bindings(relpath, tree)):
+    """``(function, model, filter_by call)`` for every site whose target resolves; *function*
+    is the one ``iter_scopes`` gives the site's scope."""
+    for scope_node, imports, function in iter_scopes(tree, query_bindings(relpath, tree)):
         scope = _Scope(scope_node, imports)
         for node in scope.nodes:
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "filter_by":
                 model = scope.target(node.func.value)
                 if model is not None:
-                    yield _scope_name(scope_node), model, node
+                    yield function, model, node
 
 
 def _find_in_module(tree: ast.Module, relpath: str) -> set[tuple[str, str, str]]:
     found: set[tuple[str, str, str]] = set()
-    for scope_name, model, call in _graded_sites(tree, relpath):
+    for function, model, call in _graded_sites(tree, relpath):
         mapped = set(inspect(model).all_orm_descriptors.keys())
         for kw in call.keywords:
             if kw.arg is not None and kw.arg not in mapped:
-                found.add((relpath, scope_name, f"{model.__name__}.{kw.arg}"))
+                found.add((relpath, function, f"{model.__name__}.{kw.arg}"))
     return found
 
 
@@ -187,7 +174,7 @@ def test_filter_by_names_only_mapped_attributes() -> None:
 
 _PREAMBLE = "from sqlalchemy import func, select\nfrom src.core.database.models import Tenant, User\n"
 
-# label -> (source after the preamble, rows as (scope, "Model.kwarg")). The reported rows
+# label -> (source after the preamble, rows as (function, "Model.kwarg")). The reported rows
 # must match EXACTLY: the phantom on the entity filter_by addresses, nothing on a valid
 # query, nothing on a target the scan cannot tell.
 _TABLE: dict[str, tuple[str, set[tuple[str, str]]]] = {
@@ -245,11 +232,25 @@ _TABLE: dict[str, tuple[str, set[tuple[str, str]]]] = {
         "def f():\n    return select(Tenant).join_from(Tenant, User).filter_by(subdomain='x')\n",
         {("f", "User.subdomain")},
     ),
+    # A row names the innermost enclosing function, whatever scope holds the site.
     "module-level": ("stmt = select(User).filter_by(is_admin=True)\n", {("<module>", "User.is_admin")}),
-    "lambda": ("f = lambda: select(User).filter_by(is_admin=True)\n", {("<lambda>", "User.is_admin")}),
+    "lambda": ("f = lambda: select(User).filter_by(is_admin=True)\n", {("<module>", "User.is_admin")}),
+    "lambda-in-a-function": (
+        "def f():\n    return lambda: select(User).filter_by(is_admin=True)\n",
+        {("f", "User.is_admin")},
+    ),
     "comprehension-is-a-scope": (
         "def f(xs):\n    return [select(User).filter_by(is_admin=True) for x in xs]\n",
-        {("<comprehension>", "User.is_admin")},
+        {("f", "User.is_admin")},
+    ),
+    "comprehensions-in-two-functions-are-two-rows": (
+        "def f(xs):\n    return [select(User).filter_by(nope=1) for x in xs]\n\n"
+        "def g(xs):\n    return [select(User).filter_by(nope=1) for x in xs]\n",
+        {("f", "User.nope"), ("g", "User.nope")},
+    ),
+    "class-body-in-a-function": (
+        "def f():\n    class K:\n        q = select(User).filter_by(nope=1)\n\n    return K\n",
+        {("f", "User.nope")},
     ),
     "a-class-body-binding-is-invisible-to-its-methods": (
         "class K:\n    select = None\n\n    def m(self):\n        return select(User).filter_by(is_admin=True)\n",

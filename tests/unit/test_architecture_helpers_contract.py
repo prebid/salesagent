@@ -29,7 +29,10 @@ from tests.unit._architecture_helpers import (
     scope_nodes,
     select_chain,
     select_entity,
+    statement_entity,
+    statement_root,
     uv_version_pattern_map,
+    walk_with_enclosing_function,
 )
 
 _ITER_CALL_SOURCE = """
@@ -144,6 +147,40 @@ def test_select_entity_resolves_by_import_and_never_by_spelling() -> None:
 
 
 @pytest.mark.arch_guard
+def test_statement_entity_answers_for_each_statement_root() -> None:
+    """A row per statement root ``statement_root`` accepts, and the class ``statement_entity`` reads off it."""
+    source = (
+        "from sqlalchemy import select\n"
+        "from src.core.database.models import User\n"
+        "select(User)\n"
+        "select(User.email)\n"
+        "select(func.count())\n"
+        "session.query(User)\n"
+        "session.query(User.email)\n"
+        "session.query()\n"
+        "sa.select(User)\n"
+        "wrap(User)\n"
+    )
+    tree = ast.parse(source)
+    bindings = query_bindings("src/x.py", tree)
+
+    def read(expr: ast.expr) -> tuple[bool, str | None]:
+        root = statement_root(expr, bindings)
+        return root is not None, statement_entity(root, bindings) if root is not None else None
+
+    assert [read(stmt.value) for stmt in tree.body if isinstance(stmt, ast.Expr)] == [
+        (True, "User"),
+        (True, "User"),  # a column projection addresses its class
+        (True, None),  # a statement on no mapped class
+        (True, "User"),  # the legacy <session>.query(M)
+        (True, "User"),
+        (True, None),
+        (False, None),  # not a statement root: unresolved, never guessed
+        (False, None),
+    ]
+
+
+@pytest.mark.arch_guard
 def test_query_bindings_drops_a_name_the_module_rebinds() -> None:
     source = (
         "from sqlalchemy import select\n"
@@ -189,7 +226,7 @@ def test_iter_scopes_shadows_through_enclosing_functions_but_not_class_bodies() 
     tree = ast.parse(_SCOPES_SOURCE)
     views = {
         getattr(scope, "name", type(scope).__name__): view
-        for scope, view in iter_scopes(tree, query_bindings("src/x.py", tree))
+        for scope, view, _ in iter_scopes(tree, query_bindings("src/x.py", tree))
     }
     assert list(views) == ["Module", "f", "Lambda", "K", "m"]  # the module first, then source order
     assert views["Module"].select == {"select"} and views["Module"].orm == {"User": "User"}
@@ -199,13 +236,69 @@ def test_iter_scopes_shadows_through_enclosing_functions_but_not_class_bodies() 
     assert views["m"].orm == {"User": "User"} and views["m"].select == {"select"}  # ...not for its methods
 
 
+_FUNCTIONS_SOURCE = """
+x = [y for y in ()]
+
+class K:
+    k = lambda: 1
+
+    def m(self):
+        return [lambda: n for n in ()]
+
+@decorate(lambda: 0)
+async def f(a=lambda: 0):
+    class L:
+        pass
+
+    def g():
+        return (h for h in ())
+"""
+
+
+@pytest.mark.arch_guard
+def test_iter_scopes_names_the_function_that_holds_each_scope() -> None:
+    """A ``def`` names itself; any other scope, the innermost ``def`` around it, else ``<module>``.
+
+    For every positioned node a scope owns, that is the name ``walk_with_enclosing_function``
+    gives the node, except a ``def`` statement itself, which runs in the scope around it.
+    (Context and operator nodes are shared singletons, so ``id()`` cannot tell them apart.)
+    """
+    tree = ast.parse(_FUNCTIONS_SOURCE)
+    scopes = list(iter_scopes(tree, query_bindings("src/x.py", tree)))
+    assert [(getattr(scope, "name", type(scope).__name__), function) for scope, _, function in scopes] == [
+        ("Module", "<module>"),
+        ("ListComp", "<module>"),
+        ("K", "<module>"),  # a class body is not a function
+        ("Lambda", "<module>"),
+        ("m", "m"),
+        ("ListComp", "m"),
+        ("Lambda", "m"),
+        ("f", "f"),
+        ("Lambda", "f"),  # the default
+        ("L", "f"),
+        ("g", "g"),
+        ("GeneratorExp", "g"),
+        ("Lambda", "f"),  # the decorator
+    ]
+    walked = {id(node): function for node, function in walk_with_enclosing_function(tree)}
+    mismatched = [
+        (type(node).__name__, node.lineno, function, walked[id(node)])
+        for scope, _, function in scopes
+        for node in scope_nodes(scope)
+        if hasattr(node, "lineno")
+        and not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and walked[id(node)] != function
+    ]
+    assert mismatched == []
+
+
 @pytest.mark.arch_guard
 def test_orm_references_resolves_names_and_selects_per_scope() -> None:
     tree = ast.parse(_SCOPES_SOURCE)
     references = orm_references("src/x.py", tree)
     calls = {
         getattr(scope, "name", type(scope).__name__): next(n for n in scope_nodes(scope) if isinstance(n, ast.Call))
-        for scope, _ in iter_scopes(tree, query_bindings("src/x.py", tree))
+        for scope, _, _ in iter_scopes(tree, query_bindings("src/x.py", tree))
         if any(isinstance(n, ast.Call) for n in scope_nodes(scope))
     }
     assert references.get(id(calls["m"])) == "User"  # select(User) in the method
@@ -237,7 +330,7 @@ def f(c, cid, p, session):
 @pytest.mark.arch_guard
 def test_fold_name_folds_rebinds_in_source_order_and_marks_what_it_cannot_read() -> None:
     tree = ast.parse(_FOLD_SOURCE)
-    ((scope, view),) = [(s, v) for s, v in iter_scopes(tree, query_bindings("src/x.py", tree)) if s is not tree]
+    ((scope, view),) = [(s, v) for s, v, _ in iter_scopes(tree, query_bindings("src/x.py", tree)) if s is not tree]
     assigned = scope_bindings(scope)
 
     def read(name: str) -> tuple[str, list[str | None], bool] | None:

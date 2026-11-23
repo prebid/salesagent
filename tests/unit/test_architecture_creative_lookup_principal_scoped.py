@@ -45,6 +45,7 @@ from tests.unit._architecture_helpers import (
     assert_violations_match_allowlist,
     call_callee_name,
     fold_name,
+    iter_call_expressions,
     iter_scopes,
     orm_references,
     parse_module,
@@ -53,6 +54,7 @@ from tests.unit._architecture_helpers import (
     scope_bindings,
     scope_nodes,
     select_chain,
+    walk_with_enclosing_function,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -93,11 +95,12 @@ def _model_attr(expr: ast.expr, references: dict[int, str]) -> str | None:
 
 def _creative_query_chains(
     tree: ast.Module, relpath: str, references: dict[int, str]
-) -> list[tuple[ast.Call, list[ast.Call]]]:
-    """Every query on a Creative-family model, once: ``(select call, its filter stages)``.
+) -> list[tuple[ast.Call, list[ast.Call], str]]:
+    """Every query on a Creative-family model, once: ``(select call, its filter stages, function)``.
 
-    Per scope (``iter_scopes``). Accumulator-style queries come first: every name the
-    scope binds by plain assignment alone (``scope_bindings``) is read through the shared
+    Per scope (``iter_scopes``, which also names the function that holds the scope: the one
+    a row is reported under). Accumulator-style queries come first: every name the scope
+    binds by plain assignment alone (``scope_bindings``) is read through the shared
     ``fold_name``, so ``name = select(...)...`` and every later ``name = name.where(...)``
     are graded as ONE query on their FULL filter set (an unscoped accumulator is flagged;
     principal_id pinned in a later statement is credited). For a parameter or a loop
@@ -106,8 +109,8 @@ def _creative_query_chains(
     Chains are walked by ``select_chain``; only the filter stages are kept.
     *references* is ``orm_references(relpath, tree)``.
     """
-    chains: list[tuple[ast.Call, list[ast.Call]]] = []
-    for scope, imports in iter_scopes(tree, query_bindings(relpath, tree)):
+    chains: list[tuple[ast.Call, list[ast.Call], str]] = []
+    for scope, imports, function in iter_scopes(tree, query_bindings(relpath, tree)):
         nodes = list(scope_nodes(scope))
         assigned = scope_bindings(scope)
         # Opaque or not, a fold is graded on the calls it folded: a rebind it cannot read
@@ -124,7 +127,7 @@ def _creative_query_chains(
             if id(select_call) in seen or references.get(id(select_call)) not in _CREATIVE_MODELS:
                 continue
             seen.add(id(select_call))
-            chains.append((select_call, [c for c in calls if call_callee_name(c) in SELECT_FILTER_METHODS]))
+            chains.append((select_call, [c for c in calls if call_callee_name(c) in SELECT_FILTER_METHODS], function))
     return chains
 
 
@@ -159,26 +162,6 @@ def _attrs_compared_in_chain(parts: list[ast.Call], references: dict[int, str]) 
     return names
 
 
-def _enclosing_function_map(tree: ast.Module) -> list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, set[int]]]:
-    """Map each function to the set of line numbers it spans (innermost wins by order)."""
-    funcs = []
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            end = getattr(node, "end_lineno", node.lineno)
-            funcs.append((node, set(range(node.lineno, end + 1))))
-    return funcs
-
-
-def _function_at(funcs: list, lineno: int) -> str:
-    """Name of the innermost function containing *lineno* (module level -> '<module>')."""
-    best: tuple[int, str] | None = None
-    for node, span in funcs:
-        if lineno in span:
-            if best is None or len(span) < best[0]:
-                best = (len(span), node.name)
-    return best[1] if best else "<module>"
-
-
 def find_unscoped_creative_queries(tree: ast.Module, relpath: str) -> list[tuple[int, str]]:
     """Return (lineno, function) per QUERY comparing creative_id without principal_id.
 
@@ -188,27 +171,26 @@ def find_unscoped_creative_queries(tree: ast.Module, relpath: str) -> list[tuple
     hid, later-scoped ones false-flagged).
     """
     references = orm_references(relpath, tree)
-    funcs = _enclosing_function_map(tree)
     violations: list[tuple[int, str]] = []
-    for select_call, filters in _creative_query_chains(tree, relpath, references):
+    for select_call, filters, function in _creative_query_chains(tree, relpath, references):
         compared = _attrs_compared_in_chain(filters, references)
         if "creative_id" in compared and "principal_id" not in compared:
-            violations.append((select_call.lineno, _function_at(funcs, select_call.lineno)))
+            violations.append((select_call.lineno, function))
     return violations
 
 
 def find_admin_calls(tree: ast.Module) -> list[tuple[int, str]]:
-    """Return (lineno, function) for admin_* repository calls (tools scan)."""
-    funcs = _enclosing_function_map(tree)
-    hits: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr in _ADMIN_REPO_METHODS
-        ):
-            hits.append((node.lineno, _function_at(funcs, node.lineno)))
-    return hits
+    """Return (lineno, function) for admin_* repository calls (tools scan).
+
+    A node walk, so the function comes from ``walk_with_enclosing_function``: the name
+    ``iter_scopes`` gives the scope that owns the call.
+    """
+    enclosing = {id(node): function for node, function in walk_with_enclosing_function(tree)}
+    return [
+        (call.lineno, enclosing[id(call)])
+        for call in iter_call_expressions(tree)
+        if isinstance(call.func, ast.Attribute) and call.func.attr in _ADMIN_REPO_METHODS
+    ]
 
 
 def _scanned_files() -> list[Path]:
@@ -444,11 +426,25 @@ class TestDetectorMetaTests:
         assert _flagged(source.replace("    s = s.where(Creative.principal_id == p)\n", "")) == ["f"]
 
     @pytest.mark.arch_guard
+    def test_detector_names_the_function_that_holds_a_nested_scope(self):
+        """A query in a comprehension or a lambda is reported under its enclosing function."""
+        source = (
+            "from src.core.database.models import Creative\n"
+            "def listed(session, ids):\n"
+            "    return [session.scalars(select(Creative).where(Creative.creative_id == i)).first() for i in ids]\n"
+            "def deferred(session, cid):\n"
+            "    return lambda: session.scalars(select(Creative).where(Creative.creative_id == cid)).first()\n"
+        )
+        assert _flagged(source) == ["listed", "deferred"]
+
+    @pytest.mark.arch_guard
     def test_admin_call_detector(self):
         tree = ast.parse(
             "def buyer_path(uow, ids):\n"
             "    return uow.creatives.admin_get_by_ids(ids)\n"
             "def fine(uow, ids, pid):\n"
             "    return uow.creatives.get_by_ids(ids, pid)\n"
+            "def deferred(uow, cid):\n"
+            "    return lambda: uow.creatives.admin_get_by_id(cid)\n"
         )
-        assert [f for _, f in find_admin_calls(tree)] == ["buyer_path"]
+        assert [f for _, f in find_admin_calls(tree)] == ["buyer_path", "deferred"]
