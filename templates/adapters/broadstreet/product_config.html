@@ -65,8 +65,7 @@ Expected context variables:
 
 <script>
 function loadBroadstreetZones() {
-    const scriptRoot = '{{ request.script_root }}' || '';
-    const tenantId = '{{ tenant_id }}';
+    const tenantId = {{ tenant_id|tojson }};
     const statusEl = document.getElementById('zones-loading-status');
     const listEl = document.getElementById('available-zones-list');
 
@@ -79,23 +78,23 @@ function loadBroadstreetZones() {
     .then(response => response.json())
     .then(data => {
         if (data.zones && data.zones.length > 0) {
-            statusEl.innerHTML = '<span style="color: #10b981;">' + data.zones.length + ' zones found</span>';
+            statusEl.innerHTML = '<span style="color: #10b981;">' + escapeHtml(data.zones.length) + ' zones found</span>';
             listEl.style.display = 'block';
-            listEl.innerHTML = '<strong>Available Zones (click to add):</strong><br>' +
-                data.zones.map(zone =>
+            const zonesHtml = data.zones.map(zone =>
                     '<label style="display: block; margin: 0.25rem 0; cursor: pointer;">' +
-                    '<input type="checkbox" value="' + zone.id + '" onchange="toggleZone(this)"' +
+                    '<input type="checkbox" value="' + escapeHtml(zone.id) + '" onchange="toggleZone(this)"' +
                     (isZoneSelected(zone.id) ? ' checked' : '') + '> ' +
-                    zone.name + ' (ID: ' + zone.id + ')' +
+                    escapeHtml(zone.name) + ' (ID: ' + escapeHtml(zone.id) + ')' +
                     '</label>'
                 ).join('');
+            listEl.innerHTML = '<strong>Available Zones (click to add):</strong><br>' + zonesHtml;
         } else {
             statusEl.innerHTML = '<span style="color: #f59e0b;">No zones found</span>';
             listEl.style.display = 'none';
         }
     })
     .catch(error => {
-        statusEl.innerHTML = '<span style="color: #ef4444;">Error: ' + error.message + '</span>';
+        statusEl.innerHTML = '<span style="color: #ef4444;">Error: ' + escapeHtml(error.message) + '</span>';
     });
 }
 

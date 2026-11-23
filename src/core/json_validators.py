@@ -12,6 +12,10 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import validates
 
+from src.core.http_utils import authorized_domain
+from src.core.media_channels import parse_media_channels
+from src.core.operator_errors import InvalidDomainNameError
+
 # Pydantic models for JSON field validation
 
 
@@ -75,6 +79,13 @@ class DeliveryDataModel(BaseModel):
     last_updated: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+def checked_authorized_domain(value: object) -> str:
+    """*value* as an authorized domain (:func:`authorized_domain`), or :class:`InvalidDomainNameError`."""
+    if (domain := authorized_domain(value)) is None:
+        raise InvalidDomainNameError()
+    return domain
+
+
 # SQLAlchemy validator mixins
 
 
@@ -83,8 +94,19 @@ class JSONValidatorMixin:
 
     @validates("authorized_emails", "authorized_domains", "auto_approve_format_ids")
     def validate_json_array_fields(self, key, value):
-        """Validate that these fields are JSON arrays."""
-        return ensure_json_array(value, default=[])
+        """Validate that these fields are JSON arrays, and that an authorized domain is a domain name."""
+        if key != "authorized_domains":
+            return ensure_json_array(value, default=[])
+        try:
+            values = ensure_json_array(value, default=[])
+        except ValueError:
+            raise InvalidDomainNameError() from None
+        return [checked_authorized_domain(domain) for domain in values]
+
+    @validates("channels")
+    def validate_channels(self, key, value):
+        """``Product.channels``: every write goes through the one rule, ``parse_media_channels`` (GH #1532)."""
+        return parse_media_channels(value or ())
 
     @validates("request_data", "response_data", "transaction_details")
     def validate_json_object_fields(self, key, value):

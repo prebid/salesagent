@@ -285,7 +285,7 @@
                     </button>
                 </div>
                 <div class="card-body">
-                    <div id="publishersList">
+                    <div id="publishersList" data-tenant-id="{{ tenant_id }}">
                         <div class="text-center text-muted py-4">
                             <p>Loading publishers...</p>
                         </div>
@@ -428,27 +428,21 @@
 
 {% include 'partials/hierarchical_tree_scripts.html' %}
 
+<script src="{{ url_for('static', filename='js/publisher_partners.js') }}"></script>
 <script>
-const tenantId = '{{ tenant_id }}';
-const scriptRoot = '{{ request.script_root }}';  // Base path for URLs (e.g., '/admin' or '')
+const tenantId = {{ tenant_id|tojson }};
 
 // API URL endpoints - use scriptRoot + hardcoded paths for production /admin prefix compatibility
 // NOTE: Cannot rely on url_for() alone because Flask's SCRIPT_NAME handling in templates
 // doesn't always include the /admin prefix when behind a reverse proxy
 const API_URLS = {
-    profilesList: scriptRoot + '/tenant/{{ tenant_id }}/inventory-profiles/api/list',
-    profileGet: scriptRoot + '/tenant/{{ tenant_id }}/inventory-profiles/{id}/api',
-    profileDelete: scriptRoot + '/tenant/{{ tenant_id }}/inventory-profiles/{id}/delete',
-    inventoryTree: scriptRoot + '/api/tenant/{{ tenant_id }}/inventory/tree',
-    inventorySync: scriptRoot + '/api/tenant/{{ tenant_id }}/inventory/sync',
+    profilesList: scriptRoot + '/tenant/' + {{ tenant_id|tojson }} + '/inventory-profiles/api/list',
+    profileGet: scriptRoot + '/tenant/' + {{ tenant_id|tojson }} + '/inventory-profiles/{id}/api',
+    profileDelete: scriptRoot + '/tenant/' + {{ tenant_id|tojson }} + '/inventory-profiles/{id}/delete',
+    inventoryTree: scriptRoot + '/api/tenant/' + {{ tenant_id|tojson }} + '/inventory/tree',
+    inventorySync: scriptRoot + '/api/tenant/' + {{ tenant_id|tojson }} + '/inventory/sync',
     // GAM sync status uses manual URL construction (dynamic sync_id parameter)
-    gamSyncStatus: scriptRoot + '/tenant/{{ tenant_id }}/gam/sync-status/{id}',
-    // Publisher partners endpoints
-    publishersList: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners',
-    publishersAdd: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners',
-    publishersDelete: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners/{domain}',
-    publishersSync: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners/sync',
-    publisherProperties: scriptRoot + '/tenant/{{ tenant_id }}/publisher-partners/{domain}/properties'
+    gamSyncStatus: scriptRoot + '/tenant/' + {{ tenant_id|tojson }} + '/gam/sync-status/{id}'
 };
 
 let selectedInventory = null;
@@ -612,60 +606,60 @@ function renderProfiles(profiles) {
         return;
     }
 
-    let html = '<div class="row">';
+    let statsHtml = '<div class="row">';
     profiles.forEach(profile => {
-        html += `
+        statsHtml += `
             <div class="col-md-6 mb-4">
                 <div class="card h-100">
                     <div class="card-header bg-light">
                         <div class="d-flex justify-content-between align-items-center">
                             <h5 class="mb-0">
                                 <i class="fas fa-layer-group text-primary"></i>
-                                ${profile.name}
+                                ${escapeHtml(profile.name)}
                             </h5>
                             <span class="badge badge-info">
-                                ${profile.product_count} product${profile.product_count != 1 ? 's' : ''}
+                                ${escapeHtml(profile.product_count)} product${profile.product_count != 1 ? 's' : ''}
                             </span>
                         </div>
                     </div>
                     <div class="card-body">
-                        ${profile.description ? `<p class="text-muted mb-3">${profile.description}</p>` : ''}
+                        ${profile.description ? `<p class="text-muted mb-3">${escapeHtml(profile.description)}</p>` : ''}
 
                         <div class="mb-2">
                             <strong><i class="fas fa-server"></i> Inventory:</strong>
-                            <span class="text-muted">${profile.inventory_summary}</span>
+                            <span class="text-muted">${escapeHtml(profile.inventory_summary)}</span>
                         </div>
 
                         <div class="mb-2">
                             <strong><i class="fas fa-palette"></i> Formats:</strong>
-                            <span class="text-muted">${profile.format_summary}</span>
+                            <span class="text-muted">${escapeHtml(profile.format_summary)}</span>
                         </div>
 
                         <div class="mb-2">
                             <strong><i class="fas fa-globe"></i> Properties:</strong>
-                            <span class="text-muted">${profile.property_summary}</span>
+                            <span class="text-muted">${escapeHtml(profile.property_summary)}</span>
                         </div>
 
                         <div class="text-muted small mt-3">
                             <i class="fas fa-clock"></i>
-                            Created: ${new Date(profile.created_at).toLocaleString()}
+                            Created: ${escapeHtml(new Date(profile.created_at).toLocaleString())}
                         </div>
                     </div>
                     <div class="card-footer bg-white">
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
-                                <button class="btn btn-sm btn-primary" onclick="editProfile(${profile.id})">
+                                <button class="btn btn-sm btn-primary" onclick="editProfile(${jsArg(profile.id)})">
                                     <i class="fas fa-edit"></i> Edit
                                 </button>
                             </div>
                             <div>
                                 ${profile.product_count == 0 ? `
-                                    <button class="btn btn-sm btn-danger" onclick="deleteProfile(${profile.id}, '${profile.name}')">
+                                    <button class="btn btn-sm btn-danger" onclick="deleteProfile(${jsArg(profile.id)}, ${jsArg(profile.name)})">
                                         <i class="fas fa-trash"></i> Delete
                                     </button>
                                 ` : `
                                     <button class="btn btn-sm btn-secondary" disabled
-                                            title="Cannot delete - used by ${profile.product_count} product(s)">
+                                            title="Cannot delete - used by ${escapeHtml(profile.product_count)} product(s)">
                                         <i class="fas fa-lock"></i> In Use
                                     </button>
                                 `}
@@ -676,9 +670,9 @@ function renderProfiles(profiles) {
             </div>
         `;
     });
-    html += '</div>';
+    statsHtml += '</div>';
 
-    container.innerHTML = html;
+    container.innerHTML = statsHtml;
 }
 
 function editProfile(profileId) {
@@ -731,7 +725,7 @@ function deleteProfile(profileId, profileName) {
             if (data.success) {
                 loadProfiles();  // Reload list
             } else {
-                alert('Error: ' + (data.error || 'Failed to delete profile'));
+                alert('Error: ' + adminErrorText(data));
             }
         })
         .catch(error => {
@@ -774,19 +768,19 @@ function loadInventoryStatus() {
                 const lastSync = new Date(data.last_sync);
                 const timeAgo = getTimeAgo(lastSync);
                 syncStatus.innerHTML = `
-                    Last synced: ${lastSync.toLocaleString()}
-                    <span class="text-muted">(${timeAgo})</span>
+                    Last synced: ${escapeHtml(lastSync.toLocaleString())}
+                    <span class="text-muted">(${escapeHtml(timeAgo)})</span>
                 `;
             } else {
                 syncStatus.innerHTML = '<span class="text-warning">Never synced</span>';
             }
 
             stats.innerHTML = `
-                <div><strong>Ad Units:</strong> ${data.total_units || 0}</div>
-                <div><strong>Placements:</strong> ${data.placements || 0}</div>
-                <div><strong>Labels:</strong> ${data.labels || 0}</div>
-                <div><strong>Targeting Keys:</strong> ${data.custom_targeting_keys || 0}</div>
-                <div><strong>Audience Segments:</strong> ${data.audience_segments || 0}</div>
+                <div><strong>Ad Units:</strong> ${escapeHtml(data.total_units || 0)}</div>
+                <div><strong>Placements:</strong> ${escapeHtml(data.placements || 0)}</div>
+                <div><strong>Labels:</strong> ${escapeHtml(data.labels || 0)}</div>
+                <div><strong>Targeting Keys:</strong> ${escapeHtml(data.custom_targeting_keys || 0)}</div>
+                <div><strong>Audience Segments:</strong> ${escapeHtml(data.audience_segments || 0)}</div>
             `;
         },
         onRender: (nodeEl, nodeData) => {
@@ -844,14 +838,12 @@ function syncInventory() {
                 window.location.href = loginUrl;
                 return Promise.reject(new Error('Session expired'));
             }
-            if (response.status === 202 || response.ok) {
-                return response.json();
-            }
-            throw new Error(`Server error: ${response.status}`);
+            // Every answer is JSON: a started sync, or a refusal the next step shows
+            return response.json();
         })
         .then(data => {
             if (data.error) {
-                throw new Error(data.error);
+                throw new Error(adminErrorText(data));
             }
 
             if (data.sync_id && data.status === 'running') {
@@ -890,7 +882,7 @@ function pollInventorySyncStatus(syncId, btn) {
                     alert(`✅ Sync completed!`);
                     window.location.reload();
                 } else if (data.status === 'failed' || data.error) {
-                    throw new Error(data.error || 'Sync failed');
+                    throw new Error(adminErrorText(data));
                 } else {
                     setTimeout(checkStatus, 2000);
                 }
@@ -953,7 +945,7 @@ function performSelectiveSync() {
         })
         .then(data => {
             if (data.error) {
-                throw new Error(data.error);
+                throw new Error(adminErrorText(data));
             }
 
             alert('Selective sync completed!');
@@ -982,30 +974,30 @@ function showInventoryDetail(item, type) {
 
     const detail = document.getElementById('inventoryDetail');
 
-    let html = `
-        <h6>${item.name}</h6>
+    let detailHtml = `
+        <h6>${escapeHtml(item.name)}</h6>
         <table class="table table-sm">
-            <tr><th>ID:</th><td>${item.id}</td></tr>
-            <tr><th>Type:</th><td>${type}</td></tr>
-            <tr><th>Status:</th><td><span class="badge bg-${getStatusColor(item.status)}">${item.status}</span></td></tr>
+            <tr><th>ID:</th><td>${escapeHtml(item.id)}</td></tr>
+            <tr><th>Type:</th><td>${escapeHtml(type)}</td></tr>
+            <tr><th>Status:</th><td><span class="badge bg-${escapeHtml(getStatusColor(item.status))}">${escapeHtml(item.status)}</span></td></tr>
     `;
 
     if (item.path && item.path.length > 0) {
-        html += `<tr><th>Path:</th><td>${item.path.join(' > ')}</td></tr>`;
+        detailHtml += `<tr><th>Path:</th><td>${escapeHtml(item.path.join(' > '))}</td></tr>`;
     }
 
     const sizes = item.sizes || [];
     if (sizes.length > 0) {
-        html += '<tr><th>Sizes:</th><td>';
+        detailHtml += '<tr><th>Sizes:</th><td>';
         sizes.forEach(size => {
-            html += `<span class="badge bg-secondary me-1">${size.width}x${size.height}</span>`;
+            detailHtml += `<span class="badge bg-secondary me-1">${escapeHtml(size.width)}x${escapeHtml(size.height)}</span>`;
         });
-        html += '</td></tr>';
+        detailHtml += '</td></tr>';
     }
 
-    html += '</table>';
+    detailHtml += '</table>';
 
-    detail.innerHTML = html;
+    detail.innerHTML = detailHtml;
 }
 
 function getStatusColor(status) {
@@ -1028,7 +1020,6 @@ function searchInventory() {
     if (status) params.append('status', status);
 
     // Use scriptRoot for proxy deployment support
-    const scriptRoot = '{{ request.script_root }}' || '';
     fetch(scriptRoot + `/api/tenant/${tenantId}/inventory-list?${params.toString()}`, {
         credentials: 'same-origin'
     })
@@ -1043,7 +1034,7 @@ function searchInventory() {
         })
         .then(data => {
             if (data.error) {
-                alert('Search failed: ' + data.error);
+                alert('Search failed: ' + adminErrorText(data));
                 return;
             }
 
@@ -1066,22 +1057,22 @@ function displaySearchResults(results) {
         return;
     }
 
-    let html = '<h6>Search Results</h6><div class="list-group">';
+    let resultsHtml = '<h6>Search Results</h6><div class="list-group">';
     results.forEach(item => {
-        html += `
+        resultsHtml += `
             <div class="list-group-item">
                 <div class="d-flex w-100 justify-content-between">
-                    <h6 class="mb-1">${item.name}</h6>
-                    <small><span class="badge bg-${getStatusColor(item.status)}">${item.status}</span></small>
+                    <h6 class="mb-1">${escapeHtml(item.name)}</h6>
+                    <small><span class="badge bg-${escapeHtml(getStatusColor(item.status))}">${escapeHtml(item.status)}</span></small>
                 </div>
-                <p class="mb-1"><small class="text-muted">${item.type} - ID: ${item.id}</small></p>
-                ${item.path ? `<small class="text-muted">${item.path.join(' > ')}</small>` : ''}
+                <p class="mb-1"><small class="text-muted">${escapeHtml(item.type)} - ID: ${escapeHtml(item.id)}</small></p>
+                ${item.path ? `<small class="text-muted">${escapeHtml(item.path.join(' > '))}</small>` : ''}
             </div>
         `;
     });
-    html += '</div>';
+    resultsHtml += '</div>';
 
-    detailDiv.innerHTML = html;
+    detailDiv.innerHTML = resultsHtml;
 }
 
 function toggleSelectAll() {
@@ -1124,13 +1115,9 @@ function updateSelectionDisplay() {
         summary.style.display = 'block';
         createBtn.disabled = false;
 
-        adUnitsDiv.innerHTML = `<strong>Ad Units (${selectedAdUnitsMap.size}):</strong> ${
-            Array.from(selectedAdUnitsMap.values()).map(u => u.name).join(', ') || 'None'
-        }`;
+        adUnitsDiv.innerHTML = `<strong>Ad Units (${escapeHtml(selectedAdUnitsMap.size)}):</strong> ${escapeHtml(Array.from(selectedAdUnitsMap.values()).map(u => u.name).join(', ') || 'None')}`;
 
-        placementsDiv.innerHTML = `<strong>Placements (${selectedPlacementsMap.size}):</strong> ${
-            Array.from(selectedPlacementsMap.values()).map(p => p.name).join(', ') || 'None'
-        }`;
+        placementsDiv.innerHTML = `<strong>Placements (${escapeHtml(selectedPlacementsMap.size)}):</strong> ${escapeHtml(Array.from(selectedPlacementsMap.values()).map(p => p.name).join(', ') || 'None')}`;
     } else {
         summary.style.display = 'none';
         createBtn.disabled = true;
@@ -1149,259 +1136,7 @@ function createProfileFromSelection() {
 }
 
 // Format selection functions are now handled by the inventory_profile_editor.html component
-
-// ========================================
-// Publishers & Properties Tab Functions
-// ========================================
-
-async function loadPublishers() {
-    // Check if publishers elements exist
-    const publishersList = document.getElementById('publishersList');
-    if (!publishersList) return;
-
-    try {
-        const response = await fetch(API_URLS.publishersList, {
-            credentials: 'same-origin'
-        });
-
-        if (!response.ok) throw new Error('Failed to load publishers');
-
-        const data = await response.json();
-
-        // Update stats (only if elements exist)
-        const totalEl = document.getElementById('totalPublishers');
-        const verifiedEl = document.getElementById('verifiedPublishers');
-        const pendingEl = document.getElementById('pendingPublishers');
-
-        if (totalEl) totalEl.textContent = data.total || 0;
-        if (verifiedEl) verifiedEl.textContent = data.authorizing || 0;
-        if (pendingEl) pendingEl.textContent = data.never_fetched || 0;
-
-        // Render publishers list
-        renderPublishers(data.partners || []);
-    } catch (error) {
-        console.error('Error loading publishers:', error);
-        if (publishersList) {
-            publishersList.innerHTML = `
-                <div class="alert alert-danger">
-                    Error loading publishers: ${error.message}
-                </div>
-            `;
-        }
-    }
-}
-
-function renderPublishers(publishers) {
-    const container = document.getElementById('publishersList');
-    if (!container) return;
-
-    if (publishers.length === 0) {
-        container.innerHTML = `
-            <div class="text-center text-muted py-4">
-                <i class="fas fa-globe fa-3x mb-3"></i>
-                <p>No publishers added yet.</p>
-                <p class="small">Click "Add Publisher" to start discovering properties.</p>
-            </div>
-        `;
-        return;
-    }
-
-    let html = '<div class="list-group">';
-
-    publishers.forEach(pub => {
-        // Authorization is read from the stored adagents.json: fresh, with a property in effect.
-        const statusIcon = pub.authorizes ? '<i class="fas fa-check-circle text-success"></i>' :
-            pub.fetch_status === 'never_fetched' ? '<i class="fas fa-clock text-muted"></i>' :
-            pub.fetch_status === 'ok' ? '<i class="fas fa-times-circle text-warning"></i>' :
-            '<i class="fas fa-exclamation-circle text-danger"></i>';
-
-        const statusText = pub.authorizes ? 'Authorizes this agent' :
-            pub.fetch_status === 'never_fetched' ? 'Not fetched yet' :
-            pub.fetch_status === 'ok' ? 'Not authorized' : 'Fetch failed';
-
-        html += `
-            <div class="list-group-item">
-                <div class="d-flex justify-content-between align-items-start">
-                    <div class="flex-grow-1">
-                        <div class="d-flex align-items-center mb-2">
-                            ${statusIcon}
-                            <h6 class="mb-0 ms-2">${pub.display_name || pub.publisher_domain}</h6>
-                            <span class="badge bg-${pub.authorizes ? 'success' : 'secondary'} ms-2">${statusText}</span>
-                        </div>
-                        <div class="small text-muted">
-                            <div><strong>Domain:</strong> ${pub.publisher_domain}</div>
-                            ${pub.property_count > 0 ? `<div><strong>Properties:</strong> ${pub.property_count} authorized</div>` : ''}
-                            ${pub.format_option_count > 0 ? `<div><strong>Format options:</strong> ${pub.format_option_count}</div>` : ''}
-                            ${pub.fetched_at ? `<div><strong>Last fetched:</strong> ${new Date(pub.fetched_at).toLocaleString()}</div>` : ''}
-                            ${pub.fetch_status !== 'ok' && pub.fetch_error ? `<div class="text-danger"><strong>Last fetch failed:</strong> ${pub.fetch_error}</div>` : ''}
-                        </div>
-                    </div>
-                    <div class="btn-group btn-group-sm">
-                        ${pub.authorizes ? `
-                            <button class="btn btn-outline-primary" onclick="viewPublisherProperties('${pub.publisher_domain}')" title="View Properties">
-                                <i class="fas fa-list"></i>
-                            </button>
-                        ` : ''}
-                        <button class="btn btn-outline-danger" onclick="deletePublisher('${pub.publisher_domain}')" title="Delete">
-                            <i class="fas fa-trash"></i>
-                        </button>
-                    </div>
-                </div>
-            </div>
-        `;
-    });
-
-    html += '</div>';
-
-    // Add sync all button at the end
-    html += `
-        <div class="mt-3 text-center">
-            <button class="btn btn-primary" onclick="syncAllPublishers()">
-                <i class="fas fa-sync"></i> Sync All Publishers
-            </button>
-        </div>
-    `;
-
-    container.innerHTML = html;
-}
-
-async function addPublisher() {
-    const domain = prompt('Enter publisher domain (e.g., nytimes.com):');
-    if (!domain) return;
-
-    try {
-        const response = await fetch(API_URLS.publishersAdd, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            credentials: 'same-origin',
-            body: JSON.stringify({
-                publisher_domain: domain.trim(),
-                display_name: domain.trim()
-            })
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to add publisher');
-        }
-
-        alert('Publisher added successfully');
-        loadPublishers();
-    } catch (error) {
-        alert('Error adding publisher: ' + error.message);
-    }
-}
-
-async function deletePublisher(domain) {
-    if (!confirm(`Delete publisher ${domain}?`)) return;
-
-    try {
-        const url = API_URLS.publishersDelete.replace('{domain}', encodeURIComponent(domain));
-        const response = await fetch(url, {
-            method: 'DELETE',
-            credentials: 'same-origin'
-        });
-
-        if (!response.ok) throw new Error('Failed to delete publisher');
-
-        loadPublishers();
-    } catch (error) {
-        alert('Error deleting publisher: ' + error.message);
-    }
-}
-
-async function syncAllPublishers() {
-    const btn = event.target.closest('button');
-    const originalText = btn.innerHTML;
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Syncing...';
-
-    try {
-        const response = await fetch(API_URLS.publishersSync, {
-            method: 'POST',
-            credentials: 'same-origin'
-        });
-
-        if (!response.ok) throw new Error('Sync failed');
-
-        const data = await response.json();
-        alert(`Sync completed!\nFetched: ${data.ok}\nFailed: ${data.errors}`);
-        loadPublishers();
-    } catch (error) {
-        alert('Error syncing publishers: ' + error.message);
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = originalText;
-    }
-}
-
-async function viewPublisherProperties(domain) {
-    const modal = document.createElement('div');
-    modal.className = 'modal fade';
-    modal.id = 'publisherPropertiesModal';
-    modal.innerHTML = `
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">Properties for ${domain}</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body" id="propertiesContent">
-                    <div class="text-center"><i class="fas fa-spinner fa-spin fa-2x"></i></div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                </div>
-            </div>
-        </div>
-    `;
-
-    document.body.appendChild(modal);
-    const bsModal = new bootstrap.Modal(modal);
-    bsModal.show();
-
-    modal.addEventListener('hidden.bs.modal', () => modal.remove());
-
-    try {
-        const url = API_URLS.publisherProperties.replace('{domain}', encodeURIComponent(domain));
-        const response = await fetch(url, { credentials: 'same-origin' });
-
-        if (!response.ok) throw new Error('Failed to load properties');
-
-        const data = await response.json();
-
-        let html = '';
-
-        if (data.error) {
-            html = `<div class="alert alert-danger">${data.error}</div>`;
-        } else if (!data.is_authorized) {
-            html = `<div class="alert alert-warning">Not authorized for this publisher.</div>`;
-        } else {
-            html = `
-                <div class="alert alert-success">
-                    <i class="fas fa-check-circle"></i> Authorized for this publisher
-                </div>
-
-                <h6>Property IDs (${data.property_ids.length})</h6>
-                <ul class="list-unstyled">
-                    ${data.property_ids.map(id => `<li><code>${id}</code></li>`).join('')}
-                </ul>
-
-                <h6 class="mt-3">Property Tags (${data.property_tags.length})</h6>
-                <div class="d-flex flex-wrap gap-2">
-                    ${data.property_tags.map(tag => `<span class="badge bg-primary">${tag}</span>`).join('')}
-                </div>
-            `;
-        }
-
-        document.getElementById('propertiesContent').innerHTML = html;
-    } catch (error) {
-        document.getElementById('propertiesContent').innerHTML = `
-            <div class="alert alert-danger">Error: ${error.message}</div>
-        `;
-    }
-}
-
+// The Publishers tab's functions are static/js/publisher_partners.js, shared with the settings page.
 </script>
 
 {% endblock %}

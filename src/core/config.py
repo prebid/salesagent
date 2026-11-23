@@ -43,7 +43,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _ENV = SettingsConfigDict(env_prefix="", case_sensitive=False, extra="ignore", env_ignore_empty=True)
 
 
-def _csv(value: str | None) -> list[str]:
+def split_csv(value: str | None) -> list[str]:
+    """The non-empty, stripped items of a comma-separated *value*."""
     return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
@@ -102,7 +103,7 @@ class RuntimeSettings(BaseSettings):
 
     @property
     def allowed_origin_list(self) -> list[str]:
-        return _csv(self.allowed_origins)
+        return split_csv(self.allowed_origins)
 
     @property
     def admin_domain_or_derived(self) -> str | None:
@@ -247,6 +248,20 @@ class AuthSettings(BaseSettings):
     google_application_credentials: str | None = None
     google_application_credentials_json: str | None = None
 
+    @field_validator("super_admin_domains", "tenant_management_domains")
+    @classmethod
+    def _domain_lists_hold_domain_names(cls, v: str | None, info: ValidationInfo) -> str | None:
+        """Start-up fails naming the variable: these lists become tenants' authorized domains."""
+        # Imported here: http_utils reaches src.core.operator_errors, which imports this module.
+        from src.core.http_utils import authorized_domain
+
+        if any(authorized_domain(domain) is None for domain in split_csv(v)):
+            raise ValueError(
+                f"{(info.field_name or '').upper()} holds a value that is not a domain name; "
+                "enter internationalized names in their xn-- form"
+            )
+        return v
+
     @field_validator("gam_oauth_client_id")
     @classmethod
     def _gam_client_id_shape(cls, v: str) -> str:
@@ -263,11 +278,11 @@ class AuthSettings(BaseSettings):
 
     @property
     def super_admin_email_list(self) -> list[str]:
-        return [e.lower() for e in _csv(self.super_admin_emails)]
+        return [e.lower() for e in split_csv(self.super_admin_emails)]
 
     @property
     def super_admin_domain_list(self) -> list[str]:
-        return [d.lower() for d in _csv(self.super_admin_domains)]
+        return [d.lower() for d in split_csv(self.super_admin_domains)]
 
     @property
     def gam_oauth_configured(self) -> bool:

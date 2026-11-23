@@ -85,7 +85,7 @@ class TestGetConfig:
         tenant = TenantFactory()
         # No auth session populated.
         response = client.get(f"/auth/oidc/tenant/{tenant.tenant_id}/config")
-        # api_mode=True route returns 401 when unauthenticated.
+        # A caller that does not ask for a page gets a 401, not the login redirect.
         assert response.status_code == 401
 
 

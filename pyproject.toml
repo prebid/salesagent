@@ -45,8 +45,6 @@ dependencies = [
     "jinja2>=3.1.0",
     "prometheus-client>=0.23.1",
     "types-pytz>=2025.2.0.20250809",
-    "markdown>=3.4.0",
-    "types-Markdown>=3.4.2.10",
     "freezegun>=1.5.5",
     "babel>=2.17.0",
     "logfire>=5.4.0",  # 5.x pulls opentelemetry-api>=1.45.1, which fixes the advisories against 1.39.1
@@ -127,7 +125,6 @@ dev = [
     "pytest-json-report>=1.5.0",
     "pytest-bdd>=7.0.0",
     "pytest-xdist>=3.5.0",  # bdd suite runs `pytest -n auto --dist loadfile`
-    "semgrep>=1.50.0",
     "pylint>=4.0.9",  # GHSA-22qq-2fwx-7p67
     # Security patches for transitive dev dependencies
     "black>=26.10.1",  # GHSA-cg8m-r9f2-5wm2; earlier GHSA-3936-cmfr-pm3m

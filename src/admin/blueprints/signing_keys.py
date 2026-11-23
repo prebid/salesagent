@@ -30,6 +30,7 @@ from flask.typing import ResponseReturnValue
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import require_tenant_access
 from src.core.config import get_settings
+from src.core.database.models import UserRole
 from src.core.database.repositories.uow import SigningKeyUoW
 from src.core.exceptions import AdCPConfigurationError
 
@@ -37,6 +38,7 @@ from src.core.exceptions import AdCPConfigurationError
 # value-set leaf and the provisioning functions are named where they are defined.
 from src.core.signing.algorithms import SIGNING_ALG_VALUES
 from src.core.signing.keys import provision_signing_key, revoke_signing_key
+from src.core.signing.posture import signing_key_backed
 
 logger = logging.getLogger(__name__)
 
@@ -52,24 +54,31 @@ def list_signing_keys(tenant_id: str) -> ResponseReturnValue:
     a rotation: ``publishable_at`` is what a counterparty fetching
     ``/.well-known/jwks.json`` sees (window-blind, revoked keys linger for the
     grace period), ``active_at`` is the single key this agent signs with now.
+
+    The active key's badge comes from ``signing_key_backed`` — the derivation the
+    signer and the setup checklist read — so a key in its active window that this
+    deployment cannot sign with is shown as not signing, with the advice for its
+    cause that the checklist shows too (#2288). The template is handed the whole
+    ``KeyBacking`` and branches on its ``signs``, never on the fields ``signs`` is
+    derived from, so the badge cannot drift from the signer and the checklist.
     """
     now = datetime.now(UTC)
     with SigningKeyUoW(tenant_id) as uow:
         assert uow.signing_keys is not None
         published = uow.signing_keys.publishable_at(now=now, grace_seconds=get_settings().signing.grace_seconds)
-        active = uow.signing_keys.active_at(now=now)
+        backing = signing_key_backed(uow.signing_keys, now=now)
         # Rendered inside the session context to avoid DetachedInstanceError.
         return render_template(
             "signing_keys_list.html",
             tenant_id=tenant_id,
             keys=published,
-            active_kid=active.kid if active else None,
+            key_backing=backing,
             algorithms=SIGNING_ALG_VALUES,
         )
 
 
 @signing_keys_bp.route("/create", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 @log_admin_action("provision_signing_key")
 def create_signing_key(tenant_id: str) -> ResponseReturnValue:
     """Provision a signing key for the tenant.
@@ -84,14 +93,14 @@ def create_signing_key(tenant_id: str) -> ResponseReturnValue:
             assert uow.signing_keys is not None
             kid = provision_signing_key(uow.signing_keys, tenant_id=tenant_id, alg=alg)
     except AdCPConfigurationError as exc:
-        # ``str(exc)`` is CODE_TABLE's sentence for CONFIGURATION_ERROR, and that
+        # ``exc.message`` is CODE_TABLE's sentence for CONFIGURATION_ERROR, and that
         # sentence names no knob. The operator-actionable part — which setting to
         # change, e.g. key_passphrase_env — travels in ConfigurationDetails.tracked_by,
         # so it is read off the typed details rather than hoped for in the text: a
         # generic "could not provision" leaves the operator with nothing to act on.
         tracked_by = exc.details.tracked_by if exc.details is not None else None
         flash(
-            f"Could not provision a signing key: {exc}" + (f" {tracked_by}" if tracked_by else ""),
+            f"Could not provision a signing key: {exc.message}" + (f" {tracked_by}" if tracked_by else ""),
             "error",
         )
         return redirect(url_for("signing_keys.list_signing_keys", tenant_id=tenant_id))
@@ -105,7 +114,7 @@ def create_signing_key(tenant_id: str) -> ResponseReturnValue:
 
 
 @signing_keys_bp.route("/<kid>/revoke", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 @log_admin_action("revoke_signing_key")
 def revoke_signing_key_route(tenant_id: str, kid: str) -> ResponseReturnValue:
     """Revoke a signing key through the layer's one revocation operation.

@@ -31,14 +31,16 @@ def scripted_llm_origin() -> str:
     return os.environ.get("SCRIPTED_LLM_ORIGIN", "http://scripted-llm:8080")
 
 
-def install_script(api_key: str, **entries: dict) -> None:
+def install_script(api_key: str, *, origin: str | None = None, **entries: dict) -> None:
     """Script the answers the origin gives a call carrying ``api_key``, one entry per question.
 
-    ``entries`` is ``ranking=``, ``policy=`` and/or ``naming=``, each an entry as the service module
-    documents it. Raises when the origin does not accept the script: a script that silently
-    failed to install would surface as a catalog-order mismatch, blaming production.
+    ``entries`` is ``ranking=``, ``policy=``, ``naming=`` and/or ``connection_test=``, each an
+    entry as the service module documents it. *origin* is the origin to script, the compose
+    service (:func:`scripted_llm_origin`) by default. Raises when the origin does not accept the
+    script: a script that silently failed to install would surface as a catalog-order
+    mismatch, blaming production.
     """
-    url = f"{scripted_llm_origin()}{SCRIPT_CONTROL_PREFIX}{api_key}"
+    url = f"{origin or scripted_llm_origin()}{SCRIPT_CONTROL_PREFIX}{api_key}"
     try:
         response = httpx.put(url, json=entries, timeout=_CONTROL_TIMEOUT_SECONDS)
     except httpx.HTTPError as exc:

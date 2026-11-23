@@ -1,4 +1,4 @@
-"""The admin format routes refuse a ``tenant_id`` that names no tenant with 404 (salesagent-ol033.30).
+"""The admin format routes check access to, and existence of, the ``tenant_id`` they are given.
 
 ``/api/formats/search`` and ``/api/formats/list`` take the tenant from a query parameter
 and hand it to the creative agent registry, which reads that tenant's
@@ -56,3 +56,47 @@ def test_a_known_tenant_gets_its_catalog(admin_client, tenant, route, empty_cata
 
     assert response.status_code == 200, response.get_data(as_text=True)
     assert response.get_json() == empty_catalog
+
+
+_AGENTS = "/api/formats/agents?tenant_id={tenant_id}"
+
+
+@pytest.mark.parametrize("route", [_SEARCH, _LIST, _AGENTS], ids=["search", "list", "agents"])
+def test_a_user_of_another_tenant_is_refused_with_403(admin_client, tenant, route):
+    """The tenant comes from the query, so the route checks access itself: no catalog, no fetch."""
+    from src.core.database.models import UserRole
+    from tests.factories import UserFactory
+    from tests.helpers.admin_session import tenant_user_session
+
+    outsider = UserFactory(tenant=TenantFactory(), role=UserRole.ADMIN)
+    tenant_user_session(admin_client, outsider.email)
+
+    response = admin_client.get(route.format(tenant_id=_TENANT_ID) + "&force_refresh=true")
+
+    assert (response.status_code, response.get_json()) == (403, {"success": False, "error": "Access denied"})
+
+
+@pytest.mark.parametrize("route", [_SEARCH, _LIST, _AGENTS], ids=["search", "list", "agents"])
+def test_a_signed_in_account_with_no_tenant_is_refused_with_403(admin_client, tenant, route):
+    """Completing the deployment's sign-in grants no tenant: require_auth alone must not open these."""
+    from tests.helpers.admin_session import tenant_user_session
+
+    tenant_user_session(admin_client, "nobody@unaffiliated.test")
+
+    response = admin_client.get(route.format(tenant_id=_TENANT_ID))
+
+    assert (response.status_code, response.get_json()) == (403, {"success": False, "error": "Access denied"})
+
+
+def test_a_member_of_the_tenant_lists_its_creative_agents(admin_client, tenant):
+    """The control for the refusals above: a viewer of the tenant gets past the check."""
+    from src.core.database.models import UserRole
+    from tests.factories import UserFactory
+    from tests.helpers.admin_session import tenant_user_session
+
+    member = UserFactory(tenant=tenant, role=UserRole.VIEWER)
+    tenant_user_session(admin_client, member.email)
+
+    response = admin_client.get(_AGENTS.format(tenant_id=_TENANT_ID))
+
+    assert response.status_code == 200, response.get_data(as_text=True)

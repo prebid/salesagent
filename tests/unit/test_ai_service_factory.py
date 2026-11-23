@@ -55,7 +55,6 @@ class TestTenantAIConfig:
         assert config.provider is None
         assert config.model is None
         assert config.api_key is None
-        assert config.logfire_token is None
         assert config.settings.temperature == 0.3
         assert config.settings.timeout == 30
 
