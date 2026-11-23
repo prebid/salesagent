@@ -9,7 +9,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import validates
 
 from src.core.http_utils import authorized_domain
@@ -60,20 +60,36 @@ class TargetingTemplateModel(BaseModel):
 class PolicySettingsModel(BaseModel):
     """Model for tenant.policy_settings: the advertising policy the Policy page saves.
 
-    The fields are the ones ``policy.update`` writes and the Policy page and policy agent
-    read. Undeclared keys are kept: the validator used to drop them, so every list the
-    page saved was discarded while the save reported success.
+    The one owner of the column's shape. The fields are the ones ``policy.update`` writes
+    and the Policy page and policy agent read; the defaults are the baseline a tenant has
+    for a key it never saved. A stored row holds only what was written, and the Policy page
+    reads it back through this model. Undeclared keys are dropped.
     """
 
-    model_config = ConfigDict(extra="allow")
-
-    enabled: bool = False
+    enabled: bool = True
     require_manual_review: bool = False
     prohibited_advertisers: list[str] = Field(default_factory=list)
     prohibited_categories: list[str] = Field(default_factory=list)
     prohibited_tactics: list[str] = Field(default_factory=list)
-    default_prohibited_categories: list[str] = Field(default_factory=list)
-    default_prohibited_tactics: list[str] = Field(default_factory=list)
+    default_prohibited_categories: list[str] = Field(
+        default_factory=lambda: [
+            "illegal_content",
+            "hate_speech",
+            "violence",
+            "adult_content",
+            "misleading_health_claims",
+            "financial_scams",
+        ]
+    )
+    default_prohibited_tactics: list[str] = Field(
+        default_factory=lambda: [
+            "targeting_children_under_13",
+            "discriminatory_targeting",
+            "deceptive_claims",
+            "impersonation",
+            "privacy_violations",
+        ]
+    )
 
 
 class DeliveryDataModel(BaseModel):
@@ -207,8 +223,6 @@ class JSONValidatorMixin:
             raise ValueError(f"{key} must be a dictionary")
 
         # Validate using Pydantic
-        # Only what was written is stored: a default added here would replace the
-        # defaults the Policy page applies to a key the tenant never saved.
         validated = PolicySettingsModel(**value)
         return validated.model_dump(mode="json", exclude_unset=True)
 
