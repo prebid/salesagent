@@ -93,15 +93,22 @@ def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE
     return task_type
 
 
-def sanitize_webhook_url_for_log(url: str | None) -> str | None:
-    """Return ``scheme://host/path`` for logs — never credentials or query.
+def url_for_record(url: str | None, *, keep_path: bool) -> str | None:
+    """The part of *url* that may go into a log line or a stored record, or None if unreadable.
 
-    Returns ``None`` rather than raising on a URL ``urlparse`` cannot read (an
-    unterminated IPv6 bracket raises ``ValueError``). :func:`webhook_url_for_log`
-    documents itself as TOTAL, and a stored row written before the ingest gate
-    can still carry such a URL — so a caller rendering one for a log line, or
-    inside a ``__repr__``, must get the placeholder rather than an exception
-    thrown from a debugger frame or a pytest diff.
+    The one answer to that question, for every caller. Never userinfo, port, query or
+    fragment: each can carry a credential or nothing an operator needs. The path is the
+    one choice, made here:
+
+    * ``keep_path=True`` -- operator logs (:func:`webhook_url_for_log`). An operator needs
+      the path to act on a refusal or a failed delivery.
+    * ``keep_path=False`` -- records every tenant user can read (admin audit rows). Webhook
+      services such as Slack and Discord put the posting credential in the path, so it is
+      replaced by ``/...`` when there was one.
+
+    Returns ``None`` rather than raising on a URL ``urlparse`` cannot read (an unterminated
+    IPv6 bracket raises ``ValueError``), or one with no scheme or host. An IPv6 host keeps its
+    brackets. The result goes through ``log_safe``, so a path cannot forge a second log line.
     """
     if not url:
         return None
@@ -109,11 +116,19 @@ def sanitize_webhook_url_for_log(url: str | None) -> str | None:
         parsed = urlparse(str(url))
     except ValueError:
         return None
-    if parsed.scheme and parsed.hostname:
-        # The PATH is carried through verbatim, so a buyer-supplied path would
-        # otherwise forge a second log line at every caller.
-        return log_safe(f"{parsed.scheme}://{parsed.hostname}{parsed.path or ''}")
-    return None
+    if not (parsed.scheme and parsed.hostname):
+        return None
+    host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+    if keep_path:
+        rest = parsed.path or ""
+    else:
+        rest = "/..." if parsed.path not in ("", "/") or parsed.query or parsed.fragment else ""
+    return log_safe(f"{parsed.scheme.lower()}://{host}{rest}")
+
+
+def sanitize_webhook_url_for_log(url: str | None) -> str | None:
+    """Return ``scheme://host/path`` for logs -- never credentials or query (:func:`url_for_record`)."""
+    return url_for_record(url, keep_path=True)
 
 
 def webhook_url_for_log(url: str | None) -> str:

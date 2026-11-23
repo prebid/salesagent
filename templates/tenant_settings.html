@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "components/secret_input.html" import secret_input %}
 
 {% block title %}{{ tenant.name }} - Settings{% endblock %}
 
@@ -2240,21 +2241,13 @@ Exclude any products that don't match the brand's tone.</pre>
                 </details>
 
                 <form method="POST" action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/settings/slack">
-                    <div class="form-group">
-                        <label for="slack_webhook_url">Task Notifications Webhook URL</label>
-                        <input type="url" id="slack_webhook_url" name="slack_webhook_url"
-                               value="{{ tenant.slack_webhook_url or '' }}"
-                               placeholder="https://hooks.slack.com/services/YOUR/WEBHOOK/URL">
-                        <small>Receives notifications for new tasks and creative approvals</small>
-                    </div>
+                    {{ secret_input("slack_webhook_url", "Task Notifications Webhook URL", tenant.slack_webhook_url,
+                                    input_type="url", placeholder="https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
+                                    help="Receives notifications for new tasks and creative approvals") }}
 
-                    <div class="form-group">
-                        <label for="slack_audit_webhook_url">Audit Log Webhook URL (Optional)</label>
-                        <input type="url" id="slack_audit_webhook_url" name="slack_audit_webhook_url"
-                               value="{{ tenant.slack_audit_webhook_url or '' }}"
-                               placeholder="https://hooks.slack.com/services/YOUR/AUDIT/WEBHOOK">
-                        <small>Separate channel for audit logs and security alerts</small>
-                    </div>
+                    {{ secret_input("slack_audit_webhook_url", "Audit Log Webhook URL (Optional)", tenant.slack_audit_webhook_url,
+                                    input_type="url", placeholder="https://hooks.slack.com/services/YOUR/AUDIT/WEBHOOK",
+                                    help="Separate channel for audit logs and security alerts") }}
 
                     <div class="button-group">
                         <button type="submit" class="btn btn-primary">Save Slack Settings</button>

@@ -34,6 +34,7 @@ from src.core.domain_config import (
     get_sales_agent_url,
     get_super_admin_domain,
 )
+from src.core.logging_config import log_safe
 from src.core.operator_errors import safe_error_message
 from src.core.security.outbound_http import OutboundError
 from src.services.google_oauth_client import exchange_authorization_code
@@ -472,7 +473,8 @@ def _back_to_login(message: str, tenant_context: str | None) -> Response:
 @auth_bp.route("/auth/google/callback")
 def google_callback():
     """Handle Google OAuth callback - simplified version."""
-    logger.debug("google_callback hit, args=%s", dict(request.args))
+    # Argument names only: the values include the authorization code and state.
+    logger.debug("google_callback hit, args=%s", sorted(request.args))
 
     oauth = current_app.oauth if hasattr(current_app, "oauth") else None
     if not oauth:
@@ -785,8 +787,14 @@ def gam_callback():
     error = request.args.get("error")
 
     # Log all callback parameters for debugging
-    logger.info(f"GAM OAuth callback received - code present: {bool(code)}, state: {state}, error: {error}")
-    logger.debug(f"GAM OAuth callback full args: {dict(request.args)}")
+    # Never the code or state values: the code is a credential until redeemed.
+    logger.info(
+        "GAM OAuth callback received - code present: %s, state present: %s, error: %s",
+        bool(code),
+        bool(state),
+        log_safe(error),
+    )
+    logger.debug("GAM OAuth callback arg names: %s", sorted(request.args))
 
     # The flow's context lives only in the session that started it. Popped
     # first so a nonce is consumed whatever the outcome of this callback.

@@ -126,21 +126,14 @@ function formatJSON() {
 }
 
 // Test Slack
+// The route tests the SAVED webhook (the page never holds it), so nothing is sent.
 function testSlack() {
-    const webhookUrl = document.getElementById('slack_webhook_url').value;
-    if (!webhookUrl) {
-        alert('Please enter a webhook URL first');
-        return;
-    }
-
     fetch(`${scriptRoot}/tenant/${config.tenantId}/test_slack`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-            webhook_url: webhookUrl
-        })
+        body: JSON.stringify({})
     })
     .then(response => response.json())
     .then(data => {

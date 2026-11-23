@@ -104,7 +104,7 @@ def mock_config(tenant_id, product_id, **kwargs):
 
 
 @adapters_bp.route("/api/tenant/<tenant_id>/adapter-config", methods=["POST"])
-@log_admin_action("update_adapter_config")
+@log_admin_action("update_adapter_config", audit_fields=("adapter_type",))
 @require_tenant_access(role=UserRole.ADMIN)
 def save_adapter_config(tenant_id, **kwargs):
     """Save adapter connection configuration.
