@@ -136,7 +136,7 @@
 
 <script>
 let currentOrders = [];
-const tenantId = '{{ tenant_id }}';
+const tenantId = {{ tenant_id|tojson }};
 
 // Load orders on page load
 document.addEventListener('DOMContentLoaded', function() {
@@ -156,7 +156,7 @@ function searchLineItem() {
     }
 
     // Open the line item viewer in a new tab
-    window.open(`{{ request.script_root }}/tenant/${tenantId}/gam/line-item/${lineItemId}`, '_blank');
+    window.open(`${scriptRoot}/tenant/${tenantId}/gam/line-item/${lineItemId}`, '_blank');
 }
 
 function loadOrders() {
@@ -165,7 +165,7 @@ function loadOrders() {
     const advertiserId = document.getElementById('advertiserFilter').value;
     const hasLineItems = document.getElementById('lineItemsFilter').value;
 
-    let url = `{{ request.script_root }}/api/tenant/${tenantId}/orders?`;
+    let url = `${scriptRoot}/api/tenant/${tenantId}/orders?`;
     if (searchTerm) url += `search=${encodeURIComponent(searchTerm)}&`;
     if (status) url += `status=${encodeURIComponent(status)}&`;
     if (advertiserId) url += `advertiser_id=${encodeURIComponent(advertiserId)}&`;
@@ -200,35 +200,35 @@ function displayOrders(orders) {
         const deliveryPercentage = deliveryMetrics.delivery_percentage || 0;
         const hasLineItems = order.line_item_count > 0;
 
-        let progressBar = '';
+        let progressBarHtml = '';
         if (hasLineItems && deliveryMetrics.total_impressions_goal > 0) {
-            progressBar = `
+            progressBarHtml = `
                 <div class="progress" style="height: 20px;">
-                    <div class="progress-bar" role="progressbar" style="width: ${Math.min(deliveryPercentage, 100)}%"
-                         aria-valuenow="${deliveryPercentage}" aria-valuemin="0" aria-valuemax="100">
-                        ${deliveryPercentage.toFixed(1)}%
+                    <div class="progress-bar" role="progressbar" style="width: ${escapeHtml(Math.min(deliveryPercentage, 100))}%"
+                         aria-valuenow="${escapeHtml(deliveryPercentage)}" aria-valuemin="0" aria-valuemax="100">
+                        ${escapeHtml(deliveryPercentage.toFixed(1))}%
                     </div>
                 </div>
-                <small class="text-muted">${formatNumber(deliveryMetrics.total_impressions_delivered)} / ${formatNumber(deliveryMetrics.total_impressions_goal)}</small>
+                <small class="text-muted">${escapeHtml(formatNumber(deliveryMetrics.total_impressions_delivered))} / ${escapeHtml(formatNumber(deliveryMetrics.total_impressions_goal))}</small>
             `;
         } else if (!hasLineItems) {
-            progressBar = '<span class="text-muted">No line items</span>';
+            progressBarHtml = '<span class="text-muted">No line items</span>';
         } else {
-            progressBar = `<span class="text-muted">${order.line_item_count} line item${order.line_item_count > 1 ? 's' : ''}</span>`;
+            progressBarHtml = `<span class="text-muted">${escapeHtml(order.line_item_count)} line item${order.line_item_count > 1 ? 's' : ''}</span>`;
         }
 
         return `
             <tr>
-                <td>${order.order_id}</td>
-                <td>${order.name}</td>
-                <td>${order.advertiser_name || order.advertiser_id || '-'}</td>
-                <td><span class="badge bg-${getDeliveryStatusColor(deliveryStatus)}">${formatDeliveryStatus(deliveryStatus)}</span></td>
-                <td>${progressBar}</td>
-                <td>${formatDate(order.start_date)}</td>
-                <td>${order.unlimited_end_date ? 'Unlimited' : formatDate(order.end_date)}</td>
-                <td>${formatCurrency(order.budget || order.total_budget, order.currency_code)}</td>
+                <td>${escapeHtml(order.order_id)}</td>
+                <td>${escapeHtml(order.name)}</td>
+                <td>${escapeHtml(order.advertiser_name || order.advertiser_id || '-')}</td>
+                <td><span class="badge bg-${escapeHtml(getDeliveryStatusColor(deliveryStatus))}">${escapeHtml(formatDeliveryStatus(deliveryStatus))}</span></td>
+                <td>${progressBarHtml}</td>
+                <td>${escapeHtml(formatDate(order.start_date))}</td>
+                <td>${escapeHtml(order.unlimited_end_date ? 'Unlimited' : formatDate(order.end_date))}</td>
+                <td>${escapeHtml(formatCurrency(order.budget || order.total_budget, order.currency_code))}</td>
                 <td>
-                    <button class="btn btn-sm btn-outline-primary" onclick="viewOrderDetails('${order.order_id}')">
+                    <button class="btn btn-sm btn-outline-primary" onclick="viewOrderDetails(${jsArg(order.order_id)})">
                         <i class="bi bi-eye"></i> View
                     </button>
                 </td>
@@ -295,7 +295,7 @@ function formatCurrency(amount, currency) {
 }
 
 function viewOrderDetails(orderId) {
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/orders/${orderId}`, {
+    fetch(`${scriptRoot}/api/tenant/${tenantId}/orders/${orderId}`, {
         credentials: 'same-origin'  // Include session cookies
     })
     .then(response => response.json())
@@ -329,22 +329,22 @@ function displayOrderDetails(order) {
             <div class="col-md-6">
                 <h6>Order Information</h6>
                 <table class="table table-sm">
-                    <tr><th>Order ID:</th><td>${order.order_id}</td></tr>
-                    <tr><th>Name:</th><td>${order.name}</td></tr>
-                    <tr><th>Order Status:</th><td><span class="badge bg-${getStatusColor(order.status)}">${order.status}</span></td></tr>
-                    <tr><th>Delivery Status:</th><td><span class="badge bg-${getDeliveryStatusColor(deliveryStatus)}">${formatDeliveryStatus(deliveryStatus)}</span></td></tr>
-                    <tr><th>PO Number:</th><td>${order.po_number || order.external_order_id || '-'}</td></tr>
-                    <tr><th>Total Budget:</th><td>${formatCurrency(order.budget || order.total_budget, order.currency_code)}</td></tr>
+                    <tr><th>Order ID:</th><td>${escapeHtml(order.order_id)}</td></tr>
+                    <tr><th>Name:</th><td>${escapeHtml(order.name)}</td></tr>
+                    <tr><th>Order Status:</th><td><span class="badge bg-${escapeHtml(getStatusColor(order.status))}">${escapeHtml(order.status)}</span></td></tr>
+                    <tr><th>Delivery Status:</th><td><span class="badge bg-${escapeHtml(getDeliveryStatusColor(deliveryStatus))}">${escapeHtml(formatDeliveryStatus(deliveryStatus))}</span></td></tr>
+                    <tr><th>PO Number:</th><td>${escapeHtml(order.po_number || order.external_order_id || '-')}</td></tr>
+                    <tr><th>Total Budget:</th><td>${escapeHtml(formatCurrency(order.budget || order.total_budget, order.currency_code))}</td></tr>
                 </table>
             </div>
             <div class="col-md-6">
                 <h6>Dates & Contacts</h6>
                 <table class="table table-sm">
-                    <tr><th>Start Date:</th><td>${formatDate(order.start_date)}</td></tr>
-                    <tr><th>End Date:</th><td>${order.unlimited_end_date ? 'Unlimited' : formatDate(order.end_date)}</td></tr>
-                    <tr><th>Advertiser:</th><td>${order.advertiser_name || '-'}</td></tr>
-                    <tr><th>Agency:</th><td>${order.agency_name || '-'}</td></tr>
-                    <tr><th>Salesperson:</th><td>${order.salesperson_name || '-'}</td></tr>
+                    <tr><th>Start Date:</th><td>${escapeHtml(formatDate(order.start_date))}</td></tr>
+                    <tr><th>End Date:</th><td>${escapeHtml(order.unlimited_end_date ? 'Unlimited' : formatDate(order.end_date))}</td></tr>
+                    <tr><th>Advertiser:</th><td>${escapeHtml(order.advertiser_name || '-')}</td></tr>
+                    <tr><th>Agency:</th><td>${escapeHtml(order.agency_name || '-')}</td></tr>
+                    <tr><th>Salesperson:</th><td>${escapeHtml(order.salesperson_name || '-')}</td></tr>
                 </table>
             </div>
         </div>
@@ -358,7 +358,7 @@ function displayOrderDetails(order) {
                     <div class="col-md-2">
                         <div class="card">
                             <div class="card-body">
-                                <h5>${totalLineItems}</h5>
+                                <h5>${escapeHtml(totalLineItems)}</h5>
                                 <small class="text-muted">Line Items</small>
                             </div>
                         </div>
@@ -366,7 +366,7 @@ function displayOrderDetails(order) {
                     <div class="col-md-3">
                         <div class="card">
                             <div class="card-body">
-                                <h5>${formatNumber(deliveryMetrics.total_impressions_delivered || 0)}</h5>
+                                <h5>${escapeHtml(formatNumber(deliveryMetrics.total_impressions_delivered || 0))}</h5>
                                 <small class="text-muted">Impressions Delivered</small>
                             </div>
                         </div>
@@ -374,7 +374,7 @@ function displayOrderDetails(order) {
                     <div class="col-md-3">
                         <div class="card">
                             <div class="card-body">
-                                <h5>${formatNumber(deliveryMetrics.total_impressions_goal || 0)}</h5>
+                                <h5>${escapeHtml(formatNumber(deliveryMetrics.total_impressions_goal || 0))}</h5>
                                 <small class="text-muted">Impressions Goal</small>
                             </div>
                         </div>
@@ -382,7 +382,7 @@ function displayOrderDetails(order) {
                     <div class="col-md-2">
                         <div class="card">
                             <div class="card-body">
-                                <h5>${(deliveryMetrics.delivery_percentage || 0).toFixed(1)}%</h5>
+                                <h5>${escapeHtml((deliveryMetrics.delivery_percentage || 0).toFixed(1))}%</h5>
                                 <small class="text-muted">Delivered</small>
                             </div>
                         </div>
@@ -390,7 +390,7 @@ function displayOrderDetails(order) {
                     <div class="col-md-2">
                         <div class="card">
                             <div class="card-body">
-                                <h5>${formatCurrency(deliveryMetrics.estimated_spend || 0, order.currency_code)}</h5>
+                                <h5>${escapeHtml(formatCurrency(deliveryMetrics.estimated_spend || 0, order.currency_code))}</h5>
                                 <small class="text-muted">Est. Spend</small>
                             </div>
                         </div>
@@ -403,7 +403,7 @@ function displayOrderDetails(order) {
 
         <div class="row">
             <div class="col-12">
-                <h6>Line Items (${totalLineItems})</h6>
+                <h6>Line Items (${escapeHtml(totalLineItems)})</h6>
                 <div class="table-responsive">
                     <table class="table table-sm">
                         <thead>
@@ -425,17 +425,17 @@ function displayOrderDetails(order) {
                                 const liDeliveryPercentage = li.delivery_percentage || 0;
                                 return `
                                 <tr>
-                                    <td>${li.line_item_id}</td>
-                                    <td>${li.name}</td>
-                                    <td>${li.line_item_type}</td>
-                                    <td><span class="badge bg-${getDeliveryStatusColor(li.status)}">${li.status}</span></td>
-                                    <td>${li.priority || '-'}</td>
-                                    <td>${li.primary_goal_units ? formatNumber(li.primary_goal_units) : '-'}</td>
-                                    <td>${li.stats_impressions ? formatNumber(li.stats_impressions) : '0'}</td>
-                                    <td>${liDeliveryPercentage.toFixed(1)}%</td>
-                                    <td>${li.cost_per_unit ? '$' + li.cost_per_unit.toFixed(2) : '-'}</td>
+                                    <td>${escapeHtml(li.line_item_id)}</td>
+                                    <td>${escapeHtml(li.name)}</td>
+                                    <td>${escapeHtml(li.line_item_type)}</td>
+                                    <td><span class="badge bg-${escapeHtml(getDeliveryStatusColor(li.status))}">${escapeHtml(li.status)}</span></td>
+                                    <td>${escapeHtml(li.priority || '-')}</td>
+                                    <td>${escapeHtml(li.primary_goal_units ? formatNumber(li.primary_goal_units) : '-')}</td>
+                                    <td>${escapeHtml(li.stats_impressions ? formatNumber(li.stats_impressions) : '0')}</td>
+                                    <td>${escapeHtml(liDeliveryPercentage.toFixed(1))}%</td>
+                                    <td>${escapeHtml(li.cost_per_unit ? '$' + li.cost_per_unit.toFixed(2) : '-')}</td>
                                     <td>
-                                        <a href="{{ request.script_root }}/tenant/${tenantId}/gam/line-item/${li.line_item_id}"
+                                        <a href="${safeUrl(scriptRoot + '/tenant/' + tenantId + '/gam/line-item/' + li.line_item_id)}"
                                            class="btn btn-sm btn-outline-info"
                                            target="_blank"
                                            title="View full line item details including targeting, creatives, and JSON representation">
@@ -464,12 +464,12 @@ function syncOrders() {
     };
 
     // Only add API key if it exists and is not empty
-    const apiKey = {{ api_key|tojson|safe }};
+    const apiKey = {{ api_key|tojson }};
     if (apiKey && apiKey !== '') {
         headers['X-API-Key'] = apiKey;
     }
 
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/sync/orders`, {
+    fetch(`${scriptRoot}/api/tenant/${tenantId}/sync/orders`, {
         method: 'POST',
         credentials: 'same-origin',  // Include session cookies
         headers: headers
@@ -482,7 +482,7 @@ function syncOrders() {
             alert(`Sync completed! Synced ${orderCount} orders and ${lineItemCount} line items.`);
             loadOrders();
         } else {
-            alert('Sync failed: ' + (data.error || 'Unknown error'));
+            alert('Sync failed: ' + adminErrorText(data));
         }
     })
     .catch(error => {

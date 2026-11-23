@@ -112,6 +112,8 @@ The Admin UI checks these variables before the `super_admin_emails` and `super_a
 
 > **Note**: Per-tenant SSO and the **Users & Access** page control who reaches one tenant. Neither grants super admin access.
 
+> Super admin is granted only to a session from the deployment's own sign-in (Google or the `OAUTH_*` provider above). A session from a tenant's own SSO is limited to that tenant and is never a super admin, even for an address listed here.
+
 ---
 
 ## Database
@@ -152,7 +154,7 @@ Or use individual variables:
 
 ## AI features
 
-AI features (creative review, product suggestions) are configured **per-tenant** in the Admin UI. Each tenant sets their own Gemini API key.
+AI features (advertising policy checks, creative review, product ranking, AI order naming) are configured **per-tenant** in the Admin UI under Settings → Integrations → AI Services. A tenant can use any supported provider (Google Gemini, Anthropic, OpenAI and others); a key stored in the legacy per-tenant Gemini column still works.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -189,7 +191,7 @@ For GAM adapter integration:
 | `ADCP_MULTI_TENANT` | `false` | Enable multi-tenant mode, where the `Host` selects the tenant |
 | `SALES_AGENT_DOMAIN` | - | Base domain for tenant subdomains (for example, `sales-agent.example.com`). Also scopes session cookies across subdomains. |
 | `ADMIN_DOMAIN` | - | Domain where the Admin UI is accessible (for example, `admin.sales-agent.example.com`) |
-| `SUPER_ADMIN_DOMAIN` | - | Email domain that sign-in treats as super admin. The access checks ignore it, so grant super admin access with `SUPER_ADMIN_DOMAINS`, as [Super admin access control](#super-admin-access-control) describes. The **Account** section of the settings page refuses to authorize this domain or an address in it; the **Users & Access** page does not check it |
+| `SUPER_ADMIN_DOMAIN` | - | Email domain that sign-in treats as super admin. The access checks ignore it, and so does the page that lists every tenant, so grant super admin access with `SUPER_ADMIN_DOMAINS`, as [Super admin access control](#super-admin-access-control) describes. No tenant can authorize this domain, in any spelling, on the settings page or the **Users & Access** page; the **Account** section of the settings page also refuses an address in it |
 | `TLS_ASK_ENABLED` | `false` | Mount `GET /tls/ask`, the endpoint an on-demand TLS proxy (Caddy) asks before issuing a certificate for a host. Off, the path answers 404. Needed only behind such a proxy; see [Caddy on-demand TLS](multi-tenant.md#caddy-on-demand-tls-no-wildcard-certificate). |
 
 ### SSO requirements by deployment mode

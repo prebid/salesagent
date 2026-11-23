@@ -71,7 +71,7 @@
                             </label>
                             {% for variant_idx in range(num_variants) %}
                             <button class="variant-btn {% if variant_idx == 0 %}active{% endif %}"
-                                    onclick="showVariant('{{ creative.creative_id }}', {{ variant_idx }})">
+                                    onclick="showVariant({{ creative.creative_id|tojson|forceescape }}, {{ variant_idx|tojson|forceescape }})">
                                 {% set variant = preview_data.previews[variant_idx] %}
                                 {{ variant.preview_id or ('Variant ' ~ (variant_idx + 1)) }}
                             </button>
@@ -91,7 +91,7 @@
                                 </label>
                                 {% for render_idx in range(variant.renders | length) %}
                                 <button class="render-btn {% if render_idx == 0 %}active{% endif %}"
-                                        onclick="showRender('{{ creative.creative_id }}', {{ variant_idx }}, {{ render_idx }})">
+                                        onclick="showRender({{ creative.creative_id|tojson|forceescape }}, {{ variant_idx|tojson|forceescape }}, {{ render_idx|tojson|forceescape }})">
                                     {% set render = variant.renders[render_idx] %}
                                     {{ render.role or render.render_id or ('Render ' ~ (render_idx + 1)) }}
                                 </button>
@@ -115,20 +115,20 @@
                                                     {% endif %}
                                                 </div>
                                                 {% endif %}
-                                                <img src="{{ render.preview_url }}"
+                                                <img src="{{ render.preview_url|safe_url }}"
                                                      alt="{{ creative.name }}"
                                                      style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px;">
                                             </div>
                                         {% elif creative.format.startswith('video_') %}
                                             <div class="video-preview">
                                                 <video controls style="max-width: 100%; height: auto; border-radius: 4px;">
-                                                    <source src="{{ render.preview_url }}" type="video/mp4">
+                                                    <source src="{{ render.preview_url|safe_url }}" type="video/mp4">
                                                     Your browser does not support video playback.
                                                 </video>
                                             </div>
                                         {% else %}
                                             <div class="generic-preview">
-                                                <img src="{{ render.preview_url }}"
+                                                <img src="{{ render.preview_url|safe_url }}"
                                                      alt="{{ creative.name }}"
                                                      style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px;">
                                             </div>
@@ -153,14 +153,14 @@
                                 {% if creative.data.width and creative.data.height %}
                                 <div class="preview-dimensions">{{ creative.data.width }}x{{ creative.data.height }}</div>
                                 {% endif %}
-                                <img src="{{ creative.data.url }}"
+                                <img src="{{ creative.data.url|safe_url }}"
                                      alt="{{ creative.name }}"
                                      style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px;">
                             </div>
                         {% elif creative.format.startswith('video_') %}
                             <div class="video-preview">
                                 <video controls style="max-width: 100%; height: auto; border-radius: 4px;">
-                                    <source src="{{ creative.data.url }}" type="video/mp4">
+                                    <source src="{{ creative.data.url|safe_url }}" type="video/mp4">
                                     Your browser does not support video playback.
                                 </video>
                             </div>
@@ -168,7 +168,7 @@
                             <div class="native-preview">
                                 <div class="native-card">
                                     {% if creative.data.image_url %}
-                                    <img src="{{ creative.data.image_url }}"
+                                    <img src="{{ creative.data.image_url|safe_url }}"
                                          alt="{{ creative.data.title or creative.name }}"
                                          style="width: 100%; height: auto; border-radius: 4px 4px 0 0;">
                                     {% endif %}
@@ -185,7 +185,7 @@
                             </div>
                         {% else %}
                             <div class="generic-preview">
-                                <a href="{{ creative.data.url }}" target="_blank" class="btn btn-secondary">
+                                <a href="{{ creative.data.url|safe_url }}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
                                     View Creative Asset →
                                 </a>
                             </div>
@@ -218,7 +218,7 @@
                         {% if creative.data.click_url %}
                         <div class="detail-item">
                             <span class="detail-label">Click URL:</span>
-                            <span class="detail-value"><a href="{{ creative.data.click_url }}" target="_blank">{{ creative.data.click_url[:50] }}...</a></span>
+                            <span class="detail-value"><a href="{{ creative.data.click_url|safe_url }}" target="_blank" rel="noopener noreferrer">{{ creative.data.click_url[:50] }}...</a></span>
                         </div>
                         {% endif %}
                         <div class="detail-item">
@@ -246,14 +246,14 @@
             <!-- Action Buttons -->
             <div class="review-actions">
                 {% if has_ai_review %}
-                <button class="btn btn-secondary" onclick="runAIReview('{{ creative.creative_id }}')">
+                <button class="btn btn-secondary" onclick="runAIReview({{ creative.creative_id|tojson|forceescape }})">
                     🤖 Run AI Review
                 </button>
                 {% endif %}
-                <button class="btn btn-success" onclick="approveCreative('{{ creative.creative_id }}')">
+                <button class="btn btn-success" onclick="approveCreative({{ creative.creative_id|tojson|forceescape }})">
                     ✅ Approve
                 </button>
-                <button class="btn btn-danger" onclick="showRejectModal('{{ creative.creative_id }}')">
+                <button class="btn btn-danger" onclick="showRejectModal({{ creative.creative_id|tojson|forceescape }})">
                     ❌ Reject
                 </button>
             </div>
@@ -544,7 +544,7 @@ function approveCreative(creativeId) {
         return;
     }
 
-    fetch(`{{ script_name }}/tenant/{{ tenant_id }}/creatives/review/${creativeId}/approve`, {
+    fetch(`${scriptRoot}/tenant/${ {{ tenant_id|tojson }} }/creatives/review/${encodeURIComponent(creativeId)}/approve`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -564,7 +564,7 @@ function approveCreative(creativeId) {
                 location.reload();
             }
         } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -593,7 +593,7 @@ function confirmReject() {
         return;
     }
 
-    fetch(`{{ script_name }}/tenant/{{ tenant_id }}/creatives/review/${currentCreativeId}/reject`, {
+    fetch(`${scriptRoot}/tenant/${ {{ tenant_id|tojson }} }/creatives/review/${encodeURIComponent(currentCreativeId)}/reject`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -615,7 +615,7 @@ function confirmReject() {
                 location.reload();
             }
         } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -631,7 +631,7 @@ function runAIReview(creativeId) {
     aiSection.style.display = 'block';
     aiContent.innerHTML = '<p style="margin: 0;"><em>Running AI review...</em></p>';
 
-    fetch(`{{ script_name }}/tenant/{{ tenant_id }}/creatives/review/${creativeId}/ai-review`, {
+    fetch(`${scriptRoot}/tenant/${ {{ tenant_id|tojson }} }/creatives/review/${encodeURIComponent(creativeId)}/ai-review`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -651,20 +651,21 @@ function runAIReview(creativeId) {
             aiContent.innerHTML = `
                 <div style="background: white; padding: 1rem; border-radius: 4px; margin-top: 0.5rem;">
                     <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
-                        <span style="font-size: 1.5rem;">${emoji}</span>
-                        <strong style="color: ${statusColor};">${statusText}</strong>
-                        <span class="format-badge" style="background: #f0f0f0; color: #666;">Confidence: ${confidence}</span>
+                        <span style="font-size: 1.5rem;">${escapeHtml(emoji)}</span>
+                        <strong style="color: ${escapeHtml(statusColor)};">${escapeHtml(statusText)}</strong>
+                        <span class="format-badge" style="background: #f0f0f0; color: #666;">Confidence: ${escapeHtml(confidence)}</span>
                     </div>
-                    <p style="margin: 0; color: #666;">${reason}</p>
+                    <p style="margin: 0; color: #666;">${escapeHtml(reason)}</p>
                 </div>
             `;
         } else {
-            aiContent.innerHTML = `<p style="margin: 0; color: #dc3545;"><strong>Error:</strong> ${data.error}</p>`;
+            aiContent.innerHTML = '<p style="margin: 0; color: #dc3545;"><strong>Error:</strong> </p>';
+            aiContent.querySelector('p').append(adminErrorText(data));
         }
     })
     .catch(error => {
         console.error('Error:', error);
-        aiContent.innerHTML = `<p style="margin: 0; color: #dc3545;"><strong>Error:</strong> ${error}</p>`;
+        aiContent.innerHTML = `<p style="margin: 0; color: #dc3545;"><strong>Error:</strong> ${escapeHtml(error)}</p>`;
     });
 }
 

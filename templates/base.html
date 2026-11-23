@@ -6,8 +6,9 @@
     <meta name="csrf-token" content="{{ csrf_token() if csrf_token else '' }}">
     <title>{% block title %}Sales Agent Admin{% endblock %}</title>
     <!-- Favicon -->
-    {% if tenant and tenant.favicon_url %}
-    <link rel="icon" href="{{ script_name }}{{ tenant.favicon_url }}" type="{% if tenant.favicon_url.endswith('.svg') %}image/svg+xml{% elif tenant.favicon_url.endswith('.png') %}image/png{% elif tenant.favicon_url.endswith('.jpg') or tenant.favicon_url.endswith('.jpeg') %}image/jpeg{% else %}image/x-icon{% endif %}">
+    {% set favicon_href = tenant_favicon_href(tenant.favicon_url if tenant) %}
+    {% if favicon_href %}
+    <link rel="icon" href="{{ favicon_href|safe_url }}" type="{% if favicon_href.endswith('.png') %}image/png{% elif favicon_href.endswith('.jpg') or favicon_href.endswith('.jpeg') %}image/jpeg{% else %}image/x-icon{% endif %}">
     {% else %}
     <link rel="icon" href="{{ script_name }}/static/favicons/default/favicon.jpg" type="image/jpeg">
     {% endif %}
@@ -16,6 +17,10 @@
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="{{ script_name }}/static/validation.css">
+    <script src="{{ script_name }}/static/js/escape_html.js"></script>
+    {# The reverse-proxy prefix (CLAUDE.md pattern 6), defined once for every page's scripts.
+       The sink guard trusts scriptRoot only because this is its one assignment. #}
+    <script>window.scriptRoot = {{ request.script_root|tojson }} || '';</script>
     <style>
         /* Custom styles that don't conflict with Bootstrap */
         body {
@@ -229,6 +234,7 @@
         });
     </script>
     <script src="{{ script_name }}/static/validation.js"></script>
+    <script src="{{ script_name }}/static/js/admin_answer.js"></script>
     <!-- Bootstrap Bundle with Popper -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     {% block scripts %}{% endblock %}

@@ -77,10 +77,10 @@ and re-test after every upgrade — minor releases can carry breaking changes.
 ### After Deployment
 
 Configure via the Admin UI:
-1. Configure your ad server (Settings → Adapters)
+1. Configure your ad server (Settings → Ad Server)
 2. Set up products that match your GAM line items
 3. Add advertisers who will use the MCP API
-4. Set your custom domain (Settings → General)
+4. Set your custom domain (Settings → Account)
 
 ---
 
@@ -112,7 +112,7 @@ For GAM integration, choose your authentication method:
    GAM_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
    GAM_OAUTH_CLIENT_SECRET=your-client-secret
    ```
-3. Configure in Admin UI: Settings → Adapters → Google Ad Manager
+3. Configure in Admin UI: Settings → Ad Server → Google Ad Manager
 
 ---
 
@@ -226,7 +226,7 @@ The primary interface for AI agents. Built with FastMCP over HTTP/SSE transport.
 
 ### A2A (Agent-to-Agent Protocol)
 JSON-RPC 2.0 server for agent-to-agent communication:
-- **Endpoint**: `/a2a` (also served on port 8091)
+- **Endpoint**: `/a2a`
 - **Discovery**: `/.well-known/agent.json` (also `/.well-known/agent-card.json`, `/agent.json`)
 - **Authentication**: Bearer tokens via Authorization header
 - **Library**: Built with `a2a-sdk[http-server]`

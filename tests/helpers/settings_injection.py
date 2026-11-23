@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
     import pytest
 
-    from src.core.config import LimitSettings, RuntimeSettings
+    from src.core.config import IntegrationSettings, LimitSettings, RuntimeSettings
 
 # Where the platform's AI credential comes from. With PYDANTIC_AI_PROVIDER unset the
 # platform provider is Google, so GEMINI_API_KEY is the key that counts; the others are
@@ -51,6 +51,24 @@ PLATFORM_AI_ENV: tuple[str, ...] = (
     "PYDANTIC_AI_PROVIDER",
     "PYDANTIC_AI_MODEL",
 )
+
+# The two rows the Admin UI's AI Services form stores in ``tenant.ai_config``
+# (``update_ai`` in ``src/admin/blueprints/settings.py``): it always writes ``provider`` and
+# ``model``, and adds ``api_key`` only when the seller supplies one. Defined once, so a
+# change to what the form stores is a change here and every test grading those rows
+# follows it.
+
+#: The seller filled in provider, model and key: a usable configuration of its own.
+ADMIN_UI_AI_CONFIG: dict[str, str] = {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-20250514",
+    "api_key": "sk-ant-tenant",
+}
+
+#: The seller left the key field blank; the form says "AI features will be disabled" as it
+#: saves this. ``TenantAIConfig.from_tenant`` answers ``UNUSABLE_AI_CONFIG`` for it when
+#: the legacy column holds no key.
+KEYLESS_AI_CONFIG: dict[str, str] = {"provider": "google", "model": "gemini-2.0-flash"}
 
 
 def _inject(monkeypatch: pytest.MonkeyPatch, group: str, overrides: dict[str, Any]) -> Any:
@@ -99,6 +117,14 @@ def inject_runtime(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> Runtime
     accumulating, restored at teardown -- e.g. ``sales_agent_domain="agent.example.com"``.
     """
     return _inject(monkeypatch, "runtime", overrides)
+
+
+def inject_integrations(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> IntegrationSettings:
+    """Put ``overrides`` on the cached settings' :class:`IntegrationSettings` and return it.
+
+    Same contract as :func:`inject_limits` -- e.g. ``logfire_token="pylf_v1_us_platform"``.
+    """
+    return _inject(monkeypatch, "integrations", overrides)
 
 
 class PlatformAICredential:

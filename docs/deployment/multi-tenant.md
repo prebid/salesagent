@@ -79,7 +79,7 @@ Register the `GOOGLE_OAUTH_REDIRECT_URI` value with the deployment's OAuth clien
 sign in. In production, every sign-in through that client sends it, whether the sign-in starts
 on the admin domain or on a tenant's host.
 
-> **`SUPER_ADMIN_DOMAIN` is a different variable.** Sign-in treats its domain as super admin, but the access checks ignore it, so it alone does not let a user open a tenant. Set `SUPER_ADMIN_DOMAINS` to grant super admin access. See [Super admin access control](environment-variables.md#super-admin-access-control).
+> **`SUPER_ADMIN_DOMAIN` is a different variable.** Sign-in treats its domain as super admin, but the access checks and the page that lists every tenant ignore it, so it alone does not let a user open or list a tenant. Set `SUPER_ADMIN_DOMAINS` to grant super admin access. See [Super admin access control](environment-variables.md#super-admin-access-control).
 
 > **Session cookies in multi-tenant mode**: When `ADCP_MULTI_TENANT=true` in production, session cookies are automatically scoped to `.SALES_AGENT_DOMAIN` so they work across all tenant subdomains. This lets users authenticate at `admin.sales-agent.yourdomain.com` and access tenant dashboards at `tenant.sales-agent.yourdomain.com`. In single-tenant mode (default), cookies use the actual request domain instead.
 

@@ -2,10 +2,11 @@
 
 import json
 import logging
+import posixpath
+from functools import partial
+from typing import Any
 
-import markdown
-from flask import Flask, request
-from markupsafe import Markup
+from flask import Flask, abort, request
 from werkzeug.middleware.proxy_fix import ProxyFix as WerkzeugProxyFix
 
 from src.admin.blueprints.accounts import accounts_bp
@@ -34,17 +35,70 @@ from src.admin.blueprints.signals_agents import signals_agents_bp
 from src.admin.blueprints.signing_keys import signing_keys_bp
 
 # from src.admin.blueprints.tasks import tasks_bp  # Disabled - tasks eliminated in favor of workflow system
-from src.admin.blueprints.tenants import tenants_bp
+from src.admin.blueprints.tenants import ALLOWED_FAVICON_EXTENSIONS, tenants_bp
 from src.admin.blueprints.users import users_bp
 from src.admin.blueprints.workflows import workflows_bp
 from src.admin.csrf import init_csrf_protection
+from src.admin.utils.operator_errors import register_error_handler
 from src.core.config import load_settings
 from src.core.config_loader import is_single_tenant_mode
 from src.core.domain_config import (
     get_session_cookie_domain,
 )
+from src.core.http_utils import safe_url
+from src.core.operator_errors import best_effort
 
 logger = logging.getLogger(__name__)
+
+#: Hosts the admin pages' scripts may fetch from, besides their own origin. The Approximated
+#: DNS widget on the settings page calls its own API (``api_url`` in tenant_settings.html).
+ADMIN_CONNECT_SOURCES = ("https://cloud.approximated.app",)
+
+#: Sent on every admin response (see ``set_content_security_policy`` in ``create_app``).
+ADMIN_CONTENT_SECURITY_POLICY = "; ".join(
+    [
+        "object-src 'none'",
+        "base-uri 'none'",
+        "frame-ancestors 'self'",
+        "form-action 'self'",
+        " ".join(["connect-src 'self'", *ADMIN_CONNECT_SOURCES]),
+    ]
+)
+
+#: Tenant-uploaded favicons: a document there may run nothing and load nothing.
+UPLOADED_FILE_CONTENT_SECURITY_POLICY = "sandbox; default-src 'none'"
+#: The endpoints that serve files from static/: Flask's own and core.send_static.
+_STATIC_ENDPOINTS = {"static": "filename", "core.send_static": "path"}
+
+
+def _uploaded_favicon_name(endpoint: str | None, view_args: dict | None) -> str | None:
+    """The normalized, lower-cased static path if this request serves a file under favicons/; else None.
+
+    Read from the routed file name, not the URL: a server decodes ``%2F`` before routing,
+    and ``send_from_directory`` resolves ``./`` and ``../``, so ``/static/.%2Ffavicons/x``
+    and ``/static/a/..%2Ffavicons/x`` reach the same file as ``/static/favicons/x``.
+    """
+    arg = _STATIC_ENDPOINTS.get(endpoint or "")
+    if arg is None:
+        return None
+    name = str((view_args or {}).get(arg, "")).replace("\\", "/")
+    normalized = posixpath.normpath("/" + name).lstrip("/").lower()
+    return normalized if normalized.startswith("favicons/") else None
+
+
+def tenant_favicon_href(url: Any, script_root: str) -> str | None:
+    """Where a page loads the favicon stored as *url* (``tenant.favicon_url``) from, or None for the default.
+
+    An uploaded favicon is a path under the admin root, and only the formats an upload
+    accepts are served (``refuse_uploaded_svg``); any other URL is the one the tenant gave.
+    The caller still writes it through ``safe_url``. A page without a tenant passes an
+    undefined, which is falsy.
+    """
+    if not url:
+        return None
+    if not url.startswith("/"):
+        return url
+    return script_root + url if url.rsplit(".", 1)[-1].lower() in ALLOWED_FAVICON_EXTENSIONS else None
 
 
 # Custom ProxyFix for handling X-Script-Name and fixing redirect URLs
@@ -153,19 +207,8 @@ def create_app(config=None, settings=None):
         except (json.JSONDecodeError, TypeError):
             return {}
 
-    def markdown_filter(text):
-        """Convert markdown text to HTML."""
-        if not text:
-            return ""
-        # Convert markdown to HTML with extensions for better formatting
-        html = markdown.markdown(
-            text,
-            extensions=["extra", "nl2br"],  # 'extra' adds tables, fenced code, etc. 'nl2br' converts newlines to <br>
-        )
-        return Markup(html)  # Mark as safe HTML
-
     app.jinja_env.filters["from_json"] = from_json_filter
-    app.jinja_env.filters["markdown"] = markdown_filter
+    app.jinja_env.filters["safe_url"] = safe_url
 
     # Trust proxy headers in production
     if is_production:
@@ -256,6 +299,37 @@ def create_app(config=None, settings=None):
                     )
         return response
 
+    @app.after_request
+    def set_content_security_policy(response):
+        """A Content-Security-Policy that the current pages can live with, and ``nosniff``.
+
+        The admin pages rely on inline scripts and inline event handlers, so this cannot
+        restrict script sources yet, and it does not stop a script that is already running.
+        It limits what the pages can do: no plugins, no ``<base>`` that re-points every
+        relative URL, no framing by another site, forms post only to this origin, and
+        fetch/XHR/EventSource/WebSocket reach only this origin and ``ADMIN_CONNECT_SOURCES``.
+        A tenant-uploaded favicon gets a sandbox that runs and loads nothing.
+        """
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        if _uploaded_favicon_name(request.endpoint, request.view_args) is not None:
+            response.headers["Content-Security-Policy"] = UPLOADED_FILE_CONTENT_SECURITY_POLICY
+        else:
+            response.headers.setdefault("Content-Security-Policy", ADMIN_CONTENT_SECURITY_POLICY)
+        return response
+
+    @app.before_request
+    def refuse_uploaded_svg():
+        """Under favicons/ only the raster formats an upload accepts are served.
+
+        An SVG uploaded before uploads were limited to raster formats can still be on disk;
+        an SVG is a document that can carry script, and this is the admin origin, so it is
+        never served. Nothing deletes the file: refusing it here is enough.
+        """
+        name = _uploaded_favicon_name(request.endpoint, request.view_args)
+        if name is not None and name.rsplit(".", 1)[-1] not in ALLOWED_FAVICON_EXTENSIONS:
+            abort(404)
+
     # Add context processor to make script_name and tenant available in templates
     @app.context_processor
     def inject_context():
@@ -270,6 +344,7 @@ def create_app(config=None, settings=None):
         context = {}
 
         context["script_name"] = request.script_root or request.environ.get("SCRIPT_NAME", "")
+        context["tenant_favicon_href"] = partial(tenant_favicon_href, script_root=context["script_name"])
 
         # Inject support email (configurable via SUPPORT_EMAIL env var)
         context["support_email"] = get_support_email()
@@ -280,17 +355,16 @@ def create_app(config=None, settings=None):
         # every such URL a plausible-looking fiction when the setting was unset. A tenant's
         # URL comes from `tenant.virtual_host`, the host it is actually served at.
 
-        # Inject fresh tenant data if user is logged in with a tenant
+        # Inject fresh tenant data if user is logged in with a tenant. Every page renders
+        # through here, the error page included, so a failed lookup must not fail the render.
         tenant_id = session.get("tenant_id")
         if tenant_id:
-            try:
+            with best_effort(f"Could not load tenant {tenant_id} for the page context"):
                 with get_db_session() as db_session:
                     stmt = select(Tenant).filter_by(tenant_id=tenant_id)
                     tenant = db_session.scalars(stmt).first()
                     if tenant:
                         context["tenant"] = tenant
-            except Exception as e:
-                logger.warning(f"Could not load tenant {tenant_id} for context: {e}")
 
         return context
 
@@ -343,51 +417,13 @@ def create_app(config=None, settings=None):
         logger.warning("sync_api blueprint not found")
 
     try:
-        from src.adapters.gam_reporting_api import gam_reporting_api
+        from src.admin.blueprints.gam_reporting_api import gam_reporting_api
 
         app.register_blueprint(gam_reporting_api)
     except ImportError:
         logger.warning("gam_reporting_api blueprint not found")
 
-    # Register adapter-specific routes
-    register_adapter_routes(app)
-
-    # Register GAM inventory endpoints
-    try:
-        from src.services.gam_inventory_service import create_inventory_endpoints
-
-        create_inventory_endpoints(app)
-        logger.info("Registered GAM inventory endpoints")
-    except ImportError:
-        logger.warning("gam_inventory_service not found")
+    # One answer for any exception a route lets escape: fixed text plus a log reference.
+    register_error_handler(app)
 
     return app
-
-
-def register_adapter_routes(app):
-    """Register adapter-specific configuration routes."""
-    try:
-        # Import adapter modules that have UI routes
-        from src.adapters.google_ad_manager import GoogleAdManager
-        from src.adapters.mock_ad_server import MockAdServer
-
-        # Register routes for each adapter that supports UI routes
-        # Note: We skip instantiation errors since routes are optional
-        adapter_configs = [
-            (GoogleAdManager, {"config": {}, "principal": None}),
-            (MockAdServer, {"principal": None}),
-        ]
-
-        for adapter_class, kwargs in adapter_configs:
-            try:
-                # Try to create instance for route registration
-                adapter_instance = adapter_class(**kwargs)
-                if hasattr(adapter_instance, "register_ui_routes"):
-                    adapter_instance.register_ui_routes(app)
-                    logger.info(f"Registered UI routes for {adapter_class.__name__}")
-            except Exception as e:
-                # This is expected for some adapters that require specific config
-                logger.debug(f"Could not register {adapter_class.__name__} routes: {e}")
-
-    except Exception as e:
-        logger.warning(f"Error importing adapter modules: {e}")

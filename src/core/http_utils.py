@@ -20,9 +20,12 @@ This module holds no state and imports nothing from the application, so every on
 callers can import it.
 """
 
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any, Protocol
 from urllib.parse import urlsplit
+
+from src.core.operator_errors import OperatorRefusal
 
 
 class HeaderSource(Protocol):
@@ -71,8 +74,26 @@ def requested_host(headers: HeaderSource) -> str | None:
     return get_header_case_insensitive(headers, "Host")
 
 
+class InvalidVirtualHost(OperatorRefusal, ValueError):
+    """A ``virtual_host`` that is not a bare ``host`` or ``host:port``.
+
+    The exception's own text says exactly what is wrong and quotes the value; it is for
+    the log and the ORM validator. Responses answer with ``MESSAGE``. Also a
+    ``ValueError``, unlike the other refusals, because the ``Tenant.virtual_host``
+    validator and its callers handle shape errors as ``ValueError``.
+    """
+
+    MESSAGE = (
+        "virtual_host must be a bare host or host:port that a client can dial, "
+        "e.g. 'seller.example.com' or 'seller.example.com:8443'"
+    )
+
+    def response_fields(self) -> dict[str, object]:
+        return {"field": "virtual_host"}
+
+
 def validate_virtual_host(value: str | None) -> str:
-    """The host a tenant is served at, folded to lowercase — or a ValueError saying why not.
+    """The host a tenant is served at, folded to lowercase — or an ``InvalidVirtualHost`` saying why not.
 
     ONE definition of the shape, so the ORM validator, the admin form and the management
     API cannot disagree about it. The card publishes this string verbatim, so a value that
@@ -88,36 +109,35 @@ def validate_virtual_host(value: str | None) -> str:
     the card publishes this string verbatim and a client dials what the card says.
     """
     if value is None or not value.strip():
-        raise ValueError("virtual_host is required: a tenant declares the host it is served at")
+        raise InvalidVirtualHost("virtual_host is required: a tenant declares the host it is served at")
     host = value.strip().lower()
     if any(ch.isspace() for ch in host):
-        raise ValueError(f"virtual_host {value!r} contains whitespace, so no Host header can name it")
-    # EVERY ValueError out of here carries an authored message. ``urlsplit`` raises its own
-    # for an unterminated IPv6 bracket ("Invalid IPv6 URL"), and the management API answers
-    # 400 with ``str(exc)`` -- so an uncaught one puts urllib's text in a response body,
-    # which is the exposure CodeQL flags on that line. Re-raised like the port below.
+        raise InvalidVirtualHost(f"virtual_host {value!r} contains whitespace, so no Host header can name it")
+    # EVERY error out of here is an InvalidVirtualHost. ``urlsplit`` raises its own ValueError
+    # for an unterminated IPv6 bracket ("Invalid IPv6 URL"); it is re-raised like the port
+    # below, so callers catch one type and answer with its MESSAGE.
     try:
         parts = urlsplit(f"//{host}")
     except ValueError as exc:
-        raise ValueError(f"virtual_host {value!r} is not a host this seller can be served at") from exc
+        raise InvalidVirtualHost(f"virtual_host {value!r} is not a host this seller can be served at") from exc
     if parts.path or parts.query or parts.fragment:
-        raise ValueError(
+        raise InvalidVirtualHost(
             f"virtual_host {value!r} is not a bare host: it carries a scheme or a path. "
             "Store the host a request names, e.g. 'seller.example.com' or 'seller.example.com:8443'"
         )
     if parts.netloc != host or "@" in parts.netloc:
-        raise ValueError(f"virtual_host {value!r} is not a bare host[:port]")
+        raise InvalidVirtualHost(f"virtual_host {value!r} is not a bare host[:port]")
     # A trailing colon parses as "no port" rather than as an error, so `host:` and `[::1]:`
     # would store and then publish `https://host:/a2a` on the card. The card is dialled
     # verbatim, so a host that cannot be dialled is the defect this function exists to catch.
     if host.endswith(":"):
-        raise ValueError(f"virtual_host {value!r} ends with a colon but names no port")
+        raise InvalidVirtualHost(f"virtual_host {value!r} ends with a colon but names no port")
     try:
         parts.port  # noqa: B018 — raises for a non-numeric port
     except ValueError as exc:
-        raise ValueError(f"virtual_host {value!r} has a non-numeric port") from exc
+        raise InvalidVirtualHost(f"virtual_host {value!r} has a non-numeric port") from exc
     if not parts.hostname:
-        raise ValueError(f"virtual_host {value!r} names no host")
+        raise InvalidVirtualHost(f"virtual_host {value!r} names no host")
     return host
 
 
@@ -176,6 +196,67 @@ def canonical_publisher_domain(stored: str) -> str:
     ``publisher_domain`` pattern refuses the colon instead.
     """
     return stored.strip().lower().split("://", 1)[-1].split("/", 1)[0].rstrip(".")
+
+
+# A DNS hostname: 1-253 characters of dot-separated labels, each 1-63 of [a-z0-9-] with no
+# leading or trailing hyphen. No port, no wildcard, no path. ``re.ASCII`` keeps IGNORECASE
+# from folding non-ASCII letters (the Kelvin sign, a dotless i) into ``[a-z]``.
+_HOSTNAME = re.compile(
+    r"(?=.{1,253}\Z)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\Z",
+    re.ASCII | re.IGNORECASE,
+)
+_PORT = re.compile(r"[1-9][0-9]{0,4}\Z", re.ASCII)  # no leading zero; the range is checked too
+
+
+def normalize_hostname(host: str) -> str | None:
+    """``host`` lower-cased with any trailing dot dropped, or None when it is not a DNS hostname.
+
+    Matched BEFORE folding: ``str.lower`` maps the Kelvin sign to ``k``, so folding first would
+    let a non-ASCII name through as an ASCII one.
+    """
+    candidate = host.strip().removesuffix(".")
+    return candidate.lower() if _HOSTNAME.match(candidate) else None
+
+
+def is_publisher_domain(domain: str) -> bool:
+    """Whether *domain*, in :func:`canonical_publisher_domain` form, is a hostname with an optional port (1-65535).
+
+    The write boundary for a stored publisher domain: anything else (markup, quotes, a space)
+    names no host a fetch could reach, and would otherwise be stored and shown as typed.
+    """
+    host, colon, port = domain.partition(":")
+    return normalize_hostname(host) == host and (not colon or (bool(_PORT.match(port)) and int(port) <= 65535))
+
+
+def authorized_domain(value: object) -> str | None:
+    """*value* as a tenant's authorized sign-in domain (a DNS hostname of two or more labels, lower-cased), or None.
+
+    An email address's domain is matched against these exactly, so a value that is not a
+    hostname can never match and would only ever be displayed. The write seams refuse it
+    with ``src.core.operator_errors.InvalidDomainNameError``.
+    """
+    domain = normalize_hostname(value) if isinstance(value, str) else None
+    return domain if domain is not None and "." in domain else None
+
+
+_URL_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+_SAFE_URL_SCHEME = re.compile(r"^(?:https?|mailto):", re.I)
+
+
+def safe_url(value: object) -> str:
+    """*value* as a URL for an ``href`` or ``src``: unchanged if relative or http(s)/mailto, else ``#``.
+
+    The ``safe_url`` template filter of the admin UI and the landing pages, and the Python
+    twin of ``checkedUrl`` in static/js/escape_html.js (one case table grades both, in
+    tests/unit/test_safe_url_filter.py). Autoescape keeps a value inside its attribute but
+    lets ``javascript:alert(1)`` be the whole attribute; the scheme is read after removing
+    the control characters and spaces a browser ignores there.
+    """
+    url = "" if value is None else str(value).strip()
+    probe = re.sub(r"[\x00-\x20\x7f]", "", url)
+    if _URL_SCHEME.match(probe) and not _SAFE_URL_SCHEME.match(probe):
+        return "#"
+    return url
 
 
 def path_from_asgi_scope(scope: Mapping[str, Any]) -> str:

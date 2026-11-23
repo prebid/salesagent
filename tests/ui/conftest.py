@@ -37,13 +37,12 @@ def base_url():
     return f"http://{host}:{port}"
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _ensure_test_auth_enabled():
-    """Enable auth_setup_mode on the default tenant, which is what gates a setup session.
+@pytest.fixture(scope="session")
+def server_db_url():
+    """The URL of the SERVER's database (/adcp), which a test seeds the page's state in.
 
-    Seeds the SERVER's database (/adcp). In-network there is no published
-    Postgres port, so honor the service-name URL the runner exports
-    (E2E_DATABASE_URL=postgres:5432/adcp); on the host path fall back to
+    In-network there is no published Postgres port, so honor the service-name URL the
+    runner exports (E2E_DATABASE_URL=postgres:5432/adcp); on the host path fall back to
     localhost:<published POSTGRES_PORT>.
     """
     db_url = os.environ.get("E2E_DATABASE_URL")
@@ -53,6 +52,55 @@ def _ensure_test_auth_enabled():
             pytest.skip("neither E2E_DATABASE_URL nor POSTGRES_PORT set — cannot configure test auth")
         db_host = os.environ.get("ADCP_TEST_DB_HOST", "localhost")
         db_url = f"postgresql://adcp_user:secure_password_change_me@{db_host}:{pg_port}/adcp"
+    return db_url
+
+
+@pytest.fixture
+def server_seeding(server_db_url):
+    """``with server_seeding():`` — the factories write to the server's database inside the block."""
+    from contextlib import contextmanager
+
+    from tests.utils.database_helpers import bound_factory_session, production_db_pointed_at
+
+    @contextmanager
+    def seeding():
+        with production_db_pointed_at(server_db_url), bound_factory_session():
+            yield
+
+    return seeding
+
+
+@pytest.fixture
+def server_tenant(server_db_url):
+    """``server_tenant(prefix, **columns)``: a tenant of the test's own, made inside ``server_seeding()``.
+
+    Its id comes from ``mint_id`` and its host from that id (``tenant_virtual_host``), so
+    neither repeats a row another suite left in the server's database. It is deleted with
+    all its rows when the test ends, and its deletion is registered before it exists, so a
+    seed that fails part-way leaves nothing behind either.
+    """
+    from tests.factories import TenantFactory
+    from tests.factories.core import tenant_virtual_host
+    from tests.factories.mint import mint_id
+    from tests.utils.database_helpers import delete_tenant, production_db_pointed_at
+
+    made: list[str] = []
+
+    def make(prefix: str, **columns):
+        tenant_id = mint_id(prefix)
+        made.append(tenant_id)
+        return TenantFactory(tenant_id=tenant_id, virtual_host=tenant_virtual_host(tenant_id), **columns)
+
+    yield make
+    with production_db_pointed_at(server_db_url):
+        for tenant_id in made:
+            delete_tenant(tenant_id)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_test_auth_enabled(server_db_url):
+    """Enable auth_setup_mode on the default tenant, which is what gates a setup session."""
+    db_url = server_db_url
 
     from sqlalchemy import create_engine, text
 
@@ -106,14 +154,33 @@ def authenticated_page(page, base_url):
     that precondition instead of acting it out. A real login flow (OIDC / global OAuth) is
     a different subject and needs an identity provider to grade against.
     """
-    from urllib.parse import urlsplit
-
     from tests.helpers.admin_session import admin_session_cookie
 
+    return _signed_in_page(page, base_url, admin_session_cookie("default"))
+
+
+@pytest.fixture
+def member_page(page, base_url):
+    """``member_page(email, tenant_id)``: the page, signed in as a member of that tenant and not a super admin.
+
+    The session is the one a tenant's OIDC login writes (``member_session_payload``), so
+    ``require_tenant_access`` decides by the member's ``User`` row and its role, as it does
+    for a tenant's own users. The test seeds that row.
+    """
+    from tests.helpers.admin_session import member_session_payload, sign_session
+
+    def sign_in(email: str, tenant_id: str):
+        return _signed_in_page(page, base_url, sign_session(member_session_payload(email, tenant_id)))
+
+    return sign_in
+
+
+def _signed_in_page(page, base_url, session_cookie: str):
+    """*page* carrying the signed session *session_cookie*, collecting its JS errors in ``page.js_errors``."""
+    from urllib.parse import urlsplit
+
     host = urlsplit(base_url).hostname or "localhost"
-    page.context.add_cookies(
-        [{"name": "session", "value": admin_session_cookie("default"), "domain": host, "path": "/"}]
-    )
+    page.context.add_cookies([{"name": "session", "value": session_cookie, "domain": host, "path": "/"}])
     page.goto(base_url)
     page.wait_for_load_state("domcontentloaded")
 
