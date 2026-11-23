@@ -1681,46 +1681,18 @@ def push_creative_to_existing_buy(
             carriers = run_async_in_sync_context(_with_html5_bundles(adapter, carriers, ()))
         except AdCPSalesAgentError as refusal:
             return CreativePushFailure(f"Creative {creative_id} is not trafficked: {refusal}", refusal)
-        package_assignments = [
-            {**assignment, "creative": carriers[(assignment["package_id"], creative_id)]}
-            for assignment in package_assignments
-        ]
-
-        with AdminCreativeUoW(tenant_id) as uow:
-            assert uow.creatives is not None
-            creative = uow.creatives.get_by_id(creative_id, buy_principal_id)
-            if not creative:
-                return CreativePushFailure(f"Creative {creative_id} not found")
-            asset = _build_adapter_asset_from_creative(creative, package_assignments)
-
-            try:
-                asset_statuses = adapter.creatives_manager.add_creative_assets(
-                    platform_order_id,
-                    [asset],
-                    datetime.now(UTC),
-                )
-            except Exception as e:
-                logger.error(
-                    log_safe(f"[GATE-PUSH] Adapter raised pushing creative {creative_id} to buy {media_buy_id}: {e}"),
-                    exc_info=True,
-                )
-                return CreativePushFailure(str(e), adcp_error_for(e))
-
-            for status in asset_statuses:
-                if status.creative_id == creative_id:
-                    if status.status == "failed":
-                        return CreativePushFailure(status.message or "Adapter reported upload failure", status.error)
-                    merged_data = _apply_creative_enrichment(creative, status)
-                    if merged_data is not None:
-                        uow.creatives.update_data(creative, merged_data)
-                    logger.info(
-                        log_safe(
-                            f"[GATE-PUSH] Pushed creative {creative_id} to live buy "
-                            f"{media_buy_id} (platform order {platform_order_id})"
-                        )
-                    )
-                    return None
-            return CreativePushFailure(f"Adapter did not report status for creative {creative_id}")
+        return _upload_to_live_order(
+            adapter.creatives_manager.add_creative_assets,
+            tenant_id=tenant_id,
+            principal_id=buy_principal_id,
+            creative_id=creative_id,
+            media_buy_id=media_buy_id,
+            platform_order_id=platform_order_id,
+            package_assignments=[
+                {**assignment, "creative": carriers[(assignment["package_id"], creative_id)]}
+                for assignment in package_assignments
+            ],
+        )
 
     except Exception as e:
         logger.error(
@@ -1728,6 +1700,58 @@ def push_creative_to_existing_buy(
             exc_info=True,
         )
         return CreativePushFailure(str(e), adcp_error_for(e))
+
+
+def _upload_to_live_order(
+    upload: Callable[[str, list[AdapterCreativeAsset], datetime], list[AssetStatus]],
+    *,
+    tenant_id: str,
+    principal_id: str,
+    creative_id: str,
+    media_buy_id: str,
+    platform_order_id: str,
+    package_assignments: list[PackageAssignmentDict],
+) -> CreativePushFailure | None:
+    """The write phase of :func:`push_creative_to_existing_buy`: upload the creative to the booked order.
+
+    Opens its own unit, reads the creative again (the push's read unit has closed), uploads it
+    on *package_assignments* through *upload* (the adapter's ``add_creative_assets``), and
+    persists the adapter's enrichment. Returns None on success,
+    and the failure otherwise.
+    """
+    from src.core.database.repositories.uow import AdminCreativeUoW
+
+    with AdminCreativeUoW(tenant_id) as uow:
+        assert uow.creatives is not None
+        creative = uow.creatives.get_by_id(creative_id, principal_id)
+        if not creative:
+            return CreativePushFailure(f"Creative {creative_id} not found")
+        asset = _build_adapter_asset_from_creative(creative, package_assignments)
+
+        try:
+            asset_statuses = upload(platform_order_id, [asset], datetime.now(UTC))
+        except Exception as e:
+            logger.error(
+                log_safe(f"[GATE-PUSH] Adapter raised pushing creative {creative_id} to buy {media_buy_id}: {e}"),
+                exc_info=True,
+            )
+            return CreativePushFailure(str(e), adcp_error_for(e))
+
+        for status in asset_statuses:
+            if status.creative_id == creative_id:
+                if status.status == "failed":
+                    return CreativePushFailure(status.message or "Adapter reported upload failure", status.error)
+                merged_data = _apply_creative_enrichment(creative, status)
+                if merged_data is not None:
+                    uow.creatives.update_data(creative, merged_data)
+                logger.info(
+                    log_safe(
+                        f"[GATE-PUSH] Pushed creative {creative_id} to live buy "
+                        f"{media_buy_id} (platform order {platform_order_id})"
+                    )
+                )
+                return None
+        return CreativePushFailure(f"Adapter did not report status for creative {creative_id}")
 
 
 def hold_creative_at_ad_server(*, tenant_id: str, principal_id: str, ad_server_creative_id: str) -> None:
