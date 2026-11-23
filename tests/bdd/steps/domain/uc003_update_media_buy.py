@@ -609,6 +609,10 @@ def given_package_exists(ctx: dict, package_id: str) -> None:
     env = ctx["env"]
     new_pkg = MediaPackageFactory(
         media_buy=ctx["existing_media_buy"],
+        # A minted id, never the factory default: the default names the buy's first request
+        # package, so the factory updated THAT row in place and every label this step
+        # registered aliased the package the buy already held.
+        package_id=mint_id("pkg"),
         package_config={
             "product_id": "guaranteed_display",
             "budget": 5000.0,
