@@ -1041,7 +1041,9 @@ def _update_media_buy_impl(
             # The config row is read on this unit's session. get_adapter would read it in a
             # session of its own, and the first get_db_session() inside an open unit closes the
             # unit's session: the revision lock _refuse_stale_revision took would go with it,
-            # before any write it guards (#1644, #2647).
+            # before any write it guards (#1644, #2647). The lock then holds until the writes,
+            # except on the thread whose cached ContextManager session is the unit's session:
+            # get_or_create_context and create_workflow_step above commit and close it (#2682).
             assert uow.adapter_configs is not None
             adapter = build_adapter(identity, uow.adapter_configs.find_by_tenant())
             today = date.today()
