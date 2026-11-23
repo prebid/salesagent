@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from src.core.database.models import AdapterConfig
 from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError
+from src.core.operator_errors import GAMNotConnected
 
 
 class TenantNotConfiguredError(AdCPConfigurationError):
@@ -100,6 +101,20 @@ class AdapterConfigRepository:
         """
         config = self.find_by_tenant()
         return config.adapter_type if config else None
+
+    def require_gam_config(self) -> AdapterConfig:
+        """The tenant's GAM adapter configuration, with a network code and credentials.
+
+        The one gate for every request that needs the tenant's GAM connection.
+
+        Raises:
+            GAMNotConnected: If the tenant has no AdapterConfig row, its adapter is not GAM,
+                or the row stores no network code or no credentials.
+        """
+        config = self.find_by_tenant()
+        if config is None or not config.gam_network_code or not self.has_gam_credentials(config):
+            raise GAMNotConnected(f"Tenant {self._tenant_id} has no GAM connection")
+        return config
 
     # ------------------------------------------------------------------
     # Logic methods (pure — accept pre-loaded config, no DB)

@@ -115,6 +115,16 @@ class ConnectionTestFailed(UpstreamFailure):
     MESSAGE = "The connection test failed"
 
 
+class GAMNotConnected(StateConflict):
+    """A request needs the tenant's Google Ad Manager connection, and the tenant has none.
+
+    Raised by ``AdapterConfigRepository.require_gam_config``: the tenant's adapter is not
+    GAM, or it stores no network code or no credentials (OAuth or service account).
+    """
+
+    MESSAGE = "Connect your GAM account first. Go to Ad Server settings to configure GAM."
+
+
 # One RecordNotFound per kind of record. The repository for that kind names it as its
 # NOT_FOUND, and Repository.require (src/core/database/repositories/base.py) raises it.
 
