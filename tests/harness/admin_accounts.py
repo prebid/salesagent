@@ -524,16 +524,22 @@ class AdminAccountEnv:
             product = ProductFactory(tenant=tenant, product_id=product_id)
             PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
 
-    def onboard_gam(self, *, tenant_id: str | None = None, service_account_email: str | None = None) -> None:
+    def onboard_gam(
+        self, *, tenant_id: str | None = None, service_account_email: str | None = None, connected: bool = True
+    ) -> None:
         """Leave *tenant_id* (this env's tenant by default) with the rows GAM onboarding writes.
 
-        The service account email is stored if given; GAM onboarding stores none.
+        The service account email is stored if given; GAM onboarding stores none. A tenant
+        not *connected* keeps its network code and stores no credentials, as one whose
+        connection was never authorized or was removed.
         """
         from tests.utils.tenant_setup import onboard_gam
 
         with self._seeding(tenant_id) as (_, tenant):
             config = onboard_gam(tenant, trafficker_id="bdd_trafficker")
             config.gam_service_account_email = service_account_email
+            if not connected:
+                config.gam_refresh_token = None
 
     def seed_running_inventory_sync(self, sync_id: str, *, tenant_id: str | None = None) -> None:
         """Store an inventory sync *sync_id* of *tenant_id* (this env's by default), started a moment ago, still running."""
@@ -744,6 +750,19 @@ class AdminAccountEnv:
         return self.client.request(
             "post", f"/api/sync/trigger/{tenant_id}", json=body, headers={"X-API-Key": self._stored_api_key("api_key")}
         )
+
+    def sync_orders_by_api(self, tenant_id: str) -> AdminResponse:
+        """POST the sync API's orders sync for *tenant_id*, as its scripted callers do."""
+        return self.client.request(
+            "post",
+            f"/api/sync/tenant/{tenant_id}/orders/sync",
+            json={},
+            headers={"X-API-Key": self._stored_api_key("api_key")},
+        )
+
+    def open_page(self, path: str) -> AdminResponse:
+        """GET *path* as a browser opens a page from its address bar, so it names no page to go back to."""
+        return self.client.request("get", path)
 
     def sync_status_by_api(self, sync_id: str) -> AdminResponse:
         """GET the sync job *sync_id* from the sync API's status route."""

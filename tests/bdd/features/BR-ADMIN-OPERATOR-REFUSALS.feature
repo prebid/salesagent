@@ -472,3 +472,47 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the JSON issues are:
       | field        | text                         |
       | network_code | Network code must be numeric |
+
+  # A request that needs the tenant's GAM connection is refused by one class, GAMNotConnected,
+  # wherever it is asked: AdapterConfigRepository.require_gam_config is the one gate. The tenant
+  # chose GAM and stores its network code, but no credentials (OAuth or service account).
+  @T-ADMIN-REFUSAL-053 @json @gam-not-connected
+  Scenario Outline: A request for <request> of a tenant whose GAM is not connected is refused as a conflict
+    Given another tenant of this seller, on Google Ad Manager with no credentials
+    When a page's script asks for <request> of that tenant
+    Then the page returns status 409
+    And the JSON response has "success" as false
+    And the JSON error is the "GAMNotConnected" refusal
+
+    Examples:
+      | request                       |
+      | the GAM custom targeting keys |
+      | a GAM line item               |
+      | an orders sync                |
+      | an inventory sync             |
+      | the GAM advertisers           |
+      | the GAM reporting             |
+      | an advertiser's GAM summary   |
+      | the GAM country breakdown     |
+      | the GAM ad unit breakdown     |
+
+  @T-ADMIN-REFUSAL-054 @json @gam-not-connected @sync-api
+  Scenario Outline: The sync API refuses <sync> of a tenant whose GAM is not connected as a conflict
+    Given another tenant of this seller, on Google Ad Manager with no credentials
+    When the sync API is asked for <sync> of that tenant
+    Then the page returns status 409
+    And the JSON response has "success" as false
+    And the JSON error is the "GAMNotConnected" refusal
+
+    Examples:
+      | sync              |
+      | an inventory sync |
+      | an orders sync    |
+
+  @T-ADMIN-REFUSAL-055 @gam-not-connected
+  Scenario: A GAM line item page of a tenant whose GAM is not connected shows the refusal on the error page
+    Given another tenant of this seller, on Google Ad Manager with no credentials
+    When the operator opens that tenant's GAM line item page with no page to go back to
+    Then the page returns status 409
+    And the page is the error page
+    And the page shows the "GAMNotConnected" refusal

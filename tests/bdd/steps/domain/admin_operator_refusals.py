@@ -345,6 +345,53 @@ def when_send_slack_test_for_absent_tenant(ctx: dict) -> None:
     ctx["admin_page"] = _env(ctx).fetch_tenant_route("bdd_absent_tenant", "test_slack")
 
 
+@given("another tenant of this seller, on Google Ad Manager with no credentials")
+def given_another_tenant_on_gam_without_credentials(ctx: dict) -> None:
+    env = _env(ctx)
+    ctx["admin_other_tenant_id"] = env.seed_tenant()
+    env.onboard_gam(tenant_id=ctx["admin_other_tenant_id"], connected=False)
+
+
+#: For each request that needs the tenant's GAM connection, as a page's script sends it:
+#: (method, path, JSON body). ``{tenant}`` is the scenario's other tenant. No line item is stored,
+#: so the line item routes go on to GAM.
+_GAM_REQUESTS: dict[str, tuple[str, str, dict[str, str] | None]] = {
+    "the GAM custom targeting keys": ("get", "/tenant/{tenant}/gam/api/custom-targeting-keys", None),
+    "a GAM line item": ("get", "/tenant/{tenant}/gam/api/line-item/1001", None),
+    "an orders sync": ("post", "/api/tenant/{tenant}/sync/orders", {}),
+    "an inventory sync": ("post", "/api/tenant/{tenant}/inventory/sync", {"mode": "incremental"}),
+    "the GAM advertisers": ("post", "/tenant/{tenant}/api/gam/get-advertisers", {}),
+    "the GAM reporting": ("get", "/api/tenant/{tenant}/gam/reporting?date_range=today", None),
+    "an advertiser's GAM summary": (
+        "get",
+        "/api/tenant/{tenant}/gam/reporting/advertiser/1001/summary?date_range=today",
+        None,
+    ),
+    "the GAM country breakdown": ("get", "/api/tenant/{tenant}/gam/reporting/countries?date_range=today", None),
+    "the GAM ad unit breakdown": ("get", "/api/tenant/{tenant}/gam/reporting/ad-units?date_range=today", None),
+}
+
+
+@when(parsers.parse("a page's script asks for {request} of that tenant"))
+def when_script_asks_for_gam_request(ctx: dict, request: str) -> None:
+    method, path, body = _GAM_REQUESTS[request]
+    ctx["admin_page"] = _env(ctx).fetch(method, path.format(tenant=_other_tenant_id(ctx)), body)
+
+
+@when(parsers.re(r"the sync API is asked for (?P<sync>an inventory sync|an orders sync) of that tenant"))
+def when_sync_api_asked_for_gam_sync(ctx: dict, sync: str) -> None:
+    env, tenant_id = _env(ctx), _other_tenant_id(ctx)
+    if sync == "an inventory sync":
+        ctx["admin_page"] = env.trigger_sync_by_api(tenant_id, {"sync_type": "inventory"})
+    else:
+        ctx["admin_page"] = env.sync_orders_by_api(tenant_id)
+
+
+@when("the operator opens that tenant's GAM line item page with no page to go back to")
+def when_open_gam_line_item_page(ctx: dict) -> None:
+    ctx["admin_page"] = _env(ctx).open_page(f"/tenant/{_other_tenant_id(ctx)}/gam/line-item/1001")
+
+
 @when(parsers.parse('the users page adds the authorized domain "{domain}" to that tenant'))
 def when_add_authorized_domain(ctx: dict, domain: str) -> None:
     ctx["admin_page"] = _env(ctx).fetch_tenant_route(_other_tenant_id(ctx), "users/domains", {"domain": domain})
