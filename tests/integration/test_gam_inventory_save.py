@@ -24,7 +24,7 @@ from src.adapters.gam_inventory_discovery import (
     Placement,
 )
 from src.core.database.models import GAMInventory
-from src.services.gam_inventory_service import GAMInventoryService
+from src.core.database.repositories.uow import GAMInventoryUoW
 from tests.factories import GAMInventoryFactory, TenantFactory
 from tests.harness._base import IntegrationEnv
 
@@ -103,8 +103,11 @@ def _discovery(ad_unit_name: str) -> GAMInventoryDiscovery:
     return discovery
 
 
-def _save(env: IntegrationEnv, discovery: GAMInventoryDiscovery) -> None:
-    GAMInventoryService(env._session)._save_inventory_to_db(TENANT, discovery)
+def _save(discovery: GAMInventoryDiscovery) -> None:
+    """Save *discovery* as the sync does (``GAMSyncManager._save_inventory``)."""
+    with GAMInventoryUoW(TENANT) as uow:
+        assert uow.inventory is not None
+        uow.inventory.save_discovery(discovery)
 
 
 def _rows(env: IntegrationEnv, tenant_id: str) -> dict[tuple[str, str], GAMInventory]:
@@ -125,7 +128,7 @@ def test_a_saved_discovery_is_one_row_per_item_of_its_tenant_and_a_resave_update
         GAMInventoryFactory(tenant=other, inventory_type="ad_unit", inventory_id="au_1", name="Theirs")
         env._commit_factory_data()
 
-        _save(env, _discovery("Leaderboard"))
+        _save(_discovery("Leaderboard"))
         first = _rows(env, TENANT)
 
         assert sorted(first) == [
@@ -188,7 +191,7 @@ def test_a_saved_discovery_is_one_row_per_item_of_its_tenant_and_a_resave_update
         assert first[("placement", "pl_gone")].status == "STALE"
         assert first[("ad_unit", "au_gone")].status == "ACTIVE"
 
-        _save(env, _discovery("Leaderboard, renamed"))
+        _save(_discovery("Leaderboard, renamed"))
         second = _rows(env, TENANT)
 
         assert sorted(second) == sorted(first)

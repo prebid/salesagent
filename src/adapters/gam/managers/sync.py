@@ -25,7 +25,6 @@ from src.adapters.gam.client import GAMClientManager
 from src.adapters.gam.managers.inventory import GAMInventoryManager
 from src.adapters.gam.managers.orders import GAMOrdersManager
 from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
-from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
 from src.services.sync_jobs import recording_failure
 
@@ -234,11 +233,12 @@ class GAMSyncManager:
         }
 
     def _save_inventory(self, discovery: GAMInventoryDiscovery) -> None:
-        """Write what *discovery* found to the database, on a session of its own that closes before the job's next unit."""
-        from src.services.gam_inventory_service import GAMInventoryService
+        """Write what *discovery* found to the database, in a unit of work of its own that closes before the job's next unit."""
+        from src.core.database.repositories.uow import GAMInventoryUoW
 
-        with get_db_session() as db_session:
-            GAMInventoryService(db_session)._save_inventory_to_db(self.tenant_id, discovery)
+        with GAMInventoryUoW(self.tenant_id) as uow:
+            assert uow.inventory is not None
+            uow.inventory.save_discovery(discovery)
 
     def get_sync_status(self, db_session: Session, sync_id: str) -> dict[str, Any] | None:
         """Get status of a specific sync job.

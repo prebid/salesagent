@@ -40,6 +40,7 @@ from src.core.database.repositories.adapter_config import AdapterConfigRepositor
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.effects import begin_effects, drain_after_commit, end_effects
+from src.core.database.repositories.gam_inventory import GAMInventoryRepository
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
@@ -571,3 +572,18 @@ class SyncJobUoW(BaseUoW):
         "sync_jobs": SyncJobRepository,
         "adapter_config": AdapterConfigRepository,
     }
+
+
+class GAMInventoryUoW(BaseUoW):
+    """Unit of Work for writing what a GAM sync discovered as a tenant's inventory.
+
+    The repository commits each batch on this unit's session, so a large inventory is
+    never one transaction; this unit commits what follows the last batch.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    inventory: GAMInventoryRepository | None
+
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {"inventory": GAMInventoryRepository}
