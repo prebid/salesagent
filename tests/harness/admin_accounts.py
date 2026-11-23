@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
@@ -523,6 +524,32 @@ class AdminAccountEnv:
         with self._seeding(tenant_id) as (_, tenant):
             product = ProductFactory(tenant=tenant, product_id=product_id)
             PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
+
+    def seed_media_buy_package(
+        self, media_buy_id: str, package_id: str, *, budget: Decimal, created_budget: float
+    ) -> None:
+        """Store a draft buy *media_buy_id* of this tenant holding *package_id*, its budget updated since creation.
+
+        The package's ``budget`` column holds *budget*, the value ``update_media_buy`` writes, and its
+        ``package_config`` keeps *created_budget*, the budget the package was created with.
+        Draft, so the page asks no ad server for delivery.
+        """
+        from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory
+
+        with self._seeding() as (_, tenant):
+            buy = MediaBuyFactory(
+                tenant=tenant, principal=PrincipalFactory(tenant=tenant), media_buy_id=media_buy_id, status="draft"
+            )
+            MediaPackageFactory(
+                media_buy=buy,
+                package_id=package_id,
+                budget=budget,
+                package_config={"package_id": package_id, "budget": created_budget},
+            )
+
+    def get_media_buy_page(self, media_buy_id: str) -> AdminResponse:
+        """GET the operator's page for the buy *media_buy_id*."""
+        return self.client.request("get", f"/tenant/{self._tenant_id}/media-buy/{media_buy_id}")
 
     def onboard_gam(self, *, tenant_id: str | None = None, service_account_email: str | None = None) -> None:
         """Leave *tenant_id* (this env's tenant by default) with the rows GAM onboarding writes.

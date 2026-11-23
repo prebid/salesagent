@@ -106,6 +106,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_unexpected_errors",
     "tests.bdd.steps.domain.admin_tenant_scoping",
     "tests.bdd.steps.domain.admin_inventory_profiles",
+    "tests.bdd.steps.domain.admin_media_buy_page",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
     "tests.bdd.steps.domain.uc_get_products_publisher_domain",
