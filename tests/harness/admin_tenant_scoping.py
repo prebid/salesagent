@@ -264,13 +264,16 @@ class AdminTenantScopingEnv(AdminAccountEnv):
     def login_as_super_admin_of_other_tenant(self) -> None:
         """A super admin signed in at a fresh home tenant, with no row in the target (#2204, AC4 as amended).
 
+        The session is the deployment sign-in's (``auth_method=None``), as for the members above:
+        a tenant-SSO session is scoped to its own tenant, so it could not reach the target.
+
         The session carries the two keys ``is_super_admin()`` caches after a configured super
         admin's first check (``_cache_admin_status`` in ``src/admin/utils/helpers.py``), so the
         grant reads the same on both transports without touching the stack's
         ``SUPER_ADMIN_EMAILS``.
         """
         home_tenant_id = self._new_home_tenant(with_member=True)
-        payload = member_session_payload(MEMBER_EMAIL, home_tenant_id)
+        payload = member_session_payload(MEMBER_EMAIL, home_tenant_id, auth_method=None)
         self.client.state_session({**payload, "is_super_admin": True, "admin_email": MEMBER_EMAIL})
 
     def _new_home_tenant(self, *, with_member: bool) -> str:
