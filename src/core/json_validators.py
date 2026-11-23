@@ -12,6 +12,8 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import validates
 
+from src.core.media_channels import parse_media_channels
+
 # Pydantic models for JSON field validation
 
 
@@ -89,9 +91,6 @@ class JSONValidatorMixin:
     @validates("channels")
     def validate_channels(self, key, value):
         """``Product.channels``: every write goes through the one rule, ``parse_media_channels`` (GH #1532)."""
-        # Imported here: src.core.helpers imports the adapters, which import the models this mixin serves.
-        from src.core.helpers.channel_helpers import parse_media_channels
-
         return parse_media_channels(value or ())
 
     @validates("request_data", "response_data", "transaction_details")

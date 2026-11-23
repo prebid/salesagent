@@ -44,6 +44,7 @@ from src.core.config_loader import is_single_tenant_mode
 from src.core.domain_config import (
     get_session_cookie_domain,
 )
+from src.core.media_channels import media_channel_options
 from src.core.operator_errors import best_effort
 
 logger = logging.getLogger(__name__)
@@ -277,10 +278,7 @@ def create_app(config=None, settings=None):
         context["support_email"] = get_support_email()
 
         # The product forms' channel picker iterates this, so it offers exactly the
-        # MediaChannel enum (GH #1532). Imported here like its siblings: src.core.helpers
-        # imports the adapters eagerly, which the admin app does not need at import time.
-        from src.core.helpers.channel_helpers import media_channel_options
-
+        # MediaChannel enum (GH #1532).
         context["media_channel_options"] = media_channel_options()
 
         # NO sales_agent_domain. Templates built per-tenant URLs as

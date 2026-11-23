@@ -2,8 +2,8 @@
 
 The shared picker ``templates/components/channel_selector.html`` used to hard-code nine
 options, four of them outside the enum, and both product handlers stored whatever the form
-posted. Three facts are graded here through the real Flask app, because the template guard
-in tests/unit cannot see them:
+posted. These facts are graded here through the real Flask app, posted as a browser posts
+(``AdminClient``), because the template guard in tests/unit cannot see them:
 
 * the add page renders the picker from ``inject_context`` -- a context processor that forgot
   the key would render an EMPTY picker silently (Flask's default Jinja ``Undefined`` iterates
@@ -26,11 +26,9 @@ from adcp.types._generated import MediaChannel
 from src.core.database.repositories.uow import ProductUoW
 from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
 from tests.factories.core import seed_property_tag_selection
-from tests.harness.admin_client import BROWSER_PAGE_HEADERS
+from tests.harness.admin_client import AdminClient
 from tests.helpers.admin_product_form import minimal_product_create_form, minimal_product_edit_form
-from tests.helpers.admin_session import admin_auth_session
 from tests.helpers.channel_picker import picker_options
-from tests.integration._egress_ingest_helpers import flashes
 
 pytestmark = [pytest.mark.admin, pytest.mark.requires_db]
 
@@ -46,6 +44,15 @@ def tenant(factory_session):
     return TenantFactory(tenant_id=_TENANT_ID)
 
 
+@pytest.fixture
+def operator(tenant):
+    """The tenant's operator in a browser, signed in."""
+    client = AdminClient()
+    client.authenticate(_TENANT_ID)
+    yield client
+    client.close()
+
+
 def _stored_channels(product_id: str) -> list[str] | None:
     with ProductUoW(_TENANT_ID) as uow:
         assert uow.products is not None
@@ -53,60 +60,51 @@ def _stored_channels(product_id: str) -> list[str] | None:
         return None if product is None else product.channels
 
 
-def test_add_product_page_offers_exactly_the_media_channel_enum(admin_client, tenant):
-    admin_auth_session(admin_client, _TENANT_ID)
-
-    response = admin_client.get(f"/tenant/{_TENANT_ID}/products/add")
-
-    assert response.status_code == 200
-    offered = {value for value, _ in picker_options(response.get_data(as_text=True))}
-    assert offered == {member.value for member in MediaChannel}
+def _selected(page) -> list[str]:
+    return [value for value, selected in picker_options(page.data.decode()) if selected]
 
 
-def test_add_product_refuses_a_channel_outside_the_enum(admin_client, tenant, factory_session):
-    """Re-rendered form (200) naming the refusal, and no row -- not the 302 a stored product gives."""
+def test_add_product_page_offers_exactly_the_media_channel_enum(operator):
+    page = operator.request("get", f"/tenant/{_TENANT_ID}/products/add")
+
+    assert page.status_code == 200
+    assert {value for value, _ in picker_options(page.data.decode())} == {member.value for member in MediaChannel}
+
+
+def test_add_product_refuses_a_channel_outside_the_enum(operator, tenant, factory_session):
+    """The form re-rendered with the refusal flashed, and no row -- a stored product goes to the list."""
     selection = seed_property_tag_selection(tenant)
     factory_session.commit()
-    admin_auth_session(admin_client, _TENANT_ID)
 
-    response = admin_client.post(
+    page = operator.submit(
         f"/tenant/{_TENANT_ID}/products/add",
-        data=minimal_product_create_form(
+        minimal_product_create_form(
             selection, product_id="picker_add", format_options=json.dumps([_IMAGE_DECLARATION]), channels="video"
         ),
-        follow_redirects=False,
     )
 
-    assert response.status_code == 200, response.data[:2000]
-    # The create path re-renders, which consumes the flash into the page; read it there.
-    assert _REFUSAL in response.get_data(as_text=True)
+    assert page.status_code == 200, page.data[:2000]
+    assert [category for category, message in page.flashes() if _REFUSAL in message] == ["error"]
     with ProductUoW(_TENANT_ID) as uow:
         assert uow.products is not None
         assert uow.products.get_by_id("picker_add") is None
 
 
-def test_edit_product_refuses_a_channel_outside_the_enum_and_keeps_the_stored_value(admin_client, tenant):
+def test_edit_product_refuses_a_channel_outside_the_enum_and_keeps_the_stored_value(operator, tenant):
     product = ProductFactory(tenant=tenant, product_id="picker_edit", channels=["olv"])
     PricingOptionFactory(product=product)
-    admin_auth_session(admin_client, _TENANT_ID)
-
     edit_path = f"/tenant/{_TENANT_ID}/products/picker_edit/edit"
-    response = admin_client.post(
-        edit_path,
-        # A browser's form post from the edit page: the error handler answers a refusal there.
-        headers={**BROWSER_PAGE_HEADERS, "Referer": f"https://localhost{edit_path}"},
-        data=minimal_product_edit_form(channels="video"),
-        follow_redirects=False,
-    )
 
-    assert response.status_code == 302, response.data[:2000]
-    # Back to the edit page -- success goes to the list.
-    assert response.headers["Location"].endswith(edit_path)
-    assert [category for category, message in flashes(admin_client) if _REFUSAL in message] == ["error"]
+    page = operator.submit(edit_path, minimal_product_edit_form(channels="video"), from_page=edit_path)
+
+    # Back on the edit page with the stored channel selected: success goes to the list,
+    # which has no picker.
+    assert _selected(page) == ["olv"]
+    assert [category for category, message in page.flashes() if _REFUSAL in message] == ["error"]
     assert _stored_channels("picker_edit") == ["olv"]
 
 
-def test_saving_the_edit_form_unchanged_keeps_the_stored_channels(admin_client, tenant):
+def test_saving_the_edit_form_unchanged_keeps_the_stored_channels(operator, tenant):
     """Open the edit page and post back what its picker selects: the stored array does not move.
 
     Seeded out of enum order on purpose. The column's rule stores enum order, which is the
@@ -114,21 +112,13 @@ def test_saving_the_edit_form_unchanged_keeps_the_stored_channels(admin_client, 
     """
     product = ProductFactory(tenant=tenant, product_id="picker_noop", channels=["retail_media", "olv"])
     PricingOptionFactory(product=product)
-    admin_auth_session(admin_client, _TENANT_ID)
     stored = _stored_channels("picker_noop")
-
     edit_path = f"/tenant/{_TENANT_ID}/products/picker_noop/edit"
-    page = admin_client.get(edit_path)
-    selected = [value for value, is_selected in picker_options(page.get_data(as_text=True)) if is_selected]
-    response = admin_client.post(
-        edit_path,
-        headers={**BROWSER_PAGE_HEADERS, "Referer": f"https://localhost{edit_path}"},
-        data=minimal_product_edit_form(channels=selected),
-        follow_redirects=False,
-    )
 
-    assert response.status_code == 302, response.data[:2000]
-    # To the list: a refusal goes back to the edit page and writes nothing.
-    assert response.headers["Location"].endswith(f"/tenant/{_TENANT_ID}/products/")
+    selected = _selected(operator.request("get", edit_path))
+    page = operator.submit(edit_path, minimal_product_edit_form(channels=selected), from_page=edit_path)
+
+    # Saved: a refusal goes back to the edit page and writes nothing.
+    assert [category for category, _ in page.flashes()] == ["success"]
     assert stored == [MediaChannel.olv.value, MediaChannel.retail_media.value]
     assert _stored_channels("picker_noop") == stored

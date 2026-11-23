@@ -832,10 +832,13 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # unknown and the array is OMITTED. A ["display"] fallback would publish an exhaustive
     # display-only scope the inputs do not support, and an empty array is wire-valid but
     # draws a Canary advisory (migration/channels.mdx).
-    # NOT-IN-SPEC / production mapping: the aliasing table (video->olv,
-    # audio->streaming_audio) and dropping names outside the channels enum are production
-    # choices this outline pins. Every OUTPUT value is a pinned enum member, emitted in enum
-    # order.
+    # NOT-IN-SPEC / production mapping: dropping a stored name outside the channels enum is a
+    # production choice this outline pins. Every OUTPUT value is a pinned enum member, emitted
+    # in enum order whatever the catalog's order (catalog_out_of_enum_order). Since GH #1532 a
+    # catalog holds such a name only as residue the channel repair left ("hologram" stands for
+    # one): the repair rewrites video, audio and retail, drops native, and Product.channels
+    # refuses every other non-member on write. No catalog or adapter can name video or audio
+    # any more, so the former aliased_channels and mixed_channels rows are gone.
     # The Given seeds the catalog, which is where production reads the channels from: the
     # union of each product's channels, falling back to the adapter's defaults only for a
     # tenant with no catalog (set_portfolio_channels in tests/harness/capabilities.py says
@@ -844,20 +847,18 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # evidence -> omit) is graded by unrecognized_only here and by the adapter-unavailable
     # rows of @T-UC-010-degradation-partitions. A publisher partnership is seeded so
     # media_buy.portfolio is emitted and an absent primary_channels is a real omission.
-    # @bva primary_channels: 1 recognized channel, 1 unrecognized channel, alias 'video',
-    # alias 'audio'
+    # @bva primary_channels: 1 recognized channel, 1 unrecognized channel
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/primary_channels
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/description
     # @source repo=adcp ref=v3.2.7 path=docs/reference/migration/channels.mdx (complete scope or omit; empty arrays advisory)
 
     Examples:
-      | partition_boundary                           | catalog_channels       | expected_result                |
+      | partition_boundary                           | catalog_channels       | expected_result                 |
       | canonical_channels                           | display, social, ctv   | equal to [display, social, ctv] |
-      | aliased_channels alias 'video' alias 'audio' | video, audio           | equal to [olv, streaming_audio] |
-      | mixed_channels                               | display, video, social | equal to [display, olv, social] |
-      | single_channel 1 recognized channel          | ctv                    | equal to [ctv]                 |
-      | unrecognized_only 1 unrecognized channel     | hologram               | absent                         |
-      | mixed_valid_invalid                          | display, hologram      | equal to [display]             |
+      | catalog_out_of_enum_order                    | ctv, display, social   | equal to [display, social, ctv] |
+      | single_channel 1 recognized channel          | ctv                    | equal to [ctv]                  |
+      | unrecognized_only 1 unrecognized channel     | hologram               | absent                          |
+      | mixed_valid_invalid                          | display, hologram      | equal to [display]              |
 
   @T-UC-010-channel-all-canonical @channel @boundary
   Scenario: All 20 canonical channels enum values are valid

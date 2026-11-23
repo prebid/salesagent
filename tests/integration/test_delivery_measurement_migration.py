@@ -10,7 +10,7 @@ Verifies upgrade, data transformation, downgrade, and roundtrip on a real DB.
 import pytest
 from sqlalchemy import text
 
-from tests.integration.migration_helpers import run_alembic_downgrade, run_alembic_upgrade, seed_product
+from tests.integration.migration_helpers import run_alembic_downgrade, run_alembic_upgrade, seed_product, stored_column
 
 # Migration revisions under test
 BACKFILL_REV = "6aee724a2d1d"
@@ -74,13 +74,7 @@ def _seed_test_data(engine):
 
 def _get_delivery_measurement(engine, product_id):
     """Read delivery_measurement for a product."""
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("SELECT delivery_measurement FROM products WHERE product_id = :pid"),
-            {"pid": product_id},
-        )
-        row = result.fetchone()
-        return row[0] if row else None
+    return stored_column(engine, "products", "delivery_measurement", product_id=product_id)
 
 
 def _get_column_info(engine):

@@ -6,12 +6,16 @@ cannot mask the template guard: these tests import the helpers, the guard does n
 
 from __future__ import annotations
 
+import subprocess
+import sys
+
 import pytest
 
-from src.core.helpers.channel_helpers import media_channel_options, parse_media_channels
+from src.core.media_channels import media_channel_options, parse_media_channels
 from src.core.operator_errors import InvalidFormInput
 from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION
 from tests.helpers.pinned_schema import load
+from tests.unit._architecture_helpers import REPO_ROOT
 
 #: The spec repo's own channels.json at the pinned tag (the vendored tree), not the SDK's copy.
 _PINNED = f"{EXPECTED_SPEC_VERSION}/enums/channels.json"
@@ -60,3 +64,18 @@ class TestParseMediaChannels:
             "channels: 'video' is not an AdCP media channel",
             "channels: 'retail' is not an AdCP media channel",
         )
+
+
+def test_the_vocabulary_loads_neither_the_models_nor_the_adapters():
+    """``Product.channels``' validator imports this module at module top, beneath the models.
+
+    An import here that reached ``src.core.helpers`` would load the adapters, which import the
+    models: the cycle the validator once hid behind a deferred import. Asked of a fresh
+    interpreter, because this process has imported both already.
+    """
+    script = "import sys, src.core.media_channels; print(*sys.modules, sep='\\n')"
+    loaded = subprocess.run(
+        [sys.executable, "-c", script], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert "src.core.media_channels" in loaded
+    assert [name for name in loaded if name.startswith(("src.adapters", "src.core.database", "src.core.helpers"))] == []

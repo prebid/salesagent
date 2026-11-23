@@ -9,7 +9,7 @@ import pytest
 from adcp.types._generated import MediaChannel
 
 from src.core.schemas import Product
-from tests.factories.product import ONE_AUTHORIZED_PROPERTY, default_publisher_properties
+from tests.factories.product import ONE_AUTHORIZED_PROPERTY, default_publisher_properties, store_channel_residue
 from tests.helpers.adcp_factories import create_test_product
 
 
@@ -126,17 +126,11 @@ class TestProductChannelsConversion:
         assert product.channels[1] == MediaChannel.olv
 
     def test_invalid_db_channel_handled_gracefully(self):
-        """Invalid channel strings in DB should be skipped, not crash.
-
-        Such a row was stored before the column's validator refused them (GH #1532), or left as
-        it was by the repair migration, so it is set the way a loaded row arrives: past the validator.
-        """
-        from sqlalchemy.orm.attributes import set_committed_value
-
+        """Invalid channel strings in DB should be skipped, not crash: residue the channel repair left."""
         from src.core.product_conversion import convert_product_model_to_schema
 
         product_model = self._make_db_product()
-        set_committed_value(product_model, "channels", ["display", "invalid_channel_xyz", "olv"])
+        store_channel_residue(product_model, ["display", "invalid_channel_xyz", "olv"])
 
         # Should not raise -- invalid channels are skipped
         product = convert_product_model_to_schema(

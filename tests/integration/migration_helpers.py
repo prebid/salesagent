@@ -191,7 +191,9 @@ def seed_account(
         )
 
 
-def seed_product(engine, *, tenant_id: str, product_id: str, **jsonb_columns: Any) -> None:
+def seed_product(
+    engine, *, tenant_id: str, product_id: str, inventory_profile_id: int | None = None, **jsonb_columns: Any
+) -> None:
     """Insert a products row directly -- a migration's subject is rows, not callers.
 
     Raw SQL for the same reason as :func:`seed_account`: a revision's subject is a row as an
@@ -202,22 +204,24 @@ def seed_product(engine, *, tenant_id: str, product_id: str, **jsonb_columns: An
     A column not named takes its server default. ``format_ids`` defaults to ``[]``, which
     satisfies its validator (zero iterations), and ``targeting_template`` to ``{}``. The
     column names are interpolated, so they come from the calling test, never from data.
+    ``inventory_profile_id`` is the one integer column a caller names, written only when given
+    so a revision without the column is seeded as before.
     """
     columns = {"format_ids": [], "targeting_template": {}, **jsonb_columns}
-    names = ", ".join(columns)
-    casts = ", ".join(f"CAST(:{name} AS jsonb)" for name in columns)
+    names = list(columns)
+    values = [f"CAST(:{name} AS jsonb)" for name in columns]
+    params: dict[str, Any] = {name: _json_or_null(value) for name, value in columns.items()}
+    if inventory_profile_id is not None:
+        names.append("inventory_profile_id")
+        values.append(":inventory_profile_id")
+        params["inventory_profile_id"] = inventory_profile_id
     with engine.begin() as conn:
         conn.execute(
             text(
-                f"INSERT INTO products (tenant_id, product_id, name, description, delivery_type, {names}) "
-                f"VALUES (:tid, :pid, :name, 'test', 'guaranteed', {casts})"
+                f"INSERT INTO products (tenant_id, product_id, name, description, delivery_type, {', '.join(names)}) "
+                f"VALUES (:tid, :pid, :name, 'test', 'guaranteed', {', '.join(values)})"
             ),
-            {
-                "tid": tenant_id,
-                "pid": product_id,
-                "name": f"Product {product_id}",
-                **{name: None if value is None else json.dumps(value) for name, value in columns.items()},
-            },
+            {"tid": tenant_id, "pid": product_id, "name": f"Product {product_id}", **params},
         )
 
 
@@ -261,7 +265,26 @@ def seed_inventory_profile(
         ).scalar_one()
 
 
-def stored_format_options(engine, table: str, where: str, key: Any) -> Any:
-    """The ``format_options`` column of the one *table* row whose *where* column is *key*."""
+class _JsonNull:
+    def __repr__(self) -> str:
+        return "JSON_NULL"
+
+
+#: What :func:`stored_column` reads a JSONB ``null`` as. psycopg2 reads it as None, exactly as
+#: it reads SQL NULL, and a revision that must store "nothing declared" as SQL NULL rather
+#: than ``'null'::jsonb`` is graded by telling the two apart.
+JSON_NULL = _JsonNull()
+
+
+def stored_column(engine, table: str, column: str, **where: Any) -> Any:
+    """*column* of the one *table* row matching *where*: None for SQL NULL, :data:`JSON_NULL` for JSONB null.
+
+    *table*, *column* and the *where* names are interpolated, so they come from the calling
+    test, never from data; the values stay binds.
+    """
+    condition = " AND ".join(f"{name} = :{name}" for name in where)
     with engine.begin() as conn:
-        return conn.execute(text(f"SELECT format_options FROM {table} WHERE {where} = :key"), {"key": key}).scalar_one()
+        is_null, value = conn.execute(
+            text(f"SELECT {column} IS NULL, {column} FROM {table} WHERE {condition}"), where
+        ).one()
+    return None if is_null else JSON_NULL if value is None else value

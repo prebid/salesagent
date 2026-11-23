@@ -26,7 +26,7 @@ from tests.integration.migration_helpers import (
     run_alembic_upgrade,
     seed_inventory_profile,
     seed_product,
-    stored_format_options,
+    stored_column,
 )
 from tests.utils.database_helpers import vhost_for
 
@@ -53,9 +53,6 @@ def _insert_product(engine, product_id: str, format_options: list[dict]) -> None
         format_options=format_options,
         properties=_PROPERTIES,
     )
-
-
-_options = stored_format_options
 
 
 def _tenant_columns(engine) -> set[str]:
@@ -85,13 +82,13 @@ def test_agent_host_options_become_product_local_and_the_catalog_column_goes(mig
 
     run_alembic_upgrade(db_url, _REVISION)
 
-    assert _options(engine, "products", "product_id", "under_host") == [_LOCAL, second]
-    assert _options(engine, "products", "product_id", "under_publisher") == [_UNDER_PUBLISHER]
-    assert _options(engine, "products", "product_id", "would_collide") == [_UNDER_HOST, _LOCAL]
-    assert _options(engine, "inventory_profiles", "id", profile) == [_LOCAL]
+    assert stored_column(engine, "products", "format_options", product_id="under_host") == [_LOCAL, second]
+    assert stored_column(engine, "products", "format_options", product_id="under_publisher") == [_UNDER_PUBLISHER]
+    assert stored_column(engine, "products", "format_options", product_id="would_collide") == [_UNDER_HOST, _LOCAL]
+    assert stored_column(engine, "inventory_profiles", "format_options", id=profile) == [_LOCAL]
     assert "publisher_format_options" not in _tenant_columns(engine)
 
     run_alembic_downgrade(db_url, _PREVIOUS)
 
     assert "publisher_format_options" in _tenant_columns(engine)
-    assert _options(engine, "products", "product_id", "under_host") == [_LOCAL, second]
+    assert stored_column(engine, "products", "format_options", product_id="under_host") == [_LOCAL, second]

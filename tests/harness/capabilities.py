@@ -231,22 +231,23 @@ class CapabilitiesEnv(PublisherAdagentsMixin, AdminOperatorMixin, IntegrationEnv
         production rule is a UNION ACROSS products, and a single multi-channel
         product would not exercise it.
         """
-        from sqlalchemy.orm.attributes import flag_modified, set_committed_value
+        from adcp.types._generated import MediaChannel
 
         from src.core.database.models import Tenant
         from tests.factories import ProductFactory
+        from tests.factories.product import store_channel_residue
 
+        members = {member.value for member in MediaChannel}
         tenant = self.get_session().get(Tenant, self._tenant_id)
         for channel in channels:
             # Channels only: an authorizing publisher would add a publisher to the portfolio
             # the scenario did not declare.
-            product = ProductFactory(tenant=tenant, authorize_publisher=False)
-            # Written as stored, past the column's validator: a scenario's catalog can hold a
-            # value outside MediaChannel ("video", "hologram"), which exists only as a row stored
-            # before the validator refused it (GH #1532) or left as it was by the repair
-            # migration -- rows the portfolio read must tolerate.
-            set_committed_value(product, "channels", [channel])
-            flag_modified(product, "channels")
+            if channel in members:
+                ProductFactory(tenant=tenant, channels=[channel], authorize_publisher=False)
+            else:
+                # Outside the enum, which the column refuses on write: only residue of the
+                # channel repair holds one (GH #1532).
+                store_channel_residue(ProductFactory(tenant=tenant, authorize_publisher=False), [channel])
         self._commit_factory_data()
 
     def declare_signing(

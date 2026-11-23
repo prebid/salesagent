@@ -14,6 +14,8 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
+from bs4 import BeautifulSoup
+
 from tests.helpers.admin_session import (
     admin_session_payload,
     admin_test_app,
@@ -83,6 +85,21 @@ class AdminResponse:
         if self._json_data is not None:
             return self._json_data
         return json.loads(self._data)
+
+    def flashes(self) -> list[tuple[str, str]]:
+        """``(category, message)`` per flash ``base.html`` rendered into this page, in order.
+
+        :meth:`AdminClient.submit` follows the redirect, so a flash arrives rendered into the
+        page the browser lands on rather than waiting in the session.
+        """
+        alerts = BeautifulSoup(self._data, "html.parser").select(".flash-messages > .alert")
+        return [
+            (
+                next(css.removeprefix("alert-") for css in alert["class"] if css.startswith("alert-")),
+                alert.find(string=True, recursive=False).strip(),
+            )
+            for alert in alerts
+        ]
 
     @classmethod
     def from_flask(cls, response: Any) -> AdminResponse:

@@ -21,13 +21,14 @@ import pytest
 from adcp.types._generated import MediaChannel
 from sqlalchemy import text
 
-from src.core.helpers.channel_helpers import parse_media_channels
+from src.core.media_channels import parse_media_channels
 from tests.integration.migration_helpers import (
     reset_to_revision,
     row_xmins,
     run_alembic_downgrade,
     run_alembic_upgrade,
     seed_product,
+    stored_column,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -58,15 +59,7 @@ def _seed(engine, product_id: str, channels: list[Any] | None) -> None:
 
 
 def _stored(engine, product_id: str):
-    """``(channels, is_sql_null)`` -- psycopg2 reads SQL NULL and ``'null'::jsonb`` both as None."""
-    with engine.connect() as conn:
-        return conn.execute(
-            text(
-                "SELECT channels, channels IS NULL AS is_sql_null "
-                "  FROM products WHERE tenant_id = :tid AND product_id = :pid"
-            ),
-            {"tid": _TENANT, "pid": product_id},
-        ).one()
+    return stored_column(engine, "products", "channels", tenant_id=_TENANT, product_id=product_id)
 
 
 def _xmins(engine) -> dict[str, str]:
@@ -99,7 +92,7 @@ class TestLegacyPickerValuesAreRemapped:
 
         run_alembic_upgrade(db_url, _REVISION)
 
-        assert _stored(engine, f"prod_{legacy}").channels == _as_the_form_writes(member.value, "affiliate")
+        assert _stored(engine, f"prod_{legacy}") == _as_the_form_writes(member.value, "affiliate")
 
     def test_a_non_string_element_is_left_as_it_is(self, at_previous):
         """Not cast to text and not dropped; it sorts after the members, so the array stays deterministic."""
@@ -108,7 +101,7 @@ class TestLegacyPickerValuesAreRemapped:
 
         run_alembic_upgrade(db_url, _REVISION)
 
-        assert _stored(engine, "prod_mixed").channels == [MediaChannel.olv.value, None, 1]
+        assert _stored(engine, "prod_mixed") == [MediaChannel.olv.value, None, 1]
 
     def test_native_is_dropped_and_the_other_channels_kept(self, at_previous):
         """``native`` is a format category, orthogonal to channels; exact equality also refuses native->social."""
@@ -117,18 +110,19 @@ class TestLegacyPickerValuesAreRemapped:
 
         run_alembic_upgrade(db_url, _REVISION)
 
-        assert _stored(engine, "prod_native").channels == ["display"]
+        assert _stored(engine, "prod_native") == ["display"]
 
     def test_a_row_holding_only_native_becomes_null(self, at_previous):
-        """SQL NULL, not ``'[]'`` and not ``'null'::jsonb``: NULL is what production stores for "no claim"."""
+        """SQL NULL, not ``'[]'`` and not ``'null'::jsonb`` (``stored_column`` reads that as ``JSON_NULL``).
+
+        NULL is what production stores for "no claim".
+        """
         engine, db_url = at_previous
         _seed(engine, "prod_only_native", ["native"])
 
         run_alembic_upgrade(db_url, _REVISION)
 
-        row = _stored(engine, "prod_only_native")
-        assert row.channels is None
-        assert row.is_sql_null is True
+        assert _stored(engine, "prod_only_native") is None
 
     def test_an_alias_beside_its_canonical_member_is_deduplicated(self, at_previous):
         engine, db_url = at_previous
@@ -136,7 +130,7 @@ class TestLegacyPickerValuesAreRemapped:
 
         run_alembic_upgrade(db_url, _REVISION)
 
-        assert _stored(engine, "prod_dup").channels == [MediaChannel.olv.value]
+        assert _stored(engine, "prod_dup") == [MediaChannel.olv.value]
 
 
 class TestOnlyAffectedRowsAreWritten:
@@ -154,7 +148,7 @@ class TestOnlyAffectedRowsAreWritten:
         assert after["prod_valid"] == before["prod_valid"]
         assert after["prod_null"] == before["prod_null"]
         assert after["prod_video"] != before["prod_video"], "the row the revision must repair was never written"
-        assert _stored(engine, "prod_valid").channels == ["display", "ctv"]
+        assert _stored(engine, "prod_valid") == ["display", "ctv"]
 
 
 class TestTheDowngradeIsALoggedNoOp:
@@ -166,6 +160,6 @@ class TestTheDowngradeIsALoggedNoOp:
 
         run_alembic_downgrade(db_url, _PREVIOUS)
 
-        assert _stored(engine, "prod_down").channels == [MediaChannel.olv.value]
+        assert _stored(engine, "prod_down") == [MediaChannel.olv.value]
         with engine.connect() as conn:
             assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == _PREVIOUS

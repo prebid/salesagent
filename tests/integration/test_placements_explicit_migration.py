@@ -24,6 +24,7 @@ from tests.integration.migration_helpers import (
     run_alembic_downgrade,
     run_alembic_upgrade,
     seed_product,
+    stored_column,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -47,10 +48,7 @@ def _insert_product(engine, product_id: str, placements: Any) -> None:
 
 
 def _placements(engine, product_id: str) -> Any:
-    with engine.begin() as conn:
-        return conn.execute(
-            text("SELECT placements FROM products WHERE product_id = :pid"), {"pid": product_id}
-        ).scalar_one()
+    return stored_column(engine, "products", "placements", product_id=product_id)
 
 
 def _has_check(engine) -> bool:
