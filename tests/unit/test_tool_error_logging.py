@@ -16,7 +16,8 @@ import logging
 import pytest
 
 from src.adapters.gam.utils.error_handler import RetryConfig, with_retry
-from src.core.exceptions import AdCPAdapterError, AdCPSalesAgentError, adcp_error_for
+from src.core.errors.details import ValidationDetails
+from src.core.exceptions import AdCPAdapterError, AdCPSalesAgentError, AdCPValidationError, adcp_error_for
 from src.core.tool_error_logging import record_boundary_error
 
 _BOUNDARY_LOGGER = "src.core.tool_error_logging"
@@ -112,3 +113,25 @@ def test_untyped_exception_is_one_error_record_with_its_traceback(caplog):
     # from the traceback header instead.
     assert caplog.text.count("Traceback (most recent call last)") == 1
     assert "RuntimeError: untyped" in caplog.text
+
+
+def test_two_refusals_sharing_one_code_are_distinguishable_in_the_record(caplog):
+    """The record names ``field`` and ``details``, because ``message`` cannot.
+
+    Post-ADR-010 ``message`` is a read-only property over ``CODE_TABLE`` -- a function of
+    the CODE, not of the raise site -- so ``create_media_buy``'s twenty-odd
+    ``AdCPValidationError`` sites all log the identical sentence. Four media_buy
+    storyboard checks failed indistinguishably on exactly that (salesagent-basxl). The
+    two values that vary per raise site are ``field`` and ``details``, and both are
+    already wire-bound, so naming them adds no exposure.
+    """
+    caplog.set_level(logging.DEBUG)
+    record_boundary_error("t", "create_media_buy", AdCPValidationError(field="packages"))
+    record_boundary_error(
+        "t", "create_media_buy", AdCPValidationError(details=ValidationDetails(reasons=["no inventory matched"]))
+    )
+
+    packages, reasons = (record.getMessage() for record in _boundary_records(caplog))
+    assert "field=packages" in packages, packages
+    assert "no inventory matched" in reasons, reasons
+    assert packages != reasons, "two different refusals must not produce the same record"

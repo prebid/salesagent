@@ -41,7 +41,7 @@ def _function_calls_repo_get_by_ids(file_path: str, func_name: str) -> bool:
     stronger than an inline select with a hand-written tenant filter.
     """
     source_path = ROOT / file_path
-    tree = ast.parse(source_path.read_text())
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
 
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name != func_name:

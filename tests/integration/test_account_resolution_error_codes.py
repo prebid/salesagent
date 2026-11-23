@@ -7,7 +7,6 @@ Verifies that account resolution errors return spec-compliant error codes
 
 import pytest
 from adcp.types import (
-    AccountReference,
     AccountReferenceById,
     AccountReferenceByNaturalKey,
     BrandReference,
@@ -58,7 +57,7 @@ class TestAccountResolutionErrorCodes:
             env.get_session()  # commit factory data
 
             identity = _make_identity(tenant.tenant_id)
-            ref = AccountReference(root=AccountReferenceById(account_id="nonexistent_acc"))
+            ref = AccountReferenceById(account_id="nonexistent_acc")
 
             with AccountUoW(tenant.tenant_id) as uow:
                 with pytest.raises(AdCPAccountNotFoundError) as exc_info:
@@ -77,11 +76,9 @@ class TestAccountResolutionErrorCodes:
             env.get_session()
 
             identity = _make_identity(tenant.tenant_id)
-            ref = AccountReference(
-                root=AccountReferenceByNaturalKey(
-                    brand=BrandReference(domain="nonexistent.com"),
-                    operator="nobody.com",
-                )
+            ref = AccountReferenceByNaturalKey(
+                brand=BrandReference(domain="nonexistent.com"),
+                operator="nobody.com",
             )
 
             with AccountUoW(tenant.tenant_id) as uow:
@@ -133,7 +130,7 @@ class TestAccountNotFoundViaTransports:
 
         now = datetime.now(UTC)
         return CreateMediaBuyRequest(
-            account=AccountReference(root=AccountReferenceById(account_id="nonexistent-acc-l9wn")),
+            account=AccountReferenceById(account_id="nonexistent-acc-l9wn"),
             brand={"domain": "testbrand.com"},
             start_time=(now + timedelta(days=1)).isoformat(),
             end_time=(now + timedelta(days=8)).isoformat(),

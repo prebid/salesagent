@@ -41,9 +41,9 @@ import pytest
 
 from src.core.security.outbound_http import OutboundRequestBlocked
 from src.core.utils.mcp_client import call_mcp_tool
+from tests.helpers.egress_backoff import fast_backoff
 from tests.helpers.local_http_origin import run_local_origin
 from tests.integration.property_list_helpers import allow_local_origin, enforce_egress_policy
-from tests.integration.test_outbound_http import fast_backoff
 
 pytestmark = [pytest.mark.integration]
 

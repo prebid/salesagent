@@ -124,6 +124,57 @@ Feature: The buyer's context object is echoed unchanged on every outcome (local)
     And the error recovery should be "correctable"
     And the error response echoes the buyer's context object unchanged
 
+  # ── create_media_buy: the ELEMENT-level echo ───────────────────────────
+  # Routed to a create-capable env by the @ctxecho-packages tag.
+  #
+  # Every scenario above grades the ENVELOPE's context, which one seam reads off
+  # the request root and writes onto the response root. AdCP declares the SAME
+  # opaque object on models nested INSIDE a response — `core/package.json`
+  # .properties.context -> $ref core/context.json, and likewise on MediaBuy,
+  # PackageUpdate, Results and MediaBuyDeliveryWebhookResult — and no seam can
+  # reach those: the boundary has no notion of a collection.
+  #
+  # So the element echo is carried by whoever builds the element, and it is a
+  # separate obligation from the envelope's. It was not graded here until now,
+  # and production dropped it: each response Package was built from a
+  # hand-written field map that did not include `context`, so a buyer's
+  # per-package bag was accepted and silently lost.
+  #
+  # BOTH create branches are graded, because they owe DIFFERENT things.
+  # create_media_buy either creates the buy through the adapter and answers with
+  # packages, or holds it for a human decision and answers with the Submitted
+  # variant of `create-media-buy-response.json` — task_id and a message, no
+  # packages array. The element echo is owed only where an element exists; the
+  # envelope echo is owed on both. Each scenario below names its branch, so
+  # neither can become the only one exercised.
+
+  @T-CTXECHO-package-elements @context-echo @ctxecho-packages
+  Scenario: Each created package echoes its own context object unchanged
+    Given the request targets a production account
+    And tenant human_review_required is false
+    And the buyer's request carries an opaque context object
+    And each package in the request carries its own opaque context object
+    When the Buyer Agent sends the create_media_buy request
+    Then the response arrives
+    And the successful response echoes the buyer's context object unchanged
+    And every created package echoes its own context object unchanged
+
+  @T-CTXECHO-package-elements-submitted @context-echo @ctxecho-packages
+  Scenario: A create held for approval echoes the envelope context and carries no package to echo
+    # The complement of the scenario above, and the reason it is a scenario
+    # rather than an Examples row: this branch's response has no packages array,
+    # so "every created package echoes its own context" would grade nothing here
+    # and pass vacuously. What it owes is the ENVELOPE echo, which every outcome
+    # owes, plus the absence of an element echo it never promised.
+    Given the request targets a production account
+    And the tenant requires manual approval
+    And the buyer's request carries an opaque context object
+    And each package in the request carries its own opaque context object
+    When the Buyer Agent sends the create_media_buy request
+    Then the response arrives
+    And the successful response echoes the buyer's context object unchanged
+    And the response carries no packages array
+
   @T-CTXECHO-malformed-before-auth @context-echo @error @auth @ctxecho-media-buys
   Scenario: A malformed request from an unauthenticated caller is answered as malformed, and still echoes the context
     # ORDERING. The document is refused for what it IS before the seller asks

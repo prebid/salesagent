@@ -6,6 +6,7 @@ to help new users understand what they need to do before taking their first orde
 
 import logging
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -13,16 +14,45 @@ from sqlalchemy import func, select
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
-    AuthorizedProperty,
     CurrencyLimit,
     GAMInventory,
     Product,
-    PublisherPartner,
     Tenant,
-    TenantAuthConfig,
 )
+from src.core.database.repositories.principal_lookup import count_principals_by_tenant
+from src.core.database.repositories.publisher import (
+    NO_PUBLISHERS,
+    AuthorizedCounts,
+    PublisherRepository,
+    count_authorized_by_tenant,
+)
+from src.core.database.repositories.signing_key import SigningKeyRepository
+from src.core.database.repositories.tenant_counts import count_by_tenant
+from src.core.database.repositories.tenant_lookup import TenantLookupRepository
+from src.core.signing.posture import KeyBacking, signing_key_backed
+from src.services.ai.factory import tenant_ai_enabled
 
 logger = logging.getLogger(__name__)
+
+
+def _mock_adapter_config_state() -> tuple[bool, str]:
+    """Whether the mock adapter counts as configured, and the operator-facing reason.
+
+    The mock adapter is not production-ready, so it only counts as configured in a
+    testing deployment. Extracted because this decision was byte-duplicated at two
+    call sites, the environment read and both message strings included — the kind of
+    copy that lets one site's wording drift from the other's silently
+    (salesagent-og9k.10).
+
+    The read goes through ``Settings.mock_adapter_counts_as_configured`` rather than
+    ``os.environ``: ``src/core/config.py`` is the one env reader (``ruff-environment.toml``).
+    That named property is also what keeps this honest — it gates ad-server
+    CONFIGURATION state, not egress, and shares only the underlying ``ADCP_TESTING``
+    flag with the other testing hatches, never their policy.
+    """
+    if get_settings().mock_adapter_counts_as_configured:
+        return True, "Mock adapter configured (test mode)"
+    return False, "Mock adapter - Configure a real ad server for production"
 
 
 def _is_multi_tenant_mode() -> bool:
@@ -35,6 +65,63 @@ def _is_multi_tenant_mode() -> bool:
     its own authentication configuration.
     """
     return not get_settings().runtime.is_single_tenant
+
+
+def _custom_domain_task(tenant_id: str, virtual_host: str) -> "SetupTask":
+    """The "Custom Domain (CNAME)" task for a tenant served at *virtual_host*.
+
+    A custom domain is a host that DIFFERS from the one this deployment declares for
+    itself. Every tenant declares a host — ``tenants.virtual_host`` is mandatory — so the
+    presence of one says nothing about whether an operator configured it; the only host
+    nobody chose is the one ``deployment_virtual_host`` derives for the tenant a deployment
+    bootstraps for itself, and the bootstraps store that answer verbatim (#1845).
+
+    A deployment that declares no host of its own has no default for a tenant to be sitting
+    on, so every tenant's host was stated by somebody and the task is done.
+
+    One function, because the live path and the dashboard's pre-fetched path both build this
+    task and a second copy is how they would come to disagree.
+    """
+    from src.core.agent_identity import deployment_virtual_host
+
+    deployment_host = deployment_virtual_host()
+    is_custom = deployment_host is None or virtual_host.lower() != deployment_host.lower()
+    return SetupTask(
+        key="tenant_cname",
+        name="Custom Domain (CNAME)",
+        description="Configure custom domain for your sales agent",
+        is_complete=is_custom,
+        action_url=f"/tenant/{tenant_id}/settings#account",
+        details=(f"Using {virtual_host}" if is_custom else f"Using this deployment's own host ({virtual_host})"),
+    )
+
+
+def _ai_features_task(tenant_id: str, tenant: Tenant) -> "SetupTask":
+    """The optional "AI Features" task: done when the seller's own AI configuration can run.
+
+    ``tenant_ai_enabled`` resolves through ``TenantAIConfig.from_tenant`` (``ai_config``
+    first, the legacy ``gemini_api_key`` column second), the same answer the AI steps act
+    on. Reading the legacy column alone kept this task incomplete for every seller who
+    configured AI under Integrations -> AI Services, which writes ``ai_config`` (#2224).
+
+    No platform fallback: the task asks the seller to configure their own key, and the
+    advertising policy check runs only on it. A keyless row (what the AI Services form
+    stores when the key field is left blank) does not count.
+
+    One function, because the live path and the dashboard's pre-fetched path both build this
+    task and a second copy is how they would come to disagree.
+    """
+    ai_configured = tenant_ai_enabled(tenant, platform_fallback=False)
+    return SetupTask(
+        key="ai_provider_key",
+        name="AI Features",
+        description="Enable AI-assisted product recommendations and creative policy checks",
+        is_complete=ai_configured,
+        action_url=f"/tenant/{tenant_id}/settings#integrations",
+        details=(
+            "AI features enabled" if ai_configured else "Optional: Configure an AI provider API key for AI features"
+        ),
+    )
 
 
 # Simple time-based cache for setup status (5 minute TTL)
@@ -116,79 +203,23 @@ class SetupChecklistService:
             return results
 
         # Fetch uncached tenants
+        now_utc = datetime.now(UTC)
 
         with get_db_session() as session:
-            # Bulk fetch all uncached tenants
-            stmt = select(Tenant).where(Tenant.tenant_id.in_(uncached_ids))
-            tenants = {t.tenant_id: t for t in session.scalars(stmt).all()}
+            tenants = TenantLookupRepository(session).find_by_ids(uncached_ids)
 
-            # Bulk count queries for all metrics (only for uncached tenants)
-            # Currency limits per tenant
-            currency_stmt = (
-                select(CurrencyLimit.tenant_id, func.count())
-                .where(CurrencyLimit.tenant_id.in_(uncached_ids))
-                .group_by(CurrencyLimit.tenant_id)
+            # One grouped count per metric, for the uncached tenants only
+            currency_counts = count_by_tenant(session, CurrencyLimit.tenant_id, uncached_ids)
+            budget_limit_counts = count_by_tenant(
+                session,
+                CurrencyLimit.tenant_id,
+                uncached_ids,
+                CurrencyLimit.max_daily_package_spend.isnot(None),
             )
-            currency_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(currency_stmt).all()
-            }
-
-            # Currency limits with budget controls per tenant
-            budget_stmt = (
-                select(CurrencyLimit.tenant_id, func.count())
-                .where(CurrencyLimit.tenant_id.in_(uncached_ids))
-                .where(CurrencyLimit.max_daily_package_spend.isnot(None))
-                .group_by(CurrencyLimit.tenant_id)
-            )
-            budget_limit_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(budget_stmt).all()
-            }
-
-            # Authorized properties per tenant
-            property_stmt = (
-                select(AuthorizedProperty.tenant_id, func.count())
-                .where(AuthorizedProperty.tenant_id.in_(uncached_ids))
-                .group_by(AuthorizedProperty.tenant_id)
-            )
-            property_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(property_stmt).all()
-            }
-
-            # GAM inventory per tenant
-            gam_stmt = (
-                select(GAMInventory.tenant_id, func.count())
-                .where(GAMInventory.tenant_id.in_(uncached_ids))
-                .group_by(GAMInventory.tenant_id)
-            )
-            gam_inventory_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(gam_stmt).all()
-            }
-
-            # Products per tenant
-            product_stmt = (
-                select(Product.tenant_id, func.count())
-                .where(Product.tenant_id.in_(uncached_ids))
-                .group_by(Product.tenant_id)
-            )
-            product_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(product_stmt).all()
-            }
-
-            # Principals per tenant
-            from src.core.database.repositories.principal_lookup import count_principals_by_tenant
-
-            principal_counts: dict[str, int] = count_principals_by_tenant(session, uncached_ids)
-
-            # Verified publisher partners per tenant
-            verified_publisher_stmt = (
-                select(PublisherPartner.tenant_id, func.count())
-                .where(PublisherPartner.tenant_id.in_(uncached_ids))
-                .where(PublisherPartner.is_verified == True)  # noqa: E712
-                .group_by(PublisherPartner.tenant_id)
-            )
-            verified_publisher_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(verified_publisher_stmt).all()
-            }
+            authorized_counts = count_authorized_by_tenant(session, uncached_ids, datetime.now(UTC))
+            gam_inventory_counts = count_by_tenant(session, GAMInventory.tenant_id, uncached_ids)
+            product_counts = count_by_tenant(session, Product.tenant_id, uncached_ids)
+            principal_counts = count_principals_by_tenant(session, uncached_ids)
 
             # Build status for each uncached tenant using pre-fetched data
             for tenant_id in uncached_ids:
@@ -202,11 +233,15 @@ class SetupChecklistService:
                     tenant=tenant,
                     currency_count=currency_counts.get(tenant_id, 0),
                     budget_limit_count=budget_limit_counts.get(tenant_id, 0),
-                    property_count=property_counts.get(tenant_id, 0),
-                    verified_publisher_count=verified_publisher_counts.get(tenant_id, 0),
+                    authorized=authorized_counts.get(tenant_id, NO_PUBLISHERS),
                     gam_inventory_count=gam_inventory_counts.get(tenant_id, 0),
                     product_count=product_counts.get(tenant_id, 0),
                     principal_count=principal_counts.get(tenant_id, 0),
+                    # Through the repository, per tenant: the signing-key selectors
+                    # are tenant-scoped by construction and a hand-written grouped
+                    # select(SigningKey) here would be exactly the raw query the
+                    # repository layer exists to keep in one place.
+                    key_backing=signing_key_backed(SigningKeyRepository(session, tenant_id), now=now_utc),
                 )
 
                 # Cache the result
@@ -269,11 +304,11 @@ class SetupChecklistService:
         tenant: Tenant,
         currency_count: int,
         budget_limit_count: int,
-        property_count: int,
-        verified_publisher_count: int,
+        authorized: AuthorizedCounts,
         gam_inventory_count: int,
         product_count: int,
         principal_count: int,
+        key_backing: KeyBacking,
     ) -> dict[str, Any]:
         """Build setup status from pre-fetched data (used by bulk query).
 
@@ -281,11 +316,12 @@ class SetupChecklistService:
             tenant: Tenant object
             currency_count: Number of currency limits
             budget_limit_count: Number of currency limits with budget controls
-            property_count: Number of authorized properties
-            verified_publisher_count: Number of verified publisher partners
+            authorized: What the tenant's publishers' stored files authorize now
             gam_inventory_count: Number of GAM inventory items
             product_count: Number of products
             principal_count: Number of principals
+            key_backing: Whether this tenant's own signing keys back signing and
+                publication (``src.core.signing.posture.signing_key_backed``)
 
         Returns:
             Dict with same format as get_setup_status()
@@ -294,14 +330,13 @@ class SetupChecklistService:
         critical_tasks = self._build_critical_tasks(
             tenant,
             currency_count,
-            property_count,
-            verified_publisher_count,
+            authorized,
             gam_inventory_count,
             product_count,
             principal_count,
         )
         recommended_tasks = self._build_recommended_tasks(tenant, budget_limit_count, currency_count)
-        optional_tasks = self._build_optional_tasks(tenant, currency_count)
+        optional_tasks = self._build_optional_tasks(tenant, currency_count, key_backing)
 
         # Calculate progress
         all_tasks = critical_tasks + recommended_tasks + optional_tasks
@@ -347,14 +382,7 @@ class SetupChecklistService:
                 else:
                     config_details = "GAM selected but not authenticated - Complete OAuth flow and test connection"
             elif tenant.ad_server == "mock":
-                # Mock adapter is for testing only - not production ready
-                # But allow it in testing environments
-                if get_settings().mock_adapter_counts_as_configured:
-                    ad_server_fully_configured = True
-                    config_details = "Mock adapter configured (test mode)"
-                else:
-                    ad_server_fully_configured = False
-                    config_details = "Mock adapter - Configure a real ad server for production"
+                ad_server_fully_configured, config_details = _mock_adapter_config_state()
             elif tenant.ad_server in ["kevel", "triton"]:
                 # Other adapters (Kevel, Triton) - assume configured once selected
                 ad_server_fully_configured = True
@@ -378,8 +406,7 @@ class SetupChecklistService:
         # 2. SSO Configuration - Critical for single-tenant deployments, optional for multi-tenant
         # In multi-tenant mode, the platform manages authentication centrally
         if not _is_multi_tenant_mode():
-            auth_config_stmt = select(TenantAuthConfig).filter_by(tenant_id=self.tenant_id)
-            auth_config = session.scalars(auth_config_stmt).first()
+            auth_config = tenant.auth_config
             sso_enabled = bool(auth_config and auth_config.oidc_enabled)
             setup_mode_disabled = bool(not tenant.auth_setup_mode) if hasattr(tenant, "auth_setup_mode") else False
 
@@ -418,37 +445,10 @@ class SetupChecklistService:
                 )
             )
 
-        # 4. Authorized Properties
-        # Single source of truth: AuthorizedProperty table
-        # (Populated automatically when syncing verified PublisherPartners)
-        stmt = (
-            select(func.count()).select_from(AuthorizedProperty).where(AuthorizedProperty.tenant_id == self.tenant_id)
-        )
-        property_count = session.scalar(stmt) or 0
-
-        # Also check verified publisher count for better messaging
-        stmt_publishers = (
-            select(func.count())
-            .select_from(PublisherPartner)
-            .where(PublisherPartner.tenant_id == self.tenant_id, PublisherPartner.is_verified == True)  # noqa: E712
-        )
-        verified_publisher_count = session.scalar(stmt_publishers) or 0
-
-        is_complete = property_count > 0
-        details = (
-            f"{property_count} properties from {verified_publisher_count} verified publishers"
-            if property_count > 0
-            else "Add publishers and sync to discover properties"
-        )
-
+        # 4. Authorized Properties: what the publishers' stored adagents.json files authorize now
         tasks.append(
-            SetupTask(
-                key="authorized_properties",
-                name="Authorized Properties",
-                description="Configure properties with adagents.json for verification",
-                is_complete=is_complete,
-                action_url=f"/tenant/{self.tenant_id}/inventory#publishers-pane",
-                details=details,
+            self._authorized_properties_task(
+                PublisherRepository(session, self.tenant_id).count_authorized(datetime.now(UTC))
             )
         )
 
@@ -662,18 +662,7 @@ class SetupChecklistService:
         )
 
         # 6. Tenant CNAME (Virtual Host)
-        virtual_host = tenant.virtual_host
-        has_custom_domain = bool(virtual_host)
-        tasks.append(
-            SetupTask(
-                key="tenant_cname",
-                name="Custom Domain (CNAME)",
-                description="Configure custom domain for your sales agent",
-                is_complete=has_custom_domain,
-                action_url=f"/tenant/{self.tenant_id}/settings#account",
-                details=f"Using {virtual_host}" if has_custom_domain else "Using default subdomain",
-            )
-        )
+        tasks.append(_custom_domain_task(self.tenant_id, tenant.virtual_host))
 
         return tasks
 
@@ -684,8 +673,7 @@ class SetupChecklistService:
         # SSO Configuration - Optional in multi-tenant mode (platform manages auth centrally)
         # In single-tenant mode, SSO is critical and shown there instead
         if _is_multi_tenant_mode():
-            auth_config_stmt = select(TenantAuthConfig).filter_by(tenant_id=self.tenant_id)
-            auth_config = session.scalars(auth_config_stmt).first()
+            auth_config = tenant.auth_config
             sso_enabled = bool(auth_config and auth_config.oidc_enabled)
             setup_mode_disabled = bool(not tenant.auth_setup_mode) if hasattr(tenant, "auth_setup_mode") else False
 
@@ -719,22 +707,17 @@ class SetupChecklistService:
             )
         )
 
-        # 2. Gemini AI Features (Optional - Tenant-Specific)
-        gemini_configured = bool(tenant.gemini_api_key)
+        # 2. AI Features (Optional - Tenant-Specific)
+        tasks.append(_ai_features_task(self.tenant_id, tenant))
+
+        # 3. Message Signing Key
         tasks.append(
-            SetupTask(
-                key="gemini_api_key",
-                name="Gemini AI Features",
-                description="Enable AI-assisted product recommendations and creative policy checks",
-                is_complete=gemini_configured,
-                action_url=f"/tenant/{self.tenant_id}/settings#integrations",
-                details=(
-                    "AI features enabled" if gemini_configured else "Optional: Configure Gemini API key for AI features"
-                ),
+            self._signing_key_task(
+                signing_key_backed(SigningKeyRepository(session, self.tenant_id), now=datetime.now(UTC))
             )
         )
 
-        # 3. Multiple Currencies
+        # 4. Multiple Currencies
         stmt = select(func.count()).select_from(CurrencyLimit).where(CurrencyLimit.tenant_id == self.tenant_id)
         currency_count = session.scalar(stmt) or 0
         multiple_currencies = currency_count > 1
@@ -753,12 +736,37 @@ class SetupChecklistService:
 
         return tasks
 
+    def _authorized_properties_task(self, authorized: AuthorizedCounts) -> SetupTask:
+        """The authorized-properties task from what the publishers' stored files authorize now.
+
+        A publisher whose stored file is past the 24-hour freshness window authorizes nothing
+        until a fetch succeeds (managed-networks.mdx :623-626); the task says so, so an
+        operator whose seeded or fetched publishers went stale learns why they stopped
+        authorizing.
+        """
+        if authorized.properties > 0:
+            details = f"{authorized.properties} properties from {authorized.publishers} authorizing publishers"
+        else:
+            details = "Add publishers and refresh them to read their properties"
+        if authorized.stale:
+            details += (
+                f". {authorized.stale} publisher(s) stopped authorizing this agent: their stored adagents.json "
+                "is older than 24 hours. Sync publishers to fetch them again"
+            )
+        return SetupTask(
+            key="authorized_properties",
+            name="Authorized Properties",
+            description="Add publishers whose adagents.json authorizes this sales agent",
+            is_complete=authorized.properties > 0,
+            action_url=f"/tenant/{self.tenant_id}/inventory#publishers-pane",
+            details=details,
+        )
+
     def _build_critical_tasks(
         self,
         tenant: Tenant,
         currency_count: int,
-        property_count: int,
-        verified_publisher_count: int,
+        authorized: AuthorizedCounts,
         gam_inventory_count: int,
         product_count: int,
         principal_count: int,
@@ -776,14 +784,7 @@ class SetupChecklistService:
                 ad_server_fully_configured = True
                 config_details = "GAM configured - Test connection to verify"
             elif tenant.ad_server == "mock":
-                # Mock adapter is for testing only - not production ready
-                # But allow it in testing environments
-                if get_settings().mock_adapter_counts_as_configured:
-                    ad_server_fully_configured = True
-                    config_details = "Mock adapter configured (test mode)"
-                else:
-                    ad_server_fully_configured = False
-                    config_details = "Mock adapter - Configure a real ad server for production"
+                ad_server_fully_configured, config_details = _mock_adapter_config_state()
             elif tenant.ad_server in ["kevel", "triton"]:
                 ad_server_fully_configured = True
                 config_details = f"{tenant.ad_server} adapter configured"
@@ -840,27 +841,9 @@ class SetupChecklistService:
                 )
             )
 
-        # 4. Authorized Properties
-        # Single source of truth: AuthorizedProperty table
-        # (Populated automatically when syncing verified PublisherPartners)
-        # Note: property_count and verified_publisher_count are passed as parameters (pre-fetched)
-        properties_is_complete = property_count > 0
-        properties_details = (
-            f"{property_count} properties from {verified_publisher_count} verified publishers"
-            if property_count > 0
-            else "Add publishers and sync to discover properties"
-        )
-
-        tasks.append(
-            SetupTask(
-                key="authorized_properties",
-                name="Authorized Properties",
-                description="Configure properties with adagents.json for verification",
-                is_complete=properties_is_complete,
-                action_url=f"/tenant/{self.tenant_id}/inventory#publishers-pane",
-                details=properties_details,
-            )
-        )
+        # 4. Authorized Properties: what the publishers' stored adagents.json files authorize now
+        # (pre-fetched).
+        tasks.append(self._authorized_properties_task(authorized))
 
         # 4. Inventory Synced - Only show after ad server is configured
         if ad_server_fully_configured:
@@ -1048,21 +1031,11 @@ class SetupChecklistService:
         )
 
         # 6. Custom Domain
-        has_custom_domain = bool(tenant.virtual_host)
-        tasks.append(
-            SetupTask(
-                key="tenant_cname",
-                name="Custom Domain (CNAME)",
-                description="Configure custom domain for your sales agent",
-                is_complete=has_custom_domain,
-                action_url=f"/tenant/{self.tenant_id}/settings#account",
-                details=f"Using {tenant.virtual_host}" if has_custom_domain else "Using default subdomain",
-            )
-        )
+        tasks.append(_custom_domain_task(self.tenant_id, tenant.virtual_host))
 
         return tasks
 
-    def _build_optional_tasks(self, tenant: Tenant, currency_count: int) -> list[SetupTask]:
+    def _build_optional_tasks(self, tenant: Tenant, currency_count: int, key_backing: KeyBacking) -> list[SetupTask]:
         """Build optional tasks from pre-fetched data (no session queries)."""
         tasks = []
 
@@ -1103,22 +1076,13 @@ class SetupChecklistService:
             )
         )
 
-        # 2. Gemini AI Features
-        gemini_configured = bool(tenant.gemini_api_key)
-        tasks.append(
-            SetupTask(
-                key="gemini_api_key",
-                name="Gemini AI Features",
-                description="Enable AI-assisted product recommendations and creative policy checks",
-                is_complete=gemini_configured,
-                action_url=f"/tenant/{self.tenant_id}/settings#integrations",
-                details=(
-                    "AI features enabled" if gemini_configured else "Optional: Configure Gemini API key for AI features"
-                ),
-            )
-        )
+        # 2. AI Features (Optional - Tenant-Specific)
+        tasks.append(_ai_features_task(self.tenant_id, tenant))
 
-        # 3. Multiple Currencies
+        # 3. Message Signing Key
+        tasks.append(self._signing_key_task(key_backing))
+
+        # 4. Multiple Currencies
         multiple_currencies = currency_count > 1
         tasks.append(
             SetupTask(
@@ -1134,6 +1098,48 @@ class SetupChecklistService:
         )
 
         return tasks
+
+    def _signing_key_task(self, key_backing: KeyBacking) -> SetupTask:
+        """The signing-key entry, built from the ONE key-presence derivation.
+
+        Added by salesagent-7x8t: this enumeration is the canonical list of
+        provisionable per-tenant resources, and it omitted signing keys — which is
+        exactly why a whole family of RFC 9421 machinery could ship with no
+        provisioning path and stay invisible in the UI.
+
+        Done-ness is ``signs`` (``SigningKeyRepository.active_at``), not merely
+        ``publishes``: a tenant whose only key is inside its post-revocation grace
+        window still appears in the published JWKS but can no longer sign, and
+        telling an operator that is "configured" is the dishonest half of the
+        distinction the two selectors exist to keep apart.
+
+        An active key that cannot sign gets the advice for its cause (#2288), from
+        :attr:`~src.core.signing.posture.ActiveKeyFault.advice`, the text the
+        signing-keys page shows too. A KEK fault must not be told "provision a
+        replacement": that publishes a second JWK and strands the one counterparties
+        already trust. That advice is only for a published key outside its active
+        window.
+
+        One builder for both enumeration paths (per-tenant and bulk) so the two
+        cannot disagree about the task's key, name or done-ness.
+        """
+        if key_backing.signs:
+            details = "Signing key provisioned and published"
+        elif key_backing.active_key_fault is not None:
+            details = f"Active key {key_backing.active_kid} cannot sign. {key_backing.active_key_fault.advice}"
+        elif key_backing.publishes:
+            details = "Published key is revoked or not yet active — provision a replacement"
+        else:
+            details = "No signing key: this seller publishes an empty JWKS and cannot sign outbound webhooks"
+
+        return SetupTask(
+            key="signing_key",
+            name="Message Signing Key",
+            description="Provision the RFC 9421 key this seller signs with and publishes to counterparties",
+            is_complete=key_backing.signs,
+            action_url=f"/tenant/{self.tenant_id}/signing-keys",
+            details=details,
+        )
 
     def get_next_steps(self) -> list[dict[str, str]]:
         """Get prioritized next steps for incomplete tasks.
@@ -1195,16 +1201,47 @@ def get_incomplete_critical_tasks(tenant_id: str) -> list[dict[str, Any]]:
     return [task for task in status["critical"] if not task["is_complete"]]
 
 
-def validate_setup_complete(tenant_id: str) -> None:
+#: The critical tasks that are preconditions for serving REAL inventory, and so do not
+#: gate a SANDBOX request.
+#:
+#: ``ad_server_connected`` is whether the tenant's live ad server is configured, and
+#: ``inventory_synced`` is whether inventory has been pulled from it -- measured, the
+#: latter is incomplete only for a GAM tenant with zero ``GAMInventory`` rows; kevel,
+#: triton and every other adapter report it complete unconditionally. Neither is a fact
+#: about the buyer's request, and neither is reachable by one: AdCP 3.2.3
+#: ``docs/media-buy/advanced-topics/sandbox.mdx`` says a sandbox request "MUST NOT make
+#: real ad platform API calls (no real orders, line items, etc.)" and "MUST return
+#: realistic response shapes with simulated data", so a readiness check about the real
+#: platform's inventory cannot be a precondition for a request that will never touch it.
+#:
+#: EVERY OTHER CRITICAL TASK STILL GATES, and that is the same page's limit on this:
+#: "MUST validate inputs the same way as production (reject invalid budgets, bad dates,
+#: etc.)" and "Apply normal input validation (sandbox does not bypass validation)". So
+#: ``currency_limits`` (budget validation), ``products_created``, ``principals_created``,
+#: ``authorized_properties`` and ``sso_configuration`` are untouched -- a sandbox buyer
+#: cannot buy a product that does not exist or in a currency the seller does not price.
+#:
+#: Keyed on ``key`` rather than ``name`` for the reason the raise site below already
+#: records: ``inventory_synced`` has three display names for the one key.
+_REAL_PLATFORM_TASKS: frozenset[str] = frozenset({"ad_server_connected", "inventory_synced"})
+
+
+def validate_setup_complete(tenant_id: str, *, sandbox: bool = False) -> None:
     """Validate that tenant has completed all critical setup tasks.
 
     Args:
         tenant_id: Tenant ID to validate
+        sandbox: whether the request references a SANDBOX account. When it does, the
+            tenant's real-ad-server readiness does not gate it (see
+            :data:`_REAL_PLATFORM_TASKS`); every input-validation task still does.
+            Defaults to False, so a production request is graded exactly as before.
 
     Raises:
         AdCPConfigurationError: If critical setup tasks are incomplete
     """
     incomplete = get_incomplete_critical_tasks(tenant_id)
+    if sandbox:
+        incomplete = [task for task in incomplete if task["key"] not in _REAL_PLATFORM_TASKS]
     if incomplete:
         # ``key``, not ``name``: ``name`` is admin-UI display text -- two of the critical tasks
         # carry a "⚠️" prefix, and ``inventory_synced`` has three names for the one key.

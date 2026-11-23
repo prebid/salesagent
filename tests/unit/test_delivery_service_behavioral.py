@@ -603,12 +603,11 @@ class TestDeliverWithBackoffGenericException:
     nothing a refusal is.
     """
 
-    def test_generic_exception_breaks_retry_loop(self):
-        from unittest.mock import MagicMock
-
+    def test_generic_exception_breaks_retry_loop(self, monkeypatch):
         from src.core.webhooks.delivery import WebhookDeliveryOutcome
         from src.services.webhook_delivery_service import (
             CircuitBreaker,
+            QueuedWebhook,
             WebhookDeliveryService,
             WebhookQueue,
         )
@@ -617,20 +616,31 @@ class TestDeliverWithBackoffGenericException:
         cb = CircuitBreaker()
         queue = WebhookQueue()
 
-        mock_config = MagicMock()
-        mock_config.url = "https://example.com/hook"
-        # No webhook_secret: production stopped reading that column with
-        # #1894, and a MagicMock answers every attribute, so leaving
-        # it set would keep this mock describing a config shape nothing reads.
-        mock_config.authentication_type = None
-        mock_config.authentication_token = None
-
+        # A QueuedWebhook, not a MagicMock config: the queue carries PRIMITIVES ONLY
+        # (#1757), so the retry loop cannot hold a session across its sleep and POST.
+        # The three auth-shaped fields below are exactly what the mock used to expose.
+        #
+        # That projection is also how the webhook_secret obligation is now met by
+        # CONSTRUCTION rather than by omission: production stopped reading that column
+        # with #1894, and the old MagicMock answered every attribute, so dropping the
+        # line was the only way to stop it describing a config shape nothing reads.
+        # QueuedWebhook is frozen and has no such field at all, so the mock can no
+        # longer over-answer — which is why the MagicMock is gone entirely.
+        #
+        # ``tenant_id`` is the dispatch-level field _deliver_with_backoff reads off the
+        # DEQUEUED ENTRY to resolve that tenant's delivery signer, so it is named here
+        # rather than left to default. There is deliberately no ``idempotency_key``:
+        # that one is a REQUIRED PAYLOAD field of the webhook document, minted once by
+        # build_webhook_envelope before the queue, and QueuedWebhook does not carry it.
         queue.enqueue(
-            {
-                "config": mock_config,
-                "payload": {"test": "data"},
-                "timestamp": datetime.now(UTC),
-            }
+            QueuedWebhook(
+                url="https://example.com/hook",
+                authentication_type=None,
+                authentication_token=None,
+                payload={"test": "data"},
+                tenant_id="test_tenant",
+                timestamp=datetime.now(UTC),
+            )
         )
 
         # salesagent-vkxf part 2: the subject is a NON-transport exception escaping
@@ -659,6 +669,22 @@ class TestDeliverWithBackoffGenericException:
         # decision and returns an outcome. The subject is unchanged: a NON-transport
         # exception escaping the delivery call, which no origin can serve, so it is
         # still injected here rather than at a transport this module never touches.
+        # ``_deliver_with_backoff`` resolves the tenant's delivery signer before it calls
+        # the seam, and that resolution reads the database. A unit test has none, so what
+        # it actually reads is whatever ``get_db_session`` happens to be in this process —
+        # and when a neighbour in the same xdist worker has left a MagicMock there, the
+        # provider's ``row.tenant_id`` is a MagicMock and pydantic refuses it while
+        # building ``ConfigurationDetails``. Measured on the box, twice, on whichever
+        # worker drew that order (runs innet_200926_1357 and innet_200926_1638).
+        #
+        # Pinned to ``None`` here — unsigned delivery — because the signer is not this
+        # case's subject: the subject is a NON-transport exception escaping the seam. A
+        # test is responsible for its own preconditions, so this one states the signer it
+        # wants instead of inheriting one.
+        # monkeypatch, not a second ``patch(...)``: the hand-rolled mock cap only
+        # shrinks (test_architecture_behavioral_mock_cap), and this file's cap is 1.
+        monkeypatch.setattr("src.core.signing.outbound.delivery_signer_for_tenant", lambda _tenant_id: None)
+
         with patch("src.services.webhook_delivery_service.deliver_webhook", _unexpected):
             result = svc._deliver_with_backoff("test_endpoint", queue)
 

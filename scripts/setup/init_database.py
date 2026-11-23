@@ -5,10 +5,14 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from scripts.ops.migrate import run_migrations
+from scripts.setup.seed_products import canonical_declaration, seed_verified_website, whole_publisher_selections
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Product, Tenant, TenantManagementConfig
 from src.core.database.repositories.principal import PrincipalRepository
+
+#: The publisher the demo tenant's basic products sell, whole.
+DEMO_PUBLISHER = "psatest.com"
 
 
 def init_db(exit_on_error=False):
@@ -100,17 +104,28 @@ def init_db(exit_on_error=False):
             # Create default tenant
             from datetime import UTC, datetime
 
+            from src.core.agent_identity import deployment_virtual_host
+
+            # The deployment declares where it answers; see deployment_virtual_host. None
+            # means a production install declaring nothing, which gets no tenant rather than
+            # one holding a host it does not serve.
+            virtual_host = deployment_virtual_host()
+            if virtual_host is None:
+                print("⚠️  No default tenant created: set ADCP_AGENT_URL or SALES_AGENT_DOMAIN, then re-run.")
+                return
+
             now = datetime.now(UTC)
             default_tenant = Tenant(
                 tenant_id="default",
                 name="Default Publisher",
-                subdomain="default",  # Proper subdomain routing
+                subdomain="default",  # An internal identifier; virtual_host is what routes
+                virtual_host=virtual_host,
                 is_active=True,
                 billing_plan="standard",
                 ad_server="mock",
                 enable_axe_signals=True,
                 human_review_required=True,
-                auto_approve_format_ids=["display_300x250", "display_728x90", "display_320x50"],
+                auto_approve_format_ids=["display_300x250_image", "display_728x90_image", "display_320x50_image"],
                 brand_manifest_policy="public",  # Allow unauthenticated discovery for quick start
                 created_at=now,
                 updated_at=now,
@@ -149,18 +164,20 @@ def init_db(exit_on_error=False):
                 platform_mappings={"mock": {"advertiser_id": "mock-default"}},
             )
 
-            # Always create basic products for demo/testing
+            # Always create basic products for demo/testing. Each sells every publisher the
+            # tenant holds, whole (#1845), so the demo publisher is held first: a stored
+            # adagents.json authorizing the tenant for one website, through the ingest service's
+            # apply step and without a fetch. Without it the products sell no publisher and are
+            # not offered.
+            seed_verified_website(session, "default", DEMO_PUBLISHER, name="PSA Test Website")
             basic_products = [
                 Product(
                     tenant_id="default",
                     product_id="prod_display_premium",
                     name="Premium Display Package",
                     description="Premium display advertising across news and sports sections",
-                    format_ids=[
-                        {
-                            "agent_url": "https://creative.adcontextprotocol.org",
-                            "id": "display_300x250",
-                        }
+                    format_options=[
+                        canonical_declaration("image", "display_300x250_image", width=300, height=250),
                     ],
                     targeting_template={"geo_countries": ["US"]},
                     delivery_type="guaranteed",
@@ -171,17 +188,15 @@ def init_db(exit_on_error=False):
                         "placement_ids": ["premium_300x250"],
                         "ad_unit_path": "/1234/premium/display",
                     },
+                    publisher_selections=whole_publisher_selections(session, "default"),
                 ),
                 Product(
                     tenant_id="default",
                     product_id="prod_video_sports",
                     name="Sports Video Package",
                     description="Pre-roll video ads for sports content",
-                    format_ids=[
-                        {
-                            "agent_url": "https://creative.adcontextprotocol.org",
-                            "id": "video_preroll",
-                        }
+                    format_options=[
+                        canonical_declaration("video_hosted", "video_standard_30s", duration_ms_exact=30000),
                     ],
                     targeting_template={"content_cat_any_of": ["sports"]},
                     delivery_type="guaranteed",
@@ -192,6 +207,7 @@ def init_db(exit_on_error=False):
                         "placement_ids": ["sports_video_preroll"],
                         "ad_unit_path": "/1234/sports/video",
                     },
+                    publisher_selections=whole_publisher_selections(session, "default"),
                 ),
             ]
             for product in basic_products:
@@ -254,11 +270,8 @@ def init_db(exit_on_error=False):
                         "product_id": "prod_1",
                         "name": "Premium Display - News",
                         "description": "Premium news site display inventory",
-                        "formats": [
-                            {
-                                "agent_url": "https://creative.adcontextprotocol.org",
-                                "id": "display_300x250",
-                            }
+                        "format_options": [
+                            canonical_declaration("image", "display_300x250_image", width=300, height=250),
                         ],
                         "targeting_template": {
                             "content_cat_any_of": ["news", "politics"],
@@ -279,11 +292,8 @@ def init_db(exit_on_error=False):
                         "product_id": "prod_2",
                         "name": "Run of Site Display",
                         "description": "Run of site display inventory",
-                        "formats": [
-                            {
-                                "agent_url": "https://creative.adcontextprotocol.org",
-                                "id": "display_728x90",
-                            }
+                        "format_options": [
+                            canonical_declaration("image", "display_728x90_image", width=728, height=90),
                         ],
                         "targeting_template": {"geo_countries": ["US", "CA"]},
                         "delivery_type": "non_guaranteed",
@@ -305,14 +315,14 @@ def init_db(exit_on_error=False):
                         product_id=p["product_id"],
                         name=p["name"],
                         description=p["description"],
-                        format_ids=p["formats"],
+                        format_options=p["format_options"],
                         targeting_template=p["targeting_template"],
                         delivery_type=p["delivery_type"],
                         is_fixed_price=p["is_fixed_price"],
                         cpm=p.get("cpm"),
                         price_guidance=p.get("price_guidance"),
                         implementation_config=p.get("implementation_config"),
-                        property_tags=["all_inventory"],  # Required per AdCP spec
+                        publisher_selections=whole_publisher_selections(session, "default"),
                     )
                     session.add(product)
 

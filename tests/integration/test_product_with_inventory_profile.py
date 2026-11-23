@@ -7,14 +7,18 @@ to catch bugs like the session variable issue found in production.
 import pytest
 from sqlalchemy import select
 
+from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     CurrencyLimit,
     InventoryProfile,
+    InventoryProfilePublisherSelection,
     Product,
     PropertyTag,
     Tenant,
 )
+from tests.factories.publisher import held_selections
+from tests.utils.database_helpers import seed_tenant_with_product_prerequisites, vhost_for
 
 
 @pytest.mark.requires_db
@@ -27,33 +31,11 @@ def test_create_product_with_inventory_profile(integration_db):
     tenant_id = "test_profile_product"
 
     with get_db_session() as session:
-        # Create tenant
-        tenant = Tenant(
-            tenant_id=tenant_id,
-            name="Test Tenant",
-            subdomain="test-profile",
-            ad_server="mock",
-            billing_plan="basic",
-            is_active=True,
+        # The tenant and the two rows a product cannot exist without (CLAUDE.md's chain:
+        # Tenant -> USD CurrencyLimit -> "all_inventory" PropertyTag).
+        seed_tenant_with_product_prerequisites(
+            session, tenant_id, subdomain="test-profile", ad_server="mock", billing_plan="basic", is_active=True
         )
-        session.add(tenant)
-
-        # Create required setup data
-        currency_limit = CurrencyLimit(
-            tenant_id=tenant_id,
-            currency_code="USD",
-            min_package_budget=100.0,
-            max_daily_package_spend=10000.0,
-        )
-        session.add(currency_limit)
-
-        property_tag = PropertyTag(
-            tenant_id=tenant_id,
-            tag_id="all_inventory",
-            name="All Inventory",
-            description="All inventory",
-        )
-        session.add(property_tag)
 
         # Create inventory profile (using proper ADCP agent URL)
         inventory_profile = InventoryProfile(
@@ -67,12 +49,17 @@ def test_create_product_with_inventory_profile(integration_db):
                 "include_descendants": False,
             },
             format_ids=[{"id": "display_300x250", "agent_url": "https://creative.adcontextprotocol.org"}],
-            publisher_properties=[
-                {
-                    "publisher_domain": "example.com",
-                    "property_ids": ["prop_1"],
-                }
-            ],
+            publisher_selections=held_selections(
+                session,
+                InventoryProfilePublisherSelection,
+                tenant_id,
+                [
+                    {
+                        "publisher_domain": "psatest.com",
+                        "property_ids": ["prop_1"],
+                    }
+                ],
+            ),
         )
         session.add(inventory_profile)
         session.flush()  # Get the profile.id
@@ -90,7 +77,7 @@ def test_create_product_with_inventory_profile(integration_db):
             delivery_type="guaranteed",
             targeting_template={},
             implementation_config={},
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, tenant_id),
         )
         session.add(product)
         session.commit()
@@ -120,6 +107,7 @@ def test_product_creation_validates_profile_belongs_to_tenant(integration_db):
             tenant_id=tenant1_id,
             name="Tenant 1",
             subdomain="tenant1",
+            virtual_host=vhost_for(tenant1_id),
             ad_server="mock",
             billing_plan="basic",
             is_active=True,
@@ -128,6 +116,7 @@ def test_product_creation_validates_profile_belongs_to_tenant(integration_db):
             tenant_id=tenant2_id,
             name="Tenant 2",
             subdomain="tenant2",
+            virtual_host=vhost_for(tenant2_id),
             ad_server="mock",
             billing_plan="basic",
             is_active=True,
@@ -162,12 +151,17 @@ def test_product_creation_validates_profile_belongs_to_tenant(integration_db):
                 "include_descendants": False,
             },
             format_ids=[{"id": "display_300x250", "agent_url": "https://test.com"}],
-            publisher_properties=[
-                {
-                    "publisher_domain": "tenant1.com",
-                    "property_ids": ["prop_1"],
-                }
-            ],
+            publisher_selections=held_selections(
+                session,
+                InventoryProfilePublisherSelection,
+                tenant1_id,
+                [
+                    {
+                        "publisher_domain": "tenant1.com",
+                        "property_ids": ["prop_1"],
+                    }
+                ],
+            ),
         )
         session.add(profile)
         session.flush()

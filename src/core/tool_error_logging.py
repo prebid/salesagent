@@ -109,13 +109,28 @@ def record_boundary_error(
         # it a second time at ERROR, and one cause was two tracebacks
         # (salesagent-3cs7o.24). Without a cause of either kind there is nothing a
         # traceback adds.
+        #
+        # ``field`` and ``details`` are named because ``message`` alone cannot say
+        # WHICH refusal this was. Post-ADR-010 the message is a read-only property over
+        # CODE_TABLE -- a function of the CODE, not of the raise site -- so every one of
+        # ``create_media_buy``'s twenty-odd AdCPValidationError sites logs the identical
+        # sentence, and a conformance failure reading "Request contains invalid field
+        # values" names nothing anyone can act on (measured: four media_buy storyboard
+        # checks failing indistinguishably, salesagent-basxl). The two values that DO
+        # vary are already wire-bound -- ``field`` is the error's field pointer and
+        # ``details`` its typed details payload -- so this adds no exposure, only the
+        # ability to tell one refusal from another. ONE site, so every tool and every
+        # transport gets it; instrumenting raise sites would be the same log twenty
+        # times.
         logger.warning(
-            "%s boundary translating %s to envelope: %s - %s (operation=%s)",
+            "%s boundary translating %s to envelope: %s - %s (operation=%s field=%s details=%s)",
             transport_upper,
             type(error).__name__,
             error_code,
             error_message,
             operation,
+            error.field,
+            error.details,
             exc_info=error if (error.__cause__ is not None or error.internal_detail is not None) else None,
         )
     else:

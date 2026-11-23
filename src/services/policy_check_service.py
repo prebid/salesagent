@@ -3,21 +3,18 @@
 import logging
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Any
 
-from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adcp.types
+from adcp.types.domains.brand_discovery import Brand  # TODO: no stable alias in adcp.types
 from pydantic import BaseModel, Field
 
 from src.core.schemas import Product
-from src.services.ai import AIServiceFactory, TenantAIConfig
 from src.services.ai.agents.policy_agent import (
     check_policy_compliance,
     create_policy_agent,
 )
 
 logger = logging.getLogger(__name__)
-
-# Sentinel value to distinguish "not provided" from "explicitly None"
-_UNSET = object()
 
 
 class PolicyStatus(StrEnum):
@@ -41,49 +38,24 @@ class PolicyCheckResult(BaseModel):
 class PolicyCheckService:
     """Service for checking advertising briefs against policy compliance rules.
 
-    Uses Pydantic AI for multi-model support. Configuration priority:
-    1. Explicit tenant_ai_config parameter
-    2. Platform defaults from environment variables
+    Uses Pydantic AI for multi-model support, on the seller's own AI configuration only.
     """
 
-    def __init__(
-        self,
-        tenant_ai_config: dict | TenantAIConfig | None = None,
-        gemini_api_key: str | None | object = _UNSET,  # Deprecated, kept for backward compatibility
-    ):
+    def __init__(self, model: Any | None = None):
         """Initialize the policy check service.
 
         Args:
-            tenant_ai_config: Tenant AI configuration for model selection.
-            gemini_api_key: DEPRECATED - Use tenant_ai_config instead. Kept for backward compatibility.
+            model: The model built from the seller's own AI configuration
+                (``AIServiceFactory.build``). ``None`` runs basic rules only.
         """
-        self._factory = AIServiceFactory()
-
-        # Handle backward compatibility with gemini_api_key parameter
-        if gemini_api_key is not _UNSET and gemini_api_key is not None:
-            # Legacy usage - create a minimal config with just the API key
-            if isinstance(gemini_api_key, str):
-                tenant_ai_config = TenantAIConfig(
-                    provider="gemini",
-                    model="gemini-2.0-flash",
-                    api_key=gemini_api_key,
-                )
-        elif gemini_api_key is None:
-            # Explicit None means disable AI
+        if model is None:
+            logger.warning("No AI configuration. Policy checks will use basic rules only.")
             self.ai_enabled = False
             self._agent = None
             return
 
-        # Get effective configuration
-        effective_config = self._factory.get_effective_config(tenant_ai_config)
-        self.ai_enabled = effective_config["has_api_key"]
-
-        if self.ai_enabled:
-            model_string = self._factory.create_model(tenant_ai_config)
-            self._agent = create_policy_agent(model_string)
-        else:
-            logger.warning("No AI API key configured. Policy checks will use basic rules only.")
-            self._agent = None
+        self.ai_enabled = True
+        self._agent = create_policy_agent(model)
 
     async def check_brief_compliance(
         self,
@@ -107,7 +79,7 @@ class PolicyCheckService:
         brand_info = None
         if brand_manifest:
             if isinstance(brand_manifest, Brand):
-                # Extract name and tagline from adcp 3.12 Brand model
+                # Extract name and tagline from the pinned SDK Brand model
                 # names is list[LocalizedName] where LocalizedName is RootModel[dict[str, str]]
                 brand_name = None
                 if brand_manifest.names:

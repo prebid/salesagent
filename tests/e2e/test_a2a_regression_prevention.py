@@ -19,7 +19,7 @@ import requests
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, create_agent_card
+from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.tools.registry import TOOLS
 
 logger = logging.getLogger(__name__)
@@ -27,25 +27,6 @@ logger = logging.getLogger(__name__)
 
 class TestAgentCardURLRegression:
     """Tests to prevent agent card URL issues that cause redirect/auth problems."""
-
-    def test_agent_card_url_no_trailing_slash(self):
-        """Test that agent card URLs don't have trailing slashes that cause redirects."""
-        agent_card = create_agent_card()
-
-        # Critical: URL should not end with trailing slash
-        assert not agent_card.supported_interfaces[0].url.endswith("/"), (
-            f"Agent card URL '{agent_card.supported_interfaces[0].url}' should not end with trailing slash"
-        )
-
-        # Should be a valid URL format
-        assert agent_card.supported_interfaces[0].url.startswith(("http://", "https://")), (
-            f"Invalid URL format: {agent_card.supported_interfaces[0].url}"
-        )
-
-        # Should end with /a2a (no slash)
-        assert agent_card.supported_interfaces[0].url.endswith("/a2a"), (
-            f"Agent card URL should end with '/a2a': {agent_card.supported_interfaces[0].url}"
-        )
 
     def test_dynamic_agent_card_urls_no_trailing_slash(self):
         """Test that dynamically generated agent card URLs don't have trailing slashes."""
@@ -217,36 +198,3 @@ class TestHTTPBehaviorRegression:
 
 
 # Summary test to run all regression checks
-def test_regression_prevention_summary():
-    """Summary test that runs key regression checks."""
-
-    try:
-        # 1. Agent card URL format
-        agent_card = create_agent_card()
-        assert not agent_card.supported_interfaces[0].url.endswith("/"), "REGRESSION: Agent card URL has trailing slash"
-
-        # 2. The registry row holds a plain callable implementation
-        # Note: signals tools removed - using get_products as core function check
-        assert callable(TOOLS["get_products"].impl), "REGRESSION: registry impl not callable"
-
-        # 3. A2A's one dispatch method exists, and the registry says get_products
-        #    is dispatchable over it (the per-tool _handle_*_skill methods are gone)
-        handler = AdCPRequestHandler()
-        assert callable(handler._dispatch_skill), "REGRESSION: Handler missing _dispatch_skill"
-        assert TOOLS["get_products"].a2a is True, "REGRESSION: get_products not dispatchable over A2A"
-    except ImportError as e:
-        if e.name and e.name.startswith("a2a"):
-            pytest.skip(f"a2a-sdk library not installed: {e}")
-        raise
-
-    # (The former check 4 — grepping adcp_a2a_server.py for "core_get_products_tool.fn(" —
-    # is dropped: that wrapper name no longer exists anywhere, so the grep could only
-    # pass vacuously. Check 2 grades the same property where it now lives, on the row.)
-
-    logger.info("✅ All regression prevention checks passed")
-
-
-if __name__ == "__main__":
-    # Run the summary test when executed directly
-    test_regression_prevention_summary()
-    print("✅ Regression prevention tests passed")

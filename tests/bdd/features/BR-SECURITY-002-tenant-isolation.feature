@@ -41,7 +41,7 @@ Feature: A credential reaches exactly one tenant's data
   # brand_manifest_policy) decides only what an ABSENT credential gets: AUTH_MISSING on a
   # protected row, anonymous service on a public one. A's token addressed to B is presented
   # and verifies as nobody in B, so the answer is AUTH_INVALID whichever policy B carries.
-  # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
   @T-SECURITY-002-credential-does-not-cross-tenants
   Scenario Outline: A credential minted for one tenant is refused by the other
     When the buyer presents tenant "<holder>" credentials addressed to tenant "<target>"
@@ -60,8 +60,8 @@ Feature: A credential reaches exactly one tenant's data
   # without credentials by design" -- a sentence about the ABSENT credential. The storyboard
   # never sends a bad credential to a public task (both its probes target the protected
   # probe task), so this is ungraded upstream and graded here, on every transport alike.
-  # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
-  # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/security.yaml pointer=/prerequisites/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
+  # @source repo=adcp ref=v3.2.7 path=static/compliance/source/universal/security.yaml pointer=/prerequisites/description
   @T-SECURITY-002-rejected-credential-is-refused-on-a-public-tool
   Scenario Outline: A credential that verifies as nobody is refused with AUTH_INVALID whatever the tenant's policy
     When the buyer presents a credential no tenant issued, addressed to tenant "<target>"

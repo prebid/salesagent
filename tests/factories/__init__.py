@@ -19,16 +19,20 @@ from tests.factories.account import (
 )
 from tests.factories.core import (
     AdapterConfigFactory,
-    AuthorizedPropertyFactory,
     CreativeAgentFactory,
     CurrencyLimitFactory,
     GAMInventoryFactory,
     PropertyTagFactory,
-    PublisherPartnerFactory,
     SignalsAgentFactory,
+    SyncJobFactory,
     TenantFactory,
 )
-from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory
+from tests.factories.creative import (
+    CreativeAssignmentFactory,
+    CreativeFactory,
+    seeded_format_identity,
+    stamp_format_identity,
+)
 from tests.factories.creative_asset import CreativeAssetFactory
 from tests.factories.delivery_simulation import DeliverySimulationConfigFactory
 from tests.factories.format import FormatFactory, FormatIdFactory
@@ -36,7 +40,13 @@ from tests.factories.inventory_profile import InventoryProfileFactory
 from tests.factories.media_buy import GetMediaBuysMediaBuyFactory, MediaBuyFactory, MediaPackageFactory
 from tests.factories.metrics import FormatPerformanceMetricsFactory
 from tests.factories.principal import PrincipalFactory
-from tests.factories.product import PricingOptionFactory, PricingOptionRequestFactory, ProductFactory
+from tests.factories.product import (
+    PricingOptionFactory,
+    PricingOptionRequestFactory,
+    ProductFactory,
+    StoredPlacementFactory,
+)
+from tests.factories.publisher import PublisherFactory
 from tests.factories.request import (
     OMIT,
     CreateMediaBuyRequestFactory,
@@ -47,14 +57,23 @@ from tests.factories.request import (
     SyncAccountsRequestFactory,
     SyncCreativesRequestFactory,
 )
+from tests.factories.signing import SigningKeyFactory
 from tests.factories.targeting import (
     CollectionListReferenceFactory,
+    FrequencyCapFactory,
     PropertyListReferenceFactory,
     TargetingFactory,
 )
-from tests.factories.user import TenantAuthConfigFactory, UserFactory
-from tests.factories.webhook import PushNotificationConfigFactory, WebhookTaskContextFactory
+from tests.factories.user import TenantAuthConfigFactory, TenantManagementConfigFactory, UserFactory
+from tests.factories.webhook import PushNotificationConfigFactory, WebhookDeliveryLogFactory, WebhookTaskContextFactory
+from tests.factories.workflow import ContextFactory, WorkflowStepFactory
 
+# Only SQLAlchemyModelFactory subclasses belong here: the harness rebinds
+# ``_meta.sqlalchemy_session`` across every entry. Plain ``factory.Factory``
+# builders (BusinessEntityFactory, WebhookTaskContextFactory, TargetingFactory,
+# CreativeAssetFactory, Format*Factory, and the ``*RequestFactory`` family that
+# builds request DTOs) have no session to bind and are exported through
+# ``__all__`` only.
 ALL_FACTORIES = [
     TenantFactory,
     AccountFactory,
@@ -63,10 +82,10 @@ ALL_FACTORIES = [
     CurrencyLimitFactory,
     GAMInventoryFactory,
     PropertyTagFactory,
-    PublisherPartnerFactory,
-    AuthorizedPropertyFactory,
+    PublisherFactory,
     CreativeAgentFactory,
     SignalsAgentFactory,
+    SyncJobFactory,
     PrincipalFactory,
     InventoryProfileFactory,
     ProductFactory,
@@ -74,12 +93,17 @@ ALL_FACTORIES = [
     MediaBuyFactory,
     MediaPackageFactory,
     PushNotificationConfigFactory,
+    WebhookDeliveryLogFactory,
     DeliverySimulationConfigFactory,
     CreativeFactory,
     CreativeAssignmentFactory,
     FormatPerformanceMetricsFactory,
     UserFactory,
     TenantAuthConfigFactory,
+    TenantManagementConfigFactory,
+    SigningKeyFactory,
+    ContextFactory,
+    WorkflowStepFactory,
 ]
 
 __all__ = [
@@ -87,7 +111,6 @@ __all__ = [
     "OMIT",
     "AccountFactory",
     "AdapterConfigFactory",
-    "AuthorizedPropertyFactory",
     "AgentAccountAccessFactory",
     "BusinessEntityFactory",
     "CollectionListReferenceFactory",
@@ -96,6 +119,8 @@ __all__ = [
     "CreativeAssetRequestFactory",
     "CreativeAssignmentFactory",
     "CreativeFactory",
+    "seeded_format_identity",
+    "stamp_format_identity",
     "CreateMediaBuyRequestFactory",
     "DeliverySimulationConfigFactory",
     "FormatFactory",
@@ -107,6 +132,7 @@ __all__ = [
     "CurrencyLimitFactory",
     "GAMInventoryFactory",
     "FormatPerformanceMetricsFactory",
+    "FrequencyCapFactory",
     "MediaBuyFactory",
     "MediaPackageFactory",
     "PackageRequestFactory",
@@ -114,16 +140,23 @@ __all__ = [
     "PricingOptionRequestFactory",
     "PrincipalFactory",
     "ProductFactory",
+    "StoredPlacementFactory",
     "PropertyListReferenceFactory",
     "PropertyTagFactory",
-    "PublisherPartnerFactory",
+    "PublisherFactory",
     "PushNotificationConfigFactory",
     "SignalsAgentFactory",
+    "SigningKeyFactory",
     "SyncAccountsRequestFactory",
     "SyncCreativesRequestFactory",
+    "SyncJobFactory",
     "TargetingFactory",
     "TenantAuthConfigFactory",
+    "TenantManagementConfigFactory",
     "TenantFactory",
     "UserFactory",
+    "WebhookDeliveryLogFactory",
     "WebhookTaskContextFactory",
+    "ContextFactory",
+    "WorkflowStepFactory",
 ]

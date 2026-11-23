@@ -45,11 +45,14 @@ from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import ErrorCodeT
 
 __all__ = [
+    "BillingNotPermittedForAgentDetails",
     "BillingNotSupportedDetails",
     "ValidationDetails",
     "PricingValidationDetails",
     "ConfigurationDetails",
+    "CreativeManifestDetails",
     "CreativeRefDetails",
+    "CreativeValueNotAllowedDetails",
     "CreativeRejectionDetails",
     "TimeWindowDetails",
     "RejectionReasonDetails",
@@ -64,6 +67,8 @@ __all__ = [
     "EntityRefDetails",
     "ErrorDetails",
     "ErrorProblem",
+    "FormatDeclarationDivergenceDetails",
+    "FormatOptionDivergenceSummary",
     "OutboundDeliveryDetails",
     "ProblemsDetails",
     "ProductRefDetails",
@@ -122,7 +127,7 @@ class ErrorProblem(BaseModel):
     which is the epic's invariant applied one level down.
 
     ``rejected_value`` and ``accepted_values`` are the pin's canonical
-    rejection-set keys (v3.1.1 ``core/error.json``, the ``details``
+    rejection-set keys (``core/error.json``, the ``details``
     description): "sellers SHOULD use the canonical key ``accepted_values``
     rather than seller-specific variants observed in the wild". Using them lets
     a buyer's error classifier read this without per-seller pattern matching.
@@ -140,14 +145,14 @@ class ErrorProblem(BaseModel):
 
 # ---------------------------------------------------------------------------
 # Pinned shapes. Each mirrors its file under the pinned schema bundle at
-# dist/schemas/3.1.1/error-details/, field for field, plus any extra the pin
+# dist/schemas/<pin>/error-details/, field for field, plus any extra the pin
 # permits and a call site actually needs. A field the pin marks required is
 # required here.
 # ---------------------------------------------------------------------------
 
 
 class VersionUnsupportedDetails(ErrorDetails):
-    """``VERSION_UNSUPPORTED`` — v3.1.1 ``error-details/version-unsupported.json``.
+    """``VERSION_UNSUPPORTED`` — ``error-details/version-unsupported.json``.
 
     ``supported_versions`` is the pin's only required field. ``build_version``
     is advisory only: the schema states buyers MUST NOT negotiate on it, so it
@@ -194,6 +199,7 @@ class EntityRefDetails(ErrorDetails):
     media_buy_id: str | None = None
     package_id: str | None = None
     product_id: str | None = None
+    proposal_id: str | None = None
     creative_id: str | None = None
     format_id: str | None = None
     line_item_id: str | None = None
@@ -234,6 +240,128 @@ class ProblemsDetails(ErrorDetails):
     """
 
     problems: list[ErrorProblem] | None = None
+
+
+class PlatformExtensionCollisionDetails(ErrorDetails):
+    """``FORMAT_DECLARATION_DIVERGENT``'s OTHER details shape: a per-field extension overlap.
+
+    ``formats/canonical/_base.json``'s ``platform_extensions`` says "a producer-self-emitted
+    overlap on a single declaration SHOULD use the same code with ``error.details: {
+    collision_kind: "platform_extension_field", target, overlapping_fields,
+    winning_extension_uri }``" -- these four keys, which is the whole of this class. The
+    code's other details shape, a declaration asserting a ``v1_format_ref`` it does not
+    narrow, is :class:`FormatDeclarationDivergenceDetails`.
+
+    ``collision_kind`` is a one-member ``Literal`` rather than a free string because it is the
+    DISCRIMINATOR between the details shapes: a recipient reads it to know which set of keys it has.
+    A second member is added when the pin names a second kind, and mypy then fails every
+    construction site that has not chosen.
+
+    ``target`` is the canonical concept both extensions extend (``tracking``,
+    ``cta_vocabulary``, ``destinations``, ``placement``) and it is NOT derivable from a
+    reference: ``core/platform-extension-ref.json`` requires ``uri`` + ``digest`` and nothing
+    else, while ``extends`` is a property of the definition. The same is true of the field
+    names. So this advisory is only constructible for extensions whose definitions the seller
+    holds, which is what makes :func:`~src.core.format_resolver.platform_extension_collisions`
+    take them as an argument instead of looking them up.
+
+    ``winning_extension_uri`` is singular while ``overlapping_fields`` is plural, and that is
+    the pin's shape rather than a simplification: precedence is per-FIELD, so one target can
+    produce several of these records, each naming the fields one extension won.
+    """
+
+    collision_kind: Literal["platform_extension_field"] = "platform_extension_field"
+    target: str
+    overlapping_fields: list[str]
+    winning_extension_uri: str
+
+
+class FormatOptionDivergenceSummary(BaseModel):
+    """One canonical declaration, as the divergence advisory summarizes it.
+
+    ``v1_format_ref`` holds RENDERED format identities (``format_display``'s
+    ``<canonical agent_url>/<id>``), not the stored reference objects: the identity is the
+    only part of a reference the divergence is about.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    format_kind: str
+    v1_format_ref: list[str]
+
+
+class FormatDeclarationDivergenceDetails(ErrorDetails):
+    """``FORMAT_DECLARATION_DIVERGENT``'s details for a declaration that does not narrow its ref.
+
+    ``enums/error-code.json`` (3.2.7): "``error.details`` SHOULD carry ``{ product_id,
+    format_ids, format_options_summary, divergence_reason }``" -- these four keys.
+    ``format_ids`` names the references a declaration asserts and does not narrow, which are
+    the ones the seller omitted from the product's legacy arm (canonical-formats.mdx, Producer
+    rules: "A producer that cannot guarantee agreement MUST omit the legacy compatibility
+    projection"). They are rendered as identities for the reason the summary's are.
+
+    ``divergence_reason`` is a ``Literal``: the one axis this seller detects is a declaration's
+    ``params`` or kind falling outside what its ``v1_format_ref`` normalizes to
+    (``core/product-format-declaration.json``: "The v2 declaration's ``params`` MUST narrow
+    ... each referenced v1 format's ``requirements``"). A second axis is a second member.
+    """
+
+    product_id: str
+    format_ids: list[str]
+    format_options_summary: list[FormatOptionDivergenceSummary]
+    divergence_reason: Literal["v1_format_ref_not_narrowed"] = "v1_format_ref_not_narrowed"
+
+
+class SelectorRouteSummary(BaseModel):
+    """One format selector route the buyer supplied, and what it normalized to.
+
+    BOTH halves in one row, because ``enums/error-code.json``'s
+    ``CONFLICTING_SELECTORS`` entry asks for both and pairing them is the whole
+    information: "``error.details`` SHOULD identify the supplied selector routes and
+    their normalized canonical summaries". A list of supplied routes beside a separate
+    list of summaries would leave the buyer to re-pair them by position.
+
+    ONE ROW PER ROUTE, and a route is a request ARM: ``media-buy/package-request.json``
+    names the routes "format_option_refs, or format_kind with optional params" and the
+    deprecated ``format_ids``, and an array arm selects an option SET ("Each reference
+    matches one target product ``format_options[]`` entry"; receivers "require each route to
+    select the same product option set").
+
+    ``field`` is the arm (``format_option_refs``, ``format_kind``, ``format_ids``) and
+    ``selector`` every value the buyer put there, rendered. ``format_kind`` and
+    ``selected_option`` are the normalized summary: the canonical shapes the arm resolved
+    to, and the SET of the product's ``format_options[]`` entries it selected -- the set
+    step (2) compares across routes. A broad legacy id selects each entry that narrows it,
+    and naming one entry of two would show the buyer two routes agreeing beside a refusal
+    that says they differ. An empty ``selected_option`` is an arm that resolved
+    and selected NOTHING, which is itself a differing selected set and so is a conflict
+    the buyer has to see.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    field: str
+    selector: list[str]
+    format_kind: list[str]
+    selected_option: list[str]
+
+
+class SelectorConflictDetails(EntityRefDetails):
+    """``CONFLICTING_SELECTORS``'s details: every route, and what each one selected.
+
+    One field, because the pin names one thing to carry (see
+    :class:`SelectorRouteSummary`). WHICH package is the inherited
+    ``package_index``/``product_id``; the pointer at the package itself is
+    ``error.field``, which the pin states separately ("``error.field`` SHOULD point at
+    the conflicting package").
+
+    Every route is listed and not only the disagreeing pair. The conflict is a property
+    of the SET — the pin requires "the selected option sets to match", not that two
+    named routes agree — so naming two of three routes would describe a different
+    refusal from the one the seller made.
+    """
+
+    selector_routes: list[SelectorRouteSummary]
 
 
 class ProductRefDetails(EntityRefDetails):
@@ -298,7 +426,7 @@ class OutboundDeliveryDetails(AdapterFailureDetails):
     detail type. The two fields below are the pair the egress seam adds --
     what a retry SCHEDULE knows that a single call does not.
 
-    The names are the pinned acceptance criterion, not a preference. AdCP 3.1.1
+    The names are the pinned acceptance criterion, not a preference. AdCP.1
     ``core/error.json`` types ``details`` as ``{"type": "object",
     "additionalProperties": true}`` -- "Additional task-specific error details"
     -- so the spec mandates no key set here and cannot decide the spelling.
@@ -344,7 +472,7 @@ class ValueRejectionDetails(ErrorDetails):
     """A value the buyer supplied was refused, and optionally what is accepted.
 
     ``rejected_value`` and ``accepted_values`` are the pin's canonical
-    rejection-set keys (v3.1.1 ``core/error.json``, the ``details`` description),
+    rejection-set keys (``core/error.json``, the ``details`` description),
     named there explicitly "rather than seller-specific variants observed in the
     wild (``available``, ``allowed`` ...)".
 
@@ -489,6 +617,37 @@ class CreativeRejectionDetails(EntityRefDetails, ValueRejectionDetails, Problems
     invalid_field: str | None = None
 
 
+class CreativeManifestDetails(EntityRefDetails, ValueRejectionDetails, ProblemsDetails):
+    """A creative manifest that does not satisfy the product declaration it was graded against.
+
+    The pin publishes no details schema for ``CREATIVE_SIZE_MISMATCH`` or
+    ``CREATIVE_VALIDATION_FAILED_GENERIC``. The first's enum entry says a seller "MAY include
+    the submitted and accepted dimensions in buyer-safe error.details", and ``problems``
+    carries exactly that per failed constraint: ``field`` is the manifest path
+    (``assets.image_main.width``), ``rejected_value`` what the asset states and
+    ``accepted_values`` what the declaration accepts. ``accepted_values`` at the top names
+    the declarations graded, by ``format_option_id`` where one is published, which is also
+    what a buyer puts in ``format_option_ref`` when the refusal is an ambiguous selection.
+
+    No new field: the entity ids, the pin's canonical rejection-set keys and the problem list
+    are all inherited, so nothing here can carry an authored sentence.
+    """
+
+
+class CreativeValueNotAllowedDetails(CreativeManifestDetails):
+    """A manifest value outside the closed set the selected declaration publishes for it.
+
+    The pin publishes no details schema for ``CREATIVE_VALUE_NOT_ALLOWED``. Its enum entry
+    names the one key it adds: a seller "SHOULD include the format's ``allowed_values`` array
+    in ``error.details.allowed_values`` so the buyer agent can re-prompt its LLM with
+    constrained sampling". ``allowed_values`` is that array, under the spelling the entry
+    gives it; everything else is :class:`CreativeManifestDetails`', so ``problems[]`` still
+    names each offending manifest path with what it states and what is accepted.
+    """
+
+    allowed_values: list[str] | None = None
+
+
 class ConfigurationDetails(CapabilityRefusalDetails):
     """A seller-side misconfiguration the buyer's request ran into.
 
@@ -554,6 +713,9 @@ class ValidationDetails(EntityRefDetails, ValueRejectionDetails, ProblemsDetails
     # break, not a cleanup. (A `managed_only_dimensions` sibling went with the
     # non-spec field it reported, salesagent-3cs7o.22.)
     geo_overlaps: list[dict[str, Any]] | None = None
+    # The sibling key for the keyword rule: each (keyword, match_type) pair the overlay's
+    # keyword_targets repeats, as values.
+    keyword_duplicates: list[dict[str, str]] | None = None
 
 
 class TimeWindowDetails(ValidationDetails):
@@ -590,7 +752,7 @@ class PricingValidationDetails(ValidationDetails):
 
 
 class BillingNotSupportedDetails(ErrorDetails):
-    """``BILLING_NOT_SUPPORTED`` — v3.1.1 ``error-details/billing-not-supported.json``.
+    """``BILLING_NOT_SUPPORTED`` — ``error-details/billing-not-supported.json``.
 
     Both fields and both spellings are the pin's, including ``scope``'s closed
     enum, so a buyer switching on it gets what the schema promises.
@@ -598,3 +760,17 @@ class BillingNotSupportedDetails(ErrorDetails):
 
     scope: Literal["capability", "account"] | None = None
     supported_billing: list[str] | None = None
+
+
+class BillingNotPermittedForAgentDetails(ErrorDetails):
+    """``BILLING_NOT_PERMITTED_FOR_AGENT`` — ``error-details/billing-not-permitted-for-agent.json``.
+
+    The pin's two fields and no others: the schema is ``additionalProperties: false``
+    and forbids any per-agent commercial state (the permitted subset, rate card,
+    payment terms) because the clamp is what keeps the code from being an oracle.
+    ``suggested_billing`` is at most ONE retry value; absent means
+    terminal-pending-onboarding.
+    """
+
+    rejected_billing: str
+    suggested_billing: str | None = None

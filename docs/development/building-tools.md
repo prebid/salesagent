@@ -9,9 +9,11 @@ The system rests on a small number of seams, and each seam is the single place t
 its concern. A tool is one registry row. One resolver identifies the caller. The boundary runs
 the tool once, for every transport. A response becomes a body in one function. An error names a
 code and supplies facts. Because there is one of each, a rule holds everywhere by
-construction, and most of the checks that used to police agreement between copies are gone.
+construction, and needs no check policing agreement between copies.
 
-The codebase targets AdCP 3.1.1 through the `adcp` SDK. The companion pages are
+The codebase targets a pinned AdCP spec version through the `adcp` SDK; the pin
+lives in `pyproject.toml` and [docs/adcp-spec-version.md](../adcp-spec-version.md)
+names the spec version it targets. The companion pages are
 [Architecture guide](architecture.md), [Request lifecycle](request-lifecycle.md),
 [Patterns reference](patterns-reference.md), [Structural guards](structural-guards.md), and
 [Error architecture](../design/error-architecture.md).
@@ -70,11 +72,10 @@ from:
 - Whether a caller needs a credential — the `identity` annotation on `spec.impl`.
 - Whether the boundary resolves an account — the `account` field on `spec.dto`.
 
-There is no field for the credential policy and no field for the account policy. The row
-used to carry an `auth` literal beside the implementation. A literal is a second statement of
-a fact the implementation already states, and the two disagreed. The annotation and the DTO
-are the policy, as [Policy is derived](#policy-is-derived-and-the-registry-checks-it)
-describes.
+There is no field for the credential policy and no field for the account policy. A literal
+beside the implementation would be a second statement of a fact the implementation already
+states, and the two can disagree. The annotation and the DTO are the policy, as
+[Policy is derived](#policy-is-derived-and-the-registry-checks-it) describes.
 
 `TOOLS` is a `MappingProxyType` over a module-private dict, and `ToolSpec` is frozen, so the
 whole declaration is immutable: nothing adds, drops, or repoints a row at runtime. Every
@@ -130,13 +131,40 @@ excluded field no transport could set and no caller read. `Field(exclude=True)` 
 domain or response model such as `Product`, where a field must exist on the model and not on
 the wire.
 
-**There is deliberately no test comparing a DTO's field set to the pinned schema.** Such a
-suite exists when the model and the schema are two artifacts that can disagree. Here the DTO
-*is* the pinned model plus the mixin, so what it declares is inherited, and the comparison
-asserts only that Python inheritance works. The alignment suite that compared them was deleted
-rather than renegotiated; `tests/unit/test_architecture_schema_inheritance.py` grades
-REDECLARATIONS against the library parent instead, which is the only place a local class can
-weaken a pinned type.
+**A FIELD YOU ADD MUST HAVE A DECLARED SURFACE.** Extending a pinned model by inheritance is
+the point of adopting it, and nothing here forbids it. What is forbidden is adding a field
+without deciding which surface it lives on, because the three surfaces behave differently and
+two of them are buyer-visible:
+
+- **A field on a request DTO is ADVERTISED.** `_register_tool` derives the announced parameter
+  shape from the DTO, so the field becomes a parameter buyers may send and other sellers do
+  not implement. `ListAccountsRequest.idempotency_key` was added so one BDD step could
+  construct the model; it reached the advertised contract and then grew a predicate in the
+  transport boundary whose only job was to detect and ignore it. Deleting the field deleted
+  the predicate.
+- **A field on a response model is ON THE WIRE** unless declared `Field(exclude=True)`. Nine
+  such fields were emitted to buyers under pinned-looking names until `9094a72d2`.
+- **`Field(exclude=True)` does not mean "internal", it means gone.** It strips the field from
+  the wire, from persistence AND from the idempotency hash alike. So a field marked that way
+  to keep it off the wire cannot persist either — measured 2026-10-17, 16 fields are in that
+  state, among them `Product.implementation_config` and `Format.platform_config`.
+
+A seller-owned field with a persistence surface therefore has no spelling on a wire model
+today, which is what salesagent-3zmsd exists to give it: an ORM model built by
+`from_domain`/`to_domain` mappers, so the domain model is not coupled to the data model.
+
+This paragraph previously said the opposite — that no comparison of a DTO's fields against the
+pin was needed, because the DTO "*is* the pinned model plus the mixin, so what it declares is
+inherited". That reasoning is what let additions accumulate unexamined: measured 2026-10-17,
+51 added-field declaration sites across 99 adoption sites. Most had no live reason — three
+justifications the regenerated SDK has since absorbed, and `TaskSummary`'s six are a field set
+`GetTaskStatusResponse` lost a release earlier. The capability is fine; those 51 were not
+using it deliberately.
+
+`tests/unit/test_architecture_dto_adds_no_field.py` grades registry request DTOs — surface (1)
+above — by unioning `model_fields` across every `adcp`-defined ancestor, with a shrink-only
+allowlist. Its population is the registry, so it never saw a model that is not a tool's
+request type.
 
 Divergence from the spec has two directions, and Python can state only one of them. You
 declare an added field on the subclass, typed and greppable in the file you are already
@@ -170,11 +198,12 @@ The rejection names what it rejected, in the two channels the pin defines for it
 Three properties of that validator are the design, not an accident of where it ended up.
 
 - **It is a validator on the mixin, not a seam.** Every transport constructs the DTO, so
-  every transport gets the policy and there is no call to forget. It used to be a
-  `ToolSpec.validate` method that only A2A ever reached, so the same bytes had three meanings.
+  every transport gets the policy and there is no call to forget. A seam such as a
+  `ToolSpec.validate` method is reached by whichever transport remembers to call it, which
+  gives the same bytes a different meaning per transport.
 - **It runs `mode="before"`, which is what reaches the nesting.** Field validation has not run
-  yet, so the strip pre-empts the SDK's own nested `extra="forbid"` — which in production was
-  rejecting a buyer who sent an unknown field inside `account`, the exact forward
+  yet, so the strip pre-empts the SDK's own nested `extra="forbid"`. Without that, a buyer
+  who sends an unknown field inside `account` is rejected — the exact forward
   incompatibility `extra="ignore"` exists to prevent.
 - **It walks the JSON Schema, not the model tree.** Two other mechanisms were built and thrown
   away, and `src/core/schemas/_accepted_shape.py` records both: walking the data against the
@@ -193,9 +222,9 @@ A free-form container such as `ext` or `context` keeps its contents. An object t
 no properties is the schema's way of saying arbitrary data lives there, so there is nothing
 undeclared to remove and only contents to lose.
 
-There is no compatibility layer, on any transport. The one that existed was deleted whole,
-because it had become a rewrite running in three places: a legacy shorthand accepted on A2A
-raised a `ValidationError` on MCP and REST, from the same bytes. If compatibility returns it is
+There is no compatibility layer, on any transport. Per-transport compatibility is a rewrite
+running in three places: a legacy shorthand accepted on A2A raises a `ValidationError` on MCP
+and REST, from the same bytes. If compatibility returns it is
 one layer ahead of validation, for every transport, and nowhere else. It does not belong on a
 DTO either: a before-validator accepting a shape AdCP does not define is the same mistake as
 declaring a non-spec field, spelled as behaviour instead of a field. Behaviour that depends on
@@ -320,8 +349,8 @@ cannot: an `identity` declared optional or defaulted, and an extra parameter wit
 
 A tool reads `identity.principal`, `identity.tenant`, and `identity.account`, and nothing
 else. There is no helper that re-checks whether a principal is present, because on a
-`ResolvedIdentity` the check has no branch to take. Two such helpers used to exist, and each
-was a second place that minted the same refusal the boundary had already decided. The name a
+`ResolvedIdentity` the check has no branch to take. Such a helper is a second place minting a
+refusal the boundary has already decided. The name a
 media buy records for its advertiser is `identity.principal.name`; the account a media buy is
 filed under is `identity.account.account_id`.
 
@@ -420,9 +449,8 @@ The resolver builds the identity once, from the resolved rows, with the account 
 returns a `PublicIdentity` for a public tool, a `ResolvedIdentity` for a protected one, and an
 `AccountIdentity` when the request names an account. The overloads make that static, so the
 boundary consumes the matching type with no `isinstance`. Nothing copies or amends an identity
-afterwards. The resolver used to resolve the account after the identity existed, by copying
-the identity. That order is how a tool could hold an identity with no account where the schema
-promised one.
+afterwards. Resolving the account after the identity exists, by copying the identity, is how a
+tool comes to hold an identity with no account where the schema promised one.
 
 The two authentication refusals belong to the resolver alone: `ruff-boundary.toml` bans
 importing `AdCPAuthRequiredError` and `AdCPAuthenticationError` anywhere else, so each has one
@@ -452,8 +480,8 @@ and a placeholder id hides it. The approval executor reports that refusal as a
 persisted-row defect and leaves the buy pending approval, so an operator who repairs the row
 can retry.
 
-There is no ambient tenant. A `ContextVar` used to carry the tenant to readers that held no
-identity, and it was a second channel that could disagree with the first. `get_adapter` in
+There is no ambient tenant. A `ContextVar` carrying the tenant to readers that hold no
+identity is a second channel, and it can disagree with the first. `get_adapter` in
 `src/core/helpers/adapter_helpers.py` takes the identity and reads the tenant and the principal
 off it, so nothing can pass the two as a mismatched pair.
 
@@ -514,10 +542,10 @@ this order, for every transport:
    `src/core/version_negotiation.py`, reading the two pins the request already declares. This
    runs FIRST, before anything reads the database: a release this build does not speak ends the
    exchange, so a rejected pin must not resolve a credential, a tenant, or an account, must not
-   hash the request, and must not be answered from the replay cache. The check used to sit
-   beside the outbound stamp, which reads well and orders wrong — the stamp can only run last —
-   and a request that named an account was then answered on auth before its unsupported pin was
-   read at all.
+   hash the request, and must not be answered from the replay cache. It does not sit beside the
+   outbound stamp, which reads well and orders wrong — the stamp can only run last, so a
+   request that names an account would be answered on auth before its unsupported pin was read
+   at all.
 3. **Resolves the identity** through `_resolve_identity`, in a worker thread because the
    resolver is synchronous and hits the database. The boundary computes the credential flag
    from the row — `spec.requires_credential() or account_ref is not None` — and hands the row's
@@ -551,9 +579,9 @@ through `object.__setattr__`, which bypasses both. That bypass is what makes the
 only writer instead of the conventional one, and it is why the refusal can be unconditional
 everywhere else: `.ast-grep/rules/context-is-written-by-the-boundary-alone.yml` bans a
 `context=` keyword under `src/` outside the boundary, and `ruff-boundary.toml` bans importing
-`adcp.types.ContextObject` outside the boundary and the schemas. Business logic used to thread
-the context through sixteen signatures and over a hundred call sites to reach the raise sites.
-One missed site was a response with no echo.
+`adcp.types.ContextObject` outside the boundary and the schemas. Threaded through business
+logic instead, the context reaches a raise site through every signature and call site on the
+way, and one missed site is a response with no echo.
 
 ### What a transport does
 
@@ -599,7 +627,15 @@ reached the SDK's nested models first and refused or coerced the payload before 
 this tree ran — so the strip was a no-op on MCP, dev rejection came from pydantic, and
 production tolerance came from a retry in a compat middleware: two programs for one policy.
 `parameters` is the DTO's own `model_json_schema()`, so the advertised shape is the model
-rather than a signature reconstructed from it. `run` reads the request headers with
+rather than a signature reconstructed from it. The server is built with
+`dereference_schemas=False`, so `tools/list` carries that schema with its `$defs` and `$ref`
+intact, equal to the request model's. FastMCP's default re-inlines every `$ref` on every
+listing, so each request re-derives a schema that is no longer the model's. It also keeps `$ref`
+and `$defs` wherever a schema is circular or its inlined form would be too large, which includes
+the largest request schemas here, so even with the default a client still receives `$ref`.
+FastMCP's default exists for MCP clients that do not resolve `$ref`. Since MCP 2025-11-25, JSON
+Schema 2020-12, which defines `$defs` and `$ref`, is the default dialect that clients must
+support, so such a client is non-conforming. `run` reads the request headers with
 `get_http_headers` and calls `serve`; outside an HTTP request that returns `{}`, a request
 presenting nothing, which the resolver answers `AUTH_MISSING` on a protected tool.
 
@@ -608,9 +644,8 @@ presenting nothing, which the resolver answers `AUTH_MISSING` on a protected too
 name, the description comes from the pinned SDK definitions — the same source MCP reads — and
 the tags come off `DTO.TAGS`, because they describe the tool's shape rather than its wiring.
 Dispatch admits a skill only when it is a registry row with `a2a=True` and answers
-`MethodNotFoundError` otherwise, so the card and what is dispatchable cannot disagree. A
-`hasattr`-built handler dict used to override the card silently. `_dispatch_skill` calls `serve`
-and returns `to_wire(...)`, so A2A adds nothing to the body.
+`MethodNotFoundError` otherwise, so the card and what is dispatchable cannot disagree.
+`_dispatch_skill` calls `serve` and returns `to_wire(...)`, so A2A adds nothing to the body.
 
 **REST** adds one route per row with a `rest` binding (`src/routes/api_v1.py`). The handler
 takes `Request`, not the DTO: a typed body parameter is exactly what makes FastAPI validate
@@ -653,8 +688,8 @@ The constructor has no `message` parameter. A raise site supplies facts through 
 owns the four things a buyer needs with a code — the message, the recovery, the suggestion, and
 the HTTP status — and `message`, `recovery`, `suggestion`, and `status_code` are read-only
 properties resolving from it at every read, so no instance can carry a value that disagrees
-with the table by any route. The table holds 100 entries: the 92 published codes loaded from
-the pinned bundle's `enums/error-code.json` through `importlib.resources`, plus the 8 platform
+with the table by any route. The table holds 101 entries: the 92 published codes loaded from
+the pinned bundle's `enums/error-code.json` through `importlib.resources`, plus the 9 platform
 codes `AppErrorCode` declares. An error names its code by its class or explicitly, never both
 and never neither: `__init_subclass__` refuses a subclass whose code the table does not
 classify, and `__new__` refuses both a bare base construction and an `error_code` passed to a
@@ -668,9 +703,9 @@ change how an error reaches the wire; the code itself lives in `src/core/errors/
 `details.py`, and `issues.py`.
 
 `internal_detail` is typed `BaseException | None`, so it takes the caught exception and
-nothing else. It goes to the server-side record and never to the wire. Forty-seven raise sites
-used to put an authored sentence there. None of those sentences said anything the code,
-the class, and the typed details did not already say. When you catch an exception and raise
+nothing else. It goes to the server-side record and never to the wire. An authored sentence
+there says nothing the code, the class, and the typed details do not already say. When you
+catch an exception and raise
 a typed one, pass the caught exception and raise `from` it. `record_boundary_error` in
 `src/core/tool_error_logging.py`, which the boundary calls on every failure, writes one
 server-side record per failure and attaches the traceback when the
@@ -860,19 +895,19 @@ exactly two concerns:
   declared library type, which is what keeps a local subclass's extra fields on the wire.
 - `AlwaysIncludeFieldsMixin` keeps a required field whose value is `None` on the wire under
   `exclude_none`. It reads that set off the model's own `model_fields` — required and nullable
-  are both already on the model — never off a schema path. A class used to opt in by naming a
-  pinned schema ref, and a hand-written ref can name the wrong schema and derive nothing,
-  silently; a rule read off the model cannot.
+  are both already on the model — never off a schema path. A class does not opt in by naming a
+  pinned schema ref: a hand-written ref can name the wrong schema and derive nothing,
+  silently, where a rule read off the model cannot.
 
 Re-insertion honours the caller's selection: the serializer reads `info.exclude` and
 `info.include`, skips a field the caller excluded, and puts back only `None`, so no raw Python
 value can land in a `mode="json"` dump.
 
 A field that must exist on the model and not on the wire is `Field(exclude=True)` at its
-declaration, nowhere else. The per-class hook and the per-class strip set that used to live on
-`WireSerializerMixin` are deleted. Every use did one of two things. It patched back the output of a
-redeclaration that had weakened the library type, in which case the fix is to not redeclare.
-Or it stripped a field that belongs on the wire, such as `Product.expires_at`. Never override
+declaration, nowhere else. `WireSerializerMixin` carries no per-class hook and no per-class
+strip set, and one added to it can only do one of two things. It patches back the output of a
+redeclaration that has weakened the library type, in which case the fix is to not redeclare.
+Or it strips a field that belongs on the wire, such as `Product.expires_at`. Never override
 `model_dump`: an override runs on one of the three serialization paths and a
 `@model_serializer` runs on all three. No model under `src/` overrides it — the two
 `def model_dump` lines are `TYPE_CHECKING` protocol declarations.
@@ -978,10 +1013,9 @@ same reason. They are persistence normalization, and keeping them beside the too
 `model_dump` inside the business-logic call graph. A tool, helper, or validator composes no
 document.
 
-**Fix a stored document that does not fit its model with a single migration.** `Targeting`
-used to carry a validator that rewrote legacy flat geo keys into the structured fields on
-every validation.
-The validator is deleted, and no read-side normalizer replaced it. A validator that reshapes
+**Fix a stored document that does not fit its model with a single migration.** No model carries
+a validator that rewrites legacy flat geo keys into the structured fields, and no read-side
+normalizer does it either. A validator that reshapes
 input runs on every read forever and hides which rows are legacy; a data migration answers
 the question once, in the rows. Write the migration only for rows that exist. No database
 reachable from this repo holds a document with the flat geo keys, so the tree carries no
@@ -1039,10 +1073,11 @@ audit logger reads its log directory the same way.
 Business code never reads `ADCP_TESTING`. Each allowance it implies has its own name,
 such as `debug_routes_enabled`, `reference_formats_only`, and `loopback_webhooks_allowed`.
 Where an allowance selects a component, the selection happens at composition. The debug
-router is mounted or absent, the creative registry is the reference-formats registry or the
-live one, and the admin UI's test-credential login blueprint is registered or absent
-(`src/admin/blueprints/test_auth.py`; a request-time reader asks the app whether it was
-composed, through `test_login_composed()`). Where an allowance gates one predicate inside one
+router is mounted or absent, and the creative registry is the reference-formats registry or
+the live one. (A flag deciding whether an AUTH blueprint is composed is not such a
+selection: it makes the app under test a different app from the deployed one, which is the
+defect this section describes rather than an illustration of doing it well.) Where an
+allowance gates one predicate inside one
 function, such as `loopback_webhooks_allowed` or `relaxed_brand_validation`, that function
 reads it off the settings object per call: a swapped component carries only that bool.
 
@@ -1144,33 +1179,9 @@ effects register on the unit of work through `repo.after_commit(fn)` and
 `repo.outbound(call)`, and disposing it discards them. An implementation never dials out;
 effects drain after commit.
 
-## What this design replaced
+## The seams
 
-The tree used to carry mechanisms this page no longer describes:
-
-- A per-tool transport wrapper for each of three transports — fifteen `*_raw` functions. The
-  wrappers disagreed about account resolution and idempotency: only three of the fifteen
-  resolved the request's `account`, so seven tools accepted the field over REST and A2A and
-  dropped it silently.
-- An `auth` literal on the registry row. The literal could disagree with the implementation.
-- Two helpers that re-checked inside every tool whether the admitted caller was present. The
-  helpers minted the same refusal in a second place.
-- A second identity resolver, kept alive by its own tests, per-transport identity middleware,
-  and an ambient tenant `ContextVar` beside the identity.
-- Per-transport request parsing: A2A skill handlers that each validated and coerced their own
-  parameter bag, and a strip that only A2A reached.
-- Hand-written `AgentSkill` literals and a `hasattr`-built handler dict, so the A2A card could
-  advertise a skill that answered `MethodNotFoundError`.
-- Hand-written REST decorators, one of which hardcoded the credential as optional, and a
-  `GET /capabilities` route that could carry no body.
-- The buyer's context threaded through signatures to raise sites, and a hand-assembled error
-  dict with no `status`.
-- Per-class serializer hooks, strip sets, `model_dump` overrides, and input-reshaping
-  validators on wire models.
-- Environment reads scattered across forty modules, and a plaintext token column with a
-  tenant admin token beside it.
-
-On this tree, each of those is one seam:
+Each concern a tool touches has exactly one seam:
 
 - The annotation is the credential policy, and the DTO is the account policy.
 - The resolver builds one identity with the account inside.
@@ -1220,8 +1231,8 @@ The steps that make up a scenario follow four rules.
   `ValidationError` there and never crosses the wire.
 - Then steps read the wire through the harness readers on the exact response from the run.
   Use `result.assert_wire_error(code, recovery=...)` for an error and `wire_field(ctx, ...)`
-  for a success. An assertion on a reconstructed exception can pass vacuously, which is why
-  the harness no longer rebuilds one: `result.error` carries what the transport raised, and
+  for a success. An assertion on a reconstructed exception can pass vacuously, so the harness
+  rebuilds none: `result.error` carries what the transport raised, and
   `wire_error_envelope` holds the bytes the buyer received or nothing at all.
 - You cannot assert a sentence. `assert_wire_error` has no message parameter, because the
   message is a function of the code and asserting it checks the table against itself. Grade

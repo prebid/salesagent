@@ -157,31 +157,6 @@ These guards enforce Critical Pattern #5: shared `_impl` functions are
 transport-agnostic. They don't know whether they're called from MCP, A2A, or
 a REST endpoint.
 
-### Schema inheritance guard
-
-**File:** `tests/unit/test_architecture_schema_inheritance.py`
-
-**What it enforces:** A local schema class that redeclares a field of its
-adcp library parent must keep the parent's shape: same annotation (or a
-subclass), no added nullability, `is_required()` not relaxed, metadata a
-superset, no introduced default. A redeclaration that reshapes or weakens a
-field needs an allowlist row naming the weakened axis.
-
-**How it works:** The redefinition rule
-(`test_no_field_redefinition_in_subclasses`) walks the live MRO of each
-local schema class and tests `__module__` to find fields redeclared over a
-library parent, so it consults no import spelling. The companion
-`test_all_library_types_have_local_subclass` discovers `Library*` aliases in
-`src/core/schemas` and asserts that the local class with the unprefixed name
-inherits from the library type; that half is alias-keyed, and an import
-under a different alias goes unexamined by it.
-This guard is the only grader of redeclarations. The alignment suite that
-used to be the backstop — `test_pydantic_schema_alignment.py`, which graded
-declared fields and `model_dump` survival against the pinned schema — was
-deleted in full ([Building a tool](building-tools.md)),
-because a design in which the DTO IS the pinned model minus a declared
-omission leaves it nothing to compare.
-
 ### Implementation signature
 
 **Where:** the `ToolImpl` protocol typing `ToolSpec.impl` in `src/core/tools/registry.py`,
@@ -490,6 +465,54 @@ uv run alembic merge -m "Merge migration heads" heads
 The smoke test in `tests/smoke/test_database_migrations.py` also checks this,
 providing coverage in the CI smoke-tests job before unit tests run.
 
+### No request-supplied session default guard
+
+**File:** `tests/unit/test_architecture_no_request_session_default.py`
+
+**What it enforces:** A Flask session lookup — `session.get`, `session.pop` or
+`session.setdefault` with a string key, anywhere under `src/` — never defaults
+(positionally or by `default=`) to a value the request supplied: a `request.*`
+expression, a parameter of the enclosing function (route arguments arrive that
+way), or a name bound from `request.*` in that function. Nor is such a lookup
+followed by `or <any of those>`.
+
+**Why it matters:** The default is taken exactly when the request carries no
+session, which is the request that must not be trusted.
+`session.pop("gam_oauth_tenant_id", state)` in the GAM OAuth callback was the
+whole of [#2205](https://github.com/prebid/salesagent/issues/2205): with no
+session, the tenant came from the attacker-controlled `state` parameter and
+that tenant's ad-server credential was overwritten. The line read as a
+harmless fallback in review and failed nothing at runtime.
+
+#### How it works
+
+For every function the guard collects its parameters and every name assigned
+from an expression rooted at `request`. It then walks the module with
+`walk_with_enclosing_function` and flags two shapes. First, a call to
+`.get`/`.pop`/`.setdefault` on `session`, `flask_session` or `<module>.session`
+whose first argument is a string constant (which is what separates the Flask
+session from SQLAlchemy's `Session.get(Model, pk)`) and whose default — the
+second positional argument or the `default=` keyword, which Flask's session
+accepts on `pop` and `setdefault` — mentions one of those names or is itself
+rooted at `request`. Second, an `or` expression in which such a lookup is
+followed by an operand that mentions one of those names or is rooted at
+`request`.
+A default computed from the session itself — `session.get("user_name",
+email.split("@")[0].title())` with `email = session["user"]` — is not flagged.
+
+#### Tests
+
+| Test | What it checks |
+|------|---------------|
+| `test_no_request_supplied_session_default` | No violation under `src/` beyond `KNOWN_VIOLATIONS` (empty) |
+| `test_detector_catches_known_bad` | The detector fires on a route-parameter default, a name bound from `request.args`, a `request.args.get(...)` default, a `default=` keyword, `setdefault`, the `or request...` form, `or` with a request-bound name or a route parameter, and the `flask_session` alias |
+| `test_detector_ignores_session_derived_defaults_and_orm_sessions` | Literal and session-derived defaults, `session.pop(...) or session.get(...)`, and `db_session.get(Tenant, pk)` are not flagged |
+
+#### No allowlist
+
+`KNOWN_VIOLATIONS` is empty and stays empty: the one violation was the bug
+the guard was written for.
+
 ### Hook-relocation guards
 
 These guards run via `pytest -m arch_guard` or as part of `make quality`.
@@ -714,7 +737,7 @@ make quality
 uv run pytest tests/unit/test_architecture_*.py tests/unit/test_*impl*.py -v
 
 # Single guard
-uv run pytest tests/unit/test_architecture_schema_inheritance.py -v
+uv run pytest tests/unit/test_architecture_no_raw_select.py -v
 ```
 
 ## Relationship to other quality mechanisms

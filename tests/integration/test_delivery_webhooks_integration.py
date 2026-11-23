@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from freezegun import freeze_time
 
+from scripts.setup.seed_products import whole_publisher_selections
 from src.adapters.gam_reporting_service import ReportingData
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
@@ -24,6 +25,8 @@ from src.core.database.models import (
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 from tests.factories import PricingOptionFactory
 from tests.factories.principal import plaintext_token_for
+from tests.factories.webhook import ReportingWebhookRequestFactory
+from tests.utils.database_helpers import vhost_for
 
 
 def _create_test_tenant_and_principal(ad_server: str | None = None) -> tuple[str, str]:
@@ -32,7 +35,11 @@ def _create_test_tenant_and_principal(ad_server: str | None = None) -> tuple[str
 
     with get_db_session() as session:
         tenant = Tenant(
-            tenant_id=tenant_id, name="Integration Tenant", subdomain="gam-pricing-test", ad_server="ad_server"
+            tenant_id=tenant_id,
+            name="Integration Tenant",
+            subdomain="gam-pricing-test",
+            virtual_host=vhost_for(tenant_id),
+            ad_server="ad_server",
         )
         principal = Principal.with_token(
             plaintext_token_for(principal_id),
@@ -90,7 +97,7 @@ def _create_basic_media_buy_with_webhook(
             delivery_type="",
             # ck_product_properties_xor: a product states EITHER properties OR
             # property_tags, never neither.
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, tenant_id),
         )
 
         pricing_option = PricingOptionFactory.build(
@@ -125,10 +132,18 @@ def _create_basic_media_buy_with_webhook(
                         "pricing_option_id": pricing_option.pricing_option_id,
                     }
                 ],
-                "reporting_webhook": {
-                    "url": "https://example.com/webhook",  # outbound HTTP will be mocked
-                    "reporting_frequency": "daily",
-                },
+                # Through the factory, not a literal. The literal declared only
+                # ``url`` and ``reporting_frequency``, so it was missing
+                # ``authentication`` -- which ``core/reporting-webhook.json``
+                # /required lists -- and the ``operation_id`` the seller must echo
+                # into ``mcp-webhook-payload.operation_id`` on every
+                # ``media_buy_delivery`` notification. Without the latter the
+                # scheduler correctly refuses to build an envelope, so every
+                # assertion here about a send was being made against a stream that
+                # cannot be delivered on.
+                "reporting_webhook": ReportingWebhookRequestFactory.payload(
+                    url="https://example.com/webhook"  # outbound HTTP will be mocked
+                ),
             },
         )
 

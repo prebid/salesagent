@@ -1,0 +1,115 @@
+{
+ "summary": {
+  "unit/ours": {
+   "parent": 6144,
+   "merged": 4897,
+   "dropped": 2003,
+   "gained": 756,
+   "deleted-by-1721": 1014,
+   "rewritten-by-1721": 364,
+   "in-surface": 625,
+   "renamed": 0,
+   "UNEXPLAINED": 0
+  },
+  "unit/mine": {
+   "parent": 4591,
+   "merged": 4897,
+   "dropped": 18,
+   "gained": 324,
+   "deleted-by-1721": 0,
+   "rewritten-by-1721": 0,
+   "in-surface": 18,
+   "renamed": 0,
+   "UNEXPLAINED": 0
+  },
+  "integration/ours": {
+   "parent": 2802,
+   "merged": 2487,
+   "dropped": 454,
+   "gained": 139,
+   "deleted-by-1721": 118,
+   "rewritten-by-1721": 97,
+   "in-surface": 238,
+   "renamed": 1,
+   "UNEXPLAINED": 0
+  },
+  "integration/mine": {
+   "parent": 2322,
+   "merged": 2487,
+   "dropped": 5,
+   "gained": 170,
+   "deleted-by-1721": 0,
+   "rewritten-by-1721": 0,
+   "in-surface": 4,
+   "renamed": 1,
+   "UNEXPLAINED": 0
+  },
+  "bdd/ours": {
+   "parent": 1159,
+   "merged": 1163,
+   "dropped": 88,
+   "gained": 92,
+   "deleted-by-1721": 8,
+   "rewritten-by-1721": 65,
+   "in-surface": 15,
+   "renamed": 0,
+   "UNEXPLAINED": 0
+  },
+  "bdd/mine": {
+   "parent": 1155,
+   "merged": 1163,
+   "dropped": 0,
+   "gained": 8,
+   "deleted-by-1721": 0,
+   "rewritten-by-1721": 0,
+   "in-surface": 0,
+   "renamed": 0,
+   "UNEXPLAINED": 0
+  },
+  "e2e/ours": {
+   "parent": 166,
+   "merged": 136,
+   "dropped": 37,
+   "gained": 7,
+   "deleted-by-1721": 10,
+   "rewritten-by-1721": 2,
+   "in-surface": 25,
+   "renamed": 0,
+   "UNEXPLAINED": 0
+  },
+  "e2e/mine": {
+   "parent": 105,
+   "merged": 136,
+   "dropped": 0,
+   "gained": 31,
+   "deleted-by-1721": 0,
+   "rewritten-by-1721": 0,
+   "in-surface": 0,
+   "renamed": 0,
+   "UNEXPLAINED": 0
+  },
+  "admin/ours": {
+   "parent": 134,
+   "merged": 136,
+   "dropped": 1,
+   "gained": 3,
+   "deleted-by-1721": 0,
+   "rewritten-by-1721": 0,
+   "in-surface": 1,
+   "renamed": 0,
+   "UNEXPLAINED": 0
+  },
+  "admin/mine": {
+   "parent": 136,
+   "merged": 136,
+   "dropped": 0,
+   "gained": 0,
+   "deleted-by-1721": 0,
+   "rewritten-by-1721": 0,
+   "in-surface": 0,
+   "renamed": 0,
+   "UNEXPLAINED": 0
+  }
+ },
+ "unexplained": {}
+}

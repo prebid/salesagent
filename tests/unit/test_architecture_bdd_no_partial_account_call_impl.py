@@ -34,7 +34,7 @@ def _scan_hits() -> list[tuple[str, int]]:
     """(relative_path, line_number) for every call_impl(account_ref=...) under steps/."""
     hits: list[tuple[str, int]] = []
     for py_file in _STEPS_DIR.rglob("*.py"):
-        for i, line in enumerate(py_file.read_text().splitlines(), start=1):
+        for i, line in enumerate(py_file.read_text(encoding="utf-8").splitlines(), start=1):
             if _NEEDLE in line:
                 hits.append((py_file.name, i))
     return hits
@@ -69,7 +69,7 @@ def test_scan_detects_pattern(tmp_path):
     """Meta: the scanner finds the disease pattern."""
     f = tmp_path / "steps" / "x.py"
     f.parent.mkdir(parents=True)
-    f.write_text("def given_x(ctx):\n    env.call_impl(account_ref=ctx['account_ref'])\n")
+    f.write_text("def given_x(ctx):\n    env.call_impl(account_ref=ctx['account_ref'])\n", encoding="utf-8")
     hits = [ln for _, ln in _scan_for(f)]
     assert hits == [2]
 
@@ -78,9 +78,13 @@ def test_scan_ignores_clean_code(tmp_path):
     """Meta: a step that does not use the pattern is not flagged."""
     f = tmp_path / "steps" / "y.py"
     f.parent.mkdir(parents=True)
-    f.write_text("def given_y(ctx):\n    env.call_impl(req=ctx['req'])\n")
+    f.write_text("def given_y(ctx):\n    env.call_impl(req=ctx['req'])\n", encoding="utf-8")
     assert _scan_for(f) == []
 
 
 def _scan_for(py_file: Path) -> list[tuple[str, int]]:
-    return [(py_file.name, i) for i, line in enumerate(py_file.read_text().splitlines(), start=1) if _NEEDLE in line]
+    return [
+        (py_file.name, i)
+        for i, line in enumerate(py_file.read_text(encoding="utf-8").splitlines(), start=1)
+        if _NEEDLE in line
+    ]

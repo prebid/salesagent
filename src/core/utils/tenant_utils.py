@@ -34,7 +34,6 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
     return {
         "tenant_id": tenant.tenant_id,
         "name": tenant.name,
-        "subdomain": tenant.subdomain,
         "virtual_host": tenant.virtual_host,
         "ad_server": tenant.ad_server,
         "enable_axe_signals": tenant.enable_axe_signals,
@@ -51,7 +50,6 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
         "account_approval_mode": tenant.account_approval_mode,
         "supported_billing": safe_json_loads(tenant.supported_billing, None),
         "account_sandbox": tenant.account_sandbox,
-        "gemini_api_key": tenant.gemini_api_key,
         "creative_review_criteria": tenant.creative_review_criteria,
         "brand_manifest_policy": tenant.brand_manifest_policy,
         "advertising_policy": safe_json_loads(tenant.advertising_policy, None),

@@ -1,7 +1,7 @@
 """Integration tests for manual/forced delivery webhook triggering."""
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 from sqlalchemy import select
@@ -141,8 +141,14 @@ async def test_trigger_report_for_media_buy_public_method(integration_db):
 
     scheduler = DeliveryWebhookScheduler()
 
-    # Mock _send_report_for_media_buy to verify it receives force=True
+    # Mock _send_report_for_media_buy to verify it receives force=True. The return value
+    # is STATED, not left to AsyncMock's default: the wrapper now returns the sender's
+    # verdict instead of a hardcoded True, so an unstated return makes the assertion
+    # below compare a MagicMock. That it used to pass without one is the point — the old
+    # wrapper answered True whatever the sender did, so this test could not have caught
+    # a delivery reported as sent when it was refused.
     with patch.object(scheduler, "_send_report_for_media_buy", new_callable=AsyncMock) as mock_send_internal:
+        mock_send_internal.return_value = True
         with get_db_session() as session:
             from src.core.database.models import MediaBuy
 
@@ -156,6 +162,43 @@ async def test_trigger_report_for_media_buy_public_method(integration_db):
             mock_send_internal.assert_called_once()
             args, kwargs = mock_send_internal.call_args
             assert kwargs.get("force") is True
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_trigger_report_propagates_a_refused_delivery_as_false(integration_db):
+    """A delivery the sender did NOT make must not be reported as triggered.
+
+    The other half of the wrapper's contract, and the half that was unrepresentable
+    until it stopped returning a hardcoded ``True``: a destination refused by the
+    egress policy before any connection, or an unusable stored registration, walks off
+    the end of ``_send_report_for_media_buy`` exactly like a success did. The operator
+    surface that reads this bool (the admin trigger's flash) then said "Sent" for a
+    webhook the buyer never received — a quiet failure on the one control an operator
+    has for "did this go out".
+    """
+    tenant_id, principal_id = _create_test_tenant_and_principal()
+    media_buy_id = _create_basic_media_buy_with_webhook(tenant_id, principal_id)
+
+    scheduler = DeliveryWebhookScheduler()
+
+    with patch.object(scheduler, "_send_report_for_media_buy", new_callable=AsyncMock) as mock_send_internal:
+        mock_send_internal.return_value = False
+
+        result = await scheduler.trigger_report_for_media_buy_by_id(media_buy_id, tenant_id)
+
+        assert result is False, (
+            "the trigger reported success for a delivery its own sender declined to make; "
+            "an operator reading this cannot tell a sent webhook from a blocked one"
+        )
+        # This assertion does real work: the wrapper's OTHER way to answer False is the
+        # "no reporting_webhook configured" early return, which never reaches the sender.
+        # Pinning that the sender WAS called (once, forced) is what makes this test grade
+        # propagation rather than that early return. ANY on the three positionals — the
+        # media buy, its reporting_webhook dict and the session are all fetched by the
+        # wrapper itself, so the test holds no handle to them; `force` is the argument
+        # this call is about.
+        mock_send_internal.assert_called_once_with(ANY, ANY, ANY, force=True)
 
 
 @pytest.mark.requires_db

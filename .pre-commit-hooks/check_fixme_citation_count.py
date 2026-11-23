@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 from count_ratchet import (
+    iter_python_sources,
     json_baseline_io,
     parse_ratchet_args,
     resolve_ratchet_paths,
@@ -61,8 +62,7 @@ def count_beads_citations(repo_root: Path) -> dict[str, int]:
     for tracked_dir in TRACKED_DIRS:
         fixme_key = f"{tracked_dir}_fixme_beads"
         quoted_key = f"{tracked_dir}_quoted_beads"
-        for path in sorted((repo_root / tracked_dir).rglob("*.py")):
-            text = path.read_text(encoding="utf-8")
+        for _path, text in iter_python_sources(repo_root / tracked_dir):
             counts[fixme_key] += len(_LOCAL_BEADS_CITATION.findall(text))
             counts[quoted_key] += len(_QUOTED_BEADS_ID.findall(text))
     return counts

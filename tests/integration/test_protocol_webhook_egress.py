@@ -85,7 +85,7 @@ from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.harness.protocol_webhook import AUDIT_LOGGER_NAME, DELIVERY_METADATA_TASK_TYPE, ProtocolWebhookEnv
 from tests.helpers import assert_signature_verifies_over_wire_body
 from tests.helpers.local_http_origin import run_local_origin
-from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
+from tests.helpers.tls_material import load_gen_test_tls, server_ssl_context
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 

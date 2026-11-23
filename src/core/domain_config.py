@@ -1,14 +1,17 @@
 """
 Domain configuration utilities.
 
-This module provides centralized domain configuration that can be customized
-via environment variables, making the codebase vendor-neutral.
+This module answers questions about THIS DEPLOYMENT's own domains — the admin
+domain, the OAuth redirect, the session cookie — so they are configurable rather
+than vendor-hardcoded.
 
-In single-tenant mode, most of these functions are not needed since there's
-no subdomain routing. In multi-tenant mode, you must set SALES_AGENT_DOMAIN.
+It says nothing about which tenant a request belongs to. A tenant is identified by
+the host it declares (``Tenant.virtual_host``) or by an explicit ``x-adcp-tenant``
+header, and by nothing else.
 """
 
 from src.core.config import get_settings
+from src.core.http_utils import same_hostname
 
 
 def _is_localhost(domain: str | None) -> bool:
@@ -20,17 +23,41 @@ def _is_localhost(domain: str | None) -> bool:
     return host in ("localhost", "127.0.0.1")
 
 
+def _is_single_label_host(domain: str | None) -> bool:
+    """True for a bare hostname with no dot (``proxy``, ``adcp-server``).
+
+    A single-label host is not a public FQDN, so no public CA will issue a
+    certificate for it and https is unreachable there by construction. These are
+    container/service names on an internal network — the shape a Docker stack is
+    reached at from inside its own network.
+    """
+    if not domain:
+        return False
+    return "." not in domain.split(":")[0]
+
+
 def _get_protocol_for_domain(domain: str | None) -> str:
-    """Return http for localhost, https for production domains."""
-    return "http" if _is_localhost(domain) else "https"
+    """Return http for hosts that cannot serve https, https for public domains.
+
+    Two http cases, and they are one case seen twice: localhost/127.0.0.1, and
+    any single-label service name. Neither can present a publicly-trusted
+    certificate, so advertising https for them yields a URL nothing can reach —
+    which for the trust root (#1291 A3) means publishing an agent identity that
+    is not where the agent answers. The in-network e2e stack, reached at
+    ``proxy:8000``, is exactly that case.
+    """
+    return "http" if _is_localhost(domain) or _is_single_label_host(domain) else "https"
 
 
 def get_sales_agent_domain() -> str | None:
-    """Get the sales agent domain (e.g., sales-agent.example.com).
+    """Get this deployment's own domain (e.g., sales-agent.example.com).
+
+    This is the domain the deployment answers on — what the admin URL, the OAuth
+    redirect and the session cookie are built from. It is NOT a suffix tenants are
+    resolved under.
 
     Returns:
         The configured SALES_AGENT_DOMAIN, or None if not configured.
-        Multi-tenant mode requires this to be set.
     """
     return get_settings().runtime.sales_agent_domain
 
@@ -76,55 +103,6 @@ def get_admin_url(protocol: str = "https") -> str | None:
     return None
 
 
-def get_a2a_server_url(protocol: str | None = None) -> str | None:
-    """Get the A2A server URL (e.g., https://sales-agent.example.com/a2a).
-
-    Args:
-        protocol: The protocol to use. If None, auto-detects based on domain
-                  (http for localhost, https for production).
-
-    Returns:
-        The full URL, or None if SALES_AGENT_DOMAIN is not configured.
-    """
-    domain = get_sales_agent_domain()
-    if not domain:
-        return None
-    # Auto-detect protocol if not specified
-    if protocol is None:
-        protocol = _get_protocol_for_domain(domain)
-    if url := get_sales_agent_url(protocol):
-        return f"{url}/a2a"
-    return None
-
-
-def get_mcp_server_url(protocol: str = "https") -> str | None:
-    """Get the MCP server URL (e.g., https://sales-agent.example.com/mcp).
-
-    Returns:
-        The full URL, or None if SALES_AGENT_DOMAIN is not configured.
-    """
-    if url := get_sales_agent_url(protocol):
-        return f"{url}/mcp"
-    return None
-
-
-def is_sales_agent_domain(host: str) -> bool:
-    """
-    Check if the given host is part of the sales agent domain.
-
-    Args:
-        host: The hostname to check (e.g., "tenant.sales-agent.example.com")
-
-    Returns:
-        True if the host ends with the sales agent domain.
-        Returns False if SALES_AGENT_DOMAIN is not configured.
-    """
-    sales_domain = get_sales_agent_domain()
-    if not sales_domain:
-        return False
-    return host.endswith(f".{sales_domain}") or host == sales_domain
-
-
 def is_admin_domain(host: str) -> bool:
     """
     Check if the given host is the admin domain.
@@ -139,45 +117,7 @@ def is_admin_domain(host: str) -> bool:
     admin_domain = get_admin_domain()
     if not admin_domain:
         return False
-    return host == admin_domain or host.startswith(f"{admin_domain}:")
-
-
-def extract_subdomain_from_host(host: str) -> str | None:
-    """
-    Extract the subdomain from a host if it's a sales agent domain.
-
-    Args:
-        host: The hostname (e.g., "tenant.sales-agent.example.com")
-
-    Returns:
-        The subdomain (e.g., "tenant") or None if not a subdomain
-        or if SALES_AGENT_DOMAIN is not configured.
-    """
-    sales_domain = get_sales_agent_domain()
-    if not sales_domain:
-        return None
-
-    if f".{sales_domain}" in host:
-        return host.split(f".{sales_domain}")[0]
-
-    return None
-
-
-def get_tenant_url(subdomain: str, protocol: str = "https") -> str | None:
-    """
-    Get the URL for a specific tenant subdomain.
-
-    Args:
-        subdomain: The tenant subdomain
-        protocol: The protocol (http or https)
-
-    Returns:
-        The full tenant URL (e.g., https://tenant.sales-agent.example.com)
-        or None if SALES_AGENT_DOMAIN is not configured.
-    """
-    if sales_domain := get_sales_agent_domain():
-        return f"{protocol}://{subdomain}.{sales_domain}"
-    return None
+    return same_hostname(host, admin_domain)
 
 
 def get_oauth_redirect_uri(protocol: str = "https") -> str | None:

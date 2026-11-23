@@ -1,39 +1,41 @@
 """Typed tenant context model.
 
-Replaces the fragile dict[str, Any] tenant representation with a typed,
-validated Pydantic model. All tenant fields are explicitly defined with
-appropriate defaults.
+A typed, validated Pydantic model of a tenant: every field is explicitly
+declared, with a default where one is sound.
 
 The resolver (``src/core/resolved_identity._resolve_identity``) loads it once per request
 and hands it on as ``ResolvedIdentity.tenant``. Nothing downstream loads a tenant again.
 
-It is read by attribute only: ``tenant.tenant_id``. The dict shim (``__getitem__``, ``get``,
-``keys``, ``__contains__``) that let ``tenant["tenant_id"]`` compile is gone, so mypy sees
-every field a reader names.
+It is read by attribute only: ``tenant.tenant_id``. There is deliberately no dict shim
+(``__getitem__``, ``get``, ``keys``, ``__contains__``), so ``tenant["tenant_id"]`` does not
+compile and mypy sees every field a reader names.
 """
 
 import logging
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from src.core.config_loader import safe_json_loads
+from src.services.ai.config import SellerAIConfig, TenantAIConfig
 
 logger = logging.getLogger(__name__)
 
 
 class TenantContext(BaseModel):
-    """Typed tenant context — replaces dict[str, Any] for tenant data.
+    """A tenant's fields, typed, as every reader downstream of the boundary sees them.
 
     Created from the database Tenant ORM model at the transport boundary.
-    Immutable after creation. All fields have sensible defaults so tests
-    can construct with just TenantContext(tenant_id="test").
+    Immutable after creation. Two fields are required, because the row always carries
+    them and a projection that admitted less would put the decision back on every
+    reader: ``tenant_id`` names the tenant, and ``virtual_host`` is the host it is
+    served at — the type is how ``canonical_agent_url`` stops needing a fallback. Every
+    other field has a default, so a test names only what it is grading.
     """
 
     tenant_id: str
     name: str = ""
-    subdomain: str = ""
-    virtual_host: str | None = None
+    virtual_host: str
     ad_server: str | None = None
     enable_axe_signals: bool = True
     authorized_emails: list[str] = []
@@ -49,7 +51,13 @@ class TenantContext(BaseModel):
     account_sandbox: bool = False  # #1592 C2/A2: account.sandbox + sync_accounts provisioning gate
     approval_mode: str = "require-human"  # BR-RULE-037: creative approval mode
     account_approval_mode: str | None = None  # BR-RULE-060: account approval mode (auto|credit_review|legal_review)
-    gemini_api_key: str | None = None
+    # What AI the seller configured, resolved once from the row by TenantAIConfig.from_tenant
+    # (ai_config first, the legacy gemini_api_key column second): the seller's own config,
+    # None for nothing, or UNUSABLE_AI_CONFIG. Every AI consumer reads it here. It carries a
+    # credential, so it is kept out of repr and of every dump; the legacy column itself is
+    # not carried at all.
+    ai_config: SellerAIConfig = Field(default=None, repr=False, exclude=True)
+    order_name_template: str | None = None
     creative_review_criteria: str | None = None
     brand_manifest_policy: str = "require_auth"
     advertising_policy: dict[str, Any] | None = None
@@ -57,6 +65,55 @@ class TenantContext(BaseModel):
     # #1592 T1a: implementation-backed AdCP capability declaration blocks.
     # None = nothing declared = the pre-#1592 capabilities wire.
     capability_declarations: dict[str, Any] | None = None
+
+    @field_validator("virtual_host")
+    @classmethod
+    def _fold_virtual_host(cls, value: str) -> str:
+        """The host this projection carries is LOWERCASE, whoever built it.
+
+        The read half of the same rule ``Tenant.virtual_host``'s validator states on the
+        write half: a ``Host`` names a DNS name and DNS is case-insensitive, so the one
+        canonical spelling is the folded one. Every reader that publishes or byte-matches
+        this tenant's origin — the agent card, ``get_adcp_capabilities`` — reads it from
+        here through ``canonical_agent_url``, so folding once at the projection is what
+        keeps a row written before that validator existed from publishing an origin in a
+        case no other reader would produce.
+        """
+        return value.strip().lower()
+
+    @property
+    def agent_url(self) -> str:
+        """Where this tenant's agent is reachable: its canonical ORIGIN, scheme included.
+
+        The ONE accessor, same name the ORM row carries, so a caller holding either shape
+        reads the same thing and no caller anywhere puts a scheme in front of a host itself
+        (#1845). The derivation stays in
+        :func:`src.core.agent_identity.canonical_agent_url`: one place computes, one name
+        reads.
+
+        Always a string, and never a fallback — ``virtual_host`` is required on this model.
+        """
+        from src.core.agent_identity import canonical_agent_url
+
+        return canonical_agent_url(self)
+
+    @property
+    def auto_approves_creatives(self) -> bool:
+        """Whether a synced creative is approved at sync, with no review before it can serve.
+
+        The ONE predicate over ``approval_mode`` that both readers ask: sync_creatives'
+        routing (``_apply_approval_mode``) approves the row when it holds and leaves it
+        ``pending_review`` otherwise, and ``get_adcp_capabilities`` advertises
+        ``media_buy.creative_approval_mode`` from it. Two readers comparing the string
+        separately could advertise ``auto_approve`` for a mode that holds creatives for review.
+
+        Only ``auto-approve`` holds. ``ai-powered`` does not: the AI reviewer leaves a creative
+        ``pending_review`` for a human on low confidence, a sensitive category or a review
+        failure, which is ``require_human``'s "may require manual review" ceiling
+        (protocol/get-adcp-capabilities-response.json, v3.2.7,
+        ``media_buy.creative_approval_mode``).
+        """
+        return self.approval_mode == "auto-approve"
 
     # --- Construction helpers ---
 
@@ -68,10 +125,9 @@ class TenantContext(BaseModel):
         request names; a background path that starts from a stored row's ``tenant_id``
         (delivery reporting for a media buy) calls it for the same reason.
         """
-        from src.core.config_loader import get_tenant_by_id
+        from src.core.config_loader import get_tenant_context
 
-        row = get_tenant_by_id(tenant_id)
-        return cls.from_dict(row) if row else None
+        return get_tenant_context(tenant_id)
 
     @classmethod
     def from_orm_model(cls, tenant: Any) -> "TenantContext":
@@ -83,7 +139,6 @@ class TenantContext(BaseModel):
         return cls(
             tenant_id=tenant.tenant_id,
             name=tenant.name or "",
-            subdomain=tenant.subdomain or "",
             virtual_host=tenant.virtual_host,
             ad_server=tenant.ad_server,
             enable_axe_signals=tenant.enable_axe_signals if tenant.enable_axe_signals is not None else True,
@@ -100,7 +155,8 @@ class TenantContext(BaseModel):
             account_sandbox=tenant.account_sandbox,
             approval_mode=tenant.approval_mode or "require-human",
             account_approval_mode=tenant.account_approval_mode,
-            gemini_api_key=tenant.gemini_api_key,
+            ai_config=TenantAIConfig.from_tenant(tenant),
+            order_name_template=tenant.order_name_template,
             creative_review_criteria=tenant.creative_review_criteria,
             brand_manifest_policy=tenant.brand_manifest_policy or "require_auth",
             advertising_policy=safe_json_loads(tenant.advertising_policy, None),

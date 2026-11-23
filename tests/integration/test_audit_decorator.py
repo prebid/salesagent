@@ -4,9 +4,10 @@ import pytest
 from flask import Flask
 from sqlalchemy import select
 
-from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
+from src.admin.utils.audit_decorator import _RAISED_MESSAGE, log_admin_action, record_admin_action_failure
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog, Tenant
+from src.core.exceptions import AdCPValidationError
 
 
 @pytest.mark.requires_db
@@ -14,7 +15,13 @@ def test_decorator_logs_successful_action(integration_db):
     """Verify decorator creates audit log for successful action."""
     # Create test tenant
     with get_db_session() as db_session:
-        tenant = Tenant(tenant_id="test_tenant", name="Test Tenant", subdomain="test")
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
+        tenant = Tenant(
+            tenant_id="test_tenant",
+            name="Test Tenant",
+            subdomain="test",
+            virtual_host="test-tenant.adcp.test",
+        )
         db_session.add(tenant)
         db_session.commit()
 
@@ -48,9 +55,14 @@ def test_decorator_logs_successful_action(integration_db):
 
 @pytest.mark.requires_db
 def test_decorator_filters_password_fields(integration_db):
-    """Verify decorator excludes password fields from audit logs."""
+    """A declared field with a secret's name is still left out; the declared others are kept."""
     with get_db_session() as db_session:
-        tenant = Tenant(tenant_id="test_tenant_2", name="Test Tenant 2", subdomain="test2")
+        tenant = Tenant(
+            tenant_id="test_tenant_2",
+            name="Test Tenant 2",
+            subdomain="test2",
+            virtual_host="test-tenant-2.adcp.test",
+        )
         db_session.add(tenant)
         db_session.commit()
 
@@ -58,7 +70,7 @@ def test_decorator_filters_password_fields(integration_db):
     app.secret_key = "test"
 
     @app.route("/test/<tenant_id>", methods=["POST"])
-    @log_admin_action("update_settings")
+    @log_admin_action("update_settings", audit_fields=("name", "password", "email"))
     def test_route(tenant_id):
         return "success"
 
@@ -92,7 +104,12 @@ def test_decorator_filters_password_fields(integration_db):
 def test_decorator_filters_sensitive_json_fields(integration_db):
     """Verify decorator filters sensitive fields from JSON requests."""
     with get_db_session() as db_session:
-        tenant = Tenant(tenant_id="test_tenant_3", name="Test Tenant 3", subdomain="test3")
+        tenant = Tenant(
+            tenant_id="test_tenant_3",
+            name="Test Tenant 3",
+            subdomain="test3",
+            virtual_host="test-tenant-3.adcp.test",
+        )
         db_session.add(tenant)
         db_session.commit()
 
@@ -100,7 +117,7 @@ def test_decorator_filters_sensitive_json_fields(integration_db):
     app.secret_key = "test"
 
     @app.route("/test/<tenant_id>", methods=["POST"])
-    @log_admin_action("api_call")
+    @log_admin_action("api_call", audit_fields=("username", "api_key", "access_token", "webhook_secret", "data"))
     def test_route(tenant_id):
         return "success"
 
@@ -138,7 +155,12 @@ def test_decorator_filters_sensitive_json_fields(integration_db):
 def test_decorator_logs_failed_actions(integration_db):
     """Verify decorator logs exceptions and re-raises them."""
     with get_db_session() as db_session:
-        tenant = Tenant(tenant_id="test_tenant_4", name="Test Tenant 4", subdomain="test4")
+        tenant = Tenant(
+            tenant_id="test_tenant_4",
+            name="Test Tenant 4",
+            subdomain="test4",
+            virtual_host="test-tenant-4.adcp.test",
+        )
         db_session.add(tenant)
         db_session.commit()
 
@@ -166,14 +188,20 @@ def test_decorator_logs_failed_actions(integration_db):
 
         assert audit_log is not None
         assert audit_log.success is False
-        assert "Test error" in audit_log.error_message
+        # The audit log is shown in the admin UI, so it records fixed text, never the exception's.
+        assert audit_log.error_message == _RAISED_MESSAGE
 
 
 @pytest.mark.requires_db
 def test_decorator_truncates_long_values(integration_db):
     """Verify decorator truncates values longer than 100 characters."""
     with get_db_session() as db_session:
-        tenant = Tenant(tenant_id="test_tenant_5", name="Test Tenant 5", subdomain="test5")
+        tenant = Tenant(
+            tenant_id="test_tenant_5",
+            name="Test Tenant 5",
+            subdomain="test5",
+            virtual_host="test-tenant-5.adcp.test",
+        )
         db_session.add(tenant)
         db_session.commit()
 
@@ -181,7 +209,7 @@ def test_decorator_truncates_long_values(integration_db):
     app.secret_key = "test"
 
     @app.route("/test/<tenant_id>", methods=["POST"])
-    @log_admin_action("long_value_test")
+    @log_admin_action("long_value_test", audit_fields=("description",))
     def test_route(tenant_id):
         return "success"
 
@@ -208,7 +236,12 @@ def test_decorator_truncates_long_values(integration_db):
 def test_decorator_extracts_custom_details(integration_db):
     """Verify extract_details callback works correctly."""
     with get_db_session() as db_session:
-        tenant = Tenant(tenant_id="test_tenant_6", name="Test Tenant 6", subdomain="test6")
+        tenant = Tenant(
+            tenant_id="test_tenant_6",
+            name="Test Tenant 6",
+            subdomain="test6",
+            virtual_host="test-tenant-6.adcp.test",
+        )
         db_session.add(tenant)
         db_session.commit()
 
@@ -270,7 +303,12 @@ def test_decorator_skips_logging_without_tenant_id(integration_db):
 def test_decorator_handles_missing_session(integration_db):
     """Verify decorator handles missing session gracefully."""
     with get_db_session() as db_session:
-        tenant = Tenant(tenant_id="test_tenant_7", name="Test Tenant 7", subdomain="test7")
+        tenant = Tenant(
+            tenant_id="test_tenant_7",
+            name="Test Tenant 7",
+            subdomain="test7",
+            virtual_host="test-tenant-7.adcp.test",
+        )
         db_session.add(tenant)
         db_session.commit()
 
@@ -325,10 +363,10 @@ def test_decorator_records_failure_when_the_handler_catches_and_returns(integrat
     @app.route("/test/<tenant_id>", methods=["POST"])
     @log_admin_action("handled_refusal")
     def test_route(tenant_id):
-        # Exactly the shape register_webhook uses: catch, signal, flash, return.
+        # Exactly the shape register_webhook uses: catch the gate's typed refusal, signal, flash, return.
         try:
-            raise ValueError("URL resolves to a restricted range.")
-        except ValueError as exc:
+            raise AdCPValidationError(internal_detail=ValueError("URL resolves to a restricted range."))
+        except AdCPValidationError as exc:
             record_admin_action_failure(exc)
             return "refused"
 
@@ -349,6 +387,8 @@ def test_decorator_records_failure_when_the_handler_catches_and_returns(integrat
         "a refused admin action was audited as SUCCESSFUL — the handler returned "
         "normally, so the decorator never saw an exception"
     )
-    assert "restricted range" in (audit_log.error_message or ""), (
-        f"the audit row must carry the refusal reason, got error_message={audit_log.error_message!r}"
+    # The row is shown in the admin UI: it carries the code's sentence, never the internal detail.
+    assert audit_log.error_message == AdCPValidationError().message, (
+        f"the audit row must carry the refusal's code sentence, got error_message={audit_log.error_message!r}"
     )
+    assert "restricted range" not in audit_log.error_message

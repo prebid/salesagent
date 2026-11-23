@@ -50,10 +50,10 @@ from src.core.exceptions import (
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
 from src.core.utils.mcp_client import MCPConnectionError
 from tests.helpers import assert_envelope_shape
+from tests.helpers.egress_backoff import fast_backoff
 from tests.helpers.envelope_assertions import envelope_for
 from tests.helpers.local_http_origin import run_local_origin
 from tests.integration.property_list_helpers import allow_local_origin
-from tests.integration.test_outbound_http import fast_backoff
 
 pytestmark = [pytest.mark.integration]
 

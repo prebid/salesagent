@@ -8,9 +8,10 @@ from adcp.types import PushNotificationConfig as LibraryPushNotificationConfig
 from adcp.types import ReportingWebhook as LibraryReportingWebhook
 from factory import LazyAttribute, Sequence, SubFactory
 
-from src.core.database.models import PushNotificationConfig
-from src.core.webhooks.delivery import WebhookTaskContext
+from src.core.database.models import PushNotificationConfig, WebhookDeliveryLog
+from src.core.webhooks.delivery import SCHEDULER_SEQUENCE_TASK_TYPE, WebhookTaskContext
 from tests.factories.core import TenantFactory
+from tests.factories.media_buy import MediaBuyFactory
 from tests.factories.principal import PrincipalFactory
 from tests.factories.request import _RequestFactory
 
@@ -35,6 +36,26 @@ class PushNotificationConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
     # from the URL. Defaulted here so a fixture that omits it is not silently registering a
     # webhook no conformant body can be built for.
     operation_id = Sequence(lambda n: f"op_{n:04d}")
+
+
+class WebhookDeliveryLogFactory(factory.alchemy.SQLAlchemyModelFactory):
+    class Meta:
+        model = WebhookDeliveryLog
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "flush"
+
+    media_buy = SubFactory(MediaBuyFactory)
+    tenant = LazyAttribute(lambda o: o.media_buy.tenant)
+    principal = LazyAttribute(lambda o: o.media_buy.principal)
+    id = Sequence(lambda n: f"webhook_log_{n:04d}")
+    tenant_id = LazyAttribute(lambda o: o.media_buy.tenant_id)
+    principal_id = LazyAttribute(lambda o: o.media_buy.principal_id)
+    media_buy_id = LazyAttribute(lambda o: o.media_buy.media_buy_id)
+    webhook_url = "https://buyer.example/report"
+    task_type = SCHEDULER_SEQUENCE_TASK_TYPE
+    sequence_number = 1
+    status = "success"
+    attempt_count = 1
 
 
 class WebhookTaskContextFactory(factory.Factory):
@@ -132,14 +153,29 @@ def hmac_authentication(credentials: str = "s" * 40) -> dict[str, object]:
 class PushNotificationConfigRequestFactory(_RequestFactory):
     """``core/push-notification-config.json`` -- async task notifications.
 
-    Only ``url`` is required, so the baseline is the unsigned single-field
+    Only ``url`` is required by the schema, so the baseline is the unsigned
     config. Sign it with ``payload(authentication=hmac_authentication())``.
+
+    ``operation_id`` is defaulted for the same reason
+    :class:`PushNotificationConfigFactory` defaults it on the stored row, and the
+    asymmetry between the two was a live defect: the row-side default meant a
+    STORED config always had one, while every buyer-sent registration built here
+    had none, so no test on the request -> stash -> sender route ever carried the
+    field. ``webhooks.mdx`` :141 says buyers SHOULD supply one per task
+    invocation, and :142 obliges the seller to echo it; since
+    ``core/mcp-webhook-payload.json`` /required includes ``operation_id`` and
+    :143 forbids recovering it from the URL, a registration without one names a
+    webhook whose envelope cannot be built. Omitting it here does not test the
+    unsigned baseline -- it registers an undeliverable webhook and then asserts a
+    delivery. A scenario that wants the omission asks for it with
+    ``payload(operation_id=OMIT)``.
     """
 
     class Meta:
         model = LibraryPushNotificationConfig
 
     url = "https://buyer.example.com/webhook"
+    operation_id = Sequence(lambda n: f"op_req_{n:04d}")
 
 
 class NotificationConfigRequestFactory(_RequestFactory):
@@ -176,6 +212,17 @@ class ReportingWebhookRequestFactory(_RequestFactory):
     because ``frequency`` is not the field's name, and the auth block outright.
 
     ``reporting_frequency`` is an enum: hourly, daily, monthly.
+
+    ``operation_id`` is NOT in ``core/reporting-webhook.json`` at the 3.2 pin --
+    it is the interim correlation agreement ``webhooks.mdx`` :656-673 describes,
+    carried as an additive field under that schema's ``additionalProperties:
+    true`` (verified against the pinned document, not taken on the prose's word).
+    It is defaulted here because THIS seller has adopted that agreement: its one
+    envelope builder requires ``operation_id``, so :666 applies -- "a
+    registration without a buyer-supplied ID cannot enable this interim delivery
+    path ... suppress scheduled sends; do not fabricate an ID or extract one from
+    the URL". A reporting registration built without one is therefore not a
+    minimal fixture, it is a stream the seller must refuse to send on.
     """
 
     class Meta:
@@ -184,3 +231,4 @@ class ReportingWebhookRequestFactory(_RequestFactory):
     url = "https://buyer.example.com/reporting"
     reporting_frequency = "daily"
     authentication = factory.LazyFunction(hmac_authentication)
+    operation_id = Sequence(lambda n: f"op_report_{n:04d}")

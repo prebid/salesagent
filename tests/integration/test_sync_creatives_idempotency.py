@@ -10,7 +10,7 @@ would prove only that a function was called.
 """
 
 import pytest
-from adcp.types import AccountReference
+from adcp.types import AccountReferenceById
 
 from src.core.exceptions import AdCPIdempotencyConflictError
 from tests.helpers.envelope_assertions import raises_adcp
@@ -58,7 +58,7 @@ def _sync(headers, *, key, creative_id="c_idem", name=None):
     return _sync_creatives(
         creatives=[payload],
         idempotency_key=key,
-        account=AccountReference(root={"account_id": ACCOUNT_ID}),
+        account=AccountReferenceById(account_id=ACCOUNT_ID),
         headers=headers,
     )
 
@@ -132,7 +132,7 @@ def test_a_dry_run_and_a_real_sync_are_different_requests(synced):
         creatives=[_make_creative_dict(creative_id="c_idem_dry")],
         idempotency_key=key,
         dry_run=True,
-        account=AccountReference(root={"account_id": ACCOUNT_ID}),
+        account=AccountReferenceById(account_id=ACCOUNT_ID),
         headers=synced,
     )
     assert dry.dry_run is True
@@ -141,7 +141,7 @@ def test_a_dry_run_and_a_real_sync_are_different_requests(synced):
         _sync_creatives(
             creatives=[_make_creative_dict(creative_id="c_idem_dry")],
             idempotency_key=key,
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=synced,
         )
 
@@ -149,7 +149,7 @@ def test_a_dry_run_and_a_real_sync_are_different_requests(synced):
     real = _sync_creatives(
         creatives=[_make_creative_dict(creative_id="c_idem_dry")],
         idempotency_key="sync-idem-dryrun-000002",
-        account=AccountReference(root={"account_id": ACCOUNT_ID}),
+        account=AccountReferenceById(account_id=ACCOUNT_ID),
         headers=synced,
     )
     assert real.dry_run is not True

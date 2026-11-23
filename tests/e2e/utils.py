@@ -10,7 +10,7 @@ from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from sqlalchemy import select
 
-from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN
+from scripts.setup.init_database_ci import CI_TEST_TENANT_ID
 from tests.helpers.credentials import credential_headers
 
 
@@ -18,7 +18,7 @@ def make_mcp_client(
     live_server: dict,
     *,
     token: str | None = None,
-    tenant: str | None = CI_TEST_SUBDOMAIN,
+    tenant: str | None = CI_TEST_TENANT_ID,
     dry_run: bool = False,
     session_id: str | None = None,
     host: str | None = None,
@@ -111,7 +111,38 @@ def live_db_env(live_server: dict):
         engine.dispose()
 
 
-def set_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = CI_TEST_SUBDOMAIN, **behavior):
+@contextmanager
+def live_repo_session(live_server: dict):
+    """Yield a harness-contract env over the live e2e database, WITHOUT factory binding.
+
+    For a caller that only needs a production REPOSITORY (``SigningKeyRepository``
+    and friends) — reading or mutating an EXISTING row — never a ``tests/factories``
+    call. :func:`live_db_env` binds ``tests/factories`` for the duration of its
+    ``yield`` and explicitly documents that a second call cannot nest inside it
+    (the binding is global class-attribute state on every factory) — a real
+    constraint one fixture already relies on (``provisioned_trust_root_tenant``'s
+    own docstring: "the session below stays bound for the whole yield: a caller
+    cannot open a second ``live_db_env`` from its test body"). This helper opens
+    an INDEPENDENT engine/session to the same database and touches no factory
+    state at all, so it is safe to call from inside a test body whose fixture
+    already holds a ``live_db_env`` open — the two connections never contend
+    (#1291 mp53.6, Phase D's grace-window backdate).
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from src.core.database.database_session import _pydantic_json_serializer
+
+    engine = create_engine(live_server["postgres"], json_serializer=_pydantic_json_serializer)
+    session = Session(engine)
+    try:
+        yield _LiveDBEnv(session)
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def set_live_adapter_behavior(live_server: dict, *, tenant_id: str = CI_TEST_TENANT_ID, **behavior):
     """Upsert adapter test-behavior on the live e2e DB via the shared factory helper.
 
     Single e2e entry point for what used to be five copy-pasted psycopg2
@@ -125,13 +156,60 @@ def set_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = CI_T
     from tests.factories.core import set_adapter_test_behavior
 
     with live_db_env(live_server) as env:
-        tenant = env.get_session().scalars(select(Tenant).filter_by(subdomain=tenant_subdomain)).first()
+        tenant = env.get_session().scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if tenant is None:
             raise RuntimeError(
-                f"Tenant with subdomain {tenant_subdomain!r} not found in the live e2e DB — "
-                "did the stack's init_database_ci.py seed run?"
+                f"Tenant {tenant_id!r} not found in the live e2e DB — did the stack's init_database_ci.py seed run?"
             )
         return set_adapter_test_behavior(env, tenant.tenant_id, **behavior)
+
+
+@contextmanager
+def declare_tenant_front(live_server: dict, origin: str, *, tenant_id: str = CI_TEST_TENANT_ID):
+    """Point *tenant_id*'s ``virtual_host`` at *origin*, and return the host it stored.
+
+    A card fetch is DISCOVERY: the client has a hostname and nothing else, so the tenant
+    has to be resolvable from the Host alone, and a request naming no tenant is refused.
+    Which host this stack is served at is decided per session — in-network it is a compose
+    service name, on the host path a dynamically allocated TLS port — so it cannot be a
+    literal in a seeder. The test knows it, from ``live_server``, and states it here.
+
+    RESTORES the previous host on exit, and that is why this is a context manager rather
+    than a call. ``virtual_host`` is UNIQUE and there is ONE origin this stack serves TLS
+    on, so a permanent claim is a claim for the whole session: the signing e2e modules
+    provision their own tenant at that same origin, and whichever suite ran first simply
+    kept it. Before the unique index the two coexisted and ``get_tenant_by_virtual_host``
+    picked one of them, which is worse than the failure.
+
+    Scoped to this stack's own database through the same ``live_db_env`` every other e2e
+    mutation goes through.
+    """
+    from urllib.parse import urlsplit
+
+    from sqlalchemy import select
+
+    from src.core.database.models import Tenant
+
+    front = urlsplit(origin).netloc or origin
+    with live_db_env(live_server) as env:
+        session = env.get_session()
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if tenant is None:
+            raise RuntimeError(
+                f"Tenant {tenant_id!r} not found in the live e2e DB — did the stack's init_database_ci.py seed run?"
+            )
+        previous = tenant.virtual_host
+        tenant.virtual_host = front
+        session.commit()
+    try:
+        yield front
+    finally:
+        with live_db_env(live_server) as env:
+            session = env.get_session()
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            if tenant is not None:
+                tenant.virtual_host = previous
+                session.commit()
 
 
 def wait_until(predicate, timeout_seconds: float, poll_interval: float = 0.5) -> bool:

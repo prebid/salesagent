@@ -18,6 +18,7 @@ Docker stack.
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -345,3 +346,46 @@ class TestProgrammedRejections:
         answers = [_post(capture_service, key, {"n": i})[0] for i in range(3)]
 
         assert answers == [418, 418, 200]
+
+
+class TestHeldDelivery:
+    """POST /control/hold/{key} holds the key's next delivery, recorded but unanswered, until released.
+
+    The instrument behind "observed as the effect fires" over e2e_rest
+    (salesagent-ol033.22): a test reads the sender's committed state while the sender
+    is still blocked on its delivery. That read means something only if the held
+    delivery is VISIBLE before it is answered and its answer WAITS for the release.
+    """
+
+    def _hold(self, base_url: str, key: str, method: str) -> None:
+        status, _ = _request(base_url, method, f"/control/hold/{key}")
+        assert status == 200
+
+    def test_a_held_delivery_is_recorded_before_it_is_answered(self, capture_service):
+        key = uuid.uuid4().hex
+        self._hold(capture_service, key, "POST")
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            delivery = pool.submit(_post, capture_service, key, {"n": 1})
+            seen_while_held: list[dict] = []
+            deadline = time.monotonic() + _TIMEOUT_SECONDS
+            while not seen_while_held and time.monotonic() < deadline:
+                seen_while_held = _get(capture_service, key)[1]["received"]
+            answered_before_release = delivery.done()
+            self._hold(capture_service, key, "DELETE")
+            status, _ = delivery.result(timeout=_TIMEOUT_SECONDS)
+
+        assert seen_while_held == [{"n": 1}]
+        assert not answered_before_release
+        assert status == 200
+
+    def test_a_hold_released_before_any_delivery_holds_nothing(self, capture_service):
+        key = uuid.uuid4().hex
+        self._hold(capture_service, key, "POST")
+        self._hold(capture_service, key, "DELETE")
+
+        started = time.monotonic()
+        status, _ = _post(capture_service, key, {"n": 1})
+
+        assert status == 200
+        assert time.monotonic() - started < 1.0, "a disarmed hold still held the delivery"

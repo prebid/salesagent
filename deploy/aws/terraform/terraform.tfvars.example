@@ -1,0 +1,27 @@
+project = "salesagent"
+region  = "eu-central-1"
+
+domain          = "sales.example.com"
+route53_zone_id = "Z0123456789ABCDEFGHIJ"
+
+# Tenants on their own domains. route53_zone_id only when this account hosts the zone.
+custom_domains = {
+  # "ads.publisher-one.com" = {}
+  # "sales.example.org"     = { route53_zone_id = "Z0123456789ABCDEFGHIJ" }
+}
+
+app_image_tag            = "v1.2.3"
+creative_agent_image_tag = "76b031a85eb8"
+
+super_admin_emails = "you@example.com"
+support_email      = "ops@example.com"
+
+# Admin login through any OIDC provider (see docs/deployment/environment-variables.md).
+# app_environment = {
+#   OAUTH_DISCOVERY_URL        = "https://accounts.google.com/.well-known/openid-configuration"
+#   OAUTH_CLIENT_ID            = "....apps.googleusercontent.com"
+#   GOOGLE_OAUTH_REDIRECT_URI  = "https://sales.example.com/admin/auth/google/callback"
+# }
+# app_secrets = {
+#   OAUTH_CLIENT_SECRET = "..."
+# }

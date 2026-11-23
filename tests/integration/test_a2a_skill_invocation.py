@@ -28,13 +28,11 @@ class TestA2ASkillInvocation:
 
     def test_skill_handler_mapping(self, handler):
         """Test that all advertised skills have handlers."""
-        # Get skills from agent card
-        from src.a2a_server.adcp_a2a_server import create_agent_card
+        # The advertised skill set, from the one derivation over TOOLS. Not a
+        # rendered card: a card describes a resolved tenant, and skills do not.
+        from src.a2a_server.adcp_a2a_server import _derived_skills
 
-        agent_card = create_agent_card()
-
-        # Verify all skills have handlers
-        expected_skills = {skill.name for skill in agent_card.skills}
+        expected_skills = {skill.name for skill in _derived_skills()}
 
         # Test that _dispatch_skill can handle all advertised skills
         for skill_name in expected_skills:

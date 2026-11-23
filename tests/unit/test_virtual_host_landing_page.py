@@ -1,8 +1,26 @@
-"""Unit tests for virtual host landing page functionality."""
+"""Unit tests for virtual host landing page functionality.
 
-from unittest.mock import Mock, patch
+Everything here calls ``generate_tenant_landing_page`` and asserts on the HTML production
+returned. The page takes a tenant row and nothing else: every URL on it is built from the
+host that row declares, which is also what the agent card publishes. So a tenant here states
+its ``virtual_host`` the way a stored row does, and no test supplies a request host.
 
-from starlette.requests import Request
+WHICH TENANT A HOST RESOLVES IS NOT GRADED HERE. It is graded where it is observable: on
+all four transports by
+``tests/bdd/features/local-tenant-identification-routes.feature``, and for the routing
+function by ``tests/unit/test_domain_routing.py``. A test that mocks
+``get_tenant_by_virtual_host`` and re-implements the root handler's header reading in its
+own body grades a copy of production that lives in this file — hard rule 5 in
+tests/CLAUDE.md, and the "recomputing the expected value from setup" pitfall — so it
+cannot fail when production changes.
+
+THAT THE PAGE AND THE CARD AGREE is graded in
+``tests/integration/test_landing_page_and_card_agree_on_origin.py``, which drives both
+surfaces over HTTP against a real row: only a test holding both answers at once can tell
+"the stored origin is published" from "some origin is published".
+"""
+
+from unittest.mock import patch
 
 from src.landing.landing_page import generate_fallback_landing_page, generate_tenant_landing_page
 
@@ -10,72 +28,19 @@ from src.landing.landing_page import generate_fallback_landing_page, generate_te
 class TestVirtualHostLandingPage:
     """Test virtual host landing page functionality."""
 
-    @patch("src.core.config_loader.get_tenant_by_virtual_host")
-    async def test_landing_page_with_virtual_host(self, mock_get_tenant):
-        """Test landing page display for virtual host."""
-        # Arrange
-        mock_tenant = {
-            "tenant_id": "landing-test",
-            "name": "Landing Test Publisher",
-            "virtual_host": "landing.test.com",
-        }
-        mock_get_tenant.return_value = mock_tenant
-
-        # Mock request with Apx-Incoming-Host header
-        mock_request = Mock(spec=Request)
-        mock_request.headers = {"apx-incoming-host": "landing.test.com"}
-
-        # Act - simulate the root route handler logic
-        headers = dict(mock_request.headers)
-        apx_host = headers.get("apx-incoming-host")
-
-        tenant = None
-        if apx_host:
-            tenant = mock_get_tenant(apx_host)
-
-        # Assert
-        assert tenant is not None
-        assert tenant["name"] == "Landing Test Publisher"
-        assert tenant["virtual_host"] == "landing.test.com"
-        mock_get_tenant.assert_called_once_with("landing.test.com")
-
-    @patch("src.core.config_loader.get_tenant_by_virtual_host")
-    async def test_landing_page_without_virtual_host(self, mock_get_tenant):
-        """Test redirect to admin for regular requests."""
-        # Arrange
-        mock_request = Mock(spec=Request)
-        mock_request.headers = {}  # No special headers
-
-        # Act - simulate the root route handler logic
-        headers = dict(mock_request.headers)
-        apx_host = headers.get("apx-incoming-host")
-
-        # Should not call get_tenant_by_virtual_host if no header
-        if not apx_host:
-            # Should redirect to admin
-            should_redirect = True
-        else:
-            tenant = mock_get_tenant(apx_host)
-            should_redirect = tenant is None
-
-        # Assert
-        assert apx_host is None
-        assert should_redirect is True
-        mock_get_tenant.assert_not_called()
-
     def test_landing_page_html_generation_with_new_module(self):
-        """Test HTML content generation using the new landing page module."""
+        """Test HTML content generation through the landing page module."""
         # Arrange
         tenant = {
             "tenant_id": "html-test",
             "name": "HTML Test Publisher & Co.",  # Test HTML escaping
             "subdomain": "htmltest",
+            "virtual_host": "htmltest.sales-agent.example.com",
         }
-        virtual_host = "htmltest.sales-agent.example.com"
 
         # Act - use the new landing page module
         with patch("src.core.tenant_status.is_tenant_ad_server_configured", return_value=True):
-            html_content = generate_tenant_landing_page(tenant, virtual_host)
+            html_content = generate_tenant_landing_page(tenant)
 
         # Assert - check for enhanced content (note: & will be escaped as &amp;)
         assert "HTML Test Publisher" in html_content  # Check for core name without special chars
@@ -83,7 +48,7 @@ class TestVirtualHostLandingPage:
         assert "/mcp" in html_content
         # A2A endpoint is at the root, not /a2a
         assert "https://htmltest.sales-agent.example.com" in html_content
-        assert "/.well-known/agent.json" in html_content
+        assert "/.well-known/agent-card.json" in html_content
         assert "<!DOCTYPE html>" in html_content
 
         # Check for new features
@@ -98,6 +63,7 @@ class TestVirtualHostLandingPage:
             "tenant_id": "xss-test",
             "name": "<script>alert('xss')</script>Malicious Publisher",
             "subdomain": "xsstest",
+            "virtual_host": "xsstest.sales-agent.example.com",
         }
 
         # Act - use the new landing page module (should auto-escape)
@@ -110,36 +76,47 @@ class TestVirtualHostLandingPage:
         assert "alert('xss')" not in html_content  # Should be escaped
         assert "Malicious Publisher" in html_content  # Safe content should remain
 
-    def test_landing_page_url_generation_production(self):
-        """Test URL generation in production environment."""
-        tenant = {"name": "Production Publisher", "subdomain": "prod", "tenant_id": "prod-1"}
-        virtual_host = "prod.sales-agent.example.com"
+    def test_landing_page_urls_use_the_stored_host(self):
+        """A tenant's own host, with https because it is not localhost."""
+        tenant = {
+            "name": "Production Publisher",
+            "subdomain": "prod",
+            "tenant_id": "prod-1",
+            "virtual_host": "prod.sales-agent.example.com",
+        }
 
-        with patch.dict("os.environ", {"PRODUCTION": "true"}):
-            with patch("src.core.tenant_status.is_tenant_ad_server_configured", return_value=True):
-                html_content = generate_tenant_landing_page(tenant, virtual_host)
+        with patch("src.core.tenant_status.is_tenant_ad_server_configured", return_value=True):
+            html_content = generate_tenant_landing_page(tenant)
 
-        # Should use production URLs (A2A at root, not /a2a)
+        # A2A is at the root, so the origin itself is one of the published endpoints.
         assert "https://prod.sales-agent.example.com/mcp" in html_content
-        assert "https://prod.sales-agent.example.com" in html_content  # A2A endpoint is at root
-        assert "https://prod.sales-agent.example.com/.well-known/agent.json" in html_content
+        assert "https://prod.sales-agent.example.com" in html_content
+        assert "https://prod.sales-agent.example.com/.well-known/agent-card.json" in html_content
 
-    def test_landing_page_url_generation_development(self):
-        """Test URL generation in development environment."""
-        tenant = {"name": "Dev Publisher", "subdomain": "dev", "tenant_id": "dev-1"}
+    def test_landing_page_urls_use_http_for_a_localhost_host(self):
+        """A tenant served on localhost publishes http, and keeps its port."""
+        tenant = {
+            "name": "Dev Publisher",
+            "subdomain": "dev",
+            "tenant_id": "dev-1",
+            "virtual_host": "localhost:8080",
+        }
 
-        with patch.dict("os.environ", {"PRODUCTION": "false", "ADCP_SALES_PORT": "8080"}):
-            with patch("src.core.tenant_status.is_tenant_ad_server_configured", return_value=True):
-                html_content = generate_tenant_landing_page(tenant)
+        with patch("src.core.tenant_status.is_tenant_ad_server_configured", return_value=True):
+            html_content = generate_tenant_landing_page(tenant)
 
-        # Should use localhost URLs (A2A at root, not /a2a)
         assert "http://localhost:8080/mcp" in html_content
         assert "http://localhost:8080" in html_content  # A2A endpoint is at root
-        assert "http://localhost:8080/.well-known/agent.json" in html_content
+        assert "http://localhost:8080/.well-known/agent-card.json" in html_content
 
     def test_landing_page_basic_content(self):
         """Test that landing page includes basic content elements."""
-        tenant = {"name": "Test Publisher", "subdomain": "testpub", "tenant_id": "testpub-1"}
+        tenant = {
+            "name": "Test Publisher",
+            "subdomain": "testpub",
+            "tenant_id": "testpub-1",
+            "virtual_host": "testpub.sales-agent.example.com",
+        }
 
         with patch("src.core.tenant_status.is_tenant_ad_server_configured", return_value=True):
             html_content = generate_tenant_landing_page(tenant)
@@ -154,18 +131,28 @@ class TestVirtualHostLandingPage:
 
     def test_landing_page_admin_dashboard_link(self):
         """Test that landing page includes admin dashboard link."""
-        tenant = {"name": "Admin Test Publisher", "subdomain": "admintest", "tenant_id": "admintest-1"}
+        tenant = {
+            "name": "Admin Test Publisher",
+            "subdomain": "admintest",
+            "tenant_id": "admintest-1",
+            "virtual_host": "admintest.sales-agent.example.com",
+        }
 
         with patch("src.core.tenant_status.is_tenant_ad_server_configured", return_value=True):
             html_content = generate_tenant_landing_page(tenant)
 
         # Check for admin dashboard
         assert "Internal Admin" in html_content
-        assert "/admin/" in html_content
+        assert "https://admintest.sales-agent.example.com/admin/" in html_content
 
     def test_landing_page_adcp_documentation_links(self):
         """Test that landing page includes proper AdCP documentation links."""
-        tenant = {"name": "Docs Test Publisher", "subdomain": "docstest", "tenant_id": "docstest-1"}
+        tenant = {
+            "name": "Docs Test Publisher",
+            "subdomain": "docstest",
+            "tenant_id": "docstest-1",
+            "virtual_host": "docstest.sales-agent.example.com",
+        }
 
         with patch("src.core.tenant_status.is_tenant_ad_server_configured", return_value=True):
             html_content = generate_tenant_landing_page(tenant)
@@ -175,29 +162,6 @@ class TestVirtualHostLandingPage:
         assert "AdCP Protocol Documentation" in html_content
         assert "Media Buy API Reference" in html_content
         assert "Signals API Reference" in html_content
-
-    @patch("src.core.config_loader.get_tenant_by_virtual_host")
-    async def test_landing_page_with_nonexistent_tenant(self, mock_get_tenant):
-        """Test landing page with virtual host that has no tenant."""
-        # Arrange
-        mock_get_tenant.return_value = None
-        mock_request = Mock(spec=Request)
-        mock_request.headers = {"apx-incoming-host": "nonexistent.test.com"}
-
-        # Act - simulate the root route handler logic
-        headers = dict(mock_request.headers)
-        apx_host = headers.get("apx-incoming-host")
-
-        tenant = None
-        if apx_host:
-            tenant = mock_get_tenant(apx_host)
-
-        should_redirect = tenant is None
-
-        # Assert
-        assert tenant is None
-        assert should_redirect is True
-        mock_get_tenant.assert_called_once_with("nonexistent.test.com")
 
     def test_fallback_landing_page_generation(self):
         """Test fallback landing page when tenant lookup fails."""
@@ -213,7 +177,12 @@ class TestVirtualHostLandingPage:
 
     def test_landing_page_responsive_design(self):
         """Test that landing page includes responsive design elements."""
-        tenant = {"name": "Responsive Publisher", "subdomain": "responsive", "tenant_id": "responsive-1"}
+        tenant = {
+            "name": "Responsive Publisher",
+            "subdomain": "responsive",
+            "tenant_id": "responsive-1",
+            "virtual_host": "responsive.sales-agent.example.com",
+        }
 
         with patch("src.core.tenant_status.is_tenant_ad_server_configured", return_value=True):
             html_content = generate_tenant_landing_page(tenant)
@@ -226,7 +195,12 @@ class TestVirtualHostLandingPage:
 
     def test_landing_page_accessibility_features(self):
         """Test that landing page includes accessibility features."""
-        tenant = {"name": "Accessible Publisher", "subdomain": "accessible", "tenant_id": "accessible-1"}
+        tenant = {
+            "name": "Accessible Publisher",
+            "subdomain": "accessible",
+            "tenant_id": "accessible-1",
+            "virtual_host": "accessible.sales-agent.example.com",
+        }
 
         with patch("src.core.tenant_status.is_tenant_ad_server_configured", return_value=True):
             html_content = generate_tenant_landing_page(tenant)
@@ -237,58 +211,22 @@ class TestVirtualHostLandingPage:
         assert 'name="description"' in html_content  # Meta description
 
     def test_landing_page_virtual_host_info_display(self):
-        """Test that virtual host information is displayed when available."""
-        tenant = {"name": "Virtual Host Publisher", "subdomain": "vhost"}
-        virtual_host = "custom.example.com"
+        """The host the tenant declares is the one the page shows."""
+        tenant = {
+            "tenant_id": "vhost-1",
+            "name": "Virtual Host Publisher",
+            "subdomain": "vhost",
+            "virtual_host": "custom.example.com",
+        }
 
-        html_content = generate_tenant_landing_page(tenant, virtual_host)
+        html_content = generate_tenant_landing_page(tenant)
 
-        # Check for virtual host info - virtual host should be used in URLs
-        assert virtual_host in html_content
-
-    def test_landing_page_tenant_subdomain_extraction(self):
-        """Test tenant subdomain extraction from virtual host."""
-        tenant = {"name": "Subdomain Test", "tenant_id": "subdomain-test"}
-        virtual_host = "scribd.sales-agent.example.com"
-
-        html_content = generate_tenant_landing_page(tenant, virtual_host)
-
-        # Should extract "scribd" as the subdomain and use it in URLs
-        assert "scribd" in html_content
-        assert "https://scribd.sales-agent.example.com" in html_content
-
-    @patch("src.core.config_loader.get_tenant_by_virtual_host")
-    async def test_landing_page_header_case_insensitive(self, mock_get_tenant):
-        """Test header extraction with different cases."""
-        # Arrange
-        mock_tenant = {"name": "Case Test Publisher", "virtual_host": "case.test.com"}
-        mock_get_tenant.return_value = mock_tenant
-
-        test_headers = [
-            {"apx-incoming-host": "case.test.com"},
-            {"Apx-Incoming-Host": "case.test.com"},
-            {"APX-INCOMING-HOST": "case.test.com"},
-        ]
-
-        for headers in test_headers:
-            mock_request = Mock(spec=Request)
-            mock_request.headers = headers
-
-            # Act - simulate header extraction (case might vary)
-            request_headers = dict(mock_request.headers)
-            apx_host = (
-                request_headers.get("apx-incoming-host")
-                or request_headers.get("Apx-Incoming-Host")
-                or request_headers.get("APX-INCOMING-HOST")
-            )
-
-            # Assert
-            assert apx_host == "case.test.com"
+        assert "https://custom.example.com" in html_content
 
     def test_landing_page_template_errors_handled(self):
         """Test that template errors are handled gracefully."""
-        # Test with minimal tenant data
-        tenant = {"name": "Minimal Publisher"}
+        # Minimal tenant data: the two fields a row always carries, plus a name
+        tenant = {"tenant_id": "minimal-1", "name": "Minimal Publisher", "virtual_host": "minimal.example.com"}
 
         # Should not raise exception even with minimal data
         html_content = generate_tenant_landing_page(tenant)

@@ -5,28 +5,29 @@
  * - Multiple groups connected by OR logic
  * - Within each group, criteria connected by AND logic
  * - Each criterion: key selection, values (OR'd together), optional exclude
- * - Backward compatible with legacy and enhanced formats
  *
- * Data Structure (groups format):
+ * Data Structure (groups format, the only one this widget reads; for a stored product the
+ * server writes it from CustomTargeting.to_stored, whatever format the product was saved in):
  * {
  *   key_value_pairs: {
  *     groups: [
  *       {
  *         criteria: [
- *           { keyId: '123', values: ['v1', 'v2'] },
- *           { keyId: '456', values: ['v3'], exclude: true }
+ *           { keyId: '123', values: ['448512', '448513'] },
+ *           { keyId: '456', values: [{ name: 'sports' }], exclude: true }
  *         ]
  *       }
  *     ]
  *   }
  * }
+ *
+ * A value string is a GAM value ID; { name } is a value name, kept as the server wrote it.
  */
 
 class TargetingWidget {
-    constructor(tenantId, containerId = 'targeting-widget', scriptRoot = '') {
+    constructor(tenantId, containerId = 'targeting-widget') {
         this.tenantId = tenantId;
         this.container = document.getElementById(containerId);
-        this.scriptRoot = scriptRoot;
         this.selectedTargeting = {
             key_value_pairs: {
                 groups: []
@@ -34,7 +35,6 @@ class TargetingWidget {
         };
         this.keyMetadata = {};        // { keyId: { name, display_name } }
         this.valueMetadata = {};      // { keyId: { valueId: displayName } }
-        this.loadedValuesByKey = {};  // { keyId: [values] }
         this.editingCriterion = null; // { groupIndex, criterionIndex }
         this.loadedSuccessfully = false; // Track if existing targeting loaded OK
 
@@ -56,13 +56,13 @@ class TargetingWidget {
             this.updateHiddenField();
         } catch (error) {
             console.error('Error initializing targeting widget:', error);
-            this.container.innerHTML = `<div class="alert alert-error">Failed to load targeting options: ${error.message}</div>`;
+            this.container.innerHTML = `<div class="alert alert-error">Failed to load targeting options: ${escapeHtml(error.message)}</div>`;
         }
     }
 
     /**
-     * Load existing targeting from hidden form field.
-     * Handles legacy, enhanced, and groups formats.
+     * Load existing targeting from hidden form field, in the groups format.
+     * Anything else is left in the field untouched, so saving cannot lose it.
      */
     loadExistingTargeting() {
         const hiddenField = document.getElementById('targeting-data');
@@ -82,53 +82,12 @@ class TargetingWidget {
                 return;
             }
 
-            // Groups format
-            if ('groups' in kvPairs && Array.isArray(kvPairs.groups)) {
-                this.selectedTargeting.key_value_pairs.groups = kvPairs.groups;
-                this.loadedSuccessfully = true;
-                console.log('[TargetingWidget] Loaded groups format:', this.selectedTargeting);
-                return;
+            if (!Array.isArray(kvPairs.groups)) {
+                throw new Error('key_value_pairs is not in the groups format');
             }
-
-            // Enhanced format (include/exclude) - convert to groups
-            if ('include' in kvPairs || 'exclude' in kvPairs) {
-                const criteria = [];
-                const include = kvPairs.include || {};
-                const exclude = kvPairs.exclude || {};
-
-                for (const [keyId, values] of Object.entries(include)) {
-                    if (values && values.length > 0) {
-                        criteria.push({ keyId, values: [...values] });
-                    }
-                }
-                for (const [keyId, values] of Object.entries(exclude)) {
-                    if (values && values.length > 0) {
-                        criteria.push({ keyId, values: [...values], exclude: true });
-                    }
-                }
-
-                if (criteria.length > 0) {
-                    this.selectedTargeting.key_value_pairs.groups = [{ criteria }];
-                }
-                this.loadedSuccessfully = true;
-                console.log('[TargetingWidget] Converted enhanced format to groups:', this.selectedTargeting);
-                return;
-            }
-
-            // Legacy format { keyId: value } - convert to groups
-            const criteria = [];
-            for (const [keyId, value] of Object.entries(kvPairs)) {
-                if (typeof value === 'string') {
-                    criteria.push({ keyId, values: [value] });
-                } else if (Array.isArray(value)) {
-                    criteria.push({ keyId, values: value });
-                }
-            }
-            if (criteria.length > 0) {
-                this.selectedTargeting.key_value_pairs.groups = [{ criteria }];
-            }
+            this.selectedTargeting.key_value_pairs.groups = kvPairs.groups;
             this.loadedSuccessfully = true;
-            console.log('[TargetingWidget] Converted legacy format to groups:', this.selectedTargeting);
+            console.log('[TargetingWidget] Loaded groups format:', this.selectedTargeting);
 
         } catch (error) {
             console.error('[TargetingWidget] Error loading existing targeting:', error);
@@ -137,10 +96,10 @@ class TargetingWidget {
     }
 
     async loadTargetingData() {
-        const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/all`;
+        const url = `${scriptRoot}/api/tenant/${this.tenantId}/targeting/all`;
         const response = await fetch(url, { credentials: 'same-origin' });
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            throw new Error(adminErrorText(await response.json()));
         }
         this.targetingData = await response.json();
 
@@ -153,13 +112,28 @@ class TargetingWidget {
                 name: key.name,
                 display_name: key.display_name || key.name
             };
-            // Index by GAM ID (for new data)
             this.keyMetadata[key.id] = metadata;
-            // Also index by key name (for legacy data migration)
-            if (key.name && key.name !== key.id) {
-                this.keyMetadata[key.name] = metadata;
-            }
         });
+    }
+
+    /**
+     * Fetch a key's current values from GAM and record their display names.
+     * Never cached: values can be added in GAM while this page is open (#1045).
+     * Throws on a failed request; each caller decides how to surface it.
+     */
+    async fetchValuesForKey(keyId) {
+        const url = `${scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
+        const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
+        if (!response.ok) {
+            throw new Error(adminErrorText(await response.json()));
+        }
+        const values = (await response.json()).values || [];
+
+        const labels = (this.valueMetadata[keyId] ??= {});
+        values.forEach(val => {
+            labels[val.id] = val.display_name || val.name || val.id;
+        });
+        return values;
     }
 
     /**
@@ -189,23 +163,7 @@ class TargetingWidget {
         // Load values for each key in parallel
         const loadPromises = Array.from(keyIds).map(async (keyId) => {
             try {
-                const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
-                const response = await fetch(url, { credentials: 'same-origin' });
-                if (!response.ok) {
-                    console.warn(`[TargetingWidget] Failed to load values for key ${keyId}: HTTP ${response.status}`);
-                    return;
-                }
-                const data = await response.json();
-
-                this.loadedValuesByKey[keyId] = data.values || [];
-
-                // Cache value metadata (id -> display_name mapping)
-                if (!this.valueMetadata[keyId]) {
-                    this.valueMetadata[keyId] = {};
-                }
-                (data.values || []).forEach(val => {
-                    this.valueMetadata[keyId][val.id] = val.display_name || val.name || val.id;
-                });
+                await this.fetchValuesForKey(keyId);
             } catch (error) {
                 console.warn(`[TargetingWidget] Error loading values for key ${keyId}:`, error);
             }
@@ -223,9 +181,11 @@ class TargetingWidget {
             return;
         }
 
+        const groupsHtml = this.renderGroups();
+        const valueSelectorHtml = this.renderValueSelector();
         this.container.innerHTML = `
             <div class="groups-container" id="groups-container">
-                ${this.renderGroups()}
+                ${groupsHtml}
             </div>
             <button type="button" class="add-group-btn" id="add-group-btn">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -234,7 +194,7 @@ class TargetingWidget {
                 </svg>
                 Or
             </button>
-            ${this.renderValueSelector()}
+            ${valueSelectorHtml}
         `;
     }
 
@@ -262,13 +222,15 @@ class TargetingWidget {
             `;
         }
 
-        return groups.map((group, groupIndex) => `
-            <div class="group-card" data-group-index="${groupIndex}">
+        return groups.map((group, groupIndex) => {
+            const criteriaHtml = this.renderCriteria(group.criteria || [], groupIndex);
+            return `
+            <div class="group-card" data-group-index="${escapeHtml(groupIndex)}">
                 ${groupIndex > 0 ? '<div class="or-divider"><span>Or</span></div>' : ''}
                 <div class="group-header">
-                    <span class="group-label">Group ${groupIndex + 1}</span>
+                    <span class="group-label">Group ${escapeHtml(groupIndex + 1)}</span>
                     ${groups.length > 1 ? `
-                        <button type="button" class="remove-group-btn" data-group-index="${groupIndex}" title="Remove group">
+                        <button type="button" class="remove-group-btn" data-group-index="${escapeHtml(groupIndex)}" title="Remove group">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <line x1="18" y1="6" x2="6" y2="18"></line>
                                 <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -276,10 +238,10 @@ class TargetingWidget {
                         </button>
                     ` : ''}
                 </div>
-                <div class="criteria-list" data-group-index="${groupIndex}">
-                    ${this.renderCriteria(group.criteria || [], groupIndex)}
+                <div class="criteria-list" data-group-index="${escapeHtml(groupIndex)}">
+                    ${criteriaHtml}
                     <div class="add-criterion-row">
-                        <button type="button" class="add-criterion-btn" data-group-index="${groupIndex}">
+                        <button type="button" class="add-criterion-btn" data-group-index="${escapeHtml(groupIndex)}">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <line x1="12" y1="5" x2="12" y2="19"></line>
                                 <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -289,14 +251,15 @@ class TargetingWidget {
                     </div>
                 </div>
             </div>
-        `).join('');
+        `;
+        }).join('');
     }
 
     renderCriteria(criteria, groupIndex) {
         return criteria.map((criterion, criterionIndex) => {
             const keyMeta = this.keyMetadata[criterion.keyId] || { display_name: criterion.keyId };
             const valueNames = criterion.values.map(v =>
-                this.valueMetadata[criterion.keyId]?.[v] || v
+                typeof v === 'object' ? v.name : this.valueMetadata[criterion.keyId]?.[v] || v
             );
             const isEditing = this.editingCriterion &&
                 this.editingCriterion.groupIndex === groupIndex &&
@@ -305,36 +268,36 @@ class TargetingWidget {
             return `
                 ${criterionIndex > 0 ? '<div class="and-connector"><span>And</span></div>' : ''}
                 <div class="criterion-row ${criterion.exclude ? 'excluded' : ''} ${isEditing ? 'editing' : ''}"
-                     data-group-index="${groupIndex}"
-                     data-criterion-index="${criterionIndex}">
-                    <div class="criterion-key" title="${keyMeta.display_name}">
-                        ${keyMeta.display_name}
+                     data-group-index="${escapeHtml(groupIndex)}"
+                     data-criterion-index="${escapeHtml(criterionIndex)}">
+                    <div class="criterion-key" title="${escapeHtml(keyMeta.display_name)}">
+                        ${escapeHtml(keyMeta.display_name)}
                     </div>
                     <select class="criterion-operator-select"
-                            data-group-index="${groupIndex}"
-                            data-criterion-index="${criterionIndex}">
+                            data-group-index="${escapeHtml(groupIndex)}"
+                            data-criterion-index="${escapeHtml(criterionIndex)}">
                         <option value="is" ${!criterion.exclude ? 'selected' : ''}>is any of</option>
                         <option value="is_not" ${criterion.exclude ? 'selected' : ''}>is none of</option>
                     </select>
-                    <div class="criterion-values" data-group-index="${groupIndex}" data-criterion-index="${criterionIndex}">
+                    <div class="criterion-values" data-group-index="${escapeHtml(groupIndex)}" data-criterion-index="${escapeHtml(criterionIndex)}">
                         ${valueNames.map((name, valIndex) => `
                             <span class="value-chip ${criterion.exclude ? 'exclude' : 'include'}">
-                                ${name}
+                                ${escapeHtml(name)}
                                 <button type="button" class="chip-remove"
-                                        data-group-index="${groupIndex}"
-                                        data-criterion-index="${criterionIndex}"
-                                        data-value-index="${valIndex}">×</button>
+                                        data-group-index="${escapeHtml(groupIndex)}"
+                                        data-criterion-index="${escapeHtml(criterionIndex)}"
+                                        data-value-index="${escapeHtml(valIndex)}">×</button>
                             </span>
                         `).join('')}
                         <button type="button" class="add-value-btn"
-                                data-group-index="${groupIndex}"
-                                data-criterion-index="${criterionIndex}"
+                                data-group-index="${escapeHtml(groupIndex)}"
+                                data-criterion-index="${escapeHtml(criterionIndex)}"
                                 title="Add value">+</button>
                     </div>
                     <div class="criterion-actions">
                         <button type="button" class="remove-criterion-btn"
-                                data-group-index="${groupIndex}"
-                                data-criterion-index="${criterionIndex}"
+                                data-group-index="${escapeHtml(groupIndex)}"
+                                data-criterion-index="${escapeHtml(criterionIndex)}"
                                 title="Remove criterion">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -369,8 +332,8 @@ class TargetingWidget {
                             <input type="search" id="key-search" placeholder="Search keys..." class="key-search-input">
                             <div class="key-list" id="key-list">
                                 ${sortedKeys.map(k => `
-                                    <div class="key-option" data-key-id="${k.id}" data-key-name="${(k.display_name || k.name).toLowerCase()}">
-                                        ${k.display_name || k.name}
+                                    <div class="key-option" data-key-id="${escapeHtml(k.id)}" data-key-name="${escapeHtml((k.display_name || k.name).toLowerCase())}">
+                                        ${escapeHtml(k.display_name || k.name)}
                                     </div>
                                 `).join('')}
                             </div>
@@ -669,26 +632,14 @@ class TargetingWidget {
         operatorSection.style.display = 'block';
         valuesList.innerHTML = '<div class="loading">Loading values...</div>';
 
+        // A response for a key the user has since moved off must not render: its
+        // checkboxes would save that key's value ids on the newly selected criterion.
+        // The hidden input holds a string, so compare against one.
+        const isCurrent = () => document.getElementById('key-selector').value === String(keyId);
+
         try {
-            // Check cache first
-            if (!this.loadedValuesByKey[keyId]) {
-                const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
-                const response = await fetch(url, { credentials: 'same-origin' });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const data = await response.json();
-
-                this.loadedValuesByKey[keyId] = data.values || [];
-
-                // Cache value metadata
-                if (!this.valueMetadata[keyId]) {
-                    this.valueMetadata[keyId] = {};
-                }
-                this.loadedValuesByKey[keyId].forEach(val => {
-                    this.valueMetadata[keyId][val.id] = val.display_name || val.name || val.id;
-                });
-            }
-
-            const values = this.loadedValuesByKey[keyId];
+            const values = await this.fetchValuesForKey(keyId);
+            if (!isCurrent()) return;
 
             if (values.length === 0) {
                 valuesList.innerHTML = '<div class="empty-state">No values available for this key</div>';
@@ -708,17 +659,18 @@ class TargetingWidget {
             valuesList.innerHTML = values.map(val => `
                 <label class="value-option">
                     <input type="checkbox" class="value-checkbox"
-                           value="${val.id}"
-                           data-name="${val.display_name || val.name}"
+                           value="${escapeHtml(val.id)}"
+                           data-name="${escapeHtml(val.display_name || val.name)}"
                            ${selectedValues.has(val.id) ? 'checked' : ''}>
-                    <span class="value-label">${val.display_name || val.name}</span>
+                    <span class="value-label">${escapeHtml(val.display_name || val.name)}</span>
                 </label>
             `).join('');
 
             this.updateApplyButton();
 
         } catch (error) {
-            valuesList.innerHTML = `<div class="error-state">Failed to load values: ${error.message}</div>`;
+            if (!isCurrent()) return;
+            valuesList.innerHTML = `<div class="error-state">Failed to load values: ${escapeHtml(error.message)}</div>`;
         }
     }
 
@@ -835,7 +787,8 @@ class TargetingWidget {
     refreshGroups() {
         const groupsContainer = document.getElementById('groups-container');
         if (groupsContainer) {
-            groupsContainer.innerHTML = this.renderGroups();
+            const groupsHtml = this.renderGroups();
+            groupsContainer.innerHTML = groupsHtml;
         }
     }
 
@@ -853,14 +806,12 @@ class TargetingWidget {
         // Filter out empty groups
         const nonEmptyGroups = groups.filter(g => g.criteria && g.criteria.length > 0);
 
+        // Always the whole document, empty included: the server replaces the product's
+        // custom targeting with it, so removing the last criterion clears the targeting.
         if (hiddenField) {
-            if (nonEmptyGroups.length > 0) {
-                hiddenField.value = JSON.stringify({
-                    key_value_pairs: { groups: nonEmptyGroups }
-                });
-            } else {
-                hiddenField.value = '';
-            }
+            hiddenField.value = JSON.stringify({
+                key_value_pairs: { groups: nonEmptyGroups }
+            });
         }
     }
 }

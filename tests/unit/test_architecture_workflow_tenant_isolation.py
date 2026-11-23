@@ -161,10 +161,6 @@ WORKFLOW_PRINCIPAL_SCOPE_EXEMPT: dict[str, str] = {
         "returned by the principal-scoped get_by_step_id_or_raise, so the scoping happened "
         "upstream; the admin blueprints act as the publisher."
     ),
-    "get_mappings_for_steps": (
-        "Bulk sibling of get_mappings_for_step. list_tasks passes ids from its own "
-        "principal-scoped page, so the scoping happened upstream."
-    ),
     "get_latest_mapping_for_object": (
         "Admin creative review only (src/admin/blueprints/creatives.py) -- the publisher "
         "resolving which workflow step a creative belongs to, across the tenant."
@@ -172,6 +168,10 @@ WORKFLOW_PRINCIPAL_SCOPE_EXEMPT: dict[str, str] = {
     "get_all_steps": (
         "Admin workflow dashboard only (src/admin/blueprints/workflows.py) -- a "
         "tenant-wide publisher view by definition."
+    ),
+    "_pending_policy_reviews": (
+        "Admin policy review queue only (src/admin/blueprints/policy.py, via "
+        "list/get/settle_pending_policy_review) -- the publisher reviewing its tenant's queue."
     ),
 }
 

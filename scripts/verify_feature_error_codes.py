@@ -180,7 +180,7 @@ def _block_columns(block: list[str]) -> dict[str, list[str]]:
 
 def expected_codes(feature: Path) -> list[tuple[int, str]]:
     """Return (line_number, code) for every expected error code in a feature."""
-    lines = feature.read_text().splitlines()
+    lines = feature.read_text(encoding="utf-8").splitlines()
     found: list[tuple[int, str]] = []
     for start, block in _iter_blocks(lines):
         columns = _block_columns(block)
@@ -246,7 +246,7 @@ def find_non_canonical(features: list[Path], enum: set[str]) -> list[dict]:
     for feature in features:
         for lineno, code in expected_codes(feature):
             if CODE_RE.match(code) and code not in enum:
-                findings.append({"file": str(feature.relative_to(PROJECT_ROOT)), "line": lineno, "code": code})
+                findings.append({"file": feature.relative_to(PROJECT_ROOT).as_posix(), "line": lineno, "code": code})
     return findings
 
 

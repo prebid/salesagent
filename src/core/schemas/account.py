@@ -13,31 +13,51 @@ SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
   mutates. The read request declares none; see ListAccountsRequest.
 """
 
-from typing import ClassVar
+from typing import Annotated, ClassVar
 
 from adcp.types import Account as LibraryAccountDomain
 from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
 from adcp.types import ListAccountsResponse as LibraryListAccountsResponse
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
 from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
-from adcp.types.generated_poc.account.sync_accounts_request import (
+from adcp.types.domains.account.sync_accounts_request import (
     Accounts as LibrarySyncAccountInput,
 )
-from adcp.types.generated_poc.account.sync_accounts_request import (
+from adcp.types.domains.account.sync_accounts_request import (
     Accounts1 as LibrarySettingsUpdateAccountInput,
 )
-from adcp.types.generated_poc.account.sync_accounts_response import (
+from adcp.types.domains.account.sync_accounts_response import (
     Account as LibraryAccount,
 )  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.reporting_dataset_share_destination import Recipient as LibraryRecipient
+from adcp.types.domains.core.reporting_dataset_share_destination import (
+    ReportingDatasetShareDestination1 as LibraryReportingDatasetShareDestination1,
+)
+from adcp.types.domains.core.reporting_dataset_share_destination import (
+    ReportingDatasetShareDestination2 as LibraryReportingDatasetShareDestination2,
+)
+from adcp.types.domains.core.reporting_delivery_config import (
+    ReportingDeliveryConfiguration as LibraryReportingDeliveryConfiguration,
+)
+from adcp.types.domains.core.reporting_delivery_method import (
+    ReportingDeliveryMethod1 as LibraryReportingDeliveryMethod1,
+)
+from adcp.types.domains.core.reporting_delivery_method import (
+    ReportingDeliveryMethod2 as LibraryReportingDeliveryMethod2,
+)
+from adcp.types.domains.core.reporting_delivery_method import (
+    ReportingDeliveryMethod3 as LibraryReportingDeliveryMethod3,
+)
 from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
-    AdcpResponse,
     BuyerRequest,
     NestedModelSerializerMixin,
+    SalesAgentAdcpResponse,
     validate_idempotency_key_shape,
 )
+from src.core.schemas._dependencies import SchemaDependencies, as_local, narrowed_from
 from src.core.schemas.notification import NotificationConfig, PushNotificationConfig
 
 # ---------------------------------------------------------------------------
@@ -78,7 +98,7 @@ class ListAccountsRequest(BuyerRequest, LibraryListAccountsRequest):
 
     Library provides: account, status, pagination, sandbox, context, ext. Nothing is added:
     the field set is the pinned schema's, which is what lets the tool's advertised shape be
-    derived from this model without publishing anything AdCP 3.1.1 does not define.
+    derived from this model without publishing anything does not define.
 
     ``idempotency_key`` used to be declared here, commented as read-tool-idempotency
     tolerance. The citation was right and the conclusion was backwards, and the generated
@@ -103,7 +123,54 @@ class ListAccountsRequest(BuyerRequest, LibraryListAccountsRequest):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
-class SyncAccountInput(LibrarySyncAccountInput):
+# The reporting-delivery chain down to the one ``dependencies`` site in it: a provisioned
+# dataset share's recipient (core/reporting-dataset-share-destination.json
+# /oneOf/1/properties/recipient). Each class builds one slot as the next local class, so the
+# request reaches :class:`ReportingShareRecipient`; the other union members are the generated ones.
+class ReportingShareRecipient(SchemaDependencies, LibraryRecipient):
+    """A provisioned share's recipient, with its schema's ``dependencies``: ``cloud`` and
+    ``region`` come together."""
+
+    _SCHEMA_DEPENDENCIES = {"cloud": ("region",), "region": ("cloud",)}
+
+
+class ReportingDatasetShareProvision(LibraryReportingDatasetShareDestination2):
+    recipient: Annotated[LibraryRecipient, as_local(ReportingShareRecipient)] = narrowed_from(
+        LibraryReportingDatasetShareDestination2, "recipient"
+    )
+
+
+class ReportingDatasetShareMethod(LibraryReportingDeliveryMethod2):
+    destination: (
+        LibraryReportingDatasetShareDestination1
+        | Annotated[LibraryReportingDatasetShareDestination2, as_local(ReportingDatasetShareProvision)]
+    ) = narrowed_from(LibraryReportingDeliveryMethod2, "destination")
+
+
+class ReportingDeliveryConfig(LibraryReportingDeliveryConfiguration):
+    method: (
+        LibraryReportingDeliveryMethod1
+        | Annotated[LibraryReportingDeliveryMethod2, as_local(ReportingDatasetShareMethod)]
+        | LibraryReportingDeliveryMethod3
+        | None
+    ) = narrowed_from(LibraryReportingDeliveryConfiguration, "method")
+
+
+#: The element of the slot both entry shapes declare, built as the local class.
+ReportingDeliveryConfigSlot = Annotated[LibraryReportingDeliveryConfiguration, as_local(ReportingDeliveryConfig)]
+
+
+class _SyncAccountEntry(SchemaDependencies):
+    """The ``dependencies`` of account/sync-accounts-request.json's ``accounts`` items, which
+    both generated entry shapes (one per ``oneOf`` branch of the item) carry."""
+
+    _SCHEMA_DEPENDENCIES = {
+        "operator_identity": ("revision",),
+        "destination_billing_entity": ("operator_identity", "revision"),
+    }
+
+
+class SyncAccountInput(_SyncAccountEntry, LibrarySyncAccountInput):
     """The provisioning entry of ``sync_accounts`` (brand / operator / billing), per the pin.
 
     Redeclares only ``notification_configs``, narrowed to the local ``NotificationConfig``
@@ -118,9 +185,12 @@ class SyncAccountInput(LibrarySyncAccountInput):
         max_length=16,
         description=LibrarySyncAccountInput.model_fields["notification_configs"].description,
     )
+    reporting_delivery_configs: list[ReportingDeliveryConfigSlot] | None = narrowed_from(
+        LibrarySyncAccountInput, "reporting_delivery_configs"
+    )
 
 
-class SettingsUpdateAccountInput(LibrarySettingsUpdateAccountInput):
+class SettingsUpdateAccountInput(_SyncAccountEntry, LibrarySettingsUpdateAccountInput):
     """The account-reference (settings-update) entry of ``sync_accounts``, per the pin.
 
     Same single redeclaration as :class:`SyncAccountInput`, for the same reason.
@@ -131,6 +201,9 @@ class SettingsUpdateAccountInput(LibrarySettingsUpdateAccountInput):
         default=None,
         max_length=16,
         description=LibrarySettingsUpdateAccountInput.model_fields["notification_configs"].description,
+    )
+    reporting_delivery_configs: list[ReportingDeliveryConfigSlot] | None = narrowed_from(
+        LibrarySettingsUpdateAccountInput, "reporting_delivery_configs"
     )
 
 
@@ -193,7 +266,7 @@ class SyncAccountsRequest(BuyerRequest, LibrarySyncAccountsRequest):
 # ---------------------------------------------------------------------------
 
 
-class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsResponse, AdcpResponse):
+class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsResponse, SalesAgentAdcpResponse):
     """Extends library ListAccountsResponse.
 
     Library provides: accounts, errors, pagination, context, ext.
@@ -230,11 +303,11 @@ class SyncResponseAccount(LibraryAccount):
 class SyncAccountsResponse(
     NestedModelSerializerMixin,
     LibrarySyncAccountsSuccess,  # type: ignore[misc]
-    AdcpResponse,
+    SalesAgentAdcpResponse,
 ):
     """Extends library SyncAccountsResponse success variant.
 
-    adcp 3.10: SyncAccountsResponse is a union TypeAlias (not RootModel).
+    the pinned SDK: SyncAccountsResponse is a union TypeAlias (not RootModel).
     Since the error variant is never constructed (ToolError handles failures),
     we subclass the success variant directly.
 
@@ -246,7 +319,7 @@ class SyncAccountsResponse(
     are untyped and reach the wire only as pydantic extras.
 
     SDK 5.7 had collapsed the success envelope to just `status`, and this class
-    carried local copies of accounts/dry_run/context/ext as a result. adcp 6.6
+    carried local copies of accounts/dry_run/context/ext as a result. the pinned SDK
     re-added all four, typed, so only `accounts` is still declared here — and only
     to narrow its item type (Pattern #4). The rest are inherited.
     """
@@ -255,7 +328,7 @@ class SyncAccountsResponse(
 
     # Protocol-envelope `status` comes from ProtocolEnvelope (composed above).
     # account/sync-accounts-response.json composes the envelope branch via a top-level
-    # allOf, and this class is a TEMPORARY adopter: at adcp 6.6
+    # allOf, and this class is a TEMPORARY adopter: at the pinned SDK
     # SyncAccountsSuccessResponse has no ProtocolEnvelope in its MRO and no status
     # field, so the mixin is ADDITIVE here and deletes as a no-op the day the SDK
     # ships the field.
@@ -268,14 +341,14 @@ class SyncAccountsResponse(
     # (src/core/schemas/creative.py, GH #1710).
 
     # Pattern #4: narrowed to SyncResponseAccount for proper deserialization on
-    # transport roundtrip. `accounts` is REQUIRED (no default): AdCP 3.1
+    # transport roundtrip. `accounts` is REQUIRED (no default):
     # sync-accounts-response is oneOf(SyncAccountsSuccess requires `accounts` |
     # SyncAccountsError requires `errors`). This model is the success variant, so
     # omitting `accounts` entirely is invalid (it would be neither a valid success
     # nor error). May be an empty list for a zero-account sync, but must be present.
     #
     # dry_run / context / ext are NOT redeclared. They carried a stale "SDK 5.7
-    # removed these from the parent" note; adcp 6.6 re-added all three, typed, and
+    # removed these from the parent" note; the pinned SDK re-added all three, typed, and
     # the SyncCreativesResponse twin already inherits them. Two of the local copies
     # were also strictly worse: `context` widened to accept a raw dict although
     # SyncAccountsRequest.context is itself a ContextObject, and `ext` weakened the

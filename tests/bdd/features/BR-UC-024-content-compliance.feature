@@ -50,7 +50,7 @@ Feature: BR-UC-024 Content Compliance
     # POST-S2: Buyer received sampled artifacts
     # POST-S5: Context echoed
     # POST-S6: Collection metadata reported
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-main-rest @main-flow @get-artifacts @rest @post-s2 @post-s5 @post-s6
   Scenario: Get media buy artifacts via REST/A2A -- success with default sampling and pagination
@@ -64,7 +64,7 @@ Feature: BR-UC-024 Content Compliance
     # POST-S2: Buyer received sampled artifacts
     # POST-S5: Context echoed
     # POST-S6: Collection metadata reported
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-main-drift @main-flow @get-artifacts @drift-detection @post-s4
   Scenario: Get media buy artifacts -- Seller includes local_verdict for drift detection
@@ -91,7 +91,7 @@ Feature: BR-UC-024 Content Compliance
     When the Buyer Agent invokes get_media_buy_artifacts with media_buy_id "mb-005", account "acct-1", package_ids ["pkg-1"], and time_range from "2026-01-01T00:00:00Z" to "2026-01-31T23:59:59Z"
     Then the response contains only artifacts matching the specified filters
     And the collection_info reflects the filtered result set
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-main-pagination-cursor @main-flow @get-artifacts @pagination
   Scenario: Get media buy artifacts -- cursor-based pagination across multiple pages
@@ -114,7 +114,7 @@ Feature: BR-UC-024 Content Compliance
     And the response echoes the request context "ctx-cal"
     # POST-S1: Seller received pass verdict with explanation
     # POST-S5: Context echoed
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-ext-a-fail @extension @ext-a @calibration @happy-path @post-s1
   Scenario: Calibrate content -- artifact fails with per-feature breakdown
@@ -125,7 +125,7 @@ Feature: BR-UC-024 Content Compliance
     And the response includes features array with at least one feature having status "failed"
     And each feature in the breakdown has feature_id and status
     # POST-S1: Seller received fail verdict with feature breakdown
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-ext-a-dialogue @extension @ext-a @calibration @dialogue @happy-path @post-s1
   Scenario: Calibrate content -- multi-turn dialogue via protocol-layer context
@@ -306,7 +306,7 @@ Feature: BR-UC-024 Content Compliance
     # POST-F1: System state unchanged
     # POST-F2: Error identifies missing field
     # POST-F3: Context echoed when possible
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-ext-g-validate @extension @ext-g @error @artifact-required
   Scenario: Validate content delivery -- ARTIFACT_REQUIRED when record artifact missing assets
@@ -375,7 +375,7 @@ Feature: BR-UC-024 Content Compliance
     And an artifact with property_rid "prop-10", artifact_id "art-10", and assets containing a text asset with content "Valid article text"
     When the Seller invokes calibrate_content with standards_id "std-100" and the artifact
     Then the operation succeeds with a verdict
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-inv-179-text-holds @invariant @BR-RULE-179
   Scenario: BR-RULE-179 INV-4 holds -- text asset with content field accepted
@@ -401,7 +401,7 @@ Feature: BR-UC-024 Content Compliance
     And the error should include "suggestion" field
     And the suggestion should contain "property_rid, artifact_id, and at least one asset"
     # POST-F3: Recovery suggestion provided
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-inv-179-violated-artid @invariant @BR-RULE-179 @error
   Scenario: BR-RULE-179 INV-2 violated -- artifact missing artifact_id rejected
@@ -413,7 +413,7 @@ Feature: BR-UC-024 Content Compliance
     And the error should include "suggestion" field
     And the suggestion should contain "property_rid, artifact_id, and at least one asset"
     # POST-F3: Recovery suggestion provided
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-inv-179-violated-assets @invariant @BR-RULE-179 @error
   Scenario: BR-RULE-179 INV-3 violated -- artifact with empty assets rejected
@@ -425,7 +425,7 @@ Feature: BR-UC-024 Content Compliance
     And the error should include "suggestion" field
     And the suggestion should contain "at least one asset"
     # POST-F3: Recovery suggestion provided
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-inv-179-violated-text @invariant @BR-RULE-179 @error
   Scenario: BR-RULE-179 INV-4 violated -- text asset missing content rejected
@@ -575,14 +575,14 @@ Feature: BR-UC-024 Content Compliance
     Then the response collection_info reflects the media buy's configured rate
     And collection_info.effective_rate is approximately 0.25
     # DEPRECATED v3.1: per-request sampling method removed (BR-RULE-183); method is configured at media-buy creation (UC-002), not accepted in the request. Retained for traceability.
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-inv-183-method @deprecated @invariant @BR-RULE-183
   Scenario: BR-RULE-183 INV-3 holds -- valid sampling method accepted
     Given a media buy "mb-131" exists for the authenticated buyer
     When the Buyer Agent invokes get_media_buy_artifacts with sampling method "stratified"
     Then the response sampling_info.method reflects "stratified"
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-inv-183-info @invariant @BR-RULE-183
   Scenario: BR-RULE-183 INV-4 holds -- collection_info included in success response
@@ -590,7 +590,7 @@ Feature: BR-UC-024 Content Compliance
     When the Buyer Agent invokes get_media_buy_artifacts with media_buy_id "mb-132"
     Then the response includes collection_info with total_deliveries, total_collected, returned_count, and effective_rate
     # DEPRECATED v3.1: per-request sampling.rate removed (BR-RULE-183); SAMPLING_RATE_INVALID can no longer be raised. Retained for traceability.
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-inv-184-default @invariant @BR-RULE-184
   Scenario: BR-RULE-184 INV-2 holds -- pagination omitted defaults to max_results 1000
@@ -1087,7 +1087,7 @@ Feature: BR-UC-024 Content Compliance
     And the payload should include a non-empty artifacts array
     And every artifacts item should include artifact and delivered_at
     # POST-S5: push-based artifact delivery contract honored
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-artifact-webhook-dedup-by-key @v3-1 @artifact-webhook @idempotency
   Scenario: Recipient deduplicates artifact webhook deliveries by idempotency_key
@@ -1097,7 +1097,7 @@ Feature: BR-UC-024 Content Compliance
     Then the orchestrator should record only one logical delivery for that idempotency_key
     And idempotency_key dedup should be scoped to the authenticated sender identity
     # POST-S5: at-least-once delivery does not cause double processing
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-artifact-webhook-rebatch-new-key @v3-1 @artifact-webhook @idempotency
   Scenario: Corrected re-emission of the same batch_id carries a fresh idempotency_key
@@ -1116,7 +1116,7 @@ Feature: BR-UC-024 Content Compliance
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # POST-F2: missing required field identified
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-inv-260-replay @v3-1 @invariant @BR-RULE-260 @idempotency
   Scenario: BR-RULE-260 INV-2 holds -- replayed calibrate_content key returns cached response without re-running work
@@ -1126,7 +1126,7 @@ Feature: BR-UC-024 Content Compliance
     Then the original cached calibration response is returned
     And no duplicate calibration evaluation work is performed
     And idempotency_key dedup is scoped to the authenticated sender identity
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-inv-260-cross-sender @v3-1 @invariant @BR-RULE-260 @idempotency
   Scenario: BR-RULE-260 INV-2 -- identical idempotency_key from different senders does not collide
@@ -1134,7 +1134,7 @@ Feature: BR-UC-024 Content Compliance
     When sender B submits a calibrate_content request with the same idempotency_key "ck_shared_key_00001"
     Then sender B's request is processed independently and not deduped against sender A
     And idempotency_key dedup remains scoped to each authenticated sender identity
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-boundary-idempotency-key @v3-1 @boundary @BR-RULE-260 @idempotency
   Scenario Outline: BR-RULE-260 INV-3 -- calibrate_content idempotency_key boundary validation - <boundary_point>
@@ -1142,7 +1142,7 @@ Feature: BR-UC-024 Content Compliance
     And a calibrate_content request with idempotency_key at the boundary: <boundary_point>
     When the Seller invokes calibrate_content with standards_id "std-263"
     Then <outcome>
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
     Examples: Boundary values
       | boundary_point                          | outcome                                          |
@@ -1160,7 +1160,7 @@ Feature: BR-UC-024 Content Compliance
     And the error code should be "IDEMPOTENCY_CONFLICT"
     And the error should include "suggestion" field
     # POST-F2: corrected re-emission must mint a fresh key
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
 
   @T-UC-024-inv-260-validate-no-key @v3-1 @invariant @BR-RULE-260 @validate-delivery
   Scenario: BR-RULE-260 -- validate_content_delivery does NOT require idempotency_key

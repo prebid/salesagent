@@ -27,10 +27,12 @@ class TestPricingHelpers:
         """Test create_test_product_with_pricing creates Product with CPM pricing."""
         with get_db_session() as session:
             # Create tenant
+            # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
             tenant = Tenant(
                 tenant_id="test_tenant",
                 name="Test Tenant",
                 subdomain="test",
+                virtual_host="test-tenant.adcp.test",
             )
             session.add(tenant)
             session.commit()
@@ -68,6 +70,7 @@ class TestPricingHelpers:
                 tenant_id="test_tenant",
                 name="Test Tenant",
                 subdomain="test",
+                virtual_host="test-tenant.adcp.test",
             )
             session.add(tenant)
             session.commit()
@@ -99,6 +102,7 @@ class TestPricingHelpers:
                 tenant_id="test_tenant",
                 name="Test Tenant",
                 subdomain="test",
+                virtual_host="test-tenant.adcp.test",
             )
             session.add(tenant)
             session.commit()
@@ -129,6 +133,7 @@ class TestPricingHelpers:
                 tenant_id="test_tenant",
                 name="Test Tenant",
                 subdomain="test",
+                virtual_host="test-tenant.adcp.test",
             )
             session.add(tenant)
             session.commit()
@@ -157,6 +162,7 @@ class TestPricingHelpers:
                 tenant_id="test_tenant",
                 name="Test Tenant",
                 subdomain="test",
+                virtual_host="test-tenant.adcp.test",
             )
             session.add(tenant)
             session.commit()

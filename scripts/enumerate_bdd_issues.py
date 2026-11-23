@@ -35,14 +35,14 @@ def load_guard_allowlist() -> set[str]:
         p = Path(guard_file)
         if not p.exists():
             continue
-        for m in re.finditer(r'\d+ (\w+)"', p.read_text()):
+        for m in re.finditer(r'\d+ (\w+)"', p.read_text(encoding="utf-8")):
             funcs.add(m.group(1))
     return funcs
 
 
 def classify_tests(results_path: str) -> dict:
     """Classify every test into actionable buckets."""
-    d = json.loads(Path(results_path).read_text())
+    d = json.loads(Path(results_path).read_text(encoding="utf-8"))
     weak_funcs = load_guard_allowlist()
 
     buckets: dict[str, list[dict]] = defaultdict(list)
@@ -204,7 +204,7 @@ def main():
 
     if args.output:
         # Serialize for machine consumption
-        Path(args.output).write_text(json.dumps(buckets, indent=2))
+        Path(args.output).write_text(json.dumps(buckets, indent=2), encoding="utf-8")
         print(f"\nJSON written to {args.output}")
 
 

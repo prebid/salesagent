@@ -16,8 +16,12 @@ from __future__ import annotations
 import json
 import os
 import re
+from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
+
+from src.core.http_utils import hostname_of
+from tests.utils.database_helpers import vhost_for
 
 
 def parse_postgres_url() -> tuple[str, str, str, int] | None:
@@ -35,19 +39,37 @@ def parse_postgres_url() -> tuple[str, str, str, int] | None:
 
 
 def _run_alembic_command(db_url: str, command_fn, target_revision: str) -> None:
-    """Run an Alembic command with temporary DATABASE_URL override.
+    """Run an Alembic command against *db_url*, whatever the caller's context.
 
-    Temporarily sets DATABASE_URL for alembic/env.py which reads from
-    DatabaseConfig.get_connection_string().
+    THE ENV VAR ALONE IS NOT THE OVERRIDE. ``alembic/env.py`` resolves its URL at import
+    time from ``DatabaseConfig.get_connection_string()``, which reads ``get_settings()`` --
+    and that is a PROCESS-WIDE CACHE (``src.core.config._settings``, built on first use).
+    Setting ``DATABASE_URL`` and hoping is therefore a coin flip decided by whether anything
+    earlier in the process warmed that cache: measured, the identical override resolved to
+    the ambient ``.../adcp_test`` when called from a module-scoped fixture and to the
+    intended ``.../test_migration_<hex>`` when called from a test body, because a
+    function-scoped conftest fixture resets the cache in between. The failure is silent --
+    the upgrade runs against the wrong database, the intended one stays empty, and the next
+    statement dies on a missing table.
+
+    So the cache is dropped for the duration and rebuilt after, making the override mean
+    what it says from any caller. Restored rather than left cleared: the ambient settings
+    belong to whatever is running this, and a test that finds them missing afterwards would
+    be paying for someone else's migration.
     """
     from alembic.config import Config
 
+    from src.core import config as config_module
+
     old_url = os.environ.get("DATABASE_URL")
+    old_settings = config_module._settings
     os.environ["DATABASE_URL"] = db_url
+    config_module._settings = None
     try:
         alembic_cfg = Config("alembic.ini")
         command_fn(alembic_cfg, target_revision)
     finally:
+        config_module._settings = old_settings
         if old_url:
             os.environ["DATABASE_URL"] = old_url
         elif "DATABASE_URL" in os.environ:
@@ -92,15 +114,26 @@ def reset_to_revision(
     engine, db_url = migration_db
     run_alembic_upgrade(db_url, revision)
     run_alembic_downgrade(db_url, revision)
+    # virtual_host is NOT NULL from revision 7f31c0ab94d2, which also adds virtual_host_name
+    # (NOT NULL, UNIQUE). The host is derived from the tenant_id so it stays distinct across
+    # seeded tenants, and the name is derived from the host by the function production uses.
+    # Which columns exist depends on ``revision``, so the row states the ones the table has.
+    vhost = vhost_for(tenant_id)
+    row = {"tenant_id": tenant_id, "name": tenant_name, "subdomain": subdomain, "virtual_host": vhost}
     with engine.begin() as conn:
-        conn.execute(text("DELETE FROM accounts"))
-        conn.execute(text("DELETE FROM tenants"))
+        if any(column["name"] == "virtual_host_name" for column in inspect(conn).get_columns("tenants")):
+            row["virtual_host_name"] = hostname_of(vhost)
+        # CASCADE, not a DELETE per known child table: every row a previous test seeded
+        # belongs to a tenant (accounts, products, ...), and a DELETE list names only the
+        # children its author knew of -- the placements tests' products outlived it and
+        # every later reset failed on products_tenant_id_fkey.
+        conn.execute(text("TRUNCATE TABLE tenants CASCADE"))
         conn.execute(
             text(
-                "INSERT INTO tenants (tenant_id, name, subdomain, ad_server, is_active) "
-                "VALUES (:tid, :name, :subdomain, 'mock', true)"
+                f"INSERT INTO tenants ({', '.join(row)}, ad_server, is_active) "
+                f"VALUES ({', '.join(f':{column}' for column in row)}, 'mock', true)"
             ),
-            {"tid": tenant_id, "name": tenant_name, "subdomain": subdomain},
+            row,
         )
     return engine, db_url
 
@@ -156,3 +189,102 @@ def seed_account(
                 "billing": billing,
             },
         )
+
+
+def seed_product(
+    engine, *, tenant_id: str, product_id: str, inventory_profile_id: int | None = None, **jsonb_columns: Any
+) -> None:
+    """Insert a products row directly -- a migration's subject is rows, not callers.
+
+    Raw SQL for the same reason as :func:`seed_account`: a revision's subject is a row as an
+    older schema holds it -- a channel string the column's validator now refuses, a NULL
+    ``delivery_measurement`` -- so no factory can produce it. Each keyword names a JSONB
+    column of the schema at the caller's revision and is written as given: None is SQL NULL,
+    what production stores for "nothing declared", and a list keeps its non-string elements.
+    A column not named takes its server default. ``format_ids`` defaults to ``[]``, which
+    satisfies its validator (zero iterations), and ``targeting_template`` to ``{}``. The
+    column names are interpolated, so they come from the calling test, never from data.
+    ``inventory_profile_id`` is the one integer column a caller names, written only when given
+    so a revision without the column is seeded as before.
+    """
+    columns = {"format_ids": [], "targeting_template": {}, **jsonb_columns}
+    names = list(columns)
+    values = [f"CAST(:{name} AS jsonb)" for name in columns]
+    params: dict[str, Any] = {name: _json_or_null(value) for name, value in columns.items()}
+    if inventory_profile_id is not None:
+        names.append("inventory_profile_id")
+        values.append(":inventory_profile_id")
+        params["inventory_profile_id"] = inventory_profile_id
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"INSERT INTO products (tenant_id, product_id, name, description, delivery_type, {', '.join(names)}) "
+                f"VALUES (:tid, :pid, :name, 'test', 'guaranteed', {', '.join(values)})"
+            ),
+            {"tid": tenant_id, "pid": product_id, "name": f"Product {product_id}", **params},
+        )
+
+
+def row_xmins(engine, *, table: str, key_column: str, tenant_id: str) -> dict[str, str]:
+    """Per-row ``xmin`` -- the transaction that last wrote the row -- keyed by *key_column*.
+
+    PostgreSQL bumps it on ANY update, including a rewrite of a row to itself, which is
+    what makes this the only assertion that can tell "issued no statement" apart from
+    "churned every row back to the same value". *table* and *key_column* are identifiers
+    from a fixed call site, hence interpolated; the tenant stays a bind.
+    """
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(f"SELECT {key_column} AS key, xmin::text AS xmin FROM {table} WHERE tenant_id = :tid"),
+            {"tid": tenant_id},
+        ).all()
+    return {row.key: row.xmin for row in rows}
+
+
+def _json_or_null(value: Any) -> str | None:
+    return None if value is None else json.dumps(value)
+
+
+def seed_inventory_profile(
+    engine, *, tenant_id: str, profile_id: str, format_options: Any, publisher_properties: Any
+) -> int:
+    """Insert an inventory_profiles row with raw SQL, as the schema under test stores it; return its id."""
+    with engine.begin() as conn:
+        return conn.execute(
+            text(
+                "INSERT INTO inventory_profiles (tenant_id, profile_id, name, inventory_config, format_options, "
+                "publisher_properties, created_at, updated_at) VALUES (:tid, :pid, :pid, '{}'::jsonb, "
+                "CAST(:options AS jsonb), CAST(:properties AS jsonb), now(), now()) RETURNING id"
+            ),
+            {
+                "tid": tenant_id,
+                "pid": profile_id,
+                "options": _json_or_null(format_options),
+                "properties": _json_or_null(publisher_properties),
+            },
+        ).scalar_one()
+
+
+class _JsonNull:
+    def __repr__(self) -> str:
+        return "JSON_NULL"
+
+
+#: What :func:`stored_column` reads a JSONB ``null`` as. psycopg2 reads it as None, exactly as
+#: it reads SQL NULL, and a revision that must store "nothing declared" as SQL NULL rather
+#: than ``'null'::jsonb`` is graded by telling the two apart.
+JSON_NULL = _JsonNull()
+
+
+def stored_column(engine, table: str, column: str, **where: Any) -> Any:
+    """*column* of the one *table* row matching *where*: None for SQL NULL, :data:`JSON_NULL` for JSONB null.
+
+    *table*, *column* and the *where* names are interpolated, so they come from the calling
+    test, never from data; the values stay binds.
+    """
+    condition = " AND ".join(f"{name} = :{name}" for name in where)
+    with engine.begin() as conn:
+        is_null, value = conn.execute(
+            text(f"SELECT {column} IS NULL, {column} FROM {table} WHERE {condition}"), where
+        ).one()
+    return None if is_null else JSON_NULL if value is None else value

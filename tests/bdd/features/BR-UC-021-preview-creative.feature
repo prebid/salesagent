@@ -184,7 +184,7 @@ Feature: BR-UC-021 Preview Creative
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows creative_manifest is required
     # POST-F3: Suggestion for recovery
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/preview-creative-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/preview-creative-request.json
 
   @T-UC-021-ext-d-batch @extension @ext-d @error @batch @post-f3
   Scenario: Batch mode with missing creative_manifest in one item -- per-item error
@@ -313,7 +313,7 @@ Feature: BR-UC-021 Preview Creative
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows the variant was not found
     # POST-F3: Suggestion for recovery
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/preview-creative-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/preview-creative-request.json
 
   @T-UC-021-ext-h-expired @extension @ext-h @error @variant @br-rule-163
   Scenario: Variant expired -- REFERENCE_NOT_FOUND
@@ -355,7 +355,7 @@ Feature: BR-UC-021 Preview Creative
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows the agent is unavailable and receives retry guidance
     # POST-F3: Suggestion for recovery
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/preview-creative-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/preview-creative-request.json
 
   @T-UC-021-ext-j-batch @extension @ext-j @error @batch @br-rule-168
   Scenario: Creative agent unavailable in batch -- per-item error with other items succeeding
@@ -368,7 +368,7 @@ Feature: BR-UC-021 Preview Creative
     And the suggestion should contain "retry"
     # BR-RULE-168 INV-3 in batch context
     # POST-F3: Item 1 succeeds despite item 2 agent failure
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/preview-creative-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/preview-creative-request.json
 
   @T-UC-021-ext-j-timeout @extension @ext-j @error @timeout @br-rule-168
   Scenario: Creative agent timeout -- SERVICE_UNAVAILABLE after 30s
@@ -409,7 +409,7 @@ Feature: BR-UC-021 Preview Creative
     And the suggestion should contain "single" or "batch" or "variant"
     # BR-RULE-160 INV-5: request_type unknown -> rejected
     # POST-F3: Suggestion for recovery
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/preview-creative-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/preview-creative-request.json
 
   @T-UC-021-discriminator-missing @invariant @BR-RULE-160 @error @discriminator
   Scenario: Missing request type -- rejected before processing
@@ -463,7 +463,7 @@ Feature: BR-UC-021 Preview Creative
     And the response has response_type "single"
     And the response contains a previews array with at least 1 preview
     # BR-RULE-227 INV-1: quality = draft -> fast, lower-fidelity render
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/preview-creative-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/preview-creative-request.json
 
   @T-UC-021-quality-production @invariant @BR-RULE-227 @quality
   Scenario: Quality production -- accepted and rendered at full fidelity
@@ -473,7 +473,7 @@ Feature: BR-UC-021 Preview Creative
     And the response has response_type "single"
     And the response contains a previews array with at least 1 preview
     # BR-RULE-227 INV-2: quality = production -> full-quality render
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/preview-creative-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/preview-creative-request.json
 
   @T-UC-021-quality-invalid @invariant @BR-RULE-227 @quality @error
   Scenario: Quality not in enum -- rejected before processing
@@ -483,7 +483,7 @@ Feature: BR-UC-021 Preview Creative
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-227 INV-3: quality not in [draft, production] -> rejected
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/preview-creative-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/preview-creative-request.json
 
   @T-UC-021-quality-batch-override @invariant @BR-RULE-227 @quality @batch @ext-a
   Scenario: Batch quality default with per-item override -- per-item wins
@@ -503,7 +503,7 @@ Feature: BR-UC-021 Preview Creative
     And the response has response_type "single"
     And the preview renders at most 5 catalog items
     # BR-RULE-228 INV-1, INV-3: item_limit >= 1 caps catalog items per preview variant
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/preview-creative-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/preview-creative-request.json
 
   @T-UC-021-item-limit-below-min @invariant @BR-RULE-228 @item-limit @error @boundary
   Scenario: Item limit below minimum -- zero is rejected
@@ -513,7 +513,7 @@ Feature: BR-UC-021 Preview Creative
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-228 INV-2: item_limit < 1 violates minimum: 1 -> rejected
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/preview-creative-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/preview-creative-request.json
 
   @T-UC-021-item-limit-batch @invariant @BR-RULE-228 @item-limit @batch @ext-a
   Scenario: Item limit per batch item -- applies to that item's catalog rendering

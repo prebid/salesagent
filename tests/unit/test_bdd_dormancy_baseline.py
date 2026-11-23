@@ -61,7 +61,7 @@ class TestBaselineFile:
         """A duplicate would let the list grow while appearing to hold its size."""
         lines = [
             ln.strip()
-            for ln in DORMANT_SCENARIOS_PATH.read_text().splitlines()
+            for ln in DORMANT_SCENARIOS_PATH.read_text(encoding="utf-8").splitlines()
             if " :: " in ln and not ln.strip().startswith("#")
         ]
         assert len(lines) == len(set(lines)), "duplicate baseline entries"

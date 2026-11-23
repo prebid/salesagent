@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import attributes
 
+from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.models import Product
 from tests.helpers.adcp_factories import create_test_product
 
@@ -19,10 +20,12 @@ def sample_product(integration_db):
 
     with get_db_session() as session:
         # Create tenant
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
         tenant = Tenant(
             tenant_id="test_tenant",
             name="Test Tenant",
             subdomain="test",
+            virtual_host="test-tenant.adcp.test",
         )
         session.add(tenant)
         session.flush()
@@ -48,7 +51,7 @@ def sample_product(integration_db):
                 if hasattr(product_data.delivery_type, "value")
                 else product_data.delivery_type
             ),
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, "test_tenant"),
         )
         session.add(product)
         session.commit()

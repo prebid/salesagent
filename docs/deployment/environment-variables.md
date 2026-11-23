@@ -29,11 +29,19 @@ For a minimal working deployment:
 # Required
 DATABASE_URL=postgresql://user:password@host:5432/adcp
 
+# Required to store secrets, such as a tenant's SSO client secret
+ENCRYPTION_KEY=your-fernet-key
+
+# Required for the first sign-in: the deployment's OAuth client and a super admin
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
+SUPER_ADMIN_EMAILS=you@example.com
+
 # Optional - AI features
 GEMINI_API_KEY=your-key
 ```
 
-Authentication is configured **per-tenant** in the Admin UI. No OAuth environment variables are required.
+After the first sign-in, each tenant configures its own SSO in the Admin UI. See [Authentication](#authentication).
 
 ## Authentication
 
@@ -44,50 +52,70 @@ Each tenant configures their own SSO provider in the Admin UI (**Users & Access*
 **Setup flow:**
 
 1. Start the system. The first startup creates a default tenant with Setup Mode enabled.
-2. Log in with test credentials (Setup Mode enables them for new tenants).
-3. Configure SSO in **Users & Access** - supports Google, Microsoft, or any OIDC provider (Okta, Auth0, Keycloak, and others) as Custom OIDC.
-4. Test your SSO login.
-5. Disable Setup Mode once SSO is working.
+2. Log in with Google as one of the `SUPER_ADMIN_EMAILS` addresses.
+3. Configure the tenant's SSO in **Users & Access** with the [SSO quick start](../user-guide/sso-setup.md#quick-start). It supports Google, Microsoft, or any OIDC provider (Okta, Auth0, Keycloak, and others) as Custom OIDC.
 
 See the [SSO setup guide](../user-guide/sso-setup.md) for detailed instructions.
 
 ### Setup Mode (per-tenant)
 
-New tenants start with `auth_setup_mode=true`, which enables test credentials:
+New tenants start with `auth_setup_mode=true`. Setup Mode lets a tenant complete an OIDC
+login *before* its SSO is enabled, so you can verify a provider before committing to it.
+It grants no credentials of its own — the first administrator signs in with the
+deployment's own OAuth (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` or the generic
+`OAUTH_*` variables) plus `SUPER_ADMIN_EMAILS`.
 
-- Email: `test_super_admin@example.com`
-- Password: `test123`
+Once SSO is configured and tested, sign in through **Sign in with SSO** and disable Setup Mode from the Users & Access page. After that, **Sign in with SSO** works only while the tenant's SSO is enabled.
 
-Once SSO is configured and tested, disable Setup Mode from the Users & Access page. After that, only SSO authentication works for that tenant.
+### Deployment OAuth
 
-### Legacy: global test mode
+These variables configure the deployment's own OAuth client. The Admin UI signs people in through it unless a tenant's own SSO handles the sign-in. The first administrator of a tenant in Setup Mode signs in through it, and per-tenant SSO doesn't replace it.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ADCP_AUTH_TEST_MODE` | `false` | Enable test authentication globally. **Deprecated - use per-tenant Setup Mode instead.** |
-
-### Legacy: environment variable OAuth
-
-These variables configure a **global** OAuth provider shared by all tenants. For new deployments, use per-tenant SSO configuration instead.
+The following variables configure the client:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GOOGLE_CLIENT_ID` | - | Google OAuth client ID (legacy) |
-| `GOOGLE_CLIENT_SECRET` | - | Google OAuth client secret (legacy) |
-| `OAUTH_DISCOVERY_URL` | - | OIDC discovery URL (legacy) |
-| `OAUTH_CLIENT_ID` | - | OAuth client ID (legacy) |
-| `OAUTH_CLIENT_SECRET` | - | OAuth client secret (legacy) |
-| `OAUTH_SCOPES` | `openid email profile` | OAuth scopes to request |
-| `OAUTH_PROVIDER` | `google` | Provider name for display |
+| `OAUTH_DISCOVERY_URL` | - | OIDC discovery URL of the provider |
+| `OAUTH_CLIENT_ID` | - | OAuth client ID |
+| `OAUTH_CLIENT_SECRET` | - | OAuth client secret |
+| `OAUTH_SCOPES` | `openid email profile` | Scopes to request with the `OAUTH_*` credentials |
+| `OAUTH_PROVIDER` | `google` | Provider name. Without `OAUTH_DISCOVERY_URL`, `google` or `microsoft` selects that provider's discovery URL |
+| `GOOGLE_CLIENT_ID` | - | Google OAuth client ID, read when the `OAUTH_*` credentials don't form a complete configuration |
+| `GOOGLE_CLIENT_SECRET` | - | Google OAuth client secret, read with `GOOGLE_CLIENT_ID` |
+| `GOOGLE_OAUTH_REDIRECT_URI` | - | Callback URL that the deployment's sign-in sends to the provider. Register the same URL with the OAuth client |
 
-### Legacy: super admin access control
+The Admin UI uses the first complete configuration in the following order:
+
+1. `OAUTH_DISCOVERY_URL`, `OAUTH_CLIENT_ID`, and `OAUTH_CLIENT_SECRET`
+2. `OAUTH_CLIENT_ID` and `OAUTH_CLIENT_SECRET`, with `OAUTH_PROVIDER` set to `google` or `microsoft`
+3. `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, the older Google-only spelling
+4. A `client_secret.json` file of Google OAuth credentials in the application's root directory
+
+Without `GOOGLE_OAUTH_REDIRECT_URI`, the global sign-in builds the callback URL from the
+request's host. In production, unless `SKIP_NGINX` is set, the callback is always under
+`/admin`. Otherwise it keeps the path that the sign-in starts from, so a deployment whose
+Admin UI answers under `/admin/` and at the root, such as the Docker Compose stack, needs
+both `<host>/admin/auth/google/callback` and `<host>/auth/google/callback` registered with
+the OAuth client. In production, a tenant's sign-in uses
+`https://<SALES_AGENT_DOMAIN>/admin/auth/google/callback`. Outside production, a tenant's
+sign-in ignores the setting and uses the request's host.
+
+### Super admin access control
+
+A super admin reaches every tenant in the Admin UI. The following variables name the super admins:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SUPER_ADMIN_EMAILS` | - | Comma-separated super admin emails. **Deprecated - use per-tenant user management.** |
-| `SUPER_ADMIN_DOMAINS` | - | Comma-separated domains for admin access. **Deprecated.** |
+| `SUPER_ADMIN_EMAILS` | - | Comma-separated super admin emails |
+| `SUPER_ADMIN_DOMAINS` | - | Comma-separated email domains whose users are super admins |
 
-> **Note**: Per-tenant SSO configuration replaces `SUPER_ADMIN_EMAILS`. Users are managed per-tenant on the Users & Access page, with authorized emails and domains configured per-tenant.
+The Admin UI checks these variables before the `super_admin_emails` and `super_admin_domains` rows of the `TenantManagementConfig` table.
+
+`scripts/setup/init_database.py` copies these variables into those two rows when you run it. The script prefers `TENANT_MANAGEMENT_EMAILS` over `SUPER_ADMIN_EMAILS`, and `TENANT_MANAGEMENT_DOMAINS` over `SUPER_ADMIN_DOMAINS`, when they are set.
+
+> **Note**: Per-tenant SSO and the **Users & Access** page control who reaches one tenant. Neither grants super admin access.
+
+> Super admin is granted only to a session from the deployment's own sign-in (Google or the `OAUTH_*` provider above). A session from a tenant's own SSO is limited to that tenant and is never a super admin, even for an address listed here.
 
 ---
 
@@ -129,7 +157,7 @@ Or use individual variables:
 
 ## AI features
 
-AI features (creative review, product suggestions) are configured **per-tenant** in the Admin UI. Each tenant sets their own Gemini API key.
+AI features (advertising policy checks, creative review, product ranking, AI order naming) are configured **per-tenant** in the Admin UI under Settings → Integrations → AI Services. A tenant can use any supported provider (Google Gemini, Anthropic, OpenAI and others); a key stored in the legacy per-tenant Gemini column still works.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -163,10 +191,11 @@ For GAM adapter integration:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ADCP_MULTI_TENANT` | `false` | Enable multi-tenant mode with subdomain routing |
+| `ADCP_MULTI_TENANT` | `false` | Enable multi-tenant mode, where the `Host` selects the tenant |
 | `SALES_AGENT_DOMAIN` | - | Base domain for tenant subdomains (for example, `sales-agent.example.com`). Also scopes session cookies across subdomains. |
 | `ADMIN_DOMAIN` | - | Domain where the Admin UI is accessible (for example, `admin.sales-agent.example.com`) |
-| `SUPER_ADMIN_DOMAIN` | - | Email domain whose users get super admin access |
+| `SUPER_ADMIN_DOMAIN` | - | Email domain that sign-in treats as super admin. The access checks ignore it, and so does the page that lists every tenant, so grant super admin access with `SUPER_ADMIN_DOMAINS`, as [Super admin access control](#super-admin-access-control) describes. No tenant can authorize this domain, in any spelling, on the settings page or the **Users & Access** page; the **Account** section of the settings page also refuses an address in it |
+| `TLS_ASK_ENABLED` | `false` | Mount `GET /tls/ask`, the endpoint an on-demand TLS proxy (Caddy) asks before issuing a certificate for a host. Off, the path answers 404. Needed only behind such a proxy; see [Caddy on-demand TLS](multi-tenant.md#caddy-on-demand-tls-no-wildcard-certificate). |
 
 ### SSO requirements by deployment mode
 
@@ -184,12 +213,13 @@ The SSO requirement varies based on deployment mode:
 | `ENVIRONMENT` | `development` | `development` or `production` |
 | `PRODUCTION` | `false` | Set to `true` for production deployments |
 | `FLY_APP_NAME` | unset | Set by Fly.io; its presence also marks the deployment as production |
+| `ADMIN_UI_URL` | `http://localhost:8001` | Public URL for the Admin UI (used in notifications) |
 
 Any one of `PRODUCTION=true`, `ENVIRONMENT=production` or a `FLY_APP_NAME` makes the
 deployment production, and every production-dependent behaviour reads that one answer:
 lenient request validation, structured JSON logging, secure session cookies, the trust in
-proxy headers, and the absence of verbose auth logging.
-| `ADMIN_UI_URL` | `http://localhost:8001` | Public URL for the Admin UI (used in notifications) |
+proxy headers, and the absence of verbose auth logging. A publisher's adagents.json is read
+in every deployment: properties come only from it.
 
 ### Demo data
 
@@ -202,9 +232,8 @@ proxy headers, and the absence of verbose auth logging.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENCRYPTION_KEY` | - | Fernet key for encrypting stored secrets (OIDC client secrets, API keys). The application refuses to encrypt or decrypt without it. Generate with `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` |
+| `ENCRYPTION_KEY` | - | Fernet key for encrypting stored secrets (OIDC client secrets, API keys, GAM service account JSON and GAM OAuth refresh tokens). The container refuses to start without it, and the application refuses to encrypt or decrypt without it, so every deployment with a GAM tenant needs it, whichever GAM authentication method the tenant uses. The database migration that encrypts existing GAM refresh tokens stops if they exist and this is not set. Keep it stable: changing it makes the stored secrets unreadable. Generate with `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` |
 | `FLASK_SECRET_KEY` | auto-generated at startup | Flask session secret. Set it explicitly so sessions survive restarts and work across multiple processes. |
-| `WEBHOOK_SECRET` | - | Secret for verifying incoming webhooks |
 
 ---
 
@@ -214,6 +243,8 @@ proxy headers, and the absence of verbose auth logging.
 |----------|---------|-------------|
 | `APPROXIMATED_API_KEY` | - | Approximated proxy service API key |
 | `APPROXIMATED_BACKEND_URL` | `adcp-sales-agent.fly.dev` | Backend address that Approximated proxies custom domains to |
+| `CREATIVE_AGENT_URL` | - | The MCP endpoint of the operator's creative agent, the URL the app dials and nothing else. Give the endpoint itself: MCP has no path convention, and the AdCP reference creative agent serves MCP only at `<base>/api/creative-agent/mcp`. Unset, the app dials the public agent's endpoint, `https://creative.adcontextprotocol.org/api/creative-agent/mcp`; an agent's identity is never dialled, so setting `CREATIVE_AGENT_ORIGIN` without this variable leaves the app nothing to dial, and every dial to that agent fails as a configuration error. |
+| `CREATIVE_AGENT_ORIGIN` | `https://creative.adcontextprotocol.org` | The operator creative agent's identity: an origin, `scheme://host[:port]`. A format reference whose `agent_url` has this origin, whatever its path, is the operator's agent, and the app connects to it through `CREATIVE_AGENT_URL`. The app refuses to start when the value carries a path, query, fragment or userinfo. |
 
 ---
 
@@ -222,7 +253,6 @@ proxy headers, and the absence of verbose auth logging.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FLASK_DEBUG` | `0` | Enable Flask debug mode |
-| `FLASK_ENV` | `production` | Flask environment |
 | `ADCP_TESTING` | `false` | A test deployment. Selects, at composition: the reference-formats creative registry (no creative agent is dialled), the debug and reset routes, loopback webhook targets, the mock ad server's seeded delivery rows, the setup checklist counting the mock adapter as configured, and relaxed brand validation in `get_products`. Each is a named property on the settings; nothing reads the flag itself. |
 
 ### Service startup
@@ -232,7 +262,7 @@ proxy headers, and the absence of verbose auth logging.
 | `ADCP_SALES_PORT` | `8080` | Port the unified application listens on (nginx proxies to it) |
 | `ADCP_SALES_HOST` | `0.0.0.0` | Bind address for `scripts/run_server.py` (production always binds all interfaces) |
 | `SKIP_NGINX` | `false` | Skip nginx in deployment scripts |
-| `SKIP_CRON` | `false` | Skip cron job scheduling |
+| `SKIP_CRON` | `false` | Skip cron job scheduling. The scheduled GAM inventory sync authenticates with `SYNC_API_KEY` and exits with an error when it is unset |
 
 Every variable above is read once, by `src/core/config.py`, when a process is composed; an
 empty value means unset. Knobs that only the repo's own scripts read (`ADCP_HOME`,
@@ -253,11 +283,11 @@ Set these through your platform's secret store (for example, `fly secrets set`) 
 - `ENCRYPTION_KEY`
 - `GAM_OAUTH_CLIENT_ID`, `GAM_OAUTH_CLIENT_SECRET` (for GAM integration)
 - `GOOGLE_APPLICATION_CREDENTIALS_JSON` (for GAM service accounts)
+- `OAUTH_CLIENT_SECRET` or `GOOGLE_CLIENT_SECRET` (for the deployment's own sign-in)
 - `APPROXIMATED_API_KEY`
-- `WEBHOOK_SECRET`
 - `FLASK_SECRET_KEY`
 
-> **Note**: Admin OAuth credentials (`GOOGLE_CLIENT_ID` and the other legacy OAuth variables) are configured per-tenant in the Admin UI instead of environment variables.
+> **Note**: Each tenant's own SSO credentials live in the database, encrypted with `ENCRYPTION_KEY`. You enter them on the Users & Access page.
 
 ### Non-sensitive configuration
 
@@ -281,6 +311,6 @@ You usually don't need to set the following variables:
 ## Related documentation
 
 - [Single-tenant deployment](single-tenant.md) - the default deployment mode
-- [Multi-tenant setup](multi-tenant.md) - subdomain routing and per-tenant domains
+- [Multi-tenant setup](multi-tenant.md) - host-based tenant routing and per-tenant domains
 - [Security and authentication](../security.md) - how secrets and sessions are handled
 - [Architecture guide](../development/architecture.md) - deployment topology and component map

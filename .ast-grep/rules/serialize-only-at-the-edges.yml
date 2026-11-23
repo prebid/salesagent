@@ -43,10 +43,26 @@ ignores:
   - "src/core/signals_agent_registry.py"
   - "src/services/protocol_webhook_service.py"
   - "src/services/webhook_delivery_service.py"
+  # The RFC 9421 layer brought two more OUTBOUND-BODY edges with it, each with one owner:
+  # trust_root.py composes the PUBLISHED JWKS and brand.json documents (a third party
+  # fetches them, so the dump IS the wire), and notification_proof_service.py composes the
+  # activation-challenge body it sends to the buyer's webhook target. Listed as edges
+  # rather than suppressed at the call site, which is what this rule requires, and mirrored
+  # in ruff-serialization.toml in the same change.
+  - "src/core/signing/trust_root.py"
+  - "src/services/notification_proof_service.py"
   - "src/core/webhooks/registration.py"
   - "src/core/errors/issues.py"
   - "src/core/errors/details.py"
   - "src/core/database/repositories/**"
+  # THE EDGE MOVED, it did not appear. The one dump in this file is the format identity's
+  # verbatim assertion becoming the ``legacy_format_id`` document, and it is the SAME call
+  # that lived in ``repositories/creative.py`` -- permitted there by the line above -- until
+  # the mapping layer took ownership of the translation between a creative asset and its row
+  # (docs/design/persistence-mapping-layer.md). Named file by file rather than as
+  # ``mapping/**``, so the next mapper that needs to compose a document says so deliberately
+  # instead of inheriting the permission.
+  - "src/core/database/mapping/creative.py"
   - "src/core/database/database_session.py"
   - "src/core/context_manager.py"
   - "src/core/json_validators.py"

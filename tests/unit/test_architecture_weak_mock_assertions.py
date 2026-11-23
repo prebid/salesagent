@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions, rel
 
 ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = (ROOT / "tests",)
@@ -43,18 +43,14 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_creative_repository.py", "test_creates_and_flushes"),
     ("tests/unit/test_creative_repository.py", "test_creates_assignment"),
     ("tests/unit/test_delivery.py", "test_adapter_failure_audit_logged"),
-    ("tests/unit/test_external_domain_routing.py", "test_index_route_external_domain_with_tenant"),
     ("tests/unit/test_gam_creative_rotation.py", "test_lica_payload_excludes_weight_when_default"),
     ("tests/unit/test_gam_creative_rotation.py", "test_lica_payload_includes_weight_when_non_default"),
     ("tests/unit/test_gam_service_account_auth.py", "test_service_account_credentials_creation"),
     ("tests/unit/test_get_media_buys.py", "test_snapshot_requested_calls_adapter"),
     ("tests/unit/test_pr1071_review_fixes.py", "test_audit_log_records_has_brand_not_has_brand_manifest"),
-    ("tests/unit/test_update_media_buy_behavioral.py", "test_update_both_start_and_end_time"),
     # FIXME(#1370): pre-existing split assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
     ("tests/integration/test_creative_async_lifecycle_obligations.py", "test_async_input_required_response"),
     ("tests/integration/test_delivery_webhooks_force.py", "test_trigger_report_for_media_buy_public_method"),
-    ("tests/integration/test_gam_tenant_setup.py", "test_command_line_parsing_network_code_optional"),
-    ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_endpoint"),
 }
 
 
@@ -67,7 +63,7 @@ def _find_split_assertions(file_path: str) -> list[tuple[str, str, int]]:
     if not source_path.exists():
         return []
 
-    tree = ast.parse(source_path.read_text())
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
     violations = []
 
     for node in ast.walk(tree):
@@ -125,8 +121,8 @@ def _collect_split_assertion_violations() -> set[tuple[str, str]]:
     found: set[tuple[str, str]] = set()
     for scan_dir in SCAN_DIRS:
         for test_file in sorted(scan_dir.rglob("*.py")):
-            rel = str(test_file.relative_to(ROOT))
-            for f, fn, _line in _find_split_assertions(rel):
+            rel_path = rel(test_file, ROOT)
+            for f, fn, _line in _find_split_assertions(rel_path):
                 found.add((f, fn))
     return found
 
@@ -137,8 +133,8 @@ def _collect_bare_assertion_violations() -> set[tuple[str, str]]:
         for test_file in sorted(scan_dir.rglob("*.py")):
             if "test_architecture_" in test_file.name:
                 continue
-            rel = str(test_file.relative_to(ROOT))
-            for f, fn, _line in _find_bare_assertions(rel):
+            rel_path = rel(test_file, ROOT)
+            for f, fn, _line in _find_bare_assertions(rel_path):
                 found.add((f, fn))
     return found
 
@@ -193,7 +189,6 @@ BARE_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_naming_agent.py", "test_generates_name_successfully"),
     ("tests/unit/test_serialization_at_the_persistence_edge.py", "test_create_from_request_adds_to_session"),
     ("tests/unit/test_review_agent.py", "test_returns_approval"),
-    ("tests/unit/test_update_media_buy_behavioral.py", "test_valid_date_range_persists_to_db"),
     # FIXME(#1370): pre-existing bare assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
     ("tests/integration/test_delivery_poll_behavioral.py", "test_adapter_failure_writes_audit_log"),
     ("tests/integration/test_gam_tenant_setup.py", "test_admin_ui_network_detection_endpoint"),
@@ -211,7 +206,7 @@ def _find_bare_assertions(file_path: str) -> list[tuple[str, str, int]]:
     if not source_path.exists():
         return []
 
-    tree = ast.parse(source_path.read_text())
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
     violations = []
 
     for node in ast.walk(tree):

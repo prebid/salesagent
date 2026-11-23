@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "components/secret_input.html" import secret_input %}
 
 {% block title %}{{ tenant.name }} - Settings{% endblock %}
 
@@ -425,7 +426,6 @@
         }
     }
 
-    /* Virtual Host now uses simple text input - complex widget styling removed */
 </style>
 
 <!-- Header -->
@@ -476,6 +476,11 @@
             <span>Integrations</span>
         </a>
 
+        <a class="settings-nav-item" href="{{ url_for('signing_keys.list_signing_keys', tenant_id=tenant.tenant_id) }}">
+            <span class="settings-nav-icon">🔑</span>
+            <span>Signing Keys</span>
+        </a>
+
         <div class="settings-nav-separator"></div>
 
         <a class="settings-nav-item" data-section="publishers">
@@ -498,6 +503,11 @@
         <a class="settings-nav-item" data-section="advertisers">
             <span class="settings-nav-icon">👥</span>
             <span>Advertisers</span>
+        </a>
+
+        <a class="settings-nav-item" href="{{ url_for('accounts.list_accounts', tenant_id=tenant.tenant_id) }}">
+            <span class="settings-nav-icon">🧾</span>
+            <span>Buyer Accounts</span>
         </a>
 
         {% if not single_tenant_mode %}
@@ -549,14 +559,15 @@
                         <div class="form-group">
                             <label>Favicon</label>
                             <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
-                                Upload a custom favicon or provide a URL. Supported formats: ICO, PNG, SVG (max 1MB)
+                                Upload a custom favicon or provide a URL. Supported formats: {{ favicon_extensions|join(', ')|upper }} (max 1MB)
                             </p>
 
                             <!-- Current favicon preview -->
                             <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; padding: 1rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
                                 <div style="width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; background: white; border: 1px solid #e2e8f0; border-radius: 6px;">
-                                    {% if tenant.favicon_url %}
-                                    <img src="{{ script_name }}{{ tenant.favicon_url }}?v={{ tenant.updated_at.timestamp() | int }}" alt="Current favicon" style="max-width: 32px; max-height: 32px;">
+                                    {% set favicon_href = tenant_favicon_href(tenant.favicon_url if tenant) %}
+                                    {% if favicon_href %}
+                                    <img src="{{ favicon_href|safe_url }}?v={{ tenant.updated_at.timestamp() | int }}" alt="Current favicon" style="max-width: 32px; max-height: 32px;">
                                     {% else %}
                                     <img src="{{ script_name }}/static/favicons/default/favicon.jpg" alt="Default favicon" style="max-width: 32px; max-height: 32px;">
                                     {% endif %}
@@ -571,29 +582,27 @@
                                     {% endif %}
                                 </div>
                                 {% if tenant.favicon_url %}
-                                <form method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/remove_favicon" style="margin: 0;">
-                                    <button type="submit" class="btn btn-outline-danger btn-sm" onclick="return confirm('Remove custom favicon and use the default?')">
-                                        Remove
-                                    </button>
-                                </form>
+                                <button type="submit" form="favicon-remove-form" class="btn btn-outline-danger btn-sm" onclick="return confirm('Remove custom favicon and use the default?')">
+                                    Remove
+                                </button>
                                 {% endif %}
                             </div>
 
                             <!-- Upload form -->
                             <div style="margin-bottom: 1rem;">
-                                <form method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/upload_favicon" enctype="multipart/form-data" style="display: flex; gap: 0.5rem; align-items: center;">
-                                    <input type="file" name="favicon" accept=".ico,.png,.svg" style="flex: 1;">
-                                    <button type="submit" class="btn btn-secondary btn-sm">Upload</button>
-                                </form>
+                                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                    <input type="file" name="favicon" form="favicon-upload-form" accept=".{{ favicon_extensions|join(',.') }}" style="flex: 1;">
+                                    <button type="submit" form="favicon-upload-form" class="btn btn-secondary btn-sm">Upload</button>
+                                </div>
                             </div>
 
                             <!-- URL form -->
                             <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed #e2e8f0;">
                                 <label style="font-size: 0.875rem; font-weight: 500; margin-bottom: 0.5rem; display: block;">Or provide a URL:</label>
-                                <form method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/update_favicon_url" style="display: flex; gap: 0.5rem; align-items: center;">
-                                    <input type="url" name="favicon_url" value="{{ tenant.favicon_url or '' }}" placeholder="https://example.com/favicon.ico" style="flex: 1; padding: 0.5rem; border: 1px solid #e2e8f0; border-radius: 6px;">
-                                    <button type="submit" class="btn btn-secondary btn-sm">Save URL</button>
-                                </form>
+                                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                    <input type="url" name="favicon_url" form="favicon-url-form" value="{{ tenant.favicon_url or '' }}" placeholder="https://example.com/favicon.ico" style="flex: 1; padding: 0.5rem; border: 1px solid #e2e8f0; border-radius: 6px;">
+                                    <button type="submit" form="favicon-url-form" class="btn btn-secondary btn-sm">Save URL</button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -604,8 +613,8 @@
                     <h3>Domain Configuration</h3>
                     <div class="form-grid">
                         <div class="form-group">
-                            <label for="virtual_host">Custom Domain (Optional)</label>
-                            <input type="text" id="virtual_host" name="virtual_host" value="{{ tenant.virtual_host or '' }}" placeholder="e.g. sales-agent.yourcompany.com">
+                            <label for="virtual_host">Custom Domain *</label>
+                            <input type="text" id="virtual_host" name="virtual_host" required value="{{ tenant.virtual_host }}" placeholder="e.g. sales-agent.yourcompany.com">
                             <small>
                                 <p style="margin-top: 0.5rem; color: #666; font-size: 0.85em;">
                                     {% if single_tenant_mode %}
@@ -696,6 +705,15 @@
                 </div>
             </form>
 
+            <!-- The favicon controls sit inside account-settings-form and reach these through form="".
+                 A form nested in a form is dropped by the HTML parser, and the first inner </form>
+                 closes the outer one, leaving the domain field and Save button in no form at all. -->
+            {% if tenant.favicon_url %}
+            <form id="favicon-remove-form" method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/remove_favicon"></form>
+            {% endif %}
+            <form id="favicon-upload-form" method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/upload_favicon" enctype="multipart/form-data"></form>
+            <form id="favicon-url-form" method="POST" action="{{ script_name }}/tenant/{{ tenant.tenant_id }}/update_favicon_url"></form>
+
             <!-- Access Control (Domain & Email Authorization) -->
             <div class="form-section" style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid #e5e7eb;">
                 <h3>🔐 Access Control</h3>
@@ -721,7 +739,7 @@
                             <form method="POST" action="{{ url_for('settings.remove_authorized_domain', tenant_id=tenant.tenant_id) }}" style="margin: 0;">
                                 <input type="hidden" name="domain" value="{{ domain }}">
                                 <button type="submit" class="btn btn-outline-danger btn-sm"
-                                        onclick="return confirm('Remove domain {{ domain }}? Users from this domain will lose access.')">Remove</button>
+                                        onclick="return confirm({{ ('Remove domain ' ~ domain ~ '? Users from this domain will lose access.')|tojson|forceescape }})">Remove</button>
                             </form>
                         </div>
                         {% endfor %}
@@ -759,7 +777,7 @@
                             <form method="POST" action="{{ url_for('settings.remove_authorized_email', tenant_id=tenant.tenant_id) }}" style="margin: 0;">
                                 <input type="hidden" name="email" value="{{ email }}">
                                 <button type="submit" class="btn btn-outline-danger btn-sm"
-                                        onclick="return confirm('Remove {{ email }}? This user will lose access.')">Remove</button>
+                                        onclick="return confirm({{ ('Remove ' ~ email ~ '? This user will lose access.')|tojson|forceescape }})">Remove</button>
                             </form>
                         </div>
                         {% endfor %}
@@ -891,7 +909,7 @@
                     <!-- Fully configured - show success state -->
                     <div class="status-card" style="background: #f0fdf4; border-left: 4px solid #10b981;">
                         <!-- Hidden fields for JS operations -->
-                        <input type="hidden" id="gam_refresh_token" value="{{ adapter_config.get('refresh_token') }}">
+                        <input type="hidden" id="gam_refresh_token" value="">  {# never rendered: a blank token means the stored one #}
                         <input type="hidden" id="gam_network_code" value="{{ adapter_config.get('network_code') }}">
                         <input type="hidden" id="gam_trafficker_id" value="{{ adapter_config.get('trafficker_id') }}">
 
@@ -957,8 +975,8 @@
                             <div style="margin-top: 0.5rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
                                 <label for="gam_refresh_token">Manual OAuth Refresh Token</label>
                                 <input type="text" id="gam_refresh_token" class="form-control"
-                                       value="{{ adapter_config.get('refresh_token', '') if adapter_config else '' }}"
-                                       placeholder="Paste your OAuth refresh token here">
+                                       value=""
+                                       placeholder="{{ 'A token is saved. Paste a new one to replace it.' if adapter_config and adapter_config.get('refresh_token') else 'Paste your OAuth refresh token here' }}">
                                 <small class="form-text text-muted">For advanced users: manually enter a refresh token if you have one.</small>
                                 <button onclick="saveManualToken()" class="btn btn-primary" style="margin-top: 0.5rem;">
                                     Save Token
@@ -1253,7 +1271,7 @@
                                 </div>
 
                                 <!-- Delete Button -->
-                                <button type="button" class="btn btn-sm btn-danger" onclick="removeCurrencyLimit('{{ limit.currency_code }}')" title="Remove Currency">
+                                <button type="button" class="btn btn-sm btn-danger" onclick="removeCurrencyLimit({{ limit.currency_code|tojson|forceescape }})" title="Remove Currency">
                                     <i class="fas fa-times"></i>
                                 </button>
                                 <input type="hidden" name="currency_limits[{{ limit.currency_code }}][_delete]" value="false">
@@ -1538,14 +1556,14 @@
 
                     <!-- AI Configuration (shown only for ai-powered mode) -->
                     <div id="ai-config-section" style="display: none; margin-top: 1rem;">
-                        {% if not has_gemini_key %}
+                        {% if not ai_enabled %}
                         <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-bottom: 1rem;">
-                            <strong>⚠️ Gemini API Key Required</strong>
-                            <p style="margin: 0.5rem 0 0;">AI review requires a Gemini API key. Please set your key in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
+                            <strong>⚠️ AI Configuration Required</strong>
+                            <p style="margin: 0.5rem 0 0;">AI review requires an AI provider with an API key. Please configure one in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
                         </div>
                         {% else %}
                         <div class="alert alert-success" style="padding: 0.75rem; background: #d1fae5; border: 1px solid #34d399; border-radius: 6px; margin-bottom: 1rem;">
-                            <strong>✅ Gemini API Key Configured</strong>
+                            <strong>✅ AI Configured</strong>
                             <p style="margin: 0.5rem 0 0; font-size: 0.875rem; color: #059669;">AI-powered creative review is enabled.</p>
                         </div>
                         {% endif %}
@@ -1712,10 +1730,10 @@ REJECT - Creative cannot be approved:
                     </div>
 
                     <div id="advertising-policy-config" style="{% if tenant.advertising_policy and tenant.advertising_policy.get('enabled') == False %}display: none;{% endif %}">
-                        {% if not tenant.gemini_api_key %}
+                        {% if not seller_ai_enabled %}
                         <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-bottom: 1rem;">
-                            <strong>⚠️ Gemini API Key Required</strong>
-                            <p style="margin: 0.5rem 0 0;">Advertising policy checks require a Gemini API key to function. Without it, all campaigns will be allowed by default. Please set your key in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
+                            <strong>⚠️ AI Configuration Required</strong>
+                            <p style="margin: 0.5rem 0 0;">Advertising policy checks require your own AI provider and API key to function. Without it, all campaigns will be allowed by default. Please configure one in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
                         </div>
                         {% endif %}
 
@@ -1782,10 +1800,10 @@ REJECT - Creative cannot be approved:
                         <small>When set, AI will use this prompt to rank products based on relevance to the buyer's brief. Leave empty to disable AI ranking and return all products.</small>
                     </div>
 
-                    {% if not has_gemini_key %}
+                    {% if not ai_enabled %}
                     <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-top: 1rem;">
-                        <strong>⚠️ Gemini API Key Required</strong>
-                        <p style="margin: 0.5rem 0 0;">Product ranking requires a Gemini API key. Please set your key in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
+                        <strong>⚠️ AI Configuration Required</strong>
+                        <p style="margin: 0.5rem 0 0;">Product ranking requires an AI provider with an API key. Please configure one in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
                     </div>
                     {% endif %}
 
@@ -1907,7 +1925,7 @@ Exclude any products that don't match the brand's tone.</pre>
                 <script>
                     // Auto-resume polling for running sync
                     document.addEventListener('DOMContentLoaded', function() {
-                        const syncId = "{{ running_sync.sync_id }}";
+                        const syncId = {{ running_sync.sync_id|tojson }};
                         const button = document.querySelector('button[onclick*="syncGAMInventory"]');
                         if (button && syncId) {
                             // Disable both buttons
@@ -1960,8 +1978,8 @@ Exclude any products that don't match the brand's tone.</pre>
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                     <h3>Publisher Partners</h3>
                     <div style="display: flex; gap: 0.5rem;">
-                        <button onclick="syncAllPublishers()" class="btn btn-secondary" id="sync-publishers-btn">
-                            <span id="sync-publishers-icon">🔄</span> Verify All
+                        <button onclick="syncAllPublishers()" class="btn btn-secondary">
+                            🔄 Verify All
                         </button>
                         <button onclick="showAddPublisherModal()" class="btn btn-primary">
                             + Add Publisher
@@ -1974,8 +1992,8 @@ Exclude any products that don't match the brand's tone.</pre>
                     Once authorized, you can sell their inventory to advertisers.
                 </p>
 
-                <!-- Publishers List -->
-                <div id="publishers-list" style="margin-top: 1rem;">
+                <!-- Publishers List, filled by static/js/publisher_partners.js; this page's sync button is the one above -->
+                <div id="publishersList" data-tenant-id="{{ tenant.tenant_id }}" data-sync-button="header" style="margin-top: 1rem;">
                     <div style="text-align: center; padding: 2rem; color: #6b7280;">
                         <span style="font-size: 1.5rem;">⏳</span>
                         <p>Loading publishers...</p>
@@ -1991,7 +2009,7 @@ Exclude any products that don't match the brand's tone.</pre>
                         Enter the domain of the publisher you want to represent. They must have authorized your sales agent in their adagents.json file.
                     </p>
 
-                    <form id="add-publisher-form" onsubmit="addPublisher(event)">
+                    <form id="add-publisher-form" onsubmit="submitAddPublisherForm(event)">
                         <div class="form-group">
                             <label for="publisher-domain">Publisher Domain</label>
                             <input type="text" id="publisher-domain" name="publisher_domain"
@@ -2059,8 +2077,8 @@ Exclude any products that don't match the brand's tone.</pre>
 
         </div>
 
-        <!-- Creative Formats section removed - table dropped in migration f2addf453200 -->
-        <!-- Formats are now fetched from creative agents via AdCP, not stored in local DB -->
+        <!-- No Creative Formats section: formats are fetched from creative agents over
+             AdCP, never stored in this database, so there is nothing here to configure. -->
 
         <!-- Advertisers Settings -->
         <div id="advertisers" class="settings-section">
@@ -2109,7 +2127,7 @@ Exclude any products that don't match the brand's tone.</pre>
                                         <div class="d-flex align-items-center gap-1">
                                             <code class="token-display" title="Only the first characters are kept in a readable form; the token itself is stored hashed">{{ principal.token_prefix }}…</code>
                                             <button class="btn btn-outline-secondary btn-sm py-0 px-1"
-                                                    onclick="rotateToken('{{ principal.principal_id }}', '{{ principal.name }}')"
+                                                    onclick="rotateToken({{ principal.principal_id|tojson|forceescape }}, {{ principal.name|tojson|forceescape }})"
                                                     title="Rotate token: issues a new one, shown once; the old one stops working">
                                                 🔄
                                             </button>
@@ -2144,12 +2162,12 @@ Exclude any products that don't match the brand's tone.</pre>
                                     <td>
                                         <div class="btn-group btn-group-sm">
                                             <button class="btn btn-outline-primary btn-sm"
-                                                    onclick="copyA2AConfig('{{ principal.principal_id }}', '{{ principal.name }}')"
+                                                    onclick="copyA2AConfig({{ principal.principal_id|tojson|forceescape }}, {{ principal.name|tojson|forceescape }})"
                                                     title="Copy A2A configuration (fill in the token you were shown at creation or rotation)">
                                                 A2A
                                             </button>
                                             <button class="btn btn-outline-primary btn-sm"
-                                                    onclick="copyMCPConfig('{{ principal.principal_id }}', '{{ principal.name }}')"
+                                                    onclick="copyMCPConfig({{ principal.principal_id|tojson|forceescape }}, {{ principal.name|tojson|forceescape }})"
                                                     title="Copy MCP configuration (fill in the token you were shown at creation or rotation)">
                                                 MCP
                                             </button>
@@ -2163,7 +2181,7 @@ Exclude any products that don't match the brand's tone.</pre>
                                                 ✏️
                                             </a>
                                             <button class="btn btn-outline-danger btn-sm"
-                                                    onclick="deletePrincipal('{{ principal.principal_id }}', '{{ principal.name }}')"
+                                                    onclick="deletePrincipal({{ principal.principal_id|tojson|forceescape }}, {{ principal.name|tojson|forceescape }})"
                                                     title="Delete Advertiser">
                                                 🗑️
                                             </button>
@@ -2223,21 +2241,13 @@ Exclude any products that don't match the brand's tone.</pre>
                 </details>
 
                 <form method="POST" action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/settings/slack">
-                    <div class="form-group">
-                        <label for="slack_webhook_url">Task Notifications Webhook URL</label>
-                        <input type="url" id="slack_webhook_url" name="slack_webhook_url"
-                               value="{{ tenant.slack_webhook_url or '' }}"
-                               placeholder="https://hooks.slack.com/services/YOUR/WEBHOOK/URL">
-                        <small>Receives notifications for new tasks and creative approvals</small>
-                    </div>
+                    {{ secret_input("slack_webhook_url", "Task Notifications Webhook URL", tenant.slack_webhook_url,
+                                    input_type="url", placeholder="https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
+                                    help="Receives notifications for new tasks and creative approvals") }}
 
-                    <div class="form-group">
-                        <label for="slack_audit_webhook_url">Audit Log Webhook URL (Optional)</label>
-                        <input type="url" id="slack_audit_webhook_url" name="slack_audit_webhook_url"
-                               value="{{ tenant.slack_audit_webhook_url or '' }}"
-                               placeholder="https://hooks.slack.com/services/YOUR/AUDIT/WEBHOOK">
-                        <small>Separate channel for audit logs and security alerts</small>
-                    </div>
+                    {{ secret_input("slack_audit_webhook_url", "Audit Log Webhook URL (Optional)", tenant.slack_audit_webhook_url,
+                                    input_type="url", placeholder="https://hooks.slack.com/services/YOUR/AUDIT/WEBHOOK",
+                                    help="Separate channel for audit logs and security alerts") }}
 
                     <div class="button-group">
                         <button type="submit" class="btn btn-primary">Save Slack Settings</button>
@@ -2308,23 +2318,6 @@ Exclude any products that don't match the brand's tone.</pre>
                         </small>
                     </div>
 
-                    <div class="form-group">
-                        <label for="logfire_token">Logfire Token (Optional)</label>
-                        <div style="display: flex; gap: 0.5rem; align-items: flex-start;">
-                            <input type="password" id="logfire_token" name="logfire_token"
-                                   placeholder="Enter Logfire token for AI observability"
-                                   autocomplete="new-password"
-                                   style="flex: 1;"
-                                   {% if has_logfire %}value="••••••••"{% endif %}>
-                            <button type="button" onclick="testLogfireConnection()" class="btn btn-secondary btn-sm" style="white-space: nowrap;">Test Logfire</button>
-                        </div>
-                        <small>
-                            Optional. Enable <a href="https://logfire.pydantic.dev/" target="_blank">Logfire</a> for AI request tracing and observability.
-                            {% if has_logfire %}<span style="color: #10b981;">Configured</span>{% endif %}
-                        </small>
-                        <div id="logfire-test-result" style="display: none; margin-top: 0.5rem; padding: 0.5rem; border-radius: 4px; font-size: 0.875rem;"></div>
-                    </div>
-
                     <div class="button-group">
                         <button type="submit" class="btn btn-primary">Save AI Settings</button>
                         <button type="button" onclick="testAIConnection()" class="btn btn-secondary">Test AI Connection</button>
@@ -2334,9 +2327,8 @@ Exclude any products that don't match the brand's tone.</pre>
                 <div id="ai-test-result" style="display: none; margin-top: 1rem; padding: 0.75rem; border-radius: 6px;"></div>
 
                 <script>
-                const scriptRoot = '{{ request.script_root }}' || '';
-                const currentProvider = '{{ current_provider }}';
-                const currentModel = '{{ current_model }}';
+                const currentProvider = {{ current_provider|tojson }};
+                const currentModel = {{ current_model|tojson }};
                 let aiModelsData = null;
 
                 // Preferred order for providers (most common first)
@@ -2349,7 +2341,7 @@ Exclude any products that don't match the brand's tone.</pre>
 
                 async function loadAIModels() {
                     try {
-                        const response = await fetch(scriptRoot + '/tenant/{{ tenant.tenant_id }}/settings/ai/models', {
+                        const response = await fetch(scriptRoot + '/tenant/' + {{ tenant.tenant_id|tojson }} + '/settings/ai/models', {
                             credentials: 'same-origin'
                         });
                         aiModelsData = await response.json();
@@ -2436,7 +2428,7 @@ Exclude any products that don't match the brand's tone.</pre>
 
                     // Update API key link
                     if (providerInfo.key_url) {
-                        apiKeyLink.href = providerInfo.key_url;
+                        apiKeyLink.href = checkedUrl(providerInfo.key_url);
                         apiKeyLink.style.display = 'inline';
                         apiKeyLink.textContent = 'Get ' + providerInfo.name + ' key';
                     } else {
@@ -2473,7 +2465,7 @@ Exclude any products that don't match the brand's tone.</pre>
                     resultDiv.innerHTML = '<strong>Testing connection...</strong> This may take a few seconds.';
 
                     try {
-                        const response = await fetch(scriptRoot + '/tenant/{{ tenant.tenant_id }}/settings/ai/test', {
+                        const response = await fetch(scriptRoot + '/tenant/' + {{ tenant.tenant_id|tojson }} + '/settings/ai/test', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             credentials: 'same-origin',
@@ -2493,66 +2485,17 @@ Exclude any products that don't match the brand's tone.</pre>
                         if (data.success) {
                             resultDiv.style.background = '#d1fae5';
                             resultDiv.style.border = '1px solid #34d399';
-                            resultDiv.innerHTML = '<strong>Success!</strong> ' + data.message;
+                            resultDiv.innerHTML = '<strong>Success!</strong> ' + escapeHtml(data.message);
                         } else {
                             resultDiv.style.background = '#fee2e2';
                             resultDiv.style.border = '1px solid #f87171';
-                            resultDiv.innerHTML = '<strong>Failed:</strong> ' + data.error;
+                            resultDiv.innerHTML = '<strong>Failed:</strong> ';
+                            resultDiv.append(adminErrorText(data));
                         }
                     } catch (error) {
                         resultDiv.style.background = '#fee2e2';
                         resultDiv.style.border = '1px solid #f87171';
-                        resultDiv.innerHTML = '<strong>Error:</strong> ' + error.message;
-                    }
-                }
-
-                async function testLogfireConnection() {
-                    const resultDiv = document.getElementById('logfire-test-result');
-                    const logfireToken = document.getElementById('logfire_token').value;
-
-                    if (!logfireToken || logfireToken === '••••••••') {
-                        resultDiv.style.display = 'block';
-                        resultDiv.style.background = '#fef3c7';
-                        resultDiv.style.border = '1px solid #fbbf24';
-                        resultDiv.innerHTML = 'Enter a Logfire token to test, or save first to test the existing token.';
-                        return;
-                    }
-
-                    resultDiv.style.display = 'block';
-                    resultDiv.style.background = '#f3f4f6';
-                    resultDiv.style.border = '1px solid #d1d5db';
-                    resultDiv.innerHTML = 'Testing Logfire connection...';
-
-                    try {
-                        const response = await fetch(scriptRoot + '/tenant/{{ tenant.tenant_id }}/settings/ai/test-logfire', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            credentials: 'same-origin',
-                            body: JSON.stringify({ logfire_token: logfireToken })
-                        });
-
-                        if (response.status === 401) {
-                            resultDiv.style.background = '#fef3c7';
-                            resultDiv.style.border = '1px solid #fbbf24';
-                            resultDiv.innerHTML = '<strong>Session expired.</strong> Please <a href="' + scriptRoot + '/login">log in again</a>.';
-                            return;
-                        }
-
-                        const data = await response.json();
-
-                        if (data.success) {
-                            resultDiv.style.background = '#d1fae5';
-                            resultDiv.style.border = '1px solid #34d399';
-                            resultDiv.innerHTML = '<strong>Success!</strong> ' + data.message;
-                        } else {
-                            resultDiv.style.background = '#fee2e2';
-                            resultDiv.style.border = '1px solid #f87171';
-                            resultDiv.innerHTML = '<strong>Failed:</strong> ' + data.error;
-                        }
-                    } catch (error) {
-                        resultDiv.style.background = '#fee2e2';
-                        resultDiv.style.border = '1px solid #f87171';
-                        resultDiv.innerHTML = '<strong>Error:</strong> ' + error.message;
+                        resultDiv.innerHTML = '<strong>Error:</strong> ' + escapeHtml(error.message);
                     }
                 }
 
@@ -2619,7 +2562,9 @@ Exclude any products that don't match the brand's tone.</pre>
                 <h3>MCP Server Endpoint</h3>
                 <div class="config-code">
                     <button class="copy-button" onclick="copyToClipboard(this)">Copy</button>
-                    <pre style="margin: 0;">{% if tenant.virtual_host %}https://{{ tenant.virtual_host }}/mcp/{% elif is_production %}https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/mcp/{% else %}http://localhost:{{ mcp_port }}/mcp/{% endif %}</pre>
+                    {# One arm only: virtual_host is mandatory (#2191), so there is no host-less
+                       tenant to offer a localhost URL or a "configure your domain" note to. #}
+                    <pre style="margin: 0;">https://{{ tenant.virtual_host }}/mcp/</pre>
                 </div>
             </div>
 
@@ -2631,12 +2576,10 @@ Exclude any products that don't match the brand's tone.</pre>
 from fastmcp.client.transports import StreamableHttpTransport
 
 headers = {
-    "Authorization": "Bearer YOUR_ACCESS_TOKEN"{% if not tenant.virtual_host %},
-    "x-adcp-tenant": "{{ tenant.subdomain }}"{% endif %}
-
+    "Authorization": "Bearer YOUR_ACCESS_TOKEN"
 }
 transport = StreamableHttpTransport(
-    url="{% if tenant.virtual_host %}https://{{ tenant.virtual_host }}/mcp/{% elif is_production %}https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/mcp/{% else %}http://localhost:{{ mcp_port }}/mcp/{% endif %}",
+    url="https://{{ tenant.virtual_host }}/mcp/",
     headers=headers
 )
 client = Client(transport=transport)
@@ -2743,20 +2686,18 @@ result = await client.tools.get_products(brief="video ads")</pre>
 
 <!-- Configuration for external JavaScript -->
 <div id="settings-config"
-     data-script-name="{{ script_name }}"
      data-tenant-id="{{ tenant.tenant_id }}"
      data-tenant-name="{{ tenant.name }}"
      data-active-adapter="{{ active_adapter }}"
      data-a2a-port="{{ mcp_port }}"
      data-mcp-port="{{ mcp_port }}"
      data-is-production="{% if is_production %}true{% else %}false{% endif %}"
-     data-virtual-host="{{ tenant.virtual_host if tenant.virtual_host else '' }}"
-     data-subdomain="{{ tenant.subdomain if tenant.subdomain else '' }}"
+     data-virtual-host="{{ tenant.virtual_host }}"
      data-tenant-ad-server="{{ tenant.ad_server if tenant.ad_server else '' }}"
-     data-sales-agent-domain="{{ sales_agent_domain if sales_agent_domain else 'sales-agent.example.com' }}"
      style="display: none;">
 </div>
 
+<script src="{{ url_for('static', filename='js/publisher_partners.js') }}"></script>
 <script src="{{ url_for('static', filename='js/tenant_settings.js') }}"></script>
 
 {% if not single_tenant_mode %}
@@ -2767,7 +2708,7 @@ result = await client.tools.get_products(brief="video ads")</pre>
 document.addEventListener("DOMContentLoaded", function() {
     const virtualHostInput = document.getElementById('virtual_host');
     const dnsWidgetContainer = document.getElementById('dns-widget-container');
-    const tenantId = '{{ tenant.tenant_id }}';
+    const tenantId = {{ tenant.tenant_id|tojson }};
 
     let widgetInitialized = false;
     let debounceTimer = null;
@@ -2786,10 +2727,9 @@ document.addEventListener("DOMContentLoaded", function() {
             if (!widgetInitialized) {
                 try {
                     // Get script name for proper URL routing
-                    const scriptName = document.getElementById('settings-config').dataset.scriptName || '';
 
                     // Get token from our backend
-                    const response = await fetch(`${scriptName}/tenant/${tenantId}/settings/approximated-token`, {
+                    const response = await fetch(`${scriptRoot}/tenant/${tenantId}/settings/approximated-token`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
@@ -2797,8 +2737,8 @@ document.addEventListener("DOMContentLoaded", function() {
                     });
 
                     if (!response.ok) {
-                        console.error('Failed to get Approximated token:', await response.text());
-                        dnsWidgetContainer.innerHTML = '<p style="color: #dc2626; font-size: 0.875rem;">❌ DNS widget unavailable. Please contact support.</p>';
+                        dnsWidgetContainer.innerHTML = '<p style="color: #dc2626; font-size: 0.875rem;"></p>';
+                        dnsWidgetContainer.firstChild.textContent = '❌ DNS widget unavailable: ' + adminErrorText(await response.json());
                         return;
                     }
 
@@ -2991,10 +2931,9 @@ async function checkDomainRegistrationStatus() {
     checkBtn.disabled = true;
 
     try {
-        const scriptName = document.getElementById('settings-config').dataset.scriptName || '';
         const tenantId = document.getElementById('settings-config').dataset.tenantId;
 
-        const response = await fetch(`${scriptName}/tenant/${tenantId}/settings/approximated-domain-status`, {
+        const response = await fetch(`${scriptRoot}/tenant/${tenantId}/settings/approximated-domain-status`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ domain: domain })
@@ -3039,7 +2978,7 @@ async function checkDomainRegistrationStatus() {
         } else {
             statusIcon.textContent = '⚠️';
             statusText.textContent = 'Check Failed';
-            statusDetails.textContent = data.error || 'Unknown error';
+            statusDetails.textContent = adminErrorText(data);
             registerBtn.style.display = 'none';
             unregisterBtn.style.display = 'none';
         }
@@ -3073,10 +3012,9 @@ async function registerDomain() {
     registerBtn.textContent = 'Registering...';
 
     try {
-        const scriptName = document.getElementById('settings-config').dataset.scriptName || '';
         const tenantId = document.getElementById('settings-config').dataset.tenantId;
 
-        const response = await fetch(`${scriptName}/tenant/${tenantId}/settings/approximated-register-domain`, {
+        const response = await fetch(`${scriptRoot}/tenant/${tenantId}/settings/approximated-register-domain`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ domain: domain })
@@ -3089,7 +3027,7 @@ async function registerDomain() {
             // Refresh status
             await checkDomainRegistrationStatus();
         } else {
-            alert(`❌ Registration failed:\n${data.error}`);
+            alert(`❌ Registration failed:\n${adminErrorText(data)}`);
         }
     } catch (error) {
         console.error('Error registering domain:', error);
@@ -3118,10 +3056,9 @@ async function unregisterDomain() {
     unregisterBtn.textContent = 'Unregistering...';
 
     try {
-        const scriptName = document.getElementById('settings-config').dataset.scriptName || '';
         const tenantId = document.getElementById('settings-config').dataset.tenantId;
 
-        const response = await fetch(`${scriptName}/tenant/${tenantId}/settings/approximated-unregister-domain`, {
+        const response = await fetch(`${scriptRoot}/tenant/${tenantId}/settings/approximated-unregister-domain`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ domain: domain })
@@ -3134,7 +3071,7 @@ async function unregisterDomain() {
             // Refresh status
             await checkDomainRegistrationStatus();
         } else {
-            alert(`❌ Unregistration failed:\n${data.error}`);
+            alert(`❌ Unregistration failed:\n${adminErrorText(data)}`);
         }
     } catch (error) {
         console.error('Error unregistering domain:', error);

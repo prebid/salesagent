@@ -38,6 +38,10 @@ What this guard pins, and why each check earns its place:
   check alone could no longer tell a hardcoded literal from a map lookup.
 * Every mapped tag must actually be dormant, so the map shrinks as scenarios get wired
   instead of accumulating stale entries.
+* Every ``_UC010_PARKED_TAGS`` narrative — the text saying a tag cannot be wired HONESTLY
+  yet, as opposed to merely not got to — has a map row to be built into. The row composes
+  "<park text> — tracked by <map issue>", so a park entry outside the map reaches no
+  scenario and the distinction it records is lost without anything going red.
 """
 
 from __future__ import annotations
@@ -63,6 +67,7 @@ FEATURE = REPO_ROOT / "tests/bdd/features/BR-UC-010-discover-seller-capabilities
 
 CONFTEST_MODULE = "tests.bdd.conftest"
 MAP_NAME = "_UC010_DORMANT_TRACKING"
+PARK_NAME = "_UC010_PARKED_TAGS"
 ROUTES_NAME = "ENV_ROUTES"
 WIRED_ACCESSOR = "_uc010_wired_tags"
 REASON_KWARG = "xfail_reason"
@@ -162,6 +167,7 @@ def test_guard_subjects_still_resolve() -> None:
     assert_guard_subject_resolves(
         CONFTEST_MODULE,
         MAP_NAME,
+        PARK_NAME,
         ROUTES_NAME,
         WIRED_ACCESSOR,
         why="The UC-010 dormancy citations would go unguarded: nothing else checks that a "
@@ -203,7 +209,7 @@ def test_dormancy_reason_is_built_from_the_per_tag_map() -> None:
 @pytest.mark.arch_guard
 def test_dormancy_reason_hardcodes_no_issue_number() -> None:
     """Any issue number in the reason must come from the map, not from the literal."""
-    tree = ast.parse(CONFTEST.read_text(), filename=str(CONFTEST))
+    tree = ast.parse(CONFTEST.read_text(encoding="utf-8"), filename=str(CONFTEST))
     offenders = find_hardcoded_issue_literals(tree)
     assert not offenders, (
         "A UC-010 dormancy reason hardcodes an issue number at "
@@ -222,9 +228,22 @@ def test_every_mapped_tag_is_actually_dormant() -> None:
 
 
 @pytest.mark.arch_guard
+def test_every_parked_narrative_has_a_tracking_entry() -> None:
+    """A park text for a tag outside the map would be built into no row at all.
+
+    The dormancy rows are generated FROM the map, taking the park's text as the reason
+    where one exists. A parked tag missing from the map therefore loses its text
+    silently — the scenario would xfail with the generic dormancy sentence and nobody
+    would see that the "cannot be wired honestly yet" narrative had stopped being read.
+    """
+    orphans = sorted(set(getattr(_bdd_conftest(), PARK_NAME)) - set(_tracking_map()))
+    assert not orphans, f"{PARK_NAME} entries with no {MAP_NAME} row, so their text reaches no scenario: {orphans}"
+
+
+@pytest.mark.arch_guard
 def test_every_mapped_tag_exists_in_the_feature_file() -> None:
     """A citation for a tag no scenario carries is dead weight and misleads."""
-    tags_in_feature = set(re.findall(r"@(T-UC-010-[\w-]+)", FEATURE.read_text()))
+    tags_in_feature = set(re.findall(r"@(T-UC-010-[\w-]+)", FEATURE.read_text(encoding="utf-8")))
     assert tags_in_feature, f"No T-UC-010-* tags found in {FEATURE} — this guard needs updating."
     unknown = sorted(set(_tracking_map()) - tags_in_feature)
     assert not unknown, f"{MAP_NAME} names tags absent from the feature file: {unknown}"

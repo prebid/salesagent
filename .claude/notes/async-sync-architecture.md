@@ -6,9 +6,9 @@ Outbound I/O does **not** belong in the HTTP request cycle. The direction for
 adapter work is: accept → validate against Postgres → return `201 pending` →
 a background worker calls GAM/Kevel/etc → update status → notify.
 
-The current synchronous adapter I/O is why `run_async_in_sync_context` exists.
-That helper is a band-aid, not a pattern to copy. See
-[issue-draft-async-adapter-architecture.md](issue-draft-async-adapter-architecture.md).
+The current synchronous adapter I/O is why `run_async_in_sync_context`
+(`src/core/validation_helpers.py`) exists. That helper is a band-aid, not a
+pattern to copy.
 
 ## The carve-out: notification activation proof (#1592 T2)
 
@@ -49,7 +49,9 @@ machinery is large. It stays available if activation ever needs to scale.)
   a buyer cannot hold a worker with 16 configs × N accounts;
 - fired **only** for an entry declaring `active: true` whose proof tuple is not
   already persisted (the spec's proof-reuse allowance);
-- **fail-closed** — anything that is not a clear 2xx is "not proven";
+- **fail-closed** — proof is a 2xx *and* an echo of the single-use challenge
+  value we generated for this registration. A bare 2xx proves only reachability,
+  which any endpoint that accepts POSTs offers. Anything else is "not proven";
 - injected through `get_notification_proof_service()`, so tests override the
   getter and production always holds a real prover.
 
@@ -68,8 +70,15 @@ machinery is large. It stays available if activation ever needs to scale.)
   to prevent. The test seam is the getter, and the default is exercised by real
   seeding rather than assumed.
 
-### Known gap
+### The challenge is signed (#1291 C2)
 
-The challenge POST is **not** RFC 9421-signed — signing is not implemented
-(`FIXME(#1291)`). Under the STRICT capability policy the seller therefore declares
-no signing capability. A buyer cannot yet verify that a challenge came from us.
+The challenge POST carries an RFC 9421 signature made with this tenant's
+`adcp_use: "request-signing"` key under the webhook profile tag
+(`adcp/webhook-signing/v1`), over the exact bytes POSTed — or it is not sent at
+all. `send_signed_challenge` in `src/core/signing/outbound.py` owns both the
+signature and the dial, so the carve-out above holds no raw POST of its own; the
+2.0s ceiling is passed to it explicitly.
+
+What the signature does *not* decide is what `get_adcp_capabilities` advertises.
+`webhook_signing.supported` is derived from key material and trust-root
+publishability (#1291 D1), and nothing in this carve-out feeds it.

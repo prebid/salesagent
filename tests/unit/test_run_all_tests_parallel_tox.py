@@ -9,12 +9,18 @@ than the longest one.
 
 Runs the REAL run_all_tests.sh end to end (real arg parsing, real env/suite
 resolution, real command construction) rather than grepping its source, so it
-asserts on genuine behavior instead of text shape. The only thing replaced is
-the ``docker`` binary on PATH -- a stub that records every invocation and exits
-0 -- because standing up the full Postgres/app/proxy compose stack is not
+asserts on genuine behavior instead of text shape. The principal thing replaced
+is the ``docker`` binary on PATH -- a stub that records every invocation and
+exits 0 -- because standing up the full Postgres/app/proxy compose stack is not
 needed to observe *which command run_all_tests.sh hands to tox*, and doing so
 would make this slow, non-hermetic, and dependent on a real Docker daemon.
 Docker orchestration is the external boundary being stubbed, not the subject.
+
+The helper scripts run_all_tests.sh calls on the host are copied in REAL
+wherever their only reach outside the process is through that stubbed
+``docker``; only the one that would touch the host's Python toolchain and
+generate real X.509 material is replaced. See ``_REAL_HOST_SCRIPTS`` /
+``_HOST_SCRIPT_STUBS``.
 
 Also covers ``scripts/check_truncated_reports.py``, the predicate BOTH runners
 apply to decide whether a green-looking run actually reported everything it
@@ -23,7 +29,6 @@ absent from the other.
 """
 
 import json
-import os
 import shutil
 import stat
 import subprocess
@@ -33,21 +38,9 @@ import pytest
 
 from scripts import check_truncated_reports
 from scripts.check_truncated_reports import truncation_report
-from tests.unit.test_run_all_tests_contract import _REPO_ROOT, _RUNNER
-
-_CREATIVE_AGENT_STACK = _REPO_ROOT / "scripts" / "creative-agent-stack.sh"
-
-# Every scripts/ module the runner shells out to after collecting reports, plus
-# the shared walk they both import. Listing only the entry points was how the
-# sandbox went stale: `report_suite_failures.py` joined the runner and
-# `_suite_reports.py` became their shared dependency, and the sandbox -- which
-# copies files rather than the tree -- kept handing the runner a scripts/ dir
-# that could not execute the checks it invokes.
-_RUNNER_REPORT_SCRIPTS = (
-    "check_truncated_reports.py",
-    "report_suite_failures.py",
-    "_suite_reports.py",
-)
+from scripts.ci.shard_split import SHARD_COUNTS
+from tests.helpers.bash_stubs import run_bash_with_stubs
+from tests.unit._run_all_tests_helpers import REPO_ROOT, RUNNER
 
 _DOCKER_STUB = """#!/usr/bin/env bash
 # Records every invocation of this fake `docker` (argv, space-joined) to
@@ -69,8 +62,27 @@ _DOCKER_STUB = """#!/usr/bin/env bash
 # the runner then fails the run for a report the stub never wrote -- which is
 # how the `quality` env, added to ALL_SUITES upstream, turned this simulation
 # into a red run that said nothing about the runner.
+#
+# The extraction container is simulated for the same reason: it is what moves the
+# reports out of the tox_data volume, and the runner grades only what it published.
+# Its contract is the runner's own: stdout carries the missing-suite list.
 printf '%s\\n' "$*" >> "$DOCKER_STUB_LOG"
 case "$*" in
+  *" alpine sh -c "*)
+    _out="" _suites="${@: -2:1}" _subdir="${@: -1}" _missing=""
+    for _arg in "$@"; do case "$_arg" in *:/out) _out="${_arg%:/out}" ;; esac; done
+    for _s in ${_suites//,/ }; do
+      if [ -f ".tox/${_s}.json" ]; then cp ".tox/${_s}.json" "$_out/"; else _missing="$_missing $_s"; fi
+      case "$_s" in bdd*)
+        if [ -f ".tox/${_s}_payloads.json" ]; then
+          cp ".tox/${_s}_payloads.json" "$_out/$_subdir/$_s.json"
+        else
+          _missing="$_missing $_s(no-payload-artifact)"
+        fi ;;
+      esac
+    done
+    printf '%s' "$_missing"
+    ;;
   *tox*)
     mkdir -p .tox
     _envs="" _seen_tox=0 _take_next=0
@@ -81,6 +93,8 @@ case "$*" in
       [ "$_arg" = "tox" ] && _seen_tox=1
     done
     for _s in ${_envs//,/ }; do
+      # A suite that died before writing anything.
+      [ "$_s" = "${DOCKER_STUB_DEAD_SUITE:-}" ] && continue
       printf '%s' '{"summary": {"collected": 1, "total": 1, "passed": 1, "deselected": 0}, "exitcode": 0}' \\
         > ".tox/${_s}.json"
       # A BDD suite now emits TWO artifacts: the pytest report and the dispatched-request
@@ -89,7 +103,7 @@ case "$*" in
       # produced no report -- a suite that produced none was not measured. Emitting only
       # the report here would simulate a stack whose BDD suites all died halfway, which
       # is the failure this stub's comment above already warns against.
-      case "$_s" in bdd*) printf '%s' '{"run": {"collected": 1}, "nodes": {}}' > ".tox/${_s}_payloads.json" ;; esac
+      case "$_s" in bdd*) printf '%s' "{\\"run\\": {\\"collected\\": 1}, \\"nodes\\": {\\"$_s\\": []}}" > ".tox/${_s}_payloads.json" ;; esac
       # The storyboard suite publishes the runner's per-protocol summary to
       # test-results/ (tests/storyboard/test_storyboard_conformance.py, _publish_summary),
       # and the runner keeps that score inside the run directory -- a storyboard env that
@@ -104,49 +118,181 @@ esac
 exit 0
 """
 
+#: Helper scripts run_all_tests.sh executes ON THE HOST that are copied in for
+#: REAL, repo-relative to REPO_ROOT. Each one's only reach outside its own
+#: process is through `docker`, which is already stubbed, so running the genuine
+#: article is both hermetic and more faithful than a hand-written double:
+#:
+#:   creative-agent-stack.sh   `build` is docker image inspect/build/tag only.
+#:   dev/alloc-e2e-subnet.sh   pure `ipaddress` arithmetic over the subnets
+#:                             `docker network inspect` reports; against the
+#:                             stub it sees none taken and prints a real
+#:                             `E2E_NETWORK_SUBNET=<cidr>` for the runner's
+#:                             `eval "export $(...)"` to consume. A double that
+#:                             printed nothing would leave that variable unbound
+#:                             under `set -u`.
+#:   check_truncated_reports.py  pure-stdlib JSON arithmetic over $RESULTS_DIR
+#:                             (main, PR #2091): the runner shells out to it
+#:                             after collecting reports so a truncated suite is
+#:                             not mistakable for a green one. It reaches
+#:                             nothing outside the workdir, and its absence is
+#:                             not inert -- whichever report-extraction shape
+#:                             run_all_tests.sh settles on, a populated
+#:                             $RESULTS_DIR makes the runner invoke it, and a
+#:                             missing file would surface only as a python3
+#:                             "No such file or directory" the rot guard below
+#:                             has to name.
+#:   report_suite_failures.py  the runner's second post-collection check (a suite
+#:                             can report "failed 0" everywhere and still exit
+#:                             non-zero), same pure-stdlib reach.
+#:   _suite_reports.py         not invoked directly -- it is the report walk the
+#:                             two checks above both import. Listing only the
+#:                             entry points was how this sandbox went stale
+#:                             once: it copies files rather than the tree, so a
+#:                             missing shared dependency hands the runner a
+#:                             scripts/ dir that cannot execute the checks it
+#:                             invokes.
+#:   audit/run_identity.py     the run's tree identity, written before any suite
+#:                             (pure stdlib + `git`, reaching only the workdir).
+#:                             BOTH an entry point and the shared dependency the
+#:                             bullet above describes: the runner invokes it, and
+#:                             _suite_reports.py imports its IDENTITY_FILE to
+#:                             keep the record out of the report walk. The
+#:                             workdir is not a repository, so it records an
+#:                             absent identity and warns -- which is the faithful
+#:                             simulation of the CI box, where git cannot name a
+#:                             commit either.
+_REAL_HOST_SCRIPTS = (
+    "scripts/creative-agent-stack.sh",
+    "scripts/dev/alloc-e2e-subnet.sh",
+    "scripts/check_truncated_reports.py",
+    "scripts/report_suite_failures.py",
+    "scripts/_suite_reports.py",
+    "scripts/audit/run_identity.py",
+    "scripts/ci/merge_shard_reports.py",
+    "scripts/ci/shard_split.py",
+    "scripts/ci/__init__.py",
+)
 
-def _run_with_stubbed_docker(tmp_path: Path) -> tuple[subprocess.CompletedProcess, Path]:
+#: Helper scripts run_all_tests.sh executes on the host that must NOT run for
+#: real, mapped to the stub that replaces each.
+#:
+#: shard_paths.py reads the real tests/bdd tree, which this sandbox does not have. The
+#: partition itself is graded by tests/collection/test_architecture_ci_bdd_shard_partition.py.
+#:
+#: ensure-test-tls.sh searches the HOST for a Python that has `cryptography`
+#: (trying `uv run python`, which resolves and builds project environments) and
+#: then generates real X.509 material on disk. That is host and toolchain reach,
+#: and none of it bears on which command the runner hands to tox. Exiting 0 is
+#: the faithful simulation: the runner reads it as "TLS material is present" and
+#: skips its in-container fallback.
+_HOST_SCRIPT_STUBS = {
+    "scripts/ci/shard_paths.py": """print("tests/bdd/test_stub.py")
+""",
+    "scripts/dev/ensure-test-tls.sh": """#!/usr/bin/env bash
+# Stands in for scripts/dev/ensure-test-tls.sh: reports that the stack's TLS
+# material exists, without touching the host's Python toolchain or writing
+# certificates. See _HOST_SCRIPT_STUBS.
+exit 0
+""",
+    # storyboard-signing-env.sh derives the storyboard agent's signed-requests settings by
+    # running `uv run python -m scripts.setup.storyboard_signing`, which resolves and builds
+    # project environments -- the same host-toolchain reach ensure-test-tls.sh is stubbed
+    # for, and none of it bears on which command the runner hands to tox.
+    #
+    # NO `exit 0` HERE, unlike the stub above: the runner SOURCES this one, so an `exit`
+    # would end run_all_tests.sh itself at that line and the test would be asserting on a
+    # run that never reached tox. Falling off the end returns 0, which is the faithful
+    # simulation -- the runner reads it as "the settings were derived" and proceeds with
+    # them unset, which is exactly what a stack brought up without them looks like.
+    "scripts/dev/storyboard-signing-env.sh": """#!/usr/bin/env bash
+# Stands in for scripts/dev/storyboard-signing-env.sh: exports nothing and returns 0,
+# without reaching the host's Python toolchain. See _HOST_SCRIPT_STUBS.
+:
+""",
+}
+
+
+# run_all_tests.sh is the Docker-stack orchestrator for Linux and macOS hosts. Beyond
+# bash it asserts POSIX permission bits on the bind-mounted logs/ directory and calls a
+# host python3, none of which a Windows checkout has.
+_RUNS_THE_BASH_RUNNER = pytest.mark.posix_only(
+    "runs run_all_tests.sh, which checks POSIX permission bits on bind-mounted dirs and calls a host python3"
+)
+
+
+def _make_executable(path: Path) -> None:
+    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def _provision_runner_dependencies(workdir: Path) -> None:
+    """Populates `workdir` with run_all_tests.sh and the helpers it shells out to.
+
+    Copying is deliberate over stubbing wherever the real script's only external
+    boundary is the stubbed `docker` -- see _REAL_HOST_SCRIPTS.
+    """
+    shutil.copy2(RUNNER, workdir / "run_all_tests.sh")
+
+    for relative in _REAL_HOST_SCRIPTS:
+        source = REPO_ROOT / relative
+        assert source.is_file(), (
+            f"{relative} is copied into this test's stub workdir but no longer exists in the repo; "
+            "run_all_tests.sh's host dependencies have moved -- update _REAL_HOST_SCRIPTS."
+        )
+        destination = workdir / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+    for relative, body in _HOST_SCRIPT_STUBS.items():
+        destination = workdir / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(body, encoding="utf-8")
+        _make_executable(destination)
+
+
+def _run_with_stubbed_docker(tmp_path: Path, **extra_env: str) -> tuple[subprocess.CompletedProcess, Path]:
     """Runs the real run_all_tests.sh default invocation with `docker` stubbed.
 
     Returns the completed process and the path to the log of every command the
     script attempted to hand to `docker`.
     """
     workdir = tmp_path / "workdir"
-    (workdir / "scripts").mkdir(parents=True)
-    shutil.copy2(_RUNNER, workdir / "run_all_tests.sh")
-    shutil.copy2(_CREATIVE_AGENT_STACK, workdir / "scripts" / "creative-agent-stack.sh")
-    # The runner shells out to these after collecting reports (main, PR #2091):
-    # a truncated suite, or one whose only problem is a setup error, must not be
-    # mistakable for a green one.
-    for name in _RUNNER_REPORT_SCRIPTS:
-        shutil.copy2(_REPO_ROOT / "scripts" / name, workdir / "scripts" / name)
-
-    stub_bin = tmp_path / "stub_bin"
-    stub_bin.mkdir()
-    docker_stub = stub_bin / "docker"
-    docker_stub.write_text(_DOCKER_STUB)
-    docker_stub.chmod(docker_stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    workdir.mkdir(parents=True)
+    _provision_runner_dependencies(workdir)
 
     docker_log = tmp_path / "docker_calls.log"
     docker_log.touch()
 
-    env = {
-        **os.environ,
-        "PATH": f"{stub_bin}:{os.environ.get('PATH', '')}",
-        "DOCKER_STUB_LOG": str(docker_log),
-        # The dedicated CI security-audit check already owns this scan; skip it
-        # here so a missing/real uvx on the test box can't affect this test.
-        "RUN_ALL_SKIP_AUDIT": "1",
-    }
-
-    proc = subprocess.run(
-        ["bash", "run_all_tests.sh"],
+    proc = run_bash_with_stubs(
+        ["run_all_tests.sh"],
+        stub_dir=tmp_path / "stub_bin",
+        stubs={"docker": _DOCKER_STUB},
+        env={
+            "DOCKER_STUB_LOG": str(docker_log),
+            # The dedicated CI security-audit check already owns this scan; skip it
+            # here so a missing/real uvx on the test box can't affect this test.
+            "RUN_ALL_SKIP_AUDIT": "1",
+            **extra_env,
+        },
         cwd=workdir,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=60,
     )
+
+    # The rot guard. run_all_tests.sh gaining another host helper is the failure
+    # this harness has already suffered once (a cross-branch merge added two,
+    # and the run died at line 219 before reaching the assertion below). Naming
+    # the missing path here turns that into a one-line diagnosis, and catches
+    # the SILENT variant too -- a new dependency invoked as `helper.sh || true`
+    # leaves the exit code 0 while the runner takes a branch it would never take
+    # in production.
+    missing = [line for line in proc.stderr.splitlines() if "No such file or directory" in line]
+    assert not missing, (
+        "run_all_tests.sh reached for a host file this stub workdir does not provide:\n"
+        + "\n".join(missing)
+        + "\n\nAdd it to _REAL_HOST_SCRIPTS (copy it, if its only external boundary is the "
+        "stubbed `docker`) or to _HOST_SCRIPT_STUBS (double it, if running it for real would "
+        "touch the network, the host toolchain, or a live Docker daemon)."
+    )
+
     return proc, docker_log
 
 
@@ -155,13 +301,14 @@ def _tox_invocation_tokens(docker_log: Path) -> list[str]:
     tests container, from the recorded `docker compose ... run ... tox ...`
     call (the only stubbed `docker` invocation that names `tox`).
     """
-    tox_lines = [line for line in docker_log.read_text().splitlines() if " tox " in f" {line} "]
+    tox_lines = [line for line in docker_log.read_text(encoding="utf-8").splitlines() if " tox " in f" {line} "]
     assert len(tox_lines) == 1, f"expected exactly one docker invocation naming tox, got: {tox_lines!r}"
     tokens = tox_lines[0].split()
     tox_index = tokens.index("tox")
     return tokens[tox_index + 1 :]
 
 
+@_RUNS_THE_BASH_RUNNER
 @pytest.mark.slow
 def test_default_run_invokes_tox_with_parallel_flag(tmp_path):
     """The default (no-flag) invocation must run `tox -p`.
@@ -181,6 +328,62 @@ def test_default_run_invokes_tox_with_parallel_flag(tmp_path):
         "run_all_tests.sh's default tox invocation must include -p (parallel "
         f"multi-suite execution) but did not: tox {' '.join(tox_args)}"
     )
+
+
+def _published_run(tmp_path: Path) -> Path:
+    runs = list((tmp_path / "workdir" / "test-results").glob("innet_*"))
+    assert len(runs) == 1, runs
+    return runs[0]
+
+
+@_RUNS_THE_BASH_RUNNER
+@pytest.mark.slow
+def test_the_fast_path_publishes_its_shards_as_one_bdd_inprocess(tmp_path):
+    """Every reader keys on one report per suite, and `.suites` must name what is published."""
+    proc, docker_log = _run_with_stubbed_docker(tmp_path, E2E_WORKERS="2", BDD_SHARD_XDIST_N="")
+
+    assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    shard_envs = [f"bdd-inprocess-s{shard}" for shard in range(1, SHARD_COUNTS["bdd"] + 1)]
+    assert ",".join(shard_envs) in " ".join(_tox_invocation_tokens(docker_log))
+
+    run = _published_run(tmp_path)
+    report = json.loads((run / "bdd_inprocess.json").read_text(encoding="utf-8"))
+    assert report["summary"]["total"] == len(shard_envs)
+    payloads = json.loads((run / "payloads" / "bdd_inprocess.json").read_text(encoding="utf-8"))
+    assert sorted(payloads["nodes"]) == shard_envs
+    assert not list(run.rglob("bdd-inprocess-s*.json"))
+
+    suites = (run / ".suites").read_text(encoding="utf-8").strip().split(",")
+    assert "bdd_inprocess" in suites
+    assert not [suite for suite in suites if suite.startswith("bdd-inprocess-s")]
+
+
+@_RUNS_THE_BASH_RUNNER
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("bdd_xdist_n", "per_shard"),
+    [("", 8 // SHARD_COUNTS["bdd"]), ("16", 16 // SHARD_COUNTS["bdd"])],
+)
+def test_the_shards_divide_the_callers_worker_budget(tmp_path, bdd_xdist_n, per_shard):
+    """cassini asks for BDD_XDIST_N=16. Ignoring it would halve the box's BDD workers."""
+    # Both named explicitly: this suite itself runs inside a shard-aware runner's env.
+    proc, _ = _run_with_stubbed_docker(tmp_path, E2E_WORKERS="8", BDD_XDIST_N=bdd_xdist_n, BDD_SHARD_XDIST_N="")
+
+    assert f"BDD_SHARD_XDIST_N={per_shard} " in proc.stdout, proc.stdout
+
+
+@_RUNS_THE_BASH_RUNNER
+@pytest.mark.slow
+def test_a_dead_shard_fails_the_run_and_publishes_no_merged_suite(tmp_path):
+    """A survivor published alone would be internally consistent and go green."""
+    proc, _ = _run_with_stubbed_docker(tmp_path, E2E_WORKERS="2", DOCKER_STUB_DEAD_SUITE="bdd-inprocess-s2")
+
+    assert proc.returncode == 1, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    assert "refusing to publish a partial suite" in proc.stderr
+
+    run = _published_run(tmp_path)
+    assert not (run / "bdd_inprocess.json").exists()
+    assert (run / "bdd-inprocess-s1.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +432,24 @@ def test_an_unreadable_report_is_a_finding_not_a_pass(tmp_path):
     problems = truncation_report(str(tmp_path))
 
     assert len(problems) == 1 and "unreadable" in problems[0], problems
+
+
+def test_a_half_written_identity_record_is_not_reported_as_a_truncated_suite(tmp_path):
+    """``meta.json`` is not a suite report, and the SAME event produces both.
+
+    A whole identity record is inert here -- it carries no ``summary``, so
+    ``collected`` and ``total`` are both absent and the predicate above returns
+    nothing. The case that is NOT inert is the one the predicate exists for: a
+    run killed mid-write leaves a half-written ``meta.json``, and read as a
+    report that is "unreadable", which this check reddens with the diagnosis
+    "the run is TRUNCATED" and "an xdist worker died". Both sentences would be
+    about the identity record rather than about any suite, and they would fail a
+    run whose suites all reported in full.
+    """
+    _write_report(tmp_path, "unit.json", collected=10, total=10, deselected=0, failed=0)
+    (tmp_path / "meta.json").write_text('{\n "schema": 1,\n "commit": "0c53', encoding="utf-8")
+
+    assert truncation_report(str(tmp_path)) == []
 
 
 def test_the_predicate_exits_non_zero_so_a_shell_caller_can_branch_on_it(tmp_path):

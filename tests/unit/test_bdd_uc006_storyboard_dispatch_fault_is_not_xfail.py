@@ -181,8 +181,8 @@ class TestUc006StoryboardDispatchFaultIsNotXfail:
         from pathlib import Path
 
         repo_root = Path(__file__).resolve().parents[2]
-        conftest_src = (repo_root / "tests" / "bdd" / "conftest.py").read_text()
-        e2e_ledger = (repo_root / "tests" / "bdd" / "e2e_rest_known_failures.txt").read_text()
+        conftest_src = (repo_root / "tests" / "bdd" / "conftest.py").read_text(encoding="utf-8")
+        e2e_ledger = (repo_root / "tests" / "bdd" / "e2e_rest_known_failures.txt").read_text(encoding="utf-8")
 
         # Match a ledger KEY, never a bare substring, for two reasons the split hit
         # in one change:

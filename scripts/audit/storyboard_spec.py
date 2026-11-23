@@ -158,20 +158,38 @@ _DECLARATION_NAMES = {"specialisms": "DEFAULT_SPECIALISMS", "protocols": "DEFAUL
 def _declared_enum_members(tree: ast.Module, name: str, where: Path) -> set[str]:
     """The enum member names in the module-level list assigned to *name*.
 
-    Raises when *name* is absent. That loudness is the point: this reader used to
+    Every unrecognised shape raises, and that loudness is the point: "the name is
+    gone", "the list is now built by a comprehension" and "the list is empty" must
+    not be indistinguishable from "this agent declares nothing". This reader used to
     scan ``src/core/tools/capabilities.py`` for a bare enum-attribute regex, and when
     the declaration MOVED to its own module the scan silently returned an empty set —
-    which reads as "this agent declares no specialisms", quietly taking every
+    which reads as "we declare no specialisms", quietly taking every
     ``specialisms/`` storyboard OFF-PATH while production went on advertising
-    ``sales-non-guaranteed`` on the wire. A missing name must fail, not evaluate to
-    "we declare nothing".
+    ``sales-non-guaranteed`` on the wire. OFF-PATH storyboards leave the published
+    check index, so the graded surface shrinks and every conformance number quoted
+    against it silently improves.
     """
     for node in tree.body:
         target = node.target if isinstance(node, ast.AnnAssign) else None
         if target is None and isinstance(node, ast.Assign) and len(node.targets) == 1:
             target = node.targets[0]
-        if isinstance(target, ast.Name) and target.id == name:
-            return {n.attr for n in ast.walk(node.value) if isinstance(n, ast.Attribute)}
+        if not (isinstance(target, ast.Name) and target.id == name):
+            continue
+        value = node.value
+        if not isinstance(value, ast.List) or not all(isinstance(e, ast.Attribute) for e in value.elts):
+            raise StoryboardAuditError(
+                f"{where}: {name} is no longer a list of `Enum.member` references "
+                f"(found {ast.dump(value) if value else 'no value'}). Teach "
+                "declared_capabilities() the new shape rather than letting it report "
+                "an empty declaration."
+            )
+        if not value.elts:
+            raise StoryboardAuditError(
+                f"{where}: {name} is declared empty. If this deployment really advertises "
+                "nothing here, say so at the call site — an empty declaration sends every "
+                "gated storyboard OFF-PATH and out of the published check index."
+            )
+        return {e.attr for e in value.elts if isinstance(e, ast.Attribute)}
     raise StoryboardAuditError(f"{where}: no module-level {name} to read the declaration from")
 
 
@@ -185,9 +203,19 @@ def declared_capabilities(repo: Path) -> dict[str, set[str]]:
     Normalized hyphenated (``sales-non-guaranteed``), matching the majority
     convention (2 of the 3 pre-migration readers) — the path segments this
     is compared against are hyphenated in the pinned tree.
+
+    Raises :class:`StoryboardAuditError` rather than returning an empty set when the
+    declaration cannot be read at all: see :func:`_declared_enum_members`.
     """
     where = repo.joinpath(*_DECLARATION_MODULE)
-    tree = ast.parse(where.read_text(encoding="utf-8"))
+    try:
+        source = where.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise StoryboardAuditError(
+            f"cannot read production's capability declaration at {where}: {exc}. "
+            "The storyboard gate classifier has no declared set to grade against."
+        ) from exc
+    tree = ast.parse(source, filename=str(where))
     return {
         key: {m.replace("_", "-") for m in _declared_enum_members(tree, name, where)}
         for key, name in _DECLARATION_NAMES.items()
@@ -233,7 +261,7 @@ def storyboards(dist: Path) -> Iterator[Storyboard]:
     ``storyboards_missing_tools``.
     """
     for yaml_file in sorted(dist.rglob("*.yaml")):
-        rel = str(yaml_file.relative_to(dist))
+        rel = yaml_file.relative_to(dist).as_posix()
         if rel.startswith(_SKIP_PREFIXES):
             continue
         stem = storyboard_key(rel)
@@ -372,7 +400,7 @@ def requiring_indexes(dist: Path) -> dict[str, list[str]]:
     """
     required_by: dict[str, list[str]] = {}
     for index in sorted(dist.rglob("index.yaml")):
-        rel_index = str(index.relative_to(dist))
+        rel_index = index.relative_to(dist).as_posix()
         if rel_index.startswith("domains/"):
             continue
         block = _REQUIRES_SCENARIOS_RE.search(index.read_text(encoding="utf-8"))
@@ -862,7 +890,7 @@ def parse_ledger_lines(path: Path, *, grammar: Callable[[str], Any]) -> list[Any
     ledger.
     """
     parsed: list[Any] = []
-    for lineno, raw in enumerate(path.read_text().splitlines(), start=1):
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         stripped = raw.strip()
         if not stripped or stripped.startswith("#"):
             continue

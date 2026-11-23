@@ -9,10 +9,13 @@ an operation fails. Errors are real exceptions from production code:
 
 from __future__ import annotations
 
+import json
+
 from pytest_bdd import parsers, then
 
 from tests.bdd.steps._outcome_helpers import (
     payload_or_none,
+    wire_advisory_errors,
     wire_entry_errors,
     wire_error_dict,
     wire_error_envelope_or_none,
@@ -414,9 +417,15 @@ def then_response_error_issue(ctx: dict, keyword: str, field: str) -> None:
      ``ValidationError`` -- including one synthesised in the test process --
      satisfied an isinstance check.
 
-     *field* is matched against the issue POINTER by trailing segment, so
-     ``billing`` matches ``/accounts/0/Accounts/billing`` without the scenario
-     having to spell out pydantic's union-branch naming.
+     *field* is matched against the issue POINTER by trailing segment, so a scenario
+     naming ``billing`` is satisfied by ``/accounts/0/billing`` without having to
+     restate the whole request-rooted path it already established in its Given.
+
+     It used to read "so ``billing`` matches ``/accounts/0/Accounts/billing`` without
+     the scenario having to spell out pydantic's union-branch naming" -- the tolerance
+     was for a pointer segment that was a UNION ARM NAME, not a member of the buyer's
+     document at all. The pointer no longer carries one (salesagent-lkgmg), so the
+     suffix match is back to being what it says it is: a scenario naming the leaf.
     """
     from tests.helpers.envelope_assertions import locate_envelope_error
 
@@ -469,6 +478,21 @@ def then_operation_fails(ctx: dict) -> None:
         "Expected the operation to fail but no error was recorded. "
         f"ctx keys: {list(ctx.keys())}, response: {payload_or_none(ctx)!r}"
     )
+
+
+@then('the response should have an "errors" array')
+@then('the response should contain an "errors" array')
+def then_response_has_errors_array(ctx: dict) -> None:
+    """Assert the wire rejection carries a non-empty, conformant errors array.
+
+    The helper asserts the array is non-empty and validates every entry against pinned
+    ``core/error.json``, which subsumes the per-entry code-and-message checks the two
+    hand-rolled versions of this step used to spell out.
+
+    Moved here from ``then_media_buy.py``, which is not a registered step module, so both
+    sentences had no live definition and every scenario using one stopped at it.
+    """
+    ctx["result"].assert_wire_error_is_schema_conformant()
 
 
 @then("the entire sync operation fails")
@@ -530,6 +554,22 @@ def then_entire_sync_operation_fails(ctx: dict) -> None:
 # ── Error code ───────────────────────────────────────────────────────
 
 
+@then(parsers.re(r'the operation should fail with error code "(?P<code>[A-Z_]+)"'))
+def then_operation_fails_with_code(ctx: dict, code: str) -> None:
+    """Assert the refusal the buyer received, through the harness's one envelope helper.
+
+    ``assert_wire_error`` defaults ``recovery`` from the pinned error-code table, so the
+    assertion also grades the retry semantics without the scenario repeating them.
+
+    UC-019 keeps its own definition of this sentence in steps/domain/uc019_query_media_buys.py,
+    which its test module imports at module scope and so overrides this one for UC-019 only:
+    that one also grades locally-tracked codes absent from the pinned enum.
+    """
+    result = ctx.get("result")
+    assert result is not None, "no TransportResult on the context — the When step did not dispatch"
+    result.assert_wire_error(code)
+
+
 @then(parsers.parse('the error code should be "{code}"'))
 def then_error_code(ctx: dict, code: str) -> None:
     """Assert the error code on the WIRE. No reconstructed fallback.
@@ -555,15 +595,61 @@ def then_error_code(ctx: dict, code: str) -> None:
         f"response, assert it there instead (see 'the <collection> entry carries error code')."
     )
     assert actual == code, f"Expected error code '{code}', got '{actual}'"
+    # The whole two-layer envelope, not the code alone: both layers carry the code and the
+    # recovery the code table gives it, which agrees with the pinned enumMetadata.
+    ctx["result"].assert_wire_error(code)
 
 
 # ── Error message content (generic) ───────────────────────────────────
+
+
+# DELETED — ``the error message should contain "<TEXT>"`` and the two
+# ``the wire error message should contain / should not contain "<TEXT>"`` steps.
+#
+# The first read ``ctx['error']`` through ``_get_error_message``, which is the
+# reconstructed-exception grade the Error Verification Policy refuses; no feature in
+# this tree carries the sentence, and UC-019 keeps its own module-local override of it.
+#
+# The pair of wire-message steps were prose pins on text that is now a function of the
+# error CODE through CODE_TABLE, so ``the response contains error code <CODE>`` already
+# grades everything a positive substring could. The ABSENCE direction is covered, and
+# strictly more widely, by ``the wire envelope should not carry the marker "<MARKER>"``
+# below — it scans the FULL envelope, including ``errors[0].details`` where
+# request-derived values now travel, rather than the message alone.
 
 
 # ── Error message content (specific) ───────────────────────────────────
 
 
 # ── Suggestion field ─────────────────────────────────────────────────
+
+
+@then(parsers.parse('the suggestion should contain "{text}"'))
+def then_suggestion_contains(ctx: dict, text: str) -> None:
+    """Assert the buyer-facing ``suggestion`` contains the given text.
+
+    Wire-first: ``_wire_suggestion`` reads the real envelope the dispatcher captured.
+    The no-wire branch is NOT a reconstructed fallback any more — ``_get_error_dict``
+    serves exactly two real sources (the wire object, and an ``adcp.types.Error`` out of
+    a successful response's ``errors[]`` advisory channel) and REFUSES anything rebuilt
+    test-side from a caught exception. So this step either grades what the buyer
+    received, grades a per-item advisory the pin declares, or raises the
+    RECONSTRUCTED-ERROR READ diagnosis; it cannot pass on a request the seller never
+    answered.
+
+    Kept rather than deleted with the prose-pinning message steps above because
+    ``suggestion`` is the one free-form field a scenario still names directly and a live
+    scenario binds this sentence (BR-UC-003 @T-UC-003-ext-t, "authorized"). When that
+    scenario is re-expressed against the CODE, this step goes with the seven unbound
+    ``the suggestion should advise ...`` steps below.
+    """
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        error = ctx.get("error")
+        assert error is not None, "No error recorded in ctx"
+        suggestion = _get_error_dict(error).get("suggestion")
+    assert suggestion, f"Expected a non-empty suggestion carrying {text!r}, got {suggestion!r}"
+    assert text.lower() in suggestion.lower(), f"Expected '{text}' in suggestion: {suggestion}"
 
 
 @then(parsers.parse("the HTTP status is {status:d}"))
@@ -894,8 +980,15 @@ def then_no_error_returned(ctx: dict) -> None:
 
 @then(parsers.parse('no error should be raised for "{value}"'))
 def then_no_error_for_value(ctx: dict, value: str) -> None:
-    """Assert no error was raised for a specific value (silent exclusion)."""
-    assert "error" not in ctx, f"Expected no error for '{value}' but got: {ctx.get('error')}"
+    """The request succeeded and its response reports nothing about *value*: silent exclusion.
+
+    Read on the wire. ``ctx["error"]`` sees only a refusal, and a seller that answered with
+    the match plus a ``REFERENCE_NOT_FOUND`` advisory for the unmatched member did not
+    exclude it silently. The success guard behind ``wire_advisory_errors`` refuses a
+    refused request, and an empty top-level ``errors[]`` is the absence of any report.
+    """
+    advisories = wire_advisory_errors(ctx)
+    assert advisories == [], f"Expected '{value}' to be excluded silently, but the response reports {advisories}"
 
 
 # ── Validation error (sandbox) ───────────────────────────────────────
@@ -908,7 +1001,13 @@ def then_validation_error(ctx: dict) -> None:
     Wire-first via the sanctioned surface: when a wire envelope was captured,
     grade it through ``ctx['result'].assert_wire_error`` (VALIDATION_ERROR is a
     canonical pinned code, so this is the invariant-blessed check, not a
-    hand-rolled one). Only when no wire exists — the dispatch-exception path, where
+    hand-rolled one). Presence of that envelope is read through the single guarded
+    accessor ``wire_error_envelope_or_none`` (``_outcome_helpers.py``) rather than
+    a hand-rolled ``result.wire_error_envelope`` — it returns ``None`` both when no
+    ``TransportResult`` exists and when one exists without a real envelope, which is
+    exactly the pair of cases this step must route to the fallback (and is the form
+    ``assert_wire_error`` requires, since it reads the real envelope specifically).
+    Only when no wire exists — the dispatch-exception path, where
     ``dispatch_request`` never produced a ``TransportResult`` — fall back to the
     reconstructed ``ctx['error']``. The fallback stays because that path has no
     ``ctx['result']`` to assert against; it is not a second wire mechanism.
@@ -947,11 +1046,14 @@ def then_real_validation_error(ctx: dict) -> None:
     anti-pattern the Error Verification Policy targets.
 
     As in ``then_validation_error``, envelope presence comes from the tolerant guarded
-    accessor ``wire_error_envelope_or_none`` (which subsumes the old ``result is not
-    None`` half) rather than a direct ``result.wire_error_envelope`` read. The wire
-    grade stays CONDITIONAL — tightening it to "there must be an envelope" would fail
-    every no-wire dispatch of this step — while the type check below is unconditional,
-    so the step always reaches a verdict.
+    accessor ``wire_error_envelope_or_none`` (``_outcome_helpers.py``) rather than a
+    hand-rolled ``result.wire_error_envelope`` read: it returns ``None`` both when no
+    ``TransportResult`` exists and when one carries no real envelope — the same pair of
+    cases the old presence guard covered, and the form ``assert_wire_error`` needs (it
+    reads the real envelope, not a synthesized one). The wire grade stays CONDITIONAL —
+    tightening it to "there must be an envelope" would fail every no-wire dispatch of
+    this step — while the type check below is unconditional, so the step always reaches
+    a verdict.
     """
     from pydantic import ValidationError
 
@@ -1087,7 +1189,11 @@ def then_wire_error_details_include(ctx: dict, key: str, value: str) -> None:
     Accepts a scalar (equality) or a list (membership), because a details value that
     names several offending items — duplicate ids, unsupported values — is naturally
     an array and the scenario names ONE of them.
+
+    A media buy LABEL (``"mb_existing"``) is resolved to the id the scenario seeded: the
+    Background registers the label, and the seller can only report the real id.
     """
+    value = ctx.get("media_buy_labels", {}).get(value, value)
     error_object = ctx["result"].wire_error_object()
     assert error_object is not None, "no wire error object captured"
     details = error_object.get("details") or {}
@@ -1097,6 +1203,17 @@ def then_wire_error_details_include(ctx: dict, key: str, value: str) -> None:
         assert value in _scalar_leaves(actual), f"expected {value!r} among errors[0].details[{key!r}] = {actual!r}"
     else:
         assert str(actual) == value, f"expected errors[0].details[{key!r}] == {value!r}, got {actual!r}"
+
+
+@then(parsers.parse("the wire error {code} details {key} should be {value}"))
+def then_wire_error_details_equal(ctx: dict, code: str, key: str, value: str) -> None:
+    """Assert the wire error is ``code`` and ``errors[0].details[key]`` equals the JSON ``value``.
+
+    Equality, not membership: a list of records must be exactly the scenario's records,
+    so a record naming the wrong field, or carrying a key its declared shape does not
+    have, fails here.
+    """
+    ctx["result"].assert_wire_error(code, details={key: json.loads(value)})
 
 
 @then(parsers.parse('the wire error object carries no "{key}" key'))
@@ -1158,12 +1275,30 @@ def then_wire_envelope_marker_absent(ctx: dict, marker: str) -> None:
     assert_no_marker_in_envelope(wire_error_dict(ctx), marker)
 
 
-@then(parsers.parse("the error details should include {key} {value}"))
+@then(parsers.parse("the error details should include {key:w} {value:S}"))
 def then_error_details_include_unquoted(ctx: dict, key: str, value: str) -> None:
     """Assert error.details contains a key with the given value (numeric/unquoted).
 
     Handles numeric coercion: if the expected value looks like a number,
     compare numerically. Otherwise compare as strings.
+
+    Field TYPES matter here, they are not decoration. Written as the bare
+    ``{key} {value}`` this sentence is ``.+? .+?`` anchored to the prefix, so it
+    swallows every PROSE continuation of "the error details should include ..."
+    too — "... policy_id and a non-empty reasons array", "... a policy_url where
+    the full policy can be reviewed", "... supported_versions as a non-empty
+    array". For those it binds nonsense (``key='policy_id'``,
+    ``value='and a non-empty reasons array'``) and can only ever fail, while
+    ALSO shadowing the domain step that does grade the obligation — the disease
+    ``tests/unit/test_architecture_bdd_no_shadowed_steps.py`` exists to remove
+    (GH #1941: one Gherkin sentence has exactly one meaning).
+
+    ``{key:w}`` (``\\w+``, one identifier) and ``{value:S}`` (one non-whitespace
+    token) pin the step to the shape it was written for — an identifier followed
+    by a single scalar, quoted or not. Every scalar site in ``tests/bdd/features``
+    still binds with identical arguments (``minimum_budget 500``,
+    ``current_version 1``, ``currency "USD"``, ``resource_id "mb-789"``); the
+    prose sentences no longer bind here, leaving each to its own domain step.
     """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
@@ -1221,6 +1356,23 @@ def then_field_matches_iso4217(ctx: dict, field: str) -> None:
         f"Expected '{field}' value '{actual}' to match ISO 4217 alphabetic format "
         "(exactly 3 uppercase ASCII letters, e.g., USD)"
     )
+
+
+# ── Correctable / transient failure ─────────────────────────────────
+
+
+@then(parsers.re(r"the response should indicate a (?P<recovery>correctable|transient) failure"))
+def then_recoverable_failure(ctx: dict, recovery: str) -> None:
+    """Assert the wire error's recovery is ``recovery``, on both envelope layers.
+
+    The code is read from the wire because the sentence names none; what it claims is the
+    recovery class, which ``assert_wire_error`` pins against the envelope. Wire only: a
+    dispatch that produced no envelope fails here rather than grading a reconstruction.
+    """
+    result = ctx.get("result")
+    code = result.wire_error_code() if result is not None else None
+    assert code is not None, f"Expected a {recovery} failure on the wire, but no wire error was captured: {result!r}"
+    result.assert_wire_error(code, recovery=recovery)
 
 
 # ── Terminal failure ────────────────────────────────────────────────
@@ -1558,6 +1710,12 @@ def then_sole_entry_error_code(ctx: dict, collection: str, code: str) -> None:
     assert code in codes, f"Expected error code {code!r} on the sole {collection} entry, got {codes}"
 
 
+# A collection whose entries are not named by its singular. A delivery entry names the buy
+# it reports on (get-media-buy-delivery-response.json: media_buy_deliveries[].media_buy_id,
+# required).
+_ENTRY_ID_KEYS = {"media_buy_deliveries": "media_buy_id"}
+
+
 def _entry_index_for(ctx: dict, collection: str, entry_id: str) -> int:
     """Index of the *collection* entry whose id field is *entry_id*, located on the wire.
 
@@ -1566,9 +1724,9 @@ def _entry_index_for(ctx: dict, collection: str, entry_id: str) -> int:
     assignment reference has two rows, and grading "row 0" would grade the anchor.
     The id key is the collection's singular -- ``creatives`` -> ``creative_id``,
     ``accounts`` -> ``account_id`` -- which is how every per-item entry the pinned
-    response schemas define names itself.
+    response schemas define names itself, unless ``_ENTRY_ID_KEYS`` names it.
     """
-    id_key = f"{collection[:-1]}_id"
+    id_key = _ENTRY_ID_KEYS.get(collection, f"{collection[:-1]}_id")
     entries = wire_field(ctx, collection)
     matches = [i for i, entry in enumerate(entries) if entry.get(id_key) == entry_id]
     assert len(matches) == 1, (

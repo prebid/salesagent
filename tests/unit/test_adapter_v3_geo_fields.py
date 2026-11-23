@@ -8,6 +8,8 @@ of the legacy flat fields (geo_country_any_of, geo_region_any_of, etc.).
 from unittest.mock import MagicMock
 
 from src.core.schemas import FrequencyCap, Targeting
+from src.core.utils.frequency_cap import suppress_cooldown_minutes
+from tests.factories import FrequencyCapFactory
 
 
 def _make_principal(adapter_key: str = "kevel") -> MagicMock:
@@ -62,26 +64,49 @@ class TestKevelV3GeoFields:
         # No "cities" key in result since city targeting was removed
         assert "cities" not in result.get("geo", {})
 
+    # These three read the cooldown through the SHARED helper the adapters now call, rather
+    # than restating Kevel's ``// 60`` inline: a test that recomputes the production
+    # expression grades its own copy of it. The ``scope="package"`` each cap used to carry is
+    # gone with the field — ``core/frequency-cap.json`` declares no ``scope``, and the pin
+    # decides the level positionally.
     def test_freq_cap_duration_is_int(self):
-        """suppress_minutes is float after ; FreqCapDuration must be int."""
-        freq_cap = FrequencyCap(suppress_minutes=120.0, scope="package")
-        result = int(max(1, freq_cap.suppress_minutes // 60))
+        """The cooldown is a float; Kevel's FreqCapDuration must be int."""
+        cooldown = suppress_cooldown_minutes(FrequencyCap(suppress_minutes=120.0))
+        result = int(max(1, cooldown // 60))
         assert isinstance(result, int)
         assert result == 2
 
     def test_freq_cap_duration_fractional_hours(self):
         """Partial hours should floor to nearest int."""
-        freq_cap = FrequencyCap(suppress_minutes=90.0, scope="package")
-        result = int(max(1, freq_cap.suppress_minutes // 60))
+        cooldown = suppress_cooldown_minutes(FrequencyCap(suppress_minutes=90.0))
+        result = int(max(1, cooldown // 60))
         assert isinstance(result, int)
         assert result == 1
 
     def test_freq_cap_duration_minimum_one(self):
         """FreqCapDuration must be at least 1 hour."""
-        freq_cap = FrequencyCap(suppress_minutes=30.0, scope="package")
-        result = int(max(1, freq_cap.suppress_minutes // 60))
+        cooldown = suppress_cooldown_minutes(FrequencyCap(suppress_minutes=30.0))
+        result = int(max(1, cooldown // 60))
         assert isinstance(result, int)
         assert result == 1
+
+    def test_cooldown_from_the_pins_preferred_suppress_duration(self):
+        """``suppress`` is the pin's preferred spelling; ``suppress_minutes`` is deprecated.
+
+        Both adapters read ``suppress_minutes`` directly before the shared helper existed, so
+        a cap sent the preferred way produced no vendor cooldown at all.
+        """
+        cap = FrequencyCap(suppress=({"interval": 2, "unit": "hours"}))
+        assert suppress_cooldown_minutes(cap) == 120.0
+
+    def test_no_cooldown_on_a_max_impressions_only_cap(self):
+        """Valid per the schema's ``anyOf``, and it has no cooldown to translate.
+
+        Reading ``suppress_minutes`` directly raised ``TypeError`` on exactly this cap
+        (``None < 60``), out of the adapter instead of a line item.
+        """
+        cap = FrequencyCapFactory.build(max_impressions=5)
+        assert suppress_cooldown_minutes(cap) is None
 
 
 class TestTritonV3GeoFields:

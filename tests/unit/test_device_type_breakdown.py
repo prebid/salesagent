@@ -10,6 +10,7 @@ Covers:
 
 from unittest.mock import MagicMock
 
+from src.adapters.mock_ad_server import simulate_breakdowns
 from src.core.schemas.delivery import (
     DeviceTypeBreakdown,
     GeoBreakdown,
@@ -329,7 +330,7 @@ class TestBuildGeoBreakdownTupleReturn:
 
 class TestDeviceTypeBreakdownSchema:
     def test_inherits_from_library_by_device_type_item(self):
-        from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
+        from adcp.types.domains.media_buy.get_media_buy_delivery_response import (
             ByDeviceTypeItem as LibraryByDeviceTypeItem,
         )
 
@@ -425,6 +426,52 @@ class TestPackageDeliveryNewFields:
 # ---------------------------------------------------------------------------
 
 
+class TestSimulateBreakdowns:
+    """The mock adapter's three breakdown splits -- previously graded by NOTHING.
+
+    Measured before adding this: ``git grep simulate_breakdowns -- tests/`` returned only
+    the harness's import and call. So the geo and device_type splits every delivery
+    scenario sorts were ungraded, and moving the placement split here from
+    ``_build_placement_breakdown`` would have made a third ungraded one.
+
+    The ORDER is what matters and is asserted, not just the row count. These rows exist so
+    the delivery tool's sort and truncation logic has non-trivial input; a split whose
+    weights stopped descending would still produce three rows and would silently make
+    every ``sort_by`` assertion downstream weaker. Reversing the weights is the probe this
+    is built to fail.
+    """
+
+    def test_all_three_splits_are_returned(self):
+        geo, device_type, placement = simulate_breakdowns(1000.0, 50.0)
+        assert [len(geo), len(device_type), len(placement)] == [10, 3, 3]
+
+    def test_each_split_is_ordered_descending_by_impressions(self):
+        """Distinct, descending weights are the property the sort tests rely on."""
+        for name, rows in zip(("geo", "device_type", "placement"), simulate_breakdowns(1000.0, 50.0), strict=True):
+            impressions = [r["impressions"] for r in rows]
+            assert impressions == sorted(impressions, reverse=True), f"{name} split is not descending: {impressions}"
+            assert len(set(impressions)) == len(impressions), f"{name} split has tied weights: {impressions}"
+
+    def test_each_split_reconciles_to_the_package_totals(self):
+        """``by_*_truncated=false`` asserts the rows account for the package, so they must."""
+        geo, device_type, placement = simulate_breakdowns(1000.0, 50.0)
+        for name, rows in (("geo", geo), ("device_type", device_type), ("placement", placement)):
+            assert round(sum(r["impressions"] for r in rows), 6) == 1000.0, f"{name} impressions do not reconcile"
+            assert round(sum(r["spend"] for r in rows), 6) == 50.0, f"{name} spend does not reconcile"
+
+    def test_the_placement_split_carries_clicks_so_sort_by_clicks_is_substantive(self):
+        """A ``sort_by=clicks`` request must have a real ordering, not an all-null sort.
+
+        This is the one reason the placement split exists at all, and it is the reason it
+        used to be synthesized in the production path.
+        """
+        _, _, placement = simulate_breakdowns(1000.0, 50.0)
+        clicks = [r["clicks"] for r in placement]
+        assert all(c is not None for c in clicks)
+        assert clicks == sorted(clicks, reverse=True)
+        assert clicks[0] == round(1000.0 * 0.5 * 0.01, 4)
+
+
 def _make_placement_dim(*, limit=None, sort_by=None):
     """Build a placement dimension mock with an optional limit and sort_by."""
     dim = MagicMock()
@@ -469,10 +516,41 @@ class TestBuildPlacementBreakdownTruncation:
         # plc_high has higher spend — must be the survivor
         assert result[0].placement_id == "plc_high"
 
-    def test_synthesised_split_returns_false_when_no_limit(self):
-        """No adapter data, no limit → synthesised 3-way split, truncated=False."""
+    def test_no_adapter_data_invents_no_placements(self):
+        """Requested but unreported → omitted, NOT fabricated.
+
+        This replaces a test that asserted the opposite -- three synthesized rows with
+        invented ids ``plc_a``/``plc_b``/``plc_c`` and a ``clicks`` value derived from a
+        hardcoded 1% CTR. That synthesis existed so a ``sort_by=clicks`` request would
+        have a substantive ordering to grade, and it ran in PRODUCTION: a buyer asking a
+        GAM tenant for a placement breakdown received three placement identifiers that
+        exist in no ad server. The old test asserted that behaviour, so it was deleted
+        rather than re-grounded.
+
+        ``(None, None)`` and not ``([], False)``: an empty array with ``truncated=False``
+        asserts a complete zero-row breakdown for a package that delivered impressions,
+        which is what ``_build_device_type_breakdown`` already refuses to do for the same
+        reason. Omitting is what the pin permits -- "unsupported dimensions are silently
+        omitted from the response" -- and it stays correct until an adapter supplies rows.
+        """
         dim = _make_placement_dim(limit=None)
         result, truncated = _build_placement_breakdown(dim, None, 1000.0, 5.0, None)
+        assert result is None, f"no adapter data must invent no placements, got {result}"
+        assert truncated is None
+
+    def test_adapter_supplied_rows_are_complete_when_no_limit(self):
+        """No limit over reported rows → truncated=False.
+
+        Keeps the coverage the deleted test incidentally had (``limit=None`` is a distinct
+        input from the ``limit=10`` case above) while taking its rows from the adapter,
+        which is where they belong.
+        """
+        dim = _make_placement_dim(limit=None)
+        raw = [
+            {"placement_id": "homepage_atf", "impressions": 600.0, "spend": 3.0},
+            {"placement_id": "article_mid", "impressions": 400.0, "spend": 2.0},
+        ]
+        result, truncated = _build_placement_breakdown(dim, raw, 1000.0, 5.0, None)
         assert result is not None
-        assert len(result) == 3
+        assert [e.placement_id for e in result] == ["homepage_atf", "article_mid"]
         assert truncated is False

@@ -1,6 +1,6 @@
 # RCA: Decisions about an object made outside the object
 
-Repo: `/Users/konst/projects/salesagent-1210`, branch `feature/spec-gaps-1210`.
+Repo: `.`, branch `feature/spec-gaps-1210`.
 Pin: `adcp==6.6.0`, AdCP spec 3.1.1.
 All line numbers verified at working-tree HEAD (`9585ace68` + working-tree edits) on 2026-08-19.
 
@@ -641,7 +641,7 @@ loop at `:189-191`. Two owners, two answers.
 ## Section 4 — SDK behaviors we are not using
 
 Verified by reading the installed `adcp==6.6.0` at
-`/Users/konst/projects/salesagent-1210/.venv/lib/python3.12/site-packages/adcp/`.
+`.venv/lib/python3.12/site-packages/adcp/`.
 
 | SDK behavior | Location | Used in `src/`? | What we do instead |
 |---|---|---|---|

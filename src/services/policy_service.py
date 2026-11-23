@@ -16,6 +16,7 @@ from sqlalchemy.orm import attributes
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, Tenant
+from src.core.utils.naming import DEFAULT_ORDER_NAME_TEMPLATE
 
 
 class ValidationError(Exception):
@@ -67,7 +68,7 @@ class PolicySettings:
     default_measurement_provider: str | None = None
 
     # Naming conventions
-    order_name_template: str = "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
+    order_name_template: str = DEFAULT_ORDER_NAME_TEMPLATE
     line_item_name_template: str = "{order_name} - {product_name}"
 
     # Approval workflow
@@ -175,7 +176,8 @@ class PolicyService:
             try:
                 PolicyService.validate_currency_code(currency.currency_code)
             except ValidationError as e:
-                errors[currency.currency_code] = e.errors.get("currency_code", str(e))
+                # validate_currency_code names the currency_code field in each refusal it raises.
+                errors[currency.currency_code] = e.errors["currency_code"]
                 continue
 
             # Validate numeric values

@@ -25,12 +25,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from scripts.setup.seed_products import whole_publisher_selections
 from tests.e2e.conftest import (
     GAM_TEST_AD_UNIT_IDS,
     GAM_TEST_ADVERTISER_ID,
     GAM_TEST_NETWORK_CODE,
 )
 from tests.factories.principal import plaintext_token_for
+from tests.helpers.postgres_admin import drop_database
 
 GAM_LIFECYCLE_TENANT_ID = "gam_lifecycle_test"
 
@@ -185,16 +187,7 @@ def gam_lifecycle_db(gam_service_account_json):
 
     # Drop the test database
     try:
-        conn = psycopg2.connect(**conn_params)
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cur = conn.cursor()
-        cur.execute(
-            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-            f"WHERE datname = '{unique_db_name}' AND pid <> pg_backend_pid()"
-        )
-        cur.execute(f'DROP DATABASE IF EXISTS "{unique_db_name}"')
-        cur.close()
-        conn.close()
+        drop_database(psycopg2.connect(**conn_params), unique_db_name)
     except Exception:
         pass
 
@@ -216,6 +209,10 @@ def _seed_lifecycle_test_data():
             tenant_id=GAM_LIFECYCLE_TENANT_ID,
             name="GAM Lifecycle Test Tenant",
             subdomain="gam-lifecycle-test",
+            # Required (NOT NULL) and UNIQUE. This tenant is addressed by x-adcp-tenant and
+            # nothing routes to it by Host, so the value exists to satisfy the column; it is
+            # under *.adcp.test, the convention the storyboard seed established.
+            virtual_host="gam-lifecycle-test.adcp.test",
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
             creative_auto_approve_threshold=0.8,
@@ -257,7 +254,7 @@ def _seed_lifecycle_test_data():
             format_ids=[],
             targeting_template={},
             delivery_type="non_guaranteed",
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, GAM_LIFECYCLE_TENANT_ID),
             implementation_config={
                 "order_name_template": "E2E-NONGUAR-{po_number}-{timestamp}",
                 "line_item_type": "PRICE_PRIORITY",
@@ -281,7 +278,7 @@ def _seed_lifecycle_test_data():
             format_ids=[],
             targeting_template={},
             delivery_type="guaranteed",
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, GAM_LIFECYCLE_TENANT_ID),
             implementation_config={
                 "order_name_template": "E2E-GUAR-{po_number}-{timestamp}",
                 "line_item_type": "STANDARD",
@@ -297,7 +294,9 @@ def _seed_lifecycle_test_data():
         )
         session.add(product_guaranteed)
 
-        # HOUSE product for archive lifecycle test
+        # Product for the archive lifecycle test. It configures HOUSE, but a CPM package on it
+        # books PRICE_PRIORITY at that type's default priority: the adapter books a
+        # share-of-voice type (SPONSORSHIP, NETWORK, HOUSE) only for flat rate.
         product_house = Product(
             tenant_id=GAM_LIFECYCLE_TENANT_ID,
             product_id="gam_e2e_house",
@@ -305,7 +304,7 @@ def _seed_lifecycle_test_data():
             format_ids=[],
             targeting_template={},
             delivery_type="non_guaranteed",
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, GAM_LIFECYCLE_TENANT_ID),
             implementation_config={
                 "order_name_template": "E2E-HOUSE-{po_number}-{timestamp}",
                 "line_item_type": "HOUSE",
@@ -363,6 +362,7 @@ def gam_adapter(gam_lifecycle_db, gam_service_account_json):
         network_code=GAM_TEST_NETWORK_CODE,
         advertiser_id=GAM_TEST_ADVERTISER_ID,
         tenant_id=GAM_LIFECYCLE_TENANT_ID,
+        tenant_ai_config=None,
     )
 
     return adapter

@@ -1,6 +1,9 @@
 """Unit tests for order approval service."""
 
+import json
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from unittest.mock import ANY, MagicMock, patch
 
@@ -169,7 +172,8 @@ def test_get_approval_status_not_found(mock_db_session):
 # ─────────────────────────────────────────────────────────────────────────────
 # Two webhook unit tests that lived here were REMOVED, not repaired, when
 # ``_send_approval_webhook`` stopped speaking httpx and started handing the URL
-# to the egress seam (``src.core.security.outbound_http.send``):
+# to the egress seam (``src.core.security.webhook_egress.deliver_webhook``, and
+# through it ``src.core.security.outbound_http.send``):
 #
 #   * ``test_webhook_notification_sent_on_success`` claimed: the payload carries
 #     event/media_buy_id/status/order_id/attempts, and a stored bearer
@@ -180,6 +184,17 @@ def test_get_approval_status_not_found(mock_db_session):
 #     ``tests/integration/test_order_approval_webhook.py``
 #     (``TestDeliveredPayload``, ``TestStoredCredential`` — which also covers the
 #     no-config direction the old test only hit incidentally).
+#
+#     Its RFC 9421 half — a bearer-registered row must NOT also be signed
+#     (``"signature-input" not in headers``, #1291 C1) — moved with it rather
+#     than lapsing: that arm is now chosen inside ``_headers_for`` from the
+#     ABSENCE of an ``authentication`` block, and both directions are graded on
+#     a real socket by ``TestSigningIsGatedByTheScheme`` in the same file
+#     (``test_a_bearer_row_is_delivered_unsigned``, ``test_a_row_less_delivery_is_unsigned``)
+#     and by ``tests/integration/test_order_approval_webhook_signing.py``.
+#     Grading it here would mean asserting the seam's arm selection through a
+#     mock of the seam, which is the caller re-deriving a decision GH #1802
+#     moved out of every caller.
 #   * ``test_webhook_retries_on_failure`` claimed: a failing POST is retried to
 #     three attempts. The hand-rolled ``for attempt in range(...)`` /
 #     ``time.sleep(2 ** attempt)`` loop it patched no longer exists; the seam owns
@@ -188,10 +203,57 @@ def test_get_approval_status_not_found(mock_db_session):
 #     (``TestRetryClassification``, ``TestExhaustedDeliveryIsSilent``) and, for
 #     the spacing, once in ``tests/integration/test_outbound_http.py``.
 #
-# The SSRF obligation from #1697 stays here because it is a claim about THIS
-# call site — that the order-approval sender shares the gate — which the seam's
-# own suite cannot make on its behalf.
+#     Its second claim — every attempt of one event carries the SAME
+#     ``idempotency_key`` — did NOT move, because it is a claim about what THIS
+#     sender puts in the body, and no other suite makes it. It is kept below,
+#     retargeted: the key is minted once per ``_send_approval_webhook`` call and
+#     travels in the single ``content=`` byte string ``deliver_webhook``
+#     serializes and the seam replays on every attempt, so "same key on every
+#     retry" is now structural rather than something to count POSTs for.
+#
+# The SSRF obligation from #1697 stays here for the same reason: it is a claim
+# about THIS call site — that the order-approval sender shares the gate — which
+# the seam's own suite cannot make on its behalf.
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+@contextmanager
+def _unregistered_and_unsigned() -> Iterator[None]:
+    """The two DB-backed reads a delivery makes, answered without a database.
+
+    Each is patched at ITS OWN seam, because the two reads do not share a session
+    and a single patch that appeared to cover both would let a unit test dial
+    Postgres for the half it missed:
+
+    * the stored registration is read by ``_lookup_approval_webhook_auth`` through
+      ``PushNotificationConfigRepository`` on the session THIS service module opens,
+      so ``src.services.order_approval_service.get_db_session`` is the right target
+      and ``scalars(...).first() -> None`` is the no-registration case: no stored
+      ``authentication`` block, which is the arm the pinned schema selects by
+      absence (security.mdx @ v3.1.1 :1424).
+    * ``delivery_signer_for_tenant`` resolves through ``signing_repo``, which opens
+      its OWN session inside ``src.core.signing.outbound`` and deliberately accepts
+      none from a caller (#1757) — precisely so no session is held across a socket.
+      Patching the service module's ``get_db_session`` would therefore not reach it.
+
+    ``signing_repo`` is what gets patched, not ``delivery_signer_for_tenant``, so the
+    posture decision still RUNS: ``webhook_delivery_signer`` returns ``None`` for a
+    tenant with no repository, which is a DECIDED posture (deliver plain) and not a
+    fabricated value. That is also why the assertions below can require ``sign=None``
+    on the seam call instead of ``ANY`` — a signer that appeared here would mean the
+    resolution had been mocked away rather than exercised.
+    """
+
+    @contextmanager
+    def _no_signing_repo(tenant_id: str | None) -> Iterator[None]:
+        yield None
+
+    with (
+        patch("src.services.order_approval_service.get_db_session") as mock_db,
+        patch("src.core.signing.outbound.signing_repo", _no_signing_repo),
+    ):
+        mock_db.return_value.__enter__.return_value.scalars.return_value.first.return_value = None
+        yield
 
 
 def test_approval_webhook_rejects_metadata_url_without_post(caplog):
@@ -202,11 +264,17 @@ def test_approval_webhook_rejects_metadata_url_without_post(caplog):
     touches. ``send`` is spied with ``wraps=`` instead, so the REAL validation
     runs — the link-local metadata address is refused inside the seam before any
     connection is attempted (and stays refused even with the private/insecure
-    escape hatches on), and production swallows the refusal as a log line.
+    escape hatches on), and production RECORDS the refusal rather than raising.
 
-    Both halves are asserted: the raw URL reached the gate under the attempt
-    budget this call site asks for, and the gate refused it — which is what
-    "nothing was POSTed" means once no local transport exists to count.
+    Three halves are asserted, and the third is what the egress merge added: the
+    raw URL reached the gate under the attempt budget and signing posture this
+    call site asks for; the gate refused it — which is what "nothing was POSTed"
+    means once no local transport exists to count; and the refusal comes back as
+    a ``refused_destination`` OUTCOME with zero attempts, logged at the level the
+    OUTCOME dictates. That last one is not decoration. Its predecessor, a bool
+    from ``_reject_unsafe_approval_webhook_url``, made a refused destination
+    indistinguishable from a delivery to both polling-thread callers, and a bare
+    ``return`` after a log line would quietly reinstate that.
     """
     from src.core.security.outbound_http import send as real_send
     from src.services.order_approval_service import _send_approval_webhook
@@ -214,18 +282,14 @@ def test_approval_webhook_rejects_metadata_url_without_post(caplog):
     metadata_url = "http://169.254.169.254/latest/meta-data/"
 
     with (
-        patch("src.services.order_approval_service.get_db_session") as mock_db,
+        _unregistered_and_unsigned(),
         # The seam call now lives one layer down, inside deliver_webhook
         # (src.core.security.webhook_egress) -- the shared delivery function every
         # webhook sender routes through since #1441.
         patch("src.core.security.webhook_egress.send", wraps=real_send) as spy_send,
-        caplog.at_level(logging.WARNING, logger="src.services.order_approval_service"),
+        caplog.at_level(logging.ERROR, logger="src.services.order_approval_service"),
     ):
-        mock_db_instance = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_db_instance
-        mock_db_instance.scalars.return_value.first.return_value = None
-
-        _send_approval_webhook(
+        outcome = _send_approval_webhook(
             webhook_url=metadata_url,
             tenant_id="tenant_1",
             principal_id="principal_1",
@@ -237,9 +301,65 @@ def test_approval_webhook_rejects_metadata_url_without_post(caplog):
     # content=, not json=: deliver_webhook serializes once (via
     # prepare_signed_request) and transmits those exact bytes via content=, never
     # json= (#1441's Core Invariant -- no webhook sender may reach
-    # json= on the egress seam).
-    spy_send.assert_called_once_with(metadata_url, content=ANY, headers=ANY, timeout=10.0, max_attempts=3)
+    # json= on the egress seam). sign=None because the tenant has no signing
+    # repository here, which is a decided posture rather than a mocked-away one --
+    # see _unregistered_and_unsigned.
+    spy_send.assert_called_once_with(metadata_url, content=ANY, headers=ANY, timeout=10.0, max_attempts=3, sign=None)
+
+    # attempts == 0 is the number that decides the signing question: `send` raised
+    # OutboundRequestBlocked out of resolve_for_dial BEFORE it built a request, so no
+    # body was ever produced and there is nothing an unsigned fallback could have been
+    # made from.
+    assert outcome.kind == "refused_destination"
+    assert outcome.attempts == 0
     assert "was refused by egress policy" in caplog.text
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
+
+
+def test_approval_webhook_payload_carries_one_idempotency_key():
+    """The dedup key survives the move onto the egress seam, in the body.
+
+    Retained from ``test_webhook_retries_on_failure`` (see the ledger above), which
+    graded it by POSTing three times and collecting one key out of three captured
+    bodies. That shape is gone with the local retry ladder, but the obligation is
+    not the seam's to keep: the SDK sender this call replaces injected the key
+    itself (``WebhookSender.send_raw``: ``{**payload, "idempotency_key": key}``),
+    so routing through ``deliver_webhook`` — which injects nothing — is exactly the
+    change that could cost the receiver its dedup key without any other suite
+    noticing.
+
+    Graded on the bytes handed to the seam. "Same key on every attempt" needs no
+    counting any more: ``deliver_webhook`` serializes ONCE into the ``content=``
+    byte string asserted here and ``send`` replays that same object on every
+    attempt, so one key in these bytes IS one key per event.
+    """
+    from src.core.security.egress.response import OutboundResult
+    from src.services.order_approval_service import _send_approval_webhook
+
+    webhook_url = "https://buyer.example.com/webhook"
+    accepted = OutboundResult(http_status=200, headers={}, content=b"", attempts=1, duration_seconds=0.01)
+
+    with (
+        _unregistered_and_unsigned(),
+        patch("src.core.security.webhook_egress.send", return_value=accepted) as spy_send,
+    ):
+        outcome = _send_approval_webhook(
+            webhook_url=webhook_url,
+            tenant_id="tenant_1",
+            principal_id="principal_1",
+            media_buy_id="mb_123",
+            status="approved",
+            message="Order approved",
+        )
+
+    spy_send.assert_called_once_with(webhook_url, content=ANY, headers=ANY, timeout=10.0, max_attempts=3, sign=None)
+    assert outcome.kind == "delivered"
+
+    # The one thing content=ANY above cannot pin: a per-event value, so there is no
+    # literal to compare it against in the atomic assertion.
+    payload = json.loads(spy_send.call_args.kwargs["content"])
+    assert isinstance(payload["idempotency_key"], str)
+    assert payload["idempotency_key"] != ""
 
 
 def test_a_started_approval_thread_can_be_cancelled(mock_db_session):

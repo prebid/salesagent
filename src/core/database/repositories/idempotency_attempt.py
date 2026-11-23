@@ -1,6 +1,6 @@
 """IdempotencyAttempt repository — tenant-scoped access to the verbatim success cache.
 
-AdCP 3.0.1 idempotency contract: retrying a mutating tool call with the same
+idempotency contract: retrying a mutating tool call with the same
 idempotency_key must return the ORIGINAL success response byte-for-byte (marked
 ``replayed: true``), and errors are NEVER cached — a retry after an error
 re-executes. This repository stores and replays those cached successes, keyed by

@@ -43,14 +43,14 @@ class TestUpdateMediaBuyWireTransportStatus:
             env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
             yield env, ctx["existing_media_buy"]
 
-    def _build_update_req(self, media_buy: object) -> object:
+    def _build_update_req(self, media_buy: object, *, end_time: str) -> object:
         from src.core.schemas import UpdateMediaBuyRequest
 
         return UpdateMediaBuyRequest(
             account={"account_id": "acct_test"},
             idempotency_key="test-idem-key-0001",
             media_buy_id=media_buy.media_buy_id,
-            end_time="2026-12-01T00:00:00Z",
+            end_time=end_time,
         )
 
     @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS)
@@ -67,7 +67,8 @@ class TestUpdateMediaBuyWireTransportStatus:
         with status='completed'.
         """
         env, media_buy = env_with_media_buy
-        req = self._build_update_req(media_buy)
+        # The seeded flight starts now, so the new end must come from the same clock.
+        req = self._build_update_req(media_buy, end_time=env.clock.future_iso(60))
         result = env.call_via(transport, req=req)
 
         assert result.is_success, f"Transport {transport}: expected success but got error: {result.error!r}"

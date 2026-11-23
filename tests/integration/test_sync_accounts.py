@@ -64,7 +64,7 @@ class TestSyncAccountsCreate:
         the full billing-party enum — including 'advertiser' — and the DB CHECK
         (ck_accounts_billing) must permit the INSERT; before the #1521 fix a
         spec-valid advertiser entry IntegrityError'd against the 2-value CHECK.
-        @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
+        @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
         """
         from src.core.database.repositories.uow import AccountUoW
 
@@ -749,7 +749,7 @@ class TestSyncAccountsApproval:
         """
         from sqlalchemy import select
 
-        from src.core.config_loader import get_tenant_by_id
+        from src.core.config_loader import get_tenant_context
         from src.core.database.database_session import get_db_session
         from src.core.database.models import Tenant
 
@@ -766,10 +766,10 @@ class TestSyncAccountsApproval:
                     "set_approval_mode writes to wrong DB column; MCP auth chain won't see it"
                 )
 
-            # And the serialized tenant dict used by resolve_identity must include it
-            tenant_dict = get_tenant_by_id("harness_audit_t")
-            assert tenant_dict is not None
-            assert tenant_dict["account_approval_mode"] == "credit_review"
+            # And the tenant context the resolver loads must include it
+            tenant_context = get_tenant_context("harness_audit_t")
+            assert tenant_context is not None
+            assert tenant_context.account_approval_mode == "credit_review"
 
 
 class TestSyncAccountsBillingPolicyTransport:
@@ -1005,7 +1005,6 @@ class TestSyncAccountsBrandIdRoundTrip:
     @pytest.mark.asyncio
     async def test_brand_id_persists_unmangled_and_resolves(self, integration_db):
         from adcp.types import (
-            AccountReference,
             AccountReferenceByNaturalKey,
         )
 
@@ -1044,11 +1043,9 @@ class TestSyncAccountsBrandIdRoundTrip:
                 assert rows[0].brand.brand_id.root == "brand_one"
 
             # ...and the resolver (which reads .root) must find that same row.
-            ref = AccountReference(
-                AccountReferenceByNaturalKey(
-                    brand={"domain": "acme.com", "brand_id": "brand_one"},
-                    operator="example.com",
-                )
+            ref = AccountReferenceByNaturalKey(
+                brand={"domain": "acme.com", "brand_id": "brand_one"},
+                operator="example.com",
             )
             with AccountUoW("sync_bid1") as uow:
                 assert uow.accounts is not None

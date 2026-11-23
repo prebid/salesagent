@@ -13,8 +13,10 @@ The [Quickstart guide](quickstart.md) gets the agent running locally in 5 minute
 
 ### Cloud walkthroughs
 
+- **[AWS (ECS Fargate, RDS, ALB)](deployment/aws.md)**
 - **[Google Cloud Run](deployment/walkthroughs/gcp.md)**
 - **[Fly.io](deployment/walkthroughs/fly.md)**
+- **[Single VM with Docker Compose and Caddy](deployment/vm.md)**
 
 ## User guide
 
@@ -34,6 +36,12 @@ The [Quickstart guide](quickstart.md) gets the agent running locally in 5 minute
 
 - **[Security](security.md)** — authentication and security best practices
 - **[Encryption](encryption.md)** — API key encryption with Fernet
+
+## Message signing (RFC 9421)
+
+- **[Signing posture and key discovery](signing/posture-and-discovery.md)** — for counterparties: what we advertise, the enforcement ladder, and the brand.json walk to our JWKS
+- **[Verifying our outbound webhooks](signing/verifying-our-webhooks.md)** — for counterparties: the profile tag, where to fetch the key, and the legacy HMAC removal
+- **[Signing key runbook](operations/signing-key-runbook.md)** — for operators: provisioning, rotation, revocation, rollout and rollback
 
 ## Development
 
@@ -66,6 +74,8 @@ docs/
 ├── deployment/
 │   ├── single-tenant.md        # Standard deployment
 │   ├── multi-tenant.md         # Multi-tenant configuration
+│   ├── aws.md                  # AWS: ECS Fargate, RDS, ALB (Terraform)
+│   ├── vm.md                   # Single VM: Docker Compose + Caddy
 │   └── walkthroughs/
 │       ├── gcp.md              # Google Cloud Run
 │       └── fly.md              # Fly.io
@@ -121,9 +131,13 @@ docs/
 
 ## Key components
 
-- **MCP server** (port `8080`) — FastMCP-based tools for AI agents
-- **Admin UI** (port `8001`) — OAuth secured web interface
-- **A2A server** (port `8091`) — agent-to-agent communication
+One application process serves the MCP server, the A2A server, and the Admin UI. In the
+Docker setup, nginx publishes all three on port `8000` and forwards each request to that
+process.
+
+- **MCP server** (`/mcp/`) — FastMCP-based tools for AI agents
+- **Admin UI** (`/admin`) — OAuth secured web interface
+- **A2A server** (`/a2a`) — agent-to-agent communication
 - **Database** — PostgreSQL
 
 ## External links

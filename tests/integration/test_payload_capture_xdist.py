@@ -22,12 +22,13 @@ processes, and an in-process assertion cannot reach it.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from tests._collection_manifest import unpublished_env
 
 #: Three small modules that between them dispatch on some nodeids and not others, so the
 #: run exercises both the recorded and the deliberately-empty row.
@@ -39,12 +40,26 @@ _MODULES = [
 
 
 @pytest.mark.requires_db
+# A nested pytest that collects three BDD modules under xdist: on the CI box it takes 120-160s,
+# past the integration job's 60s per-test default. Same budget as the liveness real-run tests,
+# which start the same kind of nested run.
+@pytest.mark.timeout(300)
 def test_dispatches_survive_the_worker_to_controller_trip(tmp_path: Path, integration_db: object) -> None:
     del integration_db
     artifact = tmp_path / "payloads.json"
     env = {
-        **os.environ,
+        **unpublished_env(),
         "BDD_PAYLOAD_ARTIFACT": str(artifact),
+        # Redirected for the same reason as the payload artifact above, and this one is
+        # NOT optional: the nested pytest writes a liveness artifact too, this test never
+        # looks at it, and its default path is the cwd-relative
+        # ``test-results/bdd_scenario_liveness.json`` that thirteen storyboard guards
+        # read. Without this line the three modules below land there as a 9-item
+        # path-narrowed artifact, and those guards correctly refuse it -- which is what
+        # made three unit tests fail on two separate full runs a day apart. Scoping the
+        # bdd tox envs does not help: this subprocess inherits the `integration` env,
+        # which declares no override.
+        "BDD_LIVENESS_ARTIFACT": str(tmp_path / "liveness.json"),
         "BDD_E2E_ENABLED": "false",
     }
     result = subprocess.run(  # noqa: S603 - fixed argv, no shell
@@ -57,7 +72,7 @@ def test_dispatches_survive_the_worker_to_controller_trip(tmp_path: Path, integr
     )
     assert artifact.exists(), f"no artifact written under xdist.\n{result.stdout[-3000:]}"
 
-    data = json.loads(artifact.read_text())
+    data = json.loads(artifact.read_text(encoding="utf-8"))
     nodes = data["nodes"]
     assert data["run"]["workers"] == 2, f"the run was not distributed: {data['run']}"
     assert len(nodes) == data["run"]["collected"], (

@@ -26,7 +26,13 @@ def test_simplified_context(integration_db):
 
     with get_db_session() as session:
         # Create tenant
-        tenant = Tenant(tenant_id="test_tenant", name="Test Tenant", subdomain="test-tenant")
+        tenant = Tenant(
+            tenant_id="test_tenant",
+            name="Test Tenant",
+            subdomain="test-tenant",
+            # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
+            virtual_host="test-tenant.adcp.test",
+        )
         session.add(tenant)
 
         # Create principal

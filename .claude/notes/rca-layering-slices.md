@@ -1,6 +1,6 @@
 # Responsibility map: `sync_creatives` and `create_media_buy`
 
-Repo `/Users/konst/projects/salesagent-1210`, branch `feature/spec-gaps-1210`, `adcp==6.6.0`.
+Repo `.`, branch `feature/spec-gaps-1210`, `adcp==6.6.0`.
 Every claim below is a file:line with the code quoted. Layer vocabulary:
 
 - **T** transport — decode wire input, resolve identity, encode wire output, translate errors

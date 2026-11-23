@@ -12,6 +12,7 @@ from tests.unit._architecture_helpers import (
     find_plain_json_column_violations,
     format_failure,
     parse_module,
+    rel,
     repo_root,
 )
 
@@ -27,10 +28,10 @@ def test_json_columns_use_jsontype() -> None:
     violations: list[str] = []
     db_dir = repo / "src" / "core" / "database"
     for path in db_dir.rglob("*.py"):
-        rel = str(path.relative_to(repo))
+        rel_path = rel(path, repo)
         tree = parse_module(path)
         for lineno in find_plain_json_column_violations(tree):
-            violations.append(f"{rel}:{lineno} — use JSONType, not JSON")
+            violations.append(f"{rel_path}:{lineno} — use JSONType, not JSON")
     assert not violations, format_failure(
         summary="JSON DB columns must use JSONType, not plain JSON",
         violations=violations,

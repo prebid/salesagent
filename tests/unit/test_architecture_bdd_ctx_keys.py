@@ -44,6 +44,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import rel
+
 _TESTS_DIR = Path(__file__).resolve().parents[1]
 _BDD_DIR = _TESTS_DIR / "bdd"
 
@@ -96,18 +98,18 @@ def _trees() -> dict[str, ast.Module]:
         if "__pycache__" in str(p):
             continue
         try:
-            source = p.read_text()
+            source = p.read_text(encoding="utf-8")
         except OSError:
             continue
-        rel = str(p.relative_to(_TESTS_DIR.parent))
+        rel_path = rel(p, _TESTS_DIR.parent)
         if not (_BDD_DIR in p.parents or _is_step_driver(source)):
             continue
-        out[rel] = ast.parse(source, filename=str(p))
+        out[rel_path] = ast.parse(source, filename=str(p))
     return out
 
 
-def _is_step_file(rel: str) -> bool:
-    return rel.startswith("tests/bdd/")
+def _is_step_file(rel_path: str) -> bool:
+    return rel_path.startswith("tests/bdd/")
 
 
 def _module_constants(tree: ast.Module) -> dict[str, str]:
@@ -119,6 +121,34 @@ def _module_constants(tree: ast.Module) -> dict[str, str]:
                 if isinstance(t, ast.Name):
                     consts[t.id] = stmt.value.value
     return consts
+
+
+def _imported_constants(tree: ast.Module, by_module: dict[str, dict[str, str]]) -> dict[str, str]:
+    """Constants this module IMPORTS from a sibling, resolved through the exporter.
+
+    ``_module_constants`` alone is per-file, so a key spelled as a constant that is
+    DEFINED in one step module and USED in another resolved on the writing side and not
+    on the reading side -- which is the one asymmetry that makes a live key look dead.
+    That is exactly how it failed: ``_dispatch.py`` defines
+    ``CREDENTIAL_REGISTRATIONS = "credential_registrations"`` and writes with it, while
+    ``signing_enforcement.py`` imports the name and reads with it, so the write was seen,
+    the read was not, and the key was reported as written-by-a-step-and-read-by-nothing.
+
+    Resolution follows the IMPORT, not a global union of every constant name in the
+    corpus: two modules are free to bind the same name to different strings, and a union
+    would silently pick one of them.
+    """
+    resolved: dict[str, str] = {}
+    for stmt in ast.walk(tree):
+        if not isinstance(stmt, ast.ImportFrom) or not stmt.module or stmt.level:
+            continue
+        exporter = by_module.get(stmt.module.replace(".", "/") + ".py")
+        if not exporter:
+            continue
+        for alias in stmt.names:
+            if alias.name in exporter:
+                resolved[alias.asname or alias.name] = exporter[alias.name]
+    return resolved
 
 
 def _joined_prefix(node: ast.JoinedStr) -> str | None:
@@ -359,26 +389,30 @@ def _scan() -> _Scan:
             for child in ast.iter_child_nodes(n):
                 parents[id(child)] = n
 
+    by_module = {rel_path: _module_constants(tree) for rel_path, tree in trees.items()}
     scan = _Scan()
-    for rel, tree in trees.items():
-        shared = _ScanContext(sinks, helpers, _module_constants(tree), parents)
+    for rel_path, tree in trees.items():
+        # Own constants win over imported ones, which is what Python does: a module that
+        # rebinds an imported name uses its own value from that point on.
+        constants = {**_imported_constants(tree, by_module), **by_module[rel_path]}
+        shared = _ScanContext(sinks, helpers, constants, parents)
         for n in ast.walk(tree):
             if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             params = [a.arg for a in n.args.posonlyargs + n.args.args + n.args.kwonlyargs]
             names = {p for p in params if p == "ctx"}
-            if rel == "tests/bdd/conftest.py" and n.name == "ctx":
+            if rel_path == "tests/bdd/conftest.py" and n.name == "ctx":
                 names.add("d")  # the fixture builds the dict under a local name
             deferred = frozenset(helpers.get(n.name, ()))
             # converge the alias set, then record once
             for _ in range(6):
-                probe = _Visitor(_Scan(), rel, n.name, set(names), shared, deferred)
+                probe = _Visitor(_Scan(), rel_path, n.name, set(names), shared, deferred)
                 for stmt in n.body:
                     probe.visit(stmt)
                 if not probe.grew:
                     break
                 names = probe.names
-            visitor = _Visitor(scan, rel, n.name, names, shared, deferred)
+            visitor = _Visitor(scan, rel_path, n.name, names, shared, deferred)
             for stmt in n.body:
                 visitor.visit(stmt)
     return scan

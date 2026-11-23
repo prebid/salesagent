@@ -32,7 +32,7 @@ class TestTheArtifactRecordsWhatWasCollected:
         path = tmp_path / storyboard_spec.COLLECTED_ARTIFACT_PATH
         collected.write(path, checks)
 
-        artifact = json.loads(path.read_text())
+        artifact = json.loads(path.read_text(encoding="utf-8"))
         assert [c["check_id"] for c in artifact["checks"]] == [
             "mcp::happy::sb_one::s1",
             "mcp::happy::sb_one::s2",
@@ -89,7 +89,7 @@ class TestTheSessionHookIsWired:
         setattr(_Session.config, collected.STASH_ATTR, [_check(storyboard="sb_live")])
         storyboard_conftest.pytest_sessionfinish(_Session())
 
-        payload = json.loads((tmp_path / "out.json").read_text())
+        payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
         assert [c["storyboard_id"] for c in payload["checks"]] == ["sb_live"]
 
     def test_writes_nothing_when_no_checks_were_stashed(self, tmp_path, monkeypatch):

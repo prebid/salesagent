@@ -4,20 +4,151 @@ Provides consistent patterns for creating test database objects with proper
 timestamp handling and field validation to prevent common test issues.
 """
 
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session
 
 from src.core.database.models import (
+    AdapterConfig,
+    AuditLog,
+    Base,
+    Context,
+    Creative,
+    CreativeAssignment,
     CurrencyLimit,
+    MediaBuy,
+    MediaPackage,
+    ObjectWorkflowMapping,
     Principal,
     Product,
+    PropertyTag,
+    Publisher,
+    PushNotificationConfig,
+    SigningKey,
     Tenant,
+    TenantAuthConfig,
+    User,
+    WebhookDeliveryLog,
+    WorkflowStep,
 )
 from tests.factories.principal import plaintext_token_for
+
+#: The suffix every fixture-minted host carries. ``.test`` is reserved by RFC 2606 precisely
+#: so it can never resolve, and ``adcp.test`` is the convention
+#: ``scripts/setup/seed_storyboard_tenant.py`` established and the wildcard test certificate
+#: already covers. Deliberately NOT ``.example.com``: a fixture host is not a real origin and
+#: must not read like one.
+TEST_VHOST_SUFFIX = "adcp.test"
+
+
+def vhost_for(tenant_id: str) -> str:
+    """A fixture host for *tenant_id* — the one derivation, called rather than copied.
+
+    ``tenants.virtual_host`` is NOT NULL and ``ix_tenants_virtual_host`` is UNIQUE, so every
+    fixture tenant needs a host and no two may share one. Deriving it from the tenant_id
+    satisfies both at once, and doing it HERE means the convention has one definition: this
+    expression was inlined at two dozen call sites before it was extracted, which is the
+    shape CLAUDE.md names a defect rather than a style preference.
+
+    Underscores become hyphens because a tenant_id may hold them and a DNS label may not.
+    Nothing routes to the result — a fixture addresses its tenant directly, by id — so this is
+    a value that satisfies a column, not a claim about where anything is served.
+    """
+    return f"{tenant_id.replace('_', '-')}.{TEST_VHOST_SUFFIX}"
+
+
+def add_product_prerequisites(
+    session,
+    tenant_id: str,
+    *,
+    min_package_budget: float = 100.0,
+    max_daily_package_spend: float = 10000.0,
+    tag_description: str = "All inventory",
+) -> None:
+    """The two rows a product cannot exist without, added to *session*.
+
+    CLAUDE.md states the chain: ``Tenant -> CurrencyLimit (USD, required for budget
+    validation) -> PropertyTag ("all_inventory", required for property_tags references)``,
+    and a product requires BOTH. Spelling it out per test file is one logical operation
+    repeated, and pylint's R0801 ratchet caught it as such the moment two of those blocks
+    became identical.
+
+    The budget floors are parameters because callers genuinely differ on them — a test
+    grading minimum-spend refusal needs a floor its request can fall under — and folding
+    them to one value would change what those tests grade.
+
+    Adds, does not commit: the caller is mid-transaction with more rows to come.
+    """
+    session.add(
+        CurrencyLimit(
+            tenant_id=tenant_id,
+            currency_code="USD",
+            min_package_budget=min_package_budget,
+            max_daily_package_spend=max_daily_package_spend,
+        )
+    )
+    session.add(
+        PropertyTag(
+            tenant_id=tenant_id,
+            tag_id="all_inventory",
+            name="All Inventory",
+            description=tag_description,
+        )
+    )
+
+
+def seed_tenant_with_principal(
+    session,
+    tenant_id: str = "default",
+    *,
+    principal_id: str = "test_principal",
+    name: str = "Test Tenant",
+    subdomain: str = "test-tenant",
+) -> None:
+    """One tenant and one principal that can authenticate against it, COMMITTED.
+
+    The pair a raw-SQL smoke test needs before it can query anything: two scripts asked for
+    exactly this, byte for byte, which is how R0801 found them.
+
+    Commits, unlike the other seeders here, because its callers close the ORM session and
+    then reconnect with psycopg2 — the rows have to be visible to a different connection.
+    """
+    session.add(create_tenant_with_timestamps(tenant_id=tenant_id, name=name, subdomain=subdomain))
+    session.add(
+        Principal.with_token(
+            plaintext_token_for(principal_id),
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            name="Test Principal",
+            platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},
+        )
+    )
+    session.commit()
+
+
+def seed_tenant_with_product_prerequisites(
+    session,
+    tenant_id: str,
+    *,
+    name: str = "Test Tenant",
+    subdomain: str | None = None,
+    **tenant_kwargs: Any,
+) -> Tenant:
+    """A tenant AND :func:`add_product_prerequisites` for it, for the common case."""
+    tenant = create_tenant_with_timestamps(
+        tenant_id=tenant_id,
+        name=name,
+        subdomain=subdomain if subdomain is not None else tenant_id.replace("_", "-"),
+        **tenant_kwargs,
+    )
+    session.add(tenant)
+    add_product_prerequisites(session, tenant_id)
+    return tenant
 
 
 @contextmanager
@@ -44,6 +175,159 @@ def bind_factories_to_session(session):
     finally:
         for f, prev in zip(ALL_FACTORIES, previous, strict=True):
             f._meta.sqlalchemy_session = prev
+
+
+@contextmanager
+def bound_factory_session() -> Iterator[Session]:
+    """A session on the current engine, bound to every factory for the block, then closed.
+
+    Owns the session as well as the binding: it creates it, binds it through
+    :func:`bind_factories_to_session` (which restores the previous binding rather than
+    nulling it) and closes it, because a caller that only borrowed the binding would
+    still have to manage the session itself, and that is where hand-rolled versions
+    diverge. The ``bound_factory_session`` fixture in tests/integration/conftest.py and
+    the admin harnesses both come through here.
+    """
+    from src.core.database.database_session import get_engine
+
+    session = Session(bind=get_engine())
+    try:
+        with bind_factories_to_session(session):
+            yield session
+    finally:
+        session.close()
+
+
+#: The models :func:`delete_tenant_rows` deletes by ``tenant_id``, children before the rows
+#: they reference and ``Tenant`` last. ONE statement of what a tenant's rows are, so a
+#: teardown and a before/after snapshot cannot disagree. A table that is not listed loses
+#: its rows with the tenant when its foreign key cascades; when it does not, the delete of
+#: ``Tenant`` fails, and the model belongs here.
+TENANT_SCOPED_MODELS = (
+    Context,
+    CreativeAssignment,
+    WebhookDeliveryLog,
+    Creative,
+    PushNotificationConfig,
+    MediaBuy,
+    Product,
+    Principal,
+    PropertyTag,
+    AdapterConfig,
+    SigningKey,
+    Publisher,
+    AuditLog,
+    User,
+    TenantAuthConfig,
+    Tenant,
+)
+
+
+def tenant_row_counts(session: Session, tenant_id: str) -> dict[str, int]:
+    """How many rows of each tenant-scoped table *tenant_id* holds, by table name."""
+    return {
+        model.__tablename__: session.scalar(select(func.count()).select_from(model).filter_by(tenant_id=tenant_id))
+        for model in TENANT_SCOPED_MODELS
+    }
+
+
+def tenant_rows(session: Session, tenant_id: str, models: Iterable[type[Base]]) -> tuple[list[tuple[Any, ...]], ...]:
+    """Every column of each row *tenant_id* holds in *models*, model by model, in a stable order.
+
+    For a before/after comparison of what a request may write. ``updated_at`` is left out:
+    it moves with any write and says nothing a column does not.
+    """
+    return tuple(
+        sorted(
+            (
+                tuple((key, getattr(row, key)) for key in model.__table__.columns.keys() if key != "updated_at")
+                for row in session.scalars(select(model).filter_by(tenant_id=tenant_id))
+            ),
+            key=repr,
+        )
+        for model in models
+    )
+
+
+def delete_tenant(tenant_id: str) -> None:
+    """Delete tenant *tenant_id* and its rows from the database the current engine points at."""
+    from src.core.database.database_session import get_engine
+
+    with Session(bind=get_engine()) as session:
+        delete_tenant_rows(session, tenant_id)
+        session.commit()
+
+
+def delete_tenant_rows(session: Session, tenant_id: str) -> None:
+    """Delete a test tenant and EVERY row that hangs off it. The caller commits.
+
+    Children go first, explicitly: the ORM ``backref`` relationships carry no
+    delete cascade, so an ORM ``session.delete(tenant)`` tries to NULL a child's
+    ``tenant_id`` — which is half of its composite primary key. The FK's
+    ``ON DELETE CASCADE`` only applies to a database-level delete.
+
+    And the deployed schema does not have the cascade the models claim. In a database the
+    migrations built, the ``tenant_id`` FK of ``products``, ``media_buys``, ``creatives``,
+    ``users`` and ``audit_logs`` is ``NO ACTION``, while ``models.py`` declares
+    ``ON DELETE CASCADE`` on each. That model/migration drift is a real, pre-existing bug
+    (out of scope to fix here), and reading the model metadata instead of the migrations
+    is what would make this teardown silently incomplete. ``adapter_config``,
+    ``property_tags``, ``pricing_options`` and ``contexts`` DO carry a real cascade in
+    their creating migrations; they are deleted anyway, because an explicit delete of an
+    already-cascaded row is a harmless no-op and depending on which half of a known
+    drift is true is not.
+
+    ``ObjectWorkflowMapping`` and ``WorkflowStep`` have no ``tenant_id`` at all, so
+    they are reached through ``contexts``.
+    """
+    context_ids = select(Context.context_id).where(Context.tenant_id == tenant_id)
+    step_ids = select(WorkflowStep.step_id).where(WorkflowStep.context_id.in_(context_ids))
+    session.execute(delete(ObjectWorkflowMapping).where(ObjectWorkflowMapping.step_id.in_(step_ids)))
+    session.execute(delete(WorkflowStep).where(WorkflowStep.context_id.in_(context_ids)))
+    # ``media_packages`` has no tenant_id and its FK to media_buys carries no cascade,
+    # so a created media buy is unreachable from the tenant-scoped deletes below.
+    media_buy_ids = select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == tenant_id)
+    session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id.in_(media_buy_ids)))
+    # ``PricingOption`` is deliberately NOT deleted directly: the
+    # ``prevent_empty_pricing_options`` trigger REFUSES to remove a product's last
+    # pricing option while that product still exists, and explicitly allows the same
+    # row to go via the product's cascade. The composite FK's ``ON DELETE CASCADE``
+    # (migration c3b75d304773) is real, so deleting ``Product`` takes it.
+    for model in TENANT_SCOPED_MODELS:
+        session.execute(delete(model).where(model.tenant_id == tenant_id))
+
+
+@contextmanager
+def production_db_pointed_at(url: str) -> Iterator[None]:
+    """Point production's cached DB engine at ``url`` for the block.
+
+    The e2e counterpart of ``integration_db``'s engine repoint: over a live stack the
+    test's factories must write to the SERVER's database, but the process's
+    ``DATABASE_URL`` targets the in-process test base, so any production call made from
+    the test (a Then step's read-back, a harness seeding through ``get_engine()``) would
+    otherwise use a different database than the one the server reads. Repoints
+    ``DATABASE_URL`` and resets the cached engine on entry, restores both on exit
+    (mirrors tests/conftest_db.py). Entered by ``_db_scope_for`` in tests/bdd/conftest.py
+    for every ``e2e_``-prefixed transport, ``e2e_admin`` included.
+    """
+    import os
+
+    import src.core.context_manager as _context_manager_module
+    from src.core.database.database_session import reset_engine
+
+    original_url = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = url
+    reset_engine()
+    _context_manager_module._context_manager_instance = None
+    try:
+        yield
+    finally:
+        if original_url is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = original_url
+        reset_engine()
+        _context_manager_module._context_manager_instance = None
 
 
 def get_utc_now():
@@ -93,6 +377,10 @@ def create_tenant_with_timestamps(
     # Ensure we have required timestamp fields
     kwargs.setdefault("created_at", now)
     kwargs.setdefault("updated_at", now)
+    # A tenant declares the host it is served at. Defaulted here for the same reason the
+    # timestamps are — a caller grading something else should not have to name it — and a
+    # caller that IS grading the host passes its own.
+    kwargs.setdefault("virtual_host", vhost_for(tenant_id))
 
     return Tenant(tenant_id=tenant_id, name=name, subdomain=subdomain, billing_plan=billing_plan, **kwargs)
 
@@ -216,7 +504,6 @@ def seed_targeting_test_tenant(
     Caller is responsible for adding products, pricing options, and committing.
     """
     from tests.factories import (
-        AuthorizedPropertyFactory,
         CurrencyLimitFactory,
         PrincipalFactory,
         PropertyTagFactory,
@@ -264,7 +551,12 @@ def seed_targeting_test_tenant(
             name=principal_name,
             platform_mappings={"mock": {"advertiser_id": "mock_adv_1"}},
         )
-        AuthorizedPropertyFactory(tenant=tenant, tenant_id=tenant_id)
+        # The default publisher (the one create_test_db_product's products name) authorizes the
+        # tenant in its stored adagents.json.
+        from tests.factories.product import DEFAULT_PUBLISHER_DOMAIN
+        from tests.factories.publisher import authorize_publishers
+
+        authorize_publishers(tenant, DEFAULT_PUBLISHER_DOMAIN)
         TenantAuthConfigFactory(tenant=tenant, tenant_id=tenant_id, oidc_enabled=True)
 
 
@@ -300,7 +592,6 @@ def add_targeting_test_product(
             delivery_type="guaranteed",
             targeting_template={},
             implementation_config={},
-            property_tags=["all_inventory"],
             property_targeting_allowed=property_targeting_allowed,
         )
         session.flush()
@@ -364,31 +655,3 @@ def seed_media_buy_with_package(
             package_config={"product_id": product_id},
         )
     return media_buy_id
-
-
-def cleanup_test_data(session, tenant_id: str, principal_id: str = None):
-    """Clean up test data for a tenant and optionally principal.
-
-    This helper provides a consistent pattern for cleaning up test data
-    in the correct order to avoid foreign key constraint violations.
-
-    Args:
-        session: Database session
-        tenant_id: Tenant ID to clean up
-        principal_id: Optional principal ID to clean up specifically
-
-    Example:
-        cleanup_test_data(session, "test_tenant_001", "test_principal_001")
-    """
-    # Clean up in reverse dependency order
-    if principal_id:
-        session.execute(delete(Product).where(Product.tenant_id == tenant_id))
-        session.execute(
-            delete(Principal).where(Principal.tenant_id == tenant_id, Principal.principal_id == principal_id)
-        )
-    else:
-        session.execute(delete(Product).where(Product.tenant_id == tenant_id))
-        session.execute(delete(Principal).where(Principal.tenant_id == tenant_id))
-
-    session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
-    session.commit()

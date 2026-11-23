@@ -46,6 +46,24 @@ class PrincipalRepository:
             select(Principal).filter_by(tenant_id=self._tenant_id, token_hash=token_hash)
         ).first()
 
+    def find_by_agent_url(self, agent_url: str) -> Principal | None:
+        """The principal of this tenant onboarded at ``agent_url``, or ``None``.
+
+        The reverse of the lookup the verifier does on the way in. A valid RFC 9421
+        signature establishes exactly one fact — "the request was issued by the agent whose
+        ``jwks_uri`` contains the ``keyid``" (security.mdx @ v3.1.1 § Agent identity) — and
+        the agent is named by the ``agents[]`` entry the verifier already used to fetch that
+        JWKS. So a signature that verifies IS a credential, and this is how it resolves to a
+        principal when the caller presented no bearer at all.
+
+        Scoped to the tenant, like every other read here, and unique within it
+        (``uq_principals_tenant_agent_url``): the constraint is what makes "the principal
+        this signature establishes" a single answer rather than whichever row sorted first.
+        """
+        return self._session.scalars(
+            select(Principal).filter_by(tenant_id=self._tenant_id, agent_url=agent_url)
+        ).first()
+
     def list_all(self) -> list[Principal]:
         """Every principal in this tenant, ordered by display name."""
         return list(

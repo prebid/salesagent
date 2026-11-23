@@ -4,7 +4,7 @@ Source: pr-review-queue run `050826_2116` (artifacts in
 `~/.local/state/pr-review-queue/prebid-salesagent/queue/050826_2116/pr1721/`, note the
 findings doc is `full-findings.md`, not `FINDINGS.md`). All 10 findings re-verified
 adversarially against the live source at HEAD `951a570c1` (both worktrees are at the same
-commit; verification done in `/Users/konst/projects/salesagent-1210`). Companion to (not a
+commit; verification done in `.`). Companion to (not a
 duplicate of) `.claude/notes/pr1721-architecture-diagnosis.md` (round 1, D1–D5/M1–M5) —
 round 1's remedies are all landed at this head; this round is the residue plus the
 recurrence question.

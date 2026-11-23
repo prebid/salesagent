@@ -24,7 +24,7 @@
 # Reconcile upstream in adcp-req (a dry_run × approval_mode partition), then
 # retire this file in favour of the regenerated one.
 #
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/creative/sync-creatives-request.json pointer=/properties/dry_run
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/dry_run
 Feature: UC-006 sync_creatives — a dry_run preview fires no effect the transaction cannot undo (local)
 
   @T-UC-006-local-dryrun-ai-review-live @dry-run @creative-approval @invariant

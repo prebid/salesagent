@@ -30,8 +30,8 @@ ENV_FILE=".test-stack.env"
 # Emits FOUR ports: postgres, the plaintext proxy, the TLS listener
 # (salesagent-tgzb), and webhook-capture's plain-HTTP readback control-plane
 # (salesagent-amht.3). Both the TLS port and the webhook-capture port are
-# allocated the same way as the other two rather than pinned, because several
-# stacks run concurrently on one box.
+# allocated the same way as the other two rather than pinned (to 8443 / 8080),
+# because several stacks run concurrently on one box.
 find_ports() {
     uv run python -c "
 import os, socket
@@ -59,30 +59,33 @@ for i in range(span - 1):
 
 # Reap abandoned test stacks before allocating. A run killed with -9
 # (OOM / agent timeout) never fires run_all_tests.sh's EXIT trap, leaving
-# an adcp-test-<pid> compose stack holding ports in 50000-60000 and
-# serving 502 once its upstream dies (salesagent-18h.12). Containers older
-# than the threshold belong to no live run on this host, so reap them.
+# an adcp-test-* compose stack holding ports in 50000-60000, serving 502 once
+# its upstream dies (salesagent-18h.12), and holding one of the few e2e network
+# slices alloc-e2e-subnet.sh hands out. A stack's age is its network's: compose
+# creates the network first, so a stack still coming up is young, and a network
+# whose containers are already gone is still found.
 reap_abandoned_stacks() {
-    local max_age_min=${STALE_STACK_MAX_AGE_MIN:-90}
-    docker ps -a --filter "name=adcp-test-" --format '{{.Names}}' 2>/dev/null \
-        | sed -E 's/-(proxy|adcp-server|postgres)-[0-9]+$//' | sort -u \
-        | while read -r proj; do
-            [ -z "$proj" ] && continue
-            # Never touch this run's own project.
-            [ "$proj" = "${COMPOSE_PROJECT_NAME:-}" ] && continue
-            local cid started age_min
-            cid=$(docker ps -aq --filter "name=${proj}-" 2>/dev/null | head -1)
-            [ -z "$cid" ] && continue
-            started=$(docker inspect -f '{{.State.StartedAt}}' "$cid" 2>/dev/null)
-            [ -z "$started" ] && continue
-            age_min=$(( ( $(date +%s) - $(date -j -f "%Y-%m-%dT%H:%M:%S" "${started%%.*}" +%s 2>/dev/null \
-                || date -d "$started" +%s 2>/dev/null || echo "$(date +%s)") ) / 60 ))
-            if [ "$age_min" -ge "$max_age_min" ]; then
-                echo -e "${BLUE}Reaping abandoned stack ${proj} (age ${age_min}m)${NC}"
-                docker-compose -f docker-compose.e2e.yml -p "$proj" down -v 2>/dev/null \
-                    || docker rm -f $(docker ps -aq --filter "name=${proj}-") 2>/dev/null || true
-            fi
-        done
+    local max_age_min=${STALE_STACK_MAX_AGE_MIN:-90} label=com.docker.compose.project
+    local now rows proj created age_min
+    now=$(date +%s)
+    # Newest network per project. `|| true`: a network removed between `ls` and
+    # `inspect` must not end `up` under set -e.
+    rows=$(docker network ls -q --filter "label=$label" 2>/dev/null \
+        | xargs -r docker network inspect -f "{{index .Labels \"$label\"}} {{.Created.Unix}}" 2>/dev/null \
+        | sort -k1,1 -k2,2nr | awk '!seen[$1]++') || true
+    while read -r proj created; do
+        case "$proj" in adcp-test-*) ;; *) continue ;; esac
+        # Never touch this run's own project.
+        [ "$proj" = "${COMPOSE_PROJECT_NAME:-}" ] && continue
+        age_min=$(( (now - created) / 60 ))
+        [ "$age_min" -ge "$max_age_min" ] || continue
+        echo -e "${BLUE}Reaping abandoned stack ${proj} (age ${age_min}m)${NC}"
+        # By label, so no compose binary or compose-file interpolation is needed.
+        # Containers first: a network cannot be removed while one is attached.
+        docker ps -aq --filter "label=$label=$proj" | xargs -r docker rm -f >/dev/null 2>&1 || true
+        docker network ls -q --filter "label=$label=$proj" | xargs -r docker network rm >/dev/null 2>&1 || true
+        docker volume ls -q --filter "label=$label=$proj" | xargs -r docker volume rm >/dev/null 2>&1 || true
+    done <<< "$rows"
 }
 
 # Host stack: pytest runs on the host and reaches the stack over localhost, so
@@ -102,7 +105,11 @@ dc() {
 cmd_up() {
     echo -e "${BLUE}Starting Docker test stack...${NC}"
 
-    export COMPOSE_PROJECT_NAME="adcp-test-$$"
+    # A random suffix, not $$: runs in separate containers each start a fresh pid
+    # namespace (and can share a hostname), so their pids repeat, and two
+    # concurrent stacks then share one project.
+    COMPOSE_PROJECT_NAME="adcp-test-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+    export COMPOSE_PROJECT_NAME
     reap_abandoned_stacks
 
     export ADCP_TESTING=true CREATE_SAMPLE_DATA=true
@@ -110,11 +117,30 @@ cmd_up() {
     export GEMINI_API_KEY="${GEMINI_API_KEY:-test_key}"
     export ENCRYPTION_KEY="${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}"  # TEST ONLY — never use in production
 
+    # The storyboard agent's signed-requests test-kit configuration, so the
+    # `adcp-server-storyboard` service definition can interpolate it. Sourced before
+    # `dc up` because these are settings the SERVER PROCESS reads at boot.
+    source scripts/dev/storyboard-signing-env.sh
+
     # The tls-proxy service bind-mounts .test-tls/; without the material the
     # mount materialises an empty directory and nginx refuses to start. Idempotent
     # — a current certificate is left exactly as it is, so concurrent stacks
     # already serving it are undisturbed.
     scripts/dev/ensure-test-tls.sh
+
+    # Allocate this stack's network slice the same way its ports are allocated
+    # (salesagent-mp53.9). The e2e network is pinned to a NON-PRIVATE range so
+    # the server reaches its webhook receiver at an address production's SSRF
+    # gate accepts unpatched; a fixed value means the second concurrent stack
+    # fails with "Pool overlaps with other one on this address space".
+    # Assigned first, not `eval "export $(...)"`: export's own status would hide
+    # the allocator's refusal, and set -u would then die on the unset variable
+    # instead of on the allocator's message.
+    if [ -z "${E2E_NETWORK_SUBNET:-}" ]; then
+        _slice=$(scripts/dev/alloc-e2e-subnet.sh) || exit
+        export "$_slice"
+        echo "  e2e network slice: $E2E_NETWORK_SUBNET"
+    fi
 
     # Bounded retry on port-collision: a sibling worktree can still grab a
     # probed port in the TOCTOU window before `docker up` publishes it.

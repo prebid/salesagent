@@ -222,8 +222,7 @@
 {% include 'partials/hierarchical_tree_scripts.html' %}
 
 <script>
-const scriptRoot = '{{ request.script_root }}' || '';
-const tenantId = '{{ tenant.tenant_id }}';
+const tenantId = {{ tenant.tenant_id|tojson }};
 const treeApiUrl = `${scriptRoot}/api/tenant/${tenantId}/inventory/tree`;
 let selectedInventory = null;
 let adUnitTree = null;
@@ -292,8 +291,8 @@ function updateSyncStatus(data) {
         }
 
         syncStatus.innerHTML = `
-            Last synced: ${lastSync.toLocaleString()}
-            <span class="text-muted">(${timeAgo})</span>
+            Last synced: ${escapeHtml(lastSync.toLocaleString())}
+            <span class="text-muted">(${escapeHtml(timeAgo)})</span>
             ${data.needs_refresh ? '<span class="badge bg-warning ms-2">Needs Refresh</span>' : ''}
         `;
     } else {
@@ -303,11 +302,11 @@ function updateSyncStatus(data) {
 
 function updateStats(data) {
     document.getElementById('inventoryStats').innerHTML = `
-        <div><strong>Ad Units:</strong> ${data.total_units || 0}</div>
-        <div><strong>Placements:</strong> ${data.placements || 0}</div>
-        <div><strong>Labels:</strong> ${data.labels || 0}</div>
-        <div><strong>Targeting Keys:</strong> ${data.custom_targeting_keys || 0}</div>
-        <div><strong>Audience Segments:</strong> ${data.audience_segments || 0}</div>
+        <div><strong>Ad Units:</strong> ${escapeHtml(data.total_units || 0)}</div>
+        <div><strong>Placements:</strong> ${escapeHtml(data.placements || 0)}</div>
+        <div><strong>Labels:</strong> ${escapeHtml(data.labels || 0)}</div>
+        <div><strong>Targeting Keys:</strong> ${escapeHtml(data.custom_targeting_keys || 0)}</div>
+        <div><strong>Audience Segments:</strong> ${escapeHtml(data.audience_segments || 0)}</div>
     `;
 }
 
@@ -325,14 +324,12 @@ function syncInventory() {
         body: JSON.stringify({ mode: 'full' })
     })
         .then(response => {
-            if (response.status === 202 || response.ok) {
-                return response.json();
-            }
-            throw new Error(`Server error: ${response.status}`);
+            // Every answer is JSON: a started sync, or a refusal the next step shows
+            return response.json();
         })
         .then(data => {
             if (data.error) {
-                throw new Error(data.error);
+                throw new Error(adminErrorText(data));
             }
 
             // Sync started in background
@@ -368,7 +365,7 @@ function pollInventorySyncStatus(syncId, btn) {
                     alert(`✅ Sync completed!\n\nAd Units: ${adUnitCount}\nPlacements: ${placementCount}\nLabels: ${labelCount}`);
                     window.location.reload();
                 } else if (data.status === 'failed' || data.error) {
-                    throw new Error(data.error || 'Sync failed');
+                    throw new Error(adminErrorText(data));
                 } else {
                     // Still running - check again in 2 seconds
                     setTimeout(checkStatus, 2000);
@@ -390,52 +387,52 @@ function showInventoryDetail(item, type) {
 
     const detail = document.getElementById('inventoryDetail');
 
-    let html = `
-        <h6>${item.name}</h6>
+    let detailHtml = `
+        <h6>${escapeHtml(item.name)}</h6>
         <table class="table table-sm">
-            <tr><th>ID:</th><td>${item.id}</td></tr>
-            <tr><th>Type:</th><td>${type}</td></tr>
-            <tr><th>Status:</th><td><span class="badge bg-${getStatusColor(item.status)}">${item.status}</span></td></tr>
+            <tr><th>ID:</th><td>${escapeHtml(item.id)}</td></tr>
+            <tr><th>Type:</th><td>${escapeHtml(type)}</td></tr>
+            <tr><th>Status:</th><td><span class="badge bg-${escapeHtml(getStatusColor(item.status))}">${escapeHtml(item.status)}</span></td></tr>
     `;
 
     if (item.path && item.path.length > 0) {
-        html += `<tr><th>Path:</th><td>${item.path.join(' > ')}</td></tr>`;
+        detailHtml += `<tr><th>Path:</th><td>${escapeHtml(item.path.join(' > '))}</td></tr>`;
     }
 
     // Sizes can be at top level (from tree API) or in metadata (from search API)
     const sizes = item.sizes || (item.metadata && item.metadata.sizes) || [];
     if (sizes.length > 0) {
-        html += '<tr><th>Sizes:</th><td>';
+        detailHtml += '<tr><th>Sizes:</th><td>';
         sizes.forEach(size => {
-            html += `<span class="inventory-size">${size.width}x${size.height}</span>`;
+            detailHtml += `<span class="inventory-size">${escapeHtml(size.width)}x${escapeHtml(size.height)}</span>`;
         });
-        html += '</td></tr>';
+        detailHtml += '</td></tr>';
     }
 
     if (item.metadata) {
         if (item.metadata.ad_unit_code) {
-            html += `<tr><th>Ad Unit Code:</th><td><code>${item.metadata.ad_unit_code}</code></td></tr>`;
+            detailHtml += `<tr><th>Ad Unit Code:</th><td><code>${escapeHtml(item.metadata.ad_unit_code)}</code></td></tr>`;
         }
 
         if (item.metadata.explicitly_targeted) {
-            html += `<tr><th>Targeting:</th><td>Explicitly Targeted</td></tr>`;
+            detailHtml += `<tr><th>Targeting:</th><td>Explicitly Targeted</td></tr>`;
         }
     }
 
-    html += '</table>';
+    detailHtml += '</table>';
 
-    html += `
+    detailHtml += `
         <div class="mt-3">
             <button class="btn btn-sm btn-primary" onclick="assignToProduct()">
                 Assign to Product
             </button>
-            <button class="btn btn-sm btn-secondary" onclick="copyInventoryId('${item.id}')">
+            <button class="btn btn-sm btn-secondary" onclick="copyInventoryId(${jsArg(item.id)})">
                 Copy ID
             </button>
         </div>
     `;
 
-    detail.innerHTML = html;
+    detail.innerHTML = detailHtml;
 }
 
 function getStatusColor(status) {
@@ -477,29 +474,29 @@ function showSearchResults(results) {
     if (results.length === 0) {
         content.innerHTML = '<p class="text-muted">No results found</p>';
     } else {
-        let html = `<p>Found ${results.length} items</p>`;
-        html += '<div class="list-group">';
+        let resultsHtml = `<p>Found ${escapeHtml(results.length)} items</p>`;
+        resultsHtml += '<div class="list-group">';
 
         results.forEach(item => {
-            html += `
+            resultsHtml += `
                 <div class="list-group-item search-result-item"
-                     onclick="showInventoryDetail(${JSON.stringify(item).replace(/"/g, '&quot;')}, '${item.type}')">
+                     onclick="showInventoryDetail(${jsArg(item)}, ${jsArg(item.type)})">
                     <div class="d-flex justify-content-between">
                         <div>
-                            <h6 class="mb-1">${item.name}</h6>
-                            <p class="mb-1 text-muted">${item.path ? item.path.join(' > ') : ''}</p>
-                            <small>Type: ${item.type} | Status: ${item.status}</small>
+                            <h6 class="mb-1">${escapeHtml(item.name)}</h6>
+                            <p class="mb-1 text-muted">${escapeHtml(item.path ? item.path.join(' > ') : '')}</p>
+                            <small>Type: ${escapeHtml(item.type)} | Status: ${escapeHtml(item.status)}</small>
                         </div>
                         <div>
-                            <span class="badge bg-${getStatusColor(item.status)}">${item.status}</span>
+                            <span class="badge bg-${escapeHtml(getStatusColor(item.status))}">${escapeHtml(item.status)}</span>
                         </div>
                     </div>
                 </div>
             `;
         });
 
-        html += '</div>';
-        content.innerHTML = html;
+        resultsHtml += '</div>';
+        content.innerHTML = resultsHtml;
     }
 
     resultsDiv.style.display = 'block';
@@ -546,25 +543,25 @@ async function assignToProduct() {
         });
 
         const productList = document.getElementById('productList');
-        let html = '<div class="list-group">';
+        let listHtml = '<div class="list-group">';
 
         products.forEach(product => {
             const isAssigned = assignedProductIds.includes(product.product_id);
-            html += `
+            listHtml += `
                 <label class="list-group-item">
                     <input class="form-check-input me-1" type="checkbox"
-                           name="productSelection" value="${product.product_id}"
-                           data-mapping-id="${mappingsByProduct[product.product_id] || ''}"
+                           name="productSelection" value="${escapeHtml(product.product_id)}"
+                           data-mapping-id="${escapeHtml(mappingsByProduct[product.product_id] || '')}"
                            ${isAssigned ? 'checked' : ''}>
-                    <strong>${product.name}</strong>
+                    <strong>${escapeHtml(product.name)}</strong>
                     ${isAssigned ? '<span class="badge bg-success ms-2">Currently Assigned</span>' : ''}
-                    <small class="text-muted d-block">${product.description || 'No description'}</small>
+                    <small class="text-muted d-block">${escapeHtml(product.description || 'No description')}</small>
                 </label>
             `;
         });
 
-        html += '</div>';
-        productList.innerHTML = html;
+        listHtml += '</div>';
+        productList.innerHTML = listHtml;
 
         new bootstrap.Modal(document.getElementById('assignProductModal')).show();
     } catch (error) {
@@ -611,7 +608,7 @@ async function saveProductAssignment() {
 
         // Add new assignments
         for (const productId of toAdd) {
-            const response = await fetch(`${scriptRoot}/tenant/{{ tenant_id }}/products/${productId}/inventory`, {
+            const response = await fetch(`${scriptRoot}/tenant/${ {{ tenant_id|tojson }} }/products/${productId}/inventory`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -622,7 +619,7 @@ async function saveProductAssignment() {
             });
             const data = await response.json();
             if (data.error) {
-                results.push(`❌ Failed to add: ${data.error}`);
+                results.push(`❌ Failed to add: ${adminErrorText(data)}`);
             } else {
                 results.push(`✓ Added to 1 product`);
             }
@@ -630,13 +627,13 @@ async function saveProductAssignment() {
 
         // Remove old assignments
         for (const { productId, mappingId } of toRemove) {
-            const response = await fetch(`${scriptRoot}/tenant/{{ tenant_id }}/products/${productId}/inventory/${mappingId}`, {
+            const response = await fetch(`${scriptRoot}/tenant/${ {{ tenant_id|tojson }} }/products/${productId}/inventory/${mappingId}`, {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' }
             });
             const data = await response.json();
             if (!data.success) {
-                results.push(`❌ Failed to remove: ${data.message || 'Unknown error'}`);
+                results.push(`❌ Failed to remove: ${adminErrorText(data)}`);
             } else {
                 results.push(`✓ Removed from 1 product`);
             }
@@ -699,20 +696,13 @@ function performSelectiveSync() {
         .then(async response => {
             // Check HTTP status first before parsing JSON
             if (!response.ok) {
-                // Try to parse error message from JSON response
-                try {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
-                } catch (e) {
-                    // If JSON parsing fails, use status text
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
+                throw new Error(adminErrorText(await response.json()));
             }
             return response.json();
         })
         .then(data => {
             if (data.error) {
-                throw new Error(data.error);
+                throw new Error(adminErrorText(data));
             }
 
             let message = 'Selective sync completed!\n\n';

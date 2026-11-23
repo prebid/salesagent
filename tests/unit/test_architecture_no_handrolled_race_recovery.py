@@ -28,6 +28,8 @@ import pathlib
 
 import pytest
 
+from tests.unit._architecture_helpers import rel
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SRC = REPO_ROOT / "src"
 
@@ -67,16 +69,16 @@ def collect_handrolled_recoveries() -> dict[tuple[str, str], int]:
     found: dict[tuple[str, str], int] = {}
     for path in sorted(SRC.rglob("*.py")):
         try:
-            tree = ast.parse(path.read_text(), filename=str(path))
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except SyntaxError:
             continue
-        rel = str(path.relative_to(SRC))
+        rel_path = rel(path, SRC)
         for node in ast.walk(tree):
             if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                 continue
             if not (_opens_savepoint(node) and _handles_integrity_error(node)):
                 continue
-            key = (rel, node.name)
+            key = (rel_path, node.name)
             if key in SANCTIONED:
                 continue
             found[key] = node.lineno
@@ -107,7 +109,7 @@ def test_allowlist_has_no_stale_entries() -> None:
 @pytest.mark.arch_guard
 def test_sanctioned_implementation_still_exists() -> None:
     """If resolve_or_write stops being the pattern, this guard is pinning nothing."""
-    tree = ast.parse((SRC / "core/database/integrity.py").read_text())
+    tree = ast.parse((SRC / "core/database/integrity.py").read_text(encoding="utf-8"))
     node = next(
         (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "resolve_or_write"),
         None,

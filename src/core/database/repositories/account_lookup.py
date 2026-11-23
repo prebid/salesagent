@@ -16,6 +16,8 @@ the principal, and status-checked; a refusal is one of the typed account errors.
 
 from __future__ import annotations
 
+import logging
+
 from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey
 
 from src.core.database.models import Account
@@ -32,6 +34,8 @@ from src.core.exceptions import (
 from src.core.helpers.brand_key import brand_key_parts
 from src.core.schemas import Principal
 
+logger = logging.getLogger(__name__)
+
 
 def find_account(repo: AccountRepository, account_ref: AccountReference, principal: Principal) -> Account:
     """The account *account_ref* names that *principal* may use, or a typed refusal.
@@ -43,15 +47,18 @@ def find_account(repo: AccountRepository, account_ref: AccountReference, princip
         AdCPAccountSetupRequiredError, AdCPAccountSuspendedError,
         AdCPAccountPaymentRequiredError: the account's status blocks operations.
     """
-    inner = account_ref.root
-    if isinstance(inner, AccountReferenceById):
-        return _by_id(repo, inner.account_id, principal.principal_id)
-    if isinstance(inner, AccountReferenceByNaturalKey):
-        return _by_natural_key(repo, inner, principal.principal_id)
+    # No ``.root``: the pinned SDK ships ``AccountReference`` as the two-arm union itself, not as a
+    # RootModel wrapping it, so the value IS the variant. ``core/account-ref.json`` is a
+    # oneOf over objects, which is what a RootModel wrapper around an object union was
+    # always misrepresenting (adcp-client-python#1077).
+    if isinstance(account_ref, AccountReferenceById):
+        return _by_id(repo, account_ref.account_id, principal.principal_id)
+    if isinstance(account_ref, AccountReferenceByNaturalKey):
+        return _by_natural_key(repo, account_ref, principal.principal_id)
     # Unreachable: AccountReference is a closed two-variant union validated by Pydantic
     # upstream. A fresh variant reaching here is an internal contract violation, not a
     # buyer-facing not-found -- raise ValueError, not AdCPSalesAgentError.
-    raise ValueError(f"Unsupported AccountReference variant: {type(inner)}")
+    raise ValueError(f"Unsupported AccountReference variant: {type(account_ref)}")
 
 
 def _by_id(repo: AccountRepository, account_id: str, principal_id: str) -> Account:
@@ -97,6 +104,20 @@ def _by_natural_key(repo: AccountRepository, ref: AccountReferenceByNaturalKey, 
 
     account = matches[0] if matches else None
     if account is None:
+        # OPERATOR-FACING, never on the wire. A natural-key miss is scoped to the calling
+        # agent's grants (#1417), so "no such account" and "an account you cannot see" are
+        # the same envelope by design — correct for the buyer, and indistinguishable for
+        # whoever has to fix a fixture. The typed details stay wire-safe; the tenant and
+        # the resolved principal go to the log, which is the only place that can tell a
+        # missing row from a missing grant.
+        logger.warning(
+            "account natural-key miss: tenant=%s principal=%s brand_domain=%s operator=%s sandbox=%s",
+            repo.tenant_id,
+            principal_id,
+            brand_domain,
+            ref.operator,
+            ref.sandbox,
+        )
         raise AdCPAccountNotFoundError(details=EntityRefDetails(brand_domain=brand_domain, operator=ref.operator))
     _require_access(repo, principal_id, account.account_id)
     _check_status(account.account_id, account.status)
@@ -126,5 +147,10 @@ def _check_status(account_id: str, status: str | None) -> None:
         )
     if status == "suspended":
         raise AdCPAccountSuspendedError(details=EntityRefDetails(account_id=account_id))
+    if status in ("rejected", "closed"):
+        # Terminal states (enums/account-status.json). docs/accounts/overview.mdx: "Sellers MUST
+        # reject operations on accounts in terminal states with ACCOUNT_NOT_FOUND or an
+        # appropriate error" -- the account can never be used again, so it resolves as absent.
+        raise AdCPAccountNotFoundError(details=EntityRefDetails(account_id=account_id))
     if status == "payment_required":
         raise AdCPAccountPaymentRequiredError(details=EntityRefDetails(account_id=account_id))

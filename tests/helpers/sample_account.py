@@ -31,6 +31,18 @@ SAMPLE_ACCOUNT: dict[str, Any] = {
     "operator": "pinnacle-agency.example",
 }
 
+#: The advertiser a request names when the test does not care which one.
+#:
+#: RESERVED, and that is the whole requirement. ``.example`` is an RFC 2606 §2 reserved
+#: top-level domain, so no one can register this and no request built from it can name a
+#: host somebody else controls. The value this replaced was ``testbrand.com`` — a real
+#: registrable domain, reached from here into roughly every generated payload in the suite
+#: and, until it was corrected, into a corpus proposed to the AdCP spec.
+#:
+#: It sits beside :data:`SAMPLE_ACCOUNT` because it is the same kind of value for the same
+#: reason: a name the fixtures agree on, defined once so the copies cannot drift.
+SAMPLE_BRAND: dict[str, Any] = {"domain": "testbrand.example"}
+
 
 def seed_sample_account(tenant: Any, principal: Any) -> Any:
     """Create the sample account and grant *principal* access to it.

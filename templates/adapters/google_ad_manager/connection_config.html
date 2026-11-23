@@ -38,7 +38,7 @@ Expected context variables:
         <!-- Fully configured - show success state -->
         <div class="status-card" style="background: #f0fdf4; border-left: 4px solid #10b981;">
             <!-- Hidden fields for JS operations -->
-            <input type="hidden" id="gam_refresh_token" value="{{ adapter_config.get('refresh_token') }}">
+            <input type="hidden" id="gam_refresh_token" value="">  {# never rendered: a blank token means the stored one #}
             <input type="hidden" id="gam_network_code" value="{{ adapter_config.get('network_code') }}">
             <input type="hidden" id="gam_trafficker_id" value="{{ adapter_config.get('trafficker_id') }}">
 
@@ -104,8 +104,8 @@ Expected context variables:
                 <div style="margin-top: 0.5rem; padding: 1rem; background: #f8f9fa; border-radius: 4px;">
                     <label for="gam_refresh_token">Manual OAuth Refresh Token</label>
                     <input type="text" id="gam_refresh_token" class="form-control"
-                           value="{{ adapter_config.get('refresh_token', '') if adapter_config else '' }}"
-                           placeholder="Paste your OAuth refresh token here">
+                           value=""
+                           placeholder="{{ 'A token is saved. Paste a new one to replace it.' if adapter_config and adapter_config.get('refresh_token') else 'Paste your OAuth refresh token here' }}">
                     <small class="form-text text-muted">For advanced users: manually enter a refresh token if you have one.</small>
                     <button onclick="saveManualToken()" class="btn btn-primary" style="margin-top: 0.5rem;">
                         Save Token

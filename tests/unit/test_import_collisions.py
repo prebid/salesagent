@@ -30,7 +30,7 @@ def test_no_import_collisions():
         if not full_path.exists():
             continue
 
-        with open(full_path) as f:
+        with open(full_path, encoding="utf-8") as f:
             content = f.read()
 
         # Parse the Python file
@@ -89,7 +89,7 @@ def test_models_use_correct_imports():
     base_path = Path(__file__).parent.parent.parent
     main_file = base_path / "src" / "core" / "main.py"
 
-    with open(main_file) as f:
+    with open(main_file, encoding="utf-8") as f:
         content = f.read()
 
     # Check for correct usage patterns (SQLAlchemy 2.0 style)
@@ -125,7 +125,7 @@ def test_wildcard_imports_documented():
         if not full_path.exists():
             continue
 
-        with open(full_path) as f:
+        with open(full_path, encoding="utf-8") as f:
             lines = f.readlines()
 
         for i, line in enumerate(lines):

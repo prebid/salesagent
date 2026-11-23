@@ -44,13 +44,16 @@ COMPOSE_FILE="docker-compose.e2e.yml"
 # concurrent runs never contend; the suffix just keeps container names distinct.
 # Compose rejects uppercase project names — lowercase whatever we're given.
 export COMPOSE_PROJECT_NAME="$(printf '%s' "${COMPOSE_PROJECT_NAME:-adcp-innet-$$}" | tr '[:upper:]' '[:lower:]')"
-# No TEST_UID/TEST_GID export, deliberately. docker-compose.e2e.yml sets no
-# `user:` on the tests service: under the rootless daemon the run boxes use,
-# container root already maps to the invoking user, so everything written into
-# the bind-mounted repo is owned by whoever launched the run, with no uid
-# plumbing at all. Exporting `id -u` here actively broke that -- rootless maps a
-# non-zero container uid to a host SUBUID, which is what left /app/logs
-# unwritable and killed adcp-server at import.
+# TEST_UID/TEST_GID export removed with docker-compose.e2e.yml's `tests.user`
+# pin (Aug 2026) -- see the comment there. In short: this derived the pin from
+# `id -u` in a process that runs as root under the CI supervisor, so it
+# resolved to 0:0 and pinned the image default; and on the rootless CI box
+# container root already maps to the invoking user, which is what the pin was
+# for. Exporting `id -u` was not merely redundant but actively harmful --
+# rootless maps a non-zero container uid to a host SUBUID, which is what left
+# /app/logs unwritable and killed adcp-server at import. .tox moved back onto a
+# named volume in the same change, so the `.tox` ownership failure that
+# motivated deriving it no longer has a bind mount to happen on.
 # The delivery-webhook scheduler runs on the SERVER (adcp-server), gated by this
 # interval. docker-compose.e2e.yml defaults it empty (scheduler off); the host
 # e2e path sets it to 5 via conftest. Mirror that so test_daily_delivery_webhook
@@ -77,6 +80,27 @@ export DELIVERY_WEBHOOK_INTERVAL="${DELIVERY_WEBHOOK_INTERVAL:-5}"
 # workers plus the per-worker server stacks -- which is why each knob cannot be
 # chosen in isolation. Tiers are keyed on the Docker VM's MemTotal, with the
 # CI-box tier matching what is measured green in-network (16/16/8 at 86-196GB).
+#
+# THE CI-BOX FLOOR IS THE BOTTOM OF THAT MEASURED RANGE, and it is a literal
+# below, not a round number: _CI_BOX_FLOOR_GB. It read 64 for a long time, 22 GB
+# under the range this comment declares, so a box between 64 and 85 GB silently
+# received the parallelism measured green at 86-196 GB. hetzner2-vm sat in that
+# gap when its Docker MemTotal fell from 86 GB to 74 GB, and its unit leg
+# truncated 20 of 30 retained in-network runs (exitcode 3, a dead master) while
+# the SAME box at 86 GB truncated 0 of 45 and a 196 GB box 0 of 92 -- with the
+# worker allocation byte-identical across all three, so the worker counts were
+# never the variable. salesagent-8qela.157 carries the measurement and
+# salesagent-8qela.158 the ruling.
+#
+# A box in the gap now drops to the tier below rather than running a
+# configuration nobody measured. That is slower on such a box and deliberately
+# so: a slow leg has a verdict and a truncated one does not.
+#
+# tests/unit/test_run_all_tests_memory_tiers.py reads both numbers out of this
+# file and fails if the floor stops matching the range the comment states, so
+# the comment is a check rather than a claim. Moving the floor means moving the
+# declared range in the same edit, which is the review this gap needed.
+_CI_BOX_FLOOR_GB=86
 _docker_mem_gb="$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)"
 # `{{.MemTotal}}` renders the literal string `<no value>` when the daemon does
 # not report it. Under `set -euo pipefail` the arithmetic below then aborts the
@@ -88,8 +112,29 @@ _docker_mem_gb="$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)"
 _docker_mem_gb=$(( _docker_mem_gb / 1073741824 ))
 _cores="$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) )"
 
-if [ "$_docker_mem_gb" -ge 64 ]; then
+if [ "$_docker_mem_gb" -ge "$_CI_BOX_FLOOR_GB" ]; then
     # CI box. Per-worker e2e stacks are affordable; cores are the ceiling again.
+    # 16, and the cap is DERIVED FROM MEASURED BARRIER COST, not from core count.
+    # Post-sharding sweep on noetis-b-vm (40 cores), barrier = import+collect per
+    # process, the phase every added worker pays before running anything:
+    #
+    #   N per suite      8       16       24
+    #   bdd-inproc-s1  101.5    176.6    238.1   s/process
+    #   integration     54.2     90.4    129.7
+    #   unit            67.2     81.5     99.8
+    #   total barrier  3376     7183    13109   s of CPU  (~N^2)
+    #
+    # Barrier per process rises in EVERY suite with N, and the total rises about
+    # quadratically -- per-process cost grows AND more processes pay it. Wall
+    # clock does not repay it: two runs at N=24 on an unchanged tree put the pole
+    # at 743.2 s and 905.6 s, a 21.9% spread, so the walls at 8, 16 and 24
+    # (872.7 / 884.2 / 743.2-905.6) are indistinguishable. Barrier, by contrast,
+    # reproduces within 6.5% across every suite -- which is why it, and not the
+    # wall clock, sets this number.
+    #
+    # 16 is therefore the largest N whose barrier is still mid-curve; 24 costs
+    # ~35% more barrier per process and buys nothing measurable. Raising it needs
+    # a barrier measurement, not a bigger box.
     _unit=$(( _cores > 16 ? 16 : _cores )); _integration=8; _e2e_workers=8
 elif [ "$_docker_mem_gb" -ge 32 ]; then
     _unit=$(( _cores > 8 ? 8 : _cores )); _integration=4; _e2e_workers=2
@@ -113,7 +158,7 @@ export INTEGRATION_XDIST_N="${INTEGRATION_XDIST_N:-$_integration}"
 # raises a UsageError for that together with -n>0 unless E2E_PER_WORKER=1 --
 # because under xdist the e2e_rest transport is silently dropped at collection and
 # the suite would go green without ever having run it. Setting E2E_WORKERS>0 takes
-# the fast path below, which splits `bdd` into `bdd_inprocess` (e2e disabled,
+# the fast path below, which splits `bdd` into `bdd-inprocess-s*` (e2e off,
 # freely parallel) plus `bdd_e2e`, and provisions N per-worker server+DB stacks so
 # e2e_rest can run in parallel legally.
 export E2E_WORKERS="${E2E_WORKERS:-$_e2e_workers}"
@@ -130,7 +175,7 @@ echo "Parallelism: docker_mem=${_docker_mem_gb}GB cores=${_cores} -> unit=$UNIT_
 # The in-network path always builds the full compose stack, so it can't honor
 # the "quick == no Docker" or the targeted contracts — those delegate to the
 # verbatim host runner that already implements them (DRY, single source).
-ALL_SUITES="unit,integration,bdd,admin,e2e,ui,quality,storyboard"
+ALL_SUITES="unit,integration,bdd,admin,e2e,ui,quality,storyboard,collection"
 DELEGATE=0
 case "${1:-ci}" in
     quick) DELEGATE=1 ;;
@@ -138,8 +183,9 @@ case "${1:-ci}" in
     *) SUITES="$1" ;;
 esac
 
-# Testability seam: resolve the argument contract and exit BEFORE any Docker
-# call so tests/unit/test_run_all_tests_contract.py can assert it without a stack.
+# Testability seam: resolve the argument contract and exit before any stack is
+# built. The `docker info` memory probe above still runs, so the tests that use
+# this seam put a stub `docker` first on PATH.
 if [ -n "${RUN_ALL_TESTS_RESOLVE_ONLY:-}" ]; then
     if [ "$DELEGATE" = 1 ]; then echo "RESOLVED delegate-host: $*"; else echo "RESOLVED suites=$SUITES"; fi
     exit 0
@@ -150,34 +196,64 @@ if [ "$DELEGATE" = 1 ]; then
 fi
 
 # Fast bdd path: when per-worker e2e stacks are provisioned (E2E_WORKERS>0), swap
-# the plain serial `bdd` env for the two-pass split — bdd_inprocess (the
+# the plain serial `bdd` env for the sharded split — bdd-inprocess-s1..sN (the
 # a2a/mcp/rest bulk, parallelized by BDD_XDIST_N) then bdd_e2e (the e2e_rest
 # transport, fanned across the per-worker servers by BDD_E2E_XDIST_N). Without
 # E2E_WORKERS the plain serial `bdd` runs unchanged, so CI and small runners are
 # unaffected. Phase B below provisions the servers and exports BDD_E2E_XDIST_N.
 if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
-    # Token-exact swap: a plain-substring ${SUITES/bdd/...} would mangle an
-    # explicit bdd_inprocess/bdd_e2e suite argument (bdd_e2e -> bdd_e2e_e2e).
-    SUITES=",$SUITES,"
-    SUITES="${SUITES/,bdd,/,bdd_inprocess,bdd_e2e,}"
-    SUITES="${SUITES#,}"; SUITES="${SUITES%,}"
-    # bdd_inprocess reads BDD_XDIST_N (compose pins it to 0 = serial by default),
-    # so the in-process bulk only parallelizes if we export a worker count here.
+    # Each shard collects only its own files. Under xdist every worker collected
+    # all 7223 items to run a slice of them -- 162.5 s per worker against 57.9 s
+    # to import -- so collection cost was O(items x workers). The split is the
+    # committed one at SHARD_COUNTS["bdd"], the same assignment CI's matrix
+    # runs, so tests/collection/test_architecture_ci_bdd_shard_partition.py already
+    # grades the exact partition used here.
+    #
+    # sys.path.insert is not optional: `python3 -c` does not reliably put the cwd on
+    # sys.path (PYTHONSAFEPATH / -P turn it off), and scripts/ci/shard_paths.py solves
+    # the same problem the same way at its own top.
+    _BDD_SHARDS="$(python3 -c "import sys; sys.path.insert(0, '.'); from scripts.ci.shard_split import SHARD_COUNTS; print(SHARD_COUNTS['bdd'])")"
     #
     # A REAL NUMBER, not `auto`. `auto` resolves through
     # PYTEST_XDIST_AUTO_NUM_WORKERS, which docker-compose.e2e.yml pins to 1 for
-    # BDD's own benefit -- so `auto` here meant ONE worker for every caller that
-    # does not separately export that variable, and the ~23m->~3.5m in-process win
-    # silently never landed. Matching E2E_WORKERS keeps the two halves of the split
-    # in proportion; both are overridable.
-    export BDD_XDIST_N="${BDD_XDIST_N:-$E2E_WORKERS}"
-    echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS BDD_XDIST_N=$BDD_XDIST_N -> suites=$SUITES"
+    # BDD's own benefit -- so `auto` meant ONE worker for every caller that does
+    # not separately export that variable, and the ~23m->~3.5m in-process win
+    # silently never landed. BDD_XDIST_N is the whole in-process budget a caller
+    # asks for (cassini's box profile asks for 16), and without one E2E_WORKERS is
+    # what the memory tiering above already sized. Dividing it across the shards
+    # keeps the TOTAL worker count there; the override form is what lets a
+    # measurement harness pin the per-shard number.
+    case "${BDD_XDIST_N:-}" in
+        ''|*[!0-9]*) _shard_workers=$(( E2E_WORKERS / _BDD_SHARDS )) ;;
+        *) _shard_workers=$(( BDD_XDIST_N / _BDD_SHARDS )) ;;
+    esac
+    export BDD_SHARD_XDIST_N="${BDD_SHARD_XDIST_N:-$(( _shard_workers > 0 ? _shard_workers : 1 ))}"
+    _shard_envs=""
+    for _shard in $(seq 1 "$_BDD_SHARDS"); do
+        _shard_paths="$(python3 scripts/ci/shard_paths.py bdd "$_shard" | tr '\n' ' ')"
+        # tox drops an empty {env:...} from argv without a word -- pytest then falls
+        # back to pytest.ini's `testpaths = tests` and the shard collects the whole
+        # tree, green. This assert is the only thing standing between that and a
+        # silent full-tree run.
+        : "${_shard_paths:?shard_paths.py produced no paths for bdd shard $_shard}"
+        export "BDD_SHARD_PATHS_$_shard=$_shard_paths"
+        _shard_envs="${_shard_envs}bdd-inprocess-s$_shard,"
+    done
+    # Token-exact swap: a plain-substring ${SUITES/bdd/...} would mangle an
+    # explicit bdd-inprocess-s*/bdd_e2e suite argument (bdd_e2e -> bdd_e2e_e2e).
+    SUITES=",$SUITES,"
+    SUITES="${SUITES/,bdd,/,${_shard_envs}bdd_e2e,}"
+    SUITES="${SUITES#,}"; SUITES="${SUITES%,}"
+    : "${BDD_SHARD_XDIST_N:?shard worker count resolved empty}"
+    echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS BDD_SHARD_XDIST_N=$BDD_SHARD_XDIST_N -> suites=$SUITES"
 fi
 
-# UTC, not local: the runner box and the machine reading the reports are in
-# different zones, so a local-time directory name means each side computes a
-# different one and the results cannot be attributed to the run that produced
-# them ("no confirmed run identity to attribute local test-results/ to").
+# UTC, not local. The name is built by whichever client launches the run while the
+# reports land under the box's UTC clock, so a CEST client produced a directory named
+# two hours ahead of its own payload. That name then sorted lexicographically above
+# every genuinely later run, so `ls -t`-style "newest directory" lookups resolved to it
+# and reported an older run's totals — or an empty husk — under the current run's id.
+# Both clocks agree only in UTC.
 RESULTS_DIR="test-results/innet_$(date -u +%d%m%y_%H%M)"
 # Kept in step with scripts/audit/compare_payloads.py's PAYLOAD_SUBDIR.
 PAYLOAD_SUBDIR="payloads"
@@ -190,10 +266,42 @@ mkdir -p "$RESULTS_DIR"
 # now, so that what is found after the suites ran is this run's or nothing: a storyboard
 # env that died before publishing must read as "no summary", not as last week's score.
 rm -f test-results/storyboard_summary_*.json
+# Same for the liveness artifact: the sharded path does not write it, so a copy on disk is
+# some earlier run's, and the unit env would read that as this run's measurement.
+rm -f test-results/bdd_scenario_liveness.json
+
+# What this run's sessions COLLECTED, published so the observers of a collection
+# do not each have to re-collect it in a subprocess. Unconditional because
+# the cost is one JSON write per process at session end, and the artifact is only useful if it is there without anyone
+# having predicted they would need it. See tests/_collection_manifest.py.
+export PYTEST_COLLECTION_MANIFEST="${PYTEST_COLLECTION_MANIFEST:-/app/$RESULTS_DIR/collection-manifest}"
+
+# Where each BDD session publishes what it MEASURED. Per run, for the same
+# reason the manifest above is: the liveness artifact itself lives at a stable
+# top-level path, so a directory derived from it would accumulate yesterday's
+# sessions, which satisfy the coverage check and get merged into today's
+# measurement. See tests/bdd/scenario_liveness.sessions_dir().
+export BDD_LIVENESS_SESSIONS="${BDD_LIVENESS_SESSIONS:-/app/$RESULTS_DIR/liveness-sessions}"
 
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
 
 cleanup() {
+    local rc=$?
+    # A failed run keeps every container's log beside its reports. The stack is removed
+    # below, and with it the only record of why the live server answered as it did: a
+    # report shows the wire answer (e.g. a per-creative SERVICE_UNAVAILABLE) but not the
+    # exception the server logged when it chose that answer.
+    if [ "$rc" -ne 0 ]; then
+        mkdir -p "$RESULTS_DIR/containers"
+        docker ps -a --filter "name=${COMPOSE_PROJECT_NAME}-" --format '{{.Names}}' | while read -r _name; do
+            docker logs "$_name" >"$RESULTS_DIR/containers/${_name}.log" 2>&1 || true
+        done
+    fi
+    # The publisher origin's access log names every Host the live server fetched an
+    # adagents.json for -- the record that the e2e ingest dialed the publisher itself
+    # (config/nginx/publisher-origin.conf). Kept on every run, not only a failed one.
+    mkdir -p "$RESULTS_DIR/containers"
+    dc logs --no-color publisher-origin >"$RESULTS_DIR/containers/publisher-origin.log" 2>&1 || true
     # Per-worker e2e servers AND their TLS sidecars are `docker compose run`
     # containers (not `up`), so `dc down` won't remove them — do it explicitly.
     # The sidecars MUST be matched too: a leaked `-tls-gwN.adcp.test` container
@@ -217,6 +325,30 @@ scripts/creative-agent-stack.sh build
 echo "Building image + bringing up the app stack in-network (project: $COMPOSE_PROJECT_NAME)..."
 dc build postgres adcp-server adcp-server-storyboard proxy tests
 
+# WHICH TREE THIS RUN GRADED, recorded beside its reports before a single suite
+# runs. A run directory used to carry no commit, no branch and no installed pin,
+# so a per-nodeid comparison could be made against a baseline that graded neither
+# tree in the claim -- and was: 36 regressions and 15 fixes reported, all of which
+# dissolved against a real base (salesagent-dxb3j). The reports cannot carry this
+# and nothing can reconstruct it afterwards, because the working tree moves.
+#
+# HERE and not later for that reason. The one fact that cannot come from the host
+# is the adcp pin AS INSTALLED -- `pyproject.toml` declares the release, while a
+# locally built SDK wheel carries a `+<local>` segment, and only that segment
+# separates two builds of the same release. So it is read from the
+# interpreter that runs the suites, which is why this sits immediately after the
+# `tests` image is built and before anything uses it. A failure to read it records
+# null rather than aborting the run: an unknown pin is worth less than no run.
+_adcp_pin="$(dc run --rm --no-deps -T tests python -m scripts.audit.run_identity --adcp 2>/dev/null | tail -1)" || _adcp_pin=""
+# The asserted identity is read HERE, in shell, and passed as arguments. run_identity.py is
+# pure stdlib and cannot import the settings loader (it runs where src/ may not exist), and a
+# raw environment read inside it is banned by ruff-environment.toml. Reading the three
+# variables in the shell satisfies both: SA_RUN_* are set by whoever launched the run --
+# cassini forwards them from the client, where .git exists -- and are empty otherwise, which
+# run_identity records as an absent identity rather than guessing one.
+python3 -m scripts.audit.run_identity --write "$RESULTS_DIR" --adcp-json "$_adcp_pin" \
+    --commit "${SA_RUN_COMMIT:-}" --branch "${SA_RUN_BRANCH:-}" --tree "${SA_RUN_TREE:-}"
+
 # Pre-create logs/ group-writable + setgid BEFORE anything else touches the
 # bind mount: adcp-server bind-mounts .:/app and creates logs/audit.log at
 # import time (uid 1001, its own baked umask) -- when that umask strips the
@@ -227,7 +359,9 @@ dc build postgres adcp-server adcp-server-storyboard proxy tests
 # create it (confirmed live: sa-93d37d7c, sa-c9acaf66 both landed
 # drwxr-sr-x -- not group-writable -- and are latent failures until fixed).
 # This must stay ahead of the TLS step below too: that step's fallback runs a
-# `tests` container, which would otherwise be the one to create logs/ first.
+# `tests` container, which would otherwise be the one to create logs/ first --
+# which is why this block sits ABOVE the TLS/subnet steps rather than beside
+# the `dc up` it used to precede.
 mkdir -p logs
 # Guarded, not silent: chmod on a logs/ that already exists owned by ANOTHER
 # uid fails with EPERM, and a bare `chmod` here would abort the whole script
@@ -273,13 +407,19 @@ for _log in audit.log error.log structured.jsonl security.jsonl; do
     # errors "Server not ready after 60s (port 8000)" and every e2e_rest BDD
     # scenario errors "the live E2E stack is unreachable", with no hint that a
     # file mode is the cause. chown to 1001 would need root we do not have here;
-    # these are per-run scratch logs, so world-writable is the honest fix.
+    # 666 is also consistent with the rest of a run directory, which is already
+    # world-writable; these are per-run scratch logs, not durable state.
     chmod 666 "logs/$_log" 2>/dev/null || true
-    # Verify rather than hope. `-w` would test OUR access; what actually matters
-    # is the OTHER write bit, since the server's uid is outside our groups. find
-    # -perm is used over `stat` because stat's flags differ between the GNU
-    # coreutils on the CI box and the BSD one on a macOS host, and this script
-    # runs on both.
+    # Verify rather than hope. Every step above is deliberately tolerant (`||
+    # true`) because each can legitimately fail on a file another uid owns; this
+    # check is what keeps that tolerance from becoming the silent skip it would
+    # otherwise be -- the earlier shape relied on an unguarded `: >` aborting
+    # under errexit, and this verifies the PROPERTY that mattered instead of the
+    # exit status of one step that might reach it.
+    # `-w` would test OUR access; what actually matters is the OTHER write bit,
+    # since the server's uid is outside our groups. find -perm is used over
+    # `stat` because stat's flags differ between the GNU coreutils on the CI box
+    # and the BSD one on a macOS host, and this script runs on both.
     if [ -z "$(find "logs/$_log" -perm -o+w 2>/dev/null)" ]; then
         echo "ERROR: logs/$_log is not writable by other; adcp-server runs as a" >&2
         echo "       non-root uid outside our groups and will die at startup with" >&2
@@ -298,19 +438,74 @@ done
 echo "Ensuring the test stack's TLS material..."
 scripts/dev/ensure-test-tls.sh || dc run --rm --no-deps -T tests python scripts/dev/gen_test_tls.py
 
+# The storyboard agent's signed-requests test-kit settings, exported for the
+# `adcp-server-storyboard` service definition to interpolate. Before `up`, because the
+# server reads them from its environment at boot. Stdlib only, so the in-network job's
+# bare python3 is enough.
+echo "Deriving the storyboard agent's signed-requests configuration..."
+source scripts/dev/storyboard-signing-env.sh
+
+# Allocate this stack's network slice BEFORE `up` (salesagent-mp53.9). The e2e
+# network is pinned to a NON-PRIVATE range so the server can reach its webhook
+# receiver at an address production's SSRF gate accepts on its own terms — but a
+# fixed value is a concurrency break: the second stack on the box dies with
+# "Pool overlaps with other one on this address space". Measured, not theorised.
+# Without this export the compose default applies and every concurrent stack
+# asks for the same slice.
+# Assigned first, so the allocator's refusal stops the run with its own message
+# (`eval "export $(...)"` returns export's status and hides it).
+if [ -z "${E2E_NETWORK_SUBNET:-}" ]; then
+    _slice=$(scripts/dev/alloc-e2e-subnet.sh) || exit
+    export "$_slice"
+    echo "  e2e network slice: $E2E_NETWORK_SUBNET"
+fi
+
 # Bring up Postgres + the app server + proxy + the TLS listener + the pinned
-# creative-agent (and its own registry Postgres). None publish host ports —
-# all reached by service name. tls-proxy is in this explicit list
-# deliberately: it is a normal `up` service, and omitting it would leave both
-# https origins it fronts (proxy.adcp.test, creative-agent.adcp.test) pointing
-# at nothing while every scenario that depends on either reported green on the
-# http branch instead (E2E_TLS_BASE_URL / CREATIVE_AGENT_URL, salesagent-amht.2).
-# adcp-server-storyboard is named here for the same reason every other service is: this
-# list is EXPLICIT, so a service absent from it is built and never started. It was, once —
-# the storyboard suite then reported `overall_status=unreachable` and graded 0 checks,
-# which the ledger-fitness check turned into a wall of "stale entry" noise. Exactly the
-# shape the comment below exists to prevent, one service over.
-dc up -d postgres adcp-server adcp-server-storyboard proxy tls-proxy creative-pg creative-agent
+# creative-agent (and its own registry Postgres). None publish host ports — all
+# reached by service name.
+#
+# This list is EXPLICIT, so a service absent from it is BUILT and never started.
+# Every entry below was added after that exact omission was observed live, and
+# every one of them failed in the same shape: not as "service missing", but as a
+# green run on the wrong branch, or as a failure three assertions downstream.
+#
+# tls-proxy: it is a normal `up` service, and omitting it leaves every https
+# origin it fronts pointing at nothing while the scenarios that depend on them
+# report green on the http branch instead (E2E_TLS_BASE_URL / CREATIVE_AGENT_URL,
+# salesagent-amht.2).
+#
+# adcp-server-storyboard: absent once, the storyboard suite reported
+# `overall_status=unreachable` and graded 0 checks, which the ledger-fitness
+# check turned into a wall of "stale entry" noise.
+#
+# webhook-capture and counterparty-origin: they are ORIGINS the SERVER dials,
+# routed by SNI through tls-proxy, and a service declared in compose but never
+# started answers 502 from nginx — which reads as a verifier or signing failure
+# three assertions later rather than as a missing service. (salesagent-mp53.9
+# shipped webhook-capture without adding it here and got away with it only
+# because nothing in-network dialled it yet: its egress test checks DNS and gate
+# arithmetic, and its contract test runs the service in-process.
+# salesagent-mp53.8's counterparty walk is the first leg that actually needs an
+# origin up, and it failed exactly this way.)
+#
+# scripted-llm: the model every server here calls (GOOGLE_GEMINI_BASE_URL), by service
+# name with no TLS front. Absent, every get_products ranking and policy scenario on
+# e2e_rest falls back to catalog order or skips its policy check, and fails as a
+# production defect three assertions later.
+#
+# tls-proxy fronts all four SNI names in this list — proxy.adcp.test,
+# creative-agent.adcp.test, storyboard.adcp.test, and the webhook-capture /
+# counterparty-origin routes — so one missing service here is a green run on the
+# wrong branch in every case. The guard
+# tests/unit/test_architecture_e2e_origin_services_start.py pins the pairing in
+# both directions: every SNI-routed upstream is started, and every name started
+# here exists in compose. It matches the FIRST `dc up -d` line in this file.
+# The directory publisher-origin serves, which the runner writes. Created here so the bind
+# mount never materialises it, and emptied so no earlier run's document answers for a
+# publisher this run has not written (tests/harness/publisher_authorization.py).
+rm -rf .test-publishers 2>/dev/null || true
+mkdir -p .test-publishers
+dc up -d postgres adcp-server adcp-server-storyboard proxy tls-proxy creative-pg creative-agent webhook-capture counterparty-origin publisher-origin scripted-llm
 
 echo "Waiting for Postgres + server health (in-network)..."
 deadline=$(( $(date +%s) + 360 ))
@@ -441,11 +636,18 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     # scenario errors attributed to the wrong layer. Collect all of them first
     # (one pass, so the operator sees every unhealthy worker rather than just
     # the first) and then abort with the count.
+    #
+    # One deadline for all workers, the same 360s the adcp-server wait uses. A
+    # fresh window per worker gave gw0, polled first, the shortest real wait.
+    # Every worker is probed at least once, so one past the deadline is still
+    # reported from its own state.
     _unhealthy=""
+    wd=$(( $(date +%s) + 360 ))
     for i in $(seq 0 $((N - 1))); do
-        wd=$(( $(date +%s) + 120 )); ok=false
-        while [ "$(date +%s)" -lt "$wd" ]; do
+        ok=false
+        while :; do
             docker exec "${COMPOSE_PROJECT_NAME}-server-gw$i" curl -sf http://localhost:8080/health >/dev/null 2>&1 && ok=true && break
+            [ "$(date +%s)" -lt "$wd" ] || break
             sleep 2
         done
         if [ "$ok" = true ]; then
@@ -466,12 +668,18 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
         exit 1
     fi
     # TLS readiness — a REAL handshake at the dotted name, verified against the
-    # generated CA, and a HARD FAILURE on timeout. Deliberately NOT the shape of
-    # the plaintext probe above, which prints "NOT ready (continuing)" and carries
-    # on: a TLS listener that half-starts and is skipped past is precisely the
-    # vacuity salesagent-tgzb exists to remove — every https scenario would then
-    # silently grade the http branch. (Making the plaintext probe fail too is a
-    # separate, deliberate change, not a side effect of this one.)
+    # generated CA, and a HARD FAILURE on timeout. This probe and the plaintext
+    # one above now share that shape deliberately: the plaintext loop used to
+    # print "NOT ready (continuing)" and carry on, which is the same vacuity in
+    # the other transport — a listener that half-starts and is skipped past means
+    # every https scenario silently grades the http branch (salesagent-tgzb), and
+    # every plaintext scenario grades nothing at all. (Making the plaintext probe
+    # fail too was a separate, deliberate change, landed above; this comment
+    # describes the state AFTER it — do not restore the "NOT ready (continuing)"
+    # wording, the code it described is gone.) Ordered AFTER the plaintext abort
+    # on purpose: a sidecar proxies its own `-server-gwN` upstream, so a dead
+    # upstream would surface here as a TLS handshake failure and send the
+    # operator to the wrong layer.
     echo "  waiting for $N per-worker TLS sidecars to complete a verified handshake..."
     for i in $(seq 0 $((N - 1))); do
         name="${COMPOSE_PROJECT_NAME}-tls-gw$i.adcp.test"
@@ -506,7 +714,8 @@ fi
 # comment used to cite was, for some callers, never actually applied. With
 # that bug fixed and the cap now confirmed to genuinely reach the container,
 # a real, monitored, disposable-worktree run of the full 7-suite `-p` (unit,
-# integration, bdd_inprocess, bdd_e2e, admin, e2e, ui) measured peak memory at
+# integration, bdd-inprocess-s1, bdd-inprocess-s2, bdd_e2e, admin, e2e, ui)
+# measured peak memory at
 # ~35GB of the box's 86.4GB (40.5%), no OOM, pass/fail counts matching a
 # serial baseline, measured on a full in-network run of all 7 suites.
 echo "Running suites in-network (parallel): $SUITES"
@@ -522,22 +731,20 @@ RC=0
 chmod -R g+w . 2>/dev/null || true
 chmod -R go-w .git 2>/dev/null || true
 
-# Delete every previous run's report BEFORE this run writes its own, and do it in
-# exactly ONE place. `.tox/` is an ordinary persistent bind-mounted directory now
-# (see the extraction note below), so a report left there outlives the run that
-# wrote it. The copy below is per-suite -- it copies only the envs named in
-# $SUITES -- which already stops an env this run never executed from being
-# republished. What the copy cannot do is tell a report THIS run wrote from one a
-# prior run left behind for a suite that DID run and died before writing its own.
-# Purging first makes a stale report unrepresentable rather than merely
-# detectable: after this line, a report exists only if this run produced it, so a
-# suite that died reaches the missing-report arm below instead of quietly
-# republishing its last PASS forever.
+# Delete every previous report BEFORE this run writes its own, and do it in
+# exactly ONE place. The suites' reports land in the tox_data VOLUME, not here
+# (see the extraction note below), and that volume is created and destroyed per
+# run -- so this purge is not what protects THIS path. It is defence in depth for
+# the host's ./.tox, which persists: a developer's earlier `tox -e ...` on the
+# host leaves JSON exactly where a future "simplification" of the extraction back
+# to `cp .tox/*.json` would find it and publish an older run's green numbers
+# under this run's id. Purging first makes that unrepresentable rather than
+# merely detectable.
 #
 # Blanket (`.tox/*.json`), not a $SUITES-scoped loop: a scoped loop leaves exactly
 # the not-run envs' reports sitting in `.tox/`, which is the class of staleness
 # documented at the copy below (`storyboard.json` republished for three runs). It
-# also bit `bdd`, which is swapped out for `bdd_inprocess,bdd_e2e` whenever
+# also bit `bdd`, which is swapped out for `bdd-inprocess-s*,bdd_e2e` whenever
 # E2E_WORKERS>0 (see above): a stale bdd.json from whenever `tox -e bdd` last ran
 # kept being republished -- one was a full DAY older than its directory-mates and
 # reported 6 failures against code that no longer existed, read as a live
@@ -546,14 +753,22 @@ rm -f .tox/*.json
 
 dc run --rm --use-aliases $E2E_ENV_ARGS tests tox -p -e "$SUITES" || RC=$?
 
-# tox writes per-suite JSON into /app/.tox, which is a plain bind-mounted dir
-# now (Aug 2026: the tox_data named volume it used to live on was removed --
-# a fresh named volume's mountpoint is always created root:root by the Docker
-# daemon regardless of the tests container's own `user:` override, which
-# permanently blocked the non-root test runner from `.tox/<env>` on every
-# single run). No throwaway extraction container needed any more -- .tox is
-# just a normal host directory, already right where $RESULTS_DIR is.
-echo "Collecting JSON reports..."
+# tox writes per-suite JSON into /app/.tox, which is the `tox_data` NAMED VOLUME
+# (docker-compose.e2e.yml, restored along with the removal of the `tests.user`
+# pin -- as root the daemon-created root:root mountpoint is writable again, so
+# tox envs stay off the slow bind-mounted host tree). The HOST's ./.tox is
+# therefore empty, and the reports must be extracted FROM THE VOLUME with a
+# throwaway container before the cleanup trap's `down -v` destroys it.
+#
+# Do NOT "simplify" this back to `cp .tox/*.json` (Aug 2026): that host-side
+# form belongs to the no-volume shape and, paired with the volume, copies
+# NOTHING -- and if a previous run left stale JSON on the host it silently
+# copies THOSE, producing a fresh, plausible, timestamped results directory
+# holding an older run's green numbers. That exact substitution was observed
+# live: two runs that executed ZERO suites still emitted full six-suite
+# "passing" report directories. The pairing is load-bearing; the volume mount
+# and this extraction have to move together.
+echo "Extracting JSON reports from the tox_data volume..."
 # Loud, not silent (Aug 2026): this used to be `2>/dev/null || true`, which
 # once ate a real failure completely silently -- a full 23-minute run
 # finished clean (exit 0, all 7 suites really passed, .tox/*.json all
@@ -563,20 +778,22 @@ echo "Collecting JSON reports..."
 # any reason) and let a real failure actually say something instead of
 # vanishing 23 minutes of work without a trace.
 #
-# Copy ONLY the suites THIS invocation ran, never `.tox/*.json` wholesale.
-# `.tox` used to be the tox_data NAMED VOLUME, destroyed by the cleanup trap's
-# `down -v` every run, so a wholesale copy could not pick up anything stale.
-# Removing that volume (so the non-root runner could write `.tox/<env>`) made
-# `.tox` an ordinary bind-mounted directory that PERSISTS between runs -- and
-# silently turned the same wholesale copy into a stale-report generator: a suite
-# this run never executed still contributes its last report, and downstream
-# tooling renders it as freshly measured.
+# Copy ONLY the suites THIS invocation ran, and name them EXPLICITLY -- never a
+# wholesale `*.json` glob. On the volume shape a wholesale glob cannot pick up a
+# PREVIOUS run's report (the volume is created and `down -v`-destroyed per run,
+# and COMPOSE_PROJECT_NAME is unique per run), so this is not about cross-run
+# staleness here. It is about the case the glob structurally cannot report: a
+# suite that RAN and died before writing its JSON. A glob copies what exists and
+# says nothing about what does not, so a dead suite leaves an omission that reads
+# as "that suite simply wasn't in this run".
 #
-# That is not hypothetical. `storyboard` is an opt-in env (not in tox's
+# That failure mode is not hypothetical in the sibling host shape, where `.tox`
+# IS a persistent directory: `storyboard` is an opt-in env (not in tox's
 # env_list), so a bare `./run_all_tests.sh` never runs it -- yet three
 # consecutive runs published a storyboard.json from hours earlier, and the
 # numbers were read as this run's until an SDK version inside the report
-# contradicted the SDK that was actually installed.
+# contradicted the SDK that was actually installed. Naming the suites closes
+# both directions at once and keeps the two runners' contracts the same.
 #
 # A missing report for a suite that DID run is an error, not an omission: it
 # means the suite died before writing one, which is exactly when its absence
@@ -588,34 +805,70 @@ mkdir -p "$RESULTS_DIR"
 # newest, a stale storyboard one 28 min — overlapping bands, so any threshold
 # misfires both ways). An explicit manifest is exact.
 printf '%s\n' "$SUITES" > "$RESULTS_DIR/.suites"
-_missing_reports=""
-for _suite in ${SUITES//,/ }; do
-    if [ -f ".tox/${_suite}.json" ]; then
-        cp ".tox/${_suite}.json" "$RESULTS_DIR/" || _missing_reports="$_missing_reports $_suite(copy-failed)"
-    else
-        _missing_reports="$_missing_reports $_suite"
-    fi
-done
-
-# The dispatched-request payload artifacts (tests/bdd/payload_capture.py), one per BDD
-# suite. They go in a SUBDIRECTORY, not beside the reports: compare_runs.py globs
-# "*.json" at this level and would read a payload artifact as a pytest report, whose
-# "tests" key is absent -- printing a phantom "baseline 0 new 0 ... CLEAN" row instead of
-# failing. Out of its glob is out of its way.
+# Every artifact tox writes lands in the VOLUME, so every one of them is
+# extracted by the SAME throwaway container, in one invocation: the per-suite
+# pytest reports and the BDD payload captures both live under /app/.tox. (The
+# storyboard runner's summaries are the exception, and are handled on the host
+# below -- they are written to test-results/ on the `.:/app` BIND mount, which
+# the host can already see.)
 #
-# A BDD suite that produced no payload artifact is treated exactly like a suite that
-# produced no report, for the reason stated above it: a suite that produced none was not
-# measured, and a gate whose "before" is silently absent reads every later run as CLEAN.
+# The per-suite selection runs INSIDE the extraction container, against the
+# volume. Deliberately not a host-side `[ -f ".tox/$s.json" ]` test: the host's
+# ./.tox is empty under the volume shape, so a host-side existence check would
+# declare EVERY suite missing -- and if a developer's earlier host `tox` run left
+# JSON there, it would instead copy those and publish an older run's green
+# numbers under this run's id. The copy and the check must see the same
+# filesystem, and the only filesystem that holds this run's reports is /t.
+# stdout carries the missing-suite list; the container's stderr passes straight
+# through so a real `cp` error still says something.
+#
+# The dispatched-request payload artifacts (tests/bdd/payload_capture.py), one per
+# BDD suite, go in a SUBDIRECTORY rather than beside the reports: compare_runs.py
+# globs "*.json" at the top level and would read a payload artifact as a pytest
+# report, whose "tests" key is absent -- printing a phantom
+# "baseline 0 new 0 ... CLEAN" row instead of failing. Out of its glob is out of
+# its way. A BDD suite that produced no payload artifact is treated exactly like
+# a suite that produced no report, for the reason stated above: a suite that
+# produced none was not measured, and a gate whose "before" is silently absent
+# reads every later run as CLEAN.
+#
+# The subdirectory is created HERE, on the host, not by the container: the
+# container runs as root, and a root-owned directory under $RESULTS_DIR is a
+# nuisance for everything that reads this run afterwards. It only ever writes
+# files into a directory the launcher owns.
 mkdir -p "$RESULTS_DIR/$PAYLOAD_SUBDIR"
-for _suite in ${SUITES//,/ }; do
-    case "$_suite" in bdd*) ;; *) continue ;; esac
-    if [ -f ".tox/${_suite}_payloads.json" ]; then
-        cp ".tox/${_suite}_payloads.json" "$RESULTS_DIR/$PAYLOAD_SUBDIR/${_suite}.json" \
-            || _missing_reports="$_missing_reports ${_suite}(payload-copy-failed)"
-    else
-        _missing_reports="$_missing_reports ${_suite}(no-payload-artifact)"
-    fi
-done
+_extract_rc=0
+_missing_reports=$(docker run --rm \
+    -v "${COMPOSE_PROJECT_NAME}_tox_data:/t:ro" \
+    -v "$(pwd)/${RESULTS_DIR}:/out" \
+    alpine sh -c '
+        missing="" payloads="/out/$2"
+        for s in $(printf "%s" "$1" | tr "," " "); do
+            if [ -f "/t/$s.json" ]; then
+                cp "/t/$s.json" /out/ || missing="$missing $s(copy-failed)"
+            else
+                missing="$missing $s"
+            fi
+            # Only the BDD suites emit a payload capture.
+            case "$s" in bdd*) ;; *) continue ;; esac
+            if [ -f "/t/${s}_payloads.json" ]; then
+                cp "/t/${s}_payloads.json" "$payloads/$s.json" \
+                    || missing="$missing $s(payload-copy-failed)"
+            else
+                missing="$missing $s(no-payload-artifact)"
+            fi
+        done
+        printf "%s" "$missing"
+    ' _ "$SUITES" "$PAYLOAD_SUBDIR") || _extract_rc=$?
+if [ "$_extract_rc" -ne 0 ]; then
+    echo "ERROR: failed to extract JSON reports into $RESULTS_DIR/ -- see error above." >&2
+    echo "       They are in the ${COMPOSE_PROJECT_NAME}_tox_data volume until this run's" >&2
+    echo "       cleanup trap runs \`down -v\`; copy them out now if you need them." >&2
+    # Fails the run for the same reason the missing-report arm below does. A dead
+    # extraction container copies NOTHING, so $_missing_reports comes back empty
+    # and that arm never fires -- leaving a run that measured nothing exiting 0.
+    if [ "$RC" -eq 0 ]; then RC=1; fi
+fi
 
 # The storyboard runner's own summaries, one per protocol. They are the suite's SCORE:
 # the conformance suite materializes only failures and skips as pytest items, so
@@ -623,6 +876,12 @@ done
 # directory (a subdirectory, for the same reason the payloads are) so the score has the
 # run's provenance instead of being overwritten at test-results/ by the next run.
 # scripts/audit/run_report.py reads them from here.
+#
+# Copied on the HOST, unlike everything above: the runner publishes these to
+# test-results/ (tests/storyboard/test_storyboard_conformance.py,
+# _publish_summary), which is under the `.:/app` bind mount and therefore already
+# on the host filesystem. They are not in the tox_data volume, so the extraction
+# container cannot see them.
 case ",$SUITES," in
     *,storyboard,*)
         mkdir -p "$RESULTS_DIR/$STORYBOARD_SUBDIR"
@@ -633,10 +892,50 @@ case ",$SUITES," in
             else
                 _missing_reports="$_missing_reports storyboard(no-runner-summary-${_protocol})"
             fi
+            # The runner's OWN full record (--json on stdout). The summary beside it is a
+            # digest that names no passing check, so comparing two runs check-by-check
+            # needs this. Best-effort: its absence is not a missing report.
+            for _record in "storyboard_run_${_protocol}.json" "storyboard_run_${_protocol}.stderr.log"; do
+                [ -f "test-results/$_record" ] && cp "test-results/$_record" "$RESULTS_DIR/$STORYBOARD_SUBDIR/$_record" || true
+            done
         done
         ;;
 esac
 
+# Merge the BDD shard artifacts back into one bdd_inprocess. Every reader globs FILES,
+# not env names -- scripts/check_truncated_reports.py, report_suite_failures, cassini,
+# compare_runs and compare_payloads -- and each expects one per suite. Left as parts, one
+# failure would be counted twice and cassini would render three BDD rows for one suite.
+#
+# It runs on the HOST, over what the extraction above published: the extraction container
+# is alpine, with no python, and the reports leave the tox_data volume only there.
+#
+# The hard-fail is the point. check_truncated_reports.py compares collected-deselected
+# against total PER FILE and is BLIND to a file that is absent: if a shard is OOM-killed
+# and the survivor were published alone, the merged report would be internally consistent
+# and the run would go GREEN with half the BDD suite never executed.
+#
+# $_REPORT_SUITES answers "what reports exist", which after a merge differs from $SUITES,
+# "what did this invocation run". The consumer joins `.suites` against the report
+# FILENAMES beside it (cassini results.summarize() renders any report whose suite is
+# unnamed there as STALE), so `.suites` has to name what was published.
+_REPORT_SUITES="$SUITES"
+case ",$SUITES," in
+    *,bdd-inprocess-s*)
+        if python3 scripts/ci/merge_shard_reports.py "$RESULTS_DIR" "$PAYLOAD_SUBDIR"; then
+            _kept=""
+            for _s in ${SUITES//,/ }; do
+                case "$_s" in bdd-inprocess-s*) continue ;; esac
+                _kept="${_kept:+$_kept,}$_s"
+            done
+            _REPORT_SUITES="bdd_inprocess${_kept:+,$_kept}"
+            printf '%s\n' "$_REPORT_SUITES" > "$RESULTS_DIR/.suites"
+        else
+            echo "ERROR: BDD shard artifacts could not be merged -- refusing to publish a partial suite." >&2
+            RC=1
+        fi
+        ;;
+esac
 if [ -n "$_missing_reports" ]; then
     echo "ERROR: no JSON report for suite(s):$_missing_reports" >&2
     echo "       The suite ran but produced no report -- it died before writing one." >&2
@@ -644,8 +943,12 @@ if [ -n "$_missing_reports" ]; then
     # The comment above already calls this "an error, not an omission". The code
     # said RC=${RC:-0}, which leaves the exit code untouched — so a dead suite
     # produced a GREEN run, and the file that publishes the numbers disagreed
-    # with its own docstring.
-    [ "$RC" -eq 0 ] && RC=1
+    # with its own docstring. Written as a full `if` rather than
+    # `[ "$RC" -eq 0 ] && RC=1`: as the last statement of a branch under
+    # `set -e`, the &&-list's non-zero status when RC is ALREADY non-zero aborts
+    # the script here, skipping the truncation check, the RC reconciliation and
+    # the security audit -- exactly on the suites-failed path that needs them.
+    if [ "$RC" -eq 0 ]; then RC=1; fi
 fi
 echo "Reports: $RESULTS_DIR/  (suites: $SUITES)"
 ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
@@ -717,12 +1020,29 @@ elif ! command -v uvx >/dev/null 2>&1; then
     [ "$RC" -eq 0 ] && RC=1
 else
     echo "Running security audit (uv-secure)..."
-    if ./scripts/security-audit.sh --no-check-uv-tool 2>/dev/null; then
+    # stderr is KEPT. It used to go to /dev/null, which made this step the only
+    # one in the script that can fail the whole run while destroying the reason:
+    # three consecutive in-network runs exited 1 here with a green suite and left
+    # nothing to diagnose, and the same lockfile audits clean (243 deps, no
+    # vulnerabilities) in every isolated reproduction — the VM host, the tests
+    # image, and the supervisor image. Whatever differs is visible only in the
+    # stream that was being discarded. A failure loud enough to fail the run must
+    # be loud enough to explain itself.
+    audit_log=$(mktemp)
+    if ./scripts/security-audit.sh --no-check-uv-tool >"$audit_log" 2>&1; then
         echo "Security audit passed"
     else
-        echo "Security audit FAILED — run: ./scripts/security-audit.sh"
+        # FIRST statement in this branch: $? is still the audit's status here.
+        # One echo earlier and it would report that echo instead — the same
+        # class of self-erasing diagnostic this change exists to remove.
+        audit_rc=$?
+        echo "Security audit FAILED (exit $audit_rc) — run: ./scripts/security-audit.sh"
+        echo "--- security audit output ---"
+        cat "$audit_log"
+        echo "--- end security audit output ---"
         [ "$RC" -eq 0 ] && RC=1
     fi
+    rm -f "$audit_log"
 fi
 
 exit $RC

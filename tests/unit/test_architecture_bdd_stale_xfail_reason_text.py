@@ -23,12 +23,11 @@ production gap" in its Gherkin comment has ever actually run against production
    boolean-alias shape" — ``_build_geo_postal_areas`` builds the native country-keyed
    map correctly.
 
-3. The 4 mi0x-cluster v3.1.1 scenarios (``creative_multiplicity``,
-   ``creative_agentic_flags``, ``governance_aware``, ``vendor_metric_optimization``) have
-   no Given/When/Then step definitions yet, so they are correctly absent from
-   ``_UC010_WIRED_TAGS`` and fast-xfail via the generic dormant fallback. Their Gherkin
-   comments must say so honestly (DORMANT), not claim a graded "#1592 production gap"
-   they never actually run against.
+3. The 2 mi0x-cluster v3.1.1 scenarios (``governance_aware``,
+   ``vendor_metric_optimization``) have no Given/When/Then step definitions yet, so they
+   are correctly absent from ``_UC010_WIRED_TAGS`` and fast-xfail via the generic
+   dormant fallback. Their Gherkin comments must say so honestly (DORMANT), not claim a
+   graded "#1592 production gap" they never actually run against.
 
 Where the obligation lives NOW
 ------------------------------
@@ -75,9 +74,10 @@ _CONFTEST_MODULE = "tests.bdd.conftest"
 _XFAIL_TAGS_NAME = "_XFAIL_TAGS"
 _WIRED_ACCESSOR = "_uc010_wired_tags"
 
+# The cluster's two creative.* scenarios (creative-multiplicity, creative-agentic-flags)
+# were retired from the feature: this seller does not claim the creative protocol, so the
+# block they graded is never emitted (see the feature's 2026-10-29 retirement note).
 _MI0X_TAGS: tuple[str, ...] = (
-    "T-UC-010-v31-creative-multiplicity",
-    "T-UC-010-v31-creative-agentic-flags",
     "T-UC-010-v31-governance-aware",
     "T-UC-010-v31-vendor-metric-optimization",
 )
@@ -205,11 +205,24 @@ class TestUC010MainReasonAccuracy:
             f"as the live gap. Got: {reason!r}"
         )
 
-    def test_reason_cites_the_signing_dependency_not_a_resolved_claim(self) -> None:
-        """The gap is spec-gated on RFC 9421 webhook signing (#1291), and account.sandbox
-        is long since resolved -- the reason must say the former and not the latter."""
+    def test_reason_names_the_rule_and_no_resolved_claim(self) -> None:
+        """The gap is the pinned cross-field rule and the state this scenario's Given can reach.
+
+        Two claims the reason must NOT make, both resolved. ``account.sandbox`` is long
+        since emitted. And RFC 9421 webhook signing is IMPLEMENTED -- ``webhook_signing``
+        is derived from real key material (``src.core.signing.posture.webhook_signing_posture``)
+        and the emitting case is graded by ``@T-UC-010-v31-webhook-signing-required-when``
+        -- so a reason citing #1291 as an unimplemented dependency describes a tree that
+        no longer exists, and pins a scenario as unreachable for a reason that has gone.
+        """
         reason = _xfail_tags_reasons()["T-UC-010-main-reporting-delivery"]
-        assert "#1291" in reason, f"The reason must cite the RFC 9421 signing dependency. Got: {reason!r}"
+        assert "must_equal_when" in reason, (
+            f"The reason must name the pinned cross-field rule that forbids the emission. Got: {reason!r}"
+        )
+        assert "#1291" not in reason, (
+            "The reason cites #1291 as the blocker, but webhook_signing is derived from key material "
+            f"and graded by @T-UC-010-v31-webhook-signing-required-when. Got: {reason!r}"
+        )
         assert "account.sandbox" not in reason, (
             f"The reason still claims the resolved account.sandbox gap. Got: {reason!r}"
         )
@@ -228,12 +241,11 @@ class TestUC010TargetingReasonAccuracy:
 
 
 class TestMi0xScenariosHonestlyDormant:
-    """The 4 v3.1.1 mi0x-cluster scenarios (creative_multiplicity,
-    creative_agentic_flags, governance_aware, vendor_metric_optimization) have no
-    Given/When/Then step definitions yet. Wiring them into _UC010_WIRED_TAGS without
-    those steps would make them fast-xfail with a FALSE reason (claiming a graded
-    production gap on a scenario that never runs) -- the same defect class this guard
-    exists to catch. Until the step definitions are written, the correct state is:
+    """The 2 v3.1.1 mi0x-cluster scenarios (governance_aware,
+    vendor_metric_optimization) have no Given/When/Then step definitions yet. Wiring
+    them into _UC010_WIRED_TAGS without those steps would make them fast-xfail with a
+    FALSE reason (claiming a graded production gap on a scenario that never runs) --
+    the same defect class this guard exists to catch. Until the step definitions are written, the correct state is:
     absent from _UC010_WIRED_TAGS (so they run through the honest dormant-fallback
     reason), and their Gherkin comment must say DORMANT, not XFAIL-EXPECTED."""
 

@@ -58,6 +58,17 @@ from tests.bdd.steps.generic.when_request import _call_via
 from tests.harness import CreativeFormatsEnv
 from tests.harness.transport import Transport, TransportResult
 
+#: The formats the seller's product declares in the wire-fidelity tests. The list projects
+#: the seller's product declarations, so without them every body would carry an empty
+#: ``formats`` array and a transport that dropped or reshaped a nested ``Format`` field
+#: would go undetected.
+DECLARED_FORMAT_IDS = ("display_300x250_image", "video_vast")
+
+
+def _assert_lists_the_declared_formats(wire: dict, transport: object) -> None:
+    listed = sorted(entry["format_id"]["id"] for entry in wire["formats"])
+    assert listed == sorted(DECLARED_FORMAT_IDS), f"{transport}: wire lists {listed}, not the declared formats"
+
 
 @pytest.mark.requires_db
 class TestWireResponseIsRealWire:
@@ -86,9 +97,13 @@ class TestWireResponseIsRealWire:
         rather than a sentence some wrapper re-derived.
         """
         with CreativeFormatsEnv() as env:
+            # The request has to NAME a seller this deployment serves: one naming none is
+            # refused (TENANT_UNDEFINED). This test creates no tenant of its own.
+            env.setup_default_data()
+            env.declare_reference_formats(*DECLARED_FORMAT_IDS)
             result = env.call_via(Transport.REST)
             assert result.wire_response == result.raw_response.json()
-            assert "formats" in result.wire_response
+            _assert_lists_the_declared_formats(result.wire_response, Transport.REST)
             assert result.payload is not None, "REST: no typed payload captured"
             assert result.wire_response["message"] == result.payload.message, (
                 "REST body's message diverged from the response model's — "
@@ -114,13 +129,17 @@ class TestWireResponseIsRealWire:
         one dispatch each, including ``message`` and the envelope defaults.
         """
         with CreativeFormatsEnv() as env:
+            # The request has to NAME a seller this deployment serves: one naming none is
+            # refused (TENANT_UNDEFINED). This test creates no tenant of its own.
+            env.setup_default_data()
+            env.declare_reference_formats(*DECLARED_FORMAT_IDS)
             bodies = {
                 transport: env.call_via(transport) for transport in (Transport.A2A, Transport.REST, Transport.MCP)
             }
 
         for transport, result in bodies.items():
             assert isinstance(result.wire_response, dict), f"{transport}: wire_response not a dict"
-            assert "formats" in result.wire_response, f"{transport}: wire_response missing formats"
+            _assert_lists_the_declared_formats(result.wire_response, transport)
             assert result.payload is not None, f"{transport}: no typed payload captured"
             assert result.wire_response["message"] == result.payload.message, (
                 f"{transport}: body's message diverged from the response model's — "
@@ -151,8 +170,13 @@ class TestWireResponseIsRealWire:
         (the wire is a complete, valid instance of the response type).
         """
         with CreativeFormatsEnv() as env:
+            # The request has to NAME a seller this deployment serves: one naming none is
+            # refused (TENANT_UNDEFINED). This test creates no tenant of its own.
+            env.setup_default_data()
+            env.declare_reference_formats(*DECLARED_FORMAT_IDS)
             result = env.call_via(Transport.MCP)
             assert isinstance(result.wire_response, dict), "MCP: wire_response not a dict"
+            _assert_lists_the_declared_formats(result.wire_response, Transport.MCP)
             assert result.payload is not None, "MCP: no typed payload captured"
             assert result.wire_response == result.payload.model_dump(mode="json"), (
                 "MCP wire_response diverged from payload.model_dump(mode='json') — "
@@ -170,9 +194,13 @@ class TestWireResponseIsRealWire:
         round-trip equality is the meaningful authenticity signal left post-fix.
         """
         with CreativeFormatsEnv() as env:
+            # The request has to NAME a seller this deployment serves: one naming none is
+            # refused (TENANT_UNDEFINED). This test creates no tenant of its own.
+            env.setup_default_data()
+            env.declare_reference_formats(*DECLARED_FORMAT_IDS)
             result = env.call_via(Transport.MCP)
         assert isinstance(result.wire_response, dict), "MCP: wire_response not a dict"
-        assert "formats" in result.wire_response, "MCP: wire_response missing formats"
+        _assert_lists_the_declared_formats(result.wire_response, Transport.MCP)
         reparsed = ListCreativeFormatsResponse(**result.wire_response)
         assert reparsed.model_dump(mode="json") == result.wire_response, (
             "MCP wire_response does not round-trip through ListCreativeFormatsResponse — "
@@ -214,7 +242,7 @@ def _transport_result_sites(module_path: pathlib.Path) -> dict[tuple[str, str, i
     reason string, which can go green by coincidence when the neighbours share a
     value.
     """
-    tree = ast.parse(module_path.read_text())
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
     owner: dict[ast.Call, str] = {}
 
     def walk(node: ast.AST, scope: tuple[str, ...]) -> None:
@@ -274,9 +302,19 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
     # (module, owner, ordinal-in-owner) -> (expected has_wire, why this SITE is what it is)
     EXPECTED_SITES: dict[tuple[str, str, int], tuple[bool, str]] = {
         # ── tests/harness/dispatchers.py — the per-transport dispatch entry points ──
-        ("dispatchers.py", "A2ADispatcher.dispatch", 0): (
+        # TWO sites, because the A2A leg moved out of the dispatcher method and into the
+        # module-level ``a2a_transport_result`` helper, which declares ``has_wire`` per
+        # construction site rather than once for the function: the success leg has the
+        # artifact DataPart in hand, the registration/refusal leg never reached the wire.
+        # Ordinals follow the SOURCE order in the current dispatchers.py (success at :201,
+        # registration at :210), not the order the pre-merge branch happened to write them.
+        ("dispatchers.py", "a2a_transport_result", 0): (
             True,
             "success, downstream of the A2A artifact DataPart capture",
+        ),
+        ("dispatchers.py", "a2a_transport_result", 1): (
+            False,
+            "registration/refusal leg — nothing was delivered, so no wire to claim",
         ),
         ("dispatchers.py", "McpDispatcher.dispatch", 0): (
             True,
@@ -377,10 +415,10 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
         nothing means the exemption is stale and must be deleted.
         """
         repo_root = pathlib.Path(__file__).resolve().parents[2]
-        seam = {str(path.relative_to(repo_root)) for path in _SEAM_MODULES}
+        seam = {path.relative_to(repo_root).as_posix() for path in _SEAM_MODULES}
         allowed = seam | set(self.FIXTURE_CONSTRUCTORS)
         constructors = {
-            str(path.relative_to(repo_root))
+            path.relative_to(repo_root).as_posix()
             for path in repo_root.glob("tests/**/*.py")
             if _transport_result_sites(path)
         }
@@ -461,6 +499,9 @@ class TestDispatchersDeclareHasWireOnRealDispatch:
     @pytest.mark.parametrize("transport", [Transport.REST, Transport.A2A, Transport.MCP])
     def test_wire_transports_declare_a_wire_and_carry_one(self, transport, integration_db):
         with CreativeFormatsEnv() as env:
+            # The request has to NAME a seller this deployment serves: one naming none is
+            # refused (TENANT_UNDEFINED). This test creates no tenant of its own.
+            env.setup_default_data()
             result = env.call_via(transport)
         assert result.has_wire is True, f"{transport}: success dispatch did not declare has_wire"
         assert result.wire_response is not None, (
@@ -493,6 +534,9 @@ class TestWireReadersBranchOnTheDeclaration:
         chosen ``has_wire`` declaration, which is the state under test.
         """
         with CreativeFormatsEnv() as env:
+            # The request has to NAME a seller this deployment serves: one naming none is
+            # refused (TENANT_UNDEFINED). This test creates no tenant of its own.
+            env.setup_default_data()
             response = env.call_impl()
         assert response is not None
         return response
@@ -558,7 +602,7 @@ class TestWirePresenceIsNeverInferredFromTransportIdentity:
     """
 
     def test_wire_readers_contain_no_transport_identity_check(self):
-        tree = ast.parse(_OUTCOME_HELPERS_PY.read_text())
+        tree = ast.parse(_OUTCOME_HELPERS_PY.read_text(encoding="utf-8"))
         readers = {
             node.name: node
             for node in ast.walk(tree)
@@ -594,6 +638,9 @@ class TestBothDispatchSeamsStashTheTransportResult:
     @pytest.mark.parametrize("transport", ["rest", "a2a", "mcp"])
     def test_call_via_stashes_the_transport_result(self, transport, integration_db):
         with CreativeFormatsEnv() as env:
+            # The request has to NAME a seller this deployment serves: one naming none is
+            # refused (TENANT_UNDEFINED). This test creates no tenant of its own.
+            env.setup_default_data()
             ctx: dict = {"env": env}
             _call_via(ctx, transport)
             assert "error" not in ctx, f"{transport}: dispatch failed: {ctx.get('error')!r}"

@@ -169,9 +169,11 @@ class TestAdapterFormatsMerged:
 
     Covers: UC-005-MAIN-MCP-03
 
-    When the tenant has an adapter (Broadstreet) that provides templates,
-    those are merged into the aggregated format list alongside creative
-    agent formats.
+    When the tenant has an adapter (Broadstreet) that provides templates and its
+    product declares them, those are merged into the aggregated format list
+    alongside creative agent formats. The list projects the products, so the
+    templates are declared on the product here (the undeclared case is graded in
+    ``test_creative_formats_validation_a.py``).
     """
 
     def test_broadstreet_formats_merged_with_agent_formats(self, integration_db):
@@ -199,6 +201,7 @@ class TestAdapterFormatsMerged:
                 session.commit()
 
             env.set_registry_formats([agent_format])
+            env.declare_formats([agent_format.format_id, *env.adapter_served_format_ids()])
             response = env.call_a2a()
 
         assert isinstance(response, ListCreativeFormatsResponse)
@@ -231,6 +234,7 @@ class TestAdapterFormatsMerged:
                 session.commit()
 
             env.set_registry_formats([])
+            env.declare_formats(env.adapter_served_format_ids())
             response = env.call_impl()
 
         broadstreet_formats = [f for f in response.formats if "broadstreet" in str(f.format_id.agent_url)]

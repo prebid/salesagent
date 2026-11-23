@@ -12,10 +12,13 @@ silently return empty results.
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from src.core.exceptions import AdCPConfigurationError
 from src.core.schemas import Principal
+from tests.helpers.gam_client import build_gam_adapter
 
 
 def _make_principal() -> Principal:
@@ -45,27 +48,13 @@ class TestAdapterTenantIdValidation:
 
     def test_gam_adapter_rejects_none_tenant_id(self):
         """GoogleAdManager with tenant_id=None must raise, not silently use ''."""
-        from src.adapters.google_ad_manager import GoogleAdManager
-
         with pytest.raises(AdCPConfigurationError):
-            GoogleAdManager(
-                config={"service_account_json": "{}"},
-                principal=_make_principal(),
-                network_code="12345",
-                tenant_id=None,
-            )
+            build_gam_adapter(MagicMock(), tenant_id=None)
 
     def test_gam_adapter_rejects_empty_tenant_id(self):
         """GoogleAdManager with tenant_id='' must raise, not proceed silently."""
-        from src.adapters.google_ad_manager import GoogleAdManager
-
         with pytest.raises(AdCPConfigurationError):
-            GoogleAdManager(
-                config={"service_account_json": "{}"},
-                principal=_make_principal(),
-                network_code="12345",
-                tenant_id="",
-            )
+            build_gam_adapter(MagicMock(), tenant_id="")
 
     def test_mock_adapter_rejects_none_tenant_id(self):
         """MockAdServer with tenant_id=None must raise, not silently use ''."""
@@ -76,6 +65,8 @@ class TestAdapterTenantIdValidation:
                 config={},
                 principal=_make_principal(),
                 tenant_id=None,
+                order_name_template=None,
+                tenant_ai_config=None,
             )
 
     def test_mock_adapter_rejects_empty_tenant_id(self):
@@ -87,26 +78,13 @@ class TestAdapterTenantIdValidation:
                 config={},
                 principal=_make_principal(),
                 tenant_id="",
+                order_name_template=None,
+                tenant_ai_config=None,
             )
 
     def test_gam_adapter_accepts_valid_tenant_id(self):
-        """GoogleAdManager with valid tenant_id should initialize without error.
-
-        The service account document has to be one google.auth can parse: the adapter
-        builds its credentials at construction, and the ``"{}"`` that stood here was only
-        ever accepted because a dry-run adapter skipped that step (no adapter carries that
-        flag now). The refusal cases above still pass ``"{}"`` -- they raise on the tenant
-        id before any credential is read.
-        """
-        from src.adapters.google_ad_manager import GoogleAdManager
-        from tests.helpers.gam_credentials import service_account_json
-
-        adapter = GoogleAdManager(
-            config={"service_account_json": service_account_json()},
-            principal=_make_principal(),
-            network_code="12345",
-            tenant_id="valid_tenant",
-        )
+        """GoogleAdManager with valid tenant_id should initialize without error."""
+        adapter = build_gam_adapter(MagicMock(), tenant_id="valid_tenant")
         assert adapter.tenant_id == "valid_tenant"
 
     def test_mock_adapter_accepts_valid_tenant_id(self):
@@ -117,6 +95,8 @@ class TestAdapterTenantIdValidation:
             config={},
             principal=_make_principal(),
             tenant_id="valid_tenant",
+            order_name_template=None,
+            tenant_ai_config=None,
         )
         assert adapter.tenant_id == "valid_tenant"
 

@@ -181,14 +181,22 @@ class TestWireCodeAndRecoveryCannotContradictThePin:
     recovery sees "stop") is exactly what these tests still forbid.
     """
 
-    def test_a_code_the_table_does_not_classify_cannot_be_constructed(self):
-        """An out-of-table code is refused at construction, so no envelope can carry one.
+    def test_a_code_the_table_does_not_classify_cannot_be_declared(self):
+        """An out-of-table code is refused at CLASS CREATION, so no error can carry one.
 
         This is what replaced the sanitize-on-emit branch: rather than rewriting a
         bad code on its way to the subscriber, the error naming it never exists.
+
+        It moved one step earlier and got stronger. The refusal used to fire on the first
+        CONSTRUCTION of an error naming the code; with ``error_code=`` gone from the
+        constructor, a code reaches an error only by being DECLARED on a class, and
+        ``__init_subclass__`` refuses that at import — so a bad code cannot survive the
+        module that introduces it, let alone reach a raise site.
         """
-        with pytest.raises(TypeError, match="not classified by CODE_TABLE"):
-            AdCPSalesAgentError(error_code="TOTALLY_NON_STANDARD_CODE")
+        with pytest.raises(TypeError, match="which CODE_TABLE does not"):
+
+            class _Impossible(AdCPSalesAgentError):
+                _code = "TOTALLY_NON_STANDARD_CODE"
 
     def test_a_constructed_error_cannot_be_re_coded_after_the_fact(self):
         """``error_code`` is read-only, closing main's route into the branch.

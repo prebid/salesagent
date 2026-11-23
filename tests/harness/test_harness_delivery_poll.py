@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 from src.core.schemas import GetMediaBuyDeliveryResponse
-from tests.factories.media_buy import pricing_options_named, request_package
+from tests.factories.media_buy import request_package
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
 
@@ -104,20 +104,15 @@ class TestDeliveryPollEnvContract:
             # No "principal" patch: the principal comes off the identity the env builds,
             # so there is no principal lookup for the env to stand in for.
             assert "adapter" in env.mock
-            assert "pricing" in env.mock
 
-    def test_pricing_options(self):
-        """set_pricing_options makes pricing data available to _impl.
+    def test_package_terms(self):
+        """add_buy registers the buy's package rows, whose stored terms price the report.
 
-        The option states its TERMS and the key is read off the row's stored
-        ``pricing_option_id`` column, so the key the lookup answers under is the one the
-        package below names. An id passed by hand could be one no reader resolves while
-        the fixture answered for it anyway — which is how a package naming an
-        unresolvable option went green.
+        The row carries the ``pricing_info`` create stores for the package
+        (``package_config_for``), so the rate on the wire is the one the package's own
+        option states.
         """
         with DeliveryPollEnv() as env:
-            env.set_pricing_options(pricing_options_named(pricing_model="cpm", rate="5.00"))
-
             env.add_buy(
                 media_buy_id="mb_001",
                 raw_request={"packages": [request_package(0)]},
@@ -126,9 +121,7 @@ class TestDeliveryPollEnvContract:
 
             response = env.call_impl(media_buy_ids=["mb_001"])
             assert isinstance(response, GetMediaBuyDeliveryResponse)
-            # The configured option reached the wire, not merely the lookup: asserting only
-            # that env.mock["pricing"] was CALLED passed even while a MagicMock option
-            # produced a MagicMock currency and the buy was dropped into errors[].
+            # The row's terms reached the wire.
             pkg = response.media_buy_deliveries[0].by_package[0]
             assert (pkg.rate, pkg.currency) == (5.0, "USD")
 

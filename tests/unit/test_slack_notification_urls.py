@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from src.services.slack_notifier import SlackNotifier
+from tests.helpers.environ import isolated_environ
 
 
 class TestSlackNotificationUrls:
@@ -170,7 +171,7 @@ class TestSlackNotificationUrls:
     def test_localhost_fallback_when_env_not_set(self, slack_notifier, mock_webhook_delivery):
         """Test that localhost is used as fallback when ADMIN_UI_URL not set (dev mode)."""
         # Don't set ADMIN_UI_URL
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             slack_notifier.notify_new_task(
                 task_id="task_123",
                 task_type="create_media_buy",

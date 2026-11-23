@@ -40,6 +40,19 @@ def e2e_host() -> str:
     return os.getenv("ADCP_TEST_HOST", "localhost")
 
 
+def e2e_in_network() -> bool:
+    """Whether this process runs INSIDE the compose network rather than on the host.
+
+    The in-network runner addresses the stack by service name (:func:`e2e_host` is a
+    compose alias); the host path reaches published ports on localhost and cannot
+    resolve a compose alias at all. Any claim that depends on compose DNS — reaching a
+    service that publishes NO host port, or resolving a network alias — is only
+    meaningful here. ``./run_all_tests.sh`` runs every suite in-network, so this is the
+    normal path and the host path is the developer convenience.
+    """
+    return e2e_host() not in {"localhost", "127.0.0.1"}
+
+
 def e2e_tls_host() -> str:
     """Host the stack's TLS listener answers at — DOTTED, and not loopback-literal.
 
@@ -62,6 +75,21 @@ def e2e_ca_bundle() -> str:
     the very file the host generator wrote.
     """
     return os.getenv("E2E_CA_BUNDLE") or str(REPO_ROOT / ".test-tls" / "ca.pem")
+
+
+def e2e_combined_ca_bundle() -> str:
+    """ABSOLUTE path to the public roots CONCATENATED with that CA — for ``SSL_CERT_FILE``.
+
+    The sibling of :func:`e2e_ca_bundle`, and the two are not interchangeable.
+    ``SSL_CERT_FILE`` REPLACES the file half of the process's default trust store, so
+    pointing it at the private CA alone would break every real HTTPS connection the
+    same process makes (``uv sync`` against pypi.org, for one). Written as a path
+    rather than imported from ``scripts/dev/gen_test_tls.py``: that module is named
+    ``test_*`` where it is re-exported, and the sibling-import guard admits only three
+    deferred importers of it. ``ensure_test_tls()`` rebuilds this file on every call,
+    so the path is all a caller needs.
+    """
+    return str(REPO_ROOT / ".test-tls" / "combined-ca.pem")
 
 
 def e2e_tls_base_url(tls_port: int | None) -> str | None:
@@ -209,6 +237,18 @@ def docker_services_e2e(request):
     # so a stack already serving the existing leaf is never disturbed.
     ensure_test_tls()
     os.environ.setdefault("E2E_CA_BUNDLE", e2e_ca_bundle())
+    # And the trust anchor for a client whose context we CANNOT pass a cafile into.
+    # ``adcp.signing``'s own fetchers build ``ssl.create_default_context()`` with no
+    # cafile (``ip_pinned_transport._build_ssl_context``) and hop 3
+    # (``async_default_jwks_fetcher``) takes no client-factory seam at all, so
+    # SSL_CERT_FILE — honoured at the OpenSSL level — is the only way the SDK can
+    # verify this stack's leaf (``test_trust_root_e2e`` walks it). COMBINED, never
+    # ``ca.pem``: this variable REPLACES the process's default cafile, so the private
+    # CA alone would break every real HTTPS connection this process makes (see
+    # docs/design/webhook-testing-architecture.md § Choose the bundle by what the
+    # client is checking). ``setdefault`` because the in-network runner already sets
+    # it to the same file (``docker-compose.e2e.yml``); this is the host path's parity.
+    os.environ.setdefault("SSL_CERT_FILE", e2e_combined_ca_bundle())
 
     if use_existing_services:
         print("Using existing Docker services (ADCP_TESTING=true or --skip-docker)")
@@ -286,8 +326,8 @@ def docker_services_e2e(request):
         # clear of the Linux ephemeral range (32768+), which the 20000-30000
         # choice for those two was already picked to avoid.
         tls_port = int(os.getenv("ADCP_TLS_PORT")) if os.getenv("ADCP_TLS_PORT") else find_free_port(15000, 20000)
-        # webhook-capture's plain-HTTP READBACK control-plane (salesagent-amht.3)
-        # — same dynamic-allocation reasoning as tls_port above (a fixed default
+        # webhook-capture's plain-HTTP READBACK control-plane — same
+        # dynamic-allocation reasoning as tls_port above (a fixed default
         # would let two concurrent stacks cross-wire onto the same host port).
         # DELIVERY never uses this port; it goes through tls_port above.
         webhook_capture_port = (
@@ -815,7 +855,7 @@ def _get_gam_service_account_json():
     # 2. File path from env var
     key_file = os.environ.get("GAM_SERVICE_ACCOUNT_KEY_FILE")
     if key_file and os.path.exists(key_file):
-        with open(key_file) as f:
+        with open(key_file, encoding="utf-8") as f:
             return f.read()
 
     return None

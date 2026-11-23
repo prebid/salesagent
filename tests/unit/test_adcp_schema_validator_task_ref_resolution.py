@@ -27,6 +27,21 @@ from tests.helpers.adcp_schema_validator import AdCPSchemaValidator
 _TASK = "list-creative-formats"
 
 
+async def _expected_ref(validator: AdCPSchemaValidator, section: str, kind: str) -> str:
+    """The ref the pinned index itself publishes for *section*'s *kind* of :data:`_TASK`.
+
+    READ FROM THE INDEX rather than spelled out, because the ref FORM is not what this
+    module grades. At AdCP 3.1.1 the index carried relative paths
+    (``media-buy/list-creative-formats-request.json``); at 3.2.1 it carries absolute URLs
+    (``https://adcontextprotocol.org/schemas/3.2.1/media-buy/...``). The resolution choice
+    -- which SECTION wins when a task is defined twice -- is unchanged, and that is what
+    the assertions below are about, so they compare against what the index says rather
+    than against a string that goes stale on every pin bump.
+    """
+    index = await validator.get_schema_index()
+    return index["schemas"][section]["tasks"][_TASK][kind]["$ref"]
+
+
 @pytest.fixture
 def validator() -> AdCPSchemaValidator:
     return AdCPSchemaValidator()
@@ -56,8 +71,9 @@ async def test_media_buy_section_wins_for_doubly_defined_task(validator, kind):
     """The resolved ref is the media-buy section's, because it comes first in the index."""
     ref = await validator._find_schema_ref_for_task(_TASK, kind)
 
-    assert ref == f"media-buy/{_TASK}-{kind}.json", (
-        f"{_TASK} {kind} resolved to {ref!r}. The media-buy section precedes creative in the "
+    assert ref == await _expected_ref(validator, "media-buy", kind), (
+        f"{_TASK} {kind} resolved to {ref!r}, which is not the media-buy section's ref. "
+        "The media-buy section precedes creative in the "
         "pinned index's key order, so its (sales-agent-facing) schema is the one payloads are "
         "graded against — if this flipped to creative/, every list-creative-formats payload is "
         "now being validated against a different contract."
@@ -77,7 +93,7 @@ async def test_resolution_flips_when_sections_are_reordered(validator, kind):
 
     ref = await validator._find_schema_ref_for_task(_TASK, kind)
 
-    assert ref == f"creative/{_TASK}-{kind}.json", (
+    assert ref == await _expected_ref(validator, "creative", kind), (
         f"Re-sorted the index sections (creative now precedes media-buy) and {_TASK} {kind} "
         f"still resolved to {ref!r} — the resolution is not actually following index key "
         "order, so the docstring's stated mechanism is wrong."

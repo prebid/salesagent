@@ -1,12 +1,14 @@
 """Factory_boy factories for core tenant-related models.
 
-Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory, PublisherPartnerFactory
+Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory
 Helpers: set_adapter_test_behavior (persist adapter test-behavior to AdapterConfig),
-get_or_create (idempotent factory seeding for shared-DB e2e_rest scenarios)
+get_or_create (idempotent factory seeding for shared-DB e2e_rest scenarios),
+seed_property_tag_selection (the property-tag rows the admin product form requires)
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -15,13 +17,12 @@ from factory import LazyAttribute, RelatedFactory, Sequence, SubFactory
 
 from src.core.database.models import (
     AdapterConfig,
-    AuthorizedProperty,
     CreativeAgent,
     CurrencyLimit,
     GAMInventory,
     PropertyTag,
-    PublisherPartner,
     SignalsAgent,
+    SyncJob,
     Tenant,
 )
 from src.core.tenant_context import TenantContext
@@ -53,22 +54,26 @@ def get_or_create(env: Any, model: type, filters: dict[str, Any], create: Any):
 
 
 def tenant_subdomain(tenant_id: str) -> str:
-    """Derive a tenant's subdomain from its tenant_id.
+    """A DNS-legal label for the ``Tenant.subdomain`` column.
 
-    Single source of truth for subdomain derivation (#1418). DNS labels cannot
-    contain underscores, so tenant_id underscores map to hyphens; the
-    normalization is also required because subdomains feed publisher_domain
-    (``f"{subdomain}.example.com"``) and the AdCP domain regex rejects
-    underscores. This MUST be the only derivation: the persisted
-    ``Tenant.subdomain`` (ORM factory) and the ``ResolvedIdentity`` tenant dict
-    (``make_tenant``) have to agree, because the e2e_rest transport
-    authenticates by sending this subdomain as the ``x-adcp-tenant`` header and
-    the live server resolves the tenant from it. A mismatch (underscore in the
-    DB row vs hyphen on the wire) makes the server fail to resolve the tenant
-    and return 401 — which silently parked every e2e_rest delivery scenario on
-    the known-failures ledger.
+    The column is NOT NULL and UNIQUE, so every seeded tenant needs a value, and DNS
+    labels carry no underscores — so a tenant_id's underscores map to hyphens.
+
+    NOTHING ROUTES BY IT. A request names its tenant by ``Host``, matched against
+    ``tenants.virtual_host``, or by ``x-adcp-tenant`` carrying the tenant id verbatim.
+    The admin UI is the only reader left.
     """
     return f"pub-{tenant_id}".replace("_", "-")
+
+
+def tenant_virtual_host(tenant_id: str) -> str:
+    """A ``Tenant.virtual_host`` named after *tenant_id*, for a tenant whose id is unique where it is stored.
+
+    ``TenantFactory``'s own host is a ``Sequence``, which restarts with each process: in a
+    database that other runs and suites also write (the e2e stack's), it repeats a host that
+    is already there. A tenant id from ``mint_id`` is unique there, and so is this host.
+    """
+    return f"{tenant_subdomain(tenant_id)}.example.com"
 
 
 class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -80,6 +85,21 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
     tenant_id = Sequence(lambda n: f"tenant_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Publisher {o.tenant_id}")
     subdomain = LazyAttribute(lambda o: tenant_subdomain(o.tenant_id))
+    #: Its OWN column with its OWN sequence, not derived from tenant_id or subdomain.
+    #: This directory's guide says why: deriving one independent column from another
+    #: invents a shape constraint on the source and then needs normalization and rules to
+    #: hold it up — which is exactly the history ``tenant_subdomain`` above carries.
+    #:
+    #: Set BY DEFAULT so the suite resolves its tenant the way a DEPLOYMENT does: from the
+    #: ``Host``, against ``tenants.virtual_host``. Production nginx derives
+    #: ``x-adcp-tenant`` from the host (``nginx-multi-tenant.conf``: ``map $host $tenant``)
+    #: and no caller sends it, so a suite where every caller asserts the header itself
+    #: grades a path no deployment runs. It also left the virtual_host branches unexecuted
+    #: — which is how a tenant host reached ``publisher_properties[].publisher_domain``
+    #: with a port in it and failed every product, graded by nothing.
+    #:
+    #: A ``.example.com`` name, so the value is a domain wherever one is expected.
+    virtual_host = Sequence(lambda n: f"vhost-{n:04d}.example.com")
     is_active = True
     billing_plan = "standard"
     ad_server = "mock"
@@ -108,7 +128,7 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
         Pass **overrides for domain fields (approval_mode, gemini_api_key, etc).
         """
         # Overrides win over the defaults rather than colliding with them. Spelling the
-        # defaults as keyword arguments meant passing name=, subdomain= or ad_server=
+        # defaults as keyword arguments meant passing name= or ad_server=
         # raised "got multiple values for keyword argument", so a caller holding a whole
         # tenant dict could not hand it over — which is what made ``tenant={...}`` a dead
         # end at every call site.
@@ -116,7 +136,10 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
             **{
                 "tenant_id": tenant_id,
                 "name": f"Test Publisher {tenant_id}",
-                "subdomain": tenant_subdomain(tenant_id),
+                # A tenant always declares a host, so the projection requires one. Derived
+                # from the tenant_id here so two contexts built in one test differ, the way
+                # the ORM factory's Sequence does.
+                "virtual_host": tenant_virtual_host(tenant_id),
                 "ad_server": "mock",
                 **overrides,
             }
@@ -139,43 +162,6 @@ class CurrencyLimitFactory(factory.alchemy.SQLAlchemyModelFactory):
     tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
     currency_code = "USD"
     min_package_budget = Decimal("100.00")
-
-
-class PublisherPartnerFactory(factory.alchemy.SQLAlchemyModelFactory):
-    class Meta:
-        model = PublisherPartner
-        sqlalchemy_session = None
-        sqlalchemy_session_persistence = "commit"
-
-    tenant = SubFactory(TenantFactory)
-    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
-    publisher_domain = Sequence(lambda n: f"publisher-{n:04d}.com")
-    display_name = LazyAttribute(lambda o: f"Publisher {o.publisher_domain}")
-    is_verified = True
-    sync_status = "success"
-
-
-class AuthorizedPropertyFactory(factory.alchemy.SQLAlchemyModelFactory):
-    """A verified authorized property — satisfies the create_media_buy setup
-    checklist's "Authorized Properties" gate (SetupChecklistService counts
-    AuthorizedProperty rows for the tenant). The in-process transports skip the
-    gate via the testing context; the live e2e_rest server enforces it, so a
-    fully-set-up tenant needs at least one of these.
-    """
-
-    class Meta:
-        model = AuthorizedProperty
-        sqlalchemy_session = None
-        sqlalchemy_session_persistence = "commit"
-
-    tenant = SubFactory(TenantFactory)
-    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
-    property_id = Sequence(lambda n: f"prop_{n:04d}")
-    property_type = "website"
-    name = LazyAttribute(lambda o: f"Authorized Property {o.property_id}")
-    publisher_domain = Sequence(lambda n: f"authorized-{n:04d}.example.com")
-    identifiers = LazyAttribute(lambda o: [{"type": "domain", "value": o.publisher_domain}])
-    verification_status = "verified"
 
 
 class AdapterConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -212,6 +198,26 @@ class GAMInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):
     )
 
 
+class SyncJobFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """An inventory sync the admin UI started a moment ago, still running and reporting progress."""
+
+    class Meta:
+        model = SyncJob
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    sync_id = Sequence(lambda n: f"sync_{n:04d}")
+    adapter_type = "google_ad_manager"
+    sync_type = "inventory"
+    status = "running"
+    started_at = factory.LazyFunction(lambda: datetime.now(UTC))
+    triggered_by = "admin_ui"
+    # A running sync with progress is never taken for a dead one (start_inventory_sync_background).
+    progress = factory.LazyFunction(lambda: {"phase": "Starting"})
+
+
 class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):
     class Meta:
         model = PropertyTag
@@ -223,6 +229,34 @@ class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):
     tag_id = Sequence(lambda n: f"tag_{n:04d}")
     name = LazyAttribute(lambda o: f"Tag {o.tag_id}")
     description = LazyAttribute(lambda o: f"Description for {o.name}")
+
+
+def seed_property_tag_selection(tenant: Tenant, env: Any = None) -> str:
+    """Seed what the admin product form's property picker requires, and return its value.
+
+    The product-create handler refuses a ``selected_property_tags`` entry that no
+    authorized property of that publisher carries, so posting the form needs the tenant's
+    ``all_inventory`` tag and a publisher whose stored adagents.json authorizes a property
+    tagged with it. The
+    return value is the ``"<publisher_domain>:all_inventory"`` string the picker submits.
+
+    ``env`` is a BDD harness env, so the tag is reused when a prior scenario left it in the
+    shared e2e_rest database (:func:`get_or_create`). A test with its own rolled-back
+    database passes none, and the tag is created.
+    """
+    get_or_create(
+        env,
+        PropertyTag,
+        {"tenant_id": tenant.tenant_id, "tag_id": "all_inventory"},
+        lambda: PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory"),
+    )
+    from tests.factories.publisher import PublisherFactory, authorize_properties
+
+    # A publisher of its own per call, so two calls give a product two publishers.
+    publisher = authorize_properties(
+        tenant, PublisherFactory(tenant=tenant).domain, [("tagged_home", ("all_inventory",))]
+    )
+    return f"{publisher.domain}:all_inventory"
 
 
 class CreativeAgentFactory(factory.alchemy.SQLAlchemyModelFactory):

@@ -1,6 +1,6 @@
 """Lock test for the integration known-failures ledger.
 
-``tests/integration/known_failures.txt`` is a SHRINKING work-list: 48 integration tests
+``tests/integration/known_failures.txt`` is a SHRINKING work-list: 41 integration tests
 xfailed pending rewrite under epic salesagent-e30o7, one child issue per cluster. This
 test pins that state so the ledger cannot drift silently:
 
@@ -24,25 +24,27 @@ from __future__ import annotations
 from pathlib import Path
 
 from tests.helpers.ledger import load_ledger_nodeids
+from tests.unit._architecture_helpers import rel
 
 LEDGER = Path(__file__).parent.parent / "integration" / "known_failures.txt"
 
-#: The count the ledger was created with. A bound, never a target — see
-#: ``test_the_ledger_never_grows``.
+#: The high-water mark the ledger is held under. A bound, never a target — see
+#: ``test_the_ledger_never_grows``. It is MEASURED against the ledger file, never spliced
+#: from a counter someone else carried: a ratchet whose number is reconciled by arithmetic
+#: records an agreement instead of a fact. Lowering it as entries graduate is the intended
+#: direction; raising it is the defect the test exists to catch.
 #:
-#: 53, where a full box run measured 48. Both additions were mine to see and did not:
-#: cluster I (2) passes on the box because it has ``ADCP_AUTH_TEST_MODE`` on and fails
-#: wherever it is off, so a baseline measured in one environment does not transfer; and
-#: cluster J (3) I excluded by judgement as another PR's to fix, which conflated fixing
-#: with recording and left CI red for a reason no reader could find. A ledger created from
-#: a single run is a floor on its contents, and the number only falls from here.
-#:
-#: 51 after the first two came off cluster B — deleted, not repaired, because
-#: test-results/bdd_scenario_liveness.json records @T-UC-002-ext-b and @T-UC-002-ext-o as
-#: bound, wired, unledgered and PASSING on all three in-process transports, grading the
-#: same two conditions and more of each. That is the shape the ledger's header asks for:
-#: a scenario replaces such a test, it does not port it.
-CEILING = 51
+#: Cluster I graduated and ``salesagent-091d8`` is NOT discharged by that. The two
+#: ``test_template_url_validation.py`` rows were never a testing-layer defect the ledger
+#: could wait out: the module built its admin app from the AMBIENT ENVIRONMENT, so whether
+#: the test-credential login blueprint was composed — and therefore whether
+#: ``url_for('test_auth.test_auth')`` resolved — was an environment fact, and a strict xfail
+#: on an environment fact is red exactly where it is enforced and green everywhere else. The
+#: module now composes that blueprint unconditionally, which is the STRICTER reading: every
+#: template branch is scanned, including the ones that render only under test mode.
+#: ``salesagent-091d8`` asks how a first admin reaches a fresh deployment before SSO exists,
+#: which is a production composition question this scanner never graded.
+CEILING = 39
 
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
@@ -83,30 +85,16 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # Cluster G (salesagent-e30o7.7) — vendor-client refusal for a dry-run adapter
         "tests/integration/test_vendor_egress.py::test_a_dry_run_adapter_holds_no_vendor_client[kevel]",
         "tests/integration/test_vendor_egress.py::test_a_dry_run_adapter_holds_no_vendor_client[triton]",
-        "tests/integration/test_vendor_egress.py::test_require_vendor_refuses_an_unconfigured_client[Kevel]",
-        "tests/integration/test_vendor_egress.py::test_require_vendor_refuses_an_unconfigured_client[Triton Digital]",
-        "tests/integration/test_vendor_egress.py::test_require_vendor_refuses_an_unconfigured_client[Xandr]",
-        "tests/integration/test_webhook_refusal_reaches_both_seats.py::TestSeatTwoTheStashPathRefusesWithoutAnOutcome::test_a_stored_legacy_row_stops_delivering_and_says_so[sub-32 credential-schemes1-sssssssssssssssssssssssssssssss-Bearer]",
         # Cluster H (salesagent-e30o7.8) — wire and status expectations that drifted
         "tests/integration/test_admin_media_buy_reject_webhook.py::TestAdminMediaBuyRejectWebhook::test_approve_webhook_echoes_buyer_request_context",
-        "tests/integration/test_bdd_dispatch_seam.py::TestCallViaForwardsReqWholeAndTheEnvUnpacksIt::test_a_format_ids_filter_still_reaches_the_tool[mcp]",
-        "tests/integration/test_bdd_dispatch_seam.py::TestCallViaForwardsReqWholeAndTheEnvUnpacksIt::test_a_format_ids_filter_still_reaches_the_tool[rest]",
         "tests/integration/test_create_media_buy_pending_approval_wire.py::test_config_approval_create_emits_submitted_not_confirmed",
         "tests/integration/test_create_media_buy_pending_approval_wire.py::test_submitted_create_replays_verbatim_without_second_workflow_step",
         "tests/integration/test_delivery_poll_behavioral.py::TestPrincipalNotFoundReturnsError::test_principal_not_found_returns_error_in_response",
         "tests/integration/test_delivery_poll_behavioral.py::TestSimulationReachesFinalThroughRealHook::test_mock_time_in_flight_reports_active_and_scheduled",
         "tests/integration/test_delivery_poll_behavioral.py::TestSimulationReachesFinalThroughRealHook::test_mock_time_past_flight_reaches_completed_and_final",
-        "tests/integration/test_harness_wire_response.py::TestWireResponseIsRealWire::test_rest_wire_response_is_the_http_body",
         "tests/integration/test_list_accounts_auth_missing_wire.py::TestListAccountsNoTokenEmitsAuthMissing::test_no_token_rest_wire_emits_auth_missing",
         "tests/integration/test_mcp_client_util.py::TestExhaustedFailureReachesTheRegistryClassified::test_seam_failure_surfaces_as_the_mapped_envelope[connection-level]",
         "tests/integration/test_mcp_client_util.py::TestExhaustedFailureReachesTheRegistryClassified::test_seam_failure_surfaces_as_the_mapped_envelope[tool-level]",
-        # Cluster I (salesagent-091d8) — production composition depends on a test flag
-        "tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_all_template_url_for_calls_resolve",
-        "tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_form_actions_point_to_valid_endpoints",
-        # Cluster J (GH #2189) — these re-run a BDD slice and grade their own subrun
-        "tests/integration/test_bdd_scenario_liveness_real_run.py::test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live",
-        "tests/integration/test_bdd_scenario_liveness_real_run.py::test_real_run_records_uc005_format_id_roundtrip_scenarios_as_live",
-        "tests/integration/test_bdd_scenario_liveness_real_run.py::test_provenance_tag_is_a_recorded_field_not_a_collection_filter",
     }
 )
 
@@ -146,6 +134,6 @@ def test_every_entry_names_a_collectable_file() -> None:
     repo_root = Path(__file__).parent.parent.parent
     missing = sorted(
         {e.split("::", 1)[0] for e in load_ledger_nodeids(LEDGER)}
-        - {str(p.relative_to(repo_root)) for p in (repo_root / "tests" / "integration").glob("test_*.py")}
+        - {rel(p, repo_root) for p in (repo_root / "tests" / "integration").glob("test_*.py")}
     )
     assert not missing, "ledger entries name files that no longer exist:\n  " + "\n  ".join(missing)

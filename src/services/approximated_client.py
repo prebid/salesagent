@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pydantic import JsonValue
 
 from src.core.database.models import Tenant
+from src.core.operator_errors import OperatorRefusal
 from src.core.security.egress.destination import VendorConstant
 from src.core.security.outbound_http import OutboundError, OutboundResult, send
 
@@ -43,28 +44,28 @@ def _api(method: str, path: str, api_key: str, *, json_body: JsonValue | None = 
     )
 
 
-class DomainNotOwned(Exception):
+class DomainNotOwned(OperatorRefusal):
     """The acting tenant does not own the domain the request named.
 
     Raised by :func:`tenant_owns_domain`, which is the only producer of the
     :class:`OwnedDomain` every domain-bearing operation below requires.
     """
 
+    MESSAGE = "Domain must match tenant's virtual_host"
+
 
 @dataclass(frozen=True, slots=True)
 class OwnedDomain:
     """A domain PROVEN to belong to the tenant acting on it.
 
-    The ownership rule used to live inside one of the three Flask handlers that
-    dial Approximated, so the other two omitted it -- and did, for as long as
-    all three have existed. Copying the ``if`` into the siblings would have made
-    the fourth route omit it in turn.
+    The ownership rule does not live inside the Flask handlers that dial
+    Approximated. An ``if`` in one handler is an ``if`` the siblings can omit, and
+    copying it into each of them only moves the omission to the next route added.
 
     This type is what stops that, and the property it buys is precise: a route
     cannot reach a dial without PRODUCING an ``OwnedDomain``, and the sanctioned
-    producer is :func:`tenant_owns_domain`. Omission -- the actual defect, and
-    the one that held for as long as these routes have existed -- becomes
-    impossible: there is no argument to pass. What remains possible is a
+    producer is :func:`tenant_owns_domain`. Omission -- the defect this exists to
+    rule out -- becomes impossible: there is no argument to pass. What remains possible is a
     deliberate forgery, ``OwnedDomain(domain)`` written by hand, because this is
     an ordinary frozen dataclass and the Flask handlers are untyped
     (``check_untyped_defs = False``), so mypy does not grade them. That is a
@@ -83,9 +84,14 @@ def tenant_owns_domain(tenant: Tenant, domain: str | None) -> OwnedDomain:
     domain)`` and the proof means nothing. Read ``tenant.virtual_host`` INSIDE
     the caller's session block -- a detached instance raises here, not at the
     dial.
+
+    Case-folded on both sides, because ``virtual_host`` is lowercase end to end and a
+    host differing only in case is the SAME host. An exact comparison here
+    refused an operator who typed the domain with a capital, and claimed the tenant did
+    not own a domain it is served at.
     """
-    if not isinstance(domain, str) or not domain or tenant.virtual_host != domain:
-        raise DomainNotOwned("Domain must match tenant's virtual_host")
+    if not isinstance(domain, str) or not domain or (tenant.virtual_host or "").lower() != domain.lower():
+        raise DomainNotOwned(DomainNotOwned.MESSAGE)
     return OwnedDomain(domain=domain)
 
 

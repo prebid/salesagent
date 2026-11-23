@@ -249,7 +249,18 @@ class TestSendWebhookEnhancedHmacSigning:
     """
 
     def test_hmac_signature_header_present_when_secret_configured(self, integration_db):
-        """An HMAC-SHA256 row sets X-ADCP-Signature on the outgoing request.
+        """An HMAC-SHA256 row sets X-AdCP-Signature on the outgoing request.
+
+        The credential lives on ``authentication_token`` — the pair every writer
+        in ``src/`` persists — rather than the ``webhook_secret`` column #1291 C1
+        retired.
+
+        The header is named with the spelling the SDK actually emits
+        (``adcp.webhook_auth``: ``X-AdCP-Signature``), which is
+        ``tests.helpers.hmac_assertions.SIGNATURE_HEADER``. The origin's header
+        map is case-insensitive, so this is not what makes the assertion pass —
+        it is what stops the assertion from documenting a header name nothing
+        emits.
 
         Covers: UC-004-EXT-G-06
         """
@@ -268,7 +279,7 @@ class TestSendWebhookEnhancedHmacSigning:
                 principal=principal,
                 url=env.webhook_url,
                 authentication_type="HMAC-SHA256",
-                authentication_token="a" * 32,
+                authentication_token="a" * 32,  # Exactly 32 chars — meets the pinned minimum
             )
 
             env.set_http_response(200)
@@ -278,8 +289,8 @@ class TestSendWebhookEnhancedHmacSigning:
             assert result is True
             assert env.delivery_attempts == 1
             sent_headers = env.last_delivery.headers
-            assert "X-ADCP-Signature" in sent_headers
-            assert len(sent_headers["X-ADCP-Signature"]) > 0
+            assert "X-AdCP-Signature" in sent_headers
+            assert len(sent_headers["X-AdCP-Signature"]) > 0
 
     def test_hmac_signature_valid_reproduces_from_payload(self, integration_db):
         """The HMAC signature can be reproduced over the raw bytes that crossed the socket.
@@ -416,6 +427,28 @@ class TestSendWebhookEnhancedHappyPath:
             assert result is True
             assert env.delivery_attempts == 1
             assert env.last_delivery.path == "/webhook"
+            # Two obligations on one delivery: the report reaches the buyer intact, and
+            # the envelope around it carries the dedup key.
+            #
+            # AdCP 3.1.1 docs/building/by-layer/L3/webhooks.mdx :195 — "Every webhook
+            # payload carries a required ``idempotency_key``" — and :253 names
+            # delivery-report events specifically, since they have no
+            # ``notification_id`` to dedupe on. Graded by
+            # dist/compliance/3.1.1/universal/webhook-emission.yaml step
+            # ``idempotency_key_presence``.
+            #
+            # Read off the ENVELOPE, not out of the report: :217 puts the buyer's
+            # document under ``result`` and the transport-level fields beside it, so the
+            # key a receiver dedupes on is a SIBLING of ``result``, never a member of
+            # it. Asserted separately from the equality below rather than folded into an
+            # expected dict, because the key is minted per event and no literal can
+            # match it — and the equality is what says the sender added nothing of its
+            # own INSIDE the buyer's document.
+            minted = env.last_delivery.json().get("idempotency_key")
+            assert isinstance(minted, str) and minted, (
+                "the delivery-report webhook carried no idempotency_key, so a receiver cannot dedupe "
+                f"a retry of this event from a new one; envelope keys were {sorted(env.last_delivery.json())}"
+            )
             assert env.delivered_result(env.last_delivery) == payload
 
     def test_no_configs_returns_false(self, integration_db):

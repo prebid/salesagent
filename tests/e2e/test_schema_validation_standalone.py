@@ -115,7 +115,7 @@ async def test_pinned_sdk_schema_source(monkeypatch):
 
     import adcp
 
-    from tests.unit.test_adcp_spec_version import EXPECTED_SPEC_VERSION
+    from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION
 
     # Minimal payload the PINNED 3.1.1 response schema accepts: cache_scope is
     # required on the standard (else) branch since AdCP 3.1, and the top-level
@@ -138,7 +138,8 @@ async def test_pinned_sdk_schema_source(monkeypatch):
             f"validator loads schemas from {validator.schema_root}, expected the adcp SDK's _schemas tree"
         )
         # The loaded index is the repo's pinned spec version. EXPECTED_SPEC_VERSION
-        # is the pin-drift guard's constant (tests/unit/test_adcp_spec_version.py);
+        # is the pinned-version constant (tests/helpers/adcp_pin.py, the shared home the
+        # pin-drift guard also reads);
         # comparing against it — not just the SDK's self-report — pins the version
         # this suite grades even if the SDK pin shifts without the guard updating.
         index = await validator.get_schema_index()

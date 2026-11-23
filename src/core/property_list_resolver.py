@@ -50,7 +50,7 @@ async def resolve_property_list(ref: PropertyListReference) -> list[str]:
             so the buyer is the only party who can fix it. The refusal carries
             ``error.field = "property_list.agent_url"`` on both envelope layers,
             which is the only channel that can name the offending input — the
-            message says nothing about the cause on purpose (AdCP 3.1.1 L1
+            message says nothing about the cause on purpose (L1
             security, point 6).
         OutboundDeliveryFailed: The agent service was reachable but did not
             answer — SERVICE_UNAVAILABLE / transient.
@@ -68,7 +68,26 @@ async def resolve_property_list(ref: PropertyListReference) -> list[str]:
         else:
             del _cache[cache_key]
 
-    # Build request
+    # DELIBERATELY UNSIGNED, permanently, with the reason stated here rather than
+    # left as an omission (salesagent-z6nr.35 site 2, #1291).
+    #
+    # This is a bespoke REST GET against {agent_url}/lists/{list_id}. It is NOT a
+    # conformant AdCP get_property_list tool call (the spec defines that over
+    # MCP/A2A — <pin>:docs/governance/property/tasks/property_lists.mdx), so
+    # there is no AdCP operation name to attribute a signature to. AdCP.1
+    # building/by-layer/L1/security.mdx:1043 is explicit that operation names must
+    # be protocol-defined and that "Verifiers MUST NOT accept operation names that
+    # are not defined by the AdCP protocol spec" — so signing this would put a
+    # signature on the wire that a conformant receiver is required to reject.
+    #
+    # Specifically DO NOT "fix" this by installing install_signing_event_hook with
+    # capability_provider=lambda: None: that provider makes the SDK skip every
+    # operation (adcp/signing/client.py:116-117), so it is dead code wearing the
+    # appearance of signing — the exact trap this ticket's acceptance forbids.
+    #
+    # Signing becomes possible only if this fetch migrates onto the real AdCP
+    # client and a conformant get_property_list call, which is its own larger
+    # ticket.
     url = agent_url_str.rstrip("/") + "/lists/" + ref.list_id
     headers: dict[str, str] = {}
     if ref.auth_token:

@@ -33,13 +33,48 @@ from tests.bdd.steps._outcome_helpers import (
     wire_field,
     wire_lookup,
 )
+from tests.bdd.steps.domain.uc006_sync_creatives import _CREATIVE_APPROVAL_MODES
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import bracket_list, comma_list
+from tests.harness.capabilities import DERIVE_IDENTITY, OMIT_IDENTITY, IdentityMode
+from tests.helpers import pinned_schema
+from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION
+
+#: The pinned schema the capabilities Thens read their value sets and patterns from.
+_CAPABILITIES_RESPONSE = "protocol/get-adcp-capabilities-response.json"
+
+
+def _pinned_node(ref: str, *path: str) -> Any:
+    """The node at *path* inside the pinned schema *ref* (the installed SDK's tree).
+
+    A value set or pattern a Then grades against is READ from the pin, never restated in a
+    scenario or a constant: a quoted copy describes the bundle it was copied from and keeps
+    grading that bundle after the pin moves (a nine-value pricing-model list and a nine-value
+    TMP surface list outlived the enums they were copied from).
+    """
+    node: Any = pinned_schema.load_canonicalized(ref)
+    for key in path:
+        node = node[key]
+    return node
+
+
+def _pinned_items_enum(ref: str, *path: str) -> frozenset[str]:
+    """The closed set an array property's items admit, inline ``enum`` or a ``$ref``'d enum file."""
+    items = _pinned_node(ref, *path, "items")
+    if "$ref" in items:
+        return frozenset(_pinned_node(items["$ref"], "enum"))
+    return frozenset(items["enum"])
+
+
+def _assert_release_precision(values: list[str], ref: str, *pattern_path: str) -> None:
+    """Every value matches the release-precision pattern the pinned schema *ref* declares."""
+    pattern = _pinned_node(ref, *pattern_path, "pattern")
+    bad = [value for value in values if not re.fullmatch(pattern, value)]
+    assert not bad, f"{bad!r} not release-precision per {ref} {'/'.join(pattern_path)}/pattern {pattern!r}"
+
 
 #: 3.1.1 billing-party enum (dist/schemas/3.1.1/enums/billing-party.json).
 BILLING_PARTY_ENUM = {"operator", "agent", "advertiser"}
-
-#: 3.1.1 pricing-model enum (dist/schemas/3.1.1/enums/pricing-model.json).
-PRICING_MODEL_ENUM = {"cpm", "vcpm", "cpc", "cpcv", "cpv", "cpp", "cpa", "flat_rate", "time"}
 
 #: 3.1.1 reporting delivery methods enum
 #: (get-adcp-capabilities-response.json#/properties/media_buy/properties/reporting_delivery_methods).
@@ -49,21 +84,6 @@ REPORTING_DELIVERY_ENUM = {"webhook", "offline"}
 #: permits (get-adcp-capabilities-response.json#/properties/webhook_signing/properties/algorithms/items/enum;
 #: minItems 1, uniqueItems). Other values are reserved and MUST NOT be emitted under v1.
 WEBHOOK_SIGNING_ALGORITHM_ENUM = {"ed25519", "ecdsa-p256-sha256"}
-
-#: 3.1.1 TMP surface enum — the closed set media_buy.execution.trusted_match.surfaces
-#: items may carry (get-adcp-capabilities-response.json#/properties/media_buy/properties/
-#: execution/properties/trusted_match/properties/surfaces/items/enum).
-TRUSTED_MATCH_SURFACE_ENUM = {
-    "website",
-    "mobile_app",
-    "ctv_app",
-    "desktop_app",
-    "dooh",
-    "podcast",
-    "radio",
-    "streaming_audio",
-    "ai_assistant",
-}
 
 #: 3.1.1 media channels enum, in schema order — the 20 canonical values
 #: (dist/schemas/3.1.1/enums/channels.json#/enum). primary_channels items $ref
@@ -102,10 +122,7 @@ def _config(ctx: dict) -> dict:
 
 def _quoted_list(text: str) -> list[str]:
     """Parse '"a", "b"' / 'display, social' step fragments into a list."""
-    quoted = re.findall(r'"([^"]+)"', text)
-    if quoted:
-        return quoted
-    return [part.strip() for part in text.split(",") if part.strip()]
+    return re.findall(r'"([^"]*)"', text) or comma_list(text)
 
 
 def _assert_schema_valid(ctx: dict) -> None:
@@ -156,13 +173,31 @@ def _assert_capabilities_success(ctx: dict) -> None:
     _assert_wire_paths_present(ctx, "adcp", "supported_protocols")
 
 
-def _assert_capabilities_config_error(ctx: dict) -> None:
+def _assert_capabilities_config_error(ctx: dict, *, block: str | None = None) -> None:
     """A seller-side config rejection: the builder refused to emit a conformant response and
     surfaced CONFIGURATION_ERROR (recovery terminal — a deployment fault the buyer cannot fix
     and MUST NOT auto-retry; enums/error-code.json#/enumMetadata/CONFIGURATION_ERROR).
     The code and its recovery ARE the contract; the sentence is derived from the code through
-    CODE_TABLE, so asserting both would check the table against itself."""
+    CODE_TABLE, so asserting both would check the table against itself.
+
+    ``block`` pins WHICH declaration the builder refused, and it is graded on
+    ``errors[0].field``, not on the message (#1291 D1). That is not a softening of the
+    obligation but the only channel that still carries it: ``AdCPSalesAgentError`` has no
+    ``message=``, so every CONFIGURATION_ERROR reaches the buyer with the SAME CODE_TABLE
+    sentence, while ``CapabilityDeclarations._reject`` raises
+    ``field="capability_declarations.<block>.<member>"``. Without the pin any
+    CONFIGURATION_ERROR satisfies the row — including the unbacked-block and pydantic
+    extra-field refusals that fire before the rule under test is ever evaluated — so a
+    graduation could be bought by the WRONG refusal.
+    """
     ctx["result"].assert_wire_error("CONFIGURATION_ERROR", recovery="terminal")
+    if block is None:
+        return
+    field = (ctx["result"].wire_error_object() or {}).get("field")
+    assert isinstance(field, str) and block in field, (
+        f"the CONFIGURATION_ERROR does not name {block!r} in errors[0].field, so it is not "
+        f"the refusal this row grades: {field!r}"
+    )
 
 
 # ── Givens: tenant / adapter / DB state ──────────────────────────────
@@ -171,9 +206,20 @@ def _assert_capabilities_config_error(ctx: dict) -> None:
 @given("the tenant has full capabilities configured")
 @given("the tenant uses the mock adapter with full capabilities configured")
 def given_full_capabilities(ctx: dict) -> None:
-    """Declare the full-capability tenant. Production has no capability config
-    surface yet — this records intent; value asserts xfail until S1/S3 land."""
+    """Declare the full-capability tenant.
+
+    Most of "full capabilities" has no production capability-config surface yet —
+    that part records intent, and the value asserts xfail until S1/S3 land. The one
+    part that IS real is the adapter's pricing-model set: production derives
+    media_buy.supported_pricing_models from adapter.get_supported_pricing_models(),
+    so "the tenant uses the mock adapter with full capabilities configured" is
+    realized by having the adapter report the mock adapter's own set (@T-UC-010-pricing
+    grades it). The env's default adapter reports NO pricing models, because absence
+    is what production emits when nothing is determined — it is a declared state here,
+    never a harness default.
+    """
     _config(ctx)["full"] = True
+    ctx["env"].set_supported_pricing_models()
 
 
 @given("the tenant supports audience targeting")
@@ -192,35 +238,34 @@ def given_supports_conversion_tracking(ctx: dict) -> None:
     _config(ctx)["conversion_tracking"] = True
 
 
-@given('"creative" is in supported_protocols')
-def given_creative_in_supported_protocols(ctx: dict) -> None:
-    """Declare the creative protocol. Production advertises only the media_buy
-    protocol, so the creative section is not emitted (#1724) — records intent."""
-    _config(ctx).setdefault("supported_protocols", []).append("creative")
-
-
-@given("the tenant declares creative supports_compliance true")
-def given_creative_supports_compliance(ctx: dict) -> None:
-    """Declare the optional creative.supports_compliance value. Records intent;
-    production does not emit the creative section yet (#1724)."""
-    _config(ctx)["creative_supports_compliance"] = True
-
-
 @given("the adapter is unavailable")
 @given("a tenant is resolvable but adapter is unavailable")
 def given_adapter_unavailable(ctx: dict) -> None:
-    """Adapter factory raises — production degrades to the [display] default channel.
+    """Adapter factory raises — production has no channel evidence and omits primary_channels.
 
     Owns both spellings. The "a tenant is resolvable but ..." one was a second
     function with the same body plus a ``has_tenant`` flag no step read; tenant
     resolvability is the env's default, so the two sentences name the same state.
+
+    A real publisher partner is seeded (salesagent-piyo) so media_buy.portfolio stays
+    populated: portfolio is now omitted entirely, never fabricated, when no real
+    publisher domain exists, and the degradation rows bound to this Given grade the
+    adapter failure's CHANNEL degradation — publisher-domain resolution is the db_fail
+    and adapter_and_db_fail rows' concern, and they assert the omission directly.
     """
     ctx["env"].make_adapter_unavailable()
+    _hold_publishers(ctx, ["degradation-fixture.com"], authorizing=True)
 
 
 @given("the database query fails")
+@given("a tenant is resolvable but database query fails")
 def given_database_query_fails(ctx: dict) -> None:
-    """Publisher-partner DB read fails — production degrades to the placeholder domain."""
+    """Publisher-partner DB read fails — production has no real publisher domain to
+    report, so media_buy.portfolio is omitted entirely rather than fabricated.
+
+    Owns both spellings for the same reason ``given_adapter_unavailable`` does; the
+    "a tenant is resolvable but ..." one carried only an unread ``has_tenant`` flag.
+    """
     ctx["env"].break_tenant_config_db()
 
 
@@ -239,13 +284,75 @@ def given_portfolio_channels(ctx: dict, channels: str) -> None:
     ctx["env"].set_portfolio_channels(_quoted_list(channels))
 
 
-@given(parsers.parse("the tenant has registered publisher partnerships with domains {domains}"))
-def given_publisher_partnerships(ctx: dict, domains: str) -> None:
-    from tests.factories.core import PublisherPartnerFactory
+def _hold_publishers(ctx: dict, domains: list[str], *, authorizing: bool) -> None:
+    """One publisher per domain: its stored adagents.json authorizing this seller, or never fetched.
 
-    parsed = _quoted_list(domains)
-    for domain in parsed:
-        PublisherPartnerFactory(tenant=ctx["tenant"], publisher_domain=domain)
+    Only a publisher whose stored file authorizes the seller is one it may name in
+    ``portfolio.publisher_domains``. The document is stored through the ingest service's
+    apply half (``tests.factories.publisher.authorize_publishers``), the one way a property
+    becomes authorized.
+    """
+    from tests.factories.publisher import PublisherFactory, authorize_publishers
+
+    for domain in domains:
+        address = ctx["env"].publisher_address(domain)
+        if authorizing:
+            authorize_publishers(ctx["tenant"], address)
+        else:
+            PublisherFactory(tenant=ctx["tenant"], domain=address)
+
+
+@given(parsers.re(r"the tenant has (?P<state>verified|unverified) publisher partnerships with domains (?P<domains>.+)"))
+def given_publisher_partnerships(ctx: dict, state: str, domains: str) -> None:
+    """``verified``: the publisher's stored adagents.json authorizes this seller; ``unverified``: never fetched."""
+    _hold_publishers(ctx, _quoted_list(domains), authorizing=state == "verified")
+
+
+@given(
+    parsers.re(
+        r'the tenant holds an authorized property on (?:"(?P<domain>[^"]+)"|(?P<own_host>its own host)) '
+        r'with verification status "(?P<status>[a-z]+)"'
+    )
+)
+def given_authorized_property(ctx: dict, domain: str | None, own_host: str | None, status: str) -> None:
+    """The publisher at *domain* (or the tenant's own host) in one of three states.
+
+    ``verified``: its stored adagents.json authorizes this seller for a property;
+    ``pending``: held but never fetched; ``failed``: its last fetch failed and nothing is
+    stored. Properties come only from a publisher's file, so these are the states a
+    publisher's authorization can be in.
+    """
+    from tests.factories.publisher import PublisherFactory, authorize_publishers
+
+    publisher_domain = ctx["tenant"].virtual_host_name if own_host else domain
+    assert publisher_domain is not None
+    if status == "verified":
+        authorize_publishers(ctx["tenant"], publisher_domain)
+    elif status == "pending":
+        PublisherFactory(tenant=ctx["tenant"], domain=publisher_domain)
+    elif status == "failed":
+        PublisherFactory(
+            tenant=ctx["tenant"],
+            domain=publisher_domain,
+            fetch_status="not_found",
+            fetch_error="adagents.json not found for this domain",
+        )
+    else:
+        raise AssertionError(f"no publisher state {status!r}")
+
+
+@given(parsers.parse("the stored adagents.json of the tenant's own host was last fetched {hours:d} hours ago"))
+def given_own_host_document_aged(ctx: dict, hours: int) -> None:
+    """Move the last successful fetch of the tenant's own-host publisher back *hours* (the harness clock)."""
+    from datetime import UTC, datetime, timedelta
+
+    from src.core.database.models import Publisher
+
+    session = ctx["env"].get_session()
+    publisher = session.get(Publisher, (ctx["tenant"].tenant_id, ctx["tenant"].virtual_host_name))
+    assert publisher is not None and publisher.fetched_at is not None, "the tenant holds no stored own-host document"
+    publisher.fetched_at = datetime.now(UTC) - timedelta(hours=hours)
+    session.commit()
 
 
 @given("the adapter provides targeting capabilities including geo")
@@ -271,8 +378,8 @@ def given_adapter_channel_enumeration_fails(ctx: dict) -> None:
 @given(parsers.parse("the adapter is in {adapter_state} state"))
 def given_adapter_state(ctx: dict, adapter_state: str) -> None:
     """available → default happy adapter (channels + full targeting);
-    unavailable → the adapter factory raises, so production degrades to the
-    [display] default and drops adapter-derived media_buy sections."""
+    unavailable → the adapter factory raises, so production omits primary_channels
+    (unknown scope) and drops adapter-derived media_buy sections."""
     if adapter_state == "unavailable":
         ctx["env"].make_adapter_unavailable()
     elif adapter_state != "available":
@@ -302,6 +409,12 @@ def given_adapter_full_targeting(ctx: dict) -> None:
     from src.adapters.base import TargetingCapabilities
 
     ctx["env"].set_targeting_capabilities(**{f.name: True for f in _dc_fields(TargetingCapabilities)})
+
+
+@given("the seller's ad server is Google Ad Manager")
+def given_seller_ad_server_is_gam(ctx: dict) -> None:
+    """The tenant's adapter is Google Ad Manager, resolved by production from its AdapterConfig row."""
+    ctx["env"].use_gam_adapter_class()
 
 
 @given(parsers.parse("the adapter provides targeting as {config}"))
@@ -335,7 +448,7 @@ def given_adapter_targeting_config(ctx: dict, config: str) -> None:
     # Native postal tokens (e.g. 'US=["zip"]', 'DE=["plz"]') -- the R4 native-map
     # scenario rows spell postal dimensions by (country, system), not by field
     # name; translate via the SAME table production uses (single source, DRY).
-    from src.core.tools.capabilities import _POSTAL_AREA_TABLE
+    from src.services.seller_capabilities import _POSTAL_AREA_TABLE
 
     postal_field_by_country_system = {(c, s): field for field, (c, s) in _POSTAL_AREA_TABLE.items()}
     for match in re.finditer(r'([A-Z]{2})=\["([a-z_]+)"\]', config):
@@ -353,7 +466,7 @@ def given_full_degradation_baseline(ctx: dict) -> None:
 
 @given("a tenant is resolvable but both adapter and DB fail")
 def given_tenant_adapter_and_db_fail(ctx: dict) -> None:
-    """adapter_and_db_fail row: both degrade — [display] channels + placeholder domain."""
+    """adapter_and_db_fail row: both degrade — [display] channels and no portfolio."""
     ctx["env"].make_adapter_unavailable()
     ctx["env"].break_tenant_config_db()
 
@@ -399,10 +512,10 @@ def given_state_snapshot(ctx: dict) -> None:
 
 def _db_state_snapshot(env: Any) -> dict[str, int]:
     """Row counts of the mutable tables a capabilities call could touch."""
-    from src.core.database.models import MediaBuy, Principal, PublisherPartner, Tenant
+    from src.core.database.models import MediaBuy, Principal, Publisher, Tenant
 
     env._commit_factory_data()
-    return {model.__tablename__: len(env.query(model)) for model in (Tenant, Principal, PublisherPartner, MediaBuy)}
+    return {model.__tablename__: len(env.query(model)) for model in (Tenant, Principal, Publisher, MediaBuy)}
 
 
 # ── Givens: auth state ───────────────────────────────────────────────
@@ -511,29 +624,23 @@ def given_capability_config(ctx: dict, capability_config: str) -> None:
         ctx["env"].configure_tenant_field("account_sandbox", match.group(1) == "true")
 
 
-# ── Givens: creative_approval_mode (real config — salesagent-y9ld R7) ─────
+# ── Givens: creative_approval_mode (real config: tenant.approval_mode) ─────
 
 
 @given(parsers.parse("the tenant creative approval mode is configured as {configured}"))
 def given_creative_approval_mode(ctx: dict, configured: str) -> None:
-    """REAL config for the require_human half: tenant.human_review_required
-    (NOT NULL DEFAULT TRUE at the schema level, tests/factories/core.py's
-    TenantFactory default is False) is the tenant-side signal
-    media_buy.creative_approval_mode is designed to derive from
-    (resolve_manual_approval_signal, salesagent-y9ld). "require_human" writes
-    human_review_required=True through the real DB column production reads;
-    "omitted" writes it False (the factory default, made explicit so the row
-    is not accidentally coupled to the factory's current default). No
-    production config surface exists yet for an affirmative auto_approve
-    claim (Q2, deferred) — that row's Given is intent-only.
+    """Write the tenant's creative-review setting, ``tenant.approval_mode``.
+
+    The same column sync_creatives routes review on (``_apply_approval_mode``), which is
+    what media_buy.creative_approval_mode advertises, so this row grades the signal against
+    the setting the UC-006 approval scenarios grade the behaviour of. The cell is the stored
+    value itself: ``auto-approve``, ``require-human`` or ``ai-powered``.
     """
     configured = configured.strip()
-    _config(ctx)["creative_approval_mode"] = configured
-    if configured == "require_human":
-        ctx["env"].configure_tenant_field("human_review_required", True)
-    elif configured == "omitted":
-        ctx["env"].configure_tenant_field("human_review_required", False)
-    # "auto_approve": no production config surface yet (Q2) — intent only.
+    assert configured in _CREATIVE_APPROVAL_MODES, (
+        f"unknown tenant approval_mode {configured!r}; the column holds one of {_CREATIVE_APPROVAL_MODES}"
+    )
+    ctx["env"].configure_tenant_field("approval_mode", configured)
 
 
 # ── Givens: version negotiation ──────────────────────────────────────
@@ -566,6 +673,9 @@ def _call_capabilities(ctx: dict, **kwargs: Any) -> None:
     dual-call Then grades.
     """
     dispatch_request(ctx, **kwargs)
+    # payload_or_none: the history records BOTH outcomes, so a dispatch that
+    # errored must contribute an (None, error) tuple rather than raise here —
+    # then_dual_call_identity is the step that grades presence.
     ctx.setdefault("response_history", []).append((payload_or_none(ctx), ctx.get("error")))
 
 
@@ -622,13 +732,11 @@ def when_call_unauthenticated(ctx: dict) -> None:
 def when_invoke_capabilities(ctx: dict) -> None:
     """Auth-outline dispatch. Names NO transport, deliberately.
 
-    This used to match ``... via (MCP|A2A|REST)`` and assign ``ctx["transport"]`` from the
-    outline's own column, overriding the pytest-level parametrization -- its docstring
-    called that parametrization "redundant for this outline by design". It was not
-    redundant, it was the whole point: with the transport supplied as DATA, the Examples
-    table could grade A2A differently from MCP and REST, and it did. Taking the column away
-    hands the transport back to the shared parametrization, so one row runs on every
-    transport and a per-transport answer is unwritable here.
+    It must not match ``... via (MCP|A2A|REST)`` and assign ``ctx["transport"]`` from the
+    outline's own column: that overrides the pytest-level parametrization, and with the
+    transport supplied as DATA the Examples table can grade A2A differently from MCP and
+    REST. With no column, the transport comes from the shared parametrization, so one row
+    runs on every transport and a per-transport answer is unwritable here.
     """
     credential = _credential_for_token_state(ctx)
     if credential is _DEFAULT:
@@ -758,41 +866,90 @@ def then_supported_versions_nonempty(ctx: dict) -> None:
     assert isinstance(versions, list) and versions, f"adcp.supported_versions not a non-empty array: {versions!r}"
 
 
-@then(parsers.parse('each value in adcp.supported_versions should match pattern "{pattern}"'))
-def then_supported_versions_pattern(ctx: dict, pattern: str) -> None:
-    for value in wire_field(ctx, "adcp.supported_versions"):
-        assert re.fullmatch(pattern, value), f"supported_versions entry {value!r} does not match {pattern!r}"
+@then("each value in adcp.supported_versions should be a release-precision version")
+def then_supported_versions_pattern(ctx: dict) -> None:
+    _assert_release_precision(
+        wire_field(ctx, "adcp.supported_versions"),
+        _CAPABILITIES_RESPONSE,
+        "properties",
+        "adcp",
+        "properties",
+        "supported_versions",
+        "items",
+    )
 
 
-@then(parsers.parse('the response envelope should echo adcp_version "{version}"'))
-def then_envelope_echoes_adcp_version(ctx: dict, version: str) -> None:
+@then("the response envelope should echo the release the seller served")
+def then_envelope_echoes_adcp_version(ctx: dict) -> None:
     """The ENVELOPE root, not the ``adcp`` body block — two different obligations.
 
     ``adcp.supported_versions`` above is what the seller SPEAKS; this is what it SERVED, and
     ``version-negotiation.yaml`` rides both on the one ``get_adcp_capabilities`` call.
     Read through ``wire_field`` off the real body, because no response model declares the
     field: it is stamped by the response seam, so reading a typed payload would grade nothing.
+
+    DERIVED from the pin, not a literal in the scenario. The expected release was spelled
+    ``"3.1"`` with the rationale that "a version bump SHOULD redden this scenario" -- and the
+    bump did redden it, three times, as a capabilities-behaviour failure rather than as the
+    pin move it was. That tripwire is redundant: ``tests/unit/test_adcp_spec_version.py``
+    already fails on pin drift, specifically and by name, and additionally cross-checks the
+    version sentence in CLAUDE.md. A second, vaguer alarm detects nothing the first does not.
+
+    What keeps this an assertion rather than a tautology is that the two sides come from
+    INDEPENDENT places. ``EXPECTED_SPEC_VERSION`` is hand-authored in
+    ``tests/helpers/adcp_pin.py`` (which exists to be shared across suites without a
+    cross-test-module import) and guarded against SDK drift by its own test; the actual value
+    is whatever the boundary stamped, from ``SERVED_ADCP_VERSION`` off
+    ``adcp.get_adcp_spec_version()`` at runtime. So this still fails if production stops
+    truncating to MAJOR.MINOR, stamps the ADVERTISED version instead of the served one, or
+    drops the stamp entirely -- the regressions the named-field assertion exists for. It is
+    the version LITERAL that was carrying no information, not the check.
+
+    The release-precision assertion beside this one is the other graded check
+    (``envelope_field_pattern``), and it reads its pattern from the pin rather than a literal.
     """
+    expected = ".".join(EXPECTED_SPEC_VERSION.split(".")[:2])
     echoed = wire_field(ctx, "adcp_version")
-    assert echoed == version, (
-        f"envelope echoed adcp_version={echoed!r}, expected {version!r} — the seller must echo "
-        "the release it actually served (version-negotiation.yaml, envelope_field_present)"
+    assert echoed == expected, (
+        f"envelope echoed adcp_version={echoed!r}, expected {expected!r} — the seller must echo "
+        "the release it actually served, which is the MAJOR.MINOR of the pinned spec version "
+        f"{EXPECTED_SPEC_VERSION!r} (version-negotiation.yaml, envelope_field_present)"
     )
 
 
-@then(parsers.parse('the response envelope adcp_version should match pattern "{pattern}"'))
-def then_envelope_adcp_version_pattern(ctx: dict, pattern: str) -> None:
-    """Release precision, which is a separate graded check from presence."""
-    echoed = wire_field(ctx, "adcp_version")
-    assert re.fullmatch(pattern, echoed), (
-        f"envelope adcp_version {echoed!r} is not release-precision {pattern!r} "
-        "(version-negotiation.yaml, envelope_field_pattern)"
+@then("the response envelope adcp_version should be a release-precision version")
+def then_envelope_adcp_version_pattern(ctx: dict) -> None:
+    """Release precision, which is a separate graded check from presence.
+
+    version-negotiation.yaml's ``envelope_field_pattern`` names the same pattern
+    ``core/version-envelope.json`` declares for ``adcp_version``, which the response schema
+    composes through its ``allOf``; the schema is the copy the installed SDK carries.
+    """
+    _assert_release_precision(
+        [wire_field(ctx, "adcp_version")], "core/version-envelope.json", "properties", "adcp_version"
     )
 
 
 @then(parsers.parse('the response should include supported_protocols containing "{protocol}"'))
 def then_supported_protocols_contains(ctx: dict, protocol: str) -> None:
     assert protocol in wire_field(ctx, "supported_protocols")
+
+
+@then(parsers.parse('supported_protocols should not contain "{protocol}"'))
+def then_supported_protocols_lacks(ctx: dict, protocol: str) -> None:
+    """The seller does not claim *protocol*. supported_protocols is schema-required, so
+    ``wire_field`` refuses a response that omits it rather than reading absence as a
+    negative claim."""
+    protocols = wire_field(ctx, "supported_protocols")
+    assert protocol not in protocols, f"supported_protocols claims {protocol!r}: {protocols!r}"
+
+
+@then("each value in supported_protocols should be a member of the pinned supported_protocols enum")
+def then_supported_protocols_in_enum(ctx: dict) -> None:
+    allowed = _pinned_items_enum(_CAPABILITIES_RESPONSE, "properties", "supported_protocols")
+    protocols = wire_field(ctx, "supported_protocols")
+    invalid = set(protocols) - allowed
+    assert not invalid, f"supported_protocols carries non-enum values {sorted(invalid)}; pinned enum {sorted(allowed)}"
 
 
 @then("last_updated should be an RFC 3339 date-time string")
@@ -824,7 +981,7 @@ def then_supported_billing_nonempty(ctx: dict) -> None:
 
 @then(parsers.parse("account.supported_billing should equal {expected_set}"))
 def then_supported_billing_equals(ctx: dict, expected_set: str) -> None:
-    expected = [part.strip() for part in expected_set.strip("[]").split(",") if part.strip()]
+    expected = bracket_list(expected_set)
     value = wire_field(ctx, "account.supported_billing")
     assert sorted(value) == sorted(expected), f"supported_billing {value!r} != {expected!r}"
 
@@ -970,6 +1127,17 @@ def then_features_boolean_flags(ctx: dict, flags: str) -> None:
         assert isinstance(value, bool), f"features.{key} not a boolean: {value!r}"
 
 
+@then(parsers.parse("media_buy.features.{flag} should equal {expected}"))
+def then_feature_flag_equals(ctx: dict, flag: str, expected: str) -> None:
+    """Exact value of one media-buy-features.json flag on the wire.
+
+    The shape Then above deliberately leaves the value ungraded because the value is a
+    production choice; a scenario that names a value does so because the flag is a
+    commitment ("If a seller declares a feature as true, they MUST honor requests using
+    that feature") and the scenario pairs it with the behaviour it promises."""
+    _assert_wire_equals(ctx, f"media_buy.features.{flag}", expected)
+
+
 @then("media_buy.supported_pricing_models should be a non-empty unique array of pricing-model enum values")
 def then_pricing_models_shape(ctx: dict) -> None:
     """supported_pricing_models: minItems 1, uniqueItems, items ∈ pricing-model enum.
@@ -978,16 +1146,13 @@ def then_pricing_models_shape(ctx: dict) -> None:
     models = wire_field(ctx, "media_buy.supported_pricing_models")
     assert isinstance(models, list) and models, f"supported_pricing_models not a non-empty array: {models!r}"
     assert len(models) == len(set(models)), f"supported_pricing_models has duplicates: {models!r}"
-    invalid = set(models) - PRICING_MODEL_ENUM
-    assert not invalid, f"supported_pricing_models carries non-enum values: {sorted(invalid)}"
-
-
-@then(parsers.parse("each pricing model should be one of {allowed}"))
-def then_pricing_models_enum(ctx: dict, allowed: str) -> None:
-    allowed_set = set(_quoted_list(allowed))
-    models = wire_field(ctx, "media_buy.supported_pricing_models")
-    invalid = set(models) - allowed_set
-    assert not invalid, f"supported_pricing_models has values outside {sorted(allowed_set)}: {sorted(invalid)}"
+    allowed = _pinned_items_enum(
+        _CAPABILITIES_RESPONSE, "properties", "media_buy", "properties", "supported_pricing_models"
+    )
+    invalid = set(models) - allowed
+    assert not invalid, (
+        f"supported_pricing_models carries non-enum values {sorted(invalid)}; pinned enum {sorted(allowed)}"
+    )
 
 
 @then("media_buy.supported_pricing_models should contain no duplicates")
@@ -1129,14 +1294,6 @@ def then_conversion_field_equals(ctx: dict, field: str, expected: str) -> None:
     _assert_wire_equals(ctx, f"media_buy.conversion_tracking.{field}", expected)
 
 
-@then(parsers.parse("creative.{field} should equal {expected}"))
-def then_creative_field_equals(ctx: dict, field: str, expected: str) -> None:
-    """Exact value on a creative sub-field (e.g. supports_compliance should equal
-    true). Pinned to the declared fixture value — the creative block is optional
-    and only present when creative is in supported_protocols."""
-    _assert_wire_equals(ctx, f"creative.{field}", expected)
-
-
 @then(parsers.parse("the response should include media_buy.portfolio with publisher_domains {domains}"))
 def then_portfolio_domains(ctx: dict, domains: str) -> None:
     actual = wire_field(ctx, "media_buy.portfolio.publisher_domains")
@@ -1162,13 +1319,6 @@ def then_supported_pricing_models_present(ctx: dict) -> None:
         "media_buy.supported_pricing_models is absent or empty after an unrelated "
         f"adapter-derived section degraded — the failure cascaded: {models!r}"
     )
-
-
-@then(parsers.parse('media_buy.portfolio primary_channels should equal "{expected}"'))
-def then_primary_channels_equal(ctx: dict, expected: str) -> None:
-    """The degraded section itself fell back to its documented default."""
-    channels = wire_field(ctx, "media_buy.portfolio.primary_channels")
-    assert channels == [expected], f"expected primary_channels == ['{expected}'], got {channels!r}"
 
 
 @then("primary_channels should equal the channels enum's 20 canonical values")
@@ -1230,9 +1380,12 @@ def then_schema_valid(ctx: dict) -> None:
     _assert_schema_valid(ctx)
 
 
-@then("the response should NOT include account section")
-def then_no_account(ctx: dict) -> None:
-    wire_absent(ctx, "account")
+@then(parsers.re(r"the response should NOT include the (?P<section>account|creative) section$"))
+def then_section_absent(ctx: dict, section: str) -> None:
+    """The top-level block is absent from the wire body. ``wire_absent`` refuses a
+    present key, a JSON null included, and an errored dispatch, so the assert cannot
+    pass on a response that never arrived."""
+    wire_absent(ctx, section)
 
 
 # ── Thens: read-only invariant ───────────────────────────────────────
@@ -1344,25 +1497,40 @@ def then_wire_context_empty(ctx: dict) -> None:
 
 @then("the error details should carry supported_versions as a non-empty array")
 def then_details_supported_versions(ctx: dict) -> None:
-    """The code is asserted before the block is read (wire_error_details takes it):
-    otherwise this grades the details of whatever envelope happened to be captured.
+    """Sole owner of this sentence: details.supported_versions is a REQUIRED, minItems-1 array.
+
+    Graded off the WIRE error envelope, never a reconstructed exception (Error
+    Verification Policy, tests/CLAUDE.md). The code is asserted before the block is read
+    — ``wire_error_details`` TAKES the expected code — otherwise this grades the details
+    of whatever envelope happened to be captured.
+
+    ``isinstance(list) and versions`` is the whole obligation and both halves are
+    load-bearing: an OMITTED key yields ``None`` (fails the isinstance half) and an
+    EMPTY array fails the truthiness half.
 
     "carry", not "include": the generic ``the error details should include {key} {value}``
-    parser matches the "include" spelling of this sentence too (key=supported_versions,
-    value="as a non-empty array"), and pytest-bdd would then hand the scenario one of the
-    two bodies with the other dead — the generic one comparing the details value against
-    the literal string "as a non-empty array". One sentence, one meaning.
+    parser used to match this sentence too (key=supported_versions, value="as a non-empty
+    array"), and pytest-bdd would then hand the scenario one of the two bodies with the
+    other dead. It is now typed ``{key:w} {value:S}`` so this exact-text step is the
+    sentence's single meaning
+    (``tests/unit/test_architecture_bdd_no_shadowed_steps.py``, GH #1941).
+
+    @source repo=adcp ref=v3.2.7 path=static/schemas/source/error-details/version-unsupported.json
+        pointer=/required  (supported_versions REQUIRED, minItems 1)
     """
     versions = ctx["result"].wire_error_details("VERSION_UNSUPPORTED").get("supported_versions")
     assert isinstance(versions, list) and versions, f"details.supported_versions not a non-empty array: {versions!r}"
 
 
-@then(parsers.parse('each supported_versions entry should match pattern "{pattern}"'))
-def then_details_versions_pattern(ctx: dict, pattern: str) -> None:
-    # The feature escapes backslashes for Gherkin — unescape before matching.
-    unescaped = pattern.replace("\\\\", "\\")
-    for value in ctx["result"].wire_error_details("VERSION_UNSUPPORTED")["supported_versions"]:
-        assert re.fullmatch(unescaped, value), f"supported_versions entry {value!r} does not match {unescaped!r}"
+@then("each error details supported_versions entry should be a release-precision version")
+def then_details_versions_pattern(ctx: dict) -> None:
+    _assert_release_precision(
+        ctx["result"].wire_error_details("VERSION_UNSUPPORTED")["supported_versions"],
+        "error-details/version-unsupported.json",
+        "properties",
+        "supported_versions",
+        "items",
+    )
 
 
 @then(parsers.parse('the error details should include supported_versions containing "{v1}" and "{v2}"'))
@@ -1507,9 +1675,12 @@ def _deg_no_tenant(ctx: dict) -> None:
         assert key in adcp, f"no_tenant adcp missing {key!r}: {sorted(adcp)}"
 
 
-def _deg_display_default(ctx: dict) -> None:
-    channels = wire_field(ctx, "media_buy.portfolio.primary_channels")
-    assert channels == ["display"], f"primary_channels not the [display] default: {channels!r}"
+def _deg_adapter_unavailable(ctx: dict) -> None:
+    # No adapter means no evidence of any channel, so the scope is unknown and the array
+    # is omitted -- never a guessed [display], which buyers would read as an exhaustive
+    # display-only allowlist (portfolio.primary_channels: "Omission means channel scope is
+    # unknown"). The portfolio itself stays: its publisher partnership is real.
+    _grade_array_or_absent(ctx, "media_buy.portfolio.primary_channels", "absent")
     targeting = wire_field(ctx, _TARGETING_PREFIX)
     assert targeting == {"geo_countries": True, "geo_regions": True}, (
         f"targeting not the degraded default: {targeting!r}"
@@ -1522,24 +1693,8 @@ def _deg_display_default(ctx: dict) -> None:
         wire_absent(ctx, path)
 
 
-def _assert_placeholder_domain(ctx: dict) -> None:
-    domains = wire_field(ctx, "media_buy.portfolio.publisher_domains")
-    assert isinstance(domains, list) and len(domains) == 1 and str(domains[0]).endswith(".example.com"), (
-        f"publisher_domains not the single placeholder domain: {domains!r}"
-    )
-
-
-def _deg_db_fail(ctx: dict) -> None:
-    _assert_placeholder_domain(ctx)
-    channels = wire_field(ctx, "media_buy.portfolio.primary_channels")
-    assert channels == ["display", "social", "ctv"], f"adapter channels degraded on a DB-only failure: {channels!r}"
-
-
 def _deg_adapter_and_db_fail(ctx: dict) -> None:
-    channels = wire_field(ctx, "media_buy.portfolio.primary_channels")
-    assert channels == ["display"], f"primary_channels not the [display] default: {channels!r}"
-    _assert_placeholder_domain(ctx)
-    for path in ("media_buy.audience_targeting", "media_buy.conversion_tracking"):
+    for path in ("media_buy.portfolio", "media_buy.audience_targeting", "media_buy.conversion_tracking"):
         wire_absent(ctx, path)
 
 
@@ -1561,10 +1716,12 @@ _SATISFY_TABLE: dict[str, Any] = {
     "with account.supported_billing non-empty and adcp.idempotency present": _deg_full_response,
     "only adcp and supported_protocols at top level, with adcp carrying major_versions, "
     "supported_versions and idempotency": _deg_no_tenant,
-    "primary_channels equals [display] and targeting equals exactly {geo_countries: true, "
-    "geo_regions: true} with no reporting_delivery_methods, audience_targeting or conversion_tracking": _deg_display_default,
-    "publisher_domains equals the placeholder domain and primary_channels equals [display, social, ctv]": _deg_db_fail,
-    "primary_channels equals [display] and publisher_domains equals the placeholder domain, "
+    "primary_channels absent and targeting equals exactly {geo_countries: true, "
+    "geo_regions: true} with no reporting_delivery_methods, audience_targeting or conversion_tracking": _deg_adapter_unavailable,
+    "media_buy.portfolio is omitted (no real publisher domain, never fabricated)": lambda ctx: wire_absent(
+        ctx, "media_buy.portfolio"
+    ),
+    "media_buy.portfolio is omitted (no real publisher domain, never fabricated), "
     "adapter-dependent sections absent": _deg_adapter_and_db_fail,
     "account present with non-empty supported_billing and no optional account fields": _deg_account_degraded,
     "media_buy.audience_targeting absent": lambda ctx: wire_absent(ctx, "media_buy.audience_targeting"),
@@ -1601,24 +1758,19 @@ CLOUD_STORAGE_PROTOCOL_ENUM = {"s3", "gcs", "azure_blob"}
 _VENDOR_METRIC_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
-def _parse_bracket_list(token: str) -> list[str]:
-    """Parse a Gherkin '[a, b]' fragment into a list of bare string tokens."""
-    inner = token.strip().removeprefix("[").removesuffix("]").strip()
-    if not inner:
-        return []
-    return [part.strip() for part in inner.split(",") if part.strip()]
-
-
 def _grade_array_or_absent(ctx: dict, path: str, expected: str) -> None:
     """Grade an outline <expected> column of the form 'absent' | 'equal to [a, b]'
     against a success-path array field on the wire."""
     expected = expected.strip()
     if expected == "absent":
+        # The parent object must be ON the wire: a field is trivially absent from a
+        # section that was never emitted, and that pass would grade nothing.
+        wire_dict(ctx, path.rpartition(".")[0])
         wire_absent(ctx, path)
         return
     match = re.fullmatch(r"equal to (\[[^\]]*\])", expected)
     assert match, f"unrecognized array expected column: {expected!r}"
-    want = _parse_bracket_list(match.group(1))
+    want = bracket_list(match.group(1))
     actual = wire_field(ctx, path)
     assert actual == want, f"{path} expected {want!r}, got {actual!r}"
 
@@ -1664,17 +1816,66 @@ def given_brand_posture(ctx: dict) -> None:
     }
 
 
+#: The algorithm minted wherever a row needs webhook_signing.supported to DERIVE true.
+#: webhook_signing is derived platform state, so "the seller emits signed webhooks" is
+#: realized by holding a key this deployment can open on a trust root it can publish —
+#: never by declaring the block, which production refuses outright.
+_WEBHOOK_SIGNING_ALG = "ed25519"
+
+
+def _realize_webhook_signing(
+    ctx: dict,
+    *,
+    keyed_alg: str | None = _WEBHOOK_SIGNING_ALG,
+    reporting_methods: list[str] | None = None,
+) -> None:
+    """Realize a webhook-signing state: the key it derives from, and any trigger declared.
+
+    One helper for all three outlines that need it, because the two halves are not
+    separable — ``must_equal_when`` grades the declared trigger against the DERIVED
+    webhook_signing value. Keyed is the default because that is what an honest webhook
+    emitter looks like; ``keyed_alg=None`` alongside a trigger is the deliberate violation
+    rule (d) exists to reject, and is the only way to reach that rejection.
+    """
+    ctx["env"].declare_signing(keyed_alg=keyed_alg)
+    if reporting_methods:
+        ctx["env"].declare_capabilities(reporting_delivery_methods=reporting_methods)
+
+
 @given(parsers.parse("the tenant declares reporting delivery methods {methods} with offline protocols {protocols}"))
 def given_reporting_delivery_methods(ctx: dict, methods: str, protocols: str) -> None:
-    """Declare push-based reporting delivery methods + offline protocols. Records
-    intent; the declaration store deliberately carries no field for either under
-    the STRICT capability policy (#1291) — declaring [webhook] would fire the
-    schema must_equal_when forcing webhook_signing.supported=true, and no offline
-    report delivery is implemented."""
-    _config(ctx)["reporting_delivery_methods"] = None if methods.strip() == "omitted" else _parse_bracket_list(methods)
-    _config(ctx)["offline_delivery_protocols"] = (
-        None if protocols.strip() == "omitted" else _parse_bracket_list(protocols)
-    )
+    """Declare push-based reporting delivery, where this deployment backs it.
+
+    ``[webhook]`` is real and is declared as real state. ``offline`` is not: production
+    refuses a method list containing it and carries no ``offline_delivery_protocols`` field
+    at all, because no bucket report delivery exists (#1729). Those rows therefore declare
+    NOTHING — realizing them would mean grading the unbacked-block refusal, which is a
+    different rule from the one this outline is about.
+    """
+    declared_methods = None if methods.strip() == "omitted" else bracket_list(methods)
+    declared_protocols = None if protocols.strip() == "omitted" else bracket_list(protocols)
+    if not declared_methods:
+        return  # baseline polling: declaring nothing IS the state under test
+    if declared_protocols or "offline" in declared_methods:
+        return  # unbacked offline delivery — see the tag's entry in _SELECTIVE_XFAIL
+    _realize_webhook_signing(ctx, reporting_methods=declared_methods)
+
+
+#: mutating-webhook emission labels -> the declaration blocks that make the trigger real.
+#: All four labels are listed so a label that drifts from the feature fails loudly here
+#: instead of silently realizing nothing and grading a tenant that declared nothing.
+#:
+#: ``None`` marks a trigger this deployment cannot declare at all: content_standards and
+#: wholesale_feed_webhooks are in production's ``_UNBACKED_BLOCKS`` (#1855 / #1867), and
+#: declaring either is refused NAMING THAT BLOCK — so realizing them would grade the row by
+#: the wrong refusal. With no trigger and no key, webhook_signing.supported is false and the
+#: row fails on the honest reading its selective-xfail entry records.
+_WEBHOOK_EMISSION_STATES: dict[str, dict[str, Any] | None] = {
+    "media_buy.reporting_delivery_methods=[webhook]": {"reporting_delivery_methods": ["webhook"]},
+    "media_buy.content_standards.supports_webhook_delivery=true": None,
+    "wholesale_feed_webhooks.supported=true": None,
+    "no mutating-webhook emission": {},
+}
 
 
 @given(
@@ -1683,22 +1884,80 @@ def given_reporting_delivery_methods(ctx: dict, methods: str, protocols: str) ->
     )
 )
 def given_webhook_emission_state(ctx: dict, emission_state: str) -> None:
-    """Declare a mutating-webhook emission posture (or its absence) for the
-    webhook-signing required_when invariant. Records intent; the declaration store
-    deliberately carries no webhook_signing field under the STRICT capability policy
-    (#1291) so the must_equal_when invariant is ungraded."""
-    _config(ctx)["webhook_emission_state"] = emission_state.strip()
+    """Realize a mutating-webhook emission posture (or its absence) as real tenant state.
+
+    The declared trigger and the key are one act: rule (d) checks the declaration against
+    the DERIVED webhook_signing value, so declaring webhook report delivery on a keyless
+    tenant is REJECTED rather than resolved — the scenario would grade a refusal instead of
+    the invariant it names.
+    """
+    emission_state = emission_state.strip()
+    assert emission_state in _WEBHOOK_EMISSION_STATES, f"unmapped webhook emission state: {emission_state!r}"
+    blocks = _WEBHOOK_EMISSION_STATES[emission_state]
+    if blocks is None:
+        return  # undeclarable trigger — see the tag's entry in _SELECTIVE_XFAIL
+    if not blocks:
+        return  # the no-emission row: declaring nothing IS the state under test
+    _realize_webhook_signing(ctx, reporting_methods=blocks["reporting_delivery_methods"])
+
+
+#: The identity-block states the two identity outlines grade, in each outline's own
+#: vocabulary — the ONE axis they vary. ``identity-required-when-signing`` names the state
+#: in its ``<identity_state>`` column, ``identity.brand_json_url boundary`` inside its
+#: ``<boundary_point>`` label; they are the same three states, so they share one table
+#: rather than two step bodies that drift apart.
+#:
+#: OMIT vs ``{}`` is not a distinction without a difference: the pinned identity block's
+#: own description says an agent declaring a signing posture with an EMPTY identity must
+#: be rejected as missing ``brand_json_url``, so ``{}`` has to be declarable to be graded.
+_IDENTITY_STATES: dict[str, dict[str, Any] | IdentityMode] = {
+    "absent": OMIT_IDENTITY,
+    "url absent": OMIT_IDENTITY,
+    "empty object": {},
+    "identity: {}": {},
+    "url present": DERIVE_IDENTITY,
+}
+
+#: The posture the boundary outline describes only as "request_signing.supported_for
+#: non-empty". ONE operation, and deliberately NOT ``get_adcp_capabilities``: a bucket
+#: covering the operation under test would have the verifier reject the very request the
+#: scenario is about, grading a signature refusal instead of the identity rule.
+_TRUST_ROOT_POSTURE: dict[str, Any] = {"supported": True, "supported_for": ["create_media_buy"]}
+
+#: ``identity.brand_json_url boundary`` rows: leading partition token -> the posture and
+#: identity state that realize the label's prose.
+_IDENTITY_BOUNDARY_ROWS: dict[str, tuple[dict[str, Any] | None, str]] = {
+    "no_posture": (None, "absent"),
+    "posture_url_present": (_TRUST_ROOT_POSTURE, "url present"),
+    "posture_url_absent": (_TRUST_ROOT_POSTURE, "url absent"),
+    "posture_identity_empty": (_TRUST_ROOT_POSTURE, "identity: {}"),
+}
+
+
+def _declare_signing_identity(ctx: dict, posture: dict[str, Any] | None, identity_state: str) -> None:
+    """Realize one (signing posture, identity state) pair as real tenant state.
+
+    The whole point of the two outlines is that the trust-root pointer can be MISSING, so
+    the state has to reach the declaration store — a Given that only recorded which state
+    it meant could never make production reject anything.
+    """
+    state = _IDENTITY_STATES.get(identity_state)
+    assert state is not None, f"unmapped identity state: {identity_state!r}"
+    ctx["env"].declare_signing(request_signing=posture, identity=state)
 
 
 @given(parsers.parse("the tenant declares {signing_posture} with identity block {identity_state}"))
 def given_signing_posture_with_identity(ctx: dict, signing_posture: str, identity_state: str) -> None:
-    """Declare a signing posture + identity-block state for the identity
-    required_when invariant. Records intent; the declaration store deliberately
-    carries no identity or request_signing field under the STRICT capability policy
-    (#1291), so a signing posture missing brand_json_url cannot be declared and the
-    required_when rejection has nothing to fire on."""
-    _config(ctx)["signing_posture"] = signing_posture.strip()
-    _config(ctx)["identity_state"] = identity_state.strip()
+    """Declare a signing posture together with the identity-block state it is paired with.
+
+    The posture is parsed from the row's OWN ``request_signing.<bucket>=[...]`` fragment
+    rather than taken from a table, so the declaration that reaches the wire is the one the
+    row wrote; ``no signing posture`` declares none at all, which is what makes its valid
+    row grade the baseline response instead of a refusal.
+    """
+    signing_posture = signing_posture.strip()
+    posture = None if signing_posture == "no signing posture" else _parse_request_signing_buckets(signing_posture)
+    _declare_signing_identity(ctx, posture, identity_state.strip())
 
 
 @given(parsers.parse('the tenant declares measurement.metrics with metric_id "{metric_id}"'))
@@ -1797,11 +2056,21 @@ def given_measurement_metric_accreditation(ctx: dict, accreditation: str) -> Non
 # ── Thens: reporting_delivery_methods outline ────────────────────────────
 
 
-@then(parsers.re(r"media_buy\.reporting_delivery_methods should be (?P<expected>absent|equal to \[[^\]]*\])$"))
-def then_reporting_methods_value(ctx: dict, expected: str) -> None:
-    """reporting_delivery_methods: absent (baseline polling only) or exactly the
-    declared push methods (items ∈ {webhook, offline}, minItems 1, uniqueItems)."""
-    _grade_array_or_absent(ctx, "media_buy.reporting_delivery_methods", expected)
+@then(
+    parsers.re(
+        r"(?P<path>media_buy\.(?:reporting_delivery_methods|portfolio\.primary_channels)) should be "
+        r"(?P<expected>absent|equal to \[[^\]]*\])$"
+    )
+)
+def then_array_value(ctx: dict, path: str, expected: str) -> None:
+    """An optional array graded as absent or exactly the expected items.
+
+    reporting_delivery_methods: absent (baseline polling only) or exactly the declared push
+    methods. portfolio.primary_channels: absent when the seller has no evidence of any AdCP
+    channel (the pin's "Omission means channel scope is unknown"), else exactly the mapped
+    channels in enum order.
+    """
+    _grade_array_or_absent(ctx, path, expected)
 
 
 @then(parsers.re(r"media_buy\.offline_delivery_protocols should be (?P<expected>absent|equal to \[[^\]]*\])$"))
@@ -1821,7 +2090,16 @@ def then_webhook_signing_supported(ctx: dict, expected: str) -> None:
     seller advertises mutating-webhook emission it MUST equal true; when no trigger
     fires it may be true, false, or absent (honest tautology — no cross-field
     constraint). 'equal to true/false' grades the exact value; anything else is the
-    no-trigger row (present→boolean or absent)."""
+    no-trigger row (present→boolean or absent).
+
+    The absent arm is graded too (#1802): ``supported`` is a REQUIRED member of
+    the webhook_signing object (v3.1.1 get-adcp-capabilities-response.json
+    #/properties/webhook_signing/required — the same reading
+    ``then_webhook_signing_bounds`` states as "supported (required)"), so the only
+    spec-legal way for it to be missing is for the WHOLE block to be missing. A
+    present block that omits it is a schema violation, and this arm used to
+    return having verified nothing at all.
+    """
     expected = expected.strip()
     path = "webhook_signing.supported"
     if expected in ("equal to true", "equal to false"):
@@ -1833,9 +2111,14 @@ def then_webhook_signing_supported(ctx: dict, expected: str) -> None:
     # at top level — no block at all. Graded as ONE tri-state verdict, so the absent case is
     # an asserted outcome rather than an unasserted `if` with no else.
     value = wire_lookup(ctx, path)
-    assert value is WIRE_MISSING or isinstance(value, bool), (
-        f"{path} must be absent or a boolean when no mutating-webhook emission is declared, got {value!r}"
-    )
+    if value is WIRE_MISSING:
+        block = wire_lookup(ctx, "webhook_signing")
+        assert block is WIRE_MISSING, (
+            f"{path} is absent but the webhook_signing block is present — supported is a "
+            f"required member, so omitting it is schema-invalid: {block!r}"
+        )
+    else:
+        assert isinstance(value, bool), f"{path} present but not a boolean: {value!r}"
 
 
 # ── Thens: brand block ───────────────────────────────────────────────────
@@ -1860,15 +2143,37 @@ def then_brand_field_equals(ctx: dict, field: str, expected: str) -> None:
 
 
 @then(parsers.parse("the seller capabilities builder should treat the configuration as {verdict}"))
-def then_identity_signing_verdict(ctx: dict, verdict: str) -> None:
-    """identity.brand_json_url required_when invariant: a seller declaring a signing
-    posture with an absent/empty identity MUST be rejected (it cannot produce a
-    conformant response), surfaced as a CONFIGURATION_ERROR (seller-side deployment
-    fault, recovery terminal) naming brand_json_url. A no-posture config emits a
-    valid success response (adcp + supported_protocols, no adcp_error)."""
+def then_signing_declaration_verdict(ctx: dict, verdict: str) -> None:
+    """A declaration this seller cannot emit conformantly MUST be rejected, not emitted.
+
+    Two outlines share this Then, because they grade the same observable over two different
+    rules of the signing family. identity-required-when-signing: a posture declared with an
+    absent or empty ``identity`` cannot produce a conformant response
+    (``brand_json_url``'s ``required_when``). request-signing-legacy-digest: a
+    ``covers_content_digest`` of ``either`` or ``forbidden`` is a 3.0/3.1 posture that "MUST
+    NOT be advertised as a 3.2 signing posture", whatever ``supported`` says. Either way the refusal
+    is a CONFIGURATION_ERROR (seller-side deployment fault, recovery terminal), and a
+    no-posture config emits a valid success response (adcp + supported_protocols, no
+    adcp_error).
+
+    The FIELD the refusal names is read out of the verdict column rather than hardcoded, so
+    each row pins its own rule's field instead of the step pinning one outline's. It is part
+    of the scenario's recorded observable and graded on ``errors[0].field``, because
+    CODE_TABLE owns the sentence and every CONFIGURATION_ERROR therefore reaches the buyer
+    with the same text, while ``CapabilityDeclarations._reject`` raises
+    ``field="capability_declarations.<the rule's field>"``. Without the pin, an un-pinned
+    CONFIGURATION_ERROR is also satisfied by a refusal that fired for a DIFFERENT reason —
+    the block-level unbacked refusal, or the sibling signing rule — which is the wrong
+    rejection wearing the right code. The dotted shape is required of the column for that
+    reason: a row that named no field would silently grade nothing but the code."""
     verdict = verdict.strip()
     if verdict.startswith("rejected"):
-        _assert_capabilities_config_error(ctx)
+        field = verdict.rsplit(maxsplit=1)[-1]
+        assert "." in field, (
+            f"the verdict column must END with the dotted field the refusal names, so the row "
+            f"pins its own rule rather than any CONFIGURATION_ERROR: {verdict!r}"
+        )
+        _assert_capabilities_config_error(ctx, block=field)
         return
     assert verdict == "a valid capabilities response", f"unrecognized verdict column: {verdict!r}"
     _assert_capabilities_success(ctx)
@@ -1951,41 +2256,12 @@ def then_experimental_features_contains(ctx: dict, feature: str) -> None:
 # ══════════════════════════════════════════════════════════════════════════
 # Batch 6 (salesagent-e4ad): compliance_testing / specialisms / advisory errors
 #
-# The capabilities builder (src/core/tools/capabilities.py) emits only
-# adcp / supported_protocols / a HARD-CODED specialisms=[sales-non-guaranteed] /
-# media_buy{features,execution}. It never emits the compliance_testing block, a
-# top-level errors[] array, or a config-derived specialisms set, and advertises
-# only the media_buy protocol. The Givens record declared intent; the Thens grade
-# the exact v3.1.1-pinned shape on the wire. Every scenario in this batch strict-
-# xfails on the genuinely-unemitted block (per-family GH homes: #1855/#1856/#1724), never a dormant skip.
+# The capabilities builder never emits the compliance_testing block (#1724), so its
+# Given records intent and the scenario xfails at the first Then. specialisms and
+# supported_protocols are declaration-driven: the specialisms scenario declares
+# through ``the tenant declares specialisms ... with supported_protocols ...``
+# (a real tenant write) and grades the emitted union on the wire.
 # ══════════════════════════════════════════════════════════════════════════
-
-
-#: 3.1.1 specialism enum, closed 22-value kebab-case set (enums/specialism.json#/enum).
-SPECIALISM_ENUM = {
-    "audience-sync",
-    "brand-rights",
-    "collection-lists",
-    "content-standards",
-    "creative-ad-server",
-    "creative-generative",
-    "creative-template",
-    "creative-transformers",
-    "governance-aware-seller",
-    "governance-delivery-monitor",
-    "governance-spend-authority",
-    "property-lists",
-    "sales-broadcast-tv",
-    "sales-catalog-driven",
-    "sales-guaranteed",
-    "sales-non-guaranteed",
-    "sales-proposal-mode",
-    "sales-social",
-    "signal-marketplace",
-    "signal-owned",
-    "signed-requests",
-    "sponsored-intelligence",
-}
 
 
 # ── Givens: declared-intent recorders (production has no config surface) ──
@@ -1996,25 +2272,6 @@ def given_compliance_scenarios(ctx: dict) -> None:
     """Declare compliance_testing support. Production emits no compliance_testing
     block (#1592) — records intent; the scenario xfails at the first Then."""
     _config(ctx)["compliance_testing"] = True
-
-
-@given('"creative" and "media_buy" are in supported_protocols')
-def given_creative_and_media_buy_protocols(ctx: dict) -> None:
-    """Declare both protocols so the specialism roll-up parents are present.
-    Production advertises only media_buy, so the creative roll-up parent is
-    missing on the wire (#1592) — records intent."""
-    protocols = _config(ctx).setdefault("supported_protocols", [])
-    for protocol in ("creative", "media_buy"):
-        if protocol not in protocols:
-            protocols.append(protocol)
-
-
-@given(parsers.parse("the tenant claims specialisms {specialisms}"))
-def given_tenant_specialisms(ctx: dict, specialisms: str) -> None:
-    """Declare a config-derived specialisms set. Production hard-codes
-    specialisms=[sales-non-guaranteed] regardless of tenant config (#1592) —
-    records intent; the equality Then xfails."""
-    _config(ctx)["specialisms"] = _quoted_list(specialisms)
 
 
 @given("the seller surfaces an advisory warning during discovery")
@@ -2070,27 +2327,37 @@ def _controller_list_scenarios(ctx: dict) -> set[str] | None:
 
 
 @then(
-    "compliance_testing.scenarios should be a subset of the scenario ids returned "
+    "each canonical controller scenario in compliance_testing.scenarios should be returned "
     "by the seller's comply_test_controller list_scenarios call"
 )
 def then_compliance_scenarios_subset(ctx: dict) -> None:
-    """Cross-system consistency: the advertised compliance_testing.scenarios MUST be
-    a subset of what the seller's comply_test_controller returns for
-    scenario:'list_scenarios' (schema description: "the runtime source of truth
-    remains comply_test_controller"). This seller exposes no comply_test_controller
-    (#1592), so the reference set is unavailable — the relation is ungraded until the
-    controller lands and the scenario already strict-xfails on the unemitted
-    compliance_testing block. When both surfaces exist this asserts the true subset.
-    Grounds: get-adcp-capabilities-response.json#/properties/compliance_testing
-    (scenarios open strings, minItems 1; list_scenarios excluded)."""
-    scenarios = set(wire_field(ctx, "compliance_testing.scenarios"))
+    """Consistency with the runtime source of truth, for CANONICAL scenario names only.
+
+    The capabilities schema lets ``scenarios`` "also include implementation-specific
+    scenarios", while comply-test-controller.mdx requires ``list_scenarios`` to answer only
+    with canonical names, so an implementation-specific entry has no runtime counterpart and
+    a subset relation over every value would fail a conformant seller. The canonical names
+    are the scenario consts ``compliance/comply-test-controller-request.json`` binds params to
+    in its ``allOf`` conditionals (that schema's ``scenario`` itself is an open string).
+
+    This seller exposes no comply_test_controller (#1724), so the reference set is
+    unavailable and the scenario strict-xfails earlier, on the unemitted block.
+    """
+    canonical = {
+        branch["if"]["properties"]["scenario"]["const"]
+        for branch in _pinned_node("compliance/comply-test-controller-request.json", "allOf")
+        if "const" in branch.get("if", {}).get("properties", {}).get("scenario", {})
+    }
+    advertised = set(wire_field(ctx, "compliance_testing.scenarios")) & canonical
     controller_scenarios = _controller_list_scenarios(ctx)
     assert controller_scenarios is not None, (
         "seller exposes no comply_test_controller list_scenarios to cross-check the "
-        "advertised compliance_testing.scenarios against (production gap #1592)"
+        "advertised compliance_testing.scenarios against (production gap #1724)"
     )
-    extra = scenarios - controller_scenarios
-    assert not extra, f"compliance_testing.scenarios advertises ids the controller does not return: {sorted(extra)}"
+    extra = advertised - controller_scenarios
+    assert not extra, (
+        f"compliance_testing.scenarios advertises canonical ids the controller does not return: {sorted(extra)}"
+    )
 
 
 # ── Thens: specialisms ───────────────────────────────────────────────────
@@ -2158,13 +2425,14 @@ def then_rejection_names(ctx: dict, capability: str, value: str) -> None:
     )
 
 
-@then("each specialism should be a member of the 3.1.1 specialism enum")
+@then("each specialism should be a member of the pinned specialism enum")
 def then_specialisms_enum(ctx: dict) -> None:
-    """Every specialisms entry is a member of the closed 22-value kebab-case enum
-    (enums/specialism.json#/enum)."""
+    """Every specialisms entry is a member of the closed kebab-case enum the pinned
+    capabilities response's ``specialisms.items`` names (enums/specialism.json#/enum)."""
     actual = wire_field(ctx, "specialisms")
-    invalid = set(actual) - SPECIALISM_ENUM
-    assert not invalid, f"specialisms carries non-enum values: {sorted(invalid)}"
+    allowed = _pinned_items_enum(_CAPABILITIES_RESPONSE, "properties", "specialisms")
+    invalid = set(actual) - allowed
+    assert not invalid, f"specialisms carries non-enum values {sorted(invalid)}; pinned enum {sorted(allowed)}"
 
 
 @then(
@@ -2197,6 +2465,16 @@ def then_errors_array(ctx: dict) -> None:
         assert isinstance(entry, dict), f"errors entry not an object: {entry!r}"
 
 
+@then(parsers.parse('the response should carry one SERVICE_UNAVAILABLE advisory for capability "{capability}"'))
+def then_one_degradation_advisory(ctx: dict, capability: str) -> None:
+    """A degraded discovery lookup is reported once, by the capability it names, on a success
+    response (get-adcp-capabilities-response.json#/properties/errors, core/error.json)."""
+    errors = wire_field(ctx, "errors")
+    assert len(errors) == 1, f"expected one advisory, got {errors!r}"
+    assert errors[0]["code"] == "SERVICE_UNAVAILABLE", f"advisory carries the wrong code: {errors[0]!r}"
+    assert errors[0]["details"] == {"capability": capability}, f"advisory names the wrong capability: {errors[0]!r}"
+
+
 @then("each errors entry should carry code and message")
 def then_errors_code_and_message(ctx: dict) -> None:
     """core/error.json#/required = [code, message] — every entry carries both as
@@ -2226,7 +2504,7 @@ def then_success_envelope_no_adcp_error(ctx: dict) -> None:
 # ══════════════════════════════════════════════════════════════════════════
 # Batch 7 (salesagent-jd6a): bounds / monotonicity boundary outlines
 #
-# request_signing subset/disjoint relations, adcp.idempotency replay_ttl_seconds
+# the request_signing subset relation, adcp.idempotency replay_ttl_seconds
 # bounds, VERSION_UNSUPPORTED details supported_versions bound, and the
 # identity.brand_json_url required_when rule. Each <expected> column drives a
 # concrete graded observable — a schema-valid success whose emitted block satisfies
@@ -2243,13 +2521,44 @@ def then_success_envelope_no_adcp_error(ctx: dict) -> None:
 # ── Givens: declared-intent recorders (production has no config surface) ──
 
 
+#: monotonicity boundary rows -> the concrete declaration they name. The narrowing bucket
+#: (``supported_for``) is ALWAYS written explicitly,
+#: because the rule keys on ``model_fields_set``: an absent superset means "wherever a
+#: signature appears" and is skipped, so a row that omitted it would not reject at all and
+#: would grade nothing while looking like it graded the subset rule.
+#:
+#: No bucket names ``get_adcp_capabilities``. With a declared ``supported_for`` that omits
+#: it, ``_bucket_for`` puts the operation under test in the ``none`` bucket — otherwise the
+#: verifier would reject the very request the scenario is about, and the row would grade a
+#: signature refusal instead of the relation.
+_MONOTONICITY_BOUNDARY_POSTURES: dict[str, dict[str, Any]] = {
+    "required_for = supported_for (full subset, equal sets)": {
+        "supported": True,
+        "supported_for": ["create_media_buy"],
+        "required_for": ["create_media_buy"],
+    },
+    "required_for adds one operation not in supported_for": {
+        "supported": True,
+        "supported_for": ["create_media_buy"],
+        "required_for": ["create_media_buy", "update_media_buy"],
+    },
+}
+
+
 @given(parsers.parse("the tenant declares request_signing posture sets for {boundary_point}"))
 def given_request_signing_posture_sets(ctx: dict, boundary_point: str) -> None:
-    """Declare a request_signing posture-set boundary (supported_for/required_for/
-    warn_for and their protocol_methods_* siblings). Records intent; the declaration
-    store deliberately carries no request_signing field under the STRICT capability
-    policy (#1291)."""
-    _config(ctx)["request_signing_boundary"] = boundary_point.strip()
+    """Declare the concrete request_signing posture one boundary label names.
+
+    Real state, not recorded intent: the invalid rows grade the builder REJECTING a
+    relation-violating posture, which only exists to be rejected if it was actually
+    declared. ``declare_signing`` also attaches the derived ``brand_json_url`` a
+    bucket-naming posture obliges, so an invalid row is rejected by the relation rule it
+    names rather than by the identity rule (which production evaluates second).
+    """
+    boundary_point = boundary_point.strip()
+    posture = _MONOTONICITY_BOUNDARY_POSTURES.get(boundary_point)
+    assert posture is not None, f"unmapped request_signing boundary_point: {boundary_point!r}"
+    ctx["env"].declare_signing(request_signing=posture)
 
 
 #: idempotency-ttl boundary rows → the concrete declared posture they name.
@@ -2319,49 +2628,49 @@ def given_error_details_builder(ctx: dict, boundary_point: str) -> None:
 
 @given(parsers.parse("the tenant identity and signing posture are configured for {boundary_point}"))
 def given_identity_signing_posture(ctx: dict, boundary_point: str) -> None:
-    """Declare an identity + signing-posture boundary for the brand_json_url
-    required_when rule. Records intent; the declaration store deliberately carries
-    no identity or request_signing field under the STRICT capability policy (#1291),
-    so a signing posture missing brand_json_url cannot be declared and the
-    required_when rejection has nothing to fire on."""
-    _config(ctx)["identity_signing_boundary"] = boundary_point.strip()
+    """Realize one ``identity.brand_json_url`` boundary label as real tenant state.
+
+    The label carries the partition name first (``posture_url_absent …``), so the leading
+    token selects the row; the prose after it is the same state described for a reader.
+    Shares :data:`_IDENTITY_STATES` and :func:`_declare_signing_identity` with the
+    ``identity-required-when-signing`` outline, which grades the same production rule from
+    the other angle.
+    """
+    partition = boundary_point.strip().split()[0]
+    row = _IDENTITY_BOUNDARY_ROWS.get(partition)
+    assert row is not None, f"unmapped identity boundary_point: {boundary_point!r}"
+    posture, identity_state = row
+    _declare_signing_identity(ctx, posture, identity_state)
 
 
-# ── Thens: request_signing subset/disjoint relations ─────────────────────
+# ── Thens: the request_signing subset relation ───────────────────────────
 
 
 def _assert_request_signing_relations(ctx: dict) -> None:
-    """The emitted request_signing posture MUST satisfy every x-adcp-validation relation:
-    required_for ⊆ supported_for; warn_for disjoint from required_for AND ⊆ supported_for;
-    protocol_methods_required_for ⊆ protocol_methods_supported_for."""
+    """The emitted posture MUST satisfy the x-adcp-validation relation it can carry:
+    ``required_for`` ⊆ ``supported_for``, over the two buckets this seller implements."""
     posture = wire_dict(ctx, "request_signing")
-
-    def _members(key: str) -> set:
-        return set(posture.get(key) or [])
-
-    supported = _members("supported_for")
-    required = _members("required_for")
-    warn = _members("warn_for")
-    pm_supported = _members("protocol_methods_supported_for")
-    pm_required = _members("protocol_methods_required_for")
+    supported = set(posture.get("supported_for") or [])
+    required = set(posture.get("required_for") or [])
     assert required <= supported, f"required_for {sorted(required)} ⊄ supported_for {sorted(supported)}"
-    assert warn.isdisjoint(required), (
-        f"warn_for {sorted(warn)} shares operations with required_for {sorted(required)} (must be disjoint)"
-    )
-    assert warn <= supported, f"warn_for {sorted(warn)} ⊄ supported_for {sorted(supported)}"
-    assert pm_required <= pm_supported, (
-        f"protocol_methods_required_for {sorted(pm_required)} ⊄ protocol_methods_supported_for {sorted(pm_supported)}"
-    )
 
 
-@then(parsers.parse("request_signing should hold the subset and disjoint relations for a {expected} posture"))
+@then(parsers.parse("request_signing should hold the subset relation for a {expected} posture"))
 def then_request_signing_relations(ctx: dict, expected: str) -> None:
-    """valid → schema-valid success whose request_signing satisfies every subset/disjoint
-    relation; invalid → the builder rejects the relation-violating config with
-    CONFIGURATION_ERROR (recovery terminal) rather than emitting the violating posture."""
+    """valid → schema-valid success whose request_signing satisfies the subset relation;
+    invalid → the builder rejects the relation-violating config with
+    CONFIGURATION_ERROR (recovery terminal) rather than emitting the violating posture.
+
+    The invalid branch names ``request_signing`` in ``errors[0].field`` (#1291 D1). Without
+    it any CONFIGURATION_ERROR satisfied the row — including the unbacked-block and pydantic
+    extra-field rejections that fire before the relation is ever evaluated — so a
+    graduation could be bought by the WRONG refusal instead of the rule under test. The
+    pin moved from the message to the field because CODE_TABLE now owns the sentence; see
+    ``_assert_capabilities_config_error``.
+    """
     expected = expected.strip()
     if expected == "invalid":
-        _assert_capabilities_config_error(ctx)
+        _assert_capabilities_config_error(ctx, block="request_signing")
         return
     assert expected == "valid", f"unrecognized expected column: {expected!r}"
     _assert_capabilities_success(ctx)
@@ -2429,10 +2738,16 @@ def then_version_details_supported_versions(ctx: dict) -> None:
 def then_brand_json_url_bounds(ctx: dict, expected: str) -> None:
     """valid → a schema-valid success and, when identity.brand_json_url is emitted, it matches
     format uri / pattern "^https://"; invalid → the builder rejects the signing-posture-without-
-    brand_json_url config with CONFIGURATION_ERROR (recovery terminal) naming brand_json_url."""
+    brand_json_url config with CONFIGURATION_ERROR (recovery terminal) naming brand_json_url.
+
+    The naming is pinned on ``errors[0].field`` for the same reason as
+    ``then_identity_signing_verdict``: this outline grades rules (e)/(f-pattern) of
+    ``_validate_identity_relations``, and both raise with
+    ``field="capability_declarations.identity.brand_json_url"``, while every
+    CONFIGURATION_ERROR carries the one CODE_TABLE sentence."""
     expected = expected.strip()
     if expected == "invalid":
-        _assert_capabilities_config_error(ctx)
+        _assert_capabilities_config_error(ctx, block="brand_json_url")
         return
     assert expected == "valid", f"unrecognized expected column: {expected!r}"
     _assert_capabilities_success(ctx)
@@ -2447,13 +2762,48 @@ def then_brand_json_url_bounds(ctx: dict, expected: str) -> None:
 # ── Thens: webhook_signing must_equal_when + algorithm-enum bounds ────────
 
 
+#: webhook_signing boundary labels -> the PLATFORM state that realizes them.
+#:
+#: ``webhook_signing`` is derived, so none of these is a declaration of the block: a keyed
+#: tenant on a publishable trust root derives ``supported: true`` and takes ``algorithms``
+#: from the ACTIVE key's own alg, and a keyless one derives false. ``keyed_alg=None`` with
+#: a trigger declared is therefore the honest realization of "the seller advertises webhook
+#: delivery but this deployment derives supported=false", which is the rejection rule (d)
+#: exists for.
+#:
+#: ``None`` marks a label this deployment cannot realize AT ALL, and each is parked with its
+#: own reason in ``_SELECTIVE_XFAIL``: the two content-standards / wholesale-feed triggers
+#: are unbacked blocks (#1855 / #1867) whose declaration is refused naming THAT block, and
+#: an off-profile algorithm is refused at MINT time (``narrow_alg``), so it can never exist
+#: in the store to be rejected on the read path.
+_WEBHOOK_SIGNING_BOUNDARIES: dict[str, tuple[str | None, list[str] | None] | None] = {
+    "reporting_delivery_methods=['webhook'], supported=true": (_WEBHOOK_SIGNING_ALG, ["webhook"]),
+    "reporting_delivery_methods=['webhook'], supported=false": (None, ["webhook"]),
+    "algorithms=['ed25519']": ("ed25519", None),
+    "algorithms=['ecdsa-p256-sha256']": ("ecdsa-p256-sha256", None),
+    "supports_webhook_delivery=true, supported=true": None,
+    "supports_webhook_delivery=true, supported absent": None,
+    "wholesale_feed_webhooks.supported=true, supported=true": None,
+    "algorithms=['rsa-pss-sha512']": None,
+}
+
+
 @given(parsers.parse("the tenant declares webhook_signing posture described as {boundary_point}"))
 def given_webhook_signing_boundary(ctx: dict, boundary_point: str) -> None:
-    """Declare a webhook_signing boundary — a mutating-webhook trigger paired with a
-    supported value, or an algorithms set. Records intent; the declaration store
-    deliberately carries no webhook_signing field under the STRICT capability policy
-    (#1291), so the outline strict-xfails on all transports."""
-    _config(ctx)["webhook_signing_boundary"] = boundary_point.strip()
+    """Realize one webhook_signing boundary as key material plus, where the row names a
+    trigger, the declaration that obliges a signed webhook.
+
+    The keyless-with-trigger row is the load-bearing one: it is the only way to reach rule
+    (d)'s rejection, because a tenant that HAS a key derives supported=true and satisfies
+    the invariant instead of violating it.
+    """
+    boundary_point = boundary_point.strip()
+    assert boundary_point in _WEBHOOK_SIGNING_BOUNDARIES, f"unmapped webhook_signing boundary: {boundary_point!r}"
+    state = _WEBHOOK_SIGNING_BOUNDARIES[boundary_point]
+    if state is None:
+        return  # unrealizable here — see the tag's entry in _SELECTIVE_XFAIL
+    keyed_alg, reporting_methods = state
+    _realize_webhook_signing(ctx, keyed_alg=keyed_alg, reporting_methods=reporting_methods)
 
 
 def _assert_webhook_signing_must_equal_when(ctx: dict, webhook_signing: dict) -> None:
@@ -2481,10 +2831,15 @@ def then_webhook_signing_bounds(ctx: dict, expected: str) -> None:
     and algorithms — when present — is a non-empty, unique array drawn from the closed enum
     {ed25519, ecdsa-p256-sha256}. invalid → the builder rejects the posture (must_equal_when
     fired with supported != true, or an algorithm outside the closed enum) with
-    CONFIGURATION_ERROR (recovery terminal) rather than emitting a non-conformant block."""
+    CONFIGURATION_ERROR (recovery terminal) rather than emitting a non-conformant block.
+
+    The invalid branch names ``webhook_signing`` in ``errors[0].field`` (#1291 D1) for the
+    same reason as ``then_request_signing_relations``: an un-named CONFIGURATION_ERROR is
+    equally satisfied by the refusal of a block the row never meant to test.
+    """
     expected = expected.strip()
     if expected == "invalid":
-        _assert_capabilities_config_error(ctx)
+        _assert_capabilities_config_error(ctx, block="webhook_signing")
         return
     assert expected == "valid", f"unrecognized expected column: {expected!r}"
     _assert_capabilities_success(ctx)
@@ -2525,27 +2880,312 @@ def given_trusted_match_surfaces(ctx: dict, surfaces: str) -> None:
     that TMP infrastructure is deployed, so the declared surface list is the
     seller-configured fact the response echoes."""
     env = ctx["env"]
-    env.declare_capabilities(trusted_match={"surfaces": _parse_bracket_list(surfaces)})
+    env.declare_capabilities(trusted_match={"surfaces": bracket_list(surfaces)})
 
 
 @then(parsers.parse("media_buy.execution.trusted_match.surfaces should equal {expected}"))
 def then_trusted_match_surfaces_equal(ctx: dict, expected: str) -> None:
     """Exact echo of the declared TMP surfaces, in declaration order, on the wire."""
-    want = _parse_bracket_list(expected)
+    want = bracket_list(expected)
     actual = wire_field(ctx, "media_buy.execution.trusted_match.surfaces")
     assert actual == want, f"media_buy.execution.trusted_match.surfaces expected {want!r}, got {actual!r}"
 
 
-@then(parsers.parse("each surface should be one of {allowed}"))
-def then_trusted_match_surfaces_in_enum(ctx: dict, allowed: str) -> None:
-    """surfaces items are drawn from the closed 3.1.1 TMP surface enum. The
-    scenario's own enumeration is pinned against the schema constant first, so a
-    drifted scenario fails loudly instead of grading a weaker set."""
-    scenario_enum = set(_quoted_list(allowed))
-    assert scenario_enum == TRUSTED_MATCH_SURFACE_ENUM, (
-        f"scenario surface enum drifted from get-adcp-capabilities-response.json: "
-        f"{sorted(scenario_enum ^ TRUSTED_MATCH_SURFACE_ENUM)}"
+@then("each trusted_match surface should be a member of the pinned surfaces enum")
+def then_trusted_match_surfaces_in_enum(ctx: dict) -> None:
+    """surfaces items are drawn from the closed set the pinned schema gives them
+    (``trusted_match.surfaces.items`` ``$ref``s ``enums/property-type.json``)."""
+    allowed = _pinned_items_enum(
+        _CAPABILITIES_RESPONSE,
+        "properties",
+        "media_buy",
+        "properties",
+        "execution",
+        "properties",
+        "trusted_match",
+        "properties",
+        "surfaces",
     )
     surfaces = wire_field(ctx, "media_buy.execution.trusted_match.surfaces")
-    invalid = set(surfaces) - TRUSTED_MATCH_SURFACE_ENUM
-    assert not invalid, f"trusted_match.surfaces carries non-enum values: {sorted(invalid)}"
+    invalid = set(surfaces) - allowed
+    assert not invalid, (
+        f"trusted_match.surfaces carries non-enum values {sorted(invalid)}; pinned enum {sorted(allowed)}"
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# D1 (#1291): the signing family reaches the wire, so its MAIN-FLOW scenarios
+# stop being dormant.
+#
+# Every Given here is a REAL state change through the shared env
+# (CapabilitiesEnv.declare_signing), so the same scenario runs identically on
+# a2a/mcp/rest: production resolves the tenant itself on every transport. None
+# of them records intent in ctx, and none of them is transport-aware.
+#
+# `request_signing` is DECLARED (a tenant posture); `webhook_signing` is
+# DERIVED from key material plus trust-root publishability and `_DERIVED_BLOCKS`
+# refuses a declaration of it — so the webhook Givens MINT A KEY instead of
+# declaring a block. That asymmetry is the Core Invariant of the family, not an
+# implementation detail of these steps.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _parse_declared_list(token: str) -> list[str]:
+    """A Gherkin ``[...]`` fragment as bare names, quoted or not.
+
+    The feature writes operation buckets QUOTED (``supported_for=["create_media_buy"]``)
+    and algorithm sets BARE (``algorithms=[ed25519]``), and both have to arrive as the
+    plain strings the schema carries — ``'"create_media_buy"'`` would be declared verbatim
+    and then never match an operation name on the wire.
+    """
+    return [item.strip('"') for item in bracket_list(token)]
+
+
+def _parse_posture_fragment(text: str) -> dict[str, Any]:
+    """Parse a ``key=value`` posture fragment into declaration kwargs.
+
+    Handles the three value shapes the feature's ``<posture>`` columns use:
+    booleans (``supported=true``), bare strings (``covers_content_digest=either``)
+    and bracketed lists (``algorithms=[ed25519]``). Deliberately strict — an
+    unparsed token would silently drop a field the row exists to grade.
+    """
+    posture: dict[str, Any] = {}
+    for key, raw in re.findall(r"(\w+)=(\[[^\]]*\]|\S+)", text.strip()):
+        if raw in ("true", "false"):
+            posture[key] = raw == "true"
+        elif raw.startswith("["):
+            posture[key] = _parse_declared_list(raw)
+        else:
+            posture[key] = raw
+    assert posture, f"posture fragment {text!r} parsed to nothing"
+    return posture
+
+
+@given(parsers.re(r"the tenant declares request_signing posture (?P<posture>supported=.+)$"))
+def given_request_signing_posture(ctx: dict, posture: str) -> None:
+    """Store a real ``request_signing`` declaration on the tenant.
+
+    The whole block is the tenant's to declare since #1291 D1, and the field type IS
+    ``RequestSigningPosture`` — the same object the verifier enforces — so what reaches
+    the wire and what the middleware applies cannot be two different readings of this
+    row.
+    """
+    ctx["env"].declare_signing(request_signing=_parse_posture_fragment(posture))
+
+
+def _parse_request_signing_buckets(fragment: str) -> dict[str, Any]:
+    """A ``request_signing.<bucket>=[...]`` fragment as a declaration.
+
+    Shared by the bucket-set Given below and the identity outline's Given, which writes
+    the same fragment shape in its ``<signing_posture>`` column — one parser, so a row
+    that names a bucket declares exactly the buckets it names in both outlines.
+    """
+    declaration: dict[str, Any] = {"supported": True}
+    for field, raw_list in re.findall(r"(?:request_signing\.)?(\w+)=(\[[^\]]*\])", fragment):
+        declaration[field] = _parse_declared_list(raw_list)
+    assert len(declaration) > 1, f"no request_signing buckets parsed from {fragment!r}"
+    return declaration
+
+
+@given(parsers.re(r"the tenant declares (?P<fragment>request_signing\.\w+=\[.+)$"))
+def given_request_signing_buckets(ctx: dict, fragment: str) -> None:
+    """Store a ``request_signing`` declaration written as ``request_signing.<bucket>=[...]``.
+
+    One step for every bucket-set Given in the feature rather than one per scenario:
+    those Givens differ only in WHICH buckets they name and with what, and a step per
+    literal sentence is the duplication the BDD guards flag.
+
+    ``supported`` is forced true because a bucket-naming posture with ``supported: false``
+    enforces nothing — every operation resolves to the ``none`` bucket — so the scenario
+    would grade an inert declaration.
+
+    The ``request_signing.`` prefix is OPTIONAL per bucket, because the feature writes it
+    on the first bucket only (``request_signing.supported_for=[…] required_for=[…]``). A
+    prefix-requiring pattern silently kept just the first bucket and the declaration
+    reached the wire with an empty ``required_for`` — caught by the
+    grades-nothing guards in the Thens below, which is what they are for.
+    """
+    ctx["env"].declare_signing(request_signing=_parse_request_signing_buckets(fragment))
+
+
+@given(parsers.re(r"the tenant declares webhook_signing posture (?P<posture>supported=.+)$"))
+def given_webhook_signing_posture(ctx: dict, posture: str) -> None:
+    """Realize a ``webhook_signing`` posture as PLATFORM state, never as a declaration.
+
+    ``webhook_signing`` is derived (``_DERIVED_BLOCKS``): ``supported`` from an active key
+    this deployment can open AND a trust root it can publish, ``algorithms`` from the
+    ACTIVE key row's own ``alg``, ``profile`` from the SDK tag the signer emits. So
+    ``supported=true algorithms=[ed25519]`` is realized by MINTING an ed25519 key on a
+    publishable host, and ``supported=false`` by leaving the tenant keyless — which is
+    what makes the emitted block gradable against what the sender would actually do.
+
+    ``legacy_hmac_fallback`` needs no realization: it describes the legacy arm's
+    reachability in ``webhook_sender_factory``, which is unconditional and independent of
+    our key material.
+    """
+    parsed = _parse_posture_fragment(posture)
+    algorithms = parsed.get("algorithms") or []
+    assert parsed.get("supported") is not True or algorithms, (
+        f"a supported=true webhook_signing row must name the algorithm to mint a key of: {posture!r}"
+    )
+    ctx["env"].declare_signing(keyed_alg=algorithms[0] if parsed.get("supported") else None)
+
+
+# ── Thens: the emitted request_signing block ──────────────────────────────
+
+
+def _request_signing_bucket(ctx: dict, field: str) -> set[str]:
+    """One emitted ``request_signing`` bucket as a set, absent -> empty."""
+    value = wire_lookup(ctx, f"request_signing.{field}")
+    return set() if value is WIRE_MISSING or value is None else set(value)
+
+
+@then(parsers.parse("request_signing.supported should equal {expected}"))
+def then_request_signing_supported(ctx: dict, expected: str) -> None:
+    """The emitted ``supported`` echoes the declared one exactly."""
+    _assert_capabilities_success(ctx)
+    _assert_schema_valid(ctx)
+    actual = wire_field(ctx, "request_signing.supported")
+    assert actual is (expected.strip() == "true"), (
+        f"request_signing.supported on the wire is {actual!r}, declared {expected.strip()!r}"
+    )
+
+
+@then(parsers.parse("request_signing.covers_content_digest should be {expected}"))
+def then_covers_content_digest(ctx: dict, expected: str) -> None:
+    """``covers_content_digest`` is the rule a buyer's Content-Digest is graded against.
+
+    Two ``<expected_digest>`` shapes in the outline: the ``supported=true`` rows demand an
+    EXACT ``required``, while the ``supported=false`` row also allows absence — a seller that
+    verifies nothing has no digest policy to state. A PRESENT value is still only
+    ``required`` there: the field's description says ``either`` and ``forbidden`` "MUST NOT
+    be advertised as a 3.2 signing posture", with no exception for an unsupported one.
+    """
+    _assert_capabilities_success(ctx)
+    _assert_schema_valid(ctx)
+    expected = expected.strip()
+    actual = wire_lookup(ctx, "request_signing.covers_content_digest")
+
+    if expected.startswith("equal to"):
+        wanted = _quoted_list(expected)[0]
+        assert actual == wanted, f"request_signing.covers_content_digest is {actual!r}, expected {wanted!r}"
+        return
+
+    allowed = set(_quoted_list(expected))
+    assert allowed, f"unparsed expected_digest column: {expected!r}"
+    assert actual is WIRE_MISSING or actual in allowed, (
+        f"request_signing.covers_content_digest is {actual!r}, which is neither absent nor one of {sorted(allowed)}"
+    )
+
+
+@then(parsers.parse("request_signing.{subset_field} should be a subset of request_signing.{superset_field}"))
+def then_request_signing_bucket_subset(ctx: dict, subset_field: str, superset_field: str) -> None:
+    """``x-adcp-validation.subset_of`` on the EMITTED buckets.
+
+    Parametrized on the pair of bucket names rather than written per relation, so the
+    assertion states which buckets it read.
+    """
+    _assert_capabilities_success(ctx)
+    subset = _request_signing_bucket(ctx, subset_field)
+    superset = _request_signing_bucket(ctx, superset_field)
+    assert subset, f"request_signing.{subset_field} is empty, so the subset relation grades nothing"
+    extra = sorted(subset - superset)
+    assert not extra, (
+        f"request_signing.{subset_field} names {extra}, which request_signing.{superset_field} "
+        f"({sorted(superset)}) does not: an operation cannot be required without being supported"
+    )
+
+
+# ── Thens: the emitted webhook_signing block ──────────────────────────────
+
+
+@then(parsers.parse("webhook_signing.supported should equal {expected}"))
+def then_webhook_signing_supported_equals(ctx: dict, expected: str) -> None:
+    """The emitted ``supported`` equals what this tenant's platform state backs.
+
+    Distinct from ``then_webhook_signing_supported`` above, which grades the
+    ``should be <equal to true | true or false>`` phrasing of the ``must_equal_when``
+    outline. Same field, two different obligations: this one is an exact equality against
+    the platform state the Given built, that one is a conditional invariant.
+
+    Not an echo of a declaration — there is none. security.mdx @ v3.1.1 reserves ``false``
+    for the posture of EMITTING UNSIGNED webhooks, so the value has to follow the key
+    material and the trust root, which is what the Given put in place.
+    """
+    _assert_capabilities_success(ctx)
+    _assert_schema_valid(ctx)
+    actual = wire_field(ctx, "webhook_signing.supported")
+    assert actual is (expected.strip() == "true"), (
+        f"webhook_signing.supported on the wire is {actual!r}, expected {expected.strip()!r}"
+    )
+
+
+def _assert_webhook_extra(ctx: dict, block: dict, clause: str) -> None:
+    """Grade ONE ``<expected_extras>`` clause against the emitted block."""
+    clause = clause.strip()
+    if clause.endswith("absent"):
+        field = clause.rsplit(" ", 1)[0].strip()
+        assert field not in block, (
+            f"webhook_signing.{field} is present ({block[field]!r}) but this posture does not sign, "
+            "so it names a Signature-Input header that never goes out"
+        )
+        return
+
+    field, _, wanted = clause.partition(" equals ")
+    field, wanted = field.strip(), wanted.strip()
+    if wanted in ("true", "false"):
+        expected: Any = wanted == "true"
+    elif wanted.startswith("["):
+        expected = bracket_list(wanted)
+    else:
+        expected = _quoted_list(wanted)[0]
+    assert block.get(field) == expected, f"webhook_signing.{field} is {block.get(field)!r}, expected {expected!r}"
+
+
+@then(parsers.parse("webhook_signing should satisfy {expected_extras}"))
+def then_webhook_signing_extras(ctx: dict, expected_extras: str) -> None:
+    """Grade the row's ``profile`` / ``algorithms`` / ``legacy_hmac_fallback`` expectations.
+
+    ``profile`` MUST match the ``tag=`` the signer emits, and ``algorithms`` is the set we
+    WILL sign with (derived from the ACTIVE key row, never the ALLOWED set) — so both are
+    exact value comparisons. The ``supported=false`` row asserts BOTH are ABSENT: with no
+    ``Signature-Input`` on the wire there is no ``tag=`` to match and no algorithm we would
+    use, so declaring either would be a claim about a header we promise not to send.
+    """
+    _assert_capabilities_success(ctx)
+    _assert_schema_valid(ctx)
+    block = wire_dict(ctx, "webhook_signing")
+    for clause in expected_extras.split(" and "):
+        _assert_webhook_extra(ctx, block, clause)
+
+
+@given(parsers.parse('the tenant declares an advertising policy described as "{description}"'))
+def given_advertising_policy_described(ctx: dict, description: str) -> None:
+    """Seed the tenant's advertising policy, the way an operator sets it.
+
+    ``configure_tenant_field`` is a real write to the ``tenants`` row and to the
+    in-memory overrides, so the in-process transports and the live server read the
+    same seeded state -- no test-only seam, and nothing for e2e to declare
+    unsupported.
+    """
+    ctx["env"].configure_tenant_field("advertising_policy", {"description": description})
+
+
+@given("the tenant declares no advertising policy")
+def given_no_advertising_policy(ctx: dict) -> None:
+    """The column holds nothing. Stated rather than left to the env's default, so the
+    scenario grades an absent policy instead of whatever the harness happens to seed."""
+    ctx["env"].configure_tenant_field("advertising_policy", None)
+
+
+@given("the tenant declares an advertising policy with no description")
+def given_advertising_policy_without_description(ctx: dict) -> None:
+    """A policy document that carries no publishable member -- the boundary between
+    "no policy" and "a policy that says nothing"."""
+    ctx["env"].configure_tenant_field("advertising_policy", {"enabled": True})
+
+
+@then(parsers.parse('media_buy.portfolio.advertising_policies should equal "{expected}"'))
+def then_advertising_policies_equals(ctx: dict, expected: str) -> None:
+    actual = wire_field(ctx, "media_buy.portfolio.advertising_policies")
+    assert actual == expected, f"advertising_policies {actual!r} != {expected!r}"

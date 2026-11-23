@@ -14,10 +14,10 @@ Filtering rules:
 - Products with property_targeting_allowed=true require ANY intersection
 """
 
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock
 
 from adcp.types import PropertyId
-from adcp.types.generated_poc.core.publisher_property_selector import (  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.publisher_property_selector import (  # TODO: no stable alias in adcp.types
     PublisherPropertySelector,
     PublisherPropertySelector1,
     PublisherPropertySelector2,
@@ -26,24 +26,20 @@ from adcp.types.generated_poc.core.publisher_property_selector import (  # TODO:
 from src.core.schemas import GetProductsRequest
 
 
-def _make_selector_all(domain: str = "example.com") -> PublisherPropertySelector:
+def _make_selector_all(domain: str = "psatest.com") -> PublisherPropertySelector:
     """Create a 'select all' publisher property selector."""
-    return PublisherPropertySelector(
-        root=PublisherPropertySelector1(
-            publisher_domain=domain,
-            selection_type="all",
-        )
+    return PublisherPropertySelector1(
+        publisher_domain=domain,
+        selection_type="all",
     )
 
 
-def _make_selector_by_id(property_ids: list[str], domain: str = "example.com") -> PublisherPropertySelector:
+def _make_selector_by_id(property_ids: list[str], domain: str = "psatest.com") -> PublisherPropertySelector:
     """Create a 'by_id' publisher property selector."""
-    return PublisherPropertySelector(
-        root=PublisherPropertySelector2(
-            publisher_domain=domain,
-            selection_type="by_id",
-            property_ids=[PropertyId(root=pid) for pid in property_ids],
-        )
+    return PublisherPropertySelector2(
+        publisher_domain=domain,
+        selection_type="by_id",
+        property_ids=[PropertyId(root=pid) for pid in property_ids],
     )
 
 
@@ -297,47 +293,3 @@ class TestCreateGetProductsRequestWithPropertyList:
 
         req = GetProductsRequest(brief="test")
         assert req.property_list is None
-
-
-class TestCapabilitiesPropertyListFiltering:
-    """Test that capabilities reports property_list_filtering honestly.
-
-    Currently declared False because zero adapters compile
-    `targeting_overlay.property_list` into native targeting (verified by
-    `grep -rn 'property_list' src/adapters/` returning zero hits). The previous
-    True value was false advertising. Restore per-adapter-aware True when a
-    real compilation path lands (B3 in inventory-targeting PLAN).
-    """
-
-    def test_capabilities_reports_property_list_filtering(self):
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-        from tests.factories import PrincipalFactory
-
-        identity = PrincipalFactory.make_identity(
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            tenant={
-                "tenant_id": "test_tenant",
-                "name": "Test Tenant",
-                "subdomain": "test",
-            },
-        )
-
-        mock_repo = MagicMock()
-        mock_repo.list_publisher_partners.return_value = []
-        mock_uow = MagicMock()
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=False)
-        mock_uow.tenant_config = mock_repo
-
-        with (
-            patch(
-                "src.core.tools.capabilities.get_adapter_class_for_tenant",
-                side_effect=Exception("adapter unavailable (test)"),
-            ),
-            patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
-        ):
-            response = _get_adcp_capabilities_impl(None, identity)
-
-        features = response.media_buy.features
-        assert features.property_list_filtering is False

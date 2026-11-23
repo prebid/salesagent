@@ -10,7 +10,7 @@ per-run artifact from a real BDD invocation. This file pins the pure logic
 ``ScenarioLiveness`` record's aggregation rules) offline, without running
 pytest-bdd. The real-run proof — that a genuinely unbound scenario is recorded
 as such, and a genuinely bound one is not — lives in
-``tests/integration/test_bdd_scenario_liveness_real_run.py``, which shells out
+``tests/collection/test_bdd_scenario_liveness_real_run.py``, which shells out
 to a real narrow ``pytest tests/bdd`` slice against Postgres.
 """
 
@@ -66,6 +66,66 @@ def test_transport_name_extracts_first_dash_segment_of_compound_param() -> None:
 def test_transport_name_no_bracket_is_default() -> None:
     class _Item:
         nodeid = "tests/bdd/test_x.py::test_foo"
+
+    assert sl._transport_name(_Item()) == "default"  # type: ignore[arg-type]
+
+
+#: Parametrize values that CONTAIN a bracket, with the transport each one really has.
+#:
+#: THIS IS THE CASE WHOSE ABSENCE LET THE DEFECT SHIP. The three tests above use
+#: bracket-free params, so a derivation splitting on the LAST bracket passes all of them --
+#: and that is what shipped: 433 of 6095 observations in one full run carried a fragment of
+#: a parametrize value as their transport, across 94 distinct phantom values, every one a
+#: plausible string rather than an error (salesagent-8qela.159). The same shape is live in
+#: ``suite_delta.nodeid_of`` in another repository (salesagent-8qela.72/.128), whose own
+#: round-trip self-check likewise has no bracketed case.
+#:
+#: All payloads are REAL, taken from the artifact rather than invented.
+#:
+#: WHICH OF THESE ARE LOAD-BEARING, measured by reinstating the last-bracket split: THREE of
+#: the five fire. The two IPv6 rows do, because their value contains a literal ``[``, and so
+#: does ``test_transport_name_refuses_a_param_merely_containing_a_transport_name`` below.
+#: The two JSON rows DO NOT -- ``{"radius": 10}`` and ``"US"]}`` carry braces, not brackets,
+#: so a last-bracket split still answers correctly for the nodeids as spelled here; their
+#: real nodeids must have carried an earlier ``[`` that these reconstructions omit. They are
+#: kept because they document the shapes the artifact actually held, but a weakening of the
+#: split would pass them. If you are changing the derivation, the IPv6 rows are the ones to
+#: watch.
+_BRACKETED_PARAMS = [
+    # an IPv6 literal inside a URL -- the worst shape, and the one shared with .72/.128
+    ("tests/bdd/test_x.py::test_foo[rest-https://[fc00::1]/hook]", "rest"),
+    ("tests/bdd/test_x.py::test_foo[a2a-https://[ff02::1]/hook]", "a2a"),
+    # a JSON payload
+    ('tests/bdd/test_x.py::test_foo[mcp-{"radius": 10}]}]', "mcp"),
+    # a JSON array tail
+    ('tests/bdd/test_x.py::test_foo[rest-"US"]}]', "rest"),
+    # the admin transport, which a hand-written vocabulary omitted while it had 44 real
+    # observations -- so this row grades the VOCABULARY, not just the split
+    ("tests/bdd/test_x.py::test_foo[admin_integration-case]", "admin_integration"),
+]
+
+
+@pytest.mark.parametrize(("nodeid", "expected"), _BRACKETED_PARAMS, ids=lambda v: str(v)[:40])
+def test_transport_name_survives_a_bracket_inside_the_parametrize_value(nodeid: str, expected: str) -> None:
+    """A ``[`` in the VALUE must not become the transport."""
+
+    class _Item:
+        pass
+
+    _Item.nodeid = nodeid  # type: ignore[attr-defined]
+    assert sl._transport_name(_Item()) == expected  # type: ignore[arg-type]
+
+
+def test_transport_name_refuses_a_param_merely_containing_a_transport_name() -> None:
+    """``restaurant`` is not ``rest``.
+
+    The other direction, so the bracket discipline is graded both ways: a derivation loose
+    enough to survive the cases above could also match a transport name embedded in an
+    ordinary word, and would then invent a transport where there is none.
+    """
+
+    class _Item:
+        nodeid = "tests/bdd/test_x.py::test_foo[restaurant-case]"
 
     assert sl._transport_name(_Item()) == "default"  # type: ignore[arg-type]
 
@@ -304,3 +364,23 @@ def test_the_verdict_tracks_the_fact_that_did_change() -> None:
     reason = "harness wiring not extended to this tag"
     assert _verdict(reason, steps_executed=True).harness_wired is True
     assert _verdict(reason, steps_executed=False).harness_wired is False
+
+
+def test_in_process_projection_keeps_what_the_observations_measured() -> None:
+    """The replay re-derives harness_wired, so it must carry the fact that field reads."""
+    observation = {
+        "nodeid": "tests/bdd/test_uc001.py::test_x[mcp-a]",
+        "transport": "mcp",
+        "outcome": "passed",
+        "reason": None,
+        "reason_category": "live",
+        "steps_executed": True,
+    }
+    e2e_observation = {**observation, "nodeid": "tests/bdd/test_uc001.py::test_x[e2e_rest-a]", "transport": "e2e_rest"}
+
+    projected = sl._project_in_process(
+        {"scenario_id": "T-UC-001-x", "observations": [observation, e2e_observation], "harness_wired": None}
+    )
+
+    assert projected["observations"] == [observation]
+    assert projected["harness_wired"] is True

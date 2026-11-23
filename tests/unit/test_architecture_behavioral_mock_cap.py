@@ -28,21 +28,43 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests.unit._architecture_helpers import iter_call_expressions
+from tests.unit._architecture_helpers import iter_call_expressions, rel
 
 # Per-file cap on hand-rolled mock constructions in behavioral test files.
 # Frozen at the current count; can only shrink. New behavioral files with mock
 # constructions fail immediately (force a deliberate cap entry or harness use).
 BEHAVIORAL_MOCK_CONSTRUCTION_CAP: dict[str, int] = {
-    "tests/integration/test_create_media_buy_behavioral.py": 27,
+    # 27 -> 26: test_creative_in_valid_state_assigned_successfully deleted. It graded
+    # ``validate_creative_format_against_product`` directly -- said so in its own docstring
+    # -- and that helper is gone, replaced by the one satisfaction function
+    # (src/core/format_satisfaction.py). Its product was a bare ``MagicMock()``, which
+    # answers every unstubbed attribute with a truthy child, so it graded the mock.
+    # 26 -> 20: the six tests of ``_validate_and_convert_format_ids`` deleted with it. No
+    # production path called it; the package format selector gate refuses those references.
+    "tests/integration/test_create_media_buy_behavioral.py": 20,
     "tests/integration/test_delivery_poll_behavioral.py": 2,
     "tests/integration/test_delivery_webhook_behavioral.py": 0,
     # 44 -> 40: TestAdapterSupportAnnotation deleted (it graded a field no model declares).
-    "tests/integration/test_get_products_behavioral.py": 40,
-    "tests/unit/test_creative_formats_behavioral.py": 17,
+    # 39 -> 38: test_zero_format_ids_raises_value_error (deleted by #2474: format_ids alone is
+    # legal under the 3.2 anyOf) and test_zero_properties_raises_value_error (deleted by #2330:
+    # conversion takes the resolved selectors and no longer refuses an empty list) both gone.
+    "tests/integration/test_get_products_behavioral.py": 38,
+    # 17 -> 13: the filter, sort and advisory tests deleted with their registry-only
+    # ``_call_impl`` helper. They are graded by BR-UC-005 scenarios on four transports or
+    # by their CreativeFormatsEnv twins in tests/integration/ (the file's docstring maps each).
+    # 13 -> 1: the referral-capability policy reads the constant instead of a mocked
+    # registry's response, the referral-warning test is deleted, and the registry-failure
+    # test keeps only the patch that injects its fault.
+    "tests/unit/test_creative_formats_behavioral.py": 1,
     "tests/unit/test_delivery_poll_behavioral.py": 1,
-    "tests/unit/test_delivery_service_behavioral.py": 2,
-    "tests/unit/test_update_media_buy_behavioral.py": 103,
+    # 2 -> 1: the webhook delivery path owns its connection and the retry-loop
+    # test builds a real QueuedWebhook instead of mocking a config object.
+    "tests/unit/test_delivery_service_behavioral.py": 1,
+    # 103 -> 88: fifteen hand-rolled ``MagicMock()`` package rows replaced by
+    # ``stub_package_row``, which derives the attribute set from
+    # ``MediaPackage.__table__.columns`` instead of setting the two attributes each site
+    # happened to need.
+    "tests/unit/test_update_media_buy_behavioral.py": 75,
 }
 
 # unittest.mock construction callables counted as hand-rolled mocking.
@@ -65,7 +87,7 @@ def _count_mock_constructions(filepath: Path) -> list[int]:
     if not _is_behavioral_test_file(filepath):
         return []
     try:
-        tree = ast.parse(filepath.read_text(), filename=str(filepath))
+        tree = ast.parse(filepath.read_text(encoding="utf-8"), filename=str(filepath))
     except (OSError, SyntaxError):
         return []
     lines: list[int] = []
@@ -83,7 +105,7 @@ _SCAN_DIRS = [_REPO_ROOT / "tests"]
 
 
 def _rel(path: Path) -> str:
-    return str(path.relative_to(_REPO_ROOT)).replace("\\", "/")
+    return rel(path, _REPO_ROOT).replace("\\", "/")
 
 
 from tests.unit._per_file_cap_guard import (

@@ -24,7 +24,9 @@ import pytest
 from src.admin.app import create_app
 from src.admin.blueprints import settings as settings_module
 from src.core.database.models import Tenant
+from src.core.operator_errors import InvalidDomainNameError, logged_failure_pattern
 from tests.factories import TenantFactory
+from tests.harness.admin_client import BROWSER_PAGE_HEADERS
 from tests.helpers import concurrent_commit_in_write_window, operator_answer
 
 app = create_app()
@@ -53,12 +55,6 @@ def _auth_session(client, tenant_id: str) -> None:
         sess["test_user_role"] = "super_admin"
         sess["test_user_name"] = "Test User"
         sess["test_tenant_id"] = tenant_id
-
-
-@pytest.fixture(autouse=True)
-def _enable_test_mode(monkeypatch):
-    """Enable global test auth so require_tenant_access accepts the test session."""
-    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
 
 
 class TestAuthorizedDomainsAdd:
@@ -96,21 +92,34 @@ class TestAuthorizedDomainsAdd:
         refreshed = factory_session.get(Tenant, tenant.tenant_id)
         assert refreshed.authorized_domains == ["example.com"]
 
-    def test_add_domain_rejects_invalid_format(self, client, factory_session):
-        """Missing '.' or containing '@' must be rejected."""
+    @pytest.mark.parametrize(
+        "domain", ["not-a-domain", "user@example.com", "a',alert(document.domain),'.example", "<b>x</b>.example.com"]
+    )
+    def test_add_domain_rejects_invalid_format(self, client, factory_session, domain):
+        """Anything but a domain name (no '.', an '@', a quote, markup) is rejected and not stored.
+
+        Posted the way the settings page's form is, so the admin error handler answers the refusal
+        with a flash on that page rather than a JSON 400.
+        """
         tenant = TenantFactory(authorized_domains=["example.com"])
         factory_session.commit()
         _auth_session(client, tenant.tenant_id)
 
+        settings_page = f"/tenant/{tenant.tenant_id}/settings"
         response = client.post(
             f"/tenant/{tenant.tenant_id}/settings/domains/add",
-            data={"domain": "not-a-domain"},  # no '.'
+            data={"domain": domain},
+            headers={**BROWSER_PAGE_HEADERS, "Referer": f"http://localhost{settings_page}"},
         )
         assert response.status_code == 302
+        assert response.headers["Location"].startswith(settings_page)
+        with client.session_transaction() as sess:
+            flashed = [message for _category, message in sess.get("_flashes", [])]
+        assert InvalidDomainNameError.MESSAGE in flashed
 
         factory_session.expire_all()
         refreshed = factory_session.get(Tenant, tenant.tenant_id)
-        assert "not-a-domain" not in refreshed.authorized_domains
+        assert refreshed.authorized_domains == ["example.com"]
 
     def test_add_domain_is_idempotent(self, client, factory_session):
         """Adding an already-present domain must not duplicate it."""
@@ -246,18 +255,16 @@ class TestApproximatedToken:
     network calls.
     """
 
-    def test_returns_500_when_api_key_missing(self, client, factory_session, monkeypatch):
-        """Without APPROXIMATED_API_KEY in env, route returns 500 + error JSON."""
+    def test_refused_when_api_key_missing(self, client, factory_session, monkeypatch):
+        """Without APPROXIMATED_API_KEY in env, the route is refused as not configured."""
         monkeypatch.delenv("APPROXIMATED_API_KEY", raising=False)
         tenant = TenantFactory()
         factory_session.commit()
         _auth_session(client, tenant.tenant_id)
 
         response = client.post(f"/tenant/{tenant.tenant_id}/settings/approximated-token")
-        assert response.status_code == 500
-        body = response.get_json()
-        assert body["success"] is False
-        assert "not configured" in body["error"].lower()
+        assert response.status_code == 503
+        assert response.get_json() == {"success": False, "error": settings_module.ApproximatedNotConfigured.MESSAGE}
 
     def test_returns_404_when_tenant_not_found(self, client, factory_session, monkeypatch):
         """Requires a real tenant to back the token request."""
@@ -320,19 +327,16 @@ class TestApproximatedToken:
         called_kwargs = mock_get.call_args.kwargs
         assert called_kwargs["headers"]["api-key"] == "fake-api-key"
 
-    def test_propagates_upstream_error(self, client, factory_session, monkeypatch):
-        """Non-200 from Approximated → endpoint surfaces the upstream status."""
+    def test_upstream_error_is_answered_with_a_log_reference(self, client, factory_session, monkeypatch):
+        """Non-2xx from Approximated → a 500 with fixed text and the reference the failure was logged under."""
         monkeypatch.setenv("APPROXIMATED_API_KEY", "fake-api-key")
         tenant = TenantFactory()
         factory_session.commit()
         _auth_session(client, tenant.tenant_id)
 
-        # The seam raises on a non-2xx and discards the response, so the upstream
-        # status now arrives on the typed failure rather than on a returned object.
-        # get_dns_token (src.services.approximated_client, imported into this
-        # blueprint since salesagent-47n9.7) never catches OutboundError -- every
-        # status it can receive is a genuine failure -- so the exception reaches
-        # this route's own except OutboundError branch unchanged.
+        # The seam raises on a non-2xx and discards the response. get_dns_token never
+        # catches OutboundError -- every status it can receive is a genuine failure --
+        # so the route records it: the vendor's status and text go to the log only.
         from src.core.security.outbound_http import OutboundDeliveryFailed
 
         with patch(
@@ -341,9 +345,10 @@ class TestApproximatedToken:
         ):
             response = client.post(f"/tenant/{tenant.tenant_id}/settings/approximated-token")
 
-        assert response.status_code == 401
+        assert response.status_code == 500
         body = response.get_json()
         assert body["success"] is False
+        assert logged_failure_pattern("Approximated API error requesting a DNS widget token").fullmatch(body["error"])
 
 
 class TestGeneralSettingsVirtualHostTaken:
@@ -372,6 +377,7 @@ class TestGeneralSettingsVirtualHostTaken:
 
     def test_winner_and_loser_get_the_same_answer(self, client, factory_session):
         tenant = TenantFactory()
+        own_host = tenant.virtual_host
         _auth_session(client, tenant.tenant_id)
 
         def commit_conflicting_row():
@@ -387,10 +393,39 @@ class TestGeneralSettingsVirtualHostTaken:
         assert loser == winner
 
         # The losing request must not have committed the virtual host it failed
-        # to claim, nor the other form fields it dirtied on the way there.
+        # to claim, nor the other form fields it dirtied on the way there: the tenant
+        # still holds the host it arrived with.
         factory_session.expire_all()
         refreshed = factory_session.get(Tenant, tenant.tenant_id)
-        assert refreshed.virtual_host is None
+        assert refreshed.virtual_host == own_host
+
+
+class TestGeneralSettingsLeavesOtherSectionsAlone:
+    """POST /tenant/<id>/settings/general must not touch flags its form does not carry.
+
+    The account settings form sends only name, subdomain and virtual_host.
+    human_review_required is saved by /business-rules and enable_axe_signals by the
+    Inventory page; treating their absence here as "unchecked" switched a tenant to
+    auto-approve on every account save. The factory defaults human_review_required
+    to False, so the test seeds True explicitly to observe the transition.
+    """
+
+    def test_account_save_keeps_manual_approval_and_axe_signals(self, client, factory_session):
+        tenant = TenantFactory(human_review_required=True, enable_axe_signals=True)
+        _auth_session(client, tenant.tenant_id)
+
+        response = client.post(
+            f"/tenant/{tenant.tenant_id}/settings/general",
+            data={"name": "Renamed Publisher", "subdomain": tenant.subdomain},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302
+        factory_session.expire_all()
+        refreshed = factory_session.get(Tenant, tenant.tenant_id)
+        assert refreshed.name == "Renamed Publisher"
+        assert refreshed.human_review_required is True
+        assert refreshed.enable_axe_signals is True
 
 
 class TestApproximatedDomainTenantOwnership:

@@ -28,6 +28,7 @@ def mock_adapter(integration_db):
             tenant_id="test_tenant_ai_creative",
             name="Test Tenant - AI Creative",
             subdomain="test-ai-creative",
+            virtual_host="test-ai-creative.adcp.test",
             ad_server="mock",  # Use ad_server field instead of config
         )
         session.add(tenant)
@@ -49,6 +50,8 @@ def mock_adapter(integration_db):
             principal=principal,
             config=config,
             tenant_id=tenant.tenant_id,
+            order_name_template=None,
+            tenant_ai_config=None,
         )
 
         yield adapter
@@ -76,21 +79,21 @@ def test_per_creative_ai_orchestration(mock_adapter, mock_gemini_test_scenarios)
     # Keywords: [APPROVE], [REJECT:reason], [ASK:field needed]
     assets = [
         {
-            "id": "creative_1",
+            "creative_id": "creative_1",
             "name": "Banner Ad [APPROVE]",
             "format": "display_300x250",
             "media_url": "https://example.com/banner.jpg",
             "click_url": "https://example.com/click",
         },
         {
-            "id": "creative_2",
+            "creative_id": "creative_2",
             "name": "Banner Ad [REJECT:missing click URL]",
             "format": "display_300x250",
             "media_url": "https://example.com/banner2.jpg",
             "click_url": "https://example.com/click2",
         },
         {
-            "id": "creative_3",
+            "creative_id": "creative_3",
             "name": "Banner Ad [ASK:brand logo]",
             "format": "display_300x250",
             "media_url": "https://example.com/banner3.jpg",
@@ -132,21 +135,21 @@ def test_mixed_creative_behaviors(mock_adapter, mock_gemini_test_scenarios):
     # Multiple creatives with different outcomes using keyword syntax
     assets = [
         {
-            "id": "c1",
+            "creative_id": "c1",
             "name": "Banner Ad 300x250",
             "format": "display_300x250",
             "media_url": "https://ex.com/1.jpg",
             "click_url": "https://ex.com/c1",
         },
         {
-            "id": "c2",
+            "creative_id": "c2",
             "name": "Video Ad [REJECT:missing captions]",
             "format": "video",
             "media_url": "https://ex.com/2.mp4",
             "click_url": "https://ex.com/c2",
         },
         {
-            "id": "c3",
+            "creative_id": "c3",
             "name": "Native Ad Story",
             "format": "native",
             "media_url": "https://ex.com/3.jpg",
@@ -182,14 +185,14 @@ def test_creative_without_test_instructions(mock_adapter, mock_gemini_test_scena
     # Normal creatives with descriptive names (no test instructions)
     assets = [
         {
-            "id": "c1",
+            "creative_id": "c1",
             "name": "Spring Sale Banner",
             "format": "display_300x250",
             "media_url": "https://ex.com/1.jpg",
             "click_url": "https://ex.com/c1",
         },
         {
-            "id": "c2",
+            "creative_id": "c2",
             "name": "Product Showcase Video",
             "format": "video",
             "media_url": "https://ex.com/2.mp4",

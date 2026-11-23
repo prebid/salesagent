@@ -1,6 +1,6 @@
 # RCA: what the structural-guard corpus can and cannot see
 
-Repo `/Users/konst/projects/salesagent-1210`, branch `feature/spec-gaps-1210`, HEAD `9585ace68`.
+Repo `.`, branch `feature/spec-gaps-1210`, HEAD `9585ace68`.
 All counts below are from commands run on this tree; commands are quoted inline.
 
 ---

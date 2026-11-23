@@ -50,45 +50,33 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.core.schemas import CreativeFormatIdentity
 from src.core.security.outbound_http import OutboundRequestBlocked
 from tests.factories.creative_asset import CreativeAssetFactory
-from tests.factories.format import AGENT_URL, FormatFactory
 from tests.harness.creative_sync import CreativeSyncEnv
 from tests.harness.transport import Transport
+from tests.integration._egress_ingest_helpers import _registered_format
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 _ALL_TRANSPORTS = [Transport.A2A, Transport.REST, Transport.MCP]
 
-_FORMAT_ID = "display_300x250_image"
 
+def _seed_registered_format(env: CreativeSyncEnv):
+    """Serve the registered format from the tenant's own creative agent.
 
-def _registered_format() -> object:
-    """A Format the tenant's registry advertises — the operator's own agent_url.
-
-    ``format_id`` MUST be built from a plain dict, not a pre-constructed
-    ``src.core.schemas.FormatId`` instance: the ``_create_new_creative`` match
-    (``fmt.format_id == creative_format``) is Pydantic ``BaseModel.__eq__``,
-    which requires an EXACT class match, not a subclass one. Passing an
-    already-built ``FormatId`` instance to the factory makes Pydantic keep
-    that subclass as-is; a dict goes through real field validation and lands
-    on the same ``FormatReferenceStructuredObject`` variant the buyer's
-    ``CreativeAsset.format_id`` resolves to on the wire — which is what
-    ``registry.list_all_formats`` actually returns in production (its formats
-    are built by validating agent JSON responses, not by embedding pre-built
-    ``FormatId`` objects).
+    Returns the identity the agent publishes it under and the declaration it serves. The
+    agent is a real peer the tenant configured, so the dial ``_processing.py`` makes for a
+    creative in this format is an OPERATOR dial to a deployment-configured endpoint -- the
+    provenance this module grades. The buyer only chooses WHICH format, by naming this
+    identity.
     """
-    return FormatFactory(format_id={"id": _FORMAT_ID, "agent_url": AGENT_URL})
+    from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
 
-
-def _creative_for_registered_format(creative_id: str):
-    """A creative naming the registered format — the buyer only chooses WHICH format."""
-    from adcp.types import FormatId
-
-    return CreativeAssetFactory(
-        creative_id=creative_id,
-        format_id=FormatId(id=_FORMAT_ID, agent_url=AGENT_URL),
-    )
+    declaration = _registered_format()
+    env.set_served_catalogue([declaration])
+    (seeded,) = env.seeded_format_ids()
+    return FormatId(id=seeded.id, agent_url=seeded.agent_url), declaration
 
 
 class TestOperatorDialRefusalIsTerminalNotTransient:
@@ -108,12 +96,12 @@ class TestOperatorDialRefusalIsTerminalNotTransient:
             env.setup_default_data()
 
             registry = env.mock["registry"].return_value
-            env.set_run_async_result([_registered_format()])
+            format_id, _declaration = _seed_registered_format(env)
             registry.preview_creative = AsyncMock(side_effect=OutboundRequestBlocked())
 
             result = env.call_via(
                 transport,
-                creatives=[_creative_for_registered_format(creative_id)],
+                creatives=[CreativeAssetFactory(creative_id=creative_id, format_id=format_id)],
             )
 
             payload = result.payload
@@ -157,33 +145,35 @@ class TestOperatorDialRefusalIsTerminalNotTransient:
 
         with CreativeSyncEnv() as env:
             tenant, principal = env.setup_default_data()
+            format_id, declaration = _seed_registered_format(env)
             original = CreativeFactory(
                 tenant=tenant,
                 principal=principal,
                 creative_id=creative_id,
                 name="Original Name",
-                format=_FORMAT_ID,
-                agent_url=AGENT_URL,
+                format=format_id.id,
+                agent_url=format_id.agent_url,
+                # The capture does not carry the peer's identity, so the seed resolves
+                # against the declaration the peer serves -- the one the sync resolves.
+                format_spec=declaration,
                 status="approved",
                 data={"assets": {}, "url": "https://example.com/original.png"},
             )
-            original_name, original_status, original_agent_url, original_format = (
+            # The identity is read into a frozen value BEFORE the dial: ``stored`` below can be
+            # the same ORM instance, so a snapshot is what makes the comparison mean anything.
+            original_name, original_status, original_identity = (
                 original.name,
                 original.status,
-                original.agent_url,
-                original.format,
+                CreativeFormatIdentity.from_row(original),
             )
 
             registry = env.mock["registry"].return_value
-            env.set_run_async_result([_registered_format()])
             registry.preview_creative = AsyncMock(side_effect=OutboundRequestBlocked())
-
-            from adcp.types import FormatId
 
             update_creative = CreativeAssetFactory(
                 creative_id=creative_id,
                 name="Attempted New Name",
-                format_id=FormatId(id=_FORMAT_ID, agent_url=AGENT_URL),
+                format_id=format_id,
             )
 
             result = env.call_via(transport, creatives=[update_creative])
@@ -218,5 +208,14 @@ class TestOperatorDialRefusalIsTerminalNotTransient:
                     f"a refused update must not persist a status change: "
                     f"stored={stored.status!r}, original={original_status!r}"
                 )
-                assert stored.agent_url == original_agent_url, "a refused update must not persist an agent_url change"
-                assert stored.format == original_format, "a refused update must not persist a format change"
+                stored_identity = CreativeFormatIdentity.from_row(stored)
+                assert stored_identity == original_identity, (
+                    f"a refused update must not persist a format-identity change: "
+                    f"stored={stored_identity!r}, original={original_identity!r}"
+                )
+                # ``assertion`` is ``compare=False``, so the equality above does not see the
+                # verbatim reference -- the half the buyer is echoed back gets its own check.
+                assert stored_identity.assertion == original_identity.assertion, (
+                    f"a refused update must not persist a change to the asserted format_id: "
+                    f"stored={stored_identity.assertion!r}, original={original_identity.assertion!r}"
+                )

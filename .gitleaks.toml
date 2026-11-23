@@ -11,6 +11,15 @@ useDefault = true
 description = "agent-db skill test-only ENCRYPTION_KEY"
 paths = ['''\.claude/skills/\.agent-db\.env''']
 
+# The conformance corpus MANIFEST maps each vector file to its SHA-256 digest, which is
+# how the fixture sync detects drift. A 64-char hex digest trips the generic-api-key rule
+# on entropy alone. Scoped to that one manifest, so a real secret in any other vector file
+# still triggers -- including keys.json, whose private keys the corpus publishes on purpose
+# and which therefore must never be mistaken for this deployment's material.
+[[allowlists]]
+description = "conformance-vector MANIFEST file digests (integrity hashes, not secrets)"
+paths = ['''tests/fixtures/adcp_conformance_vectors/.*/MANIFEST\.json''']
+
 # AdCP idempotency keys are client-chosen request-deduplication identifiers
 # (spec pattern ^[A-Za-z0-9_.:-]{16,255}$), not credentials. Test literals like
 # idempotency_key="unit-test-key-..." trip the generic-api-key rule on entropy
@@ -21,3 +30,18 @@ description = "test-fixture idempotency_key literals (request IDs, not secrets)"
 paths = ['''tests/.*\.py''']
 regexTarget = "line"
 regexes = ['''idempotency_key["']?\s*[:=]+\s*["'][A-Za-z0-9_.:-]{16,255}["']''']
+
+# Pinned AdCP webhook HMAC conformance vectors. The `secret` field is a
+# PUBLISHED test vector: the file's own `secret_provenance` records it as the
+# SHA-256 of a fixed ASCII string, chosen so cross-language runs are
+# reproducible, and its `WARNING` field says in full that implementations must
+# never use it in production. High entropy by construction, which is exactly
+# why the generic-api-key rule fires on it.
+#
+# Scoped to this one fixture directory rather than to *.json: a real credential
+# committed into any other fixture still trips the rule. The sibling allowlist
+# above covers tests/*.py only, so these vectors -- which arrive as .json --
+# were not covered by it.
+[[allowlists]]
+description = "pinned AdCP webhook HMAC test vectors (published, non-production by construction)"
+paths = ['''tests/fixtures/adcp_webhook_vectors_pinned/.*\.json''']

@@ -6,7 +6,7 @@ nodeid, and ``test_storyboard_conformance._collect_checks`` enumerates only fail
 skips, so a check that GRADUATES stops being parametrized at all — it produces no test
 item, no xpass and no signal, and the entry becomes dead weight. An entry renamed
 upstream goes the same way. ``tests/bdd/e2e_rest_known_failures.txt`` has its own
-fitness function for the same reason (``tests/unit/test_e2e_rest_ledger_fitness.py::
+fitness function for the same reason (``tests/collection/test_e2e_rest_ledger_fitness.py::
 test_every_ledger_entry_resolves_to_a_collected_item``).
 
 Every case below drives a SYNTHETIC ledger, injected through
@@ -71,18 +71,17 @@ import pytest
 from scripts.audit import ledger
 from tests.helpers import storyboard_session as rig
 from tests.helpers.ledger import load_ledger_nodeids
-from tests.unit import test_storyboard_ledger_state as ledger_state
+from tests.helpers.storyboard_ledger_pin import EXPECTED_LEDGER, LEDGER_PATH
 
 pytestmark = [pytest.mark.integration]
 
-REPO_ROOT = rig.REPO_ROOT
-LEDGER = REPO_ROOT / "tests" / "storyboard" / "known_failures.txt"
+#: The production ledger, named by the pin module that fixes its contents, so the
+#: path and the ``EXPECTED_LEDGER`` it is graded against come from one place.
+LEDGER = LEDGER_PATH
 
 # The nested-session rig (which module is collected, the runner stub, the
-# outcome parser) lives in ``tests/helpers/storyboard_session.py``: the
-# collection-gate grader
-# (``tests/integration/test_storyboard_collection_gate_real_session.py``) drives
-# the same sessions, and two copies of it would be two things to keep true.
+# outcome parser) lives in ``tests/helpers/storyboard_session.py``, so a second
+# grader driving the same sessions shares it instead of keeping a copy true.
 _SYNTHETIC_REASON = "synthetic failure injected by the ledger-fitness grader"
 
 # Bundle materialization's last resort is an HTTPS download of the pinned release
@@ -141,17 +140,29 @@ def _ledger_entries() -> list[ledger.LedgerCheckId]:
 def _write_ledger(tmp_path: Path, entries: list[ledger.LedgerCheckId]) -> dict[str, str]:
     """Write ``entries`` as a ledger file and return the env that points the loader at it."""
     path = tmp_path / "synthetic_known_failures.txt"
-    path.write_text("\n".join(_NODEID.format(e.format()) for e in entries) + "\n")
+    path.write_text("\n".join(_NODEID.format(e.format()) for e in entries) + "\n", encoding="utf-8")
     return {"STORYBOARD_LEDGER_PATH": str(path)}
 
 
 def test_production_ledger_matches_its_pin() -> None:
     """The production ledger still agrees with ``EXPECTED_LEDGER``.
 
-    The cases below no longer read that file, so nothing else in this module would
-    notice it drifting from its pin.
+    The cases below read a ledger of their own, so nothing else in this module would
+    notice the production file drifting from its pin. Comparing sets, not lengths, so the
+    failure names the entries that moved instead of just the arithmetic. Both sides as
+    NODEIDs: ``LedgerCheckId.format()`` emits the bracket CONTENT (``mcp::core::…``),
+    while ``EXPECTED_LEDGER`` holds full pytest nodeids.
     """
-    assert load_ledger_nodeids(LEDGER) == ledger_state.EXPECTED_LEDGER
+    actual = load_ledger_nodeids(LEDGER)
+    only_ledger = sorted(actual - EXPECTED_LEDGER)
+    only_expected = sorted(EXPECTED_LEDGER - actual)
+    assert actual == EXPECTED_LEDGER, (
+        "the storyboard ledger disagrees with EXPECTED_LEDGER in "
+        "tests/helpers/storyboard_ledger_pin.py — re-seed both together. "
+        f"ledger={len(actual)} EXPECTED_LEDGER={len(EXPECTED_LEDGER)}\n"
+        f"  only in the ledger ({len(only_ledger)}): {only_ledger[:5]}\n"
+        f"  only in EXPECTED_LEDGER ({len(only_expected)}): {only_expected[:5]}"
+    )
 
 
 def _run_storyboard_session(
@@ -167,10 +178,10 @@ def _run_storyboard_session(
     supplied per case rather than one of them being ambient.
 
     Unconfigured means the pinned bundle does not RESOLVE, so the two overrides point
-    at a path that does not exist. Removing them instead would no longer work: the
-    conformance gate derives the paths when they are unset, and the derivation finds
-    the in-repo bundle that CI extracts -- the nested session would flip to configured
-    and shell out toward an agent that is not there.
+    at a path that does not exist. Removing them instead does not work: the conformance
+    gate derives the paths when they are unset, and the derivation finds the in-repo
+    bundle that CI extracts -- the nested session would flip to configured and shell out
+    toward an agent that is not there.
 
     Both branches stub bundle MATERIALIZATION, whose last resort is an HTTPS fetch of
     the pinned release asset. Unstubbed, the unconfigured case would reach the network

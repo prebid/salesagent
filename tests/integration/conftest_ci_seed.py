@@ -33,7 +33,7 @@ import pytest
 #: integration run cannot answer different identities. The two seeds have different
 #: MECHANISMS -- raw ``session.add`` there, factories here -- which is the whole reason
 #: they must not also have different values.
-from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN, CI_TEST_TOKEN
+from scripts.setup.init_database_ci import CI_TEST_TENANT_ID, CI_TEST_TOKEN
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,7 @@ def ci_test_principal(factory_session) -> CiTestSeed:
     from src.core.credentials import hash_token, token_prefix
     from tests.factories import PrincipalFactory, PropertyTagFactory, TenantFactory
 
-    tenant = TenantFactory(subdomain=CI_TEST_SUBDOMAIN, name="CI Test Tenant")
+    tenant = TenantFactory(tenant_id=CI_TEST_TENANT_ID, subdomain=CI_TEST_TENANT_ID, name="CI Test Tenant")
     PropertyTagFactory(tenant=tenant, tag_id="all_inventory")
     # The hash and prefix of the DOCUMENTED token, not the factory's derived-from-id
     # default: this seed's whole purpose is that one known credential resolves here, and

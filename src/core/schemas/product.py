@@ -4,31 +4,45 @@ Extracted from src/core/schemas/__init__.py to reduce file size.
 All classes are re-exported from src.core.schemas for backward compatibility.
 """
 
-from typing import Any, ClassVar
+from typing import Annotated, Any, ClassVar
 
-from adcp.types import BrandReference as LibraryBrandReference
-from adcp.types import GetProductsResponse as LibraryGetProductsResponse
-from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
-from adcp.types import Placement as LibraryPlacement
-from adcp.types import Product as LibraryProduct
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
-from adcp.types import ProductFilters as LibraryFilters
+from adcp.types import TargetingOverlay
+
+# The legacy arm is imported from ``adcp.types.legacy``, the module that contains ONLY it.
+# See the note in ``_base.py`` on why the module and not the ``adcp.types`` facade. All five
+# names have a canonical twin, and reaching them through the facade makes which model this
+# seller extends a property of the ``Legacy`` prefix: three of the twins (Product, Placement,
+# ProductFilters) DROP ``format_ids`` outright, and the request/response pair keeps its own
+# fields while repointing the nested item types (filters, products) at the canonical models.
+from adcp.types.domains.core.media_buy_support_requirements import (
+    ProductMediaBuySupportRequirements as LibraryProductMediaBuySupportRequirements,
+)
+from adcp.types.legacy import LegacyGetProductsRequest as LibraryGetProductsRequest
+from adcp.types.legacy import LegacyGetProductsResponse as LibraryGetProductsResponse
+from adcp.types.legacy import LegacyPlacement as LibraryPlacement
+from adcp.types.legacy import LegacyProduct as LibraryProduct
+from adcp.types.legacy import LegacyProductFilters as LibraryFilters
 from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
-    AdcpResponse,
     BuyerRequest,
     FormatId,
+    FormatIdSlot,
+    MediaBuyFrequencyCapSlot,
     NestedModelSerializerMixin,
+    PinnedTargeting,
+    SalesAgentAdcpResponse,
     SalesAgentBaseModel,
 )
+from src.core.schemas._dependencies import SchemaDependencies, as_local, narrowed_from
 
 # Private alias: product.py is star-imported by the package __init__, and a bare
 # `PricingOption` import here would re-export the pricing wrapper over the legacy
 # flat PricingOption that src.core.schemas still exposes (see pricing.py's naming note).
-from src.core.schemas.pricing import PricingOption as _PricingOption
+from src.core.schemas.pricing import AdCPPricingOption as _AdCPPricingOption
 
 
 class ProductCard(LibraryProductCard):
@@ -90,11 +104,23 @@ class Product(LibraryProduct):
     # default_reporting_capabilities), for the rows that still store NULL; the NOT NULL
     # migration that retires it is salesagent-3cs7o.21.
 
-    # Narrowed to the local pricing wrapper (src.core.schemas.pricing) so every
-    # member carries our extra policy and the derived is_fixed property. Same
-    # wire shape and constraints as the SDK field it overrides; the [assignment]
-    # ignore is the expected cost of narrowing a list element type (invariance).
-    pricing_options: list[_PricingOption] = Field(  # type: ignore[assignment]
+    # Narrowed to the local pricing MEMBERS so every one carries our extra policy and the
+    # derived is_fixed property. Same wire shape, same discriminator and same constraints
+    # as the SDK field it overrides.
+    #
+    # The ELEMENTS, not a ``PricingOption`` RootModel wrapper. At the pinned SDK the SDK's own
+    # field held such a wrapper and the local one subclassed it; the pinned SDK deletes the wrapper
+    # (the fix for adcp-client-python#1077) and types the field as the arms, so holding a
+    # wrapper here would be a RESHAPE of the parent rather than a narrowing of it -- the
+    # thing the schema-inheritance guard exists to catch. A local wrapper outlived the SDK's
+    # for one release on the stated grounds that call sites needed ``.root``; this field is
+    # why that was false, and it is deleted.
+    # The ``[assignment]`` ignore is invariance, not suppression: every local member
+    # subclasses its SDK counterpart so every ELEMENT is assignable, but ``list`` is
+    # invariant so the list types are not -- the same cost delivery.py's six breakdown
+    # narrowings pay and for the same reason. The local union is also a strict narrowing
+    # in ARMS: nine of the parent's ten, without RevenueSharePricingOption.
+    pricing_options: list[Annotated[_AdCPPricingOption, Field(discriminator="pricing_model")]] = Field(  # type: ignore[assignment]
         description="Available pricing models for this product",
         min_length=1,
     )
@@ -182,9 +208,19 @@ class ProductFilters(LibraryFilters):
     filter could ever run.
     """
 
+    # Built as the local class, which carries core/format-id.json's ``dependencies``.
+    format_ids: list[FormatIdSlot] | None = narrowed_from(LibraryFilters, "format_ids")
 
-class GetProductsRequest(BuyerRequest, LibraryGetProductsRequest):
-    """Extends library GetProductsWholesaleRequest (adcp 3.9: GetProductsRequest is a union alias).
+
+class ProductMediaBuySupportRequirements(SchemaDependencies, LibraryProductMediaBuySupportRequirements):
+    """``core/media-buy-support-requirements.json``, with its ``dependencies``:
+    ``frequency_cap_constraints`` needs ``frequency_cap``."""
+
+    _SCHEMA_DEPENDENCIES = {"frequency_cap_constraints": ("frequency_cap",)}
+
+
+class GetProductsRequest(SchemaDependencies, BuyerRequest, LibraryGetProductsRequest):
+    """Extends library GetProductsWholesaleRequest (the pinned SDK: GetProductsRequest is a union alias).
 
     Base class: GetProductsWholesaleRequest (brief optional, buying_mode='wholesale').
     We widen buying_mode to str|None so callers aren't forced into a single mode.
@@ -201,7 +237,7 @@ class GetProductsRequest(BuyerRequest, LibraryGetProductsRequest):
     docs/development/building-tools.md.
 
     push_notification_config is inherited from the adcp library parent (added in the
-    6.6 SDK / spec 3.1.1); no local redeclaration.
+    an earlier SDK); no local redeclaration.
     """
 
     TAGS: ClassVar[tuple[str, ...]] = (
@@ -211,14 +247,13 @@ class GetProductsRequest(BuyerRequest, LibraryGetProductsRequest):
         "adcp",
     )
 
-    # The spec's type, matching the library parent. This field used to be declared WIDER
-    # (``| dict | str``) so the announced shape would admit the brand shorthand -- a bare
-    # onto the tool's ``__annotations__`` and FastMCP validates against it. Narrowing it
-    # without a replacement is what broke the shorthand twice (18 mcp scenarios, then 16).
-    #
-    # The shorthand is no longer accepted anywhere: the compat layer that coerced it was
-    # deleted whole. This DTO announces the spec's shape and nothing else.
-    brand: LibraryBrandReference | None = Field(default=None, description="Brand reference")
+    # ``brand`` is INHERITED. It used to be declared WIDER (``| dict | str``) so the
+    # announced shape would admit the brand shorthand -- that shorthand is no longer
+    # accepted anywhere, the compat layer that coerced it was deleted whole, and the
+    # redeclaration was narrowed back to the parent's own ``BrandReference | None`` with
+    # the parent's own ``default=None``. What was left differed from the pin on one axis,
+    # the description, so the only thing it still did was publish "Brand reference" in
+    # place of the pin's text. This DTO announces the spec's shape and nothing else.
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
@@ -228,8 +263,26 @@ class GetProductsRequest(BuyerRequest, LibraryGetProductsRequest):
         description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
     )
 
+    # media-buy/get-products-request.json's own ``dependencies``.
+    _SCHEMA_DEPENDENCIES = {"catalog": ("brand",), "if_pricing_version": ("if_wholesale_feed_version",)}
 
-class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse, AdcpResponse):
+    # Narrowed to the local classes, each of which carries its schema's ``dependencies`` or
+    # holds one that does.
+    filters: Annotated[LibraryFilters, as_local(ProductFilters)] | None = narrowed_from(
+        LibraryGetProductsRequest, "filters"
+    )
+    targeting_overlay: Annotated[TargetingOverlay, as_local(PinnedTargeting)] | None = narrowed_from(
+        LibraryGetProductsRequest, "targeting_overlay"
+    )
+    media_buy_frequency_cap: MediaBuyFrequencyCapSlot | None = narrowed_from(
+        LibraryGetProductsRequest, "media_buy_frequency_cap"
+    )
+    required_media_buy_support: (
+        Annotated[LibraryProductMediaBuySupportRequirements, as_local(ProductMediaBuySupportRequirements)] | None
+    ) = narrowed_from(LibraryGetProductsRequest, "required_media_buy_support")
+
+
+class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse, SalesAgentAdcpResponse):
     """Extends library GetProductsResponse - all fields inherited from AdCP spec.
 
     Per AdCP PR #113, this response contains ONLY domain data.

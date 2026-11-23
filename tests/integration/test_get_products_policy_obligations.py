@@ -13,6 +13,7 @@ import pytest
 from src.core.exceptions import AdCPAuthorizationError
 from src.core.resolved_identity import PublicIdentity, ResolvedIdentity
 from src.core.tenant_context import TenantContext
+from src.services.ai.factory import AIProviderError
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.harness._identity import make_identity
@@ -355,7 +356,8 @@ class TestBriefPolicyServiceUnavailable:
             env._identity = _lazy_identity("bp-failopen", "p1")
 
             mock_policy_inst = MagicMock()
-            mock_policy_inst.check_brief_compliance = AsyncMock(side_effect=RuntimeError("Gemini API timeout"))
+            # What the real service raises when the provider fails the check (run_agent).
+            mock_policy_inst.check_brief_compliance = AsyncMock(side_effect=AIProviderError("Gemini API timeout"))
             env.mock["policy_service"].return_value = mock_policy_inst
 
             response = await env.call_impl(brief="Normal campaign brief")

@@ -14,11 +14,11 @@ Usage:
         # auto-commits when exiting the `with` block
 
     with WorkflowUoW(tenant_id) as uow:
-        steps = uow.workflows.list_by_tenant(status="pending")
+        steps = uow.workflows.list_by_tenant(statuses=["pending"])
         # auto-commits when exiting the `with` block
 
-    with TenantConfigUoW(tenant_id) as uow:
-        partners = uow.tenant_config.list_publisher_partners()
+    with PublisherUoW(tenant_id) as uow:
+        publishers = uow.publishers.list_all()
         # auto-commits when exiting the `with` block
 
 """
@@ -27,8 +27,10 @@ from __future__ import annotations
 
 import logging
 import warnings
+from collections.abc import Collection, Mapping
+from datetime import UTC, datetime
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 from sqlalchemy.orm import Session
 
@@ -39,8 +41,12 @@ from src.core.database.repositories.currency_limit import CurrencyLimitRepositor
 from src.core.database.repositories.effects import begin_effects, drain_after_commit, end_effects
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
-from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.principal import PrincipalRepository
+from src.core.database.repositories.product import OfferedProduct, ProductRepository, offered_products
+from src.core.database.repositories.publisher import PublisherRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+from src.core.database.repositories.signing_key import SigningKeyRepository
+from src.core.database.repositories.sync_job import SyncJobRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 
@@ -153,14 +159,76 @@ class BaseUoW:
         finally:
             end_effects(session)
 
+    def join[U: BaseUoW](self, unit: type[U]) -> U:
+        """*unit*'s repositories on THIS unit's open transaction, for a service run inside it.
+
+        The joined unit is never entered, so it neither commits nor closes: its writes are
+        this unit's writes and commit or roll back with them, and an effect queued through
+        one of its repositories is released by this unit's commit. Opening *unit* instead
+        commits on its own exit, so its writes outlive a rollback of this unit; and
+        ``get_db_session`` hands out the thread's scoped session, so when that is this
+        unit's session the inner commit releases what this unit had flushed as well.
+        Valid only while this unit is open.
+        """
+        assert self._session is not None, f"{type(self).__name__} is not open; there is no transaction to join"
+        joined = unit(self._tenant_id)
+        joined._session = self._session
+        joined._init_repos()
+        return joined
+
+    #: ``attribute name -> repository class`` for subclasses that declare their
+    #: repositories instead of hand-writing the two hooks below. Every repository in this
+    #: layer takes ``(session, tenant_id)``, so the construction is the SAME line with a
+    #: different class — which is exactly the shape that should be data, not code.
+    #:
+    #: Subclasses may still override ``_init_repos``/``_clear_repos`` directly; the eight
+    #: pre-#1757 units of work do, and they keep working unchanged. New ones declare.
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {}
+
     def _init_repos(self) -> None:
-        raise NotImplementedError
+        """Construct every declared repository on the open session.
+
+        Raises when a subclass declares nothing AND does not override, so "forgot to
+        wire the repositories" stays a loud failure rather than a unit of work whose
+        attributes are all ``None`` at the first use.
+        """
+        if not self._REPOSITORIES:
+            raise NotImplementedError(
+                f"{type(self).__name__} must declare _REPOSITORIES or override _init_repos/_clear_repos"
+            )
+        assert self._session is not None
+        for attribute, repository in self._REPOSITORIES.items():
+            setattr(self, attribute, repository(self._session, self._tenant_id))
 
     def _clear_repos(self) -> None:
-        raise NotImplementedError
+        """Drop every declared repository, so a closed unit of work holds no session.
+
+        The mirror of :meth:`_init_repos`, and derived from the SAME declaration — the
+        two hand-written halves could previously disagree, leaving a repository (and its
+        session) attached after ``__exit__``.
+        """
+        for attribute in self._REPOSITORIES:
+            setattr(self, attribute, None)
 
 
-class MediaBuyUoW(BaseUoW):
+class _OffersProducts:
+    """The one read of the products buyers are offered, for a UoW holding both repositories it needs."""
+
+    products: ProductRepository | None
+    publishers: PublisherRepository | None
+
+    def list_offered(self, product_ids: Collection[str] | None = None) -> list[OfferedProduct]:
+        """The tenant's offered products (:func:`offered_products`), or only those of *product_ids*.
+
+        ``get_products``, ``get_product_catalog`` and ``create_media_buy`` all read products
+        here, so a product one of them refuses as unknown is unknown to the others too.
+        """
+        assert self.products is not None
+        assert self.publishers is not None
+        return offered_products(self.products.list_for_offer(product_ids), self.publishers.catalog(datetime.now(UTC)))
+
+
+class MediaBuyUoW(_OffersProducts, BaseUoW):
     """Unit of Work for MediaBuy operations.
 
     Wraps a database session and provides tenant-scoped repositories for
@@ -174,6 +242,7 @@ class MediaBuyUoW(BaseUoW):
 
     media_buys: MediaBuyRepository | None
     products: ProductRepository | None
+    publishers: PublisherRepository | None
     creatives: CreativeRepository | None
     # create_media_buy and update_media_buy both write a package's creative
     # assignments in the same transaction as the buy itself. They used to do it
@@ -188,6 +257,7 @@ class MediaBuyUoW(BaseUoW):
         assert self._session is not None
         self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
         self.products = ProductRepository(self._session, self._tenant_id)
+        self.publishers = PublisherRepository(self._session, self._tenant_id)
         self.creatives = CreativeRepository(self._session, self._tenant_id)
         self.assignments = CreativeAssignmentRepository(self._session, self._tenant_id)
         self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
@@ -196,16 +266,18 @@ class MediaBuyUoW(BaseUoW):
     def _clear_repos(self) -> None:
         self.media_buys = None
         self.products = None
+        self.publishers = None
         self.creatives = None
         self.assignments = None
         self.currency_limits = None
         self.idempotency_attempts = None
 
 
-class ProductUoW(BaseUoW):
+class ProductUoW(_OffersProducts, BaseUoW):
     """Unit of Work for Product operations.
 
-    Wraps a database session and provides a tenant-scoped ProductRepository.
+    Wraps a database session and provides a tenant-scoped ProductRepository, plus the
+    publishers whose files decide what a product sells (#1845).
     Auto-commits on clean exit, rolls back on exception.
 
     Args:
@@ -213,13 +285,16 @@ class ProductUoW(BaseUoW):
     """
 
     products: ProductRepository | None
+    publishers: PublisherRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.products = ProductRepository(self._session, self._tenant_id)
+        self.publishers = PublisherRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.products = None
+        self.publishers = None
 
 
 class WorkflowUoW(BaseUoW):
@@ -260,6 +335,23 @@ class TenantConfigUoW(BaseUoW):
 
     def _clear_repos(self) -> None:
         self.tenant_config = None
+
+
+class PrincipalUoW(BaseUoW):
+    """Unit of Work for reading a tenant's principals (advertisers).
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    principals: PrincipalRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.principals = PrincipalRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.principals = None
 
 
 class AccountUoW(BaseUoW):
@@ -386,3 +478,89 @@ class AdminCreativeUoW(BaseUoW):
         self.products = None
         self.workflows = None
         self.tenant_config = None
+
+
+class SigningKeyUoW(BaseUoW):
+    """Unit of Work for this agent's own signing keys (#1291 A2).
+
+    Wraps a database session and provides a tenant-scoped
+    ``SigningKeyRepository``. Auto-commits on clean exit, rolls back on
+    exception.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+
+    beads: salesagent-z6nr.8
+    """
+
+    signing_keys: SigningKeyRepository | None
+
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {"signing_keys": SigningKeyRepository}
+
+
+class TrustRootUoW(BaseUoW):
+    """Unit of Work for what this agent publishes about itself (#1291 A3, D1).
+
+    One session over the tenant (whose stored host IS the agent identity), its
+    publishable key set, and its publishers. Two readers open it, and each
+    needs all three in one session:
+
+    * the trust-root documents: the JWKS and the adagents pin must describe the same
+      key set, and two sessions could observe a rotation from either side of it;
+    * ``get_adcp_capabilities``: the portfolio's authorizing publishers, the signing
+      posture, and the identity block derived from the ORM ``Tenant``, which must stay
+      attached while it is read. No session in this codebase sets
+      ``expire_on_commit=False``, so a row handed out of the block raises
+      ``DetachedInstanceError`` on its first attribute read.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+
+    beads: salesagent-z6nr.9
+    """
+
+    tenant_config: TenantConfigRepository | None
+    signing_keys: SigningKeyRepository | None
+    publishers: PublisherRepository | None
+
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {
+        "tenant_config": TenantConfigRepository,
+        "signing_keys": SigningKeyRepository,
+        "publishers": PublisherRepository,
+    }
+
+
+class PublisherUoW(BaseUoW):
+    """Unit of Work for a tenant's publishers: one publisher's ingest, or the admin pages over them.
+
+    One unit per publisher ingest: the stored document, the derived rows and the fetch
+    outcome are written in one transaction, so a reader never sees a document beside the
+    properties of another. The tenant is in the same unit because the derivation compares
+    each ``authorized_agents[]`` entry against its ``agent_url``.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    publishers: PublisherRepository | None
+    tenant_config: TenantConfigRepository | None
+
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {
+        "publishers": PublisherRepository,
+        "tenant_config": TenantConfigRepository,
+    }
+
+
+class SyncJobUoW(BaseUoW):
+    """Unit of Work for a tenant's sync jobs.
+
+    For a caller that records a job's failure with no session of its own open
+    (``src.services.sync_jobs.record_sync_failure``).
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    sync_jobs: SyncJobRepository | None
+
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {"sync_jobs": SyncJobRepository}

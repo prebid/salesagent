@@ -5,6 +5,19 @@ name: salesagent CodeQL config
 queries:
   - uses: security-extended
 
+# py/log-injection (CWE-117) is excluded because the guarantee lives in the logging
+# configuration, where CodeQL cannot see it: every handler the app configures uses
+# JSONFormatter (production) or LineSafeFormatter (development, and the adcp.audit
+# files in both modes), so no record can span more than one line whatever a call site
+# interpolates. tests/unit/test_log_safe.py::TestEveryHandlerWritesOneLinePerRecord
+# runs the real setup, including uvicorn's logging step, in both modes, renders a
+# record carrying every line-break character through every handler on every logger,
+# and fails if any writes more than one line. Change a handler's formatter and that
+# test is what tells you.
+query-filters:
+  - exclude:
+      id: py/log-injection
+
 # Exclude generated / vendored / migration content from analysis to reduce noise.
 # Code Quality (github-code-quality[bot]) is configured at the org/repo level — its
 # path scope must mirror paths-ignore here. See docs/development/ci-pipeline.md

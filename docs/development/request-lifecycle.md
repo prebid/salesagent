@@ -1,3 +1,6 @@
+<!-- FIXME(#2613): this page still names code by line number. Name the function, class, test,
+constant, or section instead, and lower its count in BASELINE in
+tests/unit/test_architecture_docs_no_line_numbers.py in the same change. -->
 # Request lifecycle
 
 How a request travels from the wire to business logic, and what has already
@@ -65,13 +68,16 @@ Three details deserve attention:
   header and render a tenant landing page.
 - **One handler serves the agent card on three paths** —
   `/.well-known/agent-card.json`, `/.well-known/agent.json`, and `/agent.json`.
-  It replaces the SDK's single static route and creates the other two
-  (`src/app.py:490-533`). When the `Host` routes to a tenant, the handler
-  advertises that tenant's **stored** host as the A2A URL
-  (`_canonical_a2a_url`, `src/app.py:416-432`), so the card publishes the same
-  string the tenant's `brand.json` carries. For a `Host` that routes to no
-  tenant it falls back to the `Apx-Incoming-Host` / `Host` /
-  `X-Forwarded-Proto` sequence below that lookup (`src/app.py:434-482`).
+  Every route derives from the `_AGENT_CARD_PATHS` declaration rather than from
+  the SDK's single static route (`_install_agent_card_routes`, `src/app.py`). The
+  card advertises the tenant's **stored** host as the A2A URL
+  (`canonical_agent_url`, reached through the seller description), so it publishes
+  the same string the tenant's `brand.json` carries, and never a host from a
+  request header — every header is caller-supplied, so `Host: evil.example.com`
+  would come back as `supportedInterfaces[0].url`. A `Host` that routes to no
+  tenant is REFUSED — `CONFIGURATION_ERROR`, recovery `terminal`, no card: a card
+  states a tenant's stored identity, so with no tenant there is nothing truthful
+  to publish (`tests/e2e/test_a2a_endpoints_working.py:219` pins the refusal).
 
 The app includes the health routes (`src/routes/health.py`) alongside the REST
 router (`src/app.py:604`), and the debug and reset routes only where the
@@ -88,16 +94,17 @@ application, forwarding `Host` verbatim because tenant routing is an exact
 `Host` match:
 
 - **Compose and local development** (`config/nginx/nginx-development.conf:38-83`):
-  one server on `:8000`, `proxy_pass` to `adcp-server:8080` with
+  one server on port 8000, `proxy_pass` to `adcp-server:8080` with
   `$request_uri`, forwarding `Host`, `X-Real-IP`, `X-Forwarded-For`,
   `X-Forwarded-Proto`, and `Authorization`. It sets no tenant header, so the
   resolver identifies the tenant from `Host` (or from an `x-adcp-tenant` the
   caller sent itself).
-- **Multi-tenant deployments** (`config/nginx/nginx-multi-tenant.conf`): a
-  `map $host $tenant` extracts the subdomain, and the tenant server block adds
-  `x-adcp-tenant: $tenant` and `Apx-Incoming-Host: $tenant.<domain>` to the
-  proxied request (`:167`, `:184-185`). Those two headers, plus `Host`, are
-  exactly the three the resolver reads for tenant detection.
+- **Multi-tenant deployments** (`config/nginx/nginx-multi-tenant.conf`): the
+  proxy names no tenant. A wildcard `server_name` sends every host under the
+  domain to the app with `$host` passed through untouched (`:44-49`, `:121-132`),
+  so the proxy has no opinion about which tenant a request is for. A `$tenant`
+  variable injected as `x-adcp-tenant` would be a third way to name one, agreeing
+  with the other two only where a tenant's id equals its subdomain.
 
 ### The in-network test stack
 
@@ -106,7 +113,7 @@ the `proxy` service mounts `nginx-development.conf`, and the stack reaches it by
 service name at `http://proxy:8000`, the value of `E2E_BASE_URL`
 (`docker-compose.e2e.yml:290-303`, `:476`).
 
-Beside it, `tls-proxy` adds a second listener on `:8443` for the origins the
+Beside it, `tls-proxy` adds a second listener on port 8443 for the origins the
 stack dials over HTTPS. It routes by the TLS ClientHello's SNI name through a
 `map $ssl_server_name` — `proxy.adcp.test` to `adcp-server:8080`,
 `creative-agent.adcp.test` to `creative-agent:8080`, `webhooks.adcp.test` to
@@ -129,10 +136,24 @@ credential or resolves an identity. Outermost first:
 1. **`AuthChallengeResponder`** (`src/core/auth_middleware.py`), registered last
    and therefore outermost (`src/app.py:629`). It sees the *finished* response
    of every transport, including the MCP mount and the A2A routes. When the JSON
-   body carries an AdCP `AUTH_MISSING` or `AUTH_INVALID` code it lifts the
-   status to `401` and attaches the `WWW-Authenticate` challenge — `Bearer`, or
-   `Bearer error="invalid_token"` for a presented credential that was rejected
-   (RFC 6750 §3, `auth_middleware.py:35-38`).
+   body carries a code that owes a challenge, it lifts the status to `401` and
+   attaches the `WWW-Authenticate` header.
+
+   Which codes owe one, and what the header says, comes from the code's own
+   entry rather than from a list this middleware holds. `CODE_TABLE[code].group`
+   answers it:
+
+   - `AUTH_MISSING` and `AUTH_INVALID` answer `Bearer` and
+     `Bearer error="invalid_token"` (RFC 6750 §3).
+   - The 28 codes in `CodeGroup.SIGNATURE` answer
+     `Signature error="<code>"`, so a refused signature names its exact
+     failure in the header as well as in the envelope.
+
+   See [A code's group decides whether it also travels in a
+   header](../design/error-architecture.md#a-codes-group-decides-whether-it-also-travels-in-a-header)
+   for why the family is a property of the code, and [Request signature
+   architecture](../design/signature-architecture.md) for how a signature
+   refusal reaches this point.
 2. **`CORSMiddleware`** (`src/app.py:619-625`): adds CORS headers to all
    responses (origins from `settings.runtime.allowed_origin_list`).
 3. **`a2a_messageid_compatibility_middleware`** (`src/app.py:540-576`),
@@ -281,7 +302,15 @@ between the two codes is in
 ### Identity: `_resolve_identity`
 
 All transports converge on one function before business logic runs
-(`src/core/resolved_identity.py:267-412`):
+(`src/core/resolved_identity.py:267-412`).
+
+A request signature is a credential, and this function reads it the way it reads
+a bearer token. The resolver loads the tenant and the principal, then calls
+`verify_inbound_signature` with what it already holds, so the verifier re-reads
+no headers and resolves no tenant of its own. A refusal leaves as a typed error
+and becomes a `401` at the middleware described earlier. For how the seller
+resolves a counterparty's public key and what each posture bucket enforces, see
+[Request signature architecture](../design/signature-architecture.md).
 
 ```
 _resolve_identity(
@@ -320,14 +349,25 @@ detection, so an anonymous caller costs no database lookups.
 wins, each reading one indexed column, and only then does the resolver load the
 row once:
 
-1. `Host` header: virtual-host lookup, then subdomain extraction
-   (`<subdomain>.<domain>`; `localhost`, `www`, `admin`, and the service's own
-   name are excluded).
-2. `x-adcp-tenant` header (set by the multi-tenant nginx from the subdomain):
-   subdomain lookup, then the literal tenant id, unverified.
-3. `Apx-Incoming-Host` header (Approximated.app virtual hosts): virtual-host
-   lookup.
-4. Localhost fallback: the `default` tenant.
+1. `Host` header → `tenants.virtual_host`. What a deployment resolves by, and
+   what every proxy in front of this app forwards verbatim.
+2. `x-adcp-tenant` header → the tenant id, LITERALLY, for a caller addressing a
+   tenant explicitly rather than by the host it is served at (the test suites,
+   the CLI, a support tool). Unverified: an id naming no tenant fails at the
+   principal lookup that is scoped by it. No proxy sets this header: it names the
+   tenant a CLIENT asked for.
+
+There is no third input, and a second spelling of either of these two would not be
+a redundancy: two readers of one fact disagree, and then one request resolves to
+two different tenants depending on which one asked. A proxy that has to rewrite the
+host to make a deployment work does it at the edge, so that what arrives here is
+the `Host` (`config/nginx/nginx-multi-tenant.conf`, and
+[deployment/multi-tenant.md](../deployment/multi-tenant.md) for a deployment that
+needs one).
+
+Subdomain extraction is GONE, and so is the localhost fallback to the `default`
+tenant. A request that names no tenant this deployment serves is refused as a
+seller-side misconfiguration rather than guessed at.
 
 **3b. The seller's brand policy** (`:369-379`): a public row may still need a
 caller. Once it has loaded the tenant row, the resolver asks the row's
@@ -380,7 +420,7 @@ flowchart TD
     hdrs["Request headers"] --> token["1. Authorization: Bearer"]
     token --> missing{"credential present?"}
     missing -->|"no, row requires one"| am["AdCPAuthRequiredError (AUTH_MISSING)"]
-    missing -->|"otherwise"| tenant["3. Tenant: Host → x-adcp-tenant → Apx-Incoming-Host → localhost\nTenantContext.load"]
+    missing -->|"otherwise"| tenant["3. Tenant: Host → x-adcp-tenant\nneither → CONFIGURATION_ERROR\nTenantContext.load"]
     tenant --> policy{"3b. seller's brand policy\nrequires a caller?"}
     policy -->|"yes, and nothing presented"| am
     policy -->|"no"| principal["4. Principal inside that tenant\n(get_principal_from_token)"]
@@ -486,8 +526,10 @@ and the one unimplemented case (two concurrent requests with the same key) — i
 
 ### The context echo
 
-The buyer's `context` is opaque data this seller carries and returns. It is one
-field on one class, with one writer.
+The buyer's `context` is opaque data this seller carries and returns. At the
+ENVELOPE it is one field on one class, with one writer — that is the rest of this
+section. AdCP also declares the same object at ELEMENT level, and that half has a
+different writer; see [Element-level context](#element-level-context) below.
 
 `AdcpResponse` (`src/core/schemas/_base.py:754-795`) inherits the SDK's
 `AdcpVersionEnvelope` and `ProtocolEnvelope` — the pair every pinned response
@@ -522,6 +564,45 @@ Three tests grade each refusal by breaking it:
 `tests/unit/test_ast_grep_identity_rules.py`.
 `tests/bdd/test_local_context_echo.py` grades the behavior itself, and its
 scenarios run on every transport.
+
+### Element-level context
+
+`core/context.json` is also `$ref`'d from models that sit INSIDE a response, not
+at its root: `core/package.json` declares `context`, and so do `MediaBuy`,
+`PackageUpdate`, `Results` and `MediaBuyDeliveryWebhookResult`. Of the 225 models
+in the SDK that declare the field, those are the ones that are array elements
+rather than envelopes.
+
+The boundary cannot reach them, and this is not an oversight to be fixed there.
+`_served` reads the request ROOT and writes the response ROOT; `_boundary.py`
+mentions `packages` nowhere, and giving it a notion of collections would mean
+teaching the one transport-agnostic seam the shape of every tool's payload. So an
+element's context is echoed by whoever BUILDS the element — for packages, that is
+`_create_media_buy_impl` (`media_buy_create.py`), which copies `pkg.context` onto
+the `Package` it returns.
+
+Nothing refuses that write: the two refusals above are on `AdcpResponse`, and
+`Package` is not one. The `context=` keyword ban is scoped accordingly — it stays
+total for the envelope (a response, an error, or a `model_dump(context=...)`
+serializer call are all findings) and admits the constructors of models that
+declare the field. Without that exception the field would be permanently
+unwritable: buyer-supplied, spec-declared, and silently dropped.
+
+There is nothing to validate or derive. `context` is `additionalProperties: true`
+with zero declared properties, so its members — `buyer_ref` among them, which is
+not a declared field anywhere in AdCP — are carried or they are lost.
+
+AdCP 3.1.1 grades this at
+`media_buy_seller/inline_creatives_without_sync::create_buy_with_legacy_inline_creative`,
+which sends `packages[0].context.buyer_ref` and asserts it back at
+`/packages/0/context/buyer_ref`. Locally,
+`tests/bdd/test_local_context_echo.py`'s `@T-CTXECHO-package-elements` sends a
+distinct random bag per package and asserts each returns on its own package,
+positionally, on every transport.
+
+**Only `Package` is wired.** `MediaBuy`, `PackageUpdate`, `Results` and
+`MediaBuyDeliveryWebhookResult` declare the field with the same unreachability and
+have no echo and no coverage.
 
 ### Failure
 

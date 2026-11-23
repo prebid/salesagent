@@ -92,7 +92,7 @@ _ALLOWED_SHADOWS: set[str] = set()
 
 def _registered_step_plugins() -> list[str]:
     """Return the ``pytest_plugins`` step modules declared in bdd/conftest.py."""
-    tree = ast.parse(_CONFTEST.read_text(), filename=str(_CONFTEST))
+    tree = ast.parse(_CONFTEST.read_text(encoding="utf-8"), filename=str(_CONFTEST))
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:

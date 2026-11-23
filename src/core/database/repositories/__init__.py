@@ -22,15 +22,21 @@ from src.core.database.repositories.delivery_simulation import DeliverySimulatio
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.publisher import PublisherRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+from src.core.database.repositories.replay_nonce import ReplayNonceRepository
+from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 from src.core.database.repositories.uow import (
     AccountUoW,
     MediaBuyUoW,
     ProductUoW,
+    PublisherUoW,
     PushNotificationConfigUoW,
+    SigningKeyUoW,
     TenantConfigUoW,
+    TrustRootUoW,
     WorkflowUoW,
 )
 from src.core.database.repositories.workflow import WorkflowRepository
@@ -47,11 +53,17 @@ __all__ = [
     "MediaBuyUoW",
     "ProductRepository",
     "ProductUoW",
+    "PublisherRepository",
+    "PublisherUoW",
     "PushNotificationConfigRepository",
     "PushNotificationConfigUoW",
+    "ReplayNonceRepository",
+    "SigningKeyRepository",
+    "SigningKeyUoW",
     "TenantConfigRepository",
     "TenantConfigUoW",
     "TenantLookupRepository",
+    "TrustRootUoW",
     "WorkflowRepository",
     "WorkflowUoW",
 ]

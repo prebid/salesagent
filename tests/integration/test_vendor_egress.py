@@ -51,8 +51,6 @@ the cause if either host were ever inlined back into a call site.
 
 from __future__ import annotations
 
-import gzip
-import io
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -64,14 +62,17 @@ from src.core.exceptions import AdCPSalesAgentError
 from src.core.schemas import Principal, ReportingPeriod
 from src.core.security.egress.attempts import OutboundDeliveryFailed
 from src.core.security.outbound_http import OutboundError
+from tests.factories import TenantFactory, UserFactory
 from tests.harness._base import IntegrationEnv
+from tests.helpers.egress_backoff import fast_backoff
+from tests.helpers.gam_client import gam_report_csv_dump, serve_gam_report, stub_gam_client
 from tests.helpers.local_http_origin import LocalOrigin, OriginResponse
 
 # Reused rather than restated: which escape hatches a case opens is one decision
 # with one home, and the backoff knob that keeps a retry case fast is the seam
 # suite's own helper.
+from tests.integration.gam_oauth_helpers import callback, log_in, start_flow
 from tests.integration.property_list_helpers import allow_local_origin
-from tests.integration.test_outbound_http import fast_backoff
 
 pytestmark = [pytest.mark.integration]
 
@@ -229,7 +230,9 @@ def _mock_ad_server(origin: LocalOrigin):
             }
         },
     )
-    return MockAdServer(config={}, principal=principal, tenant_id="test_tenant")
+    return MockAdServer(
+        config={}, principal=principal, tenant_id="test_tenant", order_name_template=None, tenant_ai_config=None
+    )
 
 
 def _broadstreet(origin: LocalOrigin):
@@ -451,7 +454,7 @@ def test_mock_ad_server_webhook_does_not_retry_a_failing_origin(local_origin_tls
 def test_gam_report_download_does_not_retry_a_failing_origin(local_origin_tls, monkeypatch):
     """A failed GAM report download costs one hit.
 
-    The GAM SOAP client is a plain fake, not a transport mock: it stands in for
+    The GAM SOAP client is the shared GAM SOAP stand-in, not a transport mock: it stands in for
     the external ad server that hands back a download URL, which is the only
     way this call site can be reached at all. The HTTP that follows is real.
 
@@ -585,7 +588,9 @@ def test_google_token_exchange_does_not_retry_a_retryable_failure(local_origin_t
     assert local_origin_tls.hits == 1
 
 
-def test_gam_callback_flashes_googles_rejection_on_a_400(local_origin_tls, monkeypatch, admin_client):
+def test_gam_callback_flashes_googles_rejection_on_a_400(
+    local_origin_tls, monkeypatch, admin_client, gam_oauth_configured, bound_factory_session
+):
     """``GET /auth/gam/callback`` turns Google's 400 into the operator's message.
 
     This is the branch of the extraction that must NOT move: the service raises,
@@ -600,21 +605,20 @@ def test_gam_callback_flashes_googles_rejection_on_a_400(local_origin_tls, monke
     exception proves the ``except`` branch can be entered, not that a real 400
     from a real socket arrives there as an ``OutboundError`` whose
     ``http_status`` is 400. Only the second claim survives the extraction.
-    """
-    from src.core.config import get_settings
 
+    The callback is reached the way a member reaches it — after authorize, with
+    the state that step issued — because since #2205 it denies anything else
+    before the exchange. ``gam_oauth_configured`` sets the seller's Google
+    credentials on the live settings object the view reads.
+    """
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
     _point_google_token_url_at(local_origin_tls, monkeypatch)
     local_origin_tls.respond_with(400, body=b'{"error": "invalid_grant"}')
-    # The seller's own Google credentials are named facts on the settings object -- the
-    # GAMOAuthConfig carrier and its getter are gone, and the environment is read once
-    # (``load_settings``), so the values are set on the live settings the view reads.
-    auth = get_settings().auth
-    monkeypatch.setattr(auth, "gam_oauth_client_id", _GOOGLE_CLIENT_ID)
-    monkeypatch.setattr(auth, "gam_oauth_client_secret", _GOOGLE_CLIENT_SECRET)
+    tenant = TenantFactory(tenant_id="gam_oauth_tenant")
+    log_in(admin_client, UserFactory(tenant=tenant, role="admin"))
 
-    response = admin_client.get(f"/auth/gam/callback?code={_GOOGLE_AUTH_CODE}&state=gam_oauth_tenant")
+    response = callback(admin_client, start_flow(admin_client, tenant.tenant_id))
 
     assert response.status_code == 302
     assert urlsplit(response.headers["Location"]).path == "/tenant/gam_oauth_tenant/settings"
@@ -845,10 +849,8 @@ def test_gam_report_download_parses_the_gzipped_csv(local_origin_tls, monkeypatc
     allow_local_origin(monkeypatch)
     monkeypatch.setattr(grs.ReportingConfig, "ALLOWED_DOMAINS", ["127.0.0.1"])
 
-    buffer = io.BytesIO()
-    with gzip.GzipFile(fileobj=buffer, mode="wb") as gz:
-        gz.write(b"Dimension.DATE,Column.AD_SERVER_IMPRESSIONS\n2026-07-29,100\n")
-    local_origin_tls.respond_with(200, body=buffer.getvalue(), content_type="application/octet-stream")
+    body = gam_report_csv_dump([{"Dimension.DATE": "2026-07-29", "Column.AD_SERVER_IMPRESSIONS": 100}])
+    local_origin_tls.respond_with(200, body=body, content_type="application/octet-stream")
 
     service = _gam_reporting_service(local_origin_tls)
     rows = service._run_report({"reportQuery": {}})
@@ -1074,13 +1076,18 @@ def test_require_vendor_refuses_an_unconfigured_client(vendor):
     assert isinstance(exc.details, ConfigurationDetails)
     assert exc.details.provider == vendor
 
-    # The authored diagnostic: server-side only, and it names the vendor an
-    # operator has to go and configure.
-    assert isinstance(exc.internal_detail, str)
-    assert vendor in exc.internal_detail, "the operator diagnostic must name the vendor that cannot be dialled"
+    # RFC 9421 MERGE NOTE. The incoming branch graded the same obligation — "the vendor
+    # that cannot be dialled is named from the ARGUMENT, not enumerated in one adapter's
+    # copy of the guard" — through ``exc.internal_detail``, asserting it was a str
+    # CONTAINING the name. That API is gone: on this branch ``internal_detail`` is typed
+    # ``BaseException | None`` (src/core/exceptions.py:247), the non-wire CAUSE rather
+    # than an authored sentence, and ``require_vendor`` has no cause to carry. The
+    # obligation is not dropped, it is graded one line up and more strictly: the
+    # ``details.provider == vendor`` equality above admits no other vendor's name at all,
+    # where "other not in text" only ruled out the ones the test remembered to list.
     for other in _VENDORS_WITH_A_CLIENT:
         if other != vendor:
-            assert other not in exc.internal_detail, (
+            assert exc.details.provider != other, (
                 f"{other!r} must not be blamed for {vendor!r}'s missing credentials — the name has to be "
                 "interpolated from the argument, not enumerated in one adapter's copy of the guard"
             )
@@ -1153,30 +1160,6 @@ def test_an_unauthenticated_xandr_adapter_holds_no_vendor_client(local_origin_tl
 # ---------------------------------------------------------------------------
 
 
-class _FakeReportService:
-    """The four ``ReportService`` methods ``_run_report`` calls, and nothing else."""
-
-    def __init__(self, download_url: str) -> None:
-        self._download_url = download_url
-
-    def runReportJob(self, report_job):  # noqa: N802 - GAM SOAP name
-        return {"id": "report_job_1"}
-
-    def getReportJobStatus(self, report_job_id):  # noqa: N802 - GAM SOAP name
-        return "COMPLETED"
-
-    def getReportDownloadURL(self, report_job_id, export_format):  # noqa: N802 - GAM SOAP name
-        return self._download_url
-
-
-class _FakeGAMClient:
-    def __init__(self, download_url: str) -> None:
-        self._report_service = _FakeReportService(download_url)
-
-    def GetService(self, name):  # noqa: N802 - GAM SDK name
-        return self._report_service
-
-
 def _gam_reporting_service(origin: LocalOrigin):
     """A reporting service whose report downloads land on *origin*.
 
@@ -1185,7 +1168,6 @@ def _gam_reporting_service(origin: LocalOrigin):
     """
     from src.adapters.gam_reporting_service import GAMReportingService
 
-    return GAMReportingService(
-        _FakeGAMClient(f"{origin.base_url}/report.csv.gz"),
-        network_timezone="America/New_York",
-    )
+    client = stub_gam_client()
+    serve_gam_report(client, download_url=f"{origin.base_url}/report.csv.gz")
+    return GAMReportingService(client, network_timezone="America/New_York")

@@ -15,7 +15,8 @@ import pytest
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import InventoryProfile, Product
+from src.core.database.models import InventoryProfile, InventoryProfilePublisherSelection, Product
+from tests.factories.publisher import held_selections
 from tests.helpers.adcp_factories import create_test_db_product
 from tests.utils.database_helpers import (
     create_tenant_with_timestamps,
@@ -74,13 +75,18 @@ def profile_a(tenant_a):
                 {"agent_url": "https://creative.adcontextprotocol.org/", "id": "display_300x250"},
                 {"agent_url": "https://creative.adcontextprotocol.org/", "id": "display_728x90"},
             ],
-            publisher_properties=[
-                {
-                    "property_id": "prop_a1",
-                    "name": "Property A1",
-                    "url": "https://property-a1.example.com",
-                }
-            ],
+            publisher_selections=held_selections(
+                session,
+                InventoryProfilePublisherSelection,
+                tenant_a,
+                [
+                    {
+                        "property_id": "prop_a1",
+                        "name": "Property A1",
+                        "url": "https://property-a1.example.com",
+                    }
+                ],
+            ),
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
@@ -107,13 +113,18 @@ def profile_b(tenant_b):
             format_ids=[
                 {"agent_url": "https://creative.adcontextprotocol.org/", "id": "display_300x250"},
             ],
-            publisher_properties=[
-                {
-                    "property_id": "prop_b1",
-                    "name": "Property B1",
-                    "url": "https://property-b1.example.com",
-                }
-            ],
+            publisher_selections=held_selections(
+                session,
+                InventoryProfilePublisherSelection,
+                tenant_b,
+                [
+                    {
+                        "property_id": "prop_b1",
+                        "name": "Property B1",
+                        "url": "https://property-b1.example.com",
+                    }
+                ],
+            ),
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
@@ -292,13 +303,13 @@ class TestInventoryProfileSecurity:
             session.refresh(profile_b_obj)
 
             # Verify product_a now reflects the updated profile formats
-            effective_formats_a = product_a.effective_format_ids
+            effective_formats_a = list(product_a.format_contract.format_ids)
             assert len(effective_formats_a) == 3, "Product A should have 3 formats after profile update"
             format_ids_a = [f["id"] for f in effective_formats_a]
             assert "video_640x480" in format_ids_a, "Product A should include new video format"
 
             # Verify product_b still uses original profile_b formats (unchanged)
-            effective_formats_b = product_b.effective_format_ids
+            effective_formats_b = list(product_b.format_contract.format_ids)
             assert len(effective_formats_b) == len(original_formats_b), "Product B formats should be unchanged"
             format_ids_b = [f["id"] for f in effective_formats_b]
             assert "video_640x480" not in format_ids_b, "Product B should NOT have tenant A's new video format!"

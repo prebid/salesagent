@@ -31,7 +31,9 @@ def _identity_with(**tenant_overrides):
 
 def _identity_with_tenantcontext(**fields):
     """Build a ResolvedIdentity whose .tenant is a TenantContext (not a dict)."""
-    ctx = TenantContext(tenant_id="t1", name="T1", subdomain="t1", **fields)
+    # virtual_host is required on the projection (a tenant always declares its host);
+    # these cases grade billing policy and never read it.
+    ctx = TenantContext(tenant_id="t1", name="T1", virtual_host="t1.adcp.test", **fields)
     return PrincipalFactory.make_identity(tenant_id="t1", tenant=ctx.model_dump())
 
 

@@ -12,6 +12,10 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import validates
 
+from src.core.http_utils import authorized_domain
+from src.core.media_channels import parse_media_channels
+from src.core.operator_errors import InvalidDomainNameError
+
 # Pydantic models for JSON field validation
 
 
@@ -75,6 +79,13 @@ class DeliveryDataModel(BaseModel):
     last_updated: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+def checked_authorized_domain(value: object) -> str:
+    """*value* as an authorized domain (:func:`authorized_domain`), or :class:`InvalidDomainNameError`."""
+    if (domain := authorized_domain(value)) is None:
+        raise InvalidDomainNameError()
+    return domain
+
+
 # SQLAlchemy validator mixins
 
 
@@ -83,8 +94,19 @@ class JSONValidatorMixin:
 
     @validates("authorized_emails", "authorized_domains", "auto_approve_format_ids")
     def validate_json_array_fields(self, key, value):
-        """Validate that these fields are JSON arrays."""
-        return ensure_json_array(value, default=[])
+        """Validate that these fields are JSON arrays, and that an authorized domain is a domain name."""
+        if key != "authorized_domains":
+            return ensure_json_array(value, default=[])
+        try:
+            values = ensure_json_array(value, default=[])
+        except ValueError:
+            raise InvalidDomainNameError() from None
+        return [checked_authorized_domain(domain) for domain in values]
+
+    @validates("channels")
+    def validate_channels(self, key, value):
+        """``Product.channels``: every write goes through the one rule, ``parse_media_channels`` (GH #1532)."""
+        return parse_media_channels(value or ())
 
     @validates("request_data", "response_data", "transaction_details")
     def validate_json_object_fields(self, key, value):
@@ -280,3 +302,32 @@ def validate_json_schema(value: Any, schema: type[BaseModel]) -> dict:
 
     validated = schema(**value)
     return validated.model_dump(mode="json")
+
+
+# The ``products.placements`` CHECK. ``core/placement.json`` requires ``kind``,
+# ``placement_id`` and ``mode``, and its allOf conditionals require ``name`` of a
+# ``seller_inline`` placement and ``publisher_domain`` of a ``publisher_ref`` one. A stored
+# placement states all of them itself: nothing fills a missing member when the row is read,
+# so a row that omits one is refused when it is written. Revision 89442a2be9e1 brought the
+# rows stored before this rule up to it.
+#
+# The CHECK grades presence and names no enum. A deployed CHECK keeps the values it was
+# created with while a create_all database follows the source, so a value set written here
+# would split the two on the next pin that grows Kind or Mode. The two kind literals are the
+# spec's allOf conditionals and gate only which identity member must be present.
+# Every element counts. The path keeps only the elements that satisfy it (``strict`` mode,
+# so a missing member is an error, which a filter reads as unknown and drops), and the array
+# passes only when nothing was dropped. A non-array document is refused; SQL NULL passes.
+_EXPLICIT_PLACEMENT_PATH = (
+    'strict $[*] ? (@.placement_id.type() == "string" && @.kind.type() == "string"'
+    ' && @.mode.type() == "string"'
+    ' && (@.kind != "seller_inline" || @.name.type() == "string")'
+    ' && (@.kind != "publisher_ref" || @.publisher_domain.type() == "string"))'
+)
+PLACEMENTS_ARE_EXPLICIT_SQL = (
+    "CASE WHEN jsonb_typeof(placements) = 'array' THEN "
+    "jsonb_array_length(placements) = "
+    f"jsonb_array_length(jsonb_path_query_array(placements, '{_EXPLICIT_PLACEMENT_PATH}')) "
+    "ELSE placements IS NULL END"
+)
+PLACEMENTS_ARE_EXPLICIT_CHECK = "ck_products_placements_explicit"

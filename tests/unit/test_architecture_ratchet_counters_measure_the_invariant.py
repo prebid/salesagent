@@ -38,7 +38,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import load_hook_module, repo_root
+from tests.unit._architecture_helpers import load_hook_module, rel, repo_root
 
 
 @pytest.fixture(scope="module")
@@ -151,7 +151,7 @@ def test_no_messages_is_zero(duplication_hook) -> None:
 def test_no_file_level_mypy_suppression_in_src() -> None:
     pattern = re.compile(r"#\s*mypy:\s*ignore-errors")
     offenders = [
-        f"{path.relative_to(repo_root())}:{i}"
+        f"{rel(path, repo_root())}:{i}"
         for path in (repo_root() / "src").rglob("*.py")
         for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
         if pattern.search(line)

@@ -54,7 +54,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import NoReturn, TextIO
 
@@ -66,12 +66,32 @@ from typing import NoReturn, TextIO
 MAIN_REF = "origin/main"
 
 
+def iter_python_sources(root: Path) -> Iterator[tuple[Path, str]]:
+    """Yield ``(path, text)`` for every ``.py`` under *root*, in path order.
+
+    A file that VANISHES between the listing and the read is skipped, the rule
+    ``tests/unit/_architecture_helpers.py::iter_module_trees`` already follows. Some unit
+    tests write a real probe file into the scanned tree for one case (ast-grep grades a
+    rule's ``files:`` glob only by a real path), and under xdist another worker deletes
+    its probe between the two passes. Measured: ``FileNotFoundError:
+    src/core/tools/_synthetic_identity_probe_<hex>.py`` failing the fixme-citation ratchet
+    on an unrelated full run. A file that no longer exists holds nothing to count; any
+    other read failure raises.
+    """
+    for path in sorted(root.rglob("*.py")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+        yield path, text
+
+
 def read_json_baseline(baseline_file: Path, keys: Sequence[str]) -> dict[str, int] | None:
     """Load a JSON object baseline; missing keys default to 0."""
     if not baseline_file.exists():
         return None
     try:
-        data = json.loads(baseline_file.read_text())
+        data = json.loads(baseline_file.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise ValueError(f"baseline must be a JSON object, got {type(data).__name__}")
         return {key: int(data.get(key, 0)) for key in keys}
@@ -83,7 +103,7 @@ def read_json_baseline(baseline_file: Path, keys: Sequence[str]) -> dict[str, in
 def write_json_baseline(baseline_file: Path, counts: Mapping[str, int], keys: Sequence[str]) -> None:
     """Write a JSON baseline with a stable key order."""
     payload = {key: int(counts[key]) for key in keys}
-    baseline_file.write_text(json.dumps(payload, indent=2) + "\n")
+    baseline_file.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
 def read_int_baseline(baseline_file: Path) -> int | None:
@@ -91,7 +111,7 @@ def read_int_baseline(baseline_file: Path) -> int | None:
     if not baseline_file.exists():
         return None
     try:
-        return int(baseline_file.read_text().strip())
+        return int(baseline_file.read_text(encoding="utf-8").strip())
     except (ValueError, OSError) as e:
         print(f"Warning: Could not read baseline from {baseline_file}: {e}", file=sys.stderr)
         return None
@@ -99,7 +119,7 @@ def read_int_baseline(baseline_file: Path) -> int | None:
 
 def write_int_baseline(baseline_file: Path, count: int) -> None:
     """Write a single-integer baseline file."""
-    baseline_file.write_text(f"{count}\n")
+    baseline_file.write_text(f"{count}\n", encoding="utf-8")
 
 
 def int_baseline_io(

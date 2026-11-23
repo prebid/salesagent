@@ -27,9 +27,9 @@ relative to that session, which is not this function's to erase.
 Folding the swallow in here as well was tried and reverted. It moved site A's
 catch from OUTSIDE its ``with get_db_session()`` to inside, so a write failing
 with ``OperationalError`` no longer reached that context manager's own handler --
-and that handler does more than roll back: it calls ``scoped.remove()`` and sets
-the process-wide ``_is_healthy = False`` fail-fast trip
-(``database_session.py:227-236``). Losing that trip is defensible policy -- a
+and that handler does more than roll back: when the server never answered
+(``database_session._server_never_answered``), it sets the process-wide
+``_is_healthy = False`` fail-fast trip. Losing that trip is defensible policy -- a
 best-effort observability write arguably should not halt the process -- but it is
 a behavior change, and this move is a type relocation. So the shared part stops
 at the write.

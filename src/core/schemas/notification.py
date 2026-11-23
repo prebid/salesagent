@@ -33,12 +33,18 @@ the push pin's requiredness at the pin's own pointer (``authentication.credentia
 Wire effect: the account-level path keeps optional credentials (a credential-less block on
 ``accounts[i].notification_configs[j]`` is not an INVALID_REQUEST); the push path keeps them
 required.
+
+:class:`NotificationConfig` carries one further divergence, on ``event_types``, for a
+related reason: the pinned field states an enum AND, in the same sentence, states that a
+value outside it is reported PER ENTRY rather than refused wholesale. A model that refuses
+the document cannot do the second. See that class's docstring for the weakened axis.
 """
 
 from adcp.types import NotificationConfig as LibraryNotificationConfig
 from adcp.types import PushNotificationConfig as LibraryPushNotificationConfig
-from adcp.types.generated_poc.core.notification_config import Authentication as LibraryNotificationAuthentication
-from adcp.types.generated_poc.core.push_notification_config import Authentication as LibraryPushAuthentication
+from adcp.types.domains.core.notification_config import Authentication as LibraryNotificationAuthentication
+from adcp.types.domains.core.push_notification_config import Authentication as LibraryPushAuthentication
+from adcp.types.domains.enums.notification_type import NotificationType as LibraryNotificationType
 from pydantic import ConfigDict, Field
 
 __all__ = ["Authentication", "NotificationConfig", "PushAuthentication", "PushNotificationConfig"]
@@ -87,12 +93,60 @@ class PushAuthentication(Authentication, LibraryPushAuthentication):
 
 
 class NotificationConfig(LibraryNotificationConfig):
-    """The pinned ``core/notification-config.json``, with its block narrowed to the base class."""
+    """The pinned ``core/notification-config.json``, with its block narrowed to the base class.
+
+    ``event_types`` is the one field declared WIDER than the parent types it, and the pin
+    asks for that in the same sentence that states the enum. ``core/notification-config.json``
+    narrows the property to an inline account-anchored enum and then says what a seller does
+    with a value outside it: media-buy-anchored types "are schema-invalid on this surface and
+    sellers MUST reject those entries as PER-ACCOUNT validation failures with INVALID_REQUEST
+    or VALIDATION_ERROR and error.field pointing at the invalid ``event_types`` entry RATHER
+    THAN SILENTLY DROPPING THEM"
+    (``#/properties/event_types``, AdCP). ``account/sync-accounts-request.json`` states
+    the same MUST independently at the field a buyer actually sends
+    (``#/properties/accounts/items/properties/notification_configs``), and
+    ``account/sync-accounts-response.json`` declares the channel it goes down:
+    ``accounts[].errors[]``, "required and non-empty when action is 'failed'", under the
+    ``SyncAccountsSuccess`` branch. A seller that refuses the DOCUMENT cannot produce any of
+    that -- it reports no entry, no ``account_id``, and none of the OTHER entries' results
+    either.
+
+    So the enum is still enforced; the layer that enforces it is the one that can report it
+    per entry. ``_check_notification_configs`` (src/core/tools/accounts.py) refuses exactly
+    ``NotificationType - EventType`` and names
+    ``notification_configs[i].event_types[j]``, so this widening and that gate are
+    complementary by construction: what this field admits minus what the gate refuses IS the
+    parent's enum, member for member. Before it, the two sets were DISJOINT -- every value
+    the gate refused, pydantic refused first -- which is why the gate's event-scope branch
+    was unreachable and had drifted (``window_update`` missing) with nothing to catch it.
+
+    Deliberately NOT ``list[str]``: a value outside the notification vocabulary ENTIRELY is
+    not a question about which surface it anchors at, it is a malformed document, and it
+    keeps earning a request-level INVALID_REQUEST. The widening is exactly as wide as the
+    pin's own discussion of the field.
+
+    Critical pattern #7 is not in tension with this. It governs UNDECLARED fields --
+    ``deep_strip_to_schema`` strips what the DTO does not declare -- and ``event_types`` IS
+    declared; the question is its value domain. Pattern #7 states its own remedy for a value
+    this seller must accept ("declare it on the DTO -- that is the only mechanism"), and its
+    rationale is that an unimplemented rule be LOUD: this rule is implemented, and only the
+    value could not reach it. The weakened axis is named here rather than in a
+    guard allowlist, per critical pattern #1.
+    """
 
     # The sanctioned redeclaration: narrowed to a local subclass, same nullability, same
     # default, the parent's own description.
     authentication: Authentication | None = Field(
         default=None, description=LibraryNotificationConfig.model_fields["authentication"].description
+    )
+
+    # WIDENED past the parent (see the class docstring). The parent's own ``MinLen(1)`` and
+    # description are restated so nothing but the value domain changes; ``uniqueItems`` is
+    # the parent's and unaffected.
+    event_types: list[LibraryNotificationType] = Field(  # type: ignore[assignment]
+        ...,
+        min_length=1,
+        description=LibraryNotificationConfig.model_fields["event_types"].description,
     )
 
 

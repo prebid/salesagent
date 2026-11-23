@@ -47,6 +47,7 @@ from adcp.types import TaskType
 
 from src.core.config import get_settings
 from src.core.exceptions import AdCPBlockedUrlError
+from src.core.logging_config import log_safe
 from src.core.security.egress.policy import EgressPolicy
 
 # Fallback used when an action label is not a member of the SDK's closed
@@ -92,25 +93,22 @@ def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE
     return task_type
 
 
-# Every character ``str.splitlines()`` treats as a line boundary. ``urlsplit``
-# strips only \t \r \n (``parse._UNSAFE_URL_BYTES_TO_REMOVE``); VT, FF, the file/
-# group/record separators, NEL, U+2028 and U+2029 all survive it — and the PATH is
-# carried through verbatim below, so without this a buyer-supplied path forges a
-# second log line at every caller. Escaped rather than deleted: a dropped
-# character would silently change the URL an operator is reading.
-_LINE_BREAKING = "\n\r\v\f\x1c\x1d\x1e\x85  "
-_LOG_SAFE = str.maketrans({c: c.encode("unicode_escape").decode("ascii") for c in _LINE_BREAKING})
+def url_for_record(url: str | None, *, keep_path: bool) -> str | None:
+    """The part of *url* that may go into a log line or a stored record, or None if unreadable.
 
+    The one answer to that question, for every caller. Never userinfo, port, query or
+    fragment: each can carry a credential or nothing an operator needs. The path is the
+    one choice, made here:
 
-def sanitize_webhook_url_for_log(url: str | None) -> str | None:
-    """Return ``scheme://host/path`` for logs — never credentials or query.
+    * ``keep_path=True`` -- operator logs (:func:`webhook_url_for_log`). An operator needs
+      the path to act on a refusal or a failed delivery.
+    * ``keep_path=False`` -- records every tenant user can read (admin audit rows). Webhook
+      services such as Slack and Discord put the posting credential in the path, so it is
+      replaced by ``/...`` when there was one.
 
-    Returns ``None`` rather than raising on a URL ``urlparse`` cannot read (an
-    unterminated IPv6 bracket raises ``ValueError``). :func:`webhook_url_for_log`
-    documents itself as TOTAL, and a stored row written before the ingest gate
-    can still carry such a URL — so a caller rendering one for a log line, or
-    inside a ``__repr__``, must get the placeholder rather than an exception
-    thrown from a debugger frame or a pytest diff.
+    Returns ``None`` rather than raising on a URL ``urlparse`` cannot read (an unterminated
+    IPv6 bracket raises ``ValueError``), or one with no scheme or host. An IPv6 host keeps its
+    brackets. The result goes through ``log_safe``, so a path cannot forge a second log line.
     """
     if not url:
         return None
@@ -118,9 +116,19 @@ def sanitize_webhook_url_for_log(url: str | None) -> str | None:
         parsed = urlparse(str(url))
     except ValueError:
         return None
-    if parsed.scheme and parsed.hostname:
-        return f"{parsed.scheme}://{parsed.hostname}{parsed.path or ''}".translate(_LOG_SAFE)
-    return None
+    if not (parsed.scheme and parsed.hostname):
+        return None
+    host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+    if keep_path:
+        rest = parsed.path or ""
+    else:
+        rest = "/..." if parsed.path not in ("", "/") or parsed.query or parsed.fragment else ""
+    return log_safe(f"{parsed.scheme.lower()}://{host}{rest}")
+
+
+def sanitize_webhook_url_for_log(url: str | None) -> str | None:
+    """Return ``scheme://host/path`` for logs -- never credentials or query (:func:`url_for_record`)."""
+    return url_for_record(url, keep_path=True)
 
 
 def webhook_url_for_log(url: str | None) -> str:

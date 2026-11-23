@@ -16,7 +16,8 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal, Tenant
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from tests.factories.principal import plaintext_token_for
-from tests.integration.conftest import cleanup_tenant, make_media_buy, make_package
+from tests.integration.conftest import make_media_buy, make_package
+from tests.utils.database_helpers import delete_tenant
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -32,12 +33,17 @@ def tenant_a(integration_db):
     tenant_id = "write_test_tenant_a"
     with get_db_session() as session:
         tenant = Tenant(
-            tenant_id=tenant_id, name="Write Tenant A", subdomain="write-a", is_active=True, ad_server="mock"
+            tenant_id=tenant_id,
+            name="Write Tenant A",
+            subdomain="write-a",
+            virtual_host="write-a.adcp.test",
+            is_active=True,
+            ad_server="mock",
         )
         session.add(tenant)
         session.commit()
     yield tenant_id
-    cleanup_tenant(tenant_id)
+    delete_tenant(tenant_id)
 
 
 @pytest.fixture
@@ -46,12 +52,17 @@ def tenant_b(integration_db):
     tenant_id = "write_test_tenant_b"
     with get_db_session() as session:
         tenant = Tenant(
-            tenant_id=tenant_id, name="Write Tenant B", subdomain="write-b", is_active=True, ad_server="mock"
+            tenant_id=tenant_id,
+            name="Write Tenant B",
+            subdomain="write-b",
+            virtual_host="write-b.adcp.test",
+            is_active=True,
+            ad_server="mock",
         )
         session.add(tenant)
         session.commit()
     yield tenant_id
-    cleanup_tenant(tenant_id)
+    delete_tenant(tenant_id)
 
 
 @pytest.fixture

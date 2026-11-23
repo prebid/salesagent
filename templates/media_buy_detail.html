@@ -844,7 +844,9 @@ function showLoadingOverlay() {
         if (step < steps.length) {
             steps[step].style.opacity = '1';
             if (step > 0) {
-                steps[step - 1].innerHTML = steps[step - 1].innerHTML.replace('⏳', '✅');
+                // The step's own constant markup, with the icon swapped.
+                const doneStepHtml = steps[step - 1].innerHTML.replace('⏳', '✅');
+                steps[step - 1].innerHTML = doneStepHtml;
             }
             step++;
         }

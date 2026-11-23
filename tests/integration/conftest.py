@@ -4,7 +4,6 @@ Integration test specific fixtures.
 These fixtures are for tests that require database and service integration.
 """
 
-import os
 import uuid
 from contextlib import ExitStack
 from datetime import UTC, date, datetime
@@ -13,24 +12,27 @@ from pathlib import Path
 import psycopg2
 import pytest
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-from sqlalchemy import create_engine, delete, select
+from sqlalchemy import create_engine
 
+from scripts.setup.seed_products import seed_verified_website, whole_publisher_selections
 from src.admin.app import create_app
 
 # Registers the ci-test tenant/principal fixture for this package. Imported by
 # name rather than star-imported: the one star import in tests/conftest.py is an
 # allowlisted exception, not the pattern.
 from tests.helpers.ledger import load_ledger_nodeids
+from tests.helpers.postgres_admin import drop_database
 from tests.integration.conftest_ci_seed import ci_test_principal  # noqa: F401
 
 admin_app = create_app()
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy, MediaPackage, Principal, Tenant
+from src.core.database.models import MediaBuy, MediaPackage, ProductPublisherSelection, Tenant
 from tests.fixtures import TenantFactory
 from tests.helpers.local_http_origin import run_local_origin
 from tests.helpers.local_mcp_origin import MCPOrigin, run_mcp_origin
-from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
+from tests.helpers.tls_material import load_gen_test_tls, server_ssl_context
 from tests.integration.migration_helpers import parse_postgres_url
+from tests.utils.database_helpers import vhost_for
 
 # ---------------------------------------------------------------------------
 # Shared test helpers for media buy repository tests
@@ -38,18 +40,6 @@ from tests.integration.migration_helpers import parse_postgres_url
 
 # integration_db fixture moved to tests/conftest_db.py (visible to all test suites including tests/bdd/)
 # It is available here via tests/conftest.py -> from tests.conftest_db import *
-
-
-def cleanup_tenant(tenant_id: str) -> None:
-    """Delete tenant and all dependent data (correct FK order)."""
-    with get_db_session() as session:
-        mb_ids = session.scalars(select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == tenant_id)).all()
-        if mb_ids:
-            session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id.in_(mb_ids)))
-        session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == tenant_id))
-        session.execute(delete(Principal).where(Principal.tenant_id == tenant_id))
-        session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
-        session.commit()
 
 
 def make_media_buy(tenant_id: str, principal_id: str, media_buy_id: str, **kwargs) -> MediaBuy:
@@ -161,6 +151,29 @@ def admin_client(integration_db):
 
 
 @pytest.fixture
+def gam_oauth_configured(admin_client, monkeypatch):
+    """GAM OAuth is set up, and no authorization bypass is available.
+
+    ``require_tenant_access`` waves a ``test_user`` session through on the composed
+    test-login path, and ``is_super_admin`` waves through a configured email or
+    domain. Tests using this fixture never set ``test_user``, and the super-admin
+    lists are emptied here, so a pass proves membership. The values are set on the
+    live settings object the views read (the environment is loaded once).
+    """
+    from src.core.config import get_settings
+    from tests.helpers.admin_session import no_configured_super_admins
+
+    auth = get_settings().auth
+    monkeypatch.setattr(auth, "gam_oauth_client_id", "gam-oauth-client.apps.googleusercontent.com")
+    monkeypatch.setattr(auth, "gam_oauth_client_secret", "GOCSPX-gam-oauth-client-secret")
+    # ``gam_authorize`` only tests ``current_app.oauth`` for presence; whether the
+    # module-level app registered a provider depends on the shell's GOOGLE_CLIENT_ID.
+    monkeypatch.setattr(admin_client.application, "oauth", object(), raising=False)
+    with no_configured_super_admins():
+        yield
+
+
+@pytest.fixture
 def authenticated_admin_session(admin_client, integration_db):
     """Create an authenticated session for admin UI testing."""
     # Set up super admin configuration in database
@@ -172,9 +185,6 @@ def authenticated_admin_session(admin_client, integration_db):
         email_config = TenantManagementConfig(config_key="super_admin_emails", config_value="test@example.com")
         db_session.add(email_config)
         db_session.commit()
-
-    # Enable test mode for authentication
-    os.environ["ADCP_AUTH_TEST_MODE"] = "true"
 
     with admin_client.session_transaction() as sess:
         sess["authenticated"] = True
@@ -190,15 +200,12 @@ def authenticated_admin_session(admin_client, integration_db):
     yield admin_client
 
     # Clean up test mode
-    if "ADCP_AUTH_TEST_MODE" in os.environ:
-        del os.environ["ADCP_AUTH_TEST_MODE"]
 
 
 @pytest.fixture
 def test_tenant_with_data(integration_db):
     """Create a test tenant in the database with proper configuration and all required setup data."""
     from src.core.database.models import (
-        AuthorizedProperty,
         CurrencyLimit,
         GAMInventory,
         Principal,
@@ -214,6 +221,10 @@ def test_tenant_with_data(integration_db):
             tenant_id=tenant_data["tenant_id"],
             name=tenant_data["name"],
             subdomain=tenant_data["subdomain"],
+            # Required (NOT NULL) and UNIQUE: a tenant declares the host it is served at.
+            # Derived from the tenant_id so tenants seeded together stay distinct. Nothing
+            # routes to it by Host — these fixtures address the tenant directly.
+            virtual_host=vhost_for(tenant_data["tenant_id"]),
             is_active=tenant_data["is_active"],
             ad_server="mock",  # Mock adapter is accepted in test environments (ADCP_TESTING=true)
             auth_setup_mode=False,  # Disable setup mode for production-ready auth
@@ -248,17 +259,10 @@ def test_tenant_with_data(integration_db):
         )
         db_session.add(property_tag)
 
-        # AuthorizedProperty (required for setup validation)
-        auth_property = AuthorizedProperty(
-            tenant_id=tenant_id,
-            property_id=f"{tenant_id}_property_1",
-            property_type="website",
-            name="Fixture Default Property",  # Unique name to avoid conflicts with test assertions
-            identifiers=[{"type": "domain", "value": "fixture-default.example.com"}],
-            publisher_domain="fixture-default.example.com",
-            verification_status="verified",
-        )
-        db_session.add(auth_property)
+        # The fixture publisher, whose stored adagents.json authorizes the tenant (required for
+        # setup validation). Unique name to avoid conflicts with test assertions.
+        db_session.flush()
+        seed_verified_website(db_session, tenant_id, "fixture-default.psatest.com", name="Fixture Default Property")
 
         # Principal (required for setup completion)
         # Include both kevel and mock mappings to support ad_server="kevel" (which is production-ready)
@@ -334,7 +338,6 @@ def sample_tenant(integration_db):
 
     from src.core.database.database_session import get_db_session
     from src.core.database.models import (
-        AuthorizedProperty,
         CurrencyLimit,
         GAMInventory,
         PropertyTag,
@@ -348,6 +351,7 @@ def sample_tenant(integration_db):
             tenant_id="test_tenant",
             name="Test Tenant",
             subdomain="test",
+            virtual_host="test-tenant.adcp.test",
             is_active=True,
             ad_server="mock",  # Mock adapter is accepted in test environments (ADCP_TESTING=true)
             auth_setup_mode=False,  # Disable setup mode for production-ready auth
@@ -380,17 +384,9 @@ def sample_tenant(integration_db):
         )
         session.add(property_tag)
 
-        # Add required AuthorizedProperty (required for setup checklist)
-        auth_property = AuthorizedProperty(
-            tenant_id=tenant.tenant_id,
-            property_id="example_property",
-            property_type="website",
-            name="Example Property",
-            identifiers=[{"type": "domain", "value": "example.com"}],
-            publisher_domain="example.com",
-            verification_status="verified",
-        )
-        session.add(auth_property)
+        # The publisher whose stored adagents.json authorizes the tenant (required for the setup checklist)
+        session.flush()
+        seed_verified_website(session, tenant.tenant_id, "psatest.com", name="Example Property")
 
         # Add GAMInventory records (required for inventory sync status in setup checklist)
         inventory_items = [
@@ -513,7 +509,7 @@ def sample_products(integration_db, sample_tenant):
     """Create sample products that comply with AdCP protocol."""
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Product
-    from tests.factories import PricingOptionFactory
+    from tests.factories import PricingOptionFactory, StoredPlacementFactory
 
     with get_db_session() as session:
         products = [
@@ -528,40 +524,39 @@ def sample_products(integration_db, sample_tenant):
                 ],
                 targeting_template={"geo_country": {"values": ["US"], "required": False}},
                 delivery_type="guaranteed",
-                property_tags=["all_inventory"],  # Required per AdCP spec
+                publisher_selections=whole_publisher_selections(session, sample_tenant["tenant_id"]),
                 is_custom=False,
                 countries=["US"],
                 measurement=None,
                 creative_policy=None,
                 price_guidance=None,
                 implementation_config=None,
-                properties=None,
                 # Placements for placement-targeting validation (adcp#208)
                 placements=[
-                    {
-                        "placement_id": "homepage_atf",
-                        "name": "Homepage Above the Fold",
-                        "description": "Premium above-the-fold placement on homepage",
-                        "format_ids": [
+                    StoredPlacementFactory(
+                        placement_id="homepage_atf",
+                        name="Homepage Above the Fold",
+                        description="Premium above-the-fold placement on homepage",
+                        format_ids=[
                             {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
                         ],
-                    },
-                    {
-                        "placement_id": "sidebar",
-                        "name": "Sidebar",
-                        "description": "Standard sidebar placement",
-                        "format_ids": [
+                    ),
+                    StoredPlacementFactory(
+                        placement_id="sidebar",
+                        name="Sidebar",
+                        description="Standard sidebar placement",
+                        format_ids=[
                             {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
                         ],
-                    },
-                    {
-                        "placement_id": "article_inline",
-                        "name": "Article Inline",
-                        "description": "Inline placement within article content",
-                        "format_ids": [
+                    ),
+                    StoredPlacementFactory(
+                        placement_id="article_inline",
+                        name="Article Inline",
+                        description="Inline placement within article content",
+                        format_ids=[
                             {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
                         ],
-                    },
+                    ),
                 ],
             ),
             Product(
@@ -575,14 +570,13 @@ def sample_products(integration_db, sample_tenant):
                 ],
                 targeting_template={},
                 delivery_type="non_guaranteed",
-                property_tags=["all_inventory"],  # Required per AdCP spec
+                publisher_selections=whole_publisher_selections(session, sample_tenant["tenant_id"]),
                 price_guidance={"floor": 10.0, "p50": 20.0, "p75": 30.0, "p90": 40.0},
                 is_custom=False,
                 countries=["US", "CA"],
                 measurement=None,
                 creative_policy=None,
                 implementation_config=None,
-                properties=None,
             ),
         ]
 
@@ -619,161 +613,6 @@ def sample_products(integration_db, sample_tenant):
         return [p.product_id for p in products]
 
 
-@pytest.fixture(scope="function")
-def mcp_server(integration_db):
-    """Start a real MCP server for integration testing using the test database."""
-    import shutil
-    import socket
-    import subprocess
-    import sys
-    import tempfile
-    import time
-    from pathlib import Path
-
-    # Find an available port
-    def get_free_port():
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            s.listen(1)
-            port = s.getsockname()[1]
-        return port
-
-    port = get_free_port()
-
-    # Use the integration_db (PostgreSQL database name already created by the integration_db fixture)
-    db_name = integration_db
-
-    # IMPORTANT: Close any existing connections to ensure the database is fully committed
-    # This is necessary because the server subprocess will create a new connection
-    # Note: SQLAlchemy 2.0 uses get_db_session() context manager, no global db_session to close
-
-    # Set up environment for the server (use PostgreSQL, not SQLite)
-    # Get PostgreSQL connection details from current DATABASE_URL
-    postgres_url = os.environ.get("DATABASE_URL", "")
-    if not postgres_url or not postgres_url.startswith("postgresql://"):
-        raise RuntimeError("mcp_server fixture requires PostgreSQL DATABASE_URL")
-
-    import re
-
-    pattern = r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)"
-    match = re.match(pattern, postgres_url)
-    if match:
-        user, password, host, port_str, _ = match.groups()
-        postgres_port = int(port_str)
-        server_db_url = f"postgresql://{user}:{password}@{host}:{postgres_port}/{db_name}"
-    else:
-        raise RuntimeError(f"Failed to parse DATABASE_URL: {postgres_url}")
-
-    env = os.environ.copy()
-    env["ADCP_SALES_PORT"] = str(port)
-    env["DATABASE_URL"] = server_db_url
-    env["DB_TYPE"] = "postgresql"
-    env["ADCP_TESTING"] = "true"
-    env["PYTHONUNBUFFERED"] = "1"  # Force unbuffered output for better debugging
-
-    # Start the server process using mcp.run() instead of uvicorn directly
-    server_script = f"""
-import sys
-sys.path.insert(0, '.')
-from src.core.main import mcp
-mcp.run(transport='http', host='0.0.0.0', port={port})
-"""
-
-    # The server's output goes to FILES, never PIPEs. A PIPE nobody drains caps
-    # at 64KB; once server logging fills it (uvicorn access lines + app INFO +
-    # rich console output), the server blocks on a log write INSIDE a request
-    # handler and the calling test awaits forever — py-spy showed the server
-    # MainThread parked in logging emit while create_media_buy hung for four
-    # consecutive runs, and this wedged every full CI run at integration's quiet
-    # tail until the >1h run reaper killed it (#1868 review). Files keep the
-    # error-path diagnostics below without needing a drainer thread.
-    output_dir = Path(tempfile.mkdtemp(prefix=f"mcp-server-{port}-"))
-    stdout_path = output_dir / "stdout.log"
-    stderr_path = output_dir / "stderr.log"
-    stdout_f = stdout_path.open("wb")
-    stderr_f = stderr_path.open("wb")
-    try:
-        process = subprocess.Popen(
-            [sys.executable, "-c", server_script],
-            env=env,
-            stdout=stdout_f,
-            stderr=stderr_f,
-        )
-    finally:
-        # The child inherited the fds; the parent's handles are not needed.
-        stdout_f.close()
-        stderr_f.close()
-
-    def _tail(path: Path, limit: int = 8000) -> str:
-        """Last `limit` bytes of a log file — a chatty server writes far more than a failure message needs."""
-        try:
-            data = path.read_bytes()
-        except OSError:
-            return "N/A (log unreadable)"
-        return data[-limit:].decode(errors="replace") if data else "N/A"
-
-    def _server_output() -> str:
-        return f"STDOUT: {_tail(stdout_path)}\nSTDERR: {_tail(stderr_path)}"
-
-    # Wait for server to be ready.
-    # Server startup is dominated by Python imports (fastmcp + adcp SDK + project)
-    # plus FastAPI lifespan + DB pool warm-up. Under CI load this routinely takes
-    # 20-40s; the prior 20s deadline produced flaky 'failed to start' errors even
-    # though Uvicorn's own log showed it had started just past the threshold. Same
-    # rationale as bf5fe3a66 (test-stack readiness deadline 120s -> 360s for
-    # cold-boot).
-    max_wait = 60  # seconds
-    start_time = time.time()
-    server_ready = False
-
-    try:
-        while time.time() - start_time < max_wait:
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(1)
-                    s.connect(("localhost", port))
-                    server_ready = True
-                    break
-            except (ConnectionRefusedError, OSError):
-                # Check if process has died
-                if process.poll() is not None:
-                    raise RuntimeError(f"MCP server process died unexpectedly.\n{_server_output()}")
-                time.sleep(0.3)
-
-        if not server_ready:
-            process.kill()
-            process.wait(timeout=5)
-            raise RuntimeError(f"MCP server failed to start on port {port} within {max_wait}s.\n{_server_output()}")
-    except BaseException:
-        # Both raise points above happen before yield, so pytest's generator-fixture
-        # teardown (the code after yield, including shutil.rmtree(output_dir) below)
-        # never runs for them -- clean up here instead, on every setup-failure path.
-        shutil.rmtree(output_dir, ignore_errors=True)
-        raise
-
-    # Return server info
-    class ServerInfo:
-        def __init__(self, port, process, db_name):
-            self.port = port
-            self.process = process
-            self.db_name = db_name
-
-    server = ServerInfo(port, process, db_name)
-
-    yield server
-
-    # Cleanup
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
-    shutil.rmtree(output_dir, ignore_errors=True)
-
-    # Don't remove db_name - the PostgreSQL database is managed by integration_db fixture
-
-
 @pytest.fixture
 def test_admin_app(integration_db):
     """Provide a test Admin UI app with real database."""
@@ -794,26 +633,20 @@ def test_admin_app(integration_db):
 @pytest.fixture
 def authenticated_admin_client(test_admin_app):
     """Provide authenticated admin client with database."""
-    # Enable test mode for authentication
-    os.environ["ADCP_AUTH_TEST_MODE"] = "true"
-
     client = test_admin_app.test_client()
 
-    with client.session_transaction() as sess:
-        sess["user"] = {"email": "admin@example.com", "name": "Admin User", "role": "super_admin"}
-        sess["authenticated"] = True
-        sess["role"] = "super_admin"
-        sess["email"] = "admin@example.com"
-        # Add test mode session keys for require_tenant_access() decorator
-        sess["test_user"] = "admin@example.com"
-        sess["test_user_role"] = "super_admin"
-        sess["test_user_name"] = "Admin User"
+    # The canonical admin session. It carries `is_super_admin` + `admin_email`, which
+    # `is_super_admin()` short-circuits on — so recognising this caller costs no database
+    # round trip. That matters here beyond speed: `get_db_session()` is scoped, so a read
+    # inside the auth decorator nests within whatever session the TEST holds and its exit
+    # detaches it, discarding rows the test flushed but had not committed.
+    from tests.helpers.admin_session import admin_auth_session
+
+    admin_auth_session(client, "default")
 
     yield client
 
     # Clean up test mode
-    if "ADCP_AUTH_TEST_MODE" in os.environ:
-        del os.environ["ADCP_AUTH_TEST_MODE"]
 
 
 # ``test_media_buy_workflow`` was here and is DELETED along with the dict
@@ -870,16 +703,7 @@ def migration_db():
 
     engine.dispose()
     try:
-        conn = psycopg2.connect(**conn_params)
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cur = conn.cursor()
-        cur.execute(
-            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-            f"WHERE datname = '{db_name}' AND pid <> pg_backend_pid()"
-        )
-        cur.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
-        cur.close()
-        conn.close()
+        drop_database(psycopg2.connect(**conn_params), db_name)
     except Exception:
         pass
 
@@ -926,7 +750,6 @@ def create_test_product_with_pricing(
     format_ids: list[dict[str, str]] | None = None,
     targeting_template: dict | None = None,
     delivery_type: str = "guaranteed_impressions",
-    property_tags: list[str] | None = None,
     **product_kwargs,
 ):
     """Create a Product with pricing_options using the new pricing model."""
@@ -970,8 +793,14 @@ def create_test_product_with_pricing(
             "notes": "MRC-accredited viewability",
         }
 
-    if property_tags is None and "properties" not in product_kwargs:
-        property_tags = ["all_inventory"]
+    # The publishers the product sells: explicit ``properties`` selectors, or every publisher
+    # of the tenant whole, as a seeded product names them.
+    selectors = product_kwargs.pop("properties", None)
+    product_kwargs["publisher_selections"] = (
+        whole_publisher_selections(session, tenant_id)
+        if selectors is None
+        else ProductPublisherSelection.from_selectors(tenant_id, selectors)
+    )
 
     # Fix measurement - remove invalid fields
     if "measurement" in product_kwargs and isinstance(product_kwargs["measurement"], dict):
@@ -1009,7 +838,6 @@ def create_test_product_with_pricing(
         format_ids=format_ids,
         targeting_template=targeting_template,
         delivery_type=delivery_type,
-        property_tags=property_tags,
         **product_kwargs,
     )
     session.add(product)
@@ -1102,12 +930,10 @@ def add_required_setup_data(session, tenant_id: str):
     from sqlalchemy.orm import attributes
 
     from src.core.database.models import (
-        AuthorizedProperty,
         CurrencyLimit,
         GAMInventory,
         Principal,
         PropertyTag,
-        PublisherPartner,
         Tenant,
         TenantAuthConfig,
     )
@@ -1136,33 +962,10 @@ def add_required_setup_data(session, tenant_id: str):
         )
         session.add(auth_config)
 
-    # PublisherPartner
-    stmt_publisher = select(PublisherPartner).filter_by(
-        tenant_id=tenant_id, publisher_domain="fixture-default.example.com"
-    )
-    if not session.scalars(stmt_publisher).first():
-        publisher_partner = PublisherPartner(
-            tenant_id=tenant_id,
-            publisher_domain="fixture-default.example.com",
-            display_name="Fixture Default Publisher",
-            is_verified=True,
-            sync_status="success",
-        )
-        session.add(publisher_partner)
-
-    # AuthorizedProperty
-    stmt_property = select(AuthorizedProperty).filter_by(tenant_id=tenant_id)
-    if not session.scalars(stmt_property).first():
-        authorized_property = AuthorizedProperty(
-            tenant_id=tenant_id,
-            property_id=f"{tenant_id}_property_1",
-            property_type="website",
-            name="Fixture Default Property",
-            identifiers=[{"type": "domain", "value": "fixture-default.example.com"}],
-            publisher_domain="fixture-default.example.com",
-            verification_status="verified",
-        )
-        session.add(authorized_property)
+    # The fixture publisher: its adagents.json stored without a fetch, authorizing this tenant
+    # for one website (the apply half of the ingest service, as a seed stores it).
+    session.flush()
+    seed_verified_website(session, tenant_id, "fixture-default.psatest.com", name="Fixture Default Property")
 
     # CurrencyLimit
     stmt_currency = select(CurrencyLimit).filter_by(tenant_id=tenant_id, currency_code="USD")
@@ -1279,7 +1082,7 @@ def seed_error_test_tenant(
         human_review_required=False,
         is_active=True,
     )
-    product = ProductFactory(tenant=tenant, product_id=product_id, property_tags=["all_inventory"])
+    product = ProductFactory(tenant=tenant, product_id=product_id)
     PricingOptionFactory(product=product)
     # No access_token=: the row keeps sha256 plus a display prefix, and the factory
     # derives both from ``plaintext_token_for(principal_id)``. The token a caller
@@ -1328,6 +1131,28 @@ def seed_error_test_tenant(
         # credential any more — the hash in the row comes from the principal id.
         "access_token": plaintext_token_for(principal_id),
     }
+
+
+@pytest.fixture(autouse=True)
+def _reset_signing_warning_state():
+    """Clear the outbound delivery signer's warn-once cache between tests.
+
+    ``src.core.signing.outbound`` warns once per ``(warning, tenant)`` pair for the
+    process. The cache outlives the per-test database, so a tenant warned in one test
+    stays warned in the next — and a test asserting that a keyless tenant IS warned
+    then passes or fails on the order it ran in. This layer has already produced
+    order-dependent failures of exactly that shape.
+
+    Autouse rather than opt-in: the seam it exercises was previously a reset function
+    with no caller anywhere in ``src/`` or ``tests/``, which is indistinguishable from
+    no reset at all. A fixture every test in this suite loads cannot fall into that
+    state again.
+    """
+    from src.core.signing.outbound import reset_warning_state
+
+    reset_warning_state()
+    yield
+    reset_warning_state()
 
 
 @pytest.fixture
@@ -1389,17 +1214,10 @@ def bound_factory_session(integration_db):
     because a caller that only borrowed the binding would still have to manage the
     SASession itself and that is where the hand-rolled versions diverge.
     """
-    from sqlalchemy.orm import Session as SASession
+    from tests.utils.database_helpers import bound_factory_session as bound
 
-    from src.core.database.database_session import get_engine
-    from tests.utils.database_helpers import bind_factories_to_session
-
-    session = SASession(bind=get_engine())
-    try:
-        with bind_factories_to_session(session):
-            yield session
-    finally:
-        session.close()
+    with bound() as session:
+        yield session
 
 
 #: Integration tests ledgered pending rewrite — see ``known_failures.txt`` next to this

@@ -3,9 +3,10 @@
 import json
 import logging
 
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, session, url_for
 from sqlalchemy import select
 
+from src.admin.form_validation import json_object_body
 from src.admin.utils import approve_media_buy_through_writer, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
@@ -14,10 +15,15 @@ from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.tools.media_buy_create import ApprovalOutcome
+from src.core.webhooks.write_only import scrub_webhook_secrets
 
 logger = logging.getLogger(__name__)
 
 workflows_bp = Blueprint("workflows", __name__)
+
+
+class MediaBuyApprovalFailed(Exception):
+    """An approved media buy could not be created in the ad server: a failure, answered with a log reference."""
 
 
 @workflows_bp.route("/<tenant_id>/workflows")
@@ -71,7 +77,6 @@ def list_workflows(tenant_id, **kwargs):
                     "principal_name": principal.name if principal else "Unknown",
                     "assigned_to": step.assigned_to,
                     "error_message": step.error_message,
-                    "request_data": step.request_data,
                 }
             )
 
@@ -127,11 +132,9 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
         if context and context.principal_id:
             principal = PrincipalRepository(db, tenant_id).get(context.principal_id)
 
-        # Parse request data
-        request_data = step.request_data if step.request_data else {}
-
-        # Format the data for display
-        formatted_request = json.dumps(request_data, indent=2)
+        # The stored documents keep the buyer's webhook secrets, because delivery reads
+        # them back from the step; the page shows copies without them (GHSA-2968-2px9-6rjm).
+        formatted_request = json.dumps(scrub_webhook_secrets(step.request_data or {}), indent=2)
 
         return render_template(
             "workflow_review.html",
@@ -139,8 +142,8 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
             workflow_id=workflow_id,
             step=step,
             principal=principal,
-            request_data=request_data,
             formatted_request=formatted_request,
+            response_data=scrub_webhook_secrets(step.response_data),
         )
 
 
@@ -149,72 +152,65 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
 @log_admin_action("approve_workflow_step")
 def approve_workflow_step(tenant_id, workflow_id, step_id):
     """Approve a workflow step."""
-    try:
-        with get_db_session() as db:
-            # Get and update the workflow step via repository (tenant-scoped)
-            workflow_repo = WorkflowRepository(db, tenant_id)
+    with get_db_session() as db:
+        # Get and update the workflow step via repository (tenant-scoped)
+        workflow_repo = WorkflowRepository(db, tenant_id)
 
-            user_info = session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+        user_info = session.get("user", {})
+        user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
 
-            step = workflow_repo.update_status(
-                step_id,
-                status="approved",
-            )
+        step = workflow_repo.update_status(
+            step_id,
+            status="approved",
+        )
 
-            if not step:
-                return jsonify({"error": "Workflow step not found"}), 404
+        if not step:
+            return jsonify({"error": "Workflow step not found"}), 404
 
-            db.commit()
+        db.commit()
 
-            # Check if this is a media buy creation workflow step
-            mappings = workflow_repo.get_mappings_for_step(step_id)
-            mapping = next((m for m in mappings if m.object_type == "media_buy"), None)
+        # Check if this is a media buy creation workflow step
+        mappings = workflow_repo.get_mappings_for_step(step_id)
+        mapping = next((m for m in mappings if m.object_type == "media_buy"), None)
+
+        logger.info(f"[APPROVAL] Checking for ObjectWorkflowMapping: step_id={step_id}, found={mapping is not None}")
+        if mapping:
+            logger.info(f"[APPROVAL] Found mapping: object_type={mapping.object_type}, object_id={mapping.object_id}")
+
+        if mapping:
+            media_buy_id = mapping.object_id
+            logger.info(f"[APPROVAL] Workflow step {step_id} approved for media buy {media_buy_id}")
+
+            # Get the media buy
+            media_buy_repo = MediaBuyRepository(db, tenant_id)
+            media_buy = media_buy_repo.get_by_id(media_buy_id)
 
             logger.info(
-                f"[APPROVAL] Checking for ObjectWorkflowMapping: step_id={step_id}, found={mapping is not None}"
+                f"[APPROVAL] Media buy lookup: found={media_buy is not None}, status={media_buy.status if media_buy else 'N/A'}"
             )
-            if mapping:
-                logger.info(
-                    f"[APPROVAL] Found mapping: object_type={mapping.object_type}, object_id={mapping.object_id}"
-                )
 
-            if mapping:
-                media_buy_id = mapping.object_id
-                logger.info(f"[APPROVAL] Workflow step {step_id} approved for media buy {media_buy_id}")
+            if media_buy and media_buy.status == "pending_approval":
+                approval = approve_media_buy_through_writer(media_buy_id, tenant_id, approved_by=user_email)
 
-                # Get the media buy
-                media_buy_repo = MediaBuyRepository(db, tenant_id)
-                media_buy = media_buy_repo.get_by_id(media_buy_id)
+                if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES:
+                    return jsonify({"success": True}), 200
 
-                logger.info(
-                    f"[APPROVAL] Media buy lookup: found={media_buy is not None}, status={media_buy.status if media_buy else 'N/A'}"
-                )
+                if not approval.ok:
+                    # error_msg can carry an adapter's exception text: it goes to the log, under
+                    # the reference the admin error handler answers with.
+                    raise MediaBuyApprovalFailed(f"Media buy {media_buy_id}: {approval.error_msg}")
 
-                if media_buy and media_buy.status == "pending_approval":
-                    approval = approve_media_buy_through_writer(media_buy_id, tenant_id, approved_by=user_email)
-
-                    if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES:
-                        return jsonify({"success": True}), 200
-
-                    if not approval.ok:
-                        return jsonify({"success": False, "error": approval.error_msg}), 500
-
-                    logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
-                    flash("Workflow step approved and media buy created successfully", "success")
-                else:
-                    logger.warning(
-                        f"[APPROVAL] Media buy not executed: media_buy={media_buy is not None}, status={media_buy.status if media_buy else 'N/A'}"
-                    )
-                    flash("Workflow step approved successfully", "success")
+                logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
+                flash("Workflow step approved and media buy created successfully", "success")
             else:
+                logger.warning(
+                    f"[APPROVAL] Media buy not executed: media_buy={media_buy is not None}, status={media_buy.status if media_buy else 'N/A'}"
+                )
                 flash("Workflow step approved successfully", "success")
+        else:
+            flash("Workflow step approved successfully", "success")
 
-            return jsonify({"success": True}), 200
-
-    except Exception as e:
-        logger.error(f"Error approving workflow step {step_id}: {e}", exc_info=True)
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"success": True}), 200
 
 
 @workflows_bp.route("/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/reject", methods=["POST"])
@@ -222,31 +218,26 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
 @log_admin_action("reject_workflow_step")
 def reject_workflow_step(tenant_id, workflow_id, step_id):
     """Reject a workflow step with a reason."""
-    try:
-        data = request.get_json() or {}
-        reason = data.get("reason", "No reason provided")
+    data = json_object_body()
+    reason = data.get("reason", "No reason provided")
 
-        with get_db_session() as db:
-            # Get and update the workflow step via repository (tenant-scoped)
-            workflow_repo = WorkflowRepository(db, tenant_id)
+    with get_db_session() as db:
+        # Get and update the workflow step via repository (tenant-scoped)
+        workflow_repo = WorkflowRepository(db, tenant_id)
 
-            user_info = session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+        user_info = session.get("user", {})
+        user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
 
-            step = workflow_repo.update_status(
-                step_id,
-                status="rejected",
-                error_message=reason,
-            )
+        step = workflow_repo.update_status(
+            step_id,
+            status="rejected",
+            error_message=reason,
+        )
 
-            if not step:
-                return jsonify({"error": "Workflow step not found"}), 404
+        if not step:
+            return jsonify({"error": "Workflow step not found"}), 404
 
-            db.commit()
+        db.commit()
 
-            flash("Workflow step rejected", "info")
-            return jsonify({"success": True}), 200
-
-    except Exception as e:
-        logger.error(f"Error rejecting workflow step {step_id}: {e}", exc_info=True)
-        return jsonify({"error": "Internal server error"}), 500
+        flash("Workflow step rejected", "info")
+        return jsonify({"success": True}), 200

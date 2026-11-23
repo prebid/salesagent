@@ -6,6 +6,8 @@ import time
 from datetime import UTC
 from pathlib import Path
 
+from scripts.setup.seed_products import whole_publisher_selections
+
 #: Used by the table-cleanup except blocks below, which referenced it undefined --
 #: a NameError there would have masked the delete failure it exists to report.
 logger = logging.getLogger(__name__)
@@ -13,6 +15,8 @@ logger = logging.getLogger(__name__)
 import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session as SASession
+
+from tests.helpers.postgres_admin import drop_database
 
 # Set test mode before any imports
 os.environ["PYTEST_CURRENT_TEST"] = "true"
@@ -92,7 +96,6 @@ def test_database(test_database_url):
     from src.core.database.models import (  # noqa: F401
         AdapterConfig,
         AuditLog,
-        AuthorizedProperty,
         Base,
         Context,
         Creative,
@@ -108,6 +111,7 @@ def test_database(test_database_url):
         Product,
         ProductInventoryMapping,
         PropertyTag,
+        Publisher,
         PushNotificationConfig,
         Strategy,
         StrategyState,
@@ -250,6 +254,8 @@ def test_tenant(db_session):
         tenant_id=f"test_tenant_{unique_id}",
         name=f"Test Tenant {unique_id}",
         subdomain=f"test_{unique_id}",
+        # Required (NOT NULL) and UNIQUE, so it carries the same unique_id the rest does.
+        virtual_host=f"test-{unique_id}.adcp.test",
         is_active=True,
         ad_server="mock",
         created_at=now,
@@ -305,7 +311,7 @@ def test_product(db_session, test_tenant):
         ],
         targeting_template={},
         delivery_type="guaranteed",
-        property_tags=["all_inventory"],  # Required: products must have properties OR property_tags
+        publisher_selections=whole_publisher_selections(db_session, test_tenant.tenant_id),
     )
     db_session.add(product)
     db_session.commit()
@@ -598,6 +604,9 @@ def integration_db():
         f"postgresql://{user}:{password}@{host}:{postgres_port}/{unique_db_name}",
         echo=False,
         json_serializer=_pydantic_json_serializer,
+        # As production's get_engine() does for a direct connection: a pooled connection
+        # the server closed is replaced on checkout instead of failing the first statement.
+        pool_pre_ping=True,
     )
 
     # Ensure all model classes are imported and registered with Base.metadata
@@ -605,7 +614,6 @@ def integration_db():
     from src.core.database.models import (
         AdapterConfig,
         AuditLog,
-        AuthorizedProperty,
         Creative,
         CreativeAssignment,
         FormatPerformanceMetrics,
@@ -617,6 +625,7 @@ def integration_db():
         Product,
         ProductInventoryMapping,
         PropertyTag,
+        Publisher,
         PushNotificationConfig,
         Strategy,
         StrategyState,
@@ -636,7 +645,7 @@ def integration_db():
         Product,
         MediaBuy,
         Creative,
-        AuthorizedProperty,
+        Publisher,
         Strategy,
         AuditLog,
         CreativeAssignment,
@@ -705,21 +714,7 @@ def integration_db():
     # persistent Postgres (agent-db / local dev).
     if not _skip_clone_drop():
         try:
-            conn = _connect_with_retry(conn_params)
-            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-            cur = conn.cursor()
-            # Terminate connections to the test database
-            cur.execute(
-                f"""
-                SELECT pg_terminate_backend(pg_stat_activity.pid)
-                FROM pg_stat_activity
-                WHERE pg_stat_activity.datname = '{db_path}'
-                AND pid <> pg_backend_pid()
-                """
-            )
-            cur.execute(f'DROP DATABASE IF EXISTS "{db_path}"')
-            cur.close()
-            conn.close()
+            drop_database(_connect_with_retry(conn_params), db_path)
         except Exception:
             pass  # Ignore cleanup errors
 

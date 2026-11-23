@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.core.database.repositories.product import OfferedProduct
 from src.core.schemas import GetProductsRequest
 from tests.helpers.unit_identity import fabricated_identity
 
@@ -28,7 +29,6 @@ def _make_identity(tenant_id="test-tenant", **tenant_fields):
         principal_id="user-1",
         tenant_id=tenant_id,
         name="Test",
-        subdomain="test",
         ad_server="mock",
         advertising_policy=None,
         **tenant_fields,
@@ -44,7 +44,7 @@ def _mock_uow_with_products(products):
     mock_uow = MagicMock()
     mock_uow.__enter__ = MagicMock(return_value=mock_uow)
     mock_uow.__exit__ = MagicMock(return_value=False)
-    mock_uow.products.list_all.return_value = products
+    mock_uow.list_offered.return_value = [OfferedProduct(p, p.publisher_properties) for p in products]
     return mock_uow
 
 
@@ -238,8 +238,7 @@ class TestAIRankingExceptionPropagation:
         identity = _make_identity(product_ranking_prompt="Rank by relevance")
 
         mock_factory = MagicMock()
-        mock_factory.is_ai_enabled.return_value = True
-        mock_factory.create_model.return_value = MagicMock()
+        mock_factory.build.return_value = MagicMock()
 
         patches = _base_patches(mock_uow) + [
             patch(

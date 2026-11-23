@@ -5,6 +5,8 @@ from unittest.mock import patch
 import pytest
 
 from src.core.schemas import GetProductsRequest
+from src.services.ai import AIServiceFactory
+from src.services.ai.config import DEFAULT_GOOGLE_MODEL, TenantAIConfig
 from src.services.policy_check_service import PolicyCheckResult, PolicyCheckService, PolicyStatus
 from tests.helpers.adcp_factories import create_test_brand_manifest, create_test_product
 
@@ -13,15 +15,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 @pytest.fixture
 def policy_service():
-    """Create a policy service without API key for basic testing."""
+    """Create a policy service without AI for basic testing."""
     # Service without AI will just allow everything with a warning
-    # Must clear GEMINI_API_KEY env var to ensure AI is truly disabled
-    with patch.dict("os.environ", {}, clear=False):
-        # Remove GEMINI_API_KEY if present
-        import os
-
-        os.environ.pop("GEMINI_API_KEY", None)
-        return PolicyCheckService(gemini_api_key=None)
+    return PolicyCheckService()
 
 
 @pytest.fixture
@@ -29,9 +25,11 @@ def policy_service_with_ai():
     """Create a policy service with mocked AI via Pydantic AI."""
     # The service needs AI enabled. We'll patch the check_policy_compliance function
     # to return mock responses in each test.
-    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}):
-        service = PolicyCheckService()
-        return service
+    return PolicyCheckService(
+        model=AIServiceFactory().build(
+            TenantAIConfig(provider="google", model=DEFAULT_GOOGLE_MODEL, api_key="test-key")
+        )
+    )
 
 
 class TestPolicyWithoutAI:
@@ -47,10 +45,7 @@ class TestPolicyWithoutAI:
             assert result.status == PolicyStatus.ALLOWED
             assert len(result.warnings) > 0
             # Check for either message format - service might say "not configured" or "unavailable"
-            assert any(
-                msg in result.warnings[0]
-                for msg in ["AI service not configured", "AI policy check unavailable", "Policy check unavailable"]
-            )
+            assert any(msg in result.warnings[0] for msg in ["AI service not configured", "Policy check unavailable"])
 
 
 class TestAIPolicyAnalysis:
@@ -104,24 +99,20 @@ class TestAIPolicyAnalysis:
         assert result.status == PolicyStatus.BLOCKED
 
     @pytest.mark.asyncio
-    async def test_ai_fallback_on_error(self, policy_service_with_ai):
-        """Test graceful fallback when AI fails."""
-        from src.services.ai.agents.policy_agent import PolicyAnalysis
+    async def test_a_provider_failure_raises_ai_provider_error(self):
+        """When the model fails the call, the service raises AIProviderError; it does not answer itself.
 
-        # Mock the check_policy_compliance function to return allowed with warning (graceful fallback)
-        # The policy_agent itself handles exceptions and returns allowed with warning
-        mock_analysis = PolicyAnalysis(
-            status="allowed",
-            warnings=["AI policy check unavailable: API error"],
-        )
+        The fail-open lives in get_products, which catches exactly this type
+        (tests/integration/test_get_products_ai_defect_propagates.py grades the other half:
+        anything else propagates).
+        """
+        from src.services.ai.factory import AIProviderError
+        from tests.e2e._scripted_llm import MODEL_UNAVAILABLE
 
-        with patch("src.services.policy_check_service.check_policy_compliance", return_value=mock_analysis):
-            result = await policy_service_with_ai.check_brief_compliance("Normal product advertisement")
+        service = PolicyCheckService(model=MODEL_UNAVAILABLE.model())
 
-        # When AI fails, it should still return allowed with warning
-        assert result.status == PolicyStatus.ALLOWED
-        assert len(result.warnings) > 0
-        assert "AI policy check unavailable" in result.warnings[0]
+        with pytest.raises(AIProviderError, match="503"):
+            await service.check_brief_compliance("Normal product advertisement")
 
 
 class TestProductEligibility:

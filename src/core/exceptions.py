@@ -11,8 +11,11 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, overload
 
+from adcp.signing.errors import SignatureVerificationError
 from adcp.types import ErrorCode
 from pydantic import ValidationError
 
@@ -24,17 +27,27 @@ from src.core.errors.details import (
     CapabilityRefusalDetails,
     ConfigurationDetails,
     ConflictDetails,
+    CreativeManifestDetails,
     CreativeRefDetails,
     CreativeRejectionDetails,
+    CreativeValueNotAllowedDetails,
     EntityRefDetails,
     ErrorDetails,
     InvalidStateDetails,
+    PricingValidationDetails,
     ProductRefDetails,
     RejectionReasonDetails,
+    SelectorConflictDetails,
     ValidationDetails,
     VersionUnsupportedDetails,
 )
-from src.core.errors.issues import ErrorIssue, issues_from_validation_error, pointer_to_field
+from src.core.errors.issues import (
+    ErrorIssue,
+    issues_from_validation_error,
+    pointer_for_pydantic_error,
+    pointer_to_field,
+)
+from src.core.errors.signature_codes import SignatureErrorCode
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -64,7 +77,7 @@ if TYPE_CHECKING:
 # (see docs/decisions/adr-010-graded-wire-fields-are-functions-of-the-code.md), so a
 # raise site cannot make one of them disagree with the pin.
 #
-# That openness is the PIN's own words, not this module's preference. AdCP 3.1.1
+# That openness is the PIN's own words, not this module's preference. AdCP.1
 # ``core/error.json`` types ``error.code`` as a bare ``string`` (minLength 1,
 # maxLength 64) and states: "the standard codes published in
 # ``enums/error-code.json`` are documentary, and senders MAY emit codes outside
@@ -102,7 +115,7 @@ if TYPE_CHECKING:
 # reading of :class:`AdCPConfigurationError`.
 
 
-# The pinned spec bounds retry_after: AdCP 3.1.1 ``core/error.json`` →
+# The pinned spec bounds retry_after: ``core/error.json`` →
 # ``retry_after`` is ``{"type": "number", "minimum": 1, "maximum": 3600}`` and its
 # description reads "Sellers MUST return values between 1 and 3600. Clients MUST
 # clamp values outside this range." Never emit more even when the underlying wait
@@ -111,28 +124,43 @@ if TYPE_CHECKING:
 RETRY_AFTER_MAX = 3600
 
 
-def clamp_retry_after(seconds: float) -> int:
+@overload
+def clamp_retry_after(seconds: float) -> int: ...
+@overload
+def clamp_retry_after(seconds: None) -> None: ...
+def clamp_retry_after(seconds: float | None) -> int | None:
     """Clamp a raw retry_after to the spec Error model's [1, RETRY_AFTER_MAX] bound.
 
     The single home for the floor/ceiling every emitter shares — the idempotency
     policy's rejection branches and the egress seam's Retry-After passthrough.
     Callers layer any context-specific cap (e.g. an insert-rate window) on top.
 
+    ``None`` passes through as ``None``: a counterparty that named no wait yields an
+    error with no ``retry_after``, and every passthrough emitter has exactly that
+    case, so it is answered here once rather than by a conditional at each of them.
+
     It lives here rather than beside either caller because this module already
     owns ``AdCPSalesAgentError.retry_after`` and the spec Error shape, so neither
     emitter ends up importing the other.
     """
+    if seconds is None:
+        return None
     return min(max(1, math.ceil(seconds)), RETRY_AFTER_MAX)
 
 
 def _rebuild_error(cls: type[AdCPSalesAgentError], code: ErrorCodeT) -> AdCPSalesAgentError:
     """Reconstruct a pickled or copied error.
 
-    The ``hasattr`` branch is load-bearing: a class-coded subclass IS its code, so
-    naming it again would trip ``AdCPSalesAgentError.__new__``'s "already names a code" refusal.
-    ``__dict__`` restoration then repopulates ``_error_code`` and the rest.
+    ``code`` is accepted and unused, and deliberately kept in the signature: it is part of
+    the reduce tuple already written into pickles, so dropping the parameter would refuse to
+    load one. It is not READ because there is nothing to choose between -- every
+    constructible class IS its code, so ``cls()`` restores it. ``__dict__`` restoration then
+    repopulates ``_error_code`` and the rest.
+
+    This used to branch on ``hasattr(cls, "_code")`` and pass ``error_code=code`` otherwise,
+    for the one class that declared none. There is no such class any more.
     """
-    return cls() if hasattr(cls, "_code") else cls(error_code=code)
+    return cls()
 
 
 def _details_to_wire(details: ErrorDetails | None) -> dict[str, Any] | None:
@@ -201,7 +229,7 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
             exception it caught, or nothing.
             See the class note below.
 
-    Message provenance (AdCP 3.1.1 ``transport-errors.mdx`` § Security
+    Message provenance (``transport-errors.mdx`` § Security
     Considerations / Seller Requirements, lines 659-670): "Error responses
     flow through LLM context. Every field is client-facing. Implementations
     MUST NOT include: internal service names, hostnames, or IP addresses;
@@ -263,10 +291,23 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
             )
 
     def __new__(cls, *args: Any, **kwargs: Any) -> AdCPSalesAgentError:
-        """Refuse to build an error whose code is absent, or doubly named.
+        """Refuse to build an error that declares no code.
 
-        The invariant is: an error names a code, by its class OR explicitly. Both
-        halves are refused here, so neither can be expressed.
+        The invariant is: AN ERROR NAMES A CODE BY ITS CLASS. There is no "or explicitly"
+        any more, and that is the point of this refusal being one branch instead of two.
+
+        It used to read "by its class OR explicitly", with a second branch refusing an error
+        that did both. That second branch is gone with the thing it guarded:
+        ``AdCPRequestSignatureError`` was the only class in the tree declaring no ``_code``,
+        the only raise site passing ``error_code=``, and therefore the only reason the
+        constructor accepted a code at all. It is now the abstract parent of 28 generated
+        classes that each declare one, ``error_code`` is off the
+        constructor entirely, and a raise site picks a CLASS and nothing else.
+
+        What remains is the abstract-base check, which is what this branch was always for
+        underneath: ``_code`` is annotation-only on the base, so ``hasattr`` is False for
+        :class:`AdCPSalesAgentError` and :class:`AdCPRequestSignatureError` and True for
+        every constructible class.
 
         TWO refusals, and nothing about ``details``. A details block needs no runtime check
         because the class is generic in its detail type and every concrete subclass binds
@@ -284,23 +325,18 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
         classes, so without this a bare ``AdCPSalesAgentError()`` would construct and put a
         null code on the buyer's wire.
 
-        The second branch is why there is no ``synthesize()``: a boundary that needs
-        a code the class hierarchy does not model names it on the base, and a class
-        that already IS a code cannot be overridden into disagreeing with itself.
-        Nothing scans for either violation; neither can be constructed.
+        There is still no ``synthesize()``, and the reason is now simpler than it was: a
+        boundary that needs a code the class hierarchy does not model DECLARES a class for
+        it. That is what the signature taxonomy did -- 28 of them, written out below. Nothing
+        scans for a violation; there is nothing left to violate.
         """
-        has_class_code = hasattr(cls, "_code")
-        named = kwargs.get("error_code") is not None
-        if has_class_code and named:
-            raise TypeError(f"{cls.__name__} already names a code; do not override it")
-        if not has_class_code and not named:
-            raise TypeError(f"{cls.__name__} declares no _code and none was named")
+        if not hasattr(cls, "_code"):
+            raise TypeError(f"{cls.__name__} is abstract: it declares no _code")
         return cast("AdCPSalesAgentError", super().__new__(cls, *args, **kwargs))
 
     def __init__(
         self,
         *,
-        error_code: ErrorCodeT | None = None,
         details: DetailsT | None = None,
         issues: list[ErrorIssue] | None = None,
         field: str | None = None,
@@ -313,18 +349,18 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
         # ``internal_detail`` (an exception, server log only); values go to
         # ``field``/``details``.
         #
-        # Assigned FIRST: every derived property keys on it.
-        self._error_code = error_code if error_code is not None else type(self)._code
-        # A class-coded error's membership is already settled at class creation
-        # (``__init_subclass__``); a NAMED code is checked here, so an
-        # out-of-table code cannot outlive construction on either path.
-        # ``message``/``recovery``/``suggestion`` need no assignment at all:
-        # they are read-only properties resolving from CODE_TABLE per read.
-        if self._error_code not in CODE_TABLE:
-            raise TypeError(
-                f"error_code {self._error_code!r} is not classified by CODE_TABLE; "
-                "name a code the table knows, or add the entry."
-            )
+        # Assigned FIRST: every derived property keys on it. The class IS the code -- there
+        # is no parameter to prefer over it, and no branch here to pick between them.
+        #
+        # No CODE_TABLE membership check either: it was the other half of the same
+        # parameter. A class's code is settled at class creation by ``__init_subclass__``,
+        # which refuses an unclassified one at IMPORT, so by the time any instance exists
+        # the question is already answered. It was checked again here only because a NAMED
+        # code arrived too late for that, and nothing names one now.
+        #
+        # ``message``/``recovery``/``suggestion`` need no assignment at all: they are
+        # read-only properties resolving from CODE_TABLE per read.
+        self._error_code = type(self)._code
         self.details = details
         self.issues = issues
         # The pin's MUST: when issues[] is present, `field` is populated from
@@ -491,6 +527,401 @@ class AdCPAuthRequiredError(AdCPAuthenticationError):
     """
 
     _code: ClassVar[ErrorCodeT] = ErrorCode.AUTH_MISSING
+
+
+class AdCPRequestSignatureError(AdCPSalesAgentError[ErrorDetails]):
+    """An inbound RFC 9421 signature was required, malformed, or refused (401).
+
+    ABSTRACT, exactly like :class:`AdCPSalesAgentError` itself: it declares no ``_code``, so
+    it cannot be constructed. What a raise site picks is one of the concrete subclasses in
+    below, one per member of the request-family taxonomy, each declaring
+    its own code the way every other error class in this tree does.
+
+    This class used to NAME its code instead — the only one that did, and the only reason
+    ``__new__`` had a branch permitting it. The argument for that was a class per code being
+    "27 declarations that can drift from the one table", and it was simply wrong: the table
+    exists either way. The verifier's translation did ``CODE_BY_VALUE[exc.code]`` to get a
+    code and now does one lookup to get a class — same mapping, same size, same drift
+    surface, a different value type. Nothing was saved, and what it cost was the invariant's
+    universality: "an error names a code by its class" stopped being a property nothing can
+    violate and became a convention with one exception in it.
+
+    A DIRECT subclass, not one of :class:`AdCPAuthenticationError`, although what it says is
+    the same kind of thing: a credential was presented and did not verify. Inheriting
+    AUTH_INVALID would give every one of these classes that code through the MRO, and the
+    whole point of the taxonomy is that the code differs per refusal. The relation that
+    mattered about that parent is kept where it is actually enforced: ``ruff-boundary.toml``
+    bans this class outside the resolver beside the other two, so the three refusals of a
+    buyer's credential have one author between them.
+
+    Recovery, suggestion, message and the 401 all come from ``CODE_TABLE`` like every other
+    code — this changed WHO NAMES THE CODE and nothing about where the buyer-facing text
+    comes from. What the buyer gets that is specific to the refusal is the CODE, twice: in
+    ``error.code``, and in the ``WWW-Authenticate`` challenge ``AuthChallengeResponder``
+    derives from it. The verifier's own exception — which carries the checklist step and a
+    diagnostic sentence — rides ``internal_detail``, server log only.
+    """
+
+
+# ---------------------------------------------------------------------------
+# The RFC 9421 request-signature taxonomy: one class per code
+# ---------------------------------------------------------------------------
+# Twenty-eight class statements, in enum order, so a reader can check them off against
+# ``SignatureErrorCode`` by eye. Written out for the same reason the other ~48 concrete
+# subclasses in this module are: a class is this seller's PUBLIC API, and an API must not be
+# a function of an upstream string.
+#
+# They were briefly GENERATED from the enum -- ``type(name, (base,), {"_code": code})`` over
+# a comprehension -- and that is rejected. ``SignatureErrorCode`` is itself derived from the
+# SDK's taxonomy, so generating classes from it means an SDK UPGRADE CAN RENAME OUR CLASSES:
+# upstream respells a code, ``AdCPRequestSignatureKeyRevokedError`` quietly becomes something
+# else, every ``except`` naming it stops matching, and nothing fails at build time because
+# there is no source line to change and no diff to review. Typed out, the same upstream
+# change is an ``AttributeError`` at import on the line that names the member -- a conflict a
+# human reads. That trade is the whole point: a drift that is cheap to see beats a drift that
+# is impossible to see.
+
+
+class AdCPRequestSignatureAgentNotInBrandJsonError(AdCPRequestSignatureError):
+    """The signer's brand.json lists no agent entry for the URL it was resolved from (401).
+
+    Discovery, step 7. The brand.json fetched at the signer's trust root carries no ``agents[]`` entry whose ``url`` matches the counterparty this request claims, so no ``jwks_uri`` can be read from it and no key can be resolved.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON
+
+
+class AdCPRequestSignatureAlgNotAllowedError(AdCPRequestSignatureError):
+    """The signature names an algorithm outside the AdCP profile (401).
+
+    Checklist step 4. ``alg`` is not one of the profile's permitted values -- ``rsa-pss-sha512`` is the corpus's example -- so the signature is refused before any key is resolved for it.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_ALG_NOT_ALLOWED
+
+
+class AdCPRequestSignatureBrandJsonAmbiguousError(AdCPRequestSignatureError):
+    """The signer's brand.json matches more than one agent entry (401).
+
+    Discovery, step 7. Two or more ``agents[]`` entries answer to the counterparty's URL, so which ``jwks_uri`` governs is undecidable and the walk refuses rather than choosing.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS
+
+
+class AdCPRequestSignatureBrandJsonMalformedError(AdCPRequestSignatureError):
+    """The signer's brand.json is not a document this verifier can read (401).
+
+    Discovery, step 7. The trust root answered, but with something that is not a well-formed brand.json, so the ``agents[]`` entry the walk needs cannot be located.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_MALFORMED
+
+
+class AdCPRequestSignatureBrandJsonUnreachableError(AdCPRequestSignatureError):
+    """The signer's brand.json could not be fetched (401).
+
+    Discovery, step 7, and TRANSIENT: the document may be reachable later, so the same request may succeed on a retry once the signer's trust root is serving.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_UNREACHABLE
+
+
+class AdCPRequestSignatureBrandJsonUrlMissingError(AdCPRequestSignatureError):
+    """The signer's capabilities name no brand.json to walk to (401).
+
+    Discovery, step 7. ``identity.brand_json_url`` is absent or is not an ``https://`` URL, so the chain from the counterparty's agent URL to its keys has no second hop.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_URL_MISSING
+
+
+class AdCPRequestSignatureBrandOriginMismatchError(AdCPRequestSignatureError):
+    """The signer's brand.json is served from a different origin than its agent (401).
+
+    Discovery, step 7. brand.json and the agent it describes must share an origin -- the Brand Agent variant has no ``authorized_operators[]`` escape hatch -- so a cross-origin pair cannot anchor a key.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_BRAND_ORIGIN_MISMATCH
+
+
+class AdCPRequestSignatureCapabilitiesUnreachableError(AdCPRequestSignatureError):
+    """The signer's capabilities document could not be fetched (401).
+
+    Discovery, step 7, and TRANSIENT: the first hop of the walk failed, so nothing downstream of it was even attempted. The same request may succeed once the counterparty is serving.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE
+
+
+class AdCPRequestSignatureComponentsIncompleteError(AdCPRequestSignatureError):
+    """The signature does not cover a component this verifier requires (401).
+
+    Checklist step 6. A mandatory covered component is missing from ``Signature-Input`` -- ``@authority``, or ``content-digest`` where this agent's ``covers_content_digest`` is ``required``.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_COMPONENTS_INCOMPLETE
+
+
+class AdCPRequestSignatureComponentsUnexpectedError(AdCPRequestSignatureError):
+    """The signature covers a component this verifier forbids (401).
+
+    Checklist step 6, the mirror of ``components_incomplete``: the signature covers ``content-digest`` while this agent's ``covers_content_digest`` is ``forbidden``.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_COMPONENTS_UNEXPECTED
+
+
+class AdCPRequestSignatureDigestMismatchError(AdCPRequestSignatureError):
+    """The Content-Digest header does not describe the body that arrived (401).
+
+    Checklist step 11, which runs AFTER the signature verifies: the header was covered and its bytes are authentic, but the digest it asserts is not the hash of the received body.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_DIGEST_MISMATCH
+
+
+class AdCPRequestSignatureHeaderMalformedError(AdCPRequestSignatureError):
+    """The signature headers are not well-formed structured fields (401).
+
+    Checklist step 1, the earliest refusal there is. It fires for a ``Signature-Input`` that is not parseable RFC 8941, a ``Signature`` with no matching ``Signature-Input``, a duplicated label, an unquoted string parameter, and a multi-valued field where the profile permits one.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_HEADER_MALFORMED
+
+
+class AdCPRequestSignatureInvalidError(AdCPRequestSignatureError):
+    """The signature bytes do not verify against the resolved key (401).
+
+    Checklist step 10, the cryptographic check itself. Everything before it passed: the headers parsed, the window held, the algorithm was permitted, and a key was resolved and found usable.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_INVALID
+
+
+class AdCPRequestSignatureJwksUnavailableError(AdCPRequestSignatureError):
+    """The signer's JWKS could not be fetched (401).
+
+    Discovery, step 7, and TRANSIENT: the third hop failed. brand.json named a ``jwks_uri`` and that document did not answer.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_JWKS_UNAVAILABLE
+
+
+class AdCPRequestSignatureJwksUntrustedError(AdCPRequestSignatureError):
+    """The signer's JWKS is served from a location this verifier will not read (401).
+
+    Discovery, step 7. The ``jwks_uri`` resolves somewhere a key may not be read from -- keys come from ``<agent origin>/.well-known/jwks.json`` (docs/design/signature-architecture.md § "Resolve a counterparty's public key") -- so its contents are not admissible however well-formed the document is. It is also the code for a ``jwks_uri`` the trust boundary refuses outright: an authority that will not canonicalize, or an SSRF-banned host.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_JWKS_UNTRUSTED
+
+
+class AdCPRequestSignatureKeyOriginMismatchError(AdCPRequestSignatureError):
+    """The key resolved at an origin the signer did not declare (401).
+
+    Checklist step 7's consistency check: the origin a key was actually fetched from is byte-matched against the counterparty's declared ``identity.key_origins``, and they disagree.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_KEY_ORIGIN_MISMATCH
+
+
+class AdCPRequestSignatureKeyOriginMissingError(AdCPRequestSignatureError):
+    """The signer declares no key origin to check the resolved key against (401).
+
+    Checklist step 7. Without ``identity.key_origins`` there is nothing for the consistency check to anchor to, and an unanchored key is refused rather than admitted.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_KEY_ORIGIN_MISSING
+
+
+class AdCPRequestSignatureKeyPurposeInvalidError(AdCPRequestSignatureError):
+    """The presented key is not usable for request signing (401).
+
+    Checklist step 8. The JWK resolved but is scoped elsewhere -- ``adcp_use`` naming a different purpose, ``key_ops`` without ``verify``, or an ``alg``/``kty``/``crv`` combination that is not internally consistent.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_KEY_PURPOSE_INVALID
+
+
+class AdCPRequestSignatureKeyRevokedError(AdCPRequestSignatureError):
+    """The signing key is on a revocation list (401).
+
+    Checklist step 9, which runs BEFORE the cryptographic verify on purpose: a revoked key must be refused as revoked, not as invalid, however well its signature would have verified.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_KEY_REVOKED
+
+
+class AdCPRequestSignatureKeyUnknownError(AdCPRequestSignatureError):
+    """No key with this keyid could be resolved for the signer (401).
+
+    Checklist step 7. The counterparty resolved, but its JWKS holds no entry for the ``keyid`` the signature names.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_KEY_UNKNOWN
+
+
+class AdCPRequestSignatureParamsIncompleteError(AdCPRequestSignatureError):
+    """The signature omits a parameter the profile requires (401).
+
+    Checklist step 2. ``Signature-Input`` parsed, but ``created``, ``expires``, ``nonce`` or ``keyid`` is missing, so the window and replay checks have nothing to read.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_PARAMS_INCOMPLETE
+
+
+class AdCPRequestSignatureRateAbuseError(AdCPRequestSignatureError):
+    """The signer's live replay entries are at their per-keyid cap (401).
+
+    Checklist step 9a. One keyid holds its configured number of unexpired nonces, which is either abuse or a misconfigured signer; either way the next request is refused before it is verified.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_RATE_ABUSE
+
+
+class AdCPRequestSignatureReplayedError(AdCPRequestSignatureError):
+    """This (keyid, nonce) pair has already been accepted (401).
+
+    Checklist step 12, the last one. The signature was valid and the digest matched -- and the nonce was already claimed inside its window, so accepting it again would accept a replay.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_REPLAYED
+
+
+class AdCPRequestSignatureRequiredError(AdCPRequestSignatureError):
+    """The operation requires a signature and the request carried none (401).
+
+    Checklist step 0, the pre-check, and the one code in the family a buyer earns by doing nothing wrong except not signing. It is also what a request registering webhook credentials earns regardless of ``required_for``, per security.mdx's escalation rule.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_REQUIRED
+
+
+class AdCPRequestSignatureRevocationStaleError(AdCPRequestSignatureError):
+    """The revocation list is too old to be relied on (401).
+
+    Checklist step 9, and TRANSIENT: the list could not be refreshed inside its grace window, so whether this key is revoked is unknown and the fail-closed answer is to refuse.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_REVOCATION_STALE
+
+
+class AdCPRequestSignatureTagInvalidError(AdCPRequestSignatureError):
+    """The signature names a tag other than the AdCP request-signing profile (401).
+
+    Checklist step 3. ``tag`` must be ``adcp/request-signing/v1``; a signature scoped to another profile is not one this verifier may accept, however valid it is under that profile.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_TAG_INVALID
+
+
+class AdCPRequestSignatureWindowInvalidError(AdCPRequestSignatureError):
+    """The signature's validity window is expired, inverted or too long (401).
+
+    Checklist step 5. It covers all three window faults: ``expires`` already past, ``expires`` at or before ``created``, and a window wider than the profile's 300-second maximum.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_WINDOW_INVALID
+
+
+class AdCPRequestBodyMalformedError(AdCPRequestSignatureError):
+    """The signature verified, but the signed body is not strict, unambiguous JSON (401).
+
+    Checklist step 14, and the one code in the family whose name carries no ``signature`` infix because the spec names it that way: the signature IS valid and what is wrong is the document it covers -- duplicate object keys, invalid UTF-8, or not JSON at all. ``recovery: correctable`` in the pin's own ``enums/request-signing-error-code.json``, whose suggestion is "emit strict unambiguous JSON without duplicate keys and re-sign the body".
+
+    New with the pinned SDK / AdCP: it is the 29th member of ``REQUEST_TO_WEBHOOK_CODE``, so it earns a class like every other member rather than being named on the base (CLAUDE.md pattern #10 -- a code with no subclass is a gap).
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_BODY_MALFORMED
+
+
+class AdCPRequestTargetUriMalformedError(AdCPRequestSignatureError):
+    """The request's target URI cannot be canonicalized (401).
+
+    Parse-time, before the checklist: the authority or path cannot be reduced to the canonical ``@target-uri`` the signature base is built over, so there is no well-defined string to verify against.
+
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_TARGET_URI_MALFORMED
+
+
+#: The ONE seam where a code arrives as a string instead of as a class.
+#:
+#: Checks 1-13 run inside ``adcp.signing.verifier``, not here, and a failure there reaches us
+#: as a ``SignatureVerificationError`` carrying ``code`` -- a string. Something has to turn
+#: that string into a class, and this is it. Removing the seam entirely would mean
+#: reimplementing the SDK's checklist to learn which check failed, which trades a mapping for
+#: a second verifier; the mapping is the smaller thing.
+#:
+#: WRITTEN OUT, one class per line, never derived from the enum. That is the same rule the 28
+#: classes above follow and for the same reason: a comprehension here would make the SDK's
+#: spelling decide which class we raise, invisibly. A reader greps a class name and finds
+#: this line; a missing row is a ``KeyError`` at the seam rather than a wrong class.
+#:
+#: Consulted only by :func:`adcp_error_for`, which docs/design/error-architecture.md names as
+#: the one normalizer from an untyped exception to a typed one.
+_SIGNATURE_ERROR_BY_CODE: Final[Mapping[SignatureErrorCode, type[AdCPRequestSignatureError]]] = MappingProxyType(
+    {
+        SignatureErrorCode.REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON: AdCPRequestSignatureAgentNotInBrandJsonError,
+        SignatureErrorCode.REQUEST_SIGNATURE_ALG_NOT_ALLOWED: AdCPRequestSignatureAlgNotAllowedError,
+        SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS: AdCPRequestSignatureBrandJsonAmbiguousError,
+        SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_MALFORMED: AdCPRequestSignatureBrandJsonMalformedError,
+        SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_UNREACHABLE: AdCPRequestSignatureBrandJsonUnreachableError,
+        SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_URL_MISSING: AdCPRequestSignatureBrandJsonUrlMissingError,
+        SignatureErrorCode.REQUEST_SIGNATURE_BRAND_ORIGIN_MISMATCH: AdCPRequestSignatureBrandOriginMismatchError,
+        SignatureErrorCode.REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE: AdCPRequestSignatureCapabilitiesUnreachableError,
+        SignatureErrorCode.REQUEST_SIGNATURE_COMPONENTS_INCOMPLETE: AdCPRequestSignatureComponentsIncompleteError,
+        SignatureErrorCode.REQUEST_SIGNATURE_COMPONENTS_UNEXPECTED: AdCPRequestSignatureComponentsUnexpectedError,
+        SignatureErrorCode.REQUEST_SIGNATURE_DIGEST_MISMATCH: AdCPRequestSignatureDigestMismatchError,
+        SignatureErrorCode.REQUEST_SIGNATURE_HEADER_MALFORMED: AdCPRequestSignatureHeaderMalformedError,
+        SignatureErrorCode.REQUEST_SIGNATURE_INVALID: AdCPRequestSignatureInvalidError,
+        SignatureErrorCode.REQUEST_SIGNATURE_JWKS_UNAVAILABLE: AdCPRequestSignatureJwksUnavailableError,
+        SignatureErrorCode.REQUEST_SIGNATURE_JWKS_UNTRUSTED: AdCPRequestSignatureJwksUntrustedError,
+        SignatureErrorCode.REQUEST_SIGNATURE_KEY_ORIGIN_MISMATCH: AdCPRequestSignatureKeyOriginMismatchError,
+        SignatureErrorCode.REQUEST_SIGNATURE_KEY_ORIGIN_MISSING: AdCPRequestSignatureKeyOriginMissingError,
+        SignatureErrorCode.REQUEST_SIGNATURE_KEY_PURPOSE_INVALID: AdCPRequestSignatureKeyPurposeInvalidError,
+        SignatureErrorCode.REQUEST_SIGNATURE_KEY_REVOKED: AdCPRequestSignatureKeyRevokedError,
+        SignatureErrorCode.REQUEST_SIGNATURE_KEY_UNKNOWN: AdCPRequestSignatureKeyUnknownError,
+        SignatureErrorCode.REQUEST_SIGNATURE_PARAMS_INCOMPLETE: AdCPRequestSignatureParamsIncompleteError,
+        SignatureErrorCode.REQUEST_SIGNATURE_RATE_ABUSE: AdCPRequestSignatureRateAbuseError,
+        SignatureErrorCode.REQUEST_SIGNATURE_REPLAYED: AdCPRequestSignatureReplayedError,
+        SignatureErrorCode.REQUEST_SIGNATURE_REQUIRED: AdCPRequestSignatureRequiredError,
+        SignatureErrorCode.REQUEST_SIGNATURE_REVOCATION_STALE: AdCPRequestSignatureRevocationStaleError,
+        SignatureErrorCode.REQUEST_SIGNATURE_TAG_INVALID: AdCPRequestSignatureTagInvalidError,
+        SignatureErrorCode.REQUEST_SIGNATURE_WINDOW_INVALID: AdCPRequestSignatureWindowInvalidError,
+        SignatureErrorCode.REQUEST_BODY_MALFORMED: AdCPRequestBodyMalformedError,
+        SignatureErrorCode.REQUEST_TARGET_URI_MALFORMED: AdCPRequestTargetUriMalformedError,
+    }
+)
 
 
 class AdCPAuthorizationError(AdCPSalesAgentError[EntityRefDetails]):
@@ -660,6 +1091,46 @@ class AdCPAdapterError(AdCPSalesAgentError[AdapterFailureDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.SERVICE_UNAVAILABLE
 
 
+class AdCPTenantUndefinedError(AdCPSalesAgentError[ErrorDetails]):
+    """The request named no seller this deployment serves (421, terminal).
+
+    A PLATFORM code, because AdCP defines none for this and the spec's vocabulary is open
+    (``core/error.json``; ``error-handling.mdx:845`` "sellers MAY return platform-specific
+    codes"). The spec is silent on tenant addressing -- a request is addressed to an
+    agent's URL and the mapping from that to a seller is this seller's own concern -- so
+    there is no published code to collapse this onto, and collapsing it would throw away the
+    one distinction a buyer can act on.
+
+    NOT ``CONFIGURATION_ERROR``, which this used to be. That code's pinned condition is a
+    seller-side deployment defect whose remediation is "report this to the seller's
+    operator", and after ``virtual_host`` became NOT NULL the seller-side sub-case cannot
+    occur: what reaches here is a caller naming an address this deployment answers for
+    nobody. The shipped edge is ``default_server`` / ``server_name _``, so a buyer holding a
+    stale URL and ordinary scanner traffic arrive exactly as an edge misroute would. Telling
+    those callers the SELLER is misconfigured points at the wrong party, and
+    ``error-handling.mdx:849`` then has their dashboards page the aggregate as a seller
+    outage.
+
+    TERMINAL, not correctable. ``correctable`` means "fix the request and resend"
+    (``core/error.json``), and no version of this request to THIS deployment succeeds:
+    naming a different host addresses a different agent, which is another request to another
+    seller rather than a correction of this one. The caller's move is to find the right
+    seller, not to resend.
+
+    421 Misdirected Request (RFC 9110 S15.5.20) says precisely this -- "directed at a server
+    that is unable or unwilling to produce an authoritative response for the target URI's
+    origin". Not 500, which would claim a fault on this side; not 404, which answers for a
+    resource inside a seller this request never identified.
+
+    CARRIES NO DETAILS. The address the caller supplied is what the operator needs and the
+    one thing the buyer must not be handed back, so it travels in the raise's ``__cause__``
+    to the server's record. The resolver is the only author
+    (``ruff-boundary.toml`` bans this class elsewhere, beside the two auth refusals).
+    """
+
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.TENANT_UNDEFINED
+
+
 class AdCPConfigurationError(AdCPSalesAgentError[ConfigurationDetails]):
     """Server-side configuration is broken (500).
 
@@ -699,7 +1170,8 @@ class AdCPPersistedStateError(AdCPConfigurationError):
     reaches the buyer in both envelope layers — the pinned ``CONFIGURATION_ERROR``
     metadata permits that payload, so the contract is wider than "two doors of
     status" and this docstring says so rather than describing the narrower case it
-    was written for.
+    was written for. A package row without the pricing terms a delivery report reads is
+    the same defect with no value to name, so its ``details`` name the package.
     All are SELLER-side store defects — the buyer neither supplied the value nor can
     correct it — so this inherits ``CONFIGURATION_ERROR`` / ``terminal`` from
     ``AdCPConfigurationError`` rather than restating them. That is also what the
@@ -740,7 +1212,7 @@ class AdCPInternalError(AdCPSalesAgentError[EntityRefDetails]):
     on did not hold. The buyer cannot fix it by changing anything, and recovery is transient
     because the inconsistency may be a race that a retry resolves.
 
-    INTERNAL_ERROR is a platform code (AppErrorCode), legal on the wire because AdCP 3.1.1's
+    INTERNAL_ERROR is a platform code (AppErrorCode), legal on the wire because AdCP.1's
     code vocabulary is open, and classified in CODE_TABLE like every other code this seller
     emits.
     """
@@ -759,7 +1231,7 @@ class AdCPUrlNotAllowedError(AdCPValidationError):
     constraints"; VALIDATION_ERROR is "invalid field values or violates business rules
     beyond schema validation"), and a schema-valid https URI refused by a deny-list is the
     second. The pinned spec then applies it to this exact vector:
-    ``dist/docs/3.1.0/learning/specialist/security.mdx:84`` has the practitioner register
+    ``dist/docs/<pin>/learning/specialist/security.mdx:84`` has the practitioner register
     ``https://169.254.169.254/latest/meta-data/`` and "observe that the agent refuses it
     synchronously with a ``VALIDATION_ERROR`` on ``notification_configs[].url``".
 
@@ -842,6 +1314,18 @@ class AdCPProductNotFoundError(AdCPNotFoundError[ProductRefDetails]):
     """
 
     _code: ClassVar[ErrorCodeT] = ErrorCode.PRODUCT_NOT_FOUND
+
+
+class AdCPProposalNotFoundError(AdCPNotFoundError[EntityRefDetails]):
+    """A ``proposal_id`` this seller never issued (404, PROPOSAL_NOT_FOUND).
+
+    ``enums/error-code.json`` (AdCP) PROPOSAL_NOT_FOUND: "The referenced proposal_id is
+    not recognized by the seller -- it belongs to a different tenant, was never issued, or
+    was evicted from the seller's session cache before consumption." Recovery comes from
+    the code (correctable): the buyer requests a fresh proposal, or sends packages.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PROPOSAL_NOT_FOUND
 
 
 class AdCPContextNotFoundError(AdCPNotFoundError[EntityRefDetails]):
@@ -928,6 +1412,18 @@ class AdCPBudgetTooLowError(AdCPSalesAgentError[BudgetDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_TOO_LOW
 
 
+class AdCPInvalidPricingOptionError(AdCPSalesAgentError[PricingValidationDetails]):
+    """A package names a ``pricing_option_id`` its product does not offer (INVALID_PRICING_OPTION).
+
+    The pinned enum reserves the code for exactly this: "at the request level for
+    ``create_media_buy`` when the submitted pricing option cannot be resolved", with
+    ``error.field`` pointing at the offending record path (``packages[0].pricing_option_id``).
+    Distinct from PRODUCT_NOT_FOUND, which is the product itself being unknown.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.INVALID_PRICING_OPTION
+
+
 class AdCPCapabilityNotSupportedError(AdCPSalesAgentError[CapabilityRefusalDetails]):
     """Requested capability is not supported by this seller (422, UNSUPPORTED_FEATURE).
 
@@ -949,12 +1445,66 @@ class AdCPCapabilityNotSupportedError(AdCPSalesAgentError[CapabilityRefusalDetai
     _code: ClassVar[ErrorCodeT] = ErrorCode.UNSUPPORTED_FEATURE
 
 
+class AdCPTermsRejectedError(AdCPSalesAgentError[EntityRefDetails]):
+    """Buyer-proposed terms the seller will not accept (422, TERMS_REJECTED).
+
+    media-buy/package-request.json negotiates ``committed_metrics``, ``measurement_terms`` and
+    ``performance_standards`` one way: the seller accepts, normalizes, or "rejects with
+    ``TERMS_REJECTED`` (with explanation of which entries were unworkable)".
+    ``create_media_buy.mdx`` refuses terms as a combination the same way: "Every selected
+    pricing option MUST declare that currency ... Sellers reject incompatible product
+    combinations, currencies, pricing terms, or delivery constraints with ``TERMS_REJECTED``
+    ... and identify the incompatible package."
+
+    ``field`` points at the offending entry or package (enums/error-code.json: "The error
+    details SHOULD identify which specific term was rejected"). The declared details type is
+    the shared base of what the raise sites carry: a refused value beside the accepted ones
+    (``CapabilityRefusalDetails``, ``PricingValidationDetails``) or the package alone.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.TERMS_REJECTED
+
+
+class AdCPConflictingSelectorsError(AdCPSalesAgentError[SelectorConflictDetails]):
+    """A package's format selector routes resolve to different product options (422).
+
+    The refusal ``media-buy/package-request.json`` makes mandatory for an older 3.x
+    request whose co-present routes disagree: "Different format shapes, selected option
+    sets, or incompatible dimensions are rejected with ``CONFLICTING_SELECTORS``; sellers
+    MUST NOT silently ignore the legacy projection."
+
+    NOT the refusal for a route that fails to RESOLVE. That is ``UNSUPPORTED_FEATURE``,
+    and the pin states the ordering as an obligation rather than an implementation
+    choice — step (1) of the same contract, and the storyboard's
+    ``reject_unprojectable_legacy_dual_emission`` ("Resolution failure is reported before
+    selector equivalence and must not be mislabeled ``CONFLICTING_SELECTORS``").
+
+    NOR the refusal when a package names ONE route that does not satisfy the product:
+    "A single resolved route that does not satisfy the product is rejected with
+    ``UNSUPPORTED_FEATURE``."
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CONFLICTING_SELECTORS
+
+
+class AdCPAmbiguousBiddingPolicyError(AdCPSalesAgentError[EntityRefDetails]):
+    """One package carries the canonical bidding block AND legacy bid_price (422).
+
+    ``enums/error-code.json``: "The same effective package combines the canonical bidding
+    block with legacy bid_price or monetary optimization-goal target fields, so two bidding
+    interpretations are present. Sellers MUST reject rather than choosing a winner."
+    ``field`` names the package, because neither member alone is at fault.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.AMBIGUOUS_BIDDING_POLICY
+
+
 class AdCPIdempotencyConflictError(AdCPConflictError):
     """idempotency_key reused with a different request payload (409, IDEMPOTENCY_CONFLICT).
 
     Recovery=correctable: the buyer can fix this and resend — either replay the
     ORIGINAL bytes under the same key, or mint a fresh idempotency_key for the
-    new payload. This matches the AdCP 3.0.1 prose example envelope and the
+    new payload. This matches the prose example envelope and the
     conformance storyboard's stated expectation. The SDK's
     ``STANDARD_ERROR_CODES`` table classifies the code ``terminal`` and is
     simply wrong about it: nothing here reads that table, and ``recovery`` is
@@ -989,10 +1539,59 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.IDEMPOTENCY_EXPIRED
 
 
+class AdCPIdempotencyInFlightError(AdCPConflictError):
+    """A same-key request committed but has not produced its cached response yet (409, IDEMPOTENCY_IN_FLIGHT).
+
+    security.mdx#idempotency rule 9, reject-and-redirect: the seller "returns
+    ``IDEMPOTENCY_IN_FLIGHT`` immediately, with top-level ``error.retry_after``
+    (seconds) populated", and the buyer "MUST retry with the same
+    ``idempotency_key``". Raised where the dup-booking backstop finds the winner's
+    buy inside the replay window with no cache row to replay yet. Recovery is
+    transient, loaded from the pinned enumMetadata like every other code.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.IDEMPOTENCY_IN_FLIGHT
+
+
 class AdCPCreativeRejectedError(AdCPSalesAgentError[CreativeRejectionDetails]):
     """Creative failed policy or technical validation (422, CREATIVE_REJECTED)."""
 
     _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_REJECTED
+
+
+# The manifest-against-declaration refusals of docs/creative/creative-manifests.mdx
+# § Validation ("Validate a manifest against the selected product or publisher declaration").
+# All four are correctable per the pinned enumMetadata. The size code is the specific one the
+# enum names for dimensions, the click-URL code the one for a required destination URL left
+# out, and the value code the one it names for a text value outside a closed set the format
+# publishes (a call to action outside ``cta_values``); every other buyer-correctable manifest
+# failure (a missing required slot, a wrong asset type, a duration, a codec, a file size, an
+# ambiguous selection) takes the generic one, which the enum reserves for exactly "cannot
+# classify the failure with a more specific standard code".
+
+
+class AdCPCreativeSizeMismatchError(AdCPSalesAgentError[CreativeManifestDetails]):
+    """The creative's dimensions satisfy no size the selected declaration accepts (422, CREATIVE_SIZE_MISMATCH)."""
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_SIZE_MISMATCH
+
+
+class AdCPCreativeMissingClickUrlError(AdCPSalesAgentError[CreativeManifestDetails]):
+    """The manifest leaves out the destination URL its declaration requires (422, CREATIVE_MISSING_CLICK_URL)."""
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_MISSING_CLICK_URL
+
+
+class AdCPCreativeValidationFailedError(AdCPSalesAgentError[CreativeManifestDetails]):
+    """The manifest fails the selected declaration on a non-size rule (422, CREATIVE_VALIDATION_FAILED_GENERIC)."""
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC
+
+
+class AdCPCreativeValueNotAllowedError(AdCPSalesAgentError[CreativeValueNotAllowedDetails]):
+    """A manifest value is outside the closed set the declaration publishes (422, CREATIVE_VALUE_NOT_ALLOWED)."""
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_VALUE_NOT_ALLOWED
 
 
 # The structural provenance rejections of core/creative-policy.json: "Sellers that publish a
@@ -1192,12 +1791,12 @@ class AdcpFailure(Exception):
         self.response = response
 
 
-# Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP 3.1.1):
+# Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP):
 # each code carries its own default hint, so a VALIDATION_ERROR must not borrow
 # INVALID_REQUEST's text.
 
 
-def first_validation_error_field(validation_error: ValidationError) -> str | None:
+def first_validation_error_field(validation_error: ValidationError, *, document: Any = None) -> str | None:
     """Return the bracket-notation path of the first Pydantic error, or ``None``.
 
     Lets a transport boundary attach a structured ``field`` to the
@@ -1205,22 +1804,20 @@ def first_validation_error_field(validation_error: ValidationError) -> str | Non
     field path instead of only the rendered message. List indices render as
     ``[i]`` so boundary-derived paths such as ``packages[0].budget`` align with
     the ``packages[].budget`` field strings raised by the implementation layer.
+
+    ``JsonPointer`` renders it, rather than a second loop over ``loc`` here: ``field``
+    and ``issues[].pointer`` are two spellings of ONE path that the pin MUST-requires
+    agree, so they are one computation. *document* is the buyer's payload, which is
+    what tells pydantic's synthesized union segments apart from real members; a call
+    site holding none passes none and gets the raw loc, as this function always did.
     """
     errors = validation_error.errors()
     if not errors:
         return None
-    parts: list[str] = []
-    for loc in errors[0]["loc"]:
-        if isinstance(loc, int):
-            parts.append(f"[{loc}]")
-        elif parts:
-            parts.append(f".{loc}")
-        else:
-            parts.append(str(loc))
-    return "".join(parts)
+    return pointer_for_pydantic_error(errors[0], document).field
 
 
-def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentError:
+def adcp_error_for(exc: Exception, field: str | None = None, *, document: Any = None) -> AdCPSalesAgentError:
     """Normalize untyped exceptions to typed AdCPSalesAgentError subclasses.
 
     Single source of truth for the wrapping applied at all three transport
@@ -1232,7 +1829,7 @@ def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentEr
 
     Every branch keeps its type mapping and carries NO text: an untyped exception's
     string has no provenance guarantee (it may be a DB DSN, a stack fragment, or an
-    upstream response body -- AdCP 3.1.1 transport-errors.mdx Security Considerations
+    upstream response body -- transport-errors.mdx Security Considerations
     MUST-NOT list), and the code's own table sentence is what the buyer sees. The
     original exception is still logged in full server-side by the transport
     boundary's record_boundary_error() / audit logger. This function logs nothing:
@@ -1241,6 +1838,19 @@ def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentEr
     """
     if isinstance(exc, AdCPSalesAgentError):
         return exc
+    # The SDK's checklist refusal, which is the one untyped exception in this function that
+    # already KNOWS its code -- as a string, because checks 1-13 run inside
+    # ``adcp.signing.verifier`` and it reports which one failed the only way it can.
+    # ``_SIGNATURE_ERROR_BY_CODE`` is the written-out string-to-class table for exactly that
+    # seam; a code this seller does not classify is a ``KeyError`` HERE rather than a 500
+    # three frames later.
+    #
+    # ``internal_detail`` carries the SDK exception itself, never its text: it holds the
+    # checklist step and a diagnostic sentence, which transport-errors.mdx
+    # § Security Considerations keeps out of a buyer-facing field. Same rule as every other
+    # branch here -- a type mapping and no text.
+    if isinstance(exc, SignatureVerificationError):
+        return _SIGNATURE_ERROR_BY_CODE[SignatureErrorCode(exc.code)](internal_detail=exc)
     # A pydantic ValidationError is BY CONSTRUCTION a schema-constraint violation, and
     # 3.1/enums/error-code.json is explicit about which code that earns:
     #   INVALID_REQUEST  "malformed, missing required fields, or violates SCHEMA CONSTRAINTS"
@@ -1254,15 +1864,24 @@ def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentEr
         # ValidationError IS a ValueError subclass, so the order decides whether a
         # buyer gets the field and issues or a bare VALIDATION_ERROR.
         errors = exc.errors()
+        issues = issues_from_validation_error(errors, document)
+        # ``field`` is NOT computed here when issues[] came out non-empty. core/error.json
+        # makes it a FUNCTION of issues[0].pointer ("sellers MUST set this to
+        # issues[0].pointer translated from RFC 6901 to JSONPath-lite"), and
+        # ``AdCPSalesAgentError.__init__`` derives exactly that from the issues it is
+        # handed. Deriving it a second time from errors[0] -- which the dropped-issue rule
+        # can make a DIFFERENT error -- is how the two channels came to disagree. The
+        # fallback stands only for a ValidationError whose every entry was unattributable,
+        # where there is no issues[0] to be a function of.
         return AdCPInvalidRequestError(
-            field=field if field is not None else first_validation_error_field(exc),
-            issues=issues_from_validation_error(errors),
+            field=field if field is not None or issues else first_validation_error_field(exc, document=document),
+            issues=issues,
         )
     if isinstance(exc, ValueError):
         return AdCPValidationError()
     if isinstance(exc, PermissionError):
         return AdCPAuthorizationError()
-    return AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR)
+    return AdCPInternalError()
 
 
 # ---------------------------------------------------------------------------

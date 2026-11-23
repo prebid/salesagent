@@ -77,7 +77,7 @@ PAYLOAD_SUBDIR = "payloads"
 
 def load(artifact: pathlib.Path) -> tuple[dict[str, Any], dict[str, list[Any]]]:
     """``(run scope, nodeid -> dispatched payloads)`` for one artifact."""
-    data = json.loads(artifact.read_text())
+    data = json.loads(artifact.read_text(encoding="utf-8"))
     return data.get("run") or {}, data.get("nodes") or {}
 
 

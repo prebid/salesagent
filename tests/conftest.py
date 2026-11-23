@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests import _collection_manifest
 from tests._xdist_report_safety import sanitize_serialized_report
 
 # ---------------------------------------------------------------------------
@@ -110,8 +111,7 @@ _ENTITY_PATTERNS: dict[str, list[str]] = {
         "product",
         "pricing",
         "property_list",
-        "property_discovery",
-        "property_verification",
+        "publisher_ingest",
         "measurement_provider",
         "get_recommended_cpm",
         "duplicate_product",
@@ -386,7 +386,14 @@ def test_environment(monkeypatch, request):
     """Configure test environment variables without global pollution."""
     # Set testing flags
     monkeypatch.setenv("ADCP_TESTING", "true")
-    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")  # Enable test mode for auth
+
+    # The settings are read once and cached (src/core/config.py). Drop the cached object
+    # so this test's first read sees the environment above, and let monkeypatch restore
+    # the previous object afterwards so no stale settings leak between tests. A test that
+    # changes the environment mid-test calls load_settings() (or resets this again).
+    import src.core.config as config_module
+
+    monkeypatch.setattr(config_module, "_settings", None)
 
     # The settings are read once and cached (src/core/config.py). Drop the cached object
     # so this test's first read sees the environment above, and let monkeypatch restore
@@ -722,7 +729,7 @@ def load_fixture_json():
 
     def _load(filename):
         fixture_path = Path(__file__).parent / "fixtures" / "data" / filename
-        with open(fixture_path) as f:
+        with open(fixture_path, encoding="utf-8") as f:
             return json.load(f)
 
     return _load
@@ -790,6 +797,32 @@ def benchmark(request):
 # ============================================================================
 # Pytest Hooks
 # ============================================================================
+
+
+# ---------------------------------------------------------------------------
+# What a session collected -- see tests/_collection_manifest.py
+# ---------------------------------------------------------------------------
+# Declared here rather than as a `-p` plugin because addopts cannot load
+# `tests._collection_manifest`: the rootdir is not on sys.path when plugins are
+# registered ("No module named 'tests'"). A rootdir conftest always loads, needs
+# no PYTHONPATH, and forwards to the box through one environment variable.
+
+
+def pytest_itemcollected(item):
+    # Fires during genitems, BEFORE any deselection -- the only point that sees
+    # the pre-deselection population. See tests/_collection_manifest.py.
+    _collection_manifest.retain(item)
+
+
+def pytest_collection_finish(session):
+    # AFTER every pytest_collection_modifyitems, so the marker sets recorded
+    # here include the entity markers applied below and the transport xfail
+    # markers tests/bdd/conftest.py applies.
+    _collection_manifest.serialize(session)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    _collection_manifest.on_session_finish()
 
 
 # ---------------------------------------------------------------------------
@@ -898,35 +931,87 @@ def _resolve_dotted(dotted: str) -> Any:
 # ---------------------------------------------------------------------------
 # Nested-pytest modules — one at a time under xdist
 # ---------------------------------------------------------------------------
-# MEMBERSHIP RULE: a module belongs here if and only if it spawns a `pytest`
-# SUBPROCESS. Nothing pins that, so check before adding — an earlier revision of
-# this set carried four modules that spawn nothing (0.47s + 0.73s + 0.19s +
-# 0.13s of work pinned to one worker for no reason), and one of them stopped
-# spawning in the same change that listed it. Verify with:
+# MEMBERSHIP RULE: a module belongs here if and only if it starts a NESTED PYTEST
+# SESSION -- as a subprocess, through a helper that spawns one, or in-process via
+# `pytest.main`. Even one module's session imports the whole bdd conftest and the
+# app behind it. tests/unit/test_architecture_nested_pytest_membership.py derives
+# the set from the unit env's modules and fails on a spawner left out or a member
+# that stopped spawning. Both happened while the set was hand-kept: an earlier
+# revision carried four modules that collect nothing (0.47s + 0.73s + 0.19s +
+# 0.13s of work pinned to one worker for no reason), and spawners were missed.
+# The three spellings it recognizes: a `subprocess` call with a "pytest"
+# argument; a helper imported from another tests module that makes one
+# (`collect_bdd_node_ids_with_e2e_enabled`); and `pytest.main` in-process (one
+# under `if __name__ == "__main__":` does not count).
+# The in-process spelling is the most expensive, not an exception to be tidied
+# out: `test_architecture_ci_bdd_shard_manifest`, deleted since, measured its
+# nested import at ~2500 modules and ~490 MB which, unlike a subprocess's copy,
+# is NOT freed when the collection ends -- it is retained for the rest of that
+# worker's session.
 #
-#     grep -cE 'subprocess\.(run|Popen|check_output|check_call)' <module>
-#
-# Why the group: a nested subprocess re-collects the whole unit suite, and its
-# timeout was calibrated against a SERIAL run. With N xdist workers you get up
-# to N concurrent full-suite collections competing with the N workers that
-# spawned them. Measured on a 14-core Mac at -n 12 and -n 14, the nested
-# collection dies with
+# Why the group: a nested subprocess re-collects a whole suite, and its timeout
+# was calibrated against a SERIAL run. With N xdist workers you get up to N
+# concurrent full-suite collections competing with the N workers that spawned
+# them. Measured on a 14-core Mac at -n 12 and -n 14, the nested collection dies
+# with
 #
 #     subprocess.TimeoutExpired: [... 'pytest','tests/unit/','--collect-only' ...]
 #     timed out after 60 seconds
 #
 # while passing at -n 8 and serially. Raising the timeout would hide the
-# contention rather than remove it; a shared cached collection across the three
-# would remove the duplicated work outright and is the right follow-up. Until
-# then, one xdist_group means at most ONE nested collection runs at a time,
-# whatever the worker count -- which is the property that was actually missing.
+# contention rather than remove it. One xdist_group means at most ONE nested
+# collection runs at a time, whatever the worker count -- which is the property
+# that was actually missing.
 #
-# Requires `--dist loadgroup` (tox.ini's unit env); under any other dist mode
-# the marker is inert and these simply spread out again.
+# The "shared cached collection" this comment used to name as the right
+# follow-up now exists: tests/_collection_manifest.py publishes what the real
+# run collected, and the observers in tests/collection/ read it instead of
+# spawning. `test_e2e_rest_ledger_fitness` and
+# `test_e2e_rest_ssrf_blocked_scenario_collected` left this set that way, and
+# `test_architecture_bdd_xfail_reason_tokens` left it when its per-item
+# `--collect-only` subprocess was removed. The members below still collect for
+# themselves.
+#
+# AND AT -n 16 THE FAILURE IS NO LONGER A TIMEOUT, IT IS THE WORKER DYING.
+# `test_architecture_env_route_agreement` satisfied the rule above and was not
+# listed here, and in the in-network run of 2026-10-09 it killed the unit leg:
+#
+#     worker 'gw0' crashed while running
+#     'tests/unit/test_architecture_env_route_agreement.py::
+#      test_catch_all_scenario_resolves_not_wired[UC-002-conftest.py:3475]'
+#
+# xdist replaces a crashed worker with a clone (dsession.py:266), and
+# loadscope's `_assign_work_unit` reads `registered_collections[node]`
+# (scheduler/loadscope.py:275) -- which a clone has no entry in until it
+# finishes collecting. A second crash inside that window reschedules onto the
+# clone and the master dies with `KeyError: <WorkerController gw17>`, ending the
+# session at 2584 of 6704 collected. Three consecutive runs got no unit verdict
+# that way, which is worse than a failing test: a crash in this set does not
+# just lose its own module, it loses the whole leg.
+#
+# The multiplier is what makes it fatal rather than slow. That module's nested
+# collection was cached per PROCESS, and its items spread across every worker --
+# so 16 workers paid 16 separate `pytest tests/bdd --collect-only` runs of ~7.2k
+# items, each loading the whole app, concurrently, alongside the 16 workers that
+# spawned them. Measured in that run: 1041.8s of CPU across 28 reported items.
+# Grouping collapses that to ONE collection for all 28 items, so the group is
+# cheaper here, not just safer. That module, and `test_architecture_route_xfail_census`
+# which shared its collector, now read the real run's record from tests/collection/
+# and start no nested session, so neither is listed.
+#
+# Requires `--dist loadgroup` (tox.ini's unit env, and .github/workflows/ci.yml's
+# unit job); under any other dist mode the marker is inert and these simply
+# spread out again. The match below is on the module's basename, wherever it lives.
 _NESTED_PYTEST_MODULES: frozenset[str] = frozenset(
     {
-        "test_architecture_ci_bdd_shard_manifest",
-        "test_e2e_rest_ledger_fitness",
+        # Two seeded collections of one bdd module via the imported helper
+        # `collect_bdd_node_ids_with_e2e_enabled`.
+        "test_bdd_transport_collection_is_seed_independent",
+        # `pytest tests/integration --collect-only` as a subprocess.
+        "test_collection_is_side_effect_free",
+        # Two seeded `pytest <one bdd module> --collect-only` subprocesses.
+        "test_guards_bdd_strict_xfail_representative",
+        # A nested `pytest -n 2` run of a generated suite, as a subprocess.
         "test_xdist_report_serialization",
     }
 )
@@ -964,6 +1049,20 @@ def entity_markers_for_path(fspath: str) -> frozenset[str]:
     return frozenset(markers)
 
 
+# `tryfirst`, and the xdist_group marker below is why. xdist appends the group
+# name to the nodeid from its OWN `pytest_collection_modifyitems`
+# (xdist/remote.py:244), and the scheduler groups by splitting that suffix back
+# off (scheduler/loadgroup.py::_split_scope) -- the MARKER is never consulted by
+# the scheduler, only the suffix it produced. Both impls are plain, xdist's ran
+# first, so every marker added here arrived after the only read of it.
+#
+# Measured on this branch, `-n 4 --dist loadgroup` over
+# test_architecture_env_route_agreement.py (all 47 items marked): 0 nodeids
+# carried `@nested_pytest` and the items spread 10/15/11/11 across gw0-gw3. The
+# grouping had never taken effect, so the property the comment above claims --
+# at most one nested collection at a time -- was not held for the three modules
+# listed there either.
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
     """Auto-apply entity markers from filename/path patterns."""
     for item in items:
@@ -974,3 +1073,9 @@ def pytest_collection_modifyitems(config, items):
 
         if Path(fspath).stem in _NESTED_PYTEST_MODULES:
             item.add_marker(pytest.mark.xdist_group("nested_pytest"))
+
+        # The one place a test is skipped for the platform: a test marked
+        # ``posix_only("why")`` runs everywhere except Windows, and says why there.
+        posix_only = item.get_closest_marker("posix_only")
+        if posix_only is not None and os.name == "nt":
+            item.add_marker(pytest.mark.skip(reason=f"posix_only: {posix_only.args[0]}"))

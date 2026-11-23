@@ -12,15 +12,10 @@ look for the removed brand_manifest attribute.
 
 from datetime import UTC, datetime
 
-from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
-from adcp.types import PackageRequest as LibraryPackageRequest
+from adcp.types import LegacyCreateMediaBuyRequest as LibraryCreateMediaBuyRequest
+from adcp.types import LegacyPackageRequest as LibraryPackageRequest
 
-from src.core.utils.naming import (
-    _extract_brand_name,
-    build_order_name_context,
-)
-
-gam_build_order_name_context = build_order_name_context
+from src.core.utils.naming import _extract_brand_name, render_order_name
 
 
 def _make_request(domain: str = "nike.com", brand_id: str | None = None):
@@ -65,13 +60,13 @@ class TestExtractBrandNameFromAdcp360:
         assert brand_name == "nike.com"
 
 
-class TestBuildOrderNameContextFromAdcp360:
-    """build_order_name_context must populate brand_name from brand.domain."""
+class TestRenderOrderNameFromAdcp360:
+    """render_order_name must populate brand_name from brand.domain."""
 
     def test_brand_name_populated_in_context(self):
-        """Order name context must have the brand name from brand.domain.
+        """The order name must carry the brand name from brand.domain.
 
-        BUG: build_order_name_context in src/core/utils/naming.py reads
+        BUG: the order-name context in src/core/utils/naming.py read
         request.brand_manifest which no longer exists. brand_name ends up
         as 'N/A' even though brand.domain='nike.com' is present.
         """
@@ -79,15 +74,10 @@ class TestBuildOrderNameContextFromAdcp360:
         start_time = datetime(2025, 6, 1, tzinfo=UTC)
         end_time = datetime(2025, 6, 30, tzinfo=UTC)
 
-        context = build_order_name_context(
-            request=request,
-            packages=request.packages,
-            start_time=start_time,
-            end_time=end_time,
-        )
+        name = render_order_name("{brand_name}", request, request.packages, start_time, end_time)
 
-        assert context["brand_name"] != "N/A", "brand_name should not be 'N/A' when request.brand.domain is set"
-        assert context["brand_name"] == "nike.com"
+        assert name != "N/A", "brand_name should not be 'N/A' when request.brand.domain is set"
+        assert name == "nike.com"
 
     def test_campaign_name_uses_brand_domain(self):
         """Campaign name should incorporate brand domain, not generic fallback.
@@ -99,23 +89,18 @@ class TestBuildOrderNameContextFromAdcp360:
         start_time = datetime(2025, 6, 1, tzinfo=UTC)
         end_time = datetime(2025, 6, 30, tzinfo=UTC)
 
-        context = build_order_name_context(
-            request=request,
-            packages=request.packages,
-            start_time=start_time,
-            end_time=end_time,
-        )
+        name = render_order_name("{campaign_name}", request, request.packages, start_time, end_time)
 
-        assert context["campaign_name"] == "adidas.com", "campaign_name should be 'adidas.com', not a generic fallback"
+        assert name == "adidas.com", "campaign_name should be 'adidas.com', not a generic fallback"
 
 
-class TestGamBuildOrderNameContextFromAdcp360:
+class TestGamOrderNameFromAdcp360:
     """GAM naming must also extract brand from brand.domain."""
 
     def test_gam_brand_name_populated(self):
-        """GAM order name context must have brand name from brand.domain.
+        """The GAM order name must carry the brand name from brand.domain.
 
-        BUG: GAM build_order_name_context reads request.brand_manifest
+        BUG: GAM's order-name context read request.brand_manifest
         which no longer exists in adcp 3.6.0. brand_name is None and
         campaign_name falls back to 'Campaign TEST-001'.
         """
@@ -123,12 +108,7 @@ class TestGamBuildOrderNameContextFromAdcp360:
         start_time = datetime(2025, 6, 1, tzinfo=UTC)
         end_time = datetime(2025, 6, 30, tzinfo=UTC)
 
-        context = build_order_name_context(
-            request=request,
-            packages=request.packages,
-            start_time=start_time,
-            end_time=end_time,
-        )
+        name = render_order_name("{brand_name}", request, request.packages, start_time, end_time)
 
-        assert context["brand_name"] != "N/A", "GAM brand_name should not be 'N/A' when request.brand.domain is set"
-        assert context["brand_name"] == "nike.com"
+        assert name != "N/A", "GAM brand_name should not be 'N/A' when request.brand.domain is set"
+        assert name == "nike.com"

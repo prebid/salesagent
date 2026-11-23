@@ -17,14 +17,13 @@ from sqlalchemy.orm import Session
 
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Account, AgentAccountAccess
+from src.core.errors.details import ConflictDetails
+from src.core.exceptions import AdCPConflictError
 from src.core.helpers.brand_key import brand_key_parts
 
 #: The index that IS the natural-key invariant. ``_find_natural_key_conflict`` is
 #: only the fast path in front of it.
 NATURAL_KEY_INDEX = "uq_accounts_natural_key"
-
-from src.core.errors.details import ConflictDetails
-from src.core.exceptions import AdCPConflictError
 
 
 class NaturalKeyConflict(AdCPConflictError, ValueError):
@@ -369,7 +368,12 @@ class AccountRepository:
         status: str,
         brand_domain: str,
         brand_id: str | None,
-        operator: str,
+        # ``str | None``, matching the NULLABLE column this writes (``models.py`` :864).
+        # It was declared ``str`` and the sync path simply never passed None, so the
+        # narrowing never surfaced; routing the admin blueprint — which writes
+        # ``operator or None`` so an empty form field becomes SQL NULL rather than "" —
+        # through the shared builder is what exposed a pre-existing type lie (#1878).
+        operator: str | None,
         principal_id: str | None,
         created_fields: Mapping[str, object],
     ) -> Account:
@@ -392,7 +396,12 @@ class AccountRepository:
             account_id=account_id,
             name=name,
             status=status,
-            brand={"domain": brand_domain, **({"brand_id": brand_id} if brand_id else {})},
+            # No domain means NO brand reference, not a reference with an empty domain:
+            # ``Account.brand`` is nullable and a ``{"domain": ""}`` row is a different
+            # value from ``None``. A no-op whenever a domain is present, which is every
+            # sync/provisioning call; it is the admin form that can legitimately omit one
+            # (#1878).
+            brand=({"domain": brand_domain, **({"brand_id": brand_id} if brand_id else {})} if brand_domain else None),
             operator=operator,
             principal_id=principal_id,
             # Every settable field comes from the one walk in the caller -- naming

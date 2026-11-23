@@ -71,6 +71,12 @@ AUDIT_LOGGER_NAME = "adcp.audit"
 # context said was ignored. It is the context's value that reaches the audit
 # trail and the delivery row now, so one default serves both.
 _DEFAULT_TASK_ID = "task_001"
+#: The correlation id the harness stands in for. A real one is BUYER-generated and
+#: supplied at registration via ``push_notification_config.operation_id``, which the
+#: seller must echo verbatim into every payload; ``core/mcp-webhook-payload.json`` makes
+#: it required and forbids recovering it from the receiver URL. Named here rather than
+#: inlined so a test grading the echo can see what it has to override.
+_DEFAULT_OPERATION_ID = "op_harness_delivery"
 
 
 class ProtocolWebhookEnv(FastOutboundBackoffMixin, WebhookOutcomeRowsMixin, LocalOriginMixin, IntegrationEnv):
@@ -148,18 +154,32 @@ class ProtocolWebhookEnv(FastOutboundBackoffMixin, WebhookOutcomeRowsMixin, Loca
         *,
         task_id: str = _DEFAULT_TASK_ID,
         result: dict[str, Any] | None = None,
+        operation_id: str = _DEFAULT_OPERATION_ID,
     ) -> McpWebhookPayload:
         """Build the real SDK webhook payload production sends for a delivery report.
 
         Mirrors ``DeliveryWebhookScheduler._send_delivery_report``: the payload
         carries the spec ``TaskType`` (``update_media_buy``) while the metadata
         carries the internal ``media_buy_delivery`` label.
+
+        ``operation_id`` is REQUIRED on ``core/mcp-webhook-payload.json`` and adcp 9
+        types it ``str`` rather than ``str | None``, so the SDK now refuses to build a
+        payload without one where 6.6.0 built a schema-invalid body. Production takes it
+        off the REGISTRATION the delivery is going to and echoes it verbatim — the field
+        is a BUYER-generated correlation id, and the spec forbids the seller recovering
+        it by parsing the receiver URL.
+
+        The default is the harness standing in for what a buyer registered, because these
+        tests grade egress and signing rather than the echo itself. A test that wants to
+        grade the ECHO should pass its own config's ``operation_id`` here, so the payload
+        and the registration carry the same value the way production makes them.
         """
         return create_mcp_webhook_payload(
             task_id=task_id,
             task_type=DELIVERY_PAYLOAD_TASK_TYPE,
             status="completed",
             result=result if result is not None else {"media_buy_id": "mb_0001"},
+            operation_id=operation_id,
         )
 
     # -- Driving production --------------------------------------------------

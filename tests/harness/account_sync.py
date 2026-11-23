@@ -28,7 +28,6 @@ import asyncio
 from typing import Any
 from unittest.mock import MagicMock
 
-from src.core.errors.codes import AppErrorCode
 from src.core.schemas.account import ListAccountsResponse, SyncAccountsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import AccountListDispatchMixin
@@ -176,11 +175,11 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
         """
         from unittest.mock import patch
 
-        from src.core.exceptions import AdCPSalesAgentError
+        from src.core.exceptions import AdCPInternalError
 
         patcher = patch(
             "src.core.tools.accounts.AccountRepository.mint_account_id",
-            side_effect=AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR),
+            side_effect=AdCPInternalError(),
         )
         patcher.start()
         self._guard("patch:sync_internal_failure", patcher.stop)
@@ -196,6 +195,28 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
         if self._session:
             self._require_tenant_row("set_billing_policy")
         self.configure_tenant_field("supported_billing", supported)
+
+    def register_agent_as_passthrough_only(self) -> None:
+        """Record the env's buyer agent as passthrough-only in the seller's onboarding record.
+
+        Writes ``principals.billing_passthrough_only`` on the env principal's REAL row --
+        the column the per-buyer-agent billing gate reads off the resolved identity -- so
+        every transport, the live server over e2e included, resolves the same agent.
+
+        No-Quiet-Failures: a principal that does not exist yet raises rather than leaving
+        the scenario to grade an agent with no recorded relationship.
+        """
+        from src.core.database.models import Principal
+
+        session = self.get_session()
+        principal = session.get(Principal, (self._tenant_id, self._principal_id))
+        if principal is None:
+            raise RuntimeError(
+                f"register_agent_as_passthrough_only() found no principal {self._principal_id!r} in tenant "
+                f"{self._tenant_id!r}. Authenticate the Buyer (create the principal) first."
+            )
+        principal.billing_passthrough_only = True
+        session.commit()
 
     def clear_account_brand(self, account_id: str) -> None:
         """Null out a persisted account's ``brand``, leaving the row otherwise intact.
@@ -300,18 +321,40 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
         overrides = self._proof_overrides
         default = self._proof_default
 
-        async def _prove(_account_id: Any, config: Any) -> bool:
+        # ``**_signing`` absorbs the strategy / seller_agent_url production threads in
+        # (#1291 C2). A positional-only stand-in would make every account-sync test fail
+        # with a TypeError the moment the real signature grew, which is a harness break
+        # masquerading as a behaviour change.
+        async def _prove(_account_id: Any, config: Any, **_signing: Any) -> bool:
             return overrides.get(str(getattr(config, "url", "")), default)
 
         prover.prove = _prove
         self.mock["notification_proof"].return_value = prover
+
+    def use_real_proof_service(self) -> None:
+        """Run PRODUCTION's prover instead of the dict-lookup stand-in.
+
+        The getter stays patched — it is still the one injection seam — but it now hands
+        back a real :class:`NotificationProofService`, so ``prove()``'s own body executes:
+        the signing-strategy check, the conformant challenge payload, the fire-time SSRF
+        check and the echo validation.
+
+        This exists because the stand-in is why that body had ZERO coverage (#1291 C2): on
+        every in-process transport it replaced the method, and on e2e the harness reaches
+        the refusal branch before the POST. A test that wants to grade the SIGNED path has
+        to be able to turn the substitution off, and doing it here rather than by patching
+        from a test body keeps the seam single.
+        """
+        from src.services.notification_proof_service import NotificationProofService
+
+        self.mock["notification_proof"].return_value = NotificationProofService()
 
     def set_approval_mode(self, mode: str) -> None:
         """Configure account approval mode (BR-RULE-060).
 
         Account approval mode is a distinct field from creative approval_mode
         (BR-RULE-037) — ``configure_tenant_field`` writes the correct column so
-        the MCP real-auth chain (config_loader.get_tenant_by_id) sees it, and
+        the MCP real-auth chain (config_loader.get_tenant_context) sees it, and
         also updates the in-memory tenant overrides for the mock identity path.
         The tenant row must already exist — No-Quiet-Failures (PR #1430).
         """

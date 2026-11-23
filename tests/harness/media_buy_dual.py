@@ -7,22 +7,38 @@ a pre-seeded media buy to grade the manual-approval UpdateMediaBuySubmitted
 envelope cross-transport. This env extends MediaBuyCreateEnv with update-module
 patches and delegates update requests to the appropriate production code —
 A2A/MCP go through the real on_message_send / FastMCP Client pipelines so the
-serialized wire (and the A2A submitted reconstruction) are genuinely exercised.
+serialized wire (and the A2A submitted payload) are genuinely exercised.
 
 Introduced by PR #1567.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
 from src.core.schemas import UpdateMediaBuyRequest
+from tests.factories.request import OMIT
 from tests.harness._mixins import make_adapter_update_side_effect
-from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY, MediaBuyCreateEnv
+from tests.harness._realize import realize_e2e
+from tests.harness.media_buy_create import (
+    OMIT_ACCOUNT,
+    OMIT_IDEMPOTENCY_KEY,
+    MediaBuyCreateEnv,
+    _adapter_operation_receipts,
+)
 from tests.harness.transport import DeliverResult
 
+if TYPE_CHECKING:
+    from tests.helpers.signing import SignatureRealization
+
 _UPDATE_MODULE = "src.core.tools.media_buy_update"
+
+
+def _adapter_update_actions_on_the_live_stack(self: MediaBuyDualEnv) -> list[str]:
+    """The actions the SERVER's ad server was handed, read off the receipts it wrote."""
+    return [details["action"] for details in _adapter_operation_receipts(self, "update_media_buy")]
+
 
 _UPDATE_PATCHES = {
     "update_adapter": f"{_UPDATE_MODULE}.get_adapter",
@@ -44,7 +60,9 @@ def _is_update_request(kwargs: dict[str, Any]) -> bool:
 
     ``media_buy_id`` is the discriminator: it identifies the buy being updated and
     is absent from every create request (the seller assigns it), so a flat body
-    carrying it is unambiguously an update.
+    carrying it is unambiguously an update. An update that means to send NO id carries
+    the key with :data:`~tests.factories.request.OMIT`, which routes it here and which
+    :meth:`MediaBuyDualEnv._flatten_update_request` strips at the wire.
     """
     req = kwargs.get("req")
     if isinstance(req, UpdateMediaBuyRequest):
@@ -72,6 +90,16 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
     def _configure_mocks(self) -> None:
         super()._configure_mocks()
         self._configure_update_mocks()
+
+    @realize_e2e(_adapter_update_actions_on_the_live_stack)
+    def adapter_update_actions(self) -> list[str]:
+        """The ``action`` of each ``update_media_buy`` the ad server was handed, in order."""
+        calls = self.mock["update_adapter"].return_value.update_media_buy.call_args_list
+        return [call.kwargs["action"] for call in calls]
+
+    def adapter_mocks(self) -> list[MagicMock]:
+        """The create module's adapter, then the update module's (``_UPDATE_PATCHES``)."""
+        return [*super().adapter_mocks(), self.mock["update_adapter"].return_value]
 
     def _configure_update_mocks(self) -> None:
         mock_adapter = MagicMock()
@@ -117,7 +145,19 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
             return self._call_update_mcp(**kwargs)
         return super().deliver_mcp(**kwargs)
 
-    def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
+    def _run_rest_request(self, endpoint: str, *, signed: SignatureRealization = False, **kwargs: Any) -> Any:
+        # ``signed`` is DECLARED, never swallowed into ``**kwargs`` — the same
+        # discipline CapabilitiesEnv._run_rest_request states, and for the same
+        # reason. ``RestDispatcher`` passes ``signed=`` to EVERY
+        # ``_run_rest_request``; it is a dispatch-level fact (how the request is
+        # sent), not an AdCP request field. The create arm below was only ever
+        # safe because the BASE declares it, but the update arm never reaches the
+        # base — so an undeclared ``signed`` rode the kwargs into
+        # ``_build_update_rest_body`` and became a ``signed`` FIELD in the PUT
+        # body, which ``UpdateMediaBuyBody`` (extra="forbid", src/routes/api_v1.py)
+        # refuses as ``INVALID_REQUEST: Extra inputs are not permitted
+        # (field=signed)`` — masking whatever refusal the scenario was grading.
+        #
         # Set the update-vs-create routing flag and leave it set THROUGH the base
         # dispatch's subsequent parse_rest_response call: _base.py runs
         # _run_rest_request then parse_rest_response sequentially, so a finally-reset
@@ -127,8 +167,8 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # (unconditional assignment, so a create request clears a stale flag).
         self._active_update = _is_update_request(kwargs)
         if self._active_update:
-            return self._run_update_rest_request(**kwargs)
-        return super()._run_rest_request(endpoint, **kwargs)
+            return self._run_update_rest_request(signed=signed, **kwargs)
+        return super()._run_rest_request(endpoint, signed=signed, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         # The E2E dispatcher (RestE2EDispatcher) reads REST_ENDPOINT/REST_METHOD as
@@ -137,15 +177,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # the E2E error path calls parse_rest_error, which would leave a stale flag).
         if _is_update_request(kwargs):
             self._active_update = True
-            # The id in the URL must be the one the SCENARIO asked for, from wherever it
-            # supplied it: a typed ``req`` or a plain ``media_buy_id`` kwarg. Reading only
-            # ``req`` meant a kwarg-style call silently fell back to the seeded buy -- so
-            # "Media buy not found -- by media_buy_id" PUT to the EXISTING media buy and
-            # got a success, while the same scenario failed correctly on every other
-            # transport because they carry the id in the body rather than the path.
-            req = kwargs.get("req")
-            target = getattr(req, "media_buy_id", None) or kwargs.get("media_buy_id") or self._seeded_media_buy_id
-            self._update_target_id = target
+            self._update_target_id = self._requested_update_target(kwargs)
             return self._build_update_rest_body(**kwargs)
         self._active_update = False
         return super().build_rest_body(**kwargs)
@@ -219,10 +251,30 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         else:
             flat = req.model_dump(mode="json", exclude_none=True)
             flat.update(kwargs)
-        for field, sentinel in (("idempotency_key", OMIT_IDEMPOTENCY_KEY), ("account", OMIT_ACCOUNT)):
+        for field, sentinel in (
+            ("idempotency_key", OMIT_IDEMPOTENCY_KEY),
+            ("account", OMIT_ACCOUNT),
+            ("media_buy_id", OMIT),
+        ):
             if flat.get(field) is sentinel:
                 del flat[field]
         return flat
+
+    def _requested_update_target(self, kwargs: dict[str, Any]) -> str:
+        """The media_buy_id the REST update PUTs to: the one the SCENARIO named.
+
+        From wherever it was supplied, a typed ``req`` or a plain ``media_buy_id`` kwarg.
+        Reading only ``req`` sent a kwarg-style call to the SEEDED buy, so "Media buy not
+        found -- by media_buy_id" PUT to an existing media buy and got a success. It passed
+        on a2a/mcp because they carry the id in the body; only REST puts it in the path.
+
+        An update sent with NO id has no REST request at all: the id is the resource path
+        (``PUT /media-buys/{media_buy_id}``, src/core/tools/registry.py). The rows that send
+        none are declared not applicable on rest and e2e_rest in
+        ``tests/bdd/conftest.py::_TRANSPORT_INEXPRESSIBLE_ROWS`` and never reach this method.
+        """
+        req = kwargs.get("req")
+        return getattr(req, "media_buy_id", None) or kwargs.get("media_buy_id") or self._seeded_media_buy_id
 
     def _call_update_a2a(self, **kwargs: Any) -> DeliverResult:
         # Drive the REAL on_message_send → _dispatch_skill → to_wire → Task/Artifact
@@ -231,10 +283,10 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # the wire via update_media_buy_raw(...).model_dump(), which tracked the return
         # model rather than the assembled envelope — an update-envelope regression
         # would not be caught. A SUBMITTED update never carries an artifact body:
-        # on_message_send early-returns a Task (state=SUBMITTED, no artifacts) and the
-        # base handler synthesizes the submitted wire from the Task (tests/harness/
-        # _base.py) — production has no A2A submitted reconstruction (PR #1567 round-2
-        # follow-up). Completed/error results DO carry an artifact, stashed as
+        # on_message_send early-returns a Task (state=SUBMITTED, no artifacts) whose
+        # payload rides in ``status.message.parts``, where L0/a2a-response-format.mdx puts
+        # an interim status's data, and the base handler reads it from there
+        # (tests/harness/_base.py). Completed/error results DO carry an artifact, stashed as
         # wire_response; _parse_update_rest_response recovers the union from the
         # flattened artifact (needs the top-level status the plain model drops).
         return self._run_a2a_handler(
@@ -280,32 +332,64 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         body.pop("media_buy_id", None)
         return body
 
-    def _run_update_rest_request(self, **kwargs: Any) -> Any:
+    def _run_update_rest_request(self, *, signed: SignatureRealization = False, **kwargs: Any) -> Any:
+        # ``signed`` is DECLARED here for the same reason ``_run_rest_request`` above
+        # declares it: this arm never reaches the base, so an undeclared keyword would
+        # ride the kwargs into ``_build_update_rest_body`` and become a body FIELD.
+        #
         # The credential rides the request headers, so a no-auth update scenario is
         # refused by the real resolver rather than let through by a test-mode override.
-        headers = self._pop_credential(kwargs)
+        credential = self._pop_credential(kwargs)
         self._commit_factory_data()
         client = self.get_rest_client()
 
+        endpoint = f"/api/v1/media-buys/{self._requested_update_target(kwargs)}"
         body = self._build_update_rest_body(**kwargs)
-        # Same rule as REST_ENDPOINT above: the id in the URL is the one the SCENARIO
-        # named, from a typed ``req`` OR a plain ``media_buy_id`` kwarg. Reading only
-        # ``req`` sent a kwarg-style call to the SEEDED buy, so "Media buy not found --
-        # by media_buy_id" PUT to an existing media buy and got a success. It passed on
-        # a2a/mcp because they carry the id in the body; only REST puts it in the path,
-        # which is why one transport disagreed with the other two about a request the
-        # scenario had specified unambiguously.
-        req = kwargs.get("req")
-        media_buy_id = getattr(req, "media_buy_id", None) or kwargs.get("media_buy_id") or self._seeded_media_buy_id
-        endpoint = f"/api/v1/media-buys/{media_buy_id}"
-        return client.put(endpoint, json=body, headers=headers)
+        # Same signed/unsigned fork as the base POST dispatch, with the update's
+        # PUT verb: an env that cannot sign must REFUSE a signed dispatch (a
+        # silent unsigned send would let a signing scenario pass with no
+        # signature), and once it can sign, ``wire_request`` OWNS the request —
+        # it serializes once so the bytes signed are the bytes sent, and it emits
+        # the single ``Authorization`` identity plus this env's tenant hint
+        # itself. That is why ``credential`` is deliberately NOT merged into the
+        # signed leg: a second bearer would win the precedence race in
+        # ``resolved_identity._extract_auth_token`` and swap the acting
+        # principal, so signed and unsigned would differ by more than the
+        # signature.
+        #
+        # ``credentialed`` is read off the credential HEADERS because that is
+        # what "presented nothing" is under #1721 — ``credential={}`` and
+        # ``credential(token=None)`` both omit ``Authorization``
+        # (tests/helpers/credentials.py). It is the only way an in-process leg
+        # reaches the verifier's refusal branch at all: security.mdx :1269 makes
+        # an unsigned request carrying a valid bearer a spec-correct 200.
+        if not self.can_sign:
+            if signed:
+                self.signing  # raises, naming enable_request_signing()  # noqa: B018
+            return client.put(endpoint, json=body, headers=credential)
+        raw, wire_headers = self.wire_request(
+            path=endpoint,
+            body=body,
+            signed=signed,
+            credentialed="Authorization" in credential,
+            method="PUT",
+        )
+        return client.put(endpoint, content=raw, headers=wire_headers)
 
     def _parse_update_rest_response(self, data: dict[str, Any]) -> Any:
         """Rebuild an update_media_buy wire body as the branch the buyer received.
 
         ``UpdateMediaBuyResult.revive`` is production's own discrimination, so every
         transport hands steps the branch production would resolve rather than a
-        harness copy of that rule which can disagree with it.
+        harness copy of that rule which can disagree with it. It replaces a
+        hand-rolled submitted/success/error ladder that re-stated the same rule and
+        re-wrapped the branch in a ``UpdateMediaBuyResult(response=..., status=...)``
+        envelope; under #1721 ``UpdateMediaBuyResult`` IS the union root its three
+        branches inherit (``_BRANCH_ADAPTERS``, src/core/schemas/_base.py), so the
+        wrapper has no ``response`` field to fill and the ladder has nothing left to
+        decide. This serves the REST wire and the A2A submitted payload alike — the
+        latter read off ``status.message.parts``, which is where A2A puts an interim
+        status's data and where production writes it.
         """
         from src.core.schemas._base import UpdateMediaBuyResult
 

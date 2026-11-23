@@ -11,18 +11,19 @@ plaintext-http escape hatch this ticket closed — this guard catches that at
 ``make quality`` time.
 
 ``.github/workflows/ci.yml``'s "creative" integration matrix group was the
-last holdout (GH #1802): it now consumes
-``scripts/creative-agent-stack.sh``'s own https TLS front (GH #1757)
-via ``steps.creative_agent.outputs.url`` instead of a plaintext
-``localhost:9999`` URL, so the flag has no remaining legitimate use anywhere
-in the repo.
+last holdout (GH #1802). It no longer runs on the HOST at all: it runs
+IN-NETWORK via ``./run_all_tests.sh`` against ``docker-compose.e2e.yml`` and
+reaches the reference agent by service name
+(``CREATIVE_AGENT_URL=http://creative-agent:8080/...``), so there is no
+inline hatch and no plaintext ``localhost:9999`` URL left in ``ci.yml`` —
+and so the flag has no remaining legitimate use anywhere in the repo.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from tests.unit._architecture_helpers import assert_scanned_paths_exist
+from tests.unit._architecture_helpers import assert_scanned_paths_exist, rel
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -70,7 +71,7 @@ def find_flag_reintroductions(repo_root: Path, must_not_contain: tuple[str, ...]
         path = repo_root / relpath
         if not path.is_file():
             continue
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip().startswith("#"):
                 continue
             if _FLAG in line:
@@ -100,7 +101,7 @@ def test_detector_catches_a_reintroduced_flag() -> None:
         tmp_path = Path(tmp)
         target = tmp_path / synthetic_dir_marker
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(f'if _env_flag("{_FLAG}"):\n    return\n')
+        target.write_text(f'if _env_flag("{_FLAG}"):\n    return\n', encoding="utf-8")
         hits = find_flag_reintroductions(tmp_path, (synthetic_dir_marker,))
     assert hits == [synthetic_dir_marker]
 
@@ -112,7 +113,7 @@ def test_detector_ignores_a_file_that_never_had_the_flag() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         marker = "docker-compose.e2e.yml"
-        (tmp_path / marker).write_text("ADCP_OUTBOUND_ALLOW_PRIVATE: 'true'\n")
+        (tmp_path / marker).write_text("ADCP_OUTBOUND_ALLOW_PRIVATE: 'true'\n", encoding="utf-8")
         hits = find_flag_reintroductions(tmp_path, (marker,))
     assert hits == []
 
@@ -169,10 +170,11 @@ _ALLOWED_ALLOW_PRIVATE_SITES: frozenset[str] = frozenset(
         "tox.ini",
         # The host runner stands up the same stack outside compose.
         "run_all_tests_host.sh",
-        # The creative integration matrix group consumes the same private
-        # origins; its own comment records that the compose files and the host
-        # runner already open the hatch and this group needs it too.
-        ".github/workflows/ci.yml",
+        # NOTE: .github/workflows/ci.yml was removed from this pin at the #1802 merge.
+        # Its "creative" integration group used to run on the host and set the flag
+        # inline; the group now runs IN-NETWORK via ./run_all_tests.sh, so the compose
+        # file and run_all_tests_host.sh are the only declaration sites left. Dropping a
+        # site that genuinely stopped declaring is a shrink, not a relaxation.
     }
 )
 
@@ -211,14 +213,14 @@ def find_allow_private_declaring_files(repo_root: Path) -> set[str]:
             if not path.is_file():
                 continue
             try:
-                text = path.read_text()
+                text = path.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
                 continue
             for line in text.splitlines():
                 if line.strip().startswith("#"):
                     continue
                 if _ALLOW_PRIVATE_FLAG in line:
-                    hits.add(str(path.relative_to(repo_root)))
+                    hits.add(rel(path, repo_root))
                     break
     return hits
 
@@ -227,7 +229,7 @@ def test_allow_private_sites_match_the_pin_exactly() -> None:
     """The files that may name ADCP_OUTBOUND_ALLOW_PRIVATE are exactly the pin.
 
     Set IDENTITY, not a count: an add-plus-drop must fail, because a count that
-    stays at five while `docker-compose.yml` replaces `tox.ini` is precisely the
+    stays at three while `docker-compose.yml` replaces `tox.ini` is precisely the
     change this guard exists to refuse.
     """
     found = find_allow_private_declaring_files(_REPO_ROOT)
@@ -253,12 +255,12 @@ def test_allow_private_detector_catches_an_unpinned_site() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        (tmp_path / "docker-compose.yml").write_text(f'      {_ALLOW_PRIVATE_FLAG}: "true"\n')
+        (tmp_path / "docker-compose.yml").write_text(f'      {_ALLOW_PRIVATE_FLAG}: "true"\n', encoding="utf-8")
         # A Dockerfile ENV is the same hatch by another route, and the first
         # version of this scan missed it entirely -- measured: appending
         # `ENV ADCP_OUTBOUND_ALLOW_PRIVATE=true` to ./Dockerfile left all eight
         # tests in this file green.
-        (tmp_path / "Dockerfile").write_text(f"ENV {_ALLOW_PRIVATE_FLAG}=true\n")
+        (tmp_path / "Dockerfile").write_text(f"ENV {_ALLOW_PRIVATE_FLAG}=true\n", encoding="utf-8")
         found = find_allow_private_declaring_files(tmp_path)
     assert found == {"docker-compose.yml", "Dockerfile"}
     assert found - _ALLOWED_ALLOW_PRIVATE_SITES == {"docker-compose.yml", "Dockerfile"}
@@ -270,8 +272,10 @@ def test_allow_private_detector_ignores_prose_and_unrelated_files() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        (tmp_path / "docker-compose.yml").write_text(f"      # {_ALLOW_PRIVATE_FLAG} was removed here\n")
-        (tmp_path / "tox.ini").write_text("[tox]\nenvlist = unit\n")
+        (tmp_path / "docker-compose.yml").write_text(
+            f"      # {_ALLOW_PRIVATE_FLAG} was removed here\n", encoding="utf-8"
+        )
+        (tmp_path / "tox.ini").write_text("[tox]\nenvlist = unit\n", encoding="utf-8")
         found = find_allow_private_declaring_files(tmp_path)
     assert found == set()
 

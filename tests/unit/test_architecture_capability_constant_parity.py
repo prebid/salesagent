@@ -22,22 +22,32 @@ from tests.unit._architecture_helpers import REPO_ROOT, iter_call_expressions
 # Capability keywords whose value must be derived from an enforced constant, not a literal.
 _DERIVED_CAPABILITY_KEYWORDS = {"replay_ttl_seconds"}
 
-# Builders whose output must stay DERIVED FROM ITS ENFORCED SOURCE and must never
-# become tenant-declarable (#1592 T1a). ``account.sandbox`` comes from the
-# ``account_sandbox`` column and ``account.supported_billing`` from
-# ``resolve_supported_billing`` -- the same function the sync_accounts billing gate
-# calls, so the advertised policy and the enforced policy cannot diverge. The
-# ``adcp.*`` block derives from SUPPORTED_ADCP_MAJORS/VERSIONS plus
-# ``get_idempotency_posture``.
+# Builders that must NOT READ THE DECLARATION STORE. That is the property this guard
+# checks, stated precisely -- it is NOT "these blocks can never be tenant-declared",
+# which would be false of ``request_signing`` (#1291 D1 makes it declarable) and would
+# make the guard assert the opposite of that design.
 #
-# The capability declaration store is explicitly NOT allowed to override these: a
-# tenant that could declare `supported_billing` would advertise a billing policy
-# sync_accounts then refuses to honour. This is a structural check, not a
-# data-driven one, precisely because a future migration would pick a store key no
-# fixture could predict -- and because CapabilityDeclarations' extra="forbid"
-# rejects an unknown key at parse time, so a "declare an override and assert it is
-# ignored" test would never reach its assertion.
-_DERIVATION_ONLY_BUILDERS = ("_build_account_block", "_build_adcp_block")
+# Two different reasons a builder belongs here:
+#
+# * ``_build_account_block`` / ``_build_adcp_block`` -- their output must stay derived
+#   from its ENFORCED source and must never become tenant-declarable at all (#1592 T1a).
+#   ``account.sandbox`` comes from the ``account_sandbox`` column and
+#   ``account.supported_billing`` from ``resolve_supported_billing``, the same function
+#   the sync_accounts billing gate calls, so the advertised policy and the enforced one
+#   cannot diverge. The ``adcp.*`` block derives from SUPPORTED_ADCP_MAJORS/VERSIONS plus
+#   ``get_idempotency_posture``. A tenant that could declare ``supported_billing`` would
+#   advertise a billing policy sync_accounts then refuses to honour.
+# * ``_build_signing_blocks`` -- ``request_signing`` IS tenant-declared, but the store is
+#   read in exactly one place (``posture_for_tenant``) and the builder receives the
+#   resolved posture object. Listing it here pins that shape: a second parse of the
+#   declaration inside the builder is the two-source bug the deleted
+#   ``_REQUEST_SIGNING_UNSUPPORTED`` / ``_WEBHOOK_SIGNING_UNSUPPORTED`` literals were.
+#
+# A structural check, not a data-driven one, precisely because a future migration would
+# pick a store key no fixture could predict -- and because CapabilityDeclarations'
+# extra="forbid" rejects an unknown key at parse time, so a "declare an override and
+# assert it is ignored" test would never reach its assertion.
+_DERIVATION_ONLY_BUILDERS = ("_build_account_block", "_build_adcp_block", "_build_signing_blocks")
 _DECLARATION_STORE_NAMES = ("capability_declarations", "CapabilityDeclarations")
 
 
@@ -67,7 +77,7 @@ def test_capability_values_are_derived_not_literal():
     offenders: list[str] = []
     for path in Path("src").rglob("*.py"):
         try:
-            for site in _literal_capability_sites_in(path.read_text()):
+            for site in _literal_capability_sites_in(path.read_text(encoding="utf-8")):
                 offenders.append(f"{path}:{site.split('@')[1]} ({site.split('@')[0]})")
         except SyntaxError:
             continue
@@ -99,26 +109,30 @@ def _declaration_reads_in_builders(source: str) -> list[str]:
     return out
 
 
-def test_account_and_adcp_blocks_are_not_declaration_driven():
-    """``account.*`` and ``adcp.*`` must stay derived, never store-driven.
+def test_derivation_only_builders_do_not_read_the_declaration_store():
+    """The listed builders must take resolved values, never read the store themselves.
 
     Core invariant: the capabilities response may only advertise what some other
     part of the system ENFORCES. `supported_billing` is shared with the
     sync_accounts gate; `sandbox` is the provisioning gate's own column. Letting a
     tenant declare either would let config advertise a policy production refuses to
     honour -- the exact honesty inversion #1592 T1a exists to prevent.
+
+    For ``_build_signing_blocks`` the invariant is one step removed and just as binding:
+    ``request_signing`` IS declared, but by ONE reader upstream, so the builder that puts
+    it on the wire must see a posture object and not a declaration document.
     """
     offenders: list[str] = []
     for path in Path("src").rglob("*.py"):
         try:
-            for site in _declaration_reads_in_builders(path.read_text()):
+            for site in _declaration_reads_in_builders(path.read_text(encoding="utf-8")):
                 builder, line = site.split("@")
                 offenders.append(f"{path}:{line} ({builder})")
         except SyntaxError:
             continue
     assert not offenders, (
-        "account.*/adcp.* must derive from their enforced sources, never from the "
-        f"capability declaration store, at: {offenders}"
+        "these builders must receive resolved values and derive from their enforced "
+        f"sources, never read the capability declaration store, at: {offenders}"
     )
 
 
@@ -130,7 +144,7 @@ class TestDerivationOnlyMatcherModelsTheForm:
         assert _declaration_reads_in_builders(src)
 
     def test_declaration_read_outside_those_builders_is_ignored(self):
-        src = "def _get_adcp_capabilities_impl(tenant):\n    return tenant.get('capability_declarations')\n"
+        src = "def describe_seller(tenant):\n    return tenant.get('capability_declarations')\n"
         assert not _declaration_reads_in_builders(src)
 
     def test_attribute_access_form_is_also_flagged(self):
@@ -165,7 +179,7 @@ class TestMatcherModelsTheForm:
 
 # ── D1: declaration-driven fields must not regress to literals ────────────────
 #
-# The complement of test_account_and_adcp_blocks_are_not_declaration_driven above.
+# The complement of test_derivation_only_builders_do_not_read_the_declaration_store above.
 # That check pins fields that must STAY derived; this one pins fields that must
 # STAY declaration-driven.
 #
@@ -182,7 +196,12 @@ _DECLARATION_DRIVEN_FIELDS = {"supported_protocols", "specialisms"}
 # The impl whose tenant-resolved response construction is in scope. The NO-TENANT
 # response is deliberately excluded: it has no tenant, so it cannot read a
 # tenant-scoped declaration, and it must keep emitting the defaults byte-for-byte.
-_TENANT_RESPONSE_IMPL = "_get_adcp_capabilities_impl"
+#: The function that DERIVES the tenant-path capability values, which is in the
+#: seller-capabilities service rather than the tool impl because the agent card is a
+#: second consumer of it. This guard names the derivation, not the address it is reached
+#: through: a guard keyed on where a thing lives survives an extraction while grading
+#: nothing.
+_TENANT_RESPONSE_IMPL = "describe_seller"
 
 
 def _fields_never_declaration_driven(source: str) -> list[str]:
@@ -190,13 +209,14 @@ def _fields_never_declaration_driven(source: str) -> list[str]:
 
     Per-EMISSION checking is impossible here and it matters why: the no-tenant
     minimal response is an early ``return`` INSIDE ``_get_adcp_capabilities_impl``
-    (capabilities.py :265-274), and it legitimately keeps
+    (the ``if not tenant:`` branch in ``src/core/tools/capabilities.py`` -- cited by
+    construct, not line, because that file moves), and it legitimately keeps
     ``list(_DEFAULT_SUPPORTED_PROTOCOLS)`` -- there is no tenant to read a
     tenant-scoped declaration from, and that response must stay byte-identical.
     So "every emission reads the store" would be false for correct code.
 
     The enforceable invariant is therefore: for each field, AT LEAST ONE emission
-    in the impl reads the declarations. That catches the regression that actually
+    in the derivation reads the declarations. That catches the regression that actually
     matters -- the store silently stops reaching the wire -- while leaving the
     tenant-less path alone. It does NOT catch a partial regression where one of
     several tenant-path emissions is reverted; the BDD accept scenarios
@@ -235,12 +255,15 @@ def test_declaration_driven_fields_are_not_literal():
     offenders: list[str] = []
     for path in Path("src").rglob("*.py"):
         try:
-            offenders.extend(f"{path} ({field})" for field in _fields_never_declaration_driven(path.read_text()))
+            offenders.extend(
+                f"{path} ({field})" for field in _fields_never_declaration_driven(path.read_text(encoding="utf-8"))
+            )
         except SyntaxError:
             continue
     assert not offenders, (
         "supported_protocols/specialisms must be built from the capability declaration "
-        f"store somewhere in {_TENANT_RESPONSE_IMPL}, not emitted only as literals, at: {offenders}"
+        f"store somewhere in {_TENANT_RESPONSE_IMPL}() (src/services/seller_capabilities.py), "
+        f"not emitted only as literals, at: {offenders}"
     )
 
 
@@ -256,7 +279,7 @@ class TestDeclarationDrivenMatcherModelsTheForm:
     )
 
     def _impl(self, tenant_path: str) -> str:
-        return "def _get_adcp_capabilities_impl(req):\n" + self._NO_TENANT + tenant_path
+        return "def describe_seller(identity):\n" + self._NO_TENANT + tenant_path
 
     def test_store_driven_tenant_path_passes(self):
         """Both emissions present; the tenant one reads the store -> clean."""
@@ -295,11 +318,11 @@ class TestDeclarationDrivenMatcherModelsTheForm:
         """WOULD-BE-MISSED inverse: a function with ONLY the tenant-less emission
         (no tenant path at all) must not be flagged -- otherwise the guard would
         demand a store read where there is no tenant to read one from."""
-        src = "def _get_adcp_capabilities_impl(req):\n" + self._NO_TENANT
+        src = "def describe_seller(identity):\n" + self._NO_TENANT
         assert sorted(_fields_never_declaration_driven(src)) == ["specialisms", "supported_protocols"]
 
     def test_unrelated_field_ignored(self):
-        src = "def _get_adcp_capabilities_impl(req):\n    return Response(last_updated=now())\n"
+        src = "def describe_seller(identity):\n    return Response(last_updated=now())\n"
         assert not _fields_never_declaration_driven(src)
 
 
@@ -341,7 +364,9 @@ def test_account_posture_derives_from_the_policy_module():
     every unconfigured tenant advertise a capability it never opted into (#1721).
     Both sides now call ``src/core/billing_policy.py``; this keeps them there.
     """
-    source = (REPO_ROOT / "src/core/tools/capabilities.py").read_text()
+    # _build_account_block moved with the rest of the derivation when the agent card
+    # became a second consumer of it. The guard follows the function, not its old file.
+    source = (REPO_ROOT / "src/services/seller_capabilities.py").read_text(encoding="utf-8")
     inline = _inline_policy_reads_in_account_block(source)
     assert not inline, (
         f"_build_account_block reads policy-owned tenant key(s) inline: {inline}. "
@@ -351,7 +376,7 @@ def test_account_posture_derives_from_the_policy_module():
     )
     for resolver in _ACCOUNT_POLICY_RESOLVERS:
         assert resolver in source, (
-            f"capabilities.py no longer calls {resolver} — the account block would be free to "
+            f"seller_capabilities.py no longer calls {resolver} — the account block would be free to "
             "re-derive posture on its own, which is the divergence this guard exists to prevent."
         )
 

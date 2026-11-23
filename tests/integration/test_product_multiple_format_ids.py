@@ -20,10 +20,12 @@ def test_tenant(integration_db):
     from src.core.database.database_session import get_db_session
 
     with get_db_session() as session:
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
         tenant = Tenant(
             tenant_id="test_tenant_multi_format",
             name="Test Tenant",
             subdomain="testmulti",
+            virtual_host="test-tenant-multi-format.adcp.test",
         )
         session.add(tenant)
         session.commit()
