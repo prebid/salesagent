@@ -230,8 +230,28 @@ def test_cloud_metadata_address_is_refused(seam_call, monkeypatch):
     assert_blocked(seam_call, METADATA_URL)
 
 
+# ``urllib.parse`` cannot parse this: urlsplit raises ``ValueError: Invalid IPv6 URL``.
+MALFORMED_URL = "https://[::1/webhook"
+
+
+@pytest.mark.parametrize("seam_call", [*SEAM_CALLS, "validate_url"])
+def test_unparsable_url_is_refused_rather_than_raising(seam_call, monkeypatch):
+    """A URL the stdlib cannot parse is a refusal, not a ValueError (GH #2706).
+
+    Every caller of the seam catches ``OutboundRequestBlocked`` and nothing else, so a
+    ``ValueError`` from the parse escaped each of them as an unhandled error.
+    """
+    set_flags(monkeypatch)
+
+    with pytest.raises(_seam().OutboundRequestBlocked):
+        if seam_call == "validate_url":
+            _seam().validate_url(MALFORMED_URL)
+        else:
+            call_seam(seam_call, MALFORMED_URL)
+
+
 # ---------------------------------------------------------------------------
-# 3. The private-range escape hatch (GH #1757: the SCHEME hatch is gone
+# 3.The private-range escape hatch (GH #1757: the SCHEME hatch is gone
 #    entirely — https is required unconditionally, no flag relaxes it)
 #
 # Under default flags http://127.0.0.1:<port>/ is refused by BOTH the scheme

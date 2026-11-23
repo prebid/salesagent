@@ -395,13 +395,24 @@ class EgressPolicy:
         name rather than by position; :func:`validate_url` (which sends nothing)
         discards it.
 
-        Raises :class:`OutboundRequestBlocked` — never lets
+        Raises :class:`OutboundRequestBlocked` — for a URL ``urlparse`` cannot
+        parse too — and never lets
         ``SSRFValidationError`` out, because its message names the resolved
         IP (spec point 6). Opaque :data:`_BLOCKED_MESSAGE` regardless of
         cause, unlike :meth:`check_registration`, which may name the class of
         range because the caller already supplied that literal information.
         """
-        if _scheme_error(urlparse(url)) is not None:
+        try:
+            parsed = urlparse(url)
+        except ValueError as exc:
+            # urlsplit raises ValueError for a URL it cannot parse ("Invalid IPv6
+            # URL" for "https://[::1"). That is a refusal like any other, not an
+            # error for the caller to handle: every caller of this verdict catches
+            # OutboundRequestBlocked and nothing else. Fixed log text, as in
+            # check_registration -- the exception's text can echo the input.
+            logger.warning("Outbound request refused: URL is malformed")
+            raise OutboundRequestBlocked(field=field) from exc
+        if _scheme_error(parsed) is not None:
             logger.warning("Outbound request refused: scheme is not https")
             raise OutboundRequestBlocked(field=field)
 

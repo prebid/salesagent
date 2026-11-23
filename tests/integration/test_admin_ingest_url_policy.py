@@ -67,6 +67,10 @@ METADATA_URL = "https://169.254.169.254/agent"
 # and the scheme is checked before any resolution, so it needs no network.
 INSECURE_PUBLIC_URL = "http://signals.example.com/agent"
 
+# A URL ``urllib.parse`` cannot parse (``ValueError: Invalid IPv6 URL``). It must reach the
+# same refusal as any other blocked destination, not escape as an unhandled error (GH #2706).
+MALFORMED_URL = "https://[::1/agent"
+
 # The reason the operator must NOT be handed back. Any of these appearing in a
 # response body would be the leak point 6 forbids.
 LEAKED_FRAGMENTS = ("169.254.169.254", "reserved", "resolve", "metadata")
@@ -153,7 +157,7 @@ def create_agent_through_the_add_form(client, env, monkeypatch) -> SignalsAgent:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("url", [METADATA_URL, INSECURE_PUBLIC_URL])
+@pytest.mark.parametrize("url", [METADATA_URL, INSECURE_PUBLIC_URL, MALFORMED_URL])
 def test_signals_agent_add_refuses_and_stores_nothing(
     url, authenticated_admin_client, seeded_tenant, monkeypatch, caplog
 ):
