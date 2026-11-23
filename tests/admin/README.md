@@ -44,7 +44,7 @@ def test_a_known_tenant_gets_its_catalog(admin_client, tenant):
     assert response.status_code == 200
 ```
 
-In a new module, use the `admin_client` fixture from [`conftest.py`](conftest.py) and import the session helpers from `tests.helpers.admin_session`. Some older modules build their own application and keep a private `_auth_session` copy. Do not copy that pattern.
+In a new module, use the `admin_client` fixture from [`conftest.py`](conftest.py) and import the session helpers from `tests.helpers.admin_session`. The fixture wraps `admin_test_app()` from the same helper module. That function builds the application from the settings the test process holds, so a setting that a test patched also applies to the application. Some older modules build their own application and keep a private `_auth_session` copy. Do not copy that pattern.
 
 ## Run the tests
 
