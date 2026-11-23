@@ -53,10 +53,9 @@ Before you sign in, with either setup, complete the following steps:
    for you.
 2. Run `docker compose up -d` again so that the server reads them.
 3. Register `http://localhost:8000/admin/auth/google/callback` and
-   `http://localhost:8000/auth/google/callback` as redirect URIs with the OAuth client. The
-   Admin UI answers under `/admin/` and at the root, and the callback follows the path that
-   the sign-in starts from. If you set a different `CONDUCTOR_PORT`, use that port in place
-   of `8000`.
+   `http://localhost:8000/auth/google/callback` as redirect URIs with the OAuth client.
+   [Deployment OAuth](../deployment/environment-variables.md#deployment-oauth) explains why
+   it needs both. If you set a different `CONDUCTOR_PORT`, use that port in place of `8000`.
 
 ## Manual Setup
 

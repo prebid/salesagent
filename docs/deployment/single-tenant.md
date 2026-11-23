@@ -13,7 +13,6 @@ Single-tenant mode is the default and recommended for most publishers deploying 
 - [Docker management](#docker-management)
 - [Database migrations](#database-migrations)
 - [First-time setup](#first-time-setup)
-- [SSO setup](#sso-setup)
 - [Custom domain configuration](#custom-domain-configuration)
 - [Health monitoring](#health-monitoring)
 - [Security checklist](#security-checklist)
@@ -163,9 +162,9 @@ which lets you complete an OIDC login for it before its SSO is switched on.
 Sign in with the deployment's own OAuth — set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
 (or the generic `OAUTH_*` variables) and put your address in `SUPER_ADMIN_EMAILS`.
 
-On the Docker Compose stack, the Admin UI answers under `/admin/` and at the root, and the
-callback follows the path that the sign-in starts from. Before you sign in, register both of
-the following redirect URIs with that OAuth client:
+On the Docker Compose stack, register both of the following redirect URIs with that OAuth
+client before you sign in. [Deployment OAuth](environment-variables.md#deployment-oauth)
+explains why it needs both.
 
 - `http://localhost:8000/admin/auth/google/callback`
 - `http://localhost:8000/auth/google/callback`
@@ -173,18 +172,17 @@ the following redirect URIs with that OAuth client:
 **To complete setup:**
 
 1. Log in with Google as a `SUPER_ADMIN_EMAILS` address.
-2. In **Settings > Account**, set **Custom Domain** to the host where you open the Admin UI,
-   for example `localhost:8000`. Then go to **Users & Access**, which builds the SSO redirect
-   URI from that field.
-3. Configure your SSO provider (Google, Microsoft, or a custom OIDC provider).
-4. **Add yourself**: Add your email OR your domain to Allowed Domains.
-5. Click **Test Connection** - SSO is automatically enabled on success.
-6. Sign out, then sign in again with **Sign in with SSO**. If the header shows no **Logout**
-   link, open `/admin/logout` to sign out.
-7. Click **Disable Setup Mode**. After this, **Sign in with SSO** works only while the
-   tenant's SSO is enabled.
+2. Configure the tenant's SSO in the Admin UI with the
+   [SSO quick start](../user-guide/sso-setup.md#quick-start). In its first step, set
+   **Custom Domain** to `localhost:8000`, the host where you open the Admin UI.
 
-See the [SSO setup guide](../user-guide/sso-setup.md) for detailed provider-specific instructions.
+Add yourself with the **Admin** role (or through an allowed domain) before you test, and sign in
+with SSO before **Disable Setup Mode**. That SSO session is a tenant admin session only: for
+super-admin work (creating tenants, deployment settings), sign in with the deployment's own OAuth
+again, because a tenant's SSO never grants super admin.
+
+The [SSO setup guide](../user-guide/sso-setup.md) has provider-specific instructions.
+[Security and authentication](../security.md) covers how sessions and secrets are handled.
 
 ### Local testing with demo data
 
@@ -197,28 +195,12 @@ CREATE_DEMO_TENANT=true
 
 This creates a "Demo Sales Agent" tenant with a mock adapter, sample currencies, and test data for exploring features.
 
-## SSO setup
-
-SSO is configured per-tenant in the Admin UI:
-
-1. Log in with Google as a `SUPER_ADMIN_EMAILS` address.
-2. In **Settings > Account**, set **Custom Domain** to the host where you open the Admin UI,
-   for example `localhost:8000`. Then go to the **Users & Access** page, which builds the SSO
-   redirect URI from that field.
-3. Configure your identity provider (Google, Microsoft, or any OIDC provider as Custom OIDC).
-4. Copy the **Required Redirect URI** shown and add it to your provider's allowed redirect URIs.
-5. **Add yourself**: Add your email as a user OR add your domain to Allowed Domains.
-6. Click **Save Configuration**, then **Test Connection** - SSO is automatically enabled on success.
-7. **Disable Setup Mode** once SSO is working.
-
-See the [SSO setup guide](../user-guide/sso-setup.md) for detailed provider-specific instructions. [Security and authentication](../security.md) covers how sessions and secrets are handled.
-
 ## Custom domain configuration
 
 1. Deploy to your cloud platform (see [walkthroughs](walkthroughs/)).
 2. Point your domain's DNS to your deployment.
 3. In the Admin UI, go to **Settings > Account** and set the **Custom Domain** field.
-4. Register `https://<custom domain>/admin/auth/google/callback` and `https://<custom domain>/auth/google/callback` with the deployment's OAuth client. In production, register only the first, and set `SALES_AGENT_DOMAIN` to the custom domain.
+4. Register `https://<custom domain>/admin/auth/google/callback` and `https://<custom domain>/auth/google/callback` with the deployment's OAuth client, and in production set `SALES_AGENT_DOMAIN` to the custom domain. [Deployment OAuth](environment-variables.md#deployment-oauth) says which callback each sign-in uses.
 5. If the tenant uses SSO, add the **Required Redirect URI** that **Users & Access** then shows to your SSO provider.
 
 ## Health monitoring

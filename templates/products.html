@@ -485,7 +485,7 @@ function deleteProduct(productId, productName) {
                 window.location.reload();
             } else {
                 return response.json().then(err => {
-                    alert(err.error || 'Could not delete product');
+                    alert(adminErrorText(err));
                     return Promise.reject(err);
                 });
             }

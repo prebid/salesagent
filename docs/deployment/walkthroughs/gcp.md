@@ -60,7 +60,7 @@ gcloud run deploy adcp-sales-agent \
 Replace:
 - `YOUR_PROJECT`: Your GCP project ID
 - `YOUR_PASSWORD`: The password you set when creating the Cloud SQL instance
-- `YOUR_ENCRYPTION_KEY`: A Fernet key, which encrypts stored secrets such as a tenant's SSO client secret. Generate one with `openssl rand -base64 32 | tr '+/' '-_'`. Keep it: the container refuses to start without it, and changing it makes stored secrets unreadable.
+- `YOUR_ENCRYPTION_KEY`: A Fernet key. Generate one with `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'`. See [`ENCRYPTION_KEY`](../environment-variables.md#security) for what it encrypts and why it must stay stable.
 - `YOUR_SESSION_KEY`: A long random value that signs session cookies, such as the output of `openssl rand -hex 32`. Without it, each instance generates its own, and sessions end at every restart.
 
 ### Option B: Build Your Own Image
@@ -115,8 +115,9 @@ gcloud run services update adcp-sales-agent \
   --update-env-vars "SUPER_ADMIN_EMAILS=you@example.com"
 ```
 
-The Admin UI answers under `/admin/` and at the root, and the callback follows the path that
-the sign-in starts from. Register both of the following redirect URIs with the OAuth client:
+Register both of the following redirect URIs with the OAuth client.
+[Deployment OAuth](../environment-variables.md#deployment-oauth) explains which callback each
+sign-in uses.
 
 - `https://YOUR-SERVICE-URL.run.app/admin/auth/google/callback`
 - `https://YOUR-SERVICE-URL.run.app/auth/google/callback`
@@ -133,13 +134,11 @@ Then sign in with the following steps:
 
 Configure SSO via the Admin UI for production use.
 
-1. In **Settings > Account**, set **Custom Domain** to your service's host, for example
-   `adcp-sales-agent-abc123-uc.a.run.app`. Then go to **Users & Access** in the Admin UI, which
-   builds the SSO redirect URI from that field
-2. Configure your SSO provider (Google, Microsoft, Okta, Auth0, Keycloak, or any OIDC provider)
-3. Copy the **Required Redirect URI** that the page shows, and add it to your provider
-4. Test your SSO login
-5. Disable Setup Mode once SSO is working
+Follow the [SSO quick start](../../user-guide/sso-setup.md#quick-start). In its first step,
+set **Custom Domain** to your service's host, for example
+`adcp-sales-agent-abc123-uc.a.run.app`. **Users & Access** then shows the **Required Redirect
+URI** `https://adcp-sales-agent-abc123-uc.a.run.app/admin/auth/oidc/callback`, which you add
+to your SSO provider (Google, Microsoft, Okta, Auth0, Keycloak, or any OIDC provider).
 
 See [SSO Setup Guide](../../user-guide/sso-setup.md) for detailed provider-specific instructions.
 

@@ -49,8 +49,10 @@ Authentication for This Service:
 
 import json
 import logging
+from functools import cached_property
 from typing import Any
 
+from google.api_core.exceptions import NotFound
 from google.cloud import iam_admin_v1
 from google.cloud.iam_admin_v1 import types
 from google.oauth2 import service_account
@@ -59,18 +61,38 @@ from sqlalchemy import select
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig
+from src.core.operator_errors import ServerNotConfigured, StateConflict, safe_error_message
 
 logger = logging.getLogger(__name__)
+
+
+class TenantAdapterConfigMissing(StateConflict):
+    """The tenant has no adapter config to attach a service account to."""
+
+    MESSAGE = "This tenant has no ad server configuration yet"
+
+
+class ServiceAccountAlreadyExists(StateConflict):
+    """The tenant already has a service account; it is not replaced."""
+
+    MESSAGE = "This tenant already has a service account"
+
+
+class GCPProjectNotConfigured(ServerNotConfigured):
+    """The deployment names no GCP project to create service accounts in (``GCP_PROJECT_ID``)."""
+
+    MESSAGE = "GCP_PROJECT_ID not configured. Please set this environment variable."
 
 
 class GCPServiceAccountService:
     """Service for managing GCP service accounts for GAM integration."""
 
-    def __init__(self, gcp_project_id: str):
+    def __init__(self, gcp_project_id: str | None):
         """Initialize service with GCP project ID.
 
         Args:
-            gcp_project_id: The GCP project ID where service accounts will be created
+            gcp_project_id: The GCP project ID where service accounts will be created; a
+                deployment with none still answers what the tenant's own state refuses
 
         The credential is HANDED to the client, not left in the environment. The
         settings carry it as JSON or as a path, and ``service_account.Credentials``
@@ -79,7 +101,11 @@ class GCPServiceAccountService:
         Application Default Credentials on its own.
         """
         self.gcp_project_id = gcp_project_id
-        self.iam_client = iam_admin_v1.IAMClient(credentials=self._credentials())
+
+    @cached_property
+    def iam_client(self) -> iam_admin_v1.IAMClient:
+        """The IAM client, built on first use: building it reads the credentials (ADC when none are set)."""
+        return iam_admin_v1.IAMClient(credentials=self._credentials())
 
     @staticmethod
     def _credentials() -> service_account.Credentials | None:
@@ -104,6 +130,24 @@ class GCPServiceAccountService:
         logger.warning("No explicit GCP credentials provided - relying on Application Default Credentials")
         return None
 
+    def _adapter_config_ready_for_an_account(
+        self, tenant_id: str, adapter_config: AdapterConfig | None
+    ) -> AdapterConfig:
+        """*adapter_config*, when a service account can be created for it; otherwise the refusal, before any GCP call.
+
+        In this order: the tenant's own state, which the operator can see and fix, then this
+        deployment's GCP project.
+        """
+        if not adapter_config:
+            raise TenantAdapterConfigMissing(f"Tenant {tenant_id} not found or has no adapter config")
+        if adapter_config.gam_service_account_email:
+            raise ServiceAccountAlreadyExists(
+                f"Tenant {tenant_id} already has a service account: {adapter_config.gam_service_account_email}"
+            )
+        if not self.gcp_project_id:
+            raise GCPProjectNotConfigured(f"No GCP project to create a service account for tenant {tenant_id}")
+        return adapter_config
+
     def create_service_account_for_tenant(self, tenant_id: str, display_name: str | None = None) -> tuple[str, str]:
         """Create a service account for a tenant and store credentials.
 
@@ -118,22 +162,14 @@ class GCPServiceAccountService:
             Tuple of (service_account_email, service_account_json)
 
         Raises:
-            ValueError: If tenant not found or already has a service account
+            TenantAdapterConfigMissing: If the tenant has no adapter config
+            ServiceAccountAlreadyExists: If the tenant already has a service account
             Exception: If service account creation fails
         """
         with get_db_session() as session:
             # Get adapter config
             stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-            adapter_config = session.scalars(stmt).first()
-
-            if not adapter_config:
-                raise ValueError(f"Tenant {tenant_id} not found or has no adapter config")
-
-            # Check if service account already exists
-            if adapter_config.gam_service_account_email:
-                raise ValueError(
-                    f"Tenant {tenant_id} already has a service account: {adapter_config.gam_service_account_email}"
-                )
+            adapter_config = self._adapter_config_ready_for_an_account(tenant_id, session.scalars(stmt).first())
 
             # Generate account ID from tenant ID (must be 6-30 chars, lowercase, numbers, hyphens)
             # Format: adcp-sales-{tenant_id}
@@ -269,15 +305,13 @@ class GCPServiceAccountService:
             account = self.iam_client.get_service_account(request=request)
             logger.info(f"Found existing service account: {account.email}")
             return account
+        except NotFound:
+            logger.info(f"Service account {service_account_email} does not exist yet")
+            return None
         except Exception as e:
-            # 404 means it doesn't exist, which is fine
-            if "404" in str(e) or "NOT_FOUND" in str(e):
-                logger.info(f"Service account {service_account_email} does not exist yet")
-                return None
-            else:
-                # Some other error - log it but don't fail
-                logger.warning(f"Error checking if service account exists: {e}")
-                return None
+            # Some other error - log it but don't fail
+            logger.warning(f"Error checking if service account exists: {e}")
+            return None
 
     def _verify_service_account_exists(self, service_account_email: str) -> bool:
         """Verify that a service account exists in GCP.
@@ -359,8 +393,7 @@ class GCPServiceAccountService:
             result["service_account_count"] = account_count
             logger.info(f"Successfully listed {account_count} service accounts in project {self.gcp_project_id}")
         except Exception as e:
-            result["errors"].append(f"Failed to list service accounts: {e}")
-            logger.error(f"Failed to list service accounts: {e}", exc_info=True)
+            result["errors"].append(safe_error_message(e, "Failed to list service accounts"))
 
         # Note: We can't really test 'can_create' without actually creating one,
         # so we'll just check if we have the list permission as a basic sanity check

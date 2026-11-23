@@ -53,9 +53,7 @@ Each tenant configures their own SSO provider in the Admin UI (**Users & Access*
 
 1. Start the system. The first startup creates a default tenant with Setup Mode enabled.
 2. Log in with Google as one of the `SUPER_ADMIN_EMAILS` addresses.
-3. Configure SSO in **Users & Access** - supports Google, Microsoft, or any OIDC provider (Okta, Auth0, Keycloak, and others) as Custom OIDC.
-4. Test your SSO login.
-5. Disable Setup Mode once SSO is working.
+3. Configure the tenant's SSO in **Users & Access** with the [SSO quick start](../user-guide/sso-setup.md#quick-start). It supports Google, Microsoft, or any OIDC provider (Okta, Auth0, Keycloak, and others) as Custom OIDC.
 
 See the [SSO setup guide](../user-guide/sso-setup.md) for detailed instructions.
 
@@ -94,9 +92,13 @@ The Admin UI uses the first complete configuration in the following order:
 4. A `client_secret.json` file of Google OAuth credentials in the application's root directory
 
 Without `GOOGLE_OAUTH_REDIRECT_URI`, the global sign-in builds the callback URL from the
-request's host, under `/admin` in production unless `SKIP_NGINX` is set. In production, a
-tenant's sign-in uses `https://<SALES_AGENT_DOMAIN>/admin/auth/google/callback`. Outside
-production, a tenant's sign-in ignores the setting and uses the request's host.
+request's host. In production, unless `SKIP_NGINX` is set, the callback is always under
+`/admin`. Otherwise it keeps the path that the sign-in starts from, so a deployment whose
+Admin UI answers under `/admin/` and at the root, such as the Docker Compose stack, needs
+both `<host>/admin/auth/google/callback` and `<host>/auth/google/callback` registered with
+the OAuth client. In production, a tenant's sign-in uses
+`https://<SALES_AGENT_DOMAIN>/admin/auth/google/callback`. Outside production, a tenant's
+sign-in ignores the setting and uses the request's host.
 
 ### Super admin access control
 
@@ -112,6 +114,8 @@ The Admin UI checks these variables before the `super_admin_emails` and `super_a
 `scripts/setup/init_database.py` copies these variables into those two rows when you run it. The script prefers `TENANT_MANAGEMENT_EMAILS` over `SUPER_ADMIN_EMAILS`, and `TENANT_MANAGEMENT_DOMAINS` over `SUPER_ADMIN_DOMAINS`, when they are set.
 
 > **Note**: Per-tenant SSO and the **Users & Access** page control who reaches one tenant. Neither grants super admin access.
+
+> Super admin is granted only to a session from the deployment's own sign-in (Google or the `OAUTH_*` provider above). A session from a tenant's own SSO is limited to that tenant and is never a super admin, even for an address listed here.
 
 ---
 
@@ -153,7 +157,7 @@ Or use individual variables:
 
 ## AI features
 
-AI features (creative review, product suggestions) are configured **per-tenant** in the Admin UI. Each tenant sets their own Gemini API key.
+AI features (advertising policy checks, creative review, product ranking, AI order naming) are configured **per-tenant** in the Admin UI under Settings → Integrations → AI Services. A tenant can use any supported provider (Google Gemini, Anthropic, OpenAI and others); a key stored in the legacy per-tenant Gemini column still works.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -228,7 +232,7 @@ in every deployment: properties come only from it.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENCRYPTION_KEY` | - | Fernet key for encrypting stored secrets (OIDC client secrets, API keys, GAM service account JSON and GAM OAuth refresh tokens). The application refuses to encrypt or decrypt without it, so every deployment with a GAM tenant needs it, whichever GAM authentication method the tenant uses. The database migration that encrypts existing GAM refresh tokens stops if they exist and this is not set. Keep it stable: changing it makes the stored secrets unreadable. Generate with `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` |
+| `ENCRYPTION_KEY` | - | Fernet key for encrypting stored secrets (OIDC client secrets, API keys, GAM service account JSON and GAM OAuth refresh tokens). The container refuses to start without it, and the application refuses to encrypt or decrypt without it, so every deployment with a GAM tenant needs it, whichever GAM authentication method the tenant uses. The database migration that encrypts existing GAM refresh tokens stops if they exist and this is not set. Keep it stable: changing it makes the stored secrets unreadable. Generate with `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` |
 | `FLASK_SECRET_KEY` | auto-generated at startup | Flask session secret. Set it explicitly so sessions survive restarts and work across multiple processes. |
 | `SYNC_API_KEY` | - | Key that the Inventory Sync API accepts in the `X-API-Key` header. When unset, the API accepts the key stored in the database. See [Tenant Management API and Inventory Sync API](../operations/admin-apis.md) |
 | `TENANT_MANAGEMENT_API_KEY` | - | Key that the Tenant Management API accepts in the `X-Tenant-Management-API-Key` header. See [Tenant Management API and Inventory Sync API](../operations/admin-apis.md) |

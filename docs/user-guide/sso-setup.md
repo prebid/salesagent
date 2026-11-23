@@ -91,17 +91,20 @@ Before configuring SSO, you need the following:
 
 ## Quick start
 
-1. Open **Settings > Users & Access**.
-2. Note your **Required Redirect URI** (you need this when creating the OAuth app).
-3. Create an OAuth application in your identity provider (see the [provider setup guides](#provider-setup-guides)).
-4. Enter the **Client ID** and **Client Secret** in the SSO configuration form.
-5. **Add yourself**: Either add your email as a user OR add your email domain to Allowed Domains.
-6. Click **Save Configuration**, then **Test Connection**.
-7. Complete the login flow - SSO is automatically enabled on success.
-8. Sign out, then sign in again with **Sign in with SSO**. If the header shows no **Logout** link, open `/admin/logout` to sign out.
-9. On **Users & Access**, click **Disable Setup Mode**. After this, **Sign in with SSO** works only while the tenant's SSO is enabled.
+1. In **Settings > Account**, set **Custom Domain** to the host where you open the Admin UI, for example `localhost:8000` or `sales.example.com`. **Users & Access** builds the **Required Redirect URI** from that field.
+2. Open **Settings > Users & Access**.
+3. Note your **Required Redirect URI** (you need this when creating the OAuth app).
+4. Create an OAuth application in your identity provider (see the [provider setup guides](#provider-setup-guides)).
+5. Enter the **Client ID** and **Client Secret** in the SSO configuration form.
+6. **Add yourself**: Either add your email as a user with the **Admin** role OR add your email domain to Allowed Domains (people who sign in from an allowed domain are created as admins).
+7. Click **Save Configuration**, then **Test Connection**.
+8. Complete the login flow - SSO is automatically enabled on success.
+9. Sign out, then sign in again with **Sign in with SSO**. If the header shows no **Logout** link, open `/admin/logout` to sign out.
+10. On **Users & Access**, click **Disable Setup Mode**. After this, **Sign in with SSO** works only while the tenant's SSO is enabled.
 
 > **Important**: Add yourself as a user, or add your email domain to **Allowed Domains**, before you use **Sign in with SSO**. Otherwise, sign-in ends with "Access denied".
+
+> **Super admins**: you can add your own address or domain here like anyone else. Signing in through this tenant's SSO gives you only the role this tenant gives you, in this tenant: super-admin powers come only from the deployment's own sign-in, never from a tenant's SSO.
 
 ---
 
@@ -324,7 +327,7 @@ Replace `your-server` and `your-realm` with your Keycloak server URL and realm n
 
 After entering your SSO configuration:
 
-1. **Add yourself first**: Add your email as a user OR add your email domain to Allowed Domains.
+1. **Add yourself first**: Add your email as a user with the **Admin** role OR add your email domain to Allowed Domains.
 2. Click **Save Configuration**.
 3. Click **Test Connection** - this redirects you to your identity provider.
 4. Complete the login in your identity provider.
@@ -337,7 +340,7 @@ After entering your SSO configuration:
 Once SSO is working, follow these steps:
 
 1. **Verify test logins work** - Have team members test the SSO flow (add them as users or add their domain first).
-2. Sign in through **Sign in with SSO**.
+2. Sign in through **Sign in with SSO**. **Disable Setup Mode** requires an SSO sign-in, so you know SSO works before it becomes the only way in.
 3. **Click "Disable Setup Mode"** on the Users & Access page.
 
 After you disable Setup Mode, **Sign in with SSO** works only while the tenant's SSO is enabled. To troubleshoot, click **Re-enable Setup Mode** on the **Users & Access** page.
@@ -382,7 +385,7 @@ If you've already added yourself:
 - SSO must be **enabled** before Setup Mode can be disabled.
 - SSO is automatically enabled when you successfully complete the test flow.
 - If SSO shows as "Not Verified", click **Test Connection** and complete the login flow.
-- Sign out, sign in again with **Sign in with SSO**, and then click **Disable Setup Mode**. If the header shows no **Logout** link, open `/admin/logout` to sign out.
+- **Disable Setup Mode** works only in a session that **Sign in with SSO** started, and **Test Connection** does not start one. Follow steps 9 and 10 of the [quick start](#quick-start).
 
 ## Security best practices
 

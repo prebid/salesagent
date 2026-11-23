@@ -45,6 +45,7 @@ from src.core.database.repositories.product import OfferedProduct, ProductReposi
 from src.core.database.repositories.publisher import PublisherRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.signing_key import SigningKeyRepository
+from src.core.database.repositories.sync_job import SyncJobRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 
@@ -530,3 +531,18 @@ class PublisherUoW(BaseUoW):
         "publishers": PublisherRepository,
         "tenant_config": TenantConfigRepository,
     }
+
+
+class SyncJobUoW(BaseUoW):
+    """Unit of Work for a tenant's sync jobs.
+
+    For a caller that records a job's failure with no session of its own open
+    (``src.services.sync_jobs.record_sync_failure``).
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    sync_jobs: SyncJobRepository | None
+
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {"sync_jobs": SyncJobRepository}

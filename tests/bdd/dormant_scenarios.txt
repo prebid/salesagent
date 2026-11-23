@@ -348,10 +348,3 @@ T-UC-019-partition-targeting-rehydration :: given package "<>" persisted package
 T-UC-019-partition-targeting-rehydration :: given package "<>" persisted package_config has no targeting_overlay but legacy targeting {<>}
 T-UC-019-partition-targeting-rehydration :: given package "<>" persisted package_config has targeting_overlay set to the string 'not a dict'
 T-UC-019-partition-targeting-rehydration :: given package "<>" persisted package_config has targeting_overlay {<>}
-
-# T-UC-019-partition-valid-actions  (test_uc019_query_media_buys.py)
-T-UC-019-partition-valid-actions :: then the media buy "<>" valid_actions should equal []
-T-UC-019-partition-valid-actions :: then the media buy "<>" valid_actions should equal [cancel, update_budget, update_dates, update_packages, add_packages, sync_creatives]
-T-UC-019-partition-valid-actions :: then the media buy "<>" valid_actions should equal [cancel, update_budget, update_dates, update_packages, add_packages]
-T-UC-019-partition-valid-actions :: then the media buy "<>" valid_actions should equal [pause, cancel, update_budget, update_dates, update_packages, add_packages]
-T-UC-019-partition-valid-actions :: then the media buy "<>" valid_actions should equal [resume, cancel, update_budget, update_dates]

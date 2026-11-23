@@ -115,7 +115,7 @@ Set `SALES_AGENT_DOMAIN` to the host where you open the Admin UI:
 fly secrets set SALES_AGENT_DOMAIN="your-app-name.fly.dev"
 ```
 
-Fly.io deployments run in production, where the deployment creates its default tenant at that host and creates none without it. A sign-in through the deployment's OAuth client sends `https://<SALES_AGENT_DOMAIN>/admin/auth/google/callback` as its redirect URI, so register `https://your-app-name.fly.dev/admin/auth/google/callback` with that client.
+Fly.io deployments run in production, where the deployment creates its default tenant at that host and creates none without it. A sign-in through the deployment's OAuth client sends `/admin/auth/google/callback` on the host you sign in at, which must equal `SALES_AGENT_DOMAIN`, so register `https://your-app-name.fly.dev/admin/auth/google/callback` with that client. [Deployment OAuth](../environment-variables.md#deployment-oauth) states the rule.
 
 ### Initial Setup Flow
 
@@ -124,14 +124,7 @@ Fly.io deployments run in production, where the deployment creates its default t
 3. Log in with the deployment's own OAuth account (the address you put in
    `SUPER_ADMIN_EMAILS`). Setup Mode, enabled by default for new tenants, lets you verify
    a tenant's OIDC login before you enable it.
-4. Go to **Users & Access** and configure your SSO provider (Google, Microsoft, Okta, Auth0, Keycloak, or any OIDC provider)
-5. Copy the **Required Redirect URI** shown, for example `https://your-app-name.fly.dev/admin/auth/oidc/callback`, and add it to your provider
-6. **Add yourself**: Add your email as a user OR add your domain to Allowed Domains
-7. Click **Save Configuration**, then **Test Connection** - SSO is automatically enabled on success
-8. Sign out, then sign in again with **Sign in with SSO**. If the header shows no **Logout** link, open `/admin/logout` to sign out.
-9. Click **Disable Setup Mode**. After this, **Sign in with SSO** works only while the tenant's SSO is enabled.
-
-> **Important**: Add yourself as a user, or add your email domain to **Allowed Domains**, before you use **Sign in with SSO**. Otherwise, sign-in ends with "Access denied".
+4. Configure the tenant's SSO with the [SSO quick start](../../user-guide/sso-setup.md#quick-start). In its first step, set **Custom Domain** to `your-app-name.fly.dev`. **Users & Access** then shows the **Required Redirect URI** `https://your-app-name.fly.dev/admin/auth/oidc/callback`, which you add to your SSO provider (Google, Microsoft, Okta, Auth0, Keycloak, or any OIDC provider).
 
 See [SSO Setup Guide](../../user-guide/sso-setup.md) for detailed provider-specific instructions.
 
