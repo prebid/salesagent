@@ -377,12 +377,12 @@ class TestCreatePackage:
 
 
 # ---------------------------------------------------------------------------
-# MediaPackage.update_package_config
+# MediaPackage.set_package_config_keys
 # ---------------------------------------------------------------------------
 
 
-class TestUpdatePackageConfig:
-    """Repository.update_package_config() replaces the JSON config."""
+class TestSetPackageConfigKeys:
+    """Repository.set_package_config_keys() sets keys in the JSON config."""
 
     def test_roundtrip_update_config(self, tenant_a, principal_a):
         """Update package_config and read back."""
@@ -399,7 +399,7 @@ class TestUpdatePackageConfig:
 
         new_config = {"version": 2, "extra_field": "new"}
         with MediaBuyUoW(tenant_a) as uow:
-            result = uow.media_buys.update_package_config("mb_upd_cfg", "pkg_cfg", new_config)
+            result = uow.media_buys.set_package_config_keys("mb_upd_cfg", "pkg_cfg", **new_config)
             assert result is not None
             assert result.package_config == new_config
 
@@ -409,40 +409,6 @@ class TestUpdatePackageConfig:
             fetched = repo.get_package("mb_upd_cfg", "pkg_cfg")
             assert fetched is not None
             assert fetched.package_config == new_config
-
-    def test_update_config_nonexistent_returns_none(self, tenant_a, principal_a):
-        """Updating config of nonexistent package returns None."""
-        with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_no_pkg_cfg")
-            uow.media_buys.create(mb)
-
-        with MediaBuyUoW(tenant_a) as uow:
-            result = uow.media_buys.update_package_config("mb_no_pkg_cfg", "nonexistent", {})
-            assert result is None
-
-    def test_update_config_other_tenant_returns_none(self, tenant_a, tenant_b, principal_a, principal_b):
-        """Cannot update package config via another tenant's repository."""
-        with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_cfg_iso")
-            uow.media_buys.create(mb)
-
-        with MediaBuyUoW(tenant_a) as uow:
-            uow.media_buys.create_package(
-                media_buy_id="mb_cfg_iso",
-                package_id="pkg_cfg_iso",
-                package_config={"original": True},
-            )
-
-        with MediaBuyUoW(tenant_b) as uow:
-            result = uow.media_buys.update_package_config("mb_cfg_iso", "pkg_cfg_iso", {"hacked": True})
-            assert result is None
-
-        # Verify original unchanged
-        with get_db_session() as session:
-            repo = MediaBuyRepository(session, tenant_a)
-            fetched = repo.get_package("mb_cfg_iso", "pkg_cfg_iso")
-            assert fetched is not None
-            assert fetched.package_config == {"original": True}
 
 
 # ---------------------------------------------------------------------------

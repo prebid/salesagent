@@ -5054,8 +5054,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # updated (salesagent-mx7a8). catalogs is now applied: 3.2
             # media-buy/package-update.json defines it as "Replace the catalogs this
             # package promotes. Uses replacement semantics — the provided array replaces
-            # the current list", and update_media_buy writes that whole document through
-            # MediaBuyRepository.update_package_config, which the one affected_packages
+            # the current list", and update_media_buy writes that key through
+            # MediaBuyRepository.set_package_config_keys, which the one affected_packages
             # snapshot then reads back. Measured in one serial run over this module's
             # 63 immutable/replacement rows: 29 passed / 8 failed / 22 xfailed / 4 xpassed
             # -> 37 passed / 0 failed / 18 xfailed / 8 xpassed, the four new xpasses being

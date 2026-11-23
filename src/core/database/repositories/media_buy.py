@@ -776,7 +776,7 @@ class MediaBuyRepository(SessionEffectsMixin):
         rather than going through update_status / update_fields, which would
         otherwise leave the parent's token stale.
 
-        For the two package writers that hold only the package (update_package_config,
+        For the two package writers that hold only the package (set_package_config_keys,
         update_package_fields). The two that already hold the parent row
         (create_package, create_packages_bulk) call ``_bump_revision`` directly rather
         than paying for a second lookup.
@@ -816,24 +816,6 @@ class MediaBuyRepository(SessionEffectsMixin):
         )
         self._session.add(package)
         self._bump_revision(media_buy)
-        self._session.flush()
-        return package
-
-    def update_package_config(
-        self,
-        media_buy_id: str,
-        package_id: str,
-        package_config: dict,
-    ) -> MediaPackage | None:
-        """Update the package_config of a package within this tenant.
-
-        Returns the updated MediaPackage, or None if not found.
-        """
-        package = self.get_package(media_buy_id, package_id)
-        if package is None:
-            return None
-        package.package_config = package_config
-        self._bump_parent_revision(media_buy_id)
         self._session.flush()
         return package
 
