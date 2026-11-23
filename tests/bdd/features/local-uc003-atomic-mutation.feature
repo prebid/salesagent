@@ -103,6 +103,7 @@ Feature: UC-003 update_media_buy — one request is one atomic mutation (local)
     | pkg_002    | budget | 7000  |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail with error code "SERVICE_UNAVAILABLE"
+    And the ad server received the updates "pause_package, update_package_budget"
     When the Buyer Agent reads media buy "mb_existing" back with get_media_buys
     Then get_media_buys reports package "pkg_001" with paused false
     And get_media_buys reports package "pkg_002" with budget 5000

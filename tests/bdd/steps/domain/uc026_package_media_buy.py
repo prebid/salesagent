@@ -17,6 +17,7 @@ from tests.bdd.steps._outcome_helpers import (
     payload_or_none,
     require_payload,
     stored_package_config,
+    wire_dict,
     wire_entry,
     wire_field,
 )
@@ -296,6 +297,30 @@ def _created_media_buy_id(ctx: dict) -> str:
     return str(media_buy_id)
 
 
+def _stored_buy_id(ctx: dict) -> str:
+    """The buy whose record the request changed: the one this scenario created, or the one it updated."""
+    if ctx.get("request_kwargs"):
+        return _created_media_buy_id(ctx)
+    media_buy_id = ctx.get("existing_media_buy_id")
+    assert media_buy_id, "the scenario neither created nor updated a media buy, so there is no record to read"
+    return str(media_buy_id)
+
+
+def _assert_stored_paused(ctx: dict, pkg: Any, expected: bool) -> None:
+    """The package *pkg* the response returned is stored with ``paused`` *expected*.
+
+    GRADE THE RECORD, NOT ONLY THE ENVELOPE: a response that echoes the buyer's ask passes
+    while the record says otherwise, and the record is what the next get_media_buys serves.
+    """
+    package_id = _pkg_field(pkg, "package_id")
+    assert package_id, "response package carries no package_id, so the persisted package_config cannot be read back"
+    stored = stored_package_config(ctx, _stored_buy_id(ctx), str(package_id))
+    assert bool(stored.get("paused")) is expected, (
+        f"stored package_config['paused']={stored.get('paused')!r}, expected {expected!r} -- the response "
+        "reported the buyer's ask while the record says otherwise"
+    )
+
+
 def _create_media_buy_for_update(ctx: dict, **pkg_overrides: Any) -> None:
     """Create a media buy with a single package, store in ctx for update scenarios.
 
@@ -319,6 +344,8 @@ def _create_media_buy_for_update(ctx: dict, **pkg_overrides: Any) -> None:
     mb_id = getattr(inner, "media_buy_id", None)
     assert mb_id, "Created media buy has no media_buy_id"
     ctx["existing_media_buy_id"] = mb_id
+    # The revision the buy was created at, so an update's Then can show it moved.
+    ctx["existing_revision"] = getattr(inner, "revision", None)
     packages = getattr(inner, "packages", None) or []
     if packages:
         pkg_obj = packages[0]
@@ -2247,22 +2274,11 @@ def _assert_requested_package_effects(ctx: dict) -> None:
                 # T-UC-026-inv-200-2 failed, so the generic bool branch below made this
                 # field echo-satisfiable (salesagent-0a2ue).
                 #
-                # Create dispatch only. The update-side pause not persisting is a separate
-                # open defect (salesagent-1ete); reading the record there would grade that
-                # bug from this step instead of from its own scenario.
+                # On create and on update alike: update_media_buy records the pause inside
+                # its unit of work once the ad server accepts it (#2647).
                 actual = _pkg_field(pkg, field)
                 assert str(actual) == str(value), f"Requested {field}={value!r}, package carries {actual!r}"
-                if ctx.get("request_kwargs"):
-                    package_id = _pkg_field(pkg, "package_id")
-                    assert package_id, (
-                        "response package carries no package_id, so the persisted package_config cannot be read back"
-                    )
-                    stored = stored_package_config(ctx, _created_media_buy_id(ctx), str(package_id))
-                    assert bool(stored.get("paused")) == bool(value), (
-                        f"stored package_config['paused']={stored.get('paused')!r}, expected "
-                        f"{value!r} -- the response reported the buyer's ask while the record "
-                        "says otherwise, so the package would deliver"
-                    )
+                _assert_stored_paused(ctx, pkg, bool(value))
             elif isinstance(value, int | float) and not isinstance(value, bool):
                 actual = _pkg_field(pkg, field)
                 assert _numbers_equal(value, actual), f"Requested {field}={value!r}, package carries {actual!r}"
@@ -2393,12 +2409,29 @@ def then_paused_unchanged(ctx: dict) -> None:
 
 @then(parsers.parse("the response should contain the package with paused={paused}"))
 def then_pkg_paused_value(ctx: dict, paused: str) -> None:
-    """Assert package has specific paused value."""
+    """The returned package carries *paused*, and the seller stored it."""
     packages = _get_packages(ctx)
     pkg = packages[0]
     actual = _pkg_field(pkg, "paused")
     expected = as_bool(paused)
     assert actual == expected, f"Expected paused={expected}, got {actual}"
+    _assert_stored_paused(ctx, pkg, expected)
+
+
+@then("the response revision should be above the revision the media buy was created at")
+def then_update_moved_revision(ctx: dict) -> None:
+    """update_media_buy.mdx @ v3.2.7 line 274: "Every mutating update increments `revision`".
+
+    The pin does not say by how much, so the bound is strict but not an exact value.
+    """
+    from tests.bdd.steps.generic.then_media_buy_readback import _is_wire_integer
+
+    created = ctx.get("existing_revision")
+    assert created is not None, "the create response carried no revision to compare the update against"
+    reported = wire_dict(ctx).get("revision")
+    assert _is_wire_integer(reported) and reported > created, (
+        f"the update response carries revision {reported!r}; a mutating update must move it past {created}"
+    )
 
 
 @then(parsers.parse("the response should contain the package with canceled={canceled}"))

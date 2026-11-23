@@ -2804,11 +2804,22 @@ def then_stored_buy_status(ctx: dict, label: str, status: str) -> None:
     assert [row.status for row in rows] == [status], f"the stored media buy reads {[r.status for r in rows]}"
 
 
+def _assert_adapter_update_actions(ctx: dict, expected: list[str]) -> None:
+    """The ad server was handed exactly *expected*, in order, read from its own record (``adapter_update_actions``)."""
+    actions = ctx["env"].adapter_update_actions()
+    assert actions == expected, f"the ad server was handed {actions}, expected {expected}"
+
+
 @then("the ad server received an update_package_budget call")
 def then_ad_server_budget_call(ctx: dict) -> None:
     """The control: this request does reach the ad server, so the no-call Then can fail."""
-    actions = ctx["env"].adapter_update_actions()
-    assert actions == ["update_package_budget"], f"the ad server was handed {actions}"
+    _assert_adapter_update_actions(ctx, ["update_package_budget"])
+
+
+@then(parsers.parse('the ad server received the updates "{actions}"'))
+def then_ad_server_received_updates(ctx: dict, actions: str) -> None:
+    """The ad server was handed the comma-separated *actions*, in order: a refusal before the first cannot pass."""
+    _assert_adapter_update_actions(ctx, [action.strip() for action in actions.split(",")])
 
 
 @given(parsers.parse('the update sets its "{member}" member'))
