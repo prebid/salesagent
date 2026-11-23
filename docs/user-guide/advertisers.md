@@ -83,8 +83,6 @@ async with Client(transport=transport) as client:
 
 ## Notifications
 
-The sales agent sends notices through Slack and webhooks. It sends no email.
-
 - **Slack**: The tenant can post notices about tasks, media buys, and creatives to a Slack channel, as [Creative management](creatives.md#notifications) describes.
 - **Buyer webhooks**: A buyer names its own webhook in the `push_notification_config` field of a `create_media_buy`, `update_media_buy`, or `sync_creatives` request. The sales agent posts status changes for that request there. For `sync_creatives`, see [Creative management](creatives.md#notifications). A `sync_accounts` request also accepts the field, but the sales agent sends nothing to it. Known issue: [#1608](https://github.com/prebid/salesagent/issues/1608).
 - **Delivery reports**: A buyer sets `reporting_webhook` on `create_media_buy` to receive delivery reports.

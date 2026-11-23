@@ -51,24 +51,14 @@ every active tenant, 50 per page, and has a **Create New Account** button.
 
 ## Access levels
 
-The Admin UI recognizes two kinds of user:
+The Admin UI has two kinds of user: a super admin, who reaches every tenant, and a tenant
+user, who reaches one tenant with a viewer, manager, or admin role. On the tenant's
+**Users & Access** page, you add a user by email address, and you revoke a user's access
+by deactivating the user.
 
-- **Super admin** - An address listed in `SUPER_ADMIN_EMAILS`, or an address in a domain listed in `SUPER_ADMIN_DOMAINS`. A super admin reaches every tenant and passes every role check. Super-admin access comes only from the deployment's own sign-in: through a tenant's SSO, the same address gets only the role that tenant gives it.
-- **Tenant user** - An active user on the tenant's **Users & Access** page. You add a user by email address, or admit a whole email domain. A tenant user reaches that tenant only.
-
-A tenant user's role decides what that user can do in the tenant:
-
-- **Viewer** - Opens pages. The role check refuses its `POST`, `PUT`, `PATCH`, and `DELETE` requests.
-- **Manager** - Changes settings, products, and campaigns, but not the admin-only pages.
-- **Admin** - Also manages users and roles, authorized domains and emails, Setup Mode, SSO,
-  and the deactivation of the tenant.
-
-**Users & Access** adds a user as a viewer unless an admin picks another role. Someone who
-signs in from an authorized domain or email without an invitation becomes an admin. To
-revoke access, deactivate the user on **Users & Access**.
-
-See [SSO setup](sso-setup.md) for configuring authentication, and
-[Security and authentication](../security.md) for how the Admin UI checks access.
+[Super admins](../security.md#super-admins) and [Tenant users](../security.md#tenant-users)
+describe who counts as a super admin, what each role can do, and who can sign in without
+an invitation. See [SSO setup](sso-setup.md) for configuring authentication.
 
 ## Guides
 

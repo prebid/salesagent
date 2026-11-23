@@ -39,9 +39,9 @@ For where adapters sit in the overall system, see [Architecture](../../developme
 ## Quick start
 
 1. In the Admin UI's inventory browser, click **Sync All** to sync the GAM inventory.
-2. Under **Settings > Products**, click **Add New** to open the product form. When the tenant has no product, the button reads **Create Product**.
+2. Open the product form, as [Create a product](../../user-guide/products.md#create-a-product) describes.
 3. Under **Inventory Configuration**, click **Browse Ad Units** or **Browse Placements** and select the inventory.
-4. Add at least one pricing option. The first pricing option sets the delivery type: a fixed price is guaranteed, and an auction price is non-guaranteed.
+4. Set the pricing options. The first pricing option sets the delivery type: a fixed price is guaranteed, and an auction price is non-guaranteed.
 5. Click **Create Product**. The system generates a default GAM configuration from the delivery type and the formats, and stores it with the inventory you selected.
 6. Create a media buy. The adapter creates the GAM line items from the stored configuration. If a product has no configuration at media buy time, the system generates defaults then.
 
