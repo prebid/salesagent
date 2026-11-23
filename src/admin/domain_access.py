@@ -294,6 +294,9 @@ def add_authorized_domain(tenant_id: str, domain: str) -> bool:
     """
     Add domain to tenant's authorized_domains list.
 
+    The repository's append refuses a value that is not a domain name, and the deployment's
+    super-admin domain however it is spelled.
+
     Args:
         tenant_id: Tenant ID
         domain: Domain to add (e.g., "scribd.com")
@@ -301,15 +304,7 @@ def add_authorized_domain(tenant_id: str, domain: str) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    domain_lower = domain.lower()
-    super_admin_domain = get_super_admin_domain()
-
-    # Security check - prevent super admin domain hijacking
-    if domain_lower == super_admin_domain:
-        logger.error(f"Attempted to add super admin domain {domain} to tenant {tenant_id}")
-        return False
-
-    return _mutate_authorized_list("add", "authorized_domains", tenant_id, domain_lower)
+    return _mutate_authorized_list("add", "authorized_domains", tenant_id, domain.lower())
 
 
 def remove_authorized_domain(tenant_id: str, domain: str) -> bool:

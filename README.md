@@ -55,7 +55,7 @@ uvx adcp http://localhost:8000/mcp/ --auth test-token get_products '{"brief":"vi
 ```
 
 Access services at http://localhost:8000:
-- **Admin UI:** `/admin` or just click "Log in to Dashboard" (test credentials: `test123`)
+- **Admin UI:** `/admin`. Sign in with Google as one of the `SUPER_ADMIN_EMAILS` addresses; there is no password login. See [first-time setup](docs/quickstart.md#first-time-setup).
 - **MCP Server:** `/mcp/`
 - **A2A Server:** `/a2a`
 
@@ -91,10 +91,10 @@ and re-test after every upgrade — minor releases can carry breaking changes.
 ### After Deployment
 
 Configure via the Admin UI:
-1. Configure your ad server (Settings → Adapters)
+1. Configure your ad server (Settings → Ad Server)
 2. Set up products that match your GAM line items
 3. Add advertisers who will use the MCP API
-4. Set your custom domain (Settings → General)
+4. Set your custom domain (Settings → Account)
 
 ---
 
@@ -126,7 +126,7 @@ For GAM integration, choose your authentication method:
    GAM_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
    GAM_OAUTH_CLIENT_SECRET=your-client-secret
    ```
-3. Configure in Admin UI: Settings → Adapters → Google Ad Manager
+3. Configure in Admin UI: Settings → Ad Server → Google Ad Manager
 
 ---
 
@@ -235,7 +235,7 @@ The primary interface for AI agents. Built with FastMCP over HTTP/SSE transport.
 
 ### A2A (Agent-to-Agent Protocol)
 JSON-RPC 2.0 server for agent-to-agent communication:
-- **Endpoint**: `/a2a` (also served on port 8091)
+- **Endpoint**: `/a2a`
 - **Discovery**: `/.well-known/agent.json` (also `/.well-known/agent-card.json`, `/agent.json`)
 - **Authentication**: Bearer tokens via Authorization header
 - **Library**: Built with `a2a-sdk[http-server]`
@@ -259,38 +259,10 @@ a buyer sent it; the only difference between them is the tenant's adapter.
 
 ## Using the MCP Client
 
-```python
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
-
-# Connect to the server
-transport = StreamableHttpTransport(
-    url="http://localhost:8000/mcp/",
-    headers={"Authorization": "Bearer your_token"},
-)
-client = Client(transport=transport)
-
-async with client:
-    # 1. Discover products. Each product carries one or more `pricing_options`.
-    products = await client.tools.get_products(brief="video ads for sports content")
-
-    # 2. Book a media buy. Each package references a product and one of its
-    #    pricing options. `idempotency_key` is REQUIRED (16-255 chars) — reusing
-    #    the same key makes retries safe (returns the original buy, no duplicate).
-    result = await client.tools.create_media_buy(
-        brand="acme.com",                     # domain shorthand for a BrandReference
-        start_time="2026-08-01T00:00:00Z",    # ISO 8601, or "asap"
-        end_time="2026-08-31T23:59:59Z",
-        packages=[
-            {
-                "product_id": "ctv_sports",
-                "pricing_option_id": "cpm_usd",  # from product.pricing_options
-                "budget": 50000,                 # amount in the pricing option's currency
-            }
-        ],
-        idempotency_key="acme-ctv-2026-08-0001",
-    )
-```
+An AI agent connects with the `fastmcp` client and calls the AdCP tools by name:
+`client.call_tool("get_products", {...})`, then `client.call_tool("create_media_buy", {...})`.
+The [quick start guide](docs/quickstart.md#connecting-an-ai-agent) has the complete example,
+including the headers a local call needs and a `create_media_buy` payload the server accepts.
 
 ## Project Structure
 

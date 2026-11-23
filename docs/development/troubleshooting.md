@@ -46,6 +46,8 @@ MCP and A2A:
 Admin UI:
 
 - [Blank page or 500 error](#blank-page-or-500-error)
+- [403 "Your role does not allow this"](#your-role-does-not-allow-this)
+- [403 "Cross-origin request refused"](#cross-origin-request-refused)
 - [Activity feed doesn't update](#activity-feed-not-updating)
 - [Slack notifications don't arrive](#slack-notifications-not-arriving)
 
@@ -271,9 +273,11 @@ middleware order make this work.
 flowchart TD
     Fail["Authentication fails"] --> Which{"Which entry point?"}
     Which -->|"Admin UI (browser)"| UI{"What do you see?"}
-    UI -->|"Access denied page"| Denied["Check SUPER_ADMIN_EMAILS:\nsee Access denied in the Admin UI"]
+    UI -->|"Access denied, a 403 page,\nor no account to select"| Denied["Check the super admin lists\nand your user rows:\nsee Access denied in the Admin UI"]
     UI -->|"404 after Google login"| CB["Fix the redirect URI:\nsee OAuth callback 404"]
-    UI -->|"Login loops"| Loop["Clear cookies, check FLASK_SECRET_KEY:\nsee OAuth redirect loop"]
+    UI -->|"Login loops"| Loop["Check your SSO access\nand the session cookie:\nsee OAuth redirect loop"]
+    UI -->|"Your role does\nnot allow this"| Role["Ask a tenant admin to change\nyour role: see Your role\ndoes not allow this"]
+    UI -->|"Cross-origin\nrequest refused"| Origin["Check the proxy headers:\nsee Cross-origin request refused"]
     Which -->|"MCP / REST / A2A\n(Authorization: Bearer)"| MCP{"Does the token's hash match\na principal of the tenant\nthe request addressed?"}
     MCP -->|No| Token["Rotate the token in the Admin UI:\nsee Invalid token for the MCP API"]
     MCP -->|Yes| Active["Check the tenant is active:\nsee Rejected with a valid token"]
@@ -281,43 +285,70 @@ flowchart TD
 
 ### Access denied in the Admin UI
 
-```bash
-# Check super admin configuration
-echo $SUPER_ADMIN_EMAILS
-echo $SUPER_ADMIN_DOMAINS
+**Symptoms**: after you sign in, a tenant page answers `403`, or the
+**Select Account** page lists no account. After a sign-in through a tenant's
+own single sign-on (SSO), the login page shows "Access denied. You don't have
+permission to access this tenant." When the sign-in starts over instead, see
+[OAuth redirect loop](#oauth-redirect-loop).
 
-# Verify OAuth credentials
-echo $GOOGLE_CLIENT_ID
-echo $GOOGLE_CLIENT_SECRET
+```bash
+# Check the super admin lists the app reads
+docker compose exec adcp-server env | grep SUPER_ADMIN
+
+# Check your user rows and roles
+docker compose exec postgres psql -U adcp_user adcp -c \
+  "SELECT tenant_id, role, is_active FROM users WHERE email='you@example.com';"
 ```
 
-The Google account you log in with must match `SUPER_ADMIN_EMAILS` (or a
-domain in `SUPER_ADMIN_DOMAINS`), or be a tenant user. The
-[security guide](../security.md) documents OAuth setup, including the exact
-redirect URIs per environment.
+**Cause**: your address is neither a super admin nor an active user of the
+tenant. [Super admin check](../security.md#super-admin-check) and
+[Tenant access guard](../security.md#tenant-access-guard) describe both
+checks. The checks ignore `SUPER_ADMIN_DOMAIN` (singular). A session from a
+tenant's own SSO never counts as a super admin and reaches no other tenant, as
+[Super admins](../security.md#super-admins) explains.
+
+**Fix**: ask an admin of the tenant, or a super admin, to add your address on
+the **Users & Access** page. A `403` page can also come from the role check;
+see [Your role does not allow this](#your-role-does-not-allow-this).
 
 ### OAuth callback 404
 
-The redirect URI registered in the Google Cloud Console doesn't match your
-deployment. Register the URI for your environment:
+Google returns the browser to the redirect URI that the app sends with the
+sign-in request. A 404 at that address means that the URI names a host or a
+path that doesn't reach the Admin UI. To see the URI, read the `redirect_uri`
+parameter in the address of Google's sign-in page.
 
-- Local Docker: `http://localhost:8000/auth/google/callback`
-- Behind a production proxy: `https://your-domain.com/admin/auth/google/callback`
+[Deployment OAuth](../deployment/environment-variables.md#deployment-oauth)
+describes how the app builds the URI for each kind of sign-in.
+
+Correct `GOOGLE_OAUTH_REDIRECT_URI` or `SALES_AGENT_DOMAIN`, or route the path
+to the app in your proxy, so that the URI reaches this deployment. Register the
+same URI in the Google Cloud Console. For a URI that the console doesn't list,
+Google shows a `redirect_uri_mismatch` error instead of redirecting.
 
 ### OAuth redirect loop
 
-```bash
-# Clear session cookies in the browser, or use an incognito window.
+Clear the session cookies in the browser, or use a private window, and sign in
+again. If the loop continues, look for one of the following causes:
 
-# Verify the redirect URI in the Google Console matches exactly:
-# http://localhost:8000/auth/google/callback
-
-# Check the session secret is set and stable across restarts
-echo $FLASK_SECRET_KEY
-```
-
-When `FLASK_SECRET_KEY` is unset, the app generates a random key at startup,
-which invalidates every session cookie on each restart.
+- **The tenant's SSO refuses the sign-in.** When a tenant's SSO is enabled,
+  the login page starts it by itself on the tenant's own host, and in
+  single-tenant mode. A refusal or an error in the SSO callback returns you to
+  the login page, which starts the SSO again. To stop the loop and read the
+  stored message, open the login page with `?logged_out=1`, for example
+  `http://localhost:8000/admin/login?logged_out=1`. Then ask an admin of the
+  tenant to add or activate you on the **Users & Access** page, or to correct
+  the SSO configuration.
+- **The browser drops the session cookie.** In production, the cookie is
+  `Secure`, so the browser keeps it only over HTTPS. In multi-tenant mode, it
+  also covers only `SALES_AGENT_DOMAIN` and its subdomains, as
+  [OAuth cross-domain authentication](../security.md#oauth-cross-domain-authentication)
+  describes.
+- **The session key changes, or differs between processes.** When
+  `FLASK_SECRET_KEY` is unset, each process generates its own key at startup.
+  A restart then invalidates every session cookie, and two processes reject
+  each other's cookies. The local Docker stack always sets the key, because
+  `docker-compose.yml` falls back to a fixed development value.
 
 ### Rejected with a valid token
 
@@ -339,10 +370,14 @@ order.
 
 ### Invalid token for the MCP API
 
-Get the token from the Admin UI: open the **Advertisers** tab and copy the API
-token. The database holds only a hash of each token
-(`principals.token_hash`), so you cannot read a lost token back. Rotate it
-from the advertiser's row in the Admin UI and copy the token it shows.
+The Admin UI shows an advertiser's full API token once: when you create the
+advertiser, and when you rotate its token. The **Advertisers** section of the
+tenant settings shows only the token's first characters. The database holds
+only a hash of each token (`principals.token_hash`), so you cannot read a lost
+token back. To get a full token, click the rotate button next to the token in
+the advertiser's row, and copy the token from the dialog that opens. The
+previous token stops working immediately, so give the replacement to every
+client that used it.
 
 ### A2A authentication failed
 
@@ -442,35 +477,91 @@ as strings, not numbers:
 
 ### Blank page or 500 error
 
+When a request fails with an error that the app doesn't expect, the Admin UI
+shows a message that ends with `The details have been logged (reference <code>).`
+Find the log line with that code:
+
 ```bash
-# Check the Flask error in the logs
-docker compose logs adcp-server | grep ERROR
+docker compose logs adcp-server | grep "<code>"
 ```
 
-To get interactive tracebacks, enable debug mode in
-`docker-compose.override.yml`:
+The app logs the error at the `ERROR` level, with its traceback. It writes each
+log record on one line, so the matching line holds the whole traceback, with
+`\n` between the frames. When the page shows no reference, search the logs for
+`ERROR`.
 
-```yaml
-services:
-  adcp-server:
-    environment:
-      FLASK_DEBUG: "1"
+### Your role does not allow this
+
+**Symptoms**: a page or an action in the Admin UI fails with `403`. A page load
+or a form post gets the default `403 Forbidden` page, which doesn't show the
+message. Any other request, such as one from a page script or from `curl`, gets
+the body `{"success": false, "error": "Your role does not allow this"}`.
+
+**Cause**: the role on your user row in the tenant doesn't permit the request.
+[Tenant users](../security.md#tenant-users) lists what each role can do.
+
+To confirm the cause, find the refusal in the logs:
+
+```bash
+docker compose logs adcp-server | grep "Refused"
 ```
+
+The line reads `Refused <method> <path> for tenant <tenant_id>: role too low`.
+
+**Fix**: ask an admin of the tenant, or a super admin, to change your role on
+the **Users & Access** page.
+
+### Cross-origin request refused
+
+**Symptoms**: saving a form, or another change in the Admin UI, fails with
+`403`. A form post gets the default `403 Forbidden` page with the text
+"Cross-origin request refused". A request from a page script gets the body
+`{"success": false, "error": "Forbidden"}`.
+
+**Cause**: the request didn't come from the Admin UI's own origin, so the
+cross-site request check refused it.
+
+To confirm the cause, find the refusal in the logs:
+
+```bash
+docker compose logs adcp-server | grep "Refused a cross-origin"
+```
+
+The line reads
+`Refused a cross-origin <method> <path> (Sec-Fetch-Site=<value>, Origin=<value>)`.
+Read the two values as follows:
+
+- `Sec-Fetch-Site='cross-site'` or `Sec-Fetch-Site='same-site'`: a page on
+  another site, or on a sibling subdomain, sent the request. Open the Admin UI
+  at its own address, and repeat the change from its page.
+- `Sec-Fetch-Site=None`, with an `Origin` equal to the address in your browser:
+  the app sees a different scheme or host than the browser used.
+
+**Fix**: in the second case, correct the forwarded headers that the reverse
+proxy sends.
+[Cross-site request forgery](../security.md#cross-site-request-forgery)
+describes the check and the headers that the proxy must send.
 
 ### Activity feed not updating
 
-The activity feed uses Server-Sent Events (SSE). Check the following three
-things:
+The **Recent Activity** feed on the tenant dashboard polls the server every
+five seconds for the tenant's most recent `audit_logs` rows. Check the
+following three things:
 
-- The SSE endpoint responds at
-  `http://localhost:8000/admin/tenant/{tenant_id}/events`.
-- Rows arrive in the `audit_logs` table.
-- No browser extension blocks the SSE connection.
+- The poll address, `http://localhost:8000/admin/tenant/{tenant_id}/activity`,
+  returns JSON when you open it while you're signed in.
+- Rows arrive in the `audit_logs` table for the tenant.
+- The status next to the feed's heading starts with `Connected`. It reads
+  `Access denied` when a poll gets a `403`, and `Connection error - will retry`
+  when a poll fails.
 
 ### Slack notifications not arriving
 
-1. Verify the webhook URL in the tenant settings (`slack_webhook_url`).
-2. Check that the notification types are enabled.
+1. Verify the **Task Notifications Webhook URL** (`slack_webhook_url`) in the
+   **Integrations** section of the tenant settings.
+2. For audit log messages, check the **Audit Log Webhook URL**
+   (`slack_audit_webhook_url`) in the same section. The app sends audit log
+   messages only to that URL, and only when you set it.
 3. Test the webhook directly:
 
    ```bash
@@ -485,8 +576,10 @@ These entries cover the Google Ad Manager (GAM) adapter.
 
 ### Could not determine client ID from request
 
-**Symptoms**: error when saving or testing a GAM configuration with OAuth
-authentication.
+**Symptoms**: a GAM request that uses the tenant's OAuth refresh token fails
+with this error, for example an inventory sync. **Test Connection**,
+**Auto-detect Network**, and **Get OAuth Token** report the same cause as
+`GAM OAuth credentials not configured`.
 
 **Cause**: `GAM_OAUTH_CLIENT_ID` or `GAM_OAUTH_CLIENT_SECRET` isn't set.
 
@@ -496,22 +589,29 @@ authentication.
    docker compose exec adcp-server env | grep GAM_OAUTH
    ```
 
-2. If missing, add them to your `.env.secrets` file:
+2. If they're missing, add them to the `.env` file, which `docker-compose.yml`
+   reads:
 
    ```bash
    GAM_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
-   GAM_OAUTH_CLIENT_SECRET=your-client-secret
+   GAM_OAUTH_CLIENT_SECRET=GOCSPX-your-client-secret
    ```
+
+   The app refuses to start when the client ID doesn't end in
+   `.apps.googleusercontent.com`, or the secret doesn't start with `GOCSPX-`.
 
 3. Create OAuth credentials in the
    [Google Cloud Console credentials page](https://console.cloud.google.com/apis/credentials):
-   create an OAuth 2.0 client ID of type Web application and add the redirect
-   URI `http://localhost:8000/admin/auth/gam/callback`.
+   create an OAuth 2.0 client ID of type Web application. Add the redirect URI
+   that matches the address of your Admin UI:
+   `http://localhost:8000/admin/auth/gam/callback` under `/admin/`, or
+   `http://localhost:8000/auth/gam/callback` at the root. In production, the
+   app uses `https://<SALES_AGENT_DOMAIN>/admin/auth/gam/callback`.
 
-4. Restart the services:
+4. Recreate the containers so that they read the changed `.env` file:
 
    ```bash
-   docker compose restart
+   docker compose up -d
    ```
 
 5. Verify the configuration:
@@ -529,7 +629,7 @@ The following table compares the two GAM authentication methods.
 
 | Feature | OAuth (refresh token) | Service account |
 |---------|----------------------|-----------------|
-| Setup complexity | Higher — requires OAuth credentials | Lower — upload a JSON key |
+| Setup complexity | Higher — requires OAuth credentials | Lower — paste a JSON key, or create the account in the Admin UI |
 | Token expiration | Tokens can expire | Never expires |
 | Use case | Local testing | Production deployments |
 | Security | Tied to a user account | Isolated service identity |
@@ -538,13 +638,14 @@ Use a service account for production, and OAuth for local testing only.
 
 ### OAuth token invalid
 
-```bash
-# Store a fresh refresh token for the tenant
-uv run python -m scripts.setup.setup_tenant "Publisher" \
-  --adapter google_ad_manager \
-  --gam-network-code YOUR_CODE \
-  --gam-refresh-token NEW_TOKEN
+Store a fresh refresh token from the Admin UI. In the **Ad Server** section of
+the tenant settings, click **Refresh OAuth Token**, or **Get OAuth Token** when
+no token is stored. Approve the Google consent screen, and the callback
+replaces the stored token. The flow needs the GAM OAuth client that
+[Could not determine client ID from request](#could-not-determine-client-id-from-request)
+sets up.
 
+```bash
 # Verify in the database (the token is stored encrypted, so this shows only whether one is set)
 docker compose exec postgres psql -U adcp_user adcp -c \
   "SELECT tenant_id, gam_refresh_token IS NOT NULL AS has_token FROM adapter_config;"
@@ -563,9 +664,10 @@ docker compose exec postgres psql -U adcp_user adcp -c \
 account (hundreds of custom targeting keys with thousands of values each)
 takes more than 30 minutes.
 
-Inventory sync loads lazily by design: it fetches custom targeting **keys**
-only, and the Admin UI fetches a key's **values** on demand when you browse
-them, caching the result. A full sync of keys takes about two minutes.
+A sync from the Admin UI, and a `full` sync through the Inventory Sync API, fetch
+custom targeting **keys** only. The Admin UI reads a key's **values** live from GAM
+each time you browse the key, and stores none of them. Other Inventory Sync API syncs
+also store values, subject to `custom_targeting_limit`.
 
 ```bash
 # Trigger an inventory sync (authenticated with the SYNC_API_KEY value)
@@ -589,8 +691,13 @@ FROM gam_inventory
 WHERE tenant_id = '{tenant_id}';
 ```
 
+`values_count` counts only the values that a selective sync stored. Browsing a
+key in the Admin UI adds none.
+
 A sync that still runs long is stuck in GAM API calls — check
-`docker compose logs adcp-server` for the request the sync is waiting on.
+`docker compose logs adcp-server` for the request the sync is waiting on. For a
+selective sync with `custom_targeting`, lower `custom_targeting_limit`, or run a
+full sync, which skips values.
 
 ## Outbound request refused
 
@@ -741,9 +848,12 @@ docker compose logs -f adcp-server
 docker compose logs db-init
 ```
 
-The app also writes every operation to the `audit_logs` table — operation
-type, timestamp, principal and tenant IDs, success or failure, and security
-violations. The Admin UI Operations dashboard reads from it.
+The app also writes audit rows to the `audit_logs` table: operation type,
+timestamp, principal and tenant IDs, success or failure, and security
+violations. Only the operations whose code writes a row appear in it. For
+admin actions, coverage is per route, as [Audit trail](../security.md#audit-trail)
+explains, so don't treat the table as a complete record. The **Recent
+Activity** feed on the tenant dashboard reads from it.
 
 Test runs persist JSON reports in `test-results/<ddmmyy_HHmm>/` — read those
 instead of re-running a suite whose terminal output is gone.

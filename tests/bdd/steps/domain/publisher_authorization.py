@@ -191,8 +191,13 @@ def given_last_fetch_moved_back(ctx: dict, publisher: str, hours: int) -> None:
 # ── When: the operator's actions ────────────────────────────────────────
 
 
+# "The caller" is whoever the scenario signed in (``PublisherAuthorizationEnv``); "the
+# operator" is the super admin the env signs in by default. Both send the same request.
+
+
 @given(parsers.parse('the operator added the publisher "{publisher}"'))
 @when(parsers.parse('the operator adds the publisher "{publisher}"'))
+@when(parsers.parse('the caller adds the publisher "{publisher}"'))
 def when_add_publisher(ctx: dict, publisher: str) -> None:
     ctx["admin_page"] = _env(ctx).add_publisher(publisher)
 
@@ -203,12 +208,20 @@ def when_remove_publisher(ctx: dict, publisher: str) -> None:
     assert response.status_code == 200, f"removing {publisher!r} answered {response.status_code}: {response.data!r}"
 
 
+@when(parsers.parse('the caller removes the publisher "{publisher}"'))
+def when_caller_removes_publisher(ctx: dict, publisher: str) -> None:
+    """The removal as a scenario's caller sends it; the Thens read the answer, which may be a refusal."""
+    ctx["admin_page"] = _publishers(ctx).remove_publisher(publisher)
+
+
 @when("the operator syncs publisher partners")
+@when("the caller syncs publisher partners")
 def when_sync(ctx: dict) -> None:
     ctx["admin_page"] = _env(ctx).sync_publisher_partners()
 
 
 @when("the operator opens the publishers page")
+@when("the caller opens the publishers page")
 def when_open_publishers(ctx: dict) -> None:
     ctx["admin_page"] = _env(ctx).open_publishers()
 
@@ -224,6 +237,7 @@ def when_open_authorized_properties(ctx: dict) -> None:
 
 
 @when(parsers.parse('the operator opens the properties of the partnership with "{publisher}"'))
+@when(parsers.parse('the caller opens the properties of the partnership with "{publisher}"'))
 def when_open_properties(ctx: dict, publisher: str) -> None:
     ctx["admin_page"] = _env(ctx).open_partner_properties(publisher)
 
@@ -249,6 +263,18 @@ def then_document_stored(ctx: dict, publisher: str) -> None:
         f"fetch_error={stored.fetch_error!r}, document={stored.adagents!r} (response {body})"
     )
     assert stored.fetched_at is not None, f"no successful fetch of {publisher!r} was recorded (response {body})"
+
+
+@then(parsers.parse('the seller holds the publisher "{publisher}"'))
+def then_holds_publisher(ctx: dict, publisher: str) -> None:
+    assert _publishers(ctx).stored_publisher_or_none(publisher) is not None, (
+        f"the seller holds no publisher {publisher!r}"
+    )
+
+
+@then(parsers.parse('the seller holds no publisher "{publisher}"'))
+def then_holds_no_publisher(ctx: dict, publisher: str) -> None:
+    assert _publishers(ctx).stored_publisher_or_none(publisher) is None, f"the seller still holds {publisher!r}"
 
 
 @then(parsers.parse('the seller holds properties {names} from "{publisher}"'))

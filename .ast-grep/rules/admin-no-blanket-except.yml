@@ -30,9 +30,8 @@ message: >-
   or run a step that must not fail its caller under `with best_effort("<what failed>"):`
   from src.core.operator_errors.
 files:
+  # The GAM reporting blueprint lives here too, at src/admin/blueprints/gam_reporting_api.py.
   - "src/admin/**/*.py"
-  # Registered on the admin app (src/admin/app.py) though it lives under src/adapters.
-  - "src/adapters/gam_reporting_api.py"
 utils:
   # A type expression that names Exception or BaseException anywhere a handler can put it.
   # Recursive, so `((Exception))` and a tuple nested in a tuple are covered too. `has`

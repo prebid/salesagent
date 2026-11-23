@@ -217,6 +217,48 @@ class TestTenantManagementAPIIntegration:
         assert detail["settings"]["authorized_emails"] == ["ops@authlist.com", "eng@authlist.com"]
         assert detail["settings"]["authorized_domains"] == ["authlist.com", "eng.authlist.com"]
 
+    @pytest.mark.parametrize("domains", [["a',alert(1),'.example"], "authlist.com", [42]])
+    def test_an_authorized_domains_list_that_is_not_domain_names_is_a_400(self, client, mock_api_key_auth, domains):
+        """The column refuses it at assignment with an OperatorRefusal; the API answers 400 with its message."""
+        from src.core.operator_errors import InvalidDomainNameError
+
+        headers = {"X-Tenant-Management-API-Key": mock_api_key_auth}
+        create = client.post(
+            "/api/v1/tenant-management/tenants",
+            headers=headers,
+            json={
+                "name": "Bad Domains",
+                "subdomain": "bad-domains",
+                "virtual_host": "bad-domains.adcp.test",
+                "ad_server": "mock",
+                "authorized_emails": ["ops@authlist.com"],
+                "authorized_domains": domains,
+            },
+        )
+        assert create.status_code == 400
+        assert create.json == {"success": False, "error": InvalidDomainNameError.MESSAGE}
+
+        created = client.post(
+            "/api/v1/tenant-management/tenants",
+            headers=headers,
+            json={
+                "name": "Good Domains",
+                "subdomain": "good-domains",
+                "virtual_host": "good-domains.adcp.test",
+                "ad_server": "mock",
+                "authorized_domains": ["authlist.com"],
+            },
+        )
+        assert created.status_code == 201
+        tenant_id = created.json["tenant_id"]
+        update = client.put(
+            f"/api/v1/tenant-management/tenants/{tenant_id}", headers=headers, json={"authorized_domains": domains}
+        )
+        assert update.status_code == 400
+        assert update.json == {"success": False, "error": InvalidDomainNameError.MESSAGE}
+        detail = client.get(f"/api/v1/tenant-management/tenants/{tenant_id}", headers=headers).json
+        assert detail["settings"]["authorized_domains"] == ["authlist.com"]
+
     def test_duplicate_subdomain_returns_409(self, client, mock_api_key_auth):
         """A subdomain that is already taken answers 409, not 500.
 
