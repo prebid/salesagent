@@ -304,7 +304,6 @@ def tenant_settings(tenant_id, section=None):
         ai_config = tenant.ai_config or {}
         current_provider = ai_config.get("provider", "")
         current_model = ai_config.get("model", "")
-        has_logfire = bool(ai_config.get("logfire_token"))
 
         # Get setup checklist status
         setup_status = _setup_status_tile(tenant_id)
@@ -321,7 +320,6 @@ def tenant_settings(tenant_id, section=None):
             seller_ai_enabled=seller_ai_enabled,
             current_provider=current_provider,
             current_model=current_model,
-            has_logfire=has_logfire,
             tenant_id=tenant_id,
             section=section or "general",
             active_adapter=active_adapter,
@@ -338,6 +336,7 @@ def tenant_settings(tenant_id, section=None):
             admin_port=admin_port,
             is_production=is_production,
             script_name=script_name,
+            favicon_extensions=sorted(ALLOWED_FAVICON_EXTENSIONS),
             authorized_domains=authorized_domains,
             authorized_emails=authorized_emails,
             product_count=product_count,
@@ -357,7 +356,7 @@ def tenant_settings(tenant_id, section=None):
 
 @tenants_bp.route("/<tenant_id>/update", methods=["POST"])
 @log_admin_action("update")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def update(tenant_id):
     """Update tenant settings."""
     # Sanitize form data
@@ -538,7 +537,7 @@ def media_buys_list(tenant_id):
                 for package in media_buy.raw_request["packages"]:
                     product_id = package.get("product_id")
                     if product_id:
-                        stmt = select(Product).filter_by(product_id=product_id)
+                        stmt = select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)
                         product = db_session.scalars(stmt).first()
                         if product:
                             product_names.append(product.name)
@@ -573,9 +572,33 @@ def auth_settings(tenant_id):
     return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
 
-# Constants for favicon upload
-ALLOWED_FAVICON_EXTENSIONS = {"ico", "png", "svg", "jpg", "jpeg"}
+#: The favicon formats an upload accepts, each with the leading bytes it starts with (the
+#: extension alone proves nothing). Raster formats only: an SVG is a document that can carry
+#: script, and an uploaded favicon is served from the admin origin.
+_FAVICON_SIGNATURES = {
+    "ico": b"\x00\x00\x01\x00",
+    "png": b"\x89PNG\r\n\x1a\n",
+    "jpg": b"\xff\xd8\xff",
+    "jpeg": b"\xff\xd8\xff",
+}
+ALLOWED_FAVICON_EXTENSIONS = frozenset(_FAVICON_SIGNATURES)
+#: What an upload may have left on disk: the allowed formats, and an SVG from before SVG was refused.
+_STORED_FAVICON_EXTENSIONS = ALLOWED_FAVICON_EXTENSIONS | {"svg"}
 MAX_FAVICON_SIZE = 1 * 1024 * 1024  # 1MB
+
+
+def _favicon_content_matches(ext: str, head: bytes) -> bool:
+    """Whether a file's first bytes are those of the image format its extension names."""
+    signature = _FAVICON_SIGNATURES.get(ext)
+    return signature is not None and head.startswith(signature)
+
+
+def _remove_stored_favicons(tenant_favicon_dir: str) -> None:
+    """Delete every favicon file an upload may have left in *tenant_favicon_dir*."""
+    for ext in _STORED_FAVICON_EXTENSIONS:
+        path = os.path.join(tenant_favicon_dir, f"favicon.{ext}")
+        if os.path.exists(path):
+            os.remove(path)
 
 
 def _get_favicon_upload_dir() -> str:
@@ -640,6 +663,13 @@ def upload_favicon(tenant_id):
         flash(f"File too large. Maximum size: {MAX_FAVICON_SIZE // 1024}KB", "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
 
+    ext = file.filename.rsplit(".", 1)[1].lower()
+    head = file.read(8)
+    file.seek(0)
+    if not _favicon_content_matches(ext, head):
+        flash("The file is not a valid ICO, PNG or JPEG image", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
+
     # Create tenant-specific favicon directory
     upload_dir = _get_favicon_upload_dir()
     if not _is_safe_favicon_path(upload_dir, tenant_id):
@@ -649,17 +679,11 @@ def upload_favicon(tenant_id):
     tenant_favicon_dir = os.path.join(upload_dir, tenant_id)
     os.makedirs(tenant_favicon_dir, exist_ok=True)
 
-    # Get the file extension
-    ext = file.filename.rsplit(".", 1)[1].lower()
     # Save as favicon.{ext} in the tenant's directory
     filename = f"favicon.{ext}"
     filepath = os.path.join(tenant_favicon_dir, filename)
 
-    # Remove any existing favicon files for this tenant
-    for old_ext in ALLOWED_FAVICON_EXTENSIONS:
-        old_file = os.path.join(tenant_favicon_dir, f"favicon.{old_ext}")
-        if os.path.exists(old_file):
-            os.remove(old_file)
+    _remove_stored_favicons(tenant_favicon_dir)
 
     # Save the new favicon
     file.save(filepath)
@@ -725,11 +749,7 @@ def remove_favicon(tenant_id):
         if tenant.favicon_url and tenant.favicon_url.startswith("/static/favicons/"):
             upload_dir = _get_favicon_upload_dir()
             if _is_safe_favicon_path(upload_dir, tenant_id):
-                tenant_favicon_dir = os.path.join(upload_dir, tenant_id)
-                for ext in ALLOWED_FAVICON_EXTENSIONS:
-                    filepath = os.path.join(tenant_favicon_dir, f"favicon.{ext}")
-                    if os.path.exists(filepath):
-                        os.remove(filepath)
+                _remove_stored_favicons(os.path.join(upload_dir, tenant_id))
             else:
                 logger.error(f"Path traversal attempt detected for tenant: {tenant_id}")
 

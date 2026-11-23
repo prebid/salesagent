@@ -41,6 +41,7 @@ from src.core.database.repositories.currency_limit import CurrencyLimitRepositor
 from src.core.database.repositories.effects import begin_effects, drain_after_commit, end_effects
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.product import OfferedProduct, ProductRepository, offered_products
 from src.core.database.repositories.publisher import PublisherRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
@@ -334,6 +335,23 @@ class TenantConfigUoW(BaseUoW):
 
     def _clear_repos(self) -> None:
         self.tenant_config = None
+
+
+class PrincipalUoW(BaseUoW):
+    """Unit of Work for reading a tenant's principals (advertisers).
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    principals: PrincipalRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.principals = PrincipalRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.principals = None
 
 
 class AccountUoW(BaseUoW):

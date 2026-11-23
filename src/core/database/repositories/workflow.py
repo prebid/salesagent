@@ -447,6 +447,53 @@ class WorkflowRepository:
         return list(self._session.scalars(stmt).all())
 
     # ------------------------------------------------------------------
+    # The pending policy review queue (admin policy page)
+    # ------------------------------------------------------------------
+
+    def _pending_policy_reviews(self) -> Select[tuple[WorkflowStep]]:
+        """The one definition of the queue: this tenant's ``policy_review`` steps still ``pending``.
+
+        The policy page lists exactly these and the review route settles exactly these, so
+        media buy, creative and ad server steps (each with its own decision route) stay out.
+        """
+        return (
+            select(WorkflowStep)
+            .join(DBContext)
+            .where(
+                DBContext.tenant_id == self._tenant_id,
+                WorkflowStep.step_type == "policy_review",
+                WorkflowStep.status == "pending",
+            )
+        )
+
+    def list_pending_policy_reviews(self) -> list[WorkflowStep]:
+        """The queue, newest first."""
+        return list(self._session.scalars(self._pending_policy_reviews().order_by(WorkflowStep.created_at.desc())))
+
+    def get_pending_policy_review(self, step_id: str) -> WorkflowStep | None:
+        """Step *step_id* if it is in the queue, else None."""
+        return self._session.scalars(self._pending_policy_reviews().where(WorkflowStep.step_id == step_id)).first()
+
+    def settle_pending_policy_review(self, step_id: str, *, approved: bool, notes: str) -> bool:
+        """Approve or reject step *step_id* if it is still in the queue; True if this call settled it.
+
+        One conditional UPDATE, so of two reviewers deciding the same step only the first
+        changes it; the second matches no row and gets False.
+        """
+        in_queue = self._pending_policy_reviews().where(WorkflowStep.step_id == step_id)
+        stmt = (
+            update(WorkflowStep)
+            .where(WorkflowStep.step_id.in_(in_queue.with_only_columns(WorkflowStep.step_id)))
+            .values(
+                status="completed" if approved else "failed",
+                response_data={"approved": approved, "notes": notes},
+                completed_at=datetime.now(UTC),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        return type_cast("CursorResult[Any]", self._session.execute(stmt)).rowcount == 1
+
+    # ------------------------------------------------------------------
     # Context / WorkflowStep writes (no-commit; the UoW owns the boundary)
     # ------------------------------------------------------------------
 
