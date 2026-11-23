@@ -819,8 +819,11 @@ class MediaBuyRepository(SessionEffectsMixin):
         self._session.flush()
         return package
 
-    def set_package_config_keys(self, media_buy_id: str, package_id: str, **keys: Any) -> MediaPackage:
+    def set_package_config_keys(self, media_buy_id: str, package_id: str, /, **keys: Any) -> MediaPackage:
         """Set *keys* in the package's ``package_config``, keep the rest, and move the buy's revision.
+
+        The two ids are positional-only, so a stored key may share their names: a package
+        stores its own ``package_id`` in ``package_config``.
 
         Raises ``AdCPPackageNotFoundError`` when the buy holds no such package. A new
         document is assigned, so the JSON column records the change without ``flag_modified``.
