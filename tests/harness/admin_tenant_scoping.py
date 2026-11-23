@@ -2,8 +2,9 @@
 
 Drives ``GET /api/tenant/<tenant_id>/revenue-chart``, ``GET /api/tenant/<tenant_id>/products``,
 ``GET /api/tenant/<tenant_id>/products/suggestions``, ``GET,POST /tenant/<tenant_id>/policy/rules``
-and ``POST /auth/oidc/test/<tenant_id>`` (#2203), and the six GAM reporting routes of
-``src/adapters/gam_reporting_api.py`` (#2204), on the two admin transports ``AdminAccountEnv``
+and ``POST /auth/oidc/test/<tenant_id>`` (#2203), the six GAM reporting routes of
+``src/admin/blueprints/gam_reporting_api.py`` (#2204), and ``GET /tenant/<tenant_id>/media-buys``,
+which names products from the tenant's own catalogue, on the two admin transports ``AdminAccountEnv``
 already provides — Flask ``test_client`` (integration) and ``requests.Session`` against the
 Docker stack (e2e) — and seeds the tenants, memberships, catalogue and media buys the
 scenarios grade.
@@ -45,7 +46,7 @@ from tests.factories import MediaBuyFactory, ProductFactory, TenantFactory, User
 from tests.factories.mint import mint_id
 from tests.harness.admin_accounts import AdminAccountEnv
 from tests.harness.admin_client import AdminResponse
-from tests.helpers.admin_session import member_session_payload, no_configured_super_admins
+from tests.helpers.admin_session import cached_super_admin, member_session_payload, no_configured_super_admins
 from tests.utils.database_helpers import bound_factory_session, delete_tenant, tenant_row_counts
 
 #: The identity the scenarios log in as: a tenant user, never a super admin. Both transports
@@ -95,6 +96,7 @@ ROUTES: dict[str, TenantScopedRoute] = {
     "GAM principal summary API": TenantScopedRoute(
         f"{_GAM_API}/principals/{{principal_id}}/gam/reporting/summary", ("GET",)
     ),
+    "media buys page": TenantScopedRoute("/tenant/{tenant_id}/media-buys", ("GET",)),
 }
 
 #: Where a scenario may say a route redirected to, keyed by the name the Gherkin uses. The
@@ -113,6 +115,9 @@ class TargetTenant(NamedTuple):
     principal_id: str
     principal_name: str
     products_payload: list[dict[str, str]]
+    media_buy_id: str
+    #: The product id the buy's request packages name: one the tenant's own catalogue does not hold.
+    media_buy_product_id: str
 
 
 class TenantState(NamedTuple):
@@ -229,10 +234,23 @@ class AdminTenantScopingEnv(AdminAccountEnv):
                     "delivery_type": product.delivery_type,
                 }
             ]
+            (package,) = buy.raw_request["packages"]
+            assert package["product_id"] != product.product_id, "the buy must name a product id the tenant lacks"
             self._target = TargetTenant(
-                tenant.tenant_id, buy.principal.principal_id, buy.principal.name, products_payload
+                tenant.tenant_id,
+                buy.principal.principal_id,
+                buy.principal.name,
+                products_payload,
+                buy.media_buy_id,
+                package["product_id"],
             )
         return self._target
+
+    def seed_product_of_other_tenant(self, name: str) -> None:
+        """Another tenant's product named *name*, under the product id the target tenant's media buy names."""
+        with bound_factory_session():
+            other = TenantFactory(tenant_id=self._new_tenant_id("other"))
+            ProductFactory(tenant=other, product_id=self.target.media_buy_product_id, name=name)
 
     def target_state(self) -> TenantState:
         """The target tenant's state now, read from the database."""
@@ -264,17 +282,15 @@ class AdminTenantScopingEnv(AdminAccountEnv):
     def login_as_super_admin_of_other_tenant(self) -> None:
         """A super admin signed in at a fresh home tenant, with no row in the target (#2204, AC4 as amended).
 
-        The session is the deployment sign-in's (``auth_method=None``), as for the members above:
-        a tenant-SSO session is scoped to its own tenant, so it could not reach the target.
-
-        The session carries the two keys ``is_super_admin()`` caches after a configured super
-        admin's first check (``_cache_admin_status`` in ``src/admin/utils/helpers.py``), so the
-        grant reads the same on both transports without touching the stack's
-        ``SUPER_ADMIN_EMAILS``.
+        The session carries the keys ``is_super_admin()`` caches after a configured super
+        admin's first check (``cached_super_admin``), so the grant reads the same on both
+        transports without touching the stack's ``SUPER_ADMIN_EMAILS``. It is the deployment's
+        own (Google) sign-in, as every member session here is: a session from a tenant's SSO
+        is bound to that tenant and is never a super admin (``session_is_tenant_scoped``).
         """
         home_tenant_id = self._new_home_tenant(with_member=True)
         payload = member_session_payload(MEMBER_EMAIL, home_tenant_id, auth_method=None)
-        self.client.state_session({**payload, "is_super_admin": True, "admin_email": MEMBER_EMAIL})
+        self.client.state_session({**payload, **cached_super_admin(MEMBER_EMAIL)})
 
     def _new_home_tenant(self, *, with_member: bool) -> str:
         """A tenant the session is logged in against. Never the target, so the bypass cannot fire."""

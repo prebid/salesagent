@@ -20,6 +20,8 @@ Two properties bind them together:
 ## Contents
 
 - [Solve the problem the issue posed](#solve-the-problem-the-issue-posed)
+- [Keep the change to that outcome](#keep-the-change-to-that-outcome)
+- [Review the change](#review-the-change)
 - [Put logic in its layer](#put-logic-in-its-layer)
 - [Say each piece of logic once](#say-each-piece-of-logic-once)
 - [Follow the codebase's own conventions](#follow-the-codebases-own-conventions)
@@ -50,6 +52,56 @@ requirement — the outcome, not the mechanism. Engineer against that:
   solution starts accumulating patches and exceptions, the design
   underneath is wrong; reconsider the approach instead of adding the
   next patch.
+
+## Keep the change to that outcome
+
+One pull request closes one outcome. Scope follows the code the outcome
+needs, not the files the change happens to open:
+
+- **In scope** — the change's scope: the code the change writes (every
+  line it adds or edits), plus the callers and callees of every function
+  it writes. A defect in that set — a broken sibling caller, or a shared
+  callee behind the edited caller — is part of the fix, not a follow-up.
+- **Out of scope:** everything outside that set — pre-existing defects
+  elsewhere, unrelated cleanup, guards the outcome does not need. List
+  them under "Out of scope" in the pull request description and open an
+  issue for each. Pre-existing duplicates are paid down through
+  `.duplication-baseline`, not folded into an unrelated change.
+- **Split independent work** when each part can be reviewed and merged on
+  its own; keep coupled changes together rather than splitting to shrink
+  a diff.
+
+## Review the change
+
+A review grades the change's scope, as
+[§ Keep the change to that outcome](#keep-the-change-to-that-outcome)
+defines it, and nothing outside it. Every standard in this document
+applies in full to the code the change writes; none of them is optional
+there.
+
+- **Must fix:** a defect anywhere in the change's scope (code that
+  behaves wrongly for an input the changed code reaches), or a standard
+  the code the change writes breaks — including a changed behavior not
+  proven by a live BDD scenario on all transports
+  ([§ Verify the change](#verify-the-change), item 6). Name the line, the
+  concrete impact, and the standard.
+- **Follow-up:** a real problem outside the change's scope, or a
+  pre-existing standards violation in a caller or callee the change does
+  not edit, including one that standard's own section calls a defect,
+  unless it makes the changed code behave wrongly. Name it so it becomes
+  an issue; it is never a merge blocker.
+- **An unverified concern is a question**, not a finding.
+- **Raise each concern once.** Group related findings into one comment,
+  rather than a summary plus the same point inline.
+- **Make the first review actionable when possible.** State the merge
+  blockers you can identify at that point, with the concrete change or
+  evidence needed to resolve each one. Later findings are appropriate
+  when new evidence, a changed diff, or closer investigation reveals a
+  material issue; explain what surfaced it and why it was not raised
+  earlier when that is not obvious. This is guidance, not a bar against
+  correcting an incomplete review.
+- **Ask for what these standards require** — tests, guards, docs — not
+  for coverage of hypothetical cases.
 
 ## Put logic in its layer
 

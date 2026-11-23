@@ -7,7 +7,7 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, session,
 from sqlalchemy import select
 
 from src.admin.form_validation import json_object_body
-from src.admin.utils import approve_media_buy_through_writer, describe_approval_error, require_tenant_access
+from src.admin.utils import approval_refusal, approve_media_buy_through_writer, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context
@@ -15,6 +15,7 @@ from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.tools.media_buy_create import ApprovalOutcome
+from src.core.webhooks.write_only import scrub_webhook_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,6 @@ def list_workflows(tenant_id, **kwargs):
                     "principal_name": principal.name if principal else "Unknown",
                     "assigned_to": step.assigned_to,
                     "error_message": step.error_message,
-                    "request_data": step.request_data,
                 }
             )
 
@@ -128,11 +128,9 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
         if context and context.principal_id:
             principal = PrincipalRepository(db, tenant_id).get(context.principal_id)
 
-        # Parse request data
-        request_data = step.request_data if step.request_data else {}
-
-        # Format the data for display
-        formatted_request = json.dumps(request_data, indent=2)
+        # The stored documents keep the buyer's webhook secrets, because delivery reads
+        # them back from the step; the page shows copies without them (GHSA-2968-2px9-6rjm).
+        formatted_request = json.dumps(scrub_webhook_secrets(step.request_data or {}), indent=2)
 
         return render_template(
             "workflow_review.html",
@@ -140,8 +138,8 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
             workflow_id=workflow_id,
             step=step,
             principal=principal,
-            request_data=request_data,
             formatted_request=formatted_request,
+            response_data=scrub_webhook_secrets(step.response_data),
         )
 
 
@@ -193,9 +191,12 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                 if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES:
                     return jsonify({"success": True}), 200
 
-                if not approval.ok:
-                    # The typed error's code, field and problems; its cause stays in internal_detail.
-                    return jsonify({"success": False, "error": describe_approval_error(approval.error)}), 500
+                if not approval.ok and approval.error is not None:
+                    # A failed approval always carries its error (ApprovalResult.failed); the check
+                    # narrows the type. The typed error decides the refusal's class and status, and
+                    # its lines are the refusal's details; the admin error handler writes the answer.
+                    # Its cause stays in internal_detail.
+                    raise approval_refusal(media_buy_id, approval.error)
 
                 logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
                 flash("Workflow step approved and media buy created successfully", "success")

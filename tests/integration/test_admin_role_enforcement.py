@@ -13,8 +13,18 @@ from typing import Any, NamedTuple
 
 import pytest
 
-from src.core.database.models import Tenant, TenantAuthConfig, User, UserRole
-from tests.helpers.admin_session import tenant_user_session
+from src.core.database.models import (
+    AdapterConfig,
+    Principal,
+    PushNotificationConfig,
+    SigningKey,
+    Tenant,
+    TenantAuthConfig,
+    User,
+    UserRole,
+)
+from tests.helpers.admin_session import tenant_user_client
+from tests.utils.database_helpers import tenant_rows
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -23,12 +33,17 @@ ROLES = tuple(UserRole)
 EMAILS = {role: f"{role}@rbac.example" for role in ROLES}
 USER_IDS = {role: f"rbac_{role}" for role in ROLES}
 NEW_USER = "invited@rbac.example"
+#: The buyer whose token and webhooks the admin-only principal routes act on.
+PRINCIPAL_ID = "rbac_buyer"
+#: The signing key the revoke route acts on.
+SIGNING_KID = "rbac-kid"
 
 
 @pytest.fixture
 def rbac_tenant(integration_db):
-    """A tenant with one active user per role, one authorized domain and email, and SSO enabled."""
-    from tests.factories import TenantAuthConfigFactory, TenantFactory, UserFactory
+    """A tenant with one active user per role, one authorized domain and email, SSO enabled, a buyer and a signing key."""
+    from tests.factories import PrincipalFactory, TenantAuthConfigFactory, TenantFactory, UserFactory
+    from tests.factories.signing import SigningKeyFactory
     from tests.harness._base import IntegrationEnv
 
     with IntegrationEnv(tenant_id=TENANT_ID) as env:
@@ -42,13 +57,14 @@ def rbac_tenant(integration_db):
         for role in ROLES:
             UserFactory(tenant=tenant, user_id=USER_IDS[role], email=EMAILS[role], role=role)
         TenantAuthConfigFactory(tenant=tenant, oidc_enabled=True)
+        PrincipalFactory(tenant=tenant, principal_id=PRINCIPAL_ID)
+        SigningKeyFactory(tenant=tenant, kid=SIGNING_KID)
         yield env
 
 
 def _client_as(app, role):
-    client = app.test_client()
     # signed in through SSO, which disable-setup-mode requires of its caller
-    tenant_user_session(client, EMAILS[role], auth_method="oidc")
+    client = tenant_user_client(app, EMAILS[role], auth_method="oidc")
     with client.session_transaction() as sess:
         sess["tenant_id"] = TENANT_ID  # an SSO sign-in is bound to the tenant it was made for
     return client
@@ -68,34 +84,33 @@ def test_a_viewer_may_read(rbac_tenant, test_admin_app):
     assert _client_as(test_admin_app, "viewer").get(f"/tenant/{TENANT_ID}/users").status_code == 200
 
 
-def test_a_viewer_may_not_change_tenant_settings_but_a_manager_may(rbac_tenant, test_admin_app):
-    path = f"/tenant/{TENANT_ID}/settings/general"  # the settings page's General form
-    form = {"name": "Renamed"}
-    assert _client_as(test_admin_app, "viewer").post(path, data=form).status_code == 403
-    assert _tenant(rbac_tenant).name == "RBAC"
-    assert _client_as(test_admin_app, "manager").post(path, data=form).status_code == 302
-    assert _tenant(rbac_tenant).name == "Renamed"
-
-
 # --- Admin-only routes ----------------------------------------------------------------
-# Every route marked require_tenant_access(role=UserRole.ADMIN) except oidc.test_initiate.
+# Every route marked require_tenant_access(role=UserRole.ADMIN).
 # Signing in from an authorized domain (OIDC or Google) or an authorized email (Google)
 # with no User row creates the user as an admin, so the sign-in lists and SSO are
 # admin-only along with user management: a manager who could add an address they control
 # could make themselves an admin. A viewer or manager gets 403 and nothing changes; an
 # admin gets the route's own answer.
 #
-# oidc.test_initiate is left to tests/bdd/features/BR-ADMIN-TENANT-SCOPING.feature
-# (T-ADMIN-SCOPE-011 and T-ADMIN-SCOPE-012): with the SSO client this tenant has, the
-# route sends an admin on to the identity provider, and the feature's tenant has none.
+# oidc.test_initiate's admin answer (on to the identity provider) is graded in
+# tests/bdd/features/BR-ADMIN-TENANT-SCOPING.feature (T-ADMIN-SCOPE-011 and -012); its row
+# here grades the refusal, and only that an admin gets past the role check.
 
 
 class AdminRoute(NamedTuple):
+    """One admin-only route: how to call it, and what an admin gets back.
+
+    ``admin_status`` None means only "past the role check" (anything but 403), and
+    ``admin_changes_state`` None means the change is not asserted: for a route whose own
+    answer needs a vendor, OAuth credentials or a key-encryption key the integration
+    environment does not configure. The refusal half (403, nothing changed) holds for all.
+    """
+
     method: str
     url: str
     request: dict[str, Any]
-    admin_status: int
-    admin_changes_state: bool = True
+    admin_status: int | None
+    admin_changes_state: bool | None = True
 
 
 _T = f"/tenant/{TENANT_ID}"
@@ -131,20 +146,53 @@ ADMIN_ONLY_ROUTES = {
     "oidc.enable": AdminRoute("POST", f"{_SSO}/enable", {}, 400, admin_changes_state=False),
     "oidc.disable": AdminRoute("POST", f"{_SSO}/disable", {}, 200),
     "tenants.deactivate_tenant": AdminRoute("POST", f"{_T}/deactivate", {"data": {"confirm_name": "RBAC"}}, 302),
+    "oidc.test_initiate": AdminRoute("POST", f"/auth/oidc/test/{TENANT_ID}", {}, None, None),
+    # Where the tenant is served, its ad-server and AI credentials, the audit feed, buyer
+    # webhooks and tokens, and its signing keys.
+    "settings.update_general": AdminRoute("POST", f"{_T}/settings/general", {"data": {"name": "Renamed"}}, 302),
+    "tenants.update": AdminRoute("POST", f"{_T}/update", {"data": {"name": "Renamed"}}, None, None),
+    "settings.update_adapter": AdminRoute("POST", f"{_T}/settings/adapter", {"data": {"adapter": "mock"}}, None, None),
+    "settings.update_slack": AdminRoute(
+        "POST", f"{_T}/settings/slack", {"data": {"slack_audit_webhook_url": ""}}, None, None
+    ),
+    "settings.update_ai": AdminRoute("POST", f"{_T}/settings/ai", {"data": {"provider": "gemini"}}, None, None),
+    "settings.register_approximated_domain": AdminRoute(
+        "POST", f"{_T}/settings/approximated-register-domain", {"json": {"domain": "x.rbac.example"}}, None, None
+    ),
+    "settings.unregister_approximated_domain": AdminRoute(
+        "POST", f"{_T}/settings/approximated-unregister-domain", {"json": {"domain": "x.rbac.example"}}, None, None
+    ),
+    "adapters.save_adapter_config": AdminRoute(
+        "POST", f"/api/tenant/{TENANT_ID}/adapter-config", {"json": {"adapter_type": "mock", "config": {}}}, None, None
+    ),
+    "gam.configure_gam": AdminRoute("POST", f"{_T}/gam/configure", {"json": {"network_code": "123"}}, None, None),
+    "gam.create_service_account": AdminRoute("POST", f"{_T}/gam/create-service-account", {}, None, None),
+    "auth.gam_authorize": AdminRoute("GET", f"/auth/gam/authorize/{TENANT_ID}", {}, None, None),
+    "policy.update": AdminRoute("POST", f"{_T}/policy/update", {"data": {}}, None, None),
+    # The new token is in the answer, and the stored hash changes.
+    "principals.rotate_token": AdminRoute("POST", f"{_T}/principal/{PRINCIPAL_ID}/rotate-token", {}, 200),
+    # Back to the buyer's webhooks page, with a new push-notification row.
+    "principals.register_webhook": AdminRoute(
+        "POST",
+        f"{_T}/principals/{PRINCIPAL_ID}/webhooks/register",
+        {"data": {"url": "https://hooks.rbac.example/"}},
+        302,
+    ),
+    "signing_keys.create_signing_key": AdminRoute(
+        "POST", f"{_T}/signing-keys/create", {"data": {"alg": "ed25519"}}, None, None
+    ),
+    # Back to the keys page, with the key's revoked_at stamped.
+    "signing_keys.revoke_signing_key_route": AdminRoute("POST", f"{_T}/signing-keys/{SIGNING_KID}/revoke", {}, 302),
 }
 
 
+#: Every table an admin-only route can write, snapshotted whole for the tenant.
+_STATE_MODELS = (Tenant, User, TenantAuthConfig, AdapterConfig, Principal, PushNotificationConfig, SigningKey)
+
+
 def _state(env):
-    """Everything an admin-only route can change: the tenant row, its users and its SSO config."""
-    tenant = _tenant(env)
-    users = sorted(env.query(User, tenant_id=TENANT_ID), key=lambda u: u.user_id)
-    sso = env.get_one(TenantAuthConfig, tenant_id=TENANT_ID)
-    return (
-        (tenant.name, tenant.is_active, tenant.auth_setup_mode),
-        (tuple(tenant.authorized_domains or ()), tuple(tenant.authorized_emails or ())),
-        tuple((u.user_id, u.email, u.role, u.is_active) for u in users),
-        (sso.oidc_enabled, sso.oidc_client_id),
-    )
+    """Everything an admin-only route can change: each of those tables' rows for the tenant, every column."""
+    return tenant_rows(_fresh(env).get_session(), TENANT_ID, _STATE_MODELS)
 
 
 def _call(app, role, route):
@@ -164,8 +212,22 @@ def test_an_admin_may_use_an_admin_only_route(rbac_tenant, test_admin_app, endpo
     route = ADMIN_ONLY_ROUTES[endpoint]
     before = _state(rbac_tenant)
     response = _call(test_admin_app, "admin", route)
-    assert response.status_code == route.admin_status, response.get_data(as_text=True)[:500]
-    assert (_state(rbac_tenant) != before) is route.admin_changes_state
+    if route.admin_status is None:
+        assert response.status_code != 403, response.get_data(as_text=True)[:500]
+    else:
+        assert response.status_code == route.admin_status, response.get_data(as_text=True)[:500]
+    if route.admin_changes_state is not None:
+        assert (_state(rbac_tenant) != before) is route.admin_changes_state
+
+
+def test_the_table_lists_exactly_the_admin_only_routes(test_admin_app):
+    """One list: every endpoint tagged require_tenant_access(role=UserRole.ADMIN) has a row, and only those."""
+    tagged = {
+        endpoint
+        for endpoint, view in test_admin_app.view_functions.items()
+        if getattr(view, "tenant_access_role", None) == UserRole.ADMIN
+    }
+    assert set(ADMIN_ONLY_ROUTES) == tagged
 
 
 def test_each_admin_only_url_reaches_its_endpoint(test_admin_app):

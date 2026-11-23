@@ -16,14 +16,15 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from enum import StrEnum
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Account, Tenant
+from src.core.database.models import Account, MediaBuy, Product, Tenant
 from tests.harness.admin_client import AdminClient, AdminResponse
+from tests.helpers.admin_session import admin_session_payload
 from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
 
 
@@ -47,6 +48,15 @@ class AdminTransport(StrEnum):
 
     INTEGRATION = "admin_integration"  # Flask test_client, in-process
     E2E = "e2e_admin"  # requests.Session against the live stack
+
+
+class PendingApproval(NamedTuple):
+    """The ids of a media buy awaiting the seller's approval, and of its approval step."""
+
+    tenant_id: str
+    media_buy_id: str
+    context_id: str
+    step_id: str
 
 
 class AdminAccountEnv:
@@ -99,8 +109,9 @@ class AdminAccountEnv:
         self._database_faults: list[tuple[str, str]] = []
         #: The in-process scripted model origin (:meth:`script_ai_connection_test`), once started.
         self._llm_origin: str | None = None
-        #: What ``__exit__`` closes besides the client: the in-process origin and its variable.
-        self._llm_cleanups = ExitStack()
+        #: What ``__exit__`` closes besides the client: the in-process origin and its variable,
+        #: and every deployment setting a Given patched onto this process's settings.
+        self._in_process_cleanups = ExitStack()
 
     @property
     def mode(self) -> str:
@@ -138,7 +149,7 @@ class AdminAccountEnv:
 
     def _cleanup(self) -> None:
         """Release what ``_setup`` and the scenario's steps left behind."""
-        self._llm_cleanups.close()
+        self._in_process_cleanups.close()
         self._llm_origin = None
         self._drop_database_faults()
         self._cleanup_accounts()
@@ -175,9 +186,40 @@ class AdminAccountEnv:
                 UserFactory(tenant=tenant, email=email, role="admin")
         self.client.authenticate(self._tenant_id, tenant_user=email)
 
+    def authenticate_as_super_admin_checked_at(self, email: str, checked_at: float | None) -> None:
+        """State the session a sign-in as *email* left, whose super-admin answer was cached at *checked_at*.
+
+        *email* need be on no configured list: until the cache is older than
+        ``SUPER_ADMIN_RECHECK_SECONDS`` the session alone says it is a super admin.
+        """
+        self.client.state_session(admin_session_payload(self._tenant_id, email=email, checked_at=checked_at))
+
     def clear_auth(self) -> None:
         """Clear the authenticated session."""
         self.client.clear_auth()
+
+    # ── The deployment ────────────────────────────────────────────────────
+    #
+    # A fact the live stack's server already has (docker-compose.e2e.yml sets it on
+    # adcp-server, and the feature names the same value, so the two change together) is
+    # patched onto this process's settings only, which the app reads on each request.
+
+    def _patch_in_process_setting(self, field: str, value: object) -> None:
+        if self._mode == "e2e":
+            return
+        from unittest.mock import patch
+
+        from src.core.config import get_settings
+
+        self._in_process_cleanups.enter_context(patch.object(get_settings().runtime, field, value))
+
+    def name_super_admin_domain(self, domain: str) -> None:
+        """Make *domain* the deployment's ``SUPER_ADMIN_DOMAIN``."""
+        self._patch_in_process_setting("super_admin_domain", domain)
+
+    def serve_many_tenants(self) -> None:
+        """Make this a multi-tenant deployment (``ADCP_MULTI_TENANT``), which lists its tenants to a super admin."""
+        self._patch_in_process_setting("adcp_multi_tenant", True)
 
     # ── Routes ────────────────────────────────────────────────────────────
 
@@ -755,6 +797,125 @@ class AdminAccountEnv:
         """POST *body* (none: ``{}``) to *tenant_id*'s ``/tenant/<id>/<path>``, as its page's script does with fetch()."""
         return self.client.request("post", f"/tenant/{tenant_id}/{path}", json=body or {})
 
+    # ── Media buy approval (BR-ADMIN-OPERATOR-REFUSALS) ──
+
+    @contextmanager
+    def _approval_seeding(self) -> Iterator[Session]:
+        """A session of its own for the factories, committed when the block exits.
+
+        Not :meth:`_factory_session`: ``seed_pending_buy`` writes the approval step through
+        ``ContextManager``, which opens ``get_db_session()``, and that exit closes the
+        thread-scoped session :meth:`_factory_session` would still be writing through.
+        """
+        from src.core.database.database_session import get_engine
+
+        session = Session(bind=get_engine())
+        try:
+            with bind_factories_to_session(session):
+                yield session
+                session.commit()
+        finally:
+            session.close()
+
+    def seed_media_buy_awaiting_approval(
+        self, *, accepted_image_size: tuple[int, int] | None = None
+    ) -> PendingApproval:
+        """A tenant of its own on the mock ad server, holding a media buy that awaits the seller's approval.
+
+        With *accepted_image_size*, the buy's product also publishes an image format option
+        accepting only that size (formats/canonical/image.json ``sizes``). Returns the seeded
+        rows' ids (``seed_pending_buy``), read while their session is open: the rows detach when
+        it closes.
+        """
+        from tests.helpers.media_buy_approval import seed_pending_buy
+
+        with self._approval_seeding() as session:
+            seeded = seed_pending_buy(starts_in_days=7)
+            if accepted_image_size is not None:
+                (package,) = seeded.media_buy.packages
+                product = session.get(Product, (seeded.tenant_id, package.package_config["product_id"]))
+                assert product is not None, "the seeded buy names no stored product"
+                width, height = accepted_image_size
+                option = {
+                    "format_option_id": f"image_{width}x{height}",
+                    "format_kind": "image",
+                    "params": {"sizes": [{"width": width, "height": height}]},
+                }
+                product.format_options = [*(product.format_options or []), option]
+            pending = PendingApproval(seeded.tenant_id, seeded.media_buy_id, seeded.context_id, seeded.step_id)
+        return pending
+
+    def assign_image_creative_to_pending_buy(
+        self, pending: PendingApproval, creative_id: str, *, size: tuple[int, int]
+    ) -> None:
+        """Store the buyer's approved canonical image creative *creative_id* at *size*, assigned to the buy's package."""
+        from tests.factories import CreativeAssignmentFactory, CreativeFactory
+        from tests.factories.creative_asset import build_assets, image_spec
+
+        width, height = size
+        with self._approval_seeding() as session:
+            media_buy = session.get(MediaBuy, pending.media_buy_id)
+            assert media_buy is not None, f"no media buy {pending.media_buy_id!r}"
+            creative = CreativeFactory(
+                tenant=media_buy.tenant,
+                principal=media_buy.principal,
+                creative_id=creative_id,
+                status="approved",
+                canonical_kind="image",
+                data={
+                    "assets": build_assets(
+                        image_spec(
+                            "image_main", url=f"https://cdn.example.com/{creative_id}.png", width=width, height=height
+                        )
+                    )
+                },
+            )
+            CreativeAssignmentFactory(creative=creative, media_buy=media_buy)
+
+    def fail_ad_server_creation(self, tenant_id: str) -> None:
+        """The mock ad server of *tenant_id* fails every media buy it is asked to create.
+
+        Through the row the live server's mock adapter reads its injected behavior from
+        (``AdapterConfig.config_json["test_behavior"]``, ``mock_ad_server._read_test_behavior``),
+        so both admin transports reach the same failure.
+        """
+        from tests.factories import AdapterConfigFactory
+
+        with self._approval_seeding() as session:
+            tenant = session.get(Tenant, tenant_id)
+            assert tenant is not None, f"no tenant {tenant_id!r}"
+            AdapterConfigFactory(
+                tenant=tenant, adapter_type="mock", config_json={"test_behavior": {"fail_on_create": True}}
+            )
+
+    def approve_workflow_step(self, pending: PendingApproval) -> AdminResponse:
+        """Approve the buy's approval step as the workflow review page's script does with fetch()."""
+        return self.fetch_tenant_route(
+            pending.tenant_id, f"workflows/{pending.context_id}/steps/{pending.step_id}/approve"
+        )
+
+    def media_buy_status(self, media_buy_id: str) -> str:
+        """The stored status of *media_buy_id*, read fresh."""
+        with get_db_session() as session:
+            media_buy = session.get(MediaBuy, media_buy_id)
+            assert media_buy is not None, f"no media buy {media_buy_id!r}"
+            return str(media_buy.status)
+
+    def open_admin_home(self) -> AdminResponse:
+        """GET ``/admin/``, the page a sign-in lands on."""
+        return self.client.request("get", "/admin/")
+
+    def submit_tenant_form(self, tenant_id: str, path: str, form_data: dict[str, str]) -> AdminResponse:
+        """POST *form_data* to *tenant_id*'s ``/tenant/<id>/<path>`` as a browser's form post from no page."""
+        return self.client.submit(f"/tenant/{tenant_id}/{path}", form_data)
+
+    def authorized_domains_of(self, tenant_id: str) -> list[str]:
+        """The domains *tenant_id* authorizes, as stored."""
+        with get_db_session() as session:
+            tenant = session.get(Tenant, tenant_id)
+            assert tenant is not None, f"no tenant {tenant_id!r}"
+            return list(tenant.authorized_domains)
+
     def post_ai_connection_test(self, body: Any) -> AdminResponse:
         """POST *body* as JSON to this tenant's AI connection test, as the settings page does with fetch()."""
         return self.client.request("post", f"/tenant/{self._tenant_id}/settings/ai/test", json=body)
@@ -785,6 +946,10 @@ class AdminAccountEnv:
 
             from tests.e2e.scripted_llm_origin_service import run_scripted_llm_origin
 
-            self._llm_origin = self._llm_cleanups.enter_context(run_scripted_llm_origin(host="127.0.0.1", port=0))
-            self._llm_cleanups.enter_context(patch.dict(os.environ, {"GOOGLE_GEMINI_BASE_URL": self._llm_origin}))
+            self._llm_origin = self._in_process_cleanups.enter_context(
+                run_scripted_llm_origin(host="127.0.0.1", port=0)
+            )
+            self._in_process_cleanups.enter_context(
+                patch.dict(os.environ, {"GOOGLE_GEMINI_BASE_URL": self._llm_origin})
+            )
         return self._llm_origin

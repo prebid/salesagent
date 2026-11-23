@@ -9,7 +9,7 @@ import asyncio
 from flask import Blueprint, Response, jsonify, request
 from pydantic import BaseModel
 
-from src.admin.utils import require_auth
+from src.admin.utils import require_auth, tenant_access_refusal
 from src.core.creative_agent_registry import get_creative_agent_registry
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.agent import CreativeAgentRepository
@@ -18,16 +18,21 @@ from src.core.database.repositories.uow import TenantConfigUoW
 bp = Blueprint("format_search", __name__, url_prefix="/api/formats")
 
 
-def _unknown_tenant(tenant_id: str | None) -> tuple[Response, int] | None:
-    """The 404 for a ``tenant_id`` that names no tenant; None when it names one or is absent.
+def _tenant_refusal(tenant_id: str | None) -> Response | tuple[Response, int] | None:
+    """The refusal for a ``tenant_id`` the caller may not use, or that names no tenant; else None.
 
-    These routes take the tenant from a query parameter, and the registry reads the named
-    tenant's federation setting with ``one()``, which raises for a tenant that does not
-    exist. An absent or empty ``tenant_id`` is the registry's own "no tenant" case (the
-    default agent alone), so only a named tenant is looked up.
+    These routes take the tenant from a query parameter, so ``require_tenant_access``
+    cannot see it and the same check runs here: a caller who is not a user of the tenant
+    is refused before anything about the tenant is read or fetched with its credentials.
+    The registry reads the named tenant's federation setting with ``one()``, which raises
+    for a tenant that does not exist, hence the 404. An absent or empty ``tenant_id`` is the
+    registry's own "no tenant" case (the default agent alone), so only a named tenant is
+    checked.
     """
     if not tenant_id:
         return None
+    if (refusal := tenant_access_refusal(tenant_id)) is not None:
+        return refusal
     with TenantConfigUoW(tenant_id) as uow:
         assert uow.tenant_config is not None
         if uow.tenant_config.get_tenant() is not None:
@@ -54,7 +59,7 @@ def search_formats():
     if not query or len(query) < 2:
         return jsonify({"error": "Query must be at least 2 characters"}), 400
 
-    if (refusal := _unknown_tenant(tenant_id)) is not None:
+    if (refusal := _tenant_refusal(tenant_id)) is not None:
         return refusal
 
     # Get registry and search
@@ -109,7 +114,7 @@ def list_all_formats():
     tenant_id = request.args.get("tenant_id")
     force_refresh = request.args.get("force_refresh", "false").lower() == "true"
 
-    if (refusal := _unknown_tenant(tenant_id)) is not None:
+    if (refusal := _tenant_refusal(tenant_id)) is not None:
         return refusal
 
     registry = get_creative_agent_registry()
@@ -272,7 +277,7 @@ def list_creative_agents():
     if not tenant_id:
         return jsonify({"error": "tenant_id is required"}), 400
 
-    if (refusal := _unknown_tenant(tenant_id)) is not None:
+    if (refusal := _tenant_refusal(tenant_id)) is not None:
         return refusal
 
     with get_db_session() as session:

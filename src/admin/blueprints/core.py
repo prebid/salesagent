@@ -17,8 +17,9 @@ from flask import (
 )
 from sqlalchemy import select, text
 
-from src.admin.utils import require_auth
+from src.admin.utils import is_super_admin, require_auth
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.helpers import session_caller_email
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -249,8 +250,9 @@ def index():
         # Redirect to tenant dashboard with tenant_id
         return redirect(url_for("tenants.dashboard", tenant_id=tenant.tenant_id))
 
-    # Check if user is super admin (multi-tenant only)
-    if session.get("role") == "super_admin":
+    # Check if user is super admin (multi-tenant only). Asked of is_super_admin, which
+    # rechecks a cached answer, and never read off the role the sign-in stored.
+    if is_super_admin(session_caller_email()):
         # Super admin - show all active tenants with configuration and activity status
         return render_super_admin_index()
 
@@ -290,7 +292,7 @@ def admin_index():
         return redirect(url_for("auth.login"))
 
     # Multi-tenant mode: check for tenant context or show tenant selector
-    if session.get("role") == "super_admin":
+    if is_super_admin(session_caller_email()):
         # Super admin - delegate directly to index() handler instead of redirecting
         # Redirecting to core.index would create an infinite loop because index()
         # delegates back to admin_index() when script_root == "/admin"
@@ -303,42 +305,6 @@ def admin_index():
 
     # No tenant context - show tenant selector
     return redirect(url_for("auth.select_tenant"))
-
-
-@core_bp.route("/debug/headers")
-def debug_headers():
-    """Debug endpoint to inspect all incoming headers (for Approximated routing testing)."""
-    headers_dict = dict(request.headers)
-    detected_tenant = get_tenant_from_hostname()
-
-    debug_info = {
-        "all_headers": headers_dict,
-        "detected_tenant": (
-            {
-                "tenant_id": detected_tenant.tenant_id if detected_tenant else None,
-                "name": detected_tenant.name if detected_tenant else None,
-                "subdomain": detected_tenant.subdomain if detected_tenant else None,
-                "virtual_host": detected_tenant.virtual_host if detected_tenant else None,
-            }
-            if detected_tenant
-            else None
-        ),
-        "routing_analysis": {
-            "host_header": request.headers.get("Host"),
-            "x_forwarded_host": request.headers.get("X-Forwarded-Host"),
-            "x_original_host": request.headers.get("X-Original-Host"),
-            "x_forwarded_for": request.headers.get("X-Forwarded-For"),
-            "user_agent": request.headers.get("User-Agent"),
-        },
-        "request_info": {
-            "remote_addr": request.remote_addr,
-            "url": request.url,
-            "path": request.path,
-            "method": request.method,
-        },
-    }
-
-    return jsonify(debug_info)
 
 
 @core_bp.route("/health")
@@ -476,10 +442,10 @@ def create_tenant():
         if email_list:
             new_tenant.authorized_emails = email_list  # noqa: authorized-list-assign — construction of a not-yet-persisted tenant, race-free
 
-        authorized_domains = request.form.get("authorized_domains", "")
-        if authorized_domains:
-            domain_list = [d.strip() for d in authorized_domains.split(",") if d.strip()]
-            new_tenant.authorized_domains = domain_list  # noqa: authorized-list-assign — construction of a not-yet-persisted tenant, race-free
+        # The column refuses a value that is not a domain name with InvalidDomainNameError, an
+        # OperatorRefusal the admin error handler answers.
+        raw_domains = request.form.get("authorized_domains", "")
+        new_tenant.authorized_domains = [d.strip() for d in raw_domains.split(",") if d.strip()]  # noqa: authorized-list-assign — construction of a not-yet-persisted tenant, race-free
 
         conflict = resolve_or_write(
             db_session,
@@ -508,12 +474,7 @@ def send_static(path):
 @require_auth(admin_only=True)
 @log_admin_action("reactivate_tenant")
 def reactivate_tenant(tenant_id):
-    """Reactivate a deactivated tenant (super admin only)."""
-    # Verify super admin
-    if session.get("role") != "super_admin":
-        flash("Only super admins can reactivate tenants", "error")
-        return redirect(url_for("core.index"))
-
+    """Reactivate a deactivated tenant (super admin only, which ``require_auth(admin_only=True)`` checks)."""
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
 

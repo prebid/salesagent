@@ -429,6 +429,43 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the JSON response has "success" as false
     And the JSON error is the "DomainAlreadyAuthorized" refusal
 
+  # The deployment's SUPER_ADMIN_DOMAIN is the operator's own, and no tenant may authorize
+  # it. Both test deployments name operator.bdd-refusals.example: docker-compose.e2e.yml on
+  # the live stack, and the Given on the app in this process. The refusal compares the
+  # domain as it would be stored (lower-cased, no trailing dot), so every spelling of it is
+  # refused, on every page that authorizes a domain.
+  @T-ADMIN-REFUSAL-038 @json @authorized-domains @super-admin-domain
+  Scenario Outline: The users page refuses the deployment's super-admin domain, however it is spelled - <spelling>
+    Given the deployment's super-admin domain is "operator.bdd-refusals.example"
+    And another tenant of this seller, authorizing the domain "authorized.bdd-refusals.example"
+    When the users page adds the authorized domain "<spelling>" to that tenant
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "SuperAdminDomainRefused" refusal
+    And that tenant authorizes only the domain "authorized.bdd-refusals.example"
+
+    Examples:
+      | spelling                       |
+      | operator.bdd-refusals.example  |
+      | Operator.BDD-Refusals.Example  |
+      | operator.bdd-refusals.example. |
+
+  @T-ADMIN-REFUSAL-039 @browser @authorized-domains @super-admin-domain
+  Scenario Outline: The settings page refuses the deployment's super-admin domain, however it is spelled - <spelling>
+    Given the deployment's super-admin domain is "operator.bdd-refusals.example"
+    And another tenant of this seller, authorizing the domain "authorized.bdd-refusals.example"
+    When the settings page's form adds the authorized domain "<spelling>" to that tenant, from no page
+    Then the page returns status 400
+    And the page is the error page
+    And the page shows the "SuperAdminDomainRefused" refusal
+    And that tenant authorizes only the domain "authorized.bdd-refusals.example"
+
+    Examples:
+      | spelling                       |
+      | operator.bdd-refusals.example  |
+      | Operator.BDD-Refusals.Example  |
+      | operator.bdd-refusals.example. |
+
   @T-ADMIN-REFUSAL-034 @json @authorized-domains
   Scenario: An authorized domain that names no domain is refused for that field
     When the users page adds an authorized domain without naming one
@@ -453,3 +490,34 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the JSON issues are:
       | field        | text                         |
       | network_code | Network code must be numeric |
+
+  # Approving a media buy books it at the ad server. When the approval stops on a typed error,
+  # the operator gets a refusal whose details are that error's lines: its code and message,
+  # the request field it names, and one line per problem. The class is decided by the error.
+  # A refusal before booking leaves the buy awaiting approval, and the buy's own state is what
+  # conflicts with booking it (409). An ad server that fails the booking is another system
+  # that failed (502).
+
+  @T-ADMIN-REFUSAL-042 @json @media-buy-approval
+  Scenario: A media buy whose creative its product refuses is refused at approval with the creative's error lines
+    Given another tenant of this seller, holding a media buy awaiting approval whose product accepts images of 728x90
+    And that media buy's package is assigned the approved 300x250 image creative "cr_approval_misfit"
+    When the workflow page approves that media buy's approval step
+    Then the page returns status 409
+    And the JSON response has "success" as false
+    And the JSON error is the "MediaBuyApprovalRefused" refusal
+    And the JSON details are the "CREATIVE_SIZE_MISMATCH" error's line, then:
+      | text                                               |
+      | field packages[0].creative_ids[0]                  |
+      | creative cr_approval_misfit CREATIVE_SIZE_MISMATCH |
+    And that media buy still awaits approval
+
+  @T-ADMIN-REFUSAL-043 @json @media-buy-approval
+  Scenario: A media buy the ad server fails to book is refused at approval as the ad server's failure
+    Given another tenant of this seller, holding a media buy awaiting approval
+    And that tenant's ad server fails every media buy it is asked to create
+    When the workflow page approves that media buy's approval step
+    Then the page returns status 502
+    And the JSON response has "success" as false
+    And the JSON error is the "MediaBuyBookingFailed" refusal
+    And the JSON details are only the "SERVICE_UNAVAILABLE" error's line

@@ -4,7 +4,7 @@ Provides consistent patterns for creating test database objects with proper
 timestamp handling and field validation to prevent common test issues.
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from src.core.database.models import (
     AdapterConfig,
     AuditLog,
+    Base,
     Context,
     Creative,
     CreativeAssignment,
@@ -228,6 +229,24 @@ def tenant_row_counts(session: Session, tenant_id: str) -> dict[str, int]:
         model.__tablename__: session.scalar(select(func.count()).select_from(model).filter_by(tenant_id=tenant_id))
         for model in TENANT_SCOPED_MODELS
     }
+
+
+def tenant_rows(session: Session, tenant_id: str, models: Iterable[type[Base]]) -> tuple[list[tuple[Any, ...]], ...]:
+    """Every column of each row *tenant_id* holds in *models*, model by model, in a stable order.
+
+    For a before/after comparison of what a request may write. ``updated_at`` is left out:
+    it moves with any write and says nothing a column does not.
+    """
+    return tuple(
+        sorted(
+            (
+                tuple((key, getattr(row, key)) for key in model.__table__.columns.keys() if key != "updated_at")
+                for row in session.scalars(select(model).filter_by(tenant_id=tenant_id))
+            ),
+            key=repr,
+        )
+        for model in models
+    )
 
 
 def delete_tenant(tenant_id: str) -> None:
