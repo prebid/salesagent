@@ -5,11 +5,11 @@ import logging
 from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
-from src.admin.utils import get_tenant_config_from_db, require_auth, require_tenant_access
+from src.admin.utils import get_tenant_config_from_db, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.audit_logger import AuditLogger
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AuditLog, Context, Tenant, WorkflowStep
+from src.core.database.models import AuditLog, Context, Tenant, UserRole, WorkflowStep
 
 logger = logging.getLogger(__name__)
 
@@ -17,18 +17,10 @@ logger = logging.getLogger(__name__)
 policy_bp = Blueprint("policy", __name__)
 
 
-# FIXME(#2233): inline session["role"] check stands in for require_tenant_access.
 @policy_bp.route("/", methods=["GET"])
-@require_auth()
+@require_tenant_access()
 def index(tenant_id):
     """View and manage policy settings for the tenant."""
-    # Check access
-    if session.get("role") == "viewer":
-        return "Access denied", 403
-
-    if session.get("role") == "tenant_admin" and session.get("tenant_id") != tenant_id:
-        return "Access denied", 403
-
     with get_db_session() as db_session:
         # Get tenant info
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -133,19 +125,11 @@ def index(tenant_id):
     )
 
 
-# FIXME(#2233): inline session["role"] check stands in for require_tenant_access.
 @policy_bp.route("/update", methods=["POST"])
-@require_auth()
+@require_tenant_access(role=UserRole.ADMIN)
 @log_admin_action("update_policy")
 def update(tenant_id):
     """Update policy settings for the tenant."""
-    # Check access - only admins can update policy
-    if session.get("role") not in ["super_admin", "tenant_admin"]:
-        return "Access denied", 403
-
-    if session.get("role") == "tenant_admin" and session.get("tenant_id") != tenant_id:
-        return "Access denied", 403
-
     # Get current config
     config = get_tenant_config_from_db(tenant_id)
     if not config:
@@ -207,19 +191,11 @@ def rules(tenant_id):
     return redirect(url_for("policy.index", tenant_id=tenant_id))
 
 
-# FIXME(#2233): inline session["role"] check stands in for require_tenant_access.
 @policy_bp.route("/review/<task_id>", methods=["GET", "POST"])
-@require_auth()
+@require_tenant_access()
 @log_admin_action("review_policy_task")
 def review_task(tenant_id, task_id):
     """Review and approve/reject a policy review task."""
-    # Check access
-    if session.get("role") == "viewer":
-        return "Access denied", 403
-
-    if session.get("role") == "tenant_admin" and session.get("tenant_id") != tenant_id:
-        return "Access denied", 403
-
     with get_db_session() as db_session:
         if request.method == "POST":
             # Handle approval/rejection

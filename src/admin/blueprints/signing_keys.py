@@ -30,6 +30,7 @@ from flask.typing import ResponseReturnValue
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import require_tenant_access
 from src.core.config import get_settings
+from src.core.database.models import UserRole
 from src.core.database.repositories.uow import SigningKeyUoW
 from src.core.exceptions import AdCPConfigurationError
 
@@ -69,7 +70,7 @@ def list_signing_keys(tenant_id: str) -> ResponseReturnValue:
 
 
 @signing_keys_bp.route("/create", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 @log_admin_action("provision_signing_key")
 def create_signing_key(tenant_id: str) -> ResponseReturnValue:
     """Provision a signing key for the tenant.
@@ -105,7 +106,7 @@ def create_signing_key(tenant_id: str) -> ResponseReturnValue:
 
 
 @signing_keys_bp.route("/<kid>/revoke", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 @log_admin_action("revoke_signing_key")
 def revoke_signing_key_route(tenant_id: str, kid: str) -> ResponseReturnValue:
     """Revoke a signing key through the layer's one revocation operation.

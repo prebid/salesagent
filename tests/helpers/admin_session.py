@@ -47,22 +47,49 @@ if TYPE_CHECKING:
 TEST_FLASK_SECRET_KEY = "adcp-test-stack-session-signing-key"
 
 
-def admin_session_payload(tenant_id: str, *, auth_method: str | None = None) -> dict[str, Any]:
-    """The session an authenticated super admin carries. ONE definition, both transports."""
+#: When a test session's super-admin answer was cached: far in the future, so it never ages
+#: out during a run (production asks again once it is older than SUPER_ADMIN_RECHECK_SECONDS).
+NEVER_STALE = 4102444800.0
+
+
+def cached_super_admin(email: str, *, checked_at: float | None = NEVER_STALE) -> dict[str, Any]:
+    """The session keys ``is_super_admin()`` caches for *email* once it has found a super admin.
+
+    ``is_super_admin()`` short-circuits on them, so recognising the caller costs no database
+    round trip and no configured list: which is what lets a unit test use the real
+    decorator, and an e2e scenario grant the role without touching the stack's settings.
+    The answer is trusted for ``SUPER_ADMIN_RECHECK_SECONDS`` after *checked_at*; pass an
+    older time to state a cached answer that production will ask again, or ``None`` for a
+    session cached before the time was recorded.
+    """
+    keys: dict[str, Any] = {"is_super_admin": True, "admin_email": email}
+    if checked_at is not None:
+        keys["admin_checked_at"] = checked_at
+    return keys
+
+
+def admin_session_payload(
+    tenant_id: str,
+    *,
+    auth_method: str | None = None,
+    email: str = "test@example.com",
+    checked_at: float | None = NEVER_STALE,
+) -> dict[str, Any]:
+    """The session an authenticated super admin carries. ONE definition, both transports.
+
+    *checked_at* is when the super-admin answer was cached (``cached_super_admin``).
+    """
     payload: dict[str, Any] = {
         "authenticated": True,
-        "user": {"email": "test@example.com", "is_super_admin": True},
-        "email": "test@example.com",
+        "user": {"email": email, "is_super_admin": True},
+        "email": email,
         "tenant_id": tenant_id,
-        "test_user": "test@example.com",
+        "test_user": email,
         "test_user_role": "super_admin",
         "test_user_name": "Test User",
         "test_tenant_id": tenant_id,
-        "is_super_admin": True,
         "role": "super_admin",
-        # is_super_admin() short-circuits on this pair, so recognising the caller costs no
-        # database round trip — which is what lets a unit test use the real decorator.
-        "admin_email": "test@example.com",
+        **cached_super_admin(email, checked_at=checked_at),
     }
     if auth_method is not None:
         payload["auth_method"] = auth_method
