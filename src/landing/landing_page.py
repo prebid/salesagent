@@ -7,6 +7,7 @@ from adcp import get_adcp_spec_version
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from src.core.agent_identity import AGENT_CARD_PATH, AGENT_ENDPOINT_PATHS
+from src.core.http_utils import safe_url
 from src.core.tenant_context import TenantContext
 from src.core.version import get_version
 
@@ -15,12 +16,15 @@ def _get_jinja_env() -> Environment:
     """Get configured Jinja2 environment for landing page templates."""
     template_dir = os.path.join(os.path.dirname(__file__), "templates")
 
-    return Environment(
+    env = Environment(
         loader=FileSystemLoader(template_dir),
         autoescape=select_autoescape(["html", "xml"]),
         trim_blocks=True,
         lstrip_blocks=True,
     )
+    # The admin UI's filter too: these pages are served on the same origin.
+    env.filters["safe_url"] = safe_url
+    return env
 
 
 def _tenant_base_url(tenant_row: dict) -> str:

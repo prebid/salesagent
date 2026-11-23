@@ -25,6 +25,7 @@ from src.core.database.models import Tenant
 from src.core.database.repositories import uow as uow_module
 from tests.factories import PublisherFactory, TenantFactory
 from tests.helpers import concurrent_commit_in_write_window
+from tests.helpers.admin_session import admin_auth_session
 
 app = create_app()
 
@@ -35,11 +36,12 @@ DUPLICATE_DOMAIN = "contested-publisher.psatest.com"
 
 @pytest.fixture
 def client():
-    """Flask test client with CSRF disabled for POST testing."""
+    """Flask test client with CSRF disabled, signed in as a super admin (the routes require tenant access)."""
     app.config["TESTING"] = True
     app.config["WTF_CSRF_ENABLED"] = False
     app.config["SESSION_COOKIE_PATH"] = "/"
     with app.test_client() as client:
+        admin_auth_session(client, "any-tenant")
         yield client
 
 
@@ -124,17 +126,16 @@ class TestUnexpectedDbErrorDoesNotLeakDriverInternals:
     def test_data_error_500_carries_no_driver_internals(self, client, factory_session):
         """Deterministic non-duplicate DB error: a value the column cannot hold.
 
-        ``domain`` is String(255); an oversized value passes every
+        ``display_name`` is String(255); an oversized value passes every
         handler check and dies at flush with a DataError the handler does not
         narrow. The operator may be told the write failed — but never shown the
         driver name, the SQL statement, or the bound parameters.
         """
         tenant = TenantFactory()
-        oversized = ("a" * 300) + ".psatest.com"
 
         response = client.post(
             f"/tenant/{tenant.tenant_id}/publisher-partners",
-            json={"publisher_domain": oversized, "display_name": "Oversized"},
+            json={"publisher_domain": "oversized.psatest.com", "display_name": "x" * 300},
         )
 
         assert response.status_code == 500

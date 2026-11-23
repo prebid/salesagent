@@ -364,7 +364,7 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
   # (tests/helpers/gam_client.py), which refuses getCurrentNetwork with an ApiError reason. The
   # live server has no stand-in network and CI has no GAM network (#2583), so on e2e the Given
   # declares itself unsupported (AdminAccountEnv.serve_gam_network): graded in-process only.
-  @T-ADMIN-REFUSAL-038 @json @connection-test @gam
+  @T-ADMIN-REFUSAL-041 @json @connection-test @gam
   Scenario: A GAM connection test whose network lookup GAM refuses is answered as a failed GAM call
     Given another tenant of this seller, onboarded to Google Ad Manager with a service account key
     And Google Ad Manager refuses the current network lookup with "QuotaError.EXCEEDED_QUOTA"
@@ -444,6 +444,43 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     Then the page returns status 409
     And the JSON response has "success" as false
     And the JSON error is the "DomainAlreadyAuthorized" refusal
+
+  # The deployment's SUPER_ADMIN_DOMAIN is the operator's own, and no tenant may authorize
+  # it. Both test deployments name operator.bdd-refusals.example: docker-compose.e2e.yml on
+  # the live stack, and the Given on the app in this process. The refusal compares the
+  # domain as it would be stored (lower-cased, no trailing dot), so every spelling of it is
+  # refused, on every page that authorizes a domain.
+  @T-ADMIN-REFUSAL-038 @json @authorized-domains @super-admin-domain
+  Scenario Outline: The users page refuses the deployment's super-admin domain, however it is spelled - <spelling>
+    Given the deployment's super-admin domain is "operator.bdd-refusals.example"
+    And another tenant of this seller, authorizing the domain "authorized.bdd-refusals.example"
+    When the users page adds the authorized domain "<spelling>" to that tenant
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "SuperAdminDomainRefused" refusal
+    And that tenant authorizes only the domain "authorized.bdd-refusals.example"
+
+    Examples:
+      | spelling                       |
+      | operator.bdd-refusals.example  |
+      | Operator.BDD-Refusals.Example  |
+      | operator.bdd-refusals.example. |
+
+  @T-ADMIN-REFUSAL-039 @browser @authorized-domains @super-admin-domain
+  Scenario Outline: The settings page refuses the deployment's super-admin domain, however it is spelled - <spelling>
+    Given the deployment's super-admin domain is "operator.bdd-refusals.example"
+    And another tenant of this seller, authorizing the domain "authorized.bdd-refusals.example"
+    When the settings page's form adds the authorized domain "<spelling>" to that tenant, from no page
+    Then the page returns status 400
+    And the page is the error page
+    And the page shows the "SuperAdminDomainRefused" refusal
+    And that tenant authorizes only the domain "authorized.bdd-refusals.example"
+
+    Examples:
+      | spelling                       |
+      | operator.bdd-refusals.example  |
+      | Operator.BDD-Refusals.Example  |
+      | operator.bdd-refusals.example. |
 
   @T-ADMIN-REFUSAL-034 @json @authorized-domains
   Scenario: An authorized domain that names no domain is refused for that field

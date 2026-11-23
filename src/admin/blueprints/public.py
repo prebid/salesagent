@@ -8,6 +8,7 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 from sqlalchemy import select
 
 from src.admin.blueprints.core import get_tenant_from_hostname
+from src.admin.utils import tenant_access_refusal
 from src.admin.utils.helpers import clear_session_identity, session_is_tenant_scoped
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -346,8 +347,12 @@ def provision_tenant():
 
 @public_bp.route("/signup/complete")
 def signup_complete():
-    """Signup completion page with next steps."""
+    """Signup completion page with next steps; only for a user of the tenant it names."""
     tenant_id = request.args.get("tenant_id")
+    if not tenant_id:
+        return redirect(url_for("public.landing"))
+    if (refusal := tenant_access_refusal(tenant_id)) is not None:
+        return refusal
 
     # Get tenant info
     with get_db_session() as db_session:
