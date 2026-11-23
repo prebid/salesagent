@@ -30,17 +30,23 @@ tests/bdd/
 │   ├── BR-ADMIN-ACCOUNTS.feature                      # account pages
 │   ├── BR-ADMIN-INVENTORY-PROFILES.feature            # inventory-profile modal
 │   ├── BR-ADMIN-INVENTORY-PROFILE-publishers.feature  # inventory-profile and product forms
+│   ├── BR-ADMIN-OPERATOR-REFUSALS.feature             # expected refusals
 │   ├── BR-ADMIN-TENANT-SCOPING.feature                # tenant-scoped route authorization (#2203, #2204)
+│   ├── BR-ADMIN-UNEXPECTED-ERRORS.feature             # unexpected failures
 │   └── local-publisher-authorization.feature          # publisher pages
 ├── steps/domain/
 │   ├── admin_accounts.py                # account steps and the shared admin page steps
 │   ├── admin_inventory_profiles.py      # inventory-profile and product form steps
+│   ├── admin_operator_refusals.py       # expected-refusal steps
 │   ├── admin_tenant_scoping.py          # tenant-scoping steps
+│   ├── admin_unexpected_errors.py       # unexpected-failure steps
 │   └── publisher_authorization.py       # publisher steps
 ├── test_admin_accounts.py               # scenarios() bindings, one module per feature
 ├── test_admin_inventory_profiles.py
 ├── test_admin_inventory_profile_publishers.py
+├── test_admin_operator_refusals.py
 ├── test_admin_tenant_scoping.py
+├── test_admin_unexpected_errors.py
 ├── test_local_publisher_authorization.py
 └── conftest.py                          # T-ADMIN- parametrization, marker, ENV_ROUTES rows
 
