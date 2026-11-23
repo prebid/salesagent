@@ -46,7 +46,6 @@ class TenantContext(BaseModel):
     hitl_webhook_url: str | None = None
     auto_approve_format_ids: list[str] = []
     human_review_required: bool = True
-    policy_settings: dict[str, Any] | None = None
     signals_agent_config: dict[str, Any] | None = None
     supported_billing: list[str] | None = None  # BR-RULE-059: seller billing policy
     account_sandbox: bool = False  # #1592 C2/A2: account.sandbox + sync_accounts provisioning gate
@@ -151,7 +150,6 @@ class TenantContext(BaseModel):
             hitl_webhook_url=tenant.hitl_webhook_url,
             auto_approve_format_ids=safe_json_loads(tenant.auto_approve_format_ids, []),
             human_review_required=tenant.human_review_required if tenant.human_review_required is not None else True,
-            policy_settings=safe_json_loads(tenant.policy_settings, None),
             signals_agent_config=safe_json_loads(tenant.signals_agent_config, None),
             supported_billing=safe_json_loads(tenant.supported_billing, None),
             account_sandbox=tenant.account_sandbox,

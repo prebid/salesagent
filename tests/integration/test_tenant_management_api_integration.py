@@ -346,6 +346,8 @@ class TestTenantManagementAPIIntegration:
         assert data["ad_server"] == "google_ad_manager"
         assert "settings" in data
         assert "adapter_config" in data
+        # Creating a tenant saves no advertising policy: the operator saves one on the Policy page.
+        assert data["settings"]["advertising_policy"] is None
 
         # Verify adapter config
         assert data["adapter_config"]["adapter_type"] == "google_ad_manager"

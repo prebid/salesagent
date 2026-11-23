@@ -44,7 +44,6 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
         "human_review_required": tenant.human_review_required,
         "slack_audit_webhook_url": tenant.slack_audit_webhook_url,
         "hitl_webhook_url": tenant.hitl_webhook_url,
-        "policy_settings": safe_json_loads(tenant.policy_settings, None),
         "signals_agent_config": safe_json_loads(tenant.signals_agent_config, None),
         "approval_mode": tenant.approval_mode,
         "account_approval_mode": tenant.account_approval_mode,

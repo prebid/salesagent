@@ -294,11 +294,9 @@ def tenant_settings(tenant_id, section=None):
         stmt = select(CurrencyLimit).filter_by(tenant_id=tenant_id).order_by(CurrencyLimit.currency_code)
         currency_limits = db_session.scalars(stmt).all()
 
-        # Whether each AI feature can run for this seller, as the feature itself decides:
-        # policy checks only on the seller's own credential, ranking and review with the
-        # platform's as fallback (src/services/ai/factory.py).
+        # Whether ranking and review can run for this seller, with the platform's credential
+        # as fallback (src/services/ai/factory.py). The Policy page asks the same of policy checks.
         ai_enabled = tenant_ai_enabled(tenant)
-        seller_ai_enabled = tenant_ai_enabled(tenant, platform_fallback=False)
 
         # Get AI configuration for template
         ai_config = tenant.ai_config or {}
@@ -317,7 +315,6 @@ def tenant_settings(tenant_id, section=None):
             "tenant_settings.html",
             tenant=tenant,
             ai_enabled=ai_enabled,
-            seller_ai_enabled=seller_ai_enabled,
             current_provider=current_provider,
             current_model=current_model,
             tenant_id=tenant_id,

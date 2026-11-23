@@ -191,7 +191,6 @@ def create_tenant():
             hitl_webhook_url=data.get("hitl_webhook_url"),
             auto_approve_format_ids=data.get("auto_approve_format_ids", ["display_300x250_image"]),
             human_review_required=data.get("human_review_required", True),
-            policy_settings=data.get("policy_settings", {}),
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
             # Set default measurement provider (Publisher Ad Server)
@@ -350,7 +349,10 @@ def get_tenant(tenant_id):
                 "hitl_webhook_url": tenant.hitl_webhook_url,
                 "auto_approve_formats": (tenant.auto_approve_format_ids if tenant.auto_approve_format_ids else []),
                 "human_review_required": bool(tenant.human_review_required),
-                "policy_settings": tenant.policy_settings if tenant.policy_settings else {},
+                # The policy the operator saved on the Policy page, or None for none saved.
+                "advertising_policy": (
+                    tenant.advertising_policy.model_dump(mode="json") if tenant.advertising_policy else None
+                ),
             },
         }
 
@@ -438,8 +440,6 @@ def update_tenant(tenant_id):
             tenant.auto_approve_format_ids = data["auto_approve_format_ids"]
         if "human_review_required" in data:
             tenant.human_review_required = data["human_review_required"]
-        if "policy_settings" in data:
-            tenant.policy_settings = data["policy_settings"]
 
         # Always update the updated_at timestamp
         tenant.updated_at = datetime.now(UTC)

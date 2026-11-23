@@ -1062,26 +1062,6 @@ def parse_form_data_to_policy_updates(form_data) -> dict[str, Any]:
         if ai_policy:
             updates["ai_policy"] = ai_policy
 
-    # Parse advertising policy: the fields this form edits. PolicyService completes the
-    # policy with the ones it does not (require_manual_review, description).
-    advertising_policy_lists = (
-        "default_prohibited_categories",
-        "default_prohibited_tactics",
-        "prohibited_categories",
-        "prohibited_tactics",
-        "prohibited_advertisers",
-    )
-    if any(field in form_data for field in ("policy_check_enabled", *advertising_policy_lists)):
-        updates["advertising_policy"] = {
-            # Checkbox not present means unchecked
-            "enabled": form_data.get("policy_check_enabled") in [True, "true", "on", 1, "1"],
-            # Newline-separated; a field the form did not post saves an empty list.
-            **{
-                field_name: [line.strip() for line in form_data.get(field_name, "").split("\n") if line.strip()]
-                for field_name in advertising_policy_lists
-            },
-        }
-
     # Parse product ranking prompt
     if "product_ranking_prompt" in form_data:
         prompt_value = form_data.get("product_ranking_prompt", "").strip()
