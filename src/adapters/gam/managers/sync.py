@@ -24,6 +24,7 @@ from src.adapters.gam.client import GAMClientManager
 from src.adapters.gam.managers.inventory import GAMInventoryManager
 from src.adapters.gam.managers.orders import GAMOrdersManager
 from src.core.database.models import SyncJob
+from src.services.sync_jobs import recording_failure
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ class GAMSyncManager:
         # Create sync job
         sync_job = self._create_sync_job(db_session, sync_type, "api")
 
-        try:
+        with recording_failure(db_session, sync_job, f"Inventory sync failed for tenant {self.tenant_id}"):
             # Update status to running
             sync_job.status = "running"
             db_session.commit()
@@ -115,24 +116,12 @@ class GAMSyncManager:
             sync_job.summary = json.dumps(summary)
             db_session.commit()
 
-            logger.info(f"Inventory sync completed for tenant {self.tenant_id}: {summary}")
-            return {
-                "sync_id": sync_job.sync_id,
-                "status": "completed",
-                "summary": summary,
-            }
-
-        except Exception as e:
-            logger.error(f"Inventory sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
-
-            # Update sync job with error
-            sync_job.status = "failed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.error_message = str(e)
-            db_session.commit()
-
-            raise
+        logger.info(f"Inventory sync completed for tenant {self.tenant_id}: {summary}")
+        return {
+            "sync_id": sync_job.sync_id,
+            "status": "completed",
+            "summary": summary,
+        }
 
     def sync_orders(self, db_session: Session, force: bool = False) -> dict[str, Any]:
         """Synchronize orders and line items from GAM to database.
@@ -157,7 +146,7 @@ class GAMSyncManager:
         # Create sync job
         sync_job = self._create_sync_job(db_session, sync_type, "api")
 
-        try:
+        with recording_failure(db_session, sync_job, f"Orders sync failed for tenant {self.tenant_id}"):
             # Update status to running
             sync_job.status = "running"
             db_session.commit()
@@ -180,24 +169,12 @@ class GAMSyncManager:
             sync_job.summary = json.dumps(summary)
             db_session.commit()
 
-            logger.info(f"Orders sync completed for tenant {self.tenant_id}: {summary}")
-            return {
-                "sync_id": sync_job.sync_id,
-                "status": "completed",
-                "summary": summary,
-            }
-
-        except Exception as e:
-            logger.error(f"Orders sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
-
-            # Update sync job with error
-            sync_job.status = "failed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.error_message = str(e)
-            db_session.commit()
-
-            raise
+        logger.info(f"Orders sync completed for tenant {self.tenant_id}: {summary}")
+        return {
+            "sync_id": sync_job.sync_id,
+            "status": "completed",
+            "summary": summary,
+        }
 
     def sync_full(self, db_session: Session, force: bool = False, custom_targeting_limit: int = 1000) -> dict[str, Any]:
         """Perform full synchronization of both inventory and orders.
@@ -215,7 +192,8 @@ class GAMSyncManager:
         # Create sync job for full sync
         sync_job = self._create_sync_job(db_session, "full", "api")
 
-        try:
+        # A nested sync that fails has recorded its own job; this job takes over its text.
+        with recording_failure(db_session, sync_job, f"Full sync failed for tenant {self.tenant_id}"):
             # Update status to running
             sync_job.status = "running"
             db_session.commit()
@@ -247,24 +225,12 @@ class GAMSyncManager:
             sync_job.summary = json.dumps(combined_summary)
             db_session.commit()
 
-            logger.info(f"Full sync completed for tenant {self.tenant_id}: {combined_summary}")
-            return {
-                "sync_id": sync_job.sync_id,
-                "status": "completed",
-                "summary": combined_summary,
-            }
-
-        except Exception as e:
-            logger.error(f"Full sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
-
-            # Update sync job with error
-            sync_job.status = "failed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.error_message = str(e)
-            db_session.commit()
-
-            raise
+        logger.info(f"Full sync completed for tenant {self.tenant_id}: {combined_summary}")
+        return {
+            "sync_id": sync_job.sync_id,
+            "status": "completed",
+            "summary": combined_summary,
+        }
 
     def sync_selective(
         self,
@@ -289,12 +255,10 @@ class GAMSyncManager:
         # Create sync job
         sync_job = self._create_sync_job(db_session, "selective", "api")
 
-        try:
+        with recording_failure(db_session, sync_job, f"Selective sync failed for tenant {self.tenant_id}"):
             # Update status to running
             sync_job.status = "running"
             db_session.commit()
-
-            start_time = datetime.now(UTC)
 
             # Get discovery instance
             discovery = self.inventory_manager._get_discovery()
@@ -319,24 +283,12 @@ class GAMSyncManager:
             sync_job.summary = json.dumps(summary)
             db_session.commit()
 
-            logger.info(f"Selective sync completed for tenant {self.tenant_id}: {summary}")
-            return {
-                "sync_id": sync_job.sync_id,
-                "status": "completed",
-                "summary": summary,
-            }
-
-        except Exception as e:
-            logger.error(f"Selective sync failed for tenant {self.tenant_id}: {e}", exc_info=True)
-
-            # Update sync job with error
-            sync_job.status = "failed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.error_message = str(e)
-            db_session.commit()
-
-            raise
+        logger.info(f"Selective sync completed for tenant {self.tenant_id}: {summary}")
+        return {
+            "sync_id": sync_job.sync_id,
+            "status": "completed",
+            "summary": summary,
+        }
 
     def get_sync_status(self, db_session: Session, sync_id: str) -> dict[str, Any] | None:
         """Get status of a specific sync job.

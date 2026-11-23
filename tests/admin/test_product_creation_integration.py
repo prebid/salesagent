@@ -1,9 +1,11 @@
 """Integration tests for product creation via UI and API."""
 
 import json
+from collections.abc import Sequence
 
 import pytest
 from sqlalchemy import delete, select
+from werkzeug.datastructures import MultiDict
 
 from src.admin.app import create_app
 
@@ -15,6 +17,41 @@ from tests.integration.conftest import (
     create_test_product_with_pricing,
 )
 from tests.utils.database_helpers import create_tenant_with_timestamps
+
+#: How base.html renders a flashed error, the one way a page shows the operator a failure it did not answer
+#: with an error status.
+_ERROR_FLASH = b'class="alert alert-error"'
+
+
+def _assert_no_error_shown(response) -> None:
+    """The page shows no flashed error; a substring such as b"Error" also matches page scripts."""
+    at = response.data.find(_ERROR_FLASH)
+    assert at == -1, f"The page shows an error: {response.data[at : at + 600]!r}"
+
+
+def _valid_product_form(product_id: str, name: str, *, description: str, countries: Sequence[str] = ()) -> MultiDict:
+    """The add-product form with every field the form requires, plus *countries*.
+
+    One auction CPM pricing option, the property the fixture publisher authorizes
+    (``add_required_setup_data``), and one canonical format declaration: core/product.json's
+    root anyOf requires a format arm, so the form refuses a product without one.
+    """
+    return MultiDict(
+        [
+            ("product_id", product_id),
+            ("name", name),
+            ("description", description),
+            *(("countries", country) for country in countries),
+            ("delivery_type", "non_guaranteed"),
+            ("pricing_model_0", "cpm_auction"),
+            ("currency_0", "USD"),
+            ("floor_0", "5.0"),
+            ("min_spend_0", "1000"),
+            ("property_mode", "property_ids"),
+            ("selected_property_ids", "fixture_default_psatest_com"),
+            ("format_options", json.dumps([{"format_kind": "image", "params": {"width": 300, "height": 250}}])),
+        ]
+    )
 
 
 @pytest.fixture
@@ -105,37 +142,12 @@ def test_add_product_json_encoding(client, test_tenant, integration_db):
         sess["tenant_id"] = "test_product_tenant"
         sess["role"] = "tenant_admin"
 
-    # Product data with JSON fields - using werkzeug's MultiDict for multiple values
-    from werkzeug.datastructures import MultiDict
-
-    # Note: Formats are now fetched from creative agents via AdCP protocol (not local DB)
-    # This test focuses on JSON encoding of countries and other JSON fields
-    # Pricing uses indexed form fields (pricing_model_0, rate_0, etc.) per parse_pricing_options_from_form()
-    product_data = MultiDict(
-        [
-            ("product_id", "test_product_json"),
-            ("name", "Test Product JSON"),
-            ("description", "Test product for JSON encoding"),
-            ("countries", "US"),  # First country
-            ("countries", "GB"),  # Second country
-            ("delivery_type", "non_guaranteed"),  # Required field
-            # Indexed pricing option fields (auction CPM with floor price)
-            ("pricing_model_0", "cpm_auction"),
-            ("currency_0", "USD"),
-            ("floor_0", "5.0"),
-            ("min_spend_0", "1000"),
-            # The property the fixture publisher's stored adagents.json authorizes
-            # (add_required_setup_data): every product names its publishers.
-            ("property_mode", "property_ids"),
-            ("selected_property_ids", "fixture_default_psatest_com"),
-            # A format arm, because core/product.json's root anyOf requires one and the
-            # form now refuses a product that declares neither. This payload used to
-            # declare no format at all, which stored a row that
-            # convert_product_model_to_schema rejects -- and get_products re-raises, so the
-            # whole tenant's discovery answered INTERNAL_ERROR. The canonical arm is the
-            # one the pin tells a new product to author.
-            ("format_options", json.dumps([{"format_kind": "image", "params": {"width": 300, "height": 250}}])),
-        ]
+    # Two countries, so the stored column has to be a JSON array of both.
+    product_data = _valid_product_form(
+        "test_product_json",
+        "Test Product JSON",
+        description="Test product for JSON encoding",
+        countries=["US", "GB"],
     )
 
     # Send POST request to add product
@@ -146,7 +158,7 @@ def test_add_product_json_encoding(client, test_tenant, integration_db):
     # Check that we were redirected to the products list page
     assert b"Products" in response.data
     # Check for error messages
-    assert b"Error" not in response.data or b"Error loading" in response.data  # "Error loading" is OK in filters
+    _assert_no_error_shown(response)
 
     # Verify product was created correctly in database
     with get_db_session() as session:
@@ -220,20 +232,15 @@ def test_add_product_empty_json_fields(client, test_tenant, integration_db):
         sess["role"] = "tenant_admin"
 
     # Product data with empty JSON fields (no formats or countries selected)
-    product_data = {
-        "product_id": "test_product_empty",
-        "name": "Test Product Empty JSON",
-        "description": "Test product with empty JSON fields",
-        "delivery_type": "guaranteed",
-        "cpm": "10.0",
-        "min_spend": "1000",
-        # No formats or countries - should result in empty arrays
-    }
+    # The required fields only: no countries and no other optional JSON field is submitted.
+    product_data = _valid_product_form(
+        "test_product_empty", "Test Product Empty JSON", description="Test product with empty JSON fields"
+    )
 
     response = client.post("/tenant/test_product_tenant/products/add", data=product_data, follow_redirects=True)
 
     assert response.status_code == 200
-    assert b"Error" not in response.data or b"Error loading" in response.data
+    _assert_no_error_shown(response)
 
     # Verify empty arrays/objects are stored correctly
     with get_db_session() as session:
@@ -241,16 +248,12 @@ def test_add_product_empty_json_fields(client, test_tenant, integration_db):
             select(Product).filter_by(tenant_id="test_product_tenant", product_id="test_product_empty")
         ).first()
 
-        # Product should be created (may fail if form validation rejected it)
-        if product is not None:
-            # Empty fields might be stored as None or empty lists/dicts depending on the database
-            assert product.format_ids in [None, []]
-            assert product.countries in [None, []]
-            assert product.price_guidance in [None, {}]
-            assert product.targeting_template in [None, {}]
-        else:
-            # Product creation failed, check if there was a validation error in response
-            assert b"Product created successfully" not in response.data
+        assert product is not None, "The form refused a product carrying every required field"
+        # Fields the form did not submit are stored empty, never as a string of JSON.
+        assert product.format_ids in [None, []]
+        assert product.countries in [None, []]
+        assert product.price_guidance in [None, {}]
+        assert product.targeting_template in [None, {}]
 
 
 @pytest.mark.requires_db
@@ -364,7 +367,7 @@ def test_list_products_json_parsing(client, test_tenant, integration_db):
     # The template expects price_guidance to have min/max attributes
     # This test ensures the JSON is parsed correctly for template rendering
     assert b"Test List JSON" in response.data
-    assert b"Error" not in response.data
+    _assert_no_error_shown(response)
 
 
 if __name__ == "__main__":

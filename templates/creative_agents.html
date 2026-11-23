@@ -204,7 +204,7 @@ function testAgent(agentId, agentName) {
         if (data.success) {
             alert(`✅ Connection Successful!\n\nAgent: ${agentName}\nFormats Found: ${data.format_count}\n\nSample Formats:\n${data.sample_formats.join('\n')}`);
         } else {
-            alert(`❌ Connection Failed\n\n${data.error}`);
+            alert(`❌ ${adminErrorText(data)}`);
         }
     })
     .catch(error => {
@@ -227,7 +227,7 @@ function deleteAgent(agentId, agentName) {
                 window.location.reload();
             } else {
                 return response.json().then(err => {
-                    alert(err.error || 'Could not delete creative agent');
+                    alert(adminErrorText(err));
                     return Promise.reject(err);
                 });
             }

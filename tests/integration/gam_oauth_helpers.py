@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qs, urlsplit
 
+from tests.harness.admin_client import BROWSER_PAGE_HEADERS
 from tests.helpers.admin_session import tenant_user_session
 
 AUTH_CODE = "4/single-use-authorization-code"
@@ -26,7 +27,7 @@ def log_in(client, user) -> None:
 
 
 def authorize(client, tenant_id: str):
-    return client.get(f"/auth/gam/authorize/{tenant_id}")
+    return client.get(f"/auth/gam/authorize/{tenant_id}", headers=BROWSER_PAGE_HEADERS)
 
 
 def start_flow(client, tenant_id: str) -> str:
@@ -39,4 +40,6 @@ def start_flow(client, tenant_id: str) -> str:
 
 
 def callback(client, state: str):
-    return client.get("/auth/gam/callback", query_string={"code": AUTH_CODE, "state": state})
+    return client.get(
+        "/auth/gam/callback", query_string={"code": AUTH_CODE, "state": state}, headers=BROWSER_PAGE_HEADERS
+    )

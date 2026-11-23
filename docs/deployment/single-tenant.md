@@ -176,6 +176,11 @@ explains why it needs both.
    [SSO quick start](../user-guide/sso-setup.md#quick-start). In its first step, set
    **Custom Domain** to `localhost:8000`, the host where you open the Admin UI.
 
+Add yourself with the **Admin** role (or through an allowed domain) before you test, and sign in
+with SSO before **Disable Setup Mode**. That SSO session is a tenant admin session only: for
+super-admin work (creating tenants, deployment settings), sign in with the deployment's own OAuth
+again, because a tenant's SSO never grants super admin.
+
 The [SSO setup guide](../user-guide/sso-setup.md) has provider-specific instructions.
 [Security and authentication](../security.md) covers how sessions and secrets are handled.
 

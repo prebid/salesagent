@@ -1,10 +1,12 @@
-"""Admin tenant-scoping harness for the four routes of prebid/salesagent#2203 and the OIDC test route.
+"""Admin tenant-scoping harness for the routes of prebid/salesagent#2203 and #2204.
 
 Drives ``GET /api/tenant/<tenant_id>/revenue-chart``, ``GET /api/tenant/<tenant_id>/products``,
 ``GET /api/tenant/<tenant_id>/products/suggestions``, ``GET,POST /tenant/<tenant_id>/policy/rules``
-and ``GET /auth/oidc/test/<tenant_id>`` on the two admin transports ``AdminAccountEnv`` already
-provides — Flask ``test_client`` (integration) and ``requests.Session`` against the Docker
-stack (e2e) — and seeds the tenants, memberships, catalogue and media buys the scenarios grade.
+and ``POST /auth/oidc/test/<tenant_id>`` (#2203), and the six GAM reporting routes of
+``src/adapters/gam_reporting_api.py`` (#2204), on the two admin transports ``AdminAccountEnv``
+already provides — Flask ``test_client`` (integration) and ``requests.Session`` against the
+Docker stack (e2e) — and seeds the tenants, memberships, catalogue and media buys the
+scenarios grade.
 
 Subclasses ``AdminAccountEnv`` rather than extracting a base: the transport plumbing is
 inherited unchanged, and the harness lifecycle guard
@@ -13,9 +15,11 @@ one hand-rolled ``__enter__``/``__exit__`` home to ``AdminAccountEnv``, so a sec
 env inherits that lifecycle instead of restating it.
 
 The caller's session is STATED on both transports (``AdminClient.state_session``), with the
-keys an OIDC login writes for a caller who is not a super admin (``member_session_payload``):
-``user`` as a bare email and a HOME tenant that is never the target, with no ``test_user``
-key. ``require_tenant_access`` therefore takes its real branch, and the target tenant's
+keys the deployment's own (Google) sign-in writes for a caller who is not a super admin
+(``member_session_payload(..., auth_method=None)``): ``user`` as a bare email and a HOME
+tenant that is never the target, with no ``test_user`` key. Not an OIDC session: a sign-in
+through a tenant's own SSO is bound to that tenant and reaches no other, so it would be
+refused on the target before its membership row was ever read. ``require_tenant_access`` therefore takes its real branch, and the target tenant's
 ``User`` row is the only thing that decides the outcome: whether it exists, whether it is
 active, and the role it holds. A refusal of that session is the decorator's membership or
 role check, on the same branch in-process as on the stack.
@@ -63,6 +67,8 @@ MEMBER_ROLE = UserRole.MANAGER
 #: lower role the OIDC test route's role check would refuse in the lookup's place.
 NON_MATCHING_ROW_ROLE = UserRole.ADMIN
 ACTIVE_BUY_BUDGET = Decimal("1500.00")
+#: Any numeric id passes ``validate_numeric_id``; the handlers stop before they would use it.
+GAM_ADVERTISER_ID = "12345"
 
 
 class TenantScopedRoute(NamedTuple):
@@ -70,13 +76,25 @@ class TenantScopedRoute(NamedTuple):
     methods: tuple[str, ...]
 
 
-#: The four routes of #2203 and the OIDC test route, keyed by the name the Gherkin scenarios use.
+_GAM_API = "/api/tenant/{tenant_id}"
+
+#: The routes of #2203 and #2204, keyed by the name the Gherkin scenarios use.
 ROUTES: dict[str, TenantScopedRoute] = {
     "revenue chart API": TenantScopedRoute("/api/tenant/{tenant_id}/revenue-chart", ("GET",)),
     "products API": TenantScopedRoute("/api/tenant/{tenant_id}/products", ("GET",)),
     "product suggestions API": TenantScopedRoute("/api/tenant/{tenant_id}/products/suggestions", ("GET",)),
     "policy rules page": TenantScopedRoute("/tenant/{tenant_id}/policy/rules", ("GET", "POST")),
-    "OIDC test page": TenantScopedRoute("/auth/oidc/test/{tenant_id}", ("GET",)),
+    "OIDC test page": TenantScopedRoute("/auth/oidc/test/{tenant_id}", ("POST",)),
+    "GAM reporting API": TenantScopedRoute(f"{_GAM_API}/gam/reporting", ("GET",)),
+    "GAM advertiser summary API": TenantScopedRoute(
+        f"{_GAM_API}/gam/reporting/advertiser/{{advertiser_id}}/summary", ("GET",)
+    ),
+    "GAM principal reporting API": TenantScopedRoute(f"{_GAM_API}/principals/{{principal_id}}/gam/reporting", ("GET",)),
+    "GAM country breakdown API": TenantScopedRoute(f"{_GAM_API}/gam/reporting/countries", ("GET",)),
+    "GAM ad unit breakdown API": TenantScopedRoute(f"{_GAM_API}/gam/reporting/ad-units", ("GET",)),
+    "GAM principal summary API": TenantScopedRoute(
+        f"{_GAM_API}/principals/{{principal_id}}/gam/reporting/summary", ("GET",)
+    ),
 }
 
 #: Where a scenario may say a route redirected to, keyed by the name the Gherkin uses. The
@@ -92,6 +110,7 @@ REDIRECTS: dict[str, str] = {
 
 class TargetTenant(NamedTuple):
     tenant_id: str
+    principal_id: str
     principal_name: str
     products_payload: list[dict[str, str]]
 
@@ -146,11 +165,11 @@ def expected_suggestions_body() -> dict[str, Any]:
 
 
 class AdminTenantScopingEnv(AdminAccountEnv):
-    """Test environment for the tenant-scoping scenarios of #2203.
+    """Test environment for the tenant-scoping scenarios of #2203 and #2204.
 
     Same two transports as ``AdminAccountEnv``; adds the target tenant, the three caller
-    memberships (elsewhere / inactive here / active here, in the role the scenario names)
-    and the five routes.
+    memberships (elsewhere / inactive here / active here, in the role the scenario names),
+    a super admin of another tenant, and the routes in ``ROUTES``.
     """
 
     def __init__(self, *, mode: str = "integration", base_url: str | None = None) -> None:
@@ -210,7 +229,9 @@ class AdminTenantScopingEnv(AdminAccountEnv):
                     "delivery_type": product.delivery_type,
                 }
             ]
-            self._target = TargetTenant(tenant.tenant_id, buy.principal.name, products_payload)
+            self._target = TargetTenant(
+                tenant.tenant_id, buy.principal.principal_id, buy.principal.name, products_payload
+            )
         return self._target
 
     def target_state(self) -> TenantState:
@@ -240,6 +261,21 @@ class AdminTenantScopingEnv(AdminAccountEnv):
             _seed_member(target, MEMBER_EMAIL, is_active=is_active, role=role)
         self._authenticate_member(home_tenant_id)
 
+    def login_as_super_admin_of_other_tenant(self) -> None:
+        """A super admin signed in at a fresh home tenant, with no row in the target (#2204, AC4 as amended).
+
+        The session is the deployment sign-in's (``auth_method=None``), as for the members above:
+        a tenant-SSO session is scoped to its own tenant, so it could not reach the target.
+
+        The session carries the two keys ``is_super_admin()`` caches after a configured super
+        admin's first check (``_cache_admin_status`` in ``src/admin/utils/helpers.py``), so the
+        grant reads the same on both transports without touching the stack's
+        ``SUPER_ADMIN_EMAILS``.
+        """
+        home_tenant_id = self._new_home_tenant(with_member=True)
+        payload = member_session_payload(MEMBER_EMAIL, home_tenant_id, auth_method=None)
+        self.client.state_session({**payload, "is_super_admin": True, "admin_email": MEMBER_EMAIL})
+
     def _new_home_tenant(self, *, with_member: bool) -> str:
         """A tenant the session is logged in against. Never the target, so the bypass cannot fire."""
         with bound_factory_session():
@@ -250,25 +286,26 @@ class AdminTenantScopingEnv(AdminAccountEnv):
 
     def _authenticate_member(self, login_tenant_id: str) -> None:
         """State a tenant user's session for ``MEMBER_EMAIL`` against ``login_tenant_id`` (never the target)."""
-        self.client.state_session(member_session_payload(MEMBER_EMAIL, login_tenant_id))
+        self.client.state_session(member_session_payload(MEMBER_EMAIL, login_tenant_id, auth_method=None))
 
     # ── Requests ──────────────────────────────────────────────────────────
 
     def send(self, method: str, route_name: str, *, asks_for_json: bool = False) -> AdminResponse:
         """One request to *route_name* of the target tenant.
 
-        *asks_for_json* sends ``Accept: application/json``. ``require_tenant_access`` then
-        states a refusal's reason in a JSON body on an HTML route too, where a caller that
-        does not ask gets the 403 page, which carries no reason.
+        API callers send ``Accept: application/json``. *asks_for_json* sends that header
+        on a page route too, so a refusal states its reason instead of rendering the 403 page.
         """
         route = ROUTES[route_name]
         assert method in route.methods, f"{route_name} does not serve {method}"
-        path = route.path.format(tenant_id=self.target.tenant_id)
+        path = route.path.format(
+            tenant_id=self.target.tenant_id, principal_id=self.target.principal_id, advertiser_id=GAM_ADVERTISER_ID
+        )
         # Read here, not at seeding: a Given after the Background adds the caller's own row.
         self._state_before_request = self.target_state()
         return self.client.request(
             method,
             path,
             data={} if method == "POST" else None,
-            headers={"Accept": "application/json"} if asks_for_json else None,
+            headers={"Accept": "application/json"} if asks_for_json or path.startswith("/api/") else None,
         )

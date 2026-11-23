@@ -101,6 +101,8 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc010_capabilities",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
+    "tests.bdd.steps.domain.admin_operator_refusals",
+    "tests.bdd.steps.domain.admin_unexpected_errors",
     "tests.bdd.steps.domain.admin_tenant_scoping",
     "tests.bdd.steps.domain.admin_inventory_profiles",
     "tests.bdd.steps.domain.uc_get_products_inventory",

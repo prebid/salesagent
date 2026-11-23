@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories import MediaBuyUoW, WorkflowUoW
+from src.core.operator_errors import safe_error_message
 from src.core.thread_registry import ThreadRegistry
 
 logger = logging.getLogger(__name__)
@@ -110,8 +111,11 @@ def _run_approval_polling_thread(
             orders_manager = GAMOrdersManager(client_manager)
 
         except Exception as e:
-            logger.error(f"[{workflow_step_id}] Failed to initialize adapter: {e}")
-            _mark_approval_failed(tenant_id, workflow_step_id, f"Adapter initialization failed: {e}")
+            _mark_approval_failed(
+                tenant_id,
+                workflow_step_id,
+                safe_error_message(e, f"Adapter initialization failed for workflow step {workflow_step_id}"),
+            )
             return
 
         # Poll GAM for approval readiness
@@ -168,8 +172,11 @@ def _run_approval_polling_thread(
             time.sleep(polling_interval_seconds)
 
     except Exception as e:
-        logger.error(f"[{workflow_step_id}] Approval polling failed: {e}", exc_info=True)
-        _mark_approval_failed(tenant_id, workflow_step_id, str(e))
+        _mark_approval_failed(
+            tenant_id,
+            workflow_step_id,
+            safe_error_message(e, f"Approval polling failed for workflow step {workflow_step_id}"),
+        )
         _send_approval_webhook(tenant_id, order_id, workflow_step_id, "failed")
 
     finally:

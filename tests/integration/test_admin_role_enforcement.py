@@ -49,6 +49,8 @@ def _client_as(app, role):
     client = app.test_client()
     # signed in through SSO, which disable-setup-mode requires of its caller
     tenant_user_session(client, EMAILS[role], auth_method="oidc")
+    with client.session_transaction() as sess:
+        sess["tenant_id"] = TENANT_ID  # an SSO sign-in is bound to the tenant it was made for
     return client
 
 
@@ -177,7 +179,7 @@ def test_a_refused_fetch_gets_a_json_error(rbac_tenant, test_admin_app):
     """templates/users.html reads the answer with response.json() and shows its error."""
     response = _call(test_admin_app, "manager", ADMIN_ONLY_ROUTES["users.add_domain"])
     assert response.status_code == 403
-    assert response.get_json() == {"error": "Your role does not allow this"}
+    assert response.get_json() == {"success": False, "error": "Your role does not allow this"}
 
 
 # --- The last active admin ------------------------------------------------------------

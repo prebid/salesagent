@@ -115,6 +115,8 @@ The Admin UI checks these variables before the `super_admin_emails` and `super_a
 
 > **Note**: Per-tenant SSO and the **Users & Access** page control who reaches one tenant. Neither grants super admin access.
 
+> Super admin is granted only to a session from the deployment's own sign-in (Google or the `OAUTH_*` provider above). A session from a tenant's own SSO is limited to that tenant and is never a super admin, even for an address listed here.
+
 ---
 
 ## Database

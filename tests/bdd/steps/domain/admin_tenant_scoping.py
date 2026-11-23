@@ -1,6 +1,6 @@
-"""BDD step definitions for BR-ADMIN-TENANT-SCOPING: tenant-scoped admin routes (#2203).
+"""BDD step definitions for BR-ADMIN-TENANT-SCOPING: tenant-scoped admin routes (#2203, #2204).
 
-Steps for the five routes that take ``<tenant_id>`` from the URL. The harness
+Steps for the routes that take ``<tenant_id>`` from the URL. The harness
 (``AdminTenantScopingEnv``) is provided by the ``_harness_env`` fixture in
 tests/bdd/conftest.py. The generic admin steps (``the caller is not authenticated``,
 ``the page returns status``, ``the JSON response has "key" as "value"``) come from
@@ -66,6 +66,12 @@ def given_caller_active_member(ctx: dict) -> None:
 def given_caller_active_member_with_role(ctx: dict, role: str) -> None:
     """The same active User row, holding the role the scenario names in place of the harness default."""
     _env(ctx).login_with_target_membership(is_active=True, role=UserRole(role))
+
+
+@given("the caller is a super admin of a different tenant with no membership in the target tenant")
+def given_caller_super_admin_elsewhere(ctx: dict) -> None:
+    """Logged in as a super admin at another tenant; the target holds no User row for the caller."""
+    _env(ctx).login_as_super_admin_of_other_tenant()
 
 
 # ═══════════════════════════════════════════════════════════════════════════

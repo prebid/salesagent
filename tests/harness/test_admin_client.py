@@ -18,8 +18,9 @@ _MEMBER = member_session_payload("member@example.com", "home")
     [
         lambda client: client.state_session(_MEMBER),
         lambda client: client.authenticate("tenant_a"),
+        lambda client: client.authenticate("tenant_a", tenant_user="member@example.com"),
     ],
-    ids=["state_session", "authenticate"],
+    ids=["state_session", "authenticate", "authenticate_member"],
 )
 def test_stating_a_session_over_http_replaces_the_cookie_the_server_wrote(state: Callable[[AdminClient], None]) -> None:
     """A server-written ``session`` cookie carries a domain, so a domainless one would land beside it."""
@@ -42,8 +43,16 @@ def test_stating_a_session_over_http_replaces_the_cookie_the_server_wrote(state:
             lambda client: tenant_user_session(client._flask_client, "member@example.com"),
             member_session_payload("member@example.com", auth_method=None),
         ),
+        (
+            lambda client: client.authenticate("home", tenant_user="member@example.com"),
+            member_session_payload("member@example.com", "home", auth_method=None),
+        ),
+        (
+            lambda client: client.authenticate("home", tenant_user="member@example.com", auth_method="oidc"),
+            _MEMBER,
+        ),
     ],
-    ids=["state_session", "tenant_user_session"],
+    ids=["state_session", "tenant_user_session", "authenticate_member", "authenticate_oidc_member"],
 )
 def test_stating_a_session_in_process_replaces_the_session_the_client_held(
     state: Callable[[AdminClient], None], stated: dict[str, Any]
