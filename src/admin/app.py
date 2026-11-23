@@ -46,6 +46,7 @@ from src.core.domain_config import (
     get_session_cookie_domain,
 )
 from src.core.http_utils import safe_url
+from src.core.media_channels import media_channel_options
 from src.core.operator_errors import best_effort
 
 logger = logging.getLogger(__name__)
@@ -348,6 +349,10 @@ def create_app(config=None, settings=None):
 
         # Inject support email (configurable via SUPPORT_EMAIL env var)
         context["support_email"] = get_support_email()
+
+        # The product forms' channel picker iterates this, so it offers exactly the
+        # MediaChannel enum (GH #1532).
+        context["media_channel_options"] = media_channel_options()
 
         # NO sales_agent_domain. Templates built per-tenant URLs as
         # `https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/...`, which is the
