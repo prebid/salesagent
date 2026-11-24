@@ -4,6 +4,7 @@ from typing import cast
 from sqlalchemy import func, select
 
 from scripts.ops.migrate import run_migrations
+from scripts.setup.seed_advertising_policy import unchecked_advertising_policy
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
@@ -100,6 +101,9 @@ def init_db(exit_on_error=False):
                     ],
                     human_review_required=False,
                     auth_setup_mode=False,  # Disable setup mode for demo (simulates SSO configured)
+                    # A tenant with no saved policy serves no products (#2698); the demo saves
+                    # the smallest one, as the CI and storyboard seeds do.
+                    advertising_policy=unchecked_advertising_policy(),
                 )
             else:
                 # Production mode: Create blank tenant requiring setup
