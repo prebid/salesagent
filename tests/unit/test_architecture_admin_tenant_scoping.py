@@ -20,12 +20,20 @@ route that should prove membership and does not yet. The second kind names the i
 removes it, and the same number has to stand in a ``# FIXME(#n)`` above the route. A new
 rule fails immediately; a row that becomes guarded, or disappears, fails as stale. The set
 may only shrink.
+
+Two more ways a view names a tenant are graded here too. ``require_tenant_access`` on a rule
+WITHOUT ``<tenant_id>`` fails every call, so it is refused there. And a view that reads the
+tenant from the query string or the body (``request.args.get("tenant_id")``) has no URL
+argument to scope, so the source is scanned for those reads: each such view calls
+``tenant_access_refusal`` (directly or through a helper in its module), or sits in
+``REQUEST_TENANT_EXEMPT`` with the reason it checks some other way. That set only shrinks too.
 """
 
 from __future__ import annotations
 
+import ast
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any, NamedTuple
 
 import pytest
@@ -35,7 +43,7 @@ from werkzeug.routing import Rule
 from src.admin.auth_helpers import require_api_key_auth
 from src.admin.utils.helpers import require_auth, require_tenant_access
 from tests.helpers.admin_session import admin_test_app
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, called_function_names, repo_root
 
 # Every application of a decorator builds a new wrapper function, but all wrappers of one
 # decorator share one code object — so identity on __code__ recognises the decorator no
@@ -61,33 +69,12 @@ class Debt(NamedTuple):
 
 
 _LOGIN_ENTRY = LoginEntry()
-_INLINE_DEAD_ROLE_CHECK = Debt(2233, "inline session['role'] viewer/tenant_admin check that no production login sets")
-_INLINE_SESSION_TENANT_CHECK = Debt(2233, "inline session['tenant_id'] == tenant_id compare instead of the decorator")
-_PR_2075 = Debt(2075, "that PR adds require_tenant_access() to publisher partners; remove when it merges")
 
 # (endpoint, rule) -> why nothing in its wrapper chain authorizes the caller. Only ever shrinks.
 EXEMPT: dict[tuple[str, str], LoginEntry | Debt] = {
     ("auth.tenant_login", "/tenant/<tenant_id>/login"): _LOGIN_ENTRY,
     ("auth.tenant_google_auth", "/tenant/<tenant_id>/auth/google"): _LOGIN_ENTRY,
     ("oidc.login", "/auth/oidc/login/<tenant_id>"): _LOGIN_ENTRY,
-    ("policy.index", "/tenant/<tenant_id>/policy/"): _INLINE_DEAD_ROLE_CHECK,
-    ("policy.update", "/tenant/<tenant_id>/policy/update"): _INLINE_DEAD_ROLE_CHECK,
-    ("policy.review_task", "/tenant/<tenant_id>/policy/review/<task_id>"): _INLINE_DEAD_ROLE_CHECK,
-    ("inventory.analyze_ad_server_inventory", "/tenant/<tenant_id>/analyze-ad-server"): _INLINE_DEAD_ROLE_CHECK,
-    ("inventory.orders_browser", "/tenant/<tenant_id>/orders"): _INLINE_SESSION_TENANT_CHECK,
-    ("inventory.check_inventory_sync", "/tenant/<tenant_id>/check-inventory-sync"): _INLINE_SESSION_TENANT_CHECK,
-    ("operations.reporting", "/tenant/<tenant_id>/reporting"): _INLINE_SESSION_TENANT_CHECK,
-    ("publisher_partners.list_publisher_partners", "/tenant/<tenant_id>/publisher-partners"): _PR_2075,
-    ("publisher_partners.add_publisher_partner", "/tenant/<tenant_id>/publisher-partners"): _PR_2075,
-    (
-        "publisher_partners.delete_publisher_partner",
-        "/tenant/<tenant_id>/publisher-partners/<path:domain>",
-    ): _PR_2075,
-    ("publisher_partners.sync_publisher_partners", "/tenant/<tenant_id>/publisher-partners/sync"): _PR_2075,
-    (
-        "publisher_partners.get_publisher_properties",
-        "/tenant/<tenant_id>/publisher-partners/<path:domain>/properties",
-    ): _PR_2075,
 }
 
 _FIX_HINT = (
@@ -100,10 +87,17 @@ _FIX_HINT = (
 )
 
 
-def _authorized_by(view: Callable[..., Any]) -> str | None:
-    """The mechanism in the view's wrapper chain that authorizes the caller for the tenant, or None."""
+def _wrapper_chain(view: Callable[..., Any]) -> Iterator[Any]:
+    """The view and each function it wraps, outermost first (the ``__wrapped__`` links)."""
     current: Any = view
     while current is not None:
+        yield current
+        current = getattr(current, "__wrapped__", None)
+
+
+def _authorized_by(view: Callable[..., Any]) -> str | None:
+    """The mechanism in the view's wrapper chain that authorizes the caller for the tenant, or None."""
+    for current in _wrapper_chain(view):
         code = getattr(current, "__code__", None)
         if code is _TENANT_ACCESS_WRAPPER:
             return MEMBERSHIP
@@ -111,7 +105,6 @@ def _authorized_by(view: Callable[..., Any]) -> str | None:
             return API_KEY
         if code is _REQUIRE_AUTH_WRAPPER and inspect.getclosurevars(current).nonlocals["admin_only"]:
             return SUPER_ADMIN_ONLY
-        current = getattr(current, "__wrapped__", None)
     return None
 
 
@@ -130,6 +123,22 @@ def _unguarded(app: Flask) -> set[tuple[str, str]]:
         (rule.endpoint, rule.rule)
         for rule in _tenant_rules(app)
         if _authorized_by(app.view_functions[rule.endpoint]) is None
+    }
+
+
+def _membership_checks_without_a_tenant(app: Flask) -> set[tuple[str, str]]:
+    """``(endpoint, rule)`` of every rule WITHOUT ``<tenant_id>`` whose view carries ``require_tenant_access``.
+
+    The decorator reads ``tenant_id`` from the URL, so on such a rule every call fails.
+    """
+    return {
+        (rule.endpoint, rule.rule)
+        for rule in app.url_map.iter_rules()
+        if "tenant_id" not in rule.arguments
+        and any(
+            getattr(wrapper, "__code__", None) is _TENANT_ACCESS_WRAPPER
+            for wrapper in _wrapper_chain(app.view_functions[rule.endpoint])
+        )
     }
 
 
@@ -185,3 +194,119 @@ def test_every_debt_row_is_cited_at_its_route(app: Flask) -> None:
     )
 
     assert uncited == []
+
+
+def test_a_membership_check_is_only_on_a_rule_that_names_the_tenant(app: Flask) -> None:
+    assert _membership_checks_without_a_tenant(app) == set()
+
+
+def test_the_admin_app_serves_no_debug_routes(app: Flask) -> None:
+    """/debug/headers echoed every request header, the HttpOnly session cookie included, to anyone.
+
+    A script injected into an admin page could read the cookie back from it. Debug routes
+    belong on the FastAPI side, behind ``debug_routes_enabled``; the admin app has none.
+    """
+    debug_rules = [rule.rule for rule in app.url_map.iter_rules() if rule.rule.startswith("/debug")]
+    assert debug_rules == []
+    assert app.test_client().get("/debug/headers").status_code == 404
+
+
+# --- the tenant taken from the query string or the body ------------------------------------
+
+#: (module, view) of the views that read a tenant id from the request and check it some
+#: other way, each with the reason. Only ever shrinks.
+REQUEST_TENANT_EXEMPT: dict[tuple[str, str], str] = {
+    ("src/admin/blueprints/auth.py", "select_tenant"): (
+        "accepts only a tenant listed in the session's own available_tenants, set at sign-in"
+    ),
+}
+
+_REQUEST_SOURCES = {"args", "form", "values", "json"}
+
+#: Request keys that name a tenant.
+_TENANT_KEYS = {"tenant_id", "tenant", "tid"}
+
+_REQUEST_TENANT_FIX_HINT = (
+    "A view that reads the tenant id from the query string or the body calls "
+    "tenant_access_refusal(tenant_id) (src/admin/utils/helpers.py) before using it, and returns the refusal "
+    "when there is one. REQUEST_TENANT_EXEMPT only shrinks: a row whose view now checks access, or is gone, "
+    "is reported as stale and must be removed."
+)
+
+
+def _is_request_source(node: ast.AST, aliases: set[str]) -> bool:
+    """``request.args/form/values/json``, ``request.get_json(...)``, a name bound to one, or ``x or {}`` of those."""
+    if isinstance(node, ast.BoolOp):
+        return any(_is_request_source(value, aliases) for value in node.values)
+    if isinstance(node, ast.Name):
+        return node.id in aliases
+    if isinstance(node, ast.Call):
+        return ast.unparse(node.func) == "request.get_json"
+    source = ast.unparse(node)
+    return source.startswith("request.") and source.split(".", 1)[1] in _REQUEST_SOURCES
+
+
+def _request_aliases(function: ast.AST) -> set[str]:
+    """Names the function binds to the request's parameters or body (``data = request.get_json() or {}``)."""
+    aliases: set[str] = set()
+    for node in ast.walk(function):
+        if isinstance(node, ast.Assign) and _is_request_source(node.value, aliases):
+            aliases.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    return aliases
+
+
+def _reads_request_tenant_id(function: ast.AST) -> bool:
+    """Whether *function* reads a tenant key from the request's parameters or body, directly or through a local name."""
+    aliases = _request_aliases(function)
+    for node in ast.walk(function):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get":
+            target, key = node.func.value, node.args[0] if node.args else None
+        elif isinstance(node, ast.Subscript):
+            target, key = node.value, node.slice
+        else:
+            continue
+        if isinstance(key, ast.Constant) and key.value in _TENANT_KEYS and _is_request_source(target, aliases):
+            return True
+    return False
+
+
+def request_tenant_views_without_access_check(sources: dict[str, str]) -> set[tuple[str, str]]:
+    """``(module, view)`` of every route view that reads a tenant id from the request and never checks access to it.
+
+    A view checks access when it carries ``require_tenant_access``, or calls
+    ``tenant_access_refusal`` itself or through a function of its module that does
+    (``format_search`` reads the id in the view and checks it in a helper).
+    """
+    found: set[tuple[str, str]] = set()
+    for path, source in sources.items():
+        tree = ast.parse(source)
+        functions = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        checkers = {n.name for n in functions if "tenant_access_refusal" in called_function_names(n)} | {
+            "tenant_access_refusal"
+        }
+        for node in functions:
+            if not any(".route(" in ast.unparse(d) for d in node.decorator_list):
+                continue
+            decorators = {ast.unparse(d).split("(", 1)[0] for d in node.decorator_list}
+            if "require_tenant_access" in decorators or called_function_names(node) & checkers:
+                continue
+            if _reads_request_tenant_id(node):
+                found.add((path, node.name))
+    return found
+
+
+def _admin_sources() -> dict[str, str]:
+    root = repo_root()
+    return {
+        p.relative_to(root).as_posix(): p.read_text(encoding="utf-8")
+        for p in sorted((root / "src" / "admin").rglob("*.py"))
+        if "tests" not in p.relative_to(root).parts
+    }
+
+
+def test_a_view_taking_the_tenant_from_the_request_checks_access_to_it() -> None:
+    assert_violations_match_allowlist(
+        request_tenant_views_without_access_check(_admin_sources()),
+        set(REQUEST_TENANT_EXEMPT),
+        fix_hint=_REQUEST_TENANT_FIX_HINT,
+    )

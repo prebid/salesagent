@@ -7,7 +7,7 @@ no for such a session, and ``require_tenant_access`` / ``require_auth`` refuse a
 tenant but the one the session was issued for.
 
 The super-admin answer for a deployment sign-in comes from the session cache
-(``is_super_admin`` + ``admin_email``), so none of these tests reads a database.
+(``cached_super_admin``), so none of these tests reads a database.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import pytest
 from flask import Flask
 
 from src.admin.utils.helpers import is_super_admin, require_auth, require_tenant_access
+from tests.helpers.admin_session import cached_super_admin
 
 SUPER_ADMIN = "root@operator.example"
 OWN_TENANT = "acme"
@@ -24,13 +25,7 @@ OTHER_TENANT = "globex"
 
 def _session(*, auth_method: str | None, tenant_id: str = OWN_TENANT) -> dict:
     """A signed-in session for SUPER_ADMIN that is_super_admin would recognise from its cache."""
-    payload = {
-        "user": SUPER_ADMIN,
-        "tenant_id": tenant_id,
-        "authenticated": True,
-        "is_super_admin": True,
-        "admin_email": SUPER_ADMIN,
-    }
+    payload = {"user": SUPER_ADMIN, "tenant_id": tenant_id, "authenticated": True, **cached_super_admin(SUPER_ADMIN)}
     if auth_method is not None:
         payload["auth_method"] = auth_method
     return payload

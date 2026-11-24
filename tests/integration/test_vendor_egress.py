@@ -616,7 +616,7 @@ def test_gam_callback_flashes_googles_rejection_on_a_400(
     _point_google_token_url_at(local_origin_tls, monkeypatch)
     local_origin_tls.respond_with(400, body=b'{"error": "invalid_grant"}')
     tenant = TenantFactory(tenant_id="gam_oauth_tenant")
-    log_in(admin_client, UserFactory(tenant=tenant))
+    log_in(admin_client, UserFactory(tenant=tenant, role="admin"))
 
     response = callback(admin_client, start_flow(admin_client, tenant.tenant_id))
 

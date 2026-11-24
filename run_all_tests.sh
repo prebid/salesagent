@@ -452,8 +452,11 @@ source scripts/dev/storyboard-signing-env.sh
 # "Pool overlaps with other one on this address space". Measured, not theorised.
 # Without this export the compose default applies and every concurrent stack
 # asks for the same slice.
+# Assigned first, so the allocator's refusal stops the run with its own message
+# (`eval "export $(...)"` returns export's status and hides it).
 if [ -z "${E2E_NETWORK_SUBNET:-}" ]; then
-    eval "export $(scripts/dev/alloc-e2e-subnet.sh)"
+    _slice=$(scripts/dev/alloc-e2e-subnet.sh) || exit
+    export "$_slice"
     echo "  e2e network slice: $E2E_NETWORK_SUBNET"
 fi
 

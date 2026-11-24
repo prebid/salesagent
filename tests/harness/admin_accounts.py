@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Account, Tenant
 from tests.harness.admin_client import AdminClient, AdminResponse
+from tests.helpers.admin_session import admin_session_payload
 from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
 
 
@@ -118,8 +119,9 @@ class AdminAccountEnv:
         self._llm_origin: str | None = None
         #: The GAM service-account token endpoint (:meth:`gam_token_endpoint`), once started.
         self._token_endpoint: GamTokenEndpoint | None = None
-        #: What ``__exit__`` closes besides the client: the in-process origins and the LLM variable.
-        self._origin_cleanups = ExitStack()
+        #: What ``__exit__`` closes besides the client: the in-process origins, the LLM
+        #: variable, and every deployment setting a Given patched onto this process's settings.
+        self._in_process_cleanups = ExitStack()
 
     @property
     def mode(self) -> str:
@@ -157,7 +159,7 @@ class AdminAccountEnv:
 
     def _cleanup(self) -> None:
         """Release what ``_setup`` and the scenario's steps left behind."""
-        self._origin_cleanups.close()
+        self._in_process_cleanups.close()
         self._llm_origin = None
         self._token_endpoint = None
         self._drop_database_faults()
@@ -195,9 +197,40 @@ class AdminAccountEnv:
                 UserFactory(tenant=tenant, email=email, role="admin")
         self.client.authenticate(self._tenant_id, tenant_user=email)
 
+    def authenticate_as_super_admin_checked_at(self, email: str, checked_at: float | None) -> None:
+        """State the session a sign-in as *email* left, whose super-admin answer was cached at *checked_at*.
+
+        *email* need be on no configured list: until the cache is older than
+        ``SUPER_ADMIN_RECHECK_SECONDS`` the session alone says it is a super admin.
+        """
+        self.client.state_session(admin_session_payload(self._tenant_id, email=email, checked_at=checked_at))
+
     def clear_auth(self) -> None:
         """Clear the authenticated session."""
         self.client.clear_auth()
+
+    # ── The deployment ────────────────────────────────────────────────────
+    #
+    # A fact the live stack's server already has (docker-compose.e2e.yml sets it on
+    # adcp-server, and the feature names the same value, so the two change together) is
+    # patched onto this process's settings only, which the app reads on each request.
+
+    def _patch_in_process_setting(self, field: str, value: object) -> None:
+        if self._mode == "e2e":
+            return
+        from unittest.mock import patch
+
+        from src.core.config import get_settings
+
+        self._in_process_cleanups.enter_context(patch.object(get_settings().runtime, field, value))
+
+    def name_super_admin_domain(self, domain: str) -> None:
+        """Make *domain* the deployment's ``SUPER_ADMIN_DOMAIN``."""
+        self._patch_in_process_setting("super_admin_domain", domain)
+
+    def serve_many_tenants(self) -> None:
+        """Make this a multi-tenant deployment (``ADCP_MULTI_TENANT``), which lists its tenants to a super admin."""
+        self._patch_in_process_setting("adcp_multi_tenant", True)
 
     # ── Routes ────────────────────────────────────────────────────────────
 
@@ -604,7 +637,7 @@ class AdminAccountEnv:
     def _in_process_token_endpoint(self) -> GamTokenEndpoint:
         from tests.helpers.local_http_origin import run_local_origin
 
-        origin = self._origin_cleanups.enter_context(run_local_origin())
+        origin = self._in_process_cleanups.enter_context(run_local_origin())
         origin.respond_with(400, body=b'{"error": "invalid_grant"}')
         return GamTokenEndpoint(f"{origin.base_url}/token", lambda: [request.body for request in origin.requests])
 
@@ -845,6 +878,21 @@ class AdminAccountEnv:
         """Send *method* to *path* as a page's script does with fetch(): *body* as JSON, if any, and ``Accept: */*``."""
         return self.client.request(method, path, json=body, headers={"Accept": "*/*"})
 
+    def open_admin_home(self) -> AdminResponse:
+        """GET ``/admin/``, the page a sign-in lands on."""
+        return self.client.request("get", "/admin/")
+
+    def submit_tenant_form(self, tenant_id: str, path: str, form_data: dict[str, str]) -> AdminResponse:
+        """POST *form_data* to *tenant_id*'s ``/tenant/<id>/<path>`` as a browser's form post from no page."""
+        return self.client.submit(f"/tenant/{tenant_id}/{path}", form_data)
+
+    def authorized_domains_of(self, tenant_id: str) -> list[str]:
+        """The domains *tenant_id* authorizes, as stored."""
+        with get_db_session() as session:
+            tenant = session.get(Tenant, tenant_id)
+            assert tenant is not None, f"no tenant {tenant_id!r}"
+            return list(tenant.authorized_domains)
+
     def post_ai_connection_test(self, body: Any) -> AdminResponse:
         """POST *body* as JSON to this tenant's AI connection test, as the settings page does with fetch()."""
         return self.client.request("post", f"/tenant/{self._tenant_id}/settings/ai/test", json=body)
@@ -875,6 +923,10 @@ class AdminAccountEnv:
 
             from tests.e2e.scripted_llm_origin_service import run_scripted_llm_origin
 
-            self._llm_origin = self._origin_cleanups.enter_context(run_scripted_llm_origin(host="127.0.0.1", port=0))
-            self._origin_cleanups.enter_context(patch.dict(os.environ, {"GOOGLE_GEMINI_BASE_URL": self._llm_origin}))
+            self._llm_origin = self._in_process_cleanups.enter_context(
+                run_scripted_llm_origin(host="127.0.0.1", port=0)
+            )
+            self._in_process_cleanups.enter_context(
+                patch.dict(os.environ, {"GOOGLE_GEMINI_BASE_URL": self._llm_origin})
+            )
         return self._llm_origin

@@ -17,7 +17,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import Tenant
+from src.core.database.models import Tenant, UserRole
 from src.core.database.repositories.adapter_config import AdapterConfigRepository, read_adapter_config
 from src.core.database.repositories.gam_order import GAMLineItemRepository, GAMOrderRepository
 from src.core.database.repositories.sync_job import SyncJobRepository
@@ -316,7 +316,7 @@ def detect_gam_network(tenant_id):
 
 @gam_bp.route("/configure", methods=["POST"])
 @log_admin_action("configure_gam")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def configure_gam(tenant_id):
     """Save GAM configuration for a tenant."""
     data = json_object_body()
@@ -586,7 +586,7 @@ def reset_stuck_sync(tenant_id):
 
 @gam_bp.route("/create-service-account", methods=["POST"])
 @log_admin_action("create_gam_service_account")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def create_service_account(tenant_id):
     """Create a GCP service account for GAM integration.
 

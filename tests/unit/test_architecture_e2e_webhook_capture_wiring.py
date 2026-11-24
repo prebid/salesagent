@@ -31,7 +31,7 @@ Site 4's two halves are both load-bearing and pull in opposite directions:
   --subnet 223.255.255.0/24`` succeeds once and the SECOND stack fails with
   "Pool overlaps with other one on this address space" — even for a /28 inside
   the held /24. This repo runs concurrent stacks BY DESIGN
-  (``scripts/test-stack.sh`` sets ``COMPOSE_PROJECT_NAME="adcp-test-$$"``), so
+  (``scripts/test-stack.sh`` sets a per-run ``COMPOSE_PROJECT_NAME="adcp-test-<random>"``), so
   a hardcoded CIDR in the BASE compose file — the file the in-network runner
   uses alone — means the second stack on the box never comes up.
 
@@ -303,7 +303,7 @@ def test_base_compose_never_hardcodes_the_network_subnet() -> None:
     the second stack fails with "Pool overlaps with other one on this address
     space", and even a /28 inside the held /24 is refused. The base file is the
     one the in-network runner uses alone, and this repo runs stacks concurrently
-    by design (``COMPOSE_PROJECT_NAME="adcp-test-$$"``).
+    by design (a per-run ``COMPOSE_PROJECT_NAME="adcp-test-<random>"``).
     """
     violations = find_hardcoded_subnets(load_yaml(_BASE_COMPOSE))
 

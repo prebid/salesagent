@@ -91,6 +91,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.core.operator_errors import logged_failure_pattern
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.webhook_wire import CapturedWebhook, capture_outbound_webhooks
 
@@ -106,6 +107,9 @@ _SECRET = "order-approval-shared-secret-0123456789abcd"
 
 #: The advertiser name GAM quotes back in its rejection, which must not reach the buyer.
 _ADVERTISER = "Grüße Tōkyō Medien"
+
+#: The fixed text the buyer gets in ``message`` when GAM rejects the order outright.
+_NON_RETRYABLE_CONTEXT = "Order approval failed with a non-retryable error"
 
 #: The rejected order's id. Non-ASCII on purpose: it is what gives the byte-identity
 #: assertion its power (see module docstring).
@@ -160,7 +164,7 @@ def _gam_order_approval(*, approve_raises: Exception | None) -> Iterator[None]:
 
     ``approve_raises=None`` is the happy path; an exception whose text carries
     neither ``NO_FORECAST_YET`` nor ``ForecastingError`` is the non-retryable
-    branch, which reports the ad server's own message to the buyer.
+    branch, which reports fixed text and a log reference to the buyer.
     """
     orders_manager = MagicMock()
     if approve_raises is None:
@@ -294,8 +298,15 @@ class TestOrderApprovalWebhookAuthentication:
 
         payload = json.loads(request.content)
         assert payload["status"] == "failed"
-        # The ad server's text is not the buyer's to read.
-        assert str(gam_rejection) not in request.content.decode(), f"GAM's text reached the buyer: {payload!r}"
+        # The ad server's text is not the buyer's to read. Both checks read the DECODED
+        # payload: the body is sent with ``ensure_ascii``, so the advertiser's name is
+        # ``\u``-escaped in ``request.content`` and a search of the raw bytes never finds it.
+        assert logged_failure_pattern(_NON_RETRYABLE_CONTEXT).fullmatch(payload["message"]), (
+            f"message is not the fixed failure text with a log reference: {payload['message']!r}"
+        )
+        assert str(gam_rejection) not in json.dumps(payload, ensure_ascii=False), (
+            f"GAM's text reached the buyer: {payload!r}"
+        )
         # Fidelity: the order id survives the round trip intact, and it is non-ASCII,
         # which is what makes the byte-identity assertion below able to fail.
         assert payload["order_id"] == _NON_ASCII_ORDER_ID, f"order id mangled in transit: {payload!r}"
