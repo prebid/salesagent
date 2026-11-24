@@ -8,7 +8,7 @@ from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.models import UserRole
 from src.core.database.repositories.uow import TenantConfigUoW, WorkflowUoW
-from src.core.operator_errors import OperatorRefusal, RecordNotFound, TenantNotFound
+from src.core.operator_errors import OperatorRefusal, RecordNotFound
 from src.core.schemas.advertising_policy import AdvertisingPolicy
 from src.services.ai.factory import tenant_ai_enabled
 
@@ -70,9 +70,7 @@ def index(tenant_id):
     """
     with TenantConfigUoW(tenant_id) as uow:
         assert uow.tenant_config is not None and uow.audit_logs is not None
-        tenant = uow.tenant_config.get_tenant()
-        if tenant is None:
-            raise TenantNotFound(tenant_id)
+        tenant = uow.tenant_config.require(uow.tenant_config.get_tenant)
         tenant_name = tenant.name
         policy = tenant.advertising_policy
         # Policy checks run only on the seller's own AI configuration (products.py).
@@ -129,9 +127,7 @@ def update(tenant_id):
     """
     with TenantConfigUoW(tenant_id) as uow:
         assert uow.tenant_config is not None
-        tenant = uow.tenant_config.get_tenant()
-        if tenant is None:
-            raise TenantNotFound(tenant_id)
+        tenant = uow.tenant_config.require(uow.tenant_config.get_tenant)
         stored = tenant.advertising_policy
         uow.tenant_config.save_advertising_policy(
             AdvertisingPolicy(
