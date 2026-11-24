@@ -103,7 +103,7 @@ wheels = [
 
 [[package]]
 name = "adcp-sales-agent"
-version = "3.0.1"
+version = "3.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "a2a-cli" },
@@ -138,7 +138,6 @@ dependencies = [
     { name = "joserfc" },
     { name = "logfire" },
     { name = "mako" },
-    { name = "markdown" },
     { name = "mcp" },
     { name = "oauthlib" },
     { name = "opentelemetry-api" },
@@ -156,7 +155,6 @@ dependencies = [
     { name = "soupsieve" },
     { name = "sqlalchemy" },
     { name = "starlette" },
-    { name = "types-markdown" },
     { name = "types-pytz" },
     { name = "urllib3" },
     { name = "uvicorn" },
@@ -235,7 +233,6 @@ requires-dist = [
     { name = "joserfc", specifier = ">=1.7.6" },
     { name = "logfire", specifier = ">=5.4.0" },
     { name = "mako", specifier = ">=1.4.2" },
-    { name = "markdown", specifier = ">=3.4.0" },
     { name = "mcp", specifier = ">=2.2.0" },
     { name = "oauthlib", specifier = ">=4.0.0" },
     { name = "opentelemetry-api", specifier = ">=1.45.2" },
@@ -256,7 +253,6 @@ requires-dist = [
     { name = "soupsieve", specifier = ">=4.0.0" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },
     { name = "starlette", specifier = ">=1.0.1" },
-    { name = "types-markdown", specifier = ">=3.4.2.10" },
     { name = "types-pytz", specifier = ">=2025.2.0.20250809" },
     { name = "urllib3", specifier = ">=2.8.0" },
     { name = "uvicorn", specifier = ">=0.23.0" },
@@ -2089,15 +2085,6 @@ wheels = [
 ]
 
 [[package]]
-name = "markdown"
-version = "3.10.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2b/f4/69fa6ed85ae003c2378ffa8f6d2e3234662abd02c10d216c0ba96081a238/markdown-3.10.2.tar.gz", hash = "sha256:994d51325d25ad8aa7ce4ebaec003febcce822c3f8c911e3b17c52f7f589f950", size = 368805, upload-time = "2026-02-09T14:57:26.942Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/1f/77fa3081e4f66ca3576c896ae5d31c3002ac6607f9747d2e3aa49227e464/markdown-3.10.2-py3-none-any.whl", hash = "sha256:e91464b71ae3ee7afd3017d9f358ef0baf158fd9a298db92f1d4761133824c36", size = 108180, upload-time = "2026-02-09T14:57:25.787Z" },
-]
-
-[[package]]
 name = "markdown-it-py"
 version = "4.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3866,15 +3853,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/85/30/ff9ede605e3bd086b4dd842499814e128500621f7951ca1e5ce84bbf61b1/typer-0.21.0.tar.gz", hash = "sha256:c87c0d2b6eee3b49c5c64649ec92425492c14488096dfbc8a0c2799b2f6f9c53", size = 106781, upload-time = "2025-12-25T09:54:53.651Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/e4/5ebc1899d31d2b1601b32d21cfb4bba022ae6fce323d365f0448031b1660/typer-0.21.0-py3-none-any.whl", hash = "sha256:c79c01ca6b30af9fd48284058a7056ba0d3bf5cf10d0ff3d0c5b11b68c258ac6", size = 47109, upload-time = "2025-12-25T09:54:51.918Z" },
-]
-
-[[package]]
-name = "types-markdown"
-version = "3.10.0.20251106"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/de/e4/060f0dadd9b551cae77d6407f2bc84b168f918d90650454aff219c1b3ed2/types_markdown-3.10.0.20251106.tar.gz", hash = "sha256:12836f7fcbd7221db8baeb0d3a2f820b95050d0824bfa9665c67b4d144a1afa1", size = 19486, upload-time = "2025-11-06T03:06:44.317Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/92/58/f666ca9391f2a8bd33bb0b0797cde6ac3e764866708d5f8aec6fab215320/types_markdown-3.10.0.20251106-py3-none-any.whl", hash = "sha256:2c39512a573899b59efae07e247ba088a75b70e3415e81277692718f430afd7e", size = 25862, upload-time = "2025-11-06T03:06:43.082Z" },
 ]
 
 [[package]]

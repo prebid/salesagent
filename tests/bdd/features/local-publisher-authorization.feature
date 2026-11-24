@@ -160,3 +160,71 @@ Feature: A publisher's adagents.json authorizes this agent by its origin or an e
     And the seller's last successful fetch of "pub-psatest.com" was 25 hours ago
     When the operator opens the setup checklist
     Then the page contains "stopped authorizing this agent: their stored adagents.json is older than 24 hours"
+
+  # WHO MAY CALL THE PUBLISHER ROUTES. Every scenario above signs the operator in as a super
+  # admin, who passes every access check, so none of them would notice a route letting
+  # anybody in. This one names the caller. require_tenant_access() guards all five routes
+  # (src/admin/utils/helpers.py): a caller with no session is refused with 401, a user of
+  # another tenant with 403 "Access denied", and an active member's role decides the rest.
+  # Any member may read; adding, removing and syncing are writes, which role_permits gives
+  # to a manager or an admin. The routes are the pages' script API, so the caller sends what
+  # a client that is not a browser sends (no Accept, Origin or Sec-Fetch header) and every
+  # refusal is JSON. A refused request leaves every publisher row, and every row derived from
+  # one, as it found them.
+  #
+  # The write boundary refuses a publisher domain that is not a host name with an optional
+  # port (is_publisher_domain, src/core/http_utils.py), and stores nothing.
+  #
+  # What follows the add makes each write observable: only an add stores
+  # "partner-psatest.com", only a removal drops "pub-psatest.com", and only a sync stores
+  # the "sports" property its file lists from now on.
+  @T-ADMIN-PUBAUTH-access
+  Scenario Outline: Only the tenant's own users reach the publisher routes, and a viewer may only read them
+    Given the publisher "pub-psatest.com" authorizes "{origin}" for property "front_page"
+    And the operator added the publisher "pub-psatest.com"
+    And the publisher "pub-psatest.com" lists property "sports" named "Sports" in its adagents.json
+    And the publisher "pub-psatest.com" authorizes "{origin}" for property "sports"
+    And the caller is <caller>
+    When the caller <request>
+    Then the page returns status <status>
+    And <answer>
+    And <stored>
+
+    Examples: a caller with no session
+      | caller            | request                                                        | status | answer                                                     | stored                                       |
+      | not authenticated | opens the publishers page                                      | 401    | the JSON response is the refusal "Authentication required" | the target tenant's stored data is unchanged |
+      | not authenticated | adds the publisher "partner-psatest.com"                       | 401    | the JSON response is the refusal "Authentication required" | the target tenant's stored data is unchanged |
+      | not authenticated | removes the publisher "pub-psatest.com"                        | 401    | the JSON response is the refusal "Authentication required" | the target tenant's stored data is unchanged |
+      | not authenticated | syncs publisher partners                                       | 401    | the JSON response is the refusal "Authentication required" | the target tenant's stored data is unchanged |
+      | not authenticated | opens the properties of the partnership with "pub-psatest.com" | 401    | the JSON response is the refusal "Authentication required" | the target tenant's stored data is unchanged |
+
+    # An admin there, so only the membership check can refuse.
+    Examples: a user of another tenant
+      | caller                                 | request                                                        | status | answer                                           | stored                                       |
+      | an active member of a different tenant | opens the publishers page                                      | 403    | the JSON response is the refusal "Access denied" | the target tenant's stored data is unchanged |
+      | an active member of a different tenant | adds the publisher "partner-psatest.com"                       | 403    | the JSON response is the refusal "Access denied" | the target tenant's stored data is unchanged |
+      | an active member of a different tenant | removes the publisher "pub-psatest.com"                        | 403    | the JSON response is the refusal "Access denied" | the target tenant's stored data is unchanged |
+      | an active member of a different tenant | syncs publisher partners                                       | 403    | the JSON response is the refusal "Access denied" | the target tenant's stored data is unchanged |
+      | an active member of a different tenant | opens the properties of the partnership with "pub-psatest.com" | 403    | the JSON response is the refusal "Access denied" | the target tenant's stored data is unchanged |
+
+    Examples: a viewer of the tenant
+      | caller                                                     | request                                                        | status | answer                                                                                                        | stored                                       |
+      | an active member of the target tenant with the viewer role | adds the publisher "partner-psatest.com"                       | 403    | the JSON response is the refusal "Your role does not allow this"                                              | the target tenant's stored data is unchanged |
+      | an active member of the target tenant with the viewer role | removes the publisher "pub-psatest.com"                        | 403    | the JSON response is the refusal "Your role does not allow this"                                              | the target tenant's stored data is unchanged |
+      | an active member of the target tenant with the viewer role | syncs publisher partners                                       | 403    | the JSON response is the refusal "Your role does not allow this"                                              | the target tenant's stored data is unchanged |
+      | an active member of the target tenant with the viewer role | opens the publishers page                                      | 200    | the publishers page shows "pub-psatest.com" last fetched "ok" with 1 authorized property and 0 format options | the target tenant's stored data is unchanged |
+      | an active member of the target tenant with the viewer role | opens the properties of the partnership with "pub-psatest.com" | 200    | the view reports this agent authorized for "front_page"                                                       | the target tenant's stored data is unchanged |
+
+    # The least role that may write.
+    Examples: a manager of the tenant
+      | caller                                                      | request                                  | status | answer                                                              | stored                                                                    |
+      | an active member of the target tenant with the manager role | adds the publisher "partner-psatest.com" | 201    | the JSON response has "message" as "Publisher added"                | the seller holds the publisher "partner-psatest.com"                      |
+      | an active member of the target tenant with the manager role | removes the publisher "pub-psatest.com"  | 200    | the JSON response has "message" as "Publisher deleted successfully" | the seller holds no publisher "pub-psatest.com"                           |
+      | an active member of the target tenant with the manager role | syncs publisher partners                 | 200    | the JSON response has "message" as "Sync completed"                 | the seller holds properties "Front page", "Sports" from "pub-psatest.com" |
+
+    Examples: a publisher domain that is not a host name
+      | caller                                                      | request                                           | status | answer                                                                                                                            | stored                                       |
+      | an active member of the target tenant with the manager role | adds the publisher "<img src=x onerror=alert(1)>" | 400    | the JSON response is the refusal "Enter a domain name such as news.example.com; enter an internationalized name in its xn-- form" | the target tenant's stored data is unchanged |
+      | an active member of the target tenant with the manager role | adds the publisher "a'b.example.com"              | 400    | the JSON response is the refusal "Enter a domain name such as news.example.com; enter an internationalized name in its xn-- form" | the target tenant's stored data is unchanged |
+      | an active member of the target tenant with the manager role | adds the publisher "a"b.example.com"              | 400    | the JSON response is the refusal "Enter a domain name such as news.example.com; enter an internationalized name in its xn-- form" | the target tenant's stored data is unchanged |
+      | an active member of the target tenant with the manager role | adds the publisher "two words.example.com"        | 400    | the JSON response is the refusal "Enter a domain name such as news.example.com; enter an internationalized name in its xn-- form" | the target tenant's stored data is unchanged |

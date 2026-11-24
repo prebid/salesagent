@@ -243,3 +243,16 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
       | GAM country breakdown API   | GAM reporting is only available for tenants using Google Ad Manager |
       | GAM ad unit breakdown API   | GAM reporting is only available for tenants using Google Ad Manager |
       | GAM principal summary API   | Principal does not have a GAM advertiser ID configured              |
+
+  # The media buys page names the products each buy's packages name. The buyer chose those
+  # ids, so the page looks them up in the target tenant's catalogue alone
+  # (tenants.media_buys_list): an id another tenant uses must not put that tenant's product
+  # name on this page. The seeded buy names a product id the target's catalogue lacks. The
+  # name holds no character HTML escapes, so its absence from the page is not an escape.
+  @T-ADMIN-SCOPE-015 @auth @edge-case
+  Scenario: The media buys page names no product of another tenant
+    Given another tenant holds a product named "Product of another tenant" under the product id the target tenant's media buy names
+    And the caller is an active member of the target tenant
+    When the caller sends GET to the media buys page of the target tenant
+    Then the page returns status 200
+    And the media buys page lists the target tenant's media buy with no product named "Product of another tenant"

@@ -40,8 +40,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from datetime import datetime
-from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
+from enum import Enum, StrEnum
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, assert_never, cast
 
 from adcp.signing.verifier import CoversDigestPolicy, VerifierCapability
 from adcp.signing.webhook_signer import WEBHOOK_TAG
@@ -601,15 +601,86 @@ class KeyBacking(NamedTuple):
 
     ``signs`` additionally requires that this deployment can OPEN the row's private
     half; ``publishes`` does not, because a JWKS needs only the public one. See
-    :func:`_private_half_is_resolvable`.
+    :func:`_private_half_unresolvable_because`.
+
+    ``active_kid`` is the key ``active_at`` selects, whether or not it opens, and
+    ``active_key_fault`` is why it cannot sign here, or ``None`` when it can. Together
+    they separate the reasons ``publishes`` can hold while ``signs`` does not (#2288),
+    which need different fixes: with no key in its active window (revoked, or
+    ``not_before`` still ahead) the fix is to provision a replacement; for an active key
+    that cannot sign, :attr:`ActiveKeyFault.advice` says what to do.
     """
 
-    signs: bool
     publishes: bool
+    active_kid: str | None
+    active_key_fault: ActiveKeyFault | None
+
+    @property
+    def signs(self) -> bool:
+        """An active key exists and this deployment can sign with it."""
+        return self.active_kid is not None and self.active_key_fault is None
 
 
-def _private_half_is_resolvable(repo: SigningKeyRepository, row: SigningKey, *, now: datetime) -> bool:
-    """Whether this deployment can ACTUALLY DECRYPT *row*'s private key.
+#: Why a KEK fault must not be answered with a new key: the one spelling of the sentence
+#: both KEK arms of :attr:`ActiveKeyFault.advice` end with. ``MATERIAL_CHANGED`` does not
+#: use it, because a new key is its fix.
+_DO_NOT_REMINT = (
+    "Do not re-mint: a replacement publishes a second key and strands this one, "
+    "which is the key counterparties already trust."
+)
+
+
+class ActiveKeyFault(StrEnum):
+    """Why this deployment cannot sign with the tenant's active key (#2288).
+
+    The causes need different fixes, so the operator is told which one applies, and
+    :attr:`advice` is the one text both admin surfaces (the signing-keys page and the
+    setup checklist) show for it. The advice follows
+    ``docs/operations/signing-key-runbook.md``.
+    """
+
+    #: No KEK is configured, so no ``db:`` row can be opened.
+    KEK_UNSET = "kek_unset"
+    #: A KEK is configured, but the row's private half does not decrypt under it.
+    KEK_WRONG = "kek_wrong"
+    #: The private half decrypts but no longer derives the public JWK the row publishes.
+    MATERIAL_CHANGED = "material_changed"
+
+    @property
+    def advice(self) -> str:
+        """What the operator should do, as both admin surfaces show it."""
+        match self:
+            case ActiveKeyFault.KEK_UNSET:
+                return (
+                    "This deployment has no key encryption key (KEK) configured, so it cannot decrypt the key. "
+                    f"Restore the KEK. {_DO_NOT_REMINT}"
+                )
+            case ActiveKeyFault.KEK_WRONG:
+                return (
+                    "The key encryption key (KEK) this deployment holds is not the one the key was provisioned "
+                    f"under, so it cannot decrypt the key. Restore the original KEK. {_DO_NOT_REMINT}"
+                )
+            case ActiveKeyFault.MATERIAL_CHANGED:
+                return (
+                    "The key decrypts, but its private half no longer matches the public key it publishes, so "
+                    "the stored key material has changed and counterparties would reject its signatures. "
+                    "Restoring the KEK will not help. Rotate: provision a replacement, then revoke this key."
+                )
+            case _:
+                assert_never(self)
+
+    @property
+    def runbook_anchor(self) -> str:
+        """The section of ``docs/operations/signing-key-runbook.md`` that covers this fault."""
+        if self is ActiveKeyFault.MATERIAL_CHANGED:
+            return "a-key-whose-private-half-no-longer-matches-its-published-key"
+        return "a-key-minted-under-a-kek-that-was-later-unset"
+
+
+def _private_half_unresolvable_because(
+    repo: SigningKeyRepository, row: SigningKey, *, now: datetime
+) -> ActiveKeyFault | None:
+    """Why this deployment CANNOT ACTUALLY DECRYPT and use *row*'s private key, or ``None`` if it can.
 
     A ``db:`` row stores the private PEM ENCRYPTED under the deployment-wide key
     encryption key named by ``SigningSettings.key_passphrase_env``. Minting refuses
@@ -631,10 +702,17 @@ def _private_half_is_resolvable(repo: SigningKeyRepository, row: SigningKey, *, 
     Every row is checked, because every row's private half is the ciphertext on it:
     there is no other place a key can live and so no row whose resolvability is
     unknowable from here.
+
+    The two refusals ``resolve_signing_material`` can give a configured KEK are told
+    apart by the TYPE of their cause, never by message text: the decrypt refusal
+    carries the ``ValueError`` the key loader raised, and the published-JWK tripwire
+    carries :class:`~src.core.signing.provider.PublishedJwkMismatch`. The other refusals
+    it has for an explicit kid (no such kid, revoked) cannot hold for the row
+    ``active_at`` has just returned, so they are not given a cause of their own.
     """
     from src.core.config import get_settings
     from src.core.exceptions import AdCPConfigurationError
-    from src.core.signing.provider import resolve_signing_material
+    from src.core.signing.provider import PublishedJwkMismatch, resolve_signing_material
 
     if get_settings().signing.key_passphrase is None:
         logger.warning(
@@ -645,10 +723,19 @@ def _private_half_is_resolvable(repo: SigningKeyRepository, row: SigningKey, *, 
             row.tenant_id,
             row.kid,
         )
-        return False
+        return ActiveKeyFault.KEK_UNSET
     try:
         resolve_signing_material(repo, tenant_id=row.tenant_id, purpose=row.purpose, now=now, kid=row.kid)
     except AdCPConfigurationError as exc:
+        if isinstance(exc.internal_detail, PublishedJwkMismatch):
+            logger.warning(
+                "Tenant %s holds ACTIVE signing key %s, whose private half decrypts but no longer "
+                "derives the public JWK the row publishes — the key material has changed, so this "
+                "agent declares and performs NO signing with it (#2288)",
+                row.tenant_id,
+                row.kid,
+            )
+            return ActiveKeyFault.MATERIAL_CHANGED
         logger.warning(
             "Tenant %s holds ACTIVE signing key %s and a passphrase IS configured, but this "
             "deployment could not decrypt the key's private half (%s) — the configured KEK is "
@@ -657,8 +744,8 @@ def _private_half_is_resolvable(repo: SigningKeyRepository, row: SigningKey, *, 
             row.kid,
             exc,
         )
-        return False
-    return True
+        return ActiveKeyFault.KEK_WRONG
+    return None
 
 
 def signing_key_backed(repo: SigningKeyRepository, *, now: datetime) -> KeyBacking:
@@ -682,6 +769,7 @@ def signing_key_backed(repo: SigningKeyRepository, *, now: datetime) -> KeyBacki
 
     active = repo.active_at(now=now)
     return KeyBacking(
-        signs=active is not None and _private_half_is_resolvable(repo, active, now=now),
         publishes=bool(repo.publishable_at(now=now, grace_seconds=get_settings().signing.grace_seconds)),
+        active_kid=active.kid if active is not None else None,
+        active_key_fault=_private_half_unresolvable_because(repo, active, now=now) if active is not None else None,
     )
