@@ -159,13 +159,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
         user_info = session.get("user", {})
         user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
 
-        step = workflow_repo.update_status(
-            step_id,
-            status="approved",
-        )
-
-        if not step:
-            return jsonify({"error": "Workflow step not found"}), 404
+        workflow_repo.require(workflow_repo.update_status, step_id, status="approved")
 
         db.commit()
 
