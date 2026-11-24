@@ -543,10 +543,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
         assert uow.media_buys is not None
         assert uow.tenant_config is not None
 
-        creative = uow.creatives.admin_get_by_id(creative_id)
-
-        if not creative:
-            return jsonify({"error": "Creative not found"}), 404
+        creative = uow.creatives.require(uow.creatives.admin_get_by_id, creative_id)
 
         # Check if there was a prior AI review that disagreed
         prior_ai_review = uow.creatives.get_prior_ai_review(creative_id)
