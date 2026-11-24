@@ -57,6 +57,9 @@ from tests.factories.creative_asset import build_assets, image_spec, url_spec, v
 from tests.factories.media_buy import package_pricing_fields
 from tests.factories.principal import plaintext_token_for
 
+#: One request-scoped get_products refine entry (get-products-request.json /refine/items).
+_REFINE_ENTRY = {"scope": "request", "ask": "more video"}
+
 
 class TestSchemaMatchesLibrary:
     """Validate that our schemas match the adcp library schemas.
@@ -189,7 +192,7 @@ class TestSchemaMatchesLibrary:
         [
             {"buying_mode": "brief", "brief": "video ads"},
             {"buying_mode": "wholesale"},
-            {"buying_mode": "refine", "refine": [{"scope": "request", "ask": "more video"}]},
+            {"buying_mode": "refine", "refine": [_REFINE_ENTRY]},
             {"brief": "video ads"},
         ],
         ids=["brief", "wholesale", "refine", "absent"],
@@ -209,6 +212,40 @@ class TestSchemaMatchesLibrary:
         with pytest.raises(ValidationError) as excinfo:
             GetProductsRequest(buying_mode="auction", brief="video ads")
         assert [error["loc"] for error in excinfo.value.errors()] == [("buying_mode",)]
+
+    @pytest.mark.parametrize(
+        ("request_fields", "field"),
+        [
+            ({"buying_mode": "brief"}, "brief"),
+            ({"buying_mode": "brief", "brief": "video ads", "refine": [_REFINE_ENTRY]}, "refine"),
+            ({"buying_mode": "wholesale", "brief": "video ads"}, "brief"),
+            ({"buying_mode": "wholesale", "refine": [_REFINE_ENTRY]}, "refine"),
+            ({"buying_mode": "refine"}, "refine"),
+            ({"buying_mode": "refine", "brief": "video ads", "refine": [_REFINE_ENTRY]}, "brief"),
+        ],
+        ids=[
+            "brief-without-brief",
+            "brief-with-refine",
+            "wholesale-with-brief",
+            "wholesale-with-refine",
+            "refine-without-refine",
+            "refine-with-brief",
+        ],
+    )
+    def test_get_products_request_refuses_a_companion_the_mode_rules_out(self, request_fields, field):
+        """The pin's per-mode companion rules, refused on the field that breaks them.
+
+        get-products-request.json writes them in descriptions only: ``brief`` is "Required when
+        buying_mode is 'brief'. Must not be provided when buying_mode is 'wholesale' or
+        'refine'", and ``refine`` is "Only valid when buying_mode is 'refine'" (required there
+        by get_products.mdx). They apply to a mode the buyer SENT; a request without one keeps
+        the pre-v3 default (#2710, D1).
+        """
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as excinfo:
+            GetProductsRequest(**request_fields)
+        assert [error["loc"] for error in excinfo.value.errors()] == [(field,)]
 
     def test_get_products_request_brand_accepts_domain(self):
         """Verify brand (BrandReference) accepts domain field per adcp 3.6.0."""
@@ -243,9 +280,9 @@ class TestSchemaMatchesLibrary:
         # buying_mode is required for the wholesale variant in adcp 3.9
         test_cases = [
             {"buying_mode": "wholesale"},  # Minimal valid
-            {"buying_mode": "wholesale", "brief": "test"},  # Brief only
+            {"buying_mode": "brief", "brief": "test"},  # Brief only
             {"buying_mode": "wholesale", "brand": {"domain": "acme.com"}},  # BrandReference
-            {"buying_mode": "wholesale", "brief": "test", "brand": {"domain": "acme.com"}},  # Both
+            {"buying_mode": "brief", "brief": "test", "brand": {"domain": "acme.com"}},  # Both
         ]
 
         for case in test_cases:

@@ -24,7 +24,8 @@ from adcp.types.legacy import LegacyGetProductsResponse as LibraryGetProductsRes
 from adcp.types.legacy import LegacyPlacement as LibraryPlacement
 from adcp.types.legacy import LegacyProduct as LibraryProduct
 from adcp.types.legacy import LegacyProductFilters as LibraryFilters
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, ValidationError, model_validator
+from pydantic_core import InitErrorDetails, PydanticCustomError
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
@@ -267,6 +268,45 @@ class GetProductsRequest(SchemaDependencies, BuyerRequest, LibraryGetProductsReq
 
     # media-buy/get-products-request.json's own ``dependencies``.
     _SCHEMA_DEPENDENCIES = {"catalog": ("brand",), "if_pricing_version": ("if_wholesale_feed_version",)}
+
+    #: Per mode, the companion it requires and the ones it rules out. get-products-request.json
+    #: states these in field descriptions only ("Required when buying_mode is 'brief'. Must not
+    #: be provided when buying_mode is 'wholesale' or 'refine'"; refine "Only valid when
+    #: buying_mode is 'refine'"), and get_products.mdx makes refine required in refine mode.
+    _MODE_COMPANIONS: ClassVar[dict[BuyingMode, tuple[str | None, tuple[str, ...]]]] = {
+        BuyingMode.brief: ("brief", ("refine",)),
+        BuyingMode.wholesale: (None, ("brief", "refine")),
+        BuyingMode.refine: ("refine", ("brief",)),
+    }
+
+    @model_validator(mode="after")
+    def _enforce_mode_companions(self) -> "GetProductsRequest":
+        """Refuse a companion the sent ``buying_mode`` requires and lacks, or rules out and has.
+
+        A request without ``buying_mode`` is checked against nothing: the pin says a pre-v3
+        request without it "SHOULD default to 'brief'", and it keeps the brief path (#2710, D1).
+        Each refusal is located on the field, so the boundary answers INVALID_REQUEST naming it.
+        """
+        if self.buying_mode is None:
+            return self
+        required, ruled_out = self._MODE_COMPANIONS[self.buying_mode]
+        mode = self.buying_mode.value
+        errors = [
+            InitErrorDetails(
+                type=PydanticCustomError(
+                    "buying_mode_companion", "not allowed when buying_mode is {mode}", {"mode": mode}
+                ),
+                loc=(name,),
+                input=mode,
+            )
+            for name in ruled_out
+            if getattr(self, name) is not None
+        ]
+        if required is not None and getattr(self, required) is None:
+            errors.append(InitErrorDetails(type="missing", loc=(required,), input=mode))
+        if errors:
+            raise ValidationError.from_exception_data(type(self).__name__, errors)
+        return self
 
     # Narrowed to the local classes, each of which carries its schema's ``dependencies`` or
     # holds one that does.
