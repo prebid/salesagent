@@ -301,7 +301,6 @@ def seed_storyboard_tenant() -> str:
                     is_active=True,
                     authorized_emails=["storyboard@example.com"],
                     authorized_domains=None,
-                    policy_settings=None,
                     advertising_policy=unchecked_advertising_policy(),
                     signals_agent_config=None,
                     ai_policy=None,

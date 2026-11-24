@@ -162,6 +162,37 @@ def given_advertising_policy_prohibiting(ctx: dict, datatable: Sequence[Sequence
     ctx["saved_prohibitions"] = [entry for entries in lists.values() for entry in entries]
 
 
+def _prohibited_advertiser(env: Any) -> str:
+    """The advertiser the operator prohibits on the Policy page: this scenario's own, by the env's nonce."""
+    return f"blocked-{env.scripted_nonce}.example"
+
+
+@given(
+    parsers.re(
+        r"the operator saves the Policy page with policy checks (?P<checks>on|off) and a prohibited advertiser of its own"
+    )
+)
+def given_operator_saves_policy_page(ctx: dict, checks: str) -> None:
+    """Every field of the Policy page's form, as a browser posts it: the save is the policy's only writer."""
+    form = {
+        "prohibited_advertisers": _prohibited_advertiser(ctx["env"]),
+        "prohibited_categories": "",
+        "prohibited_tactics": "",
+        "default_prohibited_categories": "",
+        "default_prohibited_tactics": "",
+    }
+    if checks == "on":
+        form["enabled"] = "on"
+    ctx["env"].save_policy_page(form)
+
+
+@given("the LLM blocks the brief only when the policy it is shown names that advertiser")
+def given_llm_blocks_on_saved_advertiser(ctx: dict) -> None:
+    """A BLOCKED verdict answers only a policy prompt that carries the advertiser the operator saved."""
+    env = ctx["env"]
+    env.set_policy_blocked_if_prompt_names([_prohibited_advertiser(env)])
+
+
 @given(parsers.parse("the seller's AI is configured {where}"))
 def given_seller_ai(ctx: dict, where: str) -> None:
     _SELLER_AI[where](ctx["env"])

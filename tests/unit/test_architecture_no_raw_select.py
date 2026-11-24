@@ -136,8 +136,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/operations.py", "approve_media_buy"),
     ("src/admin/blueprints/operations.py", "media_buy_detail"),
     ("src/admin/blueprints/operations.py", "reporting"),
-    ("src/admin/blueprints/policy.py", "index"),
-    ("src/admin/blueprints/policy.py", "update"),
     ("src/admin/blueprints/principals.py", "create_principal"),
     # delete_principal removed — the lookup goes through PrincipalRepository.get()
     # delete_webhook / register_webhook / toggle_webhook removed — rewired onto

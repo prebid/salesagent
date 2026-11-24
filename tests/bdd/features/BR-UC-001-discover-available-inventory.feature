@@ -554,6 +554,28 @@ Feature: BR-UC-001 Discover Available Inventory
     # advertising_policy is implementation-only (not in AdCP 3.2.7); POLICY_VIOLATION is in
     # the pinned enums/error-code.json.
 
+  # Local scenarios (#2697): the policy an operator saves on the admin Policy page is the
+  # policy get_products checks a brief against. Implementation-only: AdCP has no
+  # advertising-policy object, and no storyboard grades it; POLICY_VIOLATION is in the
+  # pinned error-code enum. The scripted model blocks a brief only when the policy rules it
+  # is shown name the advertiser the operator saved, so a block shows the saved lists reached
+  # the check, and checks saved off show the saved flag decides whether the check runs.
+  @T-UC-001-inv-002-7 @invariant @BR-RULE-002 @implementation-only
+  Scenario: BR-RULE-002 - get_products enforces the policy saved on the Policy page
+    Given the seller's AI is configured in ai_config
+    And the operator saves the Policy page with policy checks on and a prohibited advertiser of its own
+    And the LLM blocks the brief only when the policy it is shown names that advertiser
+    When the Buyer Agent sends a get_products request with a brief
+    Then the operation should fail with error code "POLICY_VIOLATION"
+
+  @T-UC-001-inv-002-8 @invariant @BR-RULE-002 @implementation-only
+  Scenario: BR-RULE-002 - get_products skips the check when the Policy page saved it off
+    Given the seller's AI is configured in ai_config
+    And the operator saves the Policy page with policy checks off and a prohibited advertiser of its own
+    And the LLM blocks the brief only when the policy it is shown names that advertiser
+    When the Buyer Agent sends a get_products request with a brief
+    Then the request should proceed to product discovery without policy check
+
   @T-UC-001-inv-003-2v @invariant @BR-RULE-003 @analysis-2026-03-09 @schema-v3.1 @implementation-only
   Scenario: BR-RULE-003 INV-2 violated - principal NOT in allowed list
     Given a product has allowed_principal_ids ["buyer-456"]

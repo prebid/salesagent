@@ -124,7 +124,6 @@ class Tenant(Base, JSONValidatorMixin):
     # salesagent-b8gf9).
     auto_approve_format_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     human_review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    policy_settings: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     supported_billing: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)  # BR-RULE-059
     # Default FALSE: a seller advertises sandbox support by configuring it, never
     # by the absence of configuration. A true-by-default column made every

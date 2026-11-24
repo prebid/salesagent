@@ -231,7 +231,6 @@ def test_tenant_with_data(integration_db):
             auth_setup_mode=False,  # Disable setup mode for production-ready auth
             auto_approve_format_ids=[],  # JSONType expects list, not json.dumps()
             human_review_required=False,
-            policy_settings={},  # JSONType expects dict, not json.dumps()
             advertising_policy=AdvertisingPolicyFactory(enabled=False),  # policy saved (#2698)
             authorized_emails=["test@example.com"],  # Required for access control
             created_at=now,

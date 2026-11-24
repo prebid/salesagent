@@ -62,7 +62,7 @@ FEATURES_DIR = BDD_DIR / "features"
 # and against the 14 names in ``src.core.tools.registry.TOOLS``:
 #
 #   This seller's own served surface -- the only bind-worthy entries:
-#     BR-UC-001  get_products (Required for a sales agent)          119 scenarios
+#     BR-UC-001  get_products (Required for a sales agent)          121 scenarios
 #     BR-UC-027  list_tasks, complete_task, get_task_status          93
 #
 #   Tasks this seller does not serve (no row in ``TOOLS``), Optional or Conditional

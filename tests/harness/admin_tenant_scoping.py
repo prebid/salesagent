@@ -3,8 +3,9 @@
 Drives ``GET /api/tenant/<tenant_id>/revenue-chart``, ``GET /api/tenant/<tenant_id>/products``,
 ``GET /api/tenant/<tenant_id>/products/suggestions``, ``GET,POST /tenant/<tenant_id>/policy/rules``
 and ``POST /auth/oidc/test/<tenant_id>`` (#2203), the six GAM reporting routes of
-``src/admin/blueprints/gam_reporting_api.py`` (#2204), and ``GET /tenant/<tenant_id>/media-buys``,
-which names products from the tenant's own catalogue, on the two admin transports ``AdminAccountEnv``
+``src/admin/blueprints/gam_reporting_api.py`` (#2204), ``GET /tenant/<tenant_id>/media-buys``,
+which names products from the tenant's own catalogue, and the Policy page with the admin-only
+``POST /tenant/<tenant_id>/policy/update`` that saves it (#2692), on the two admin transports ``AdminAccountEnv``
 already provides — Flask ``test_client`` (integration) and ``requests.Session`` against the
 Docker stack (e2e) — and seeds the tenants, memberships, catalogue and media buys the
 scenarios grade.
@@ -34,6 +35,7 @@ seeding and read-backs are methods of the env.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import ExitStack
 from decimal import Decimal
 from typing import Any, NamedTuple
@@ -41,6 +43,7 @@ from urllib.parse import urlsplit
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, UserRole
+from src.core.schemas.advertising_policy import AdvertisingPolicy
 from src.services.default_products import get_default_products
 from tests.factories import MediaBuyFactory, ProductFactory, TenantFactory, UserFactory
 from tests.factories.mint import mint_id
@@ -75,6 +78,23 @@ GAM_ADVERTISER_ID = "12345"
 class TenantScopedRoute(NamedTuple):
     path: str
     methods: tuple[str, ...]
+    #: The form a POST to the route carries; an empty one when the route names none.
+    form: Mapping[str, str] | None = None
+
+
+#: Every field of the Policy page's form, filled in as an operator saves it: both checks on,
+#: and each list differing from the baseline the page offers a tenant with no saved policy,
+#: so a page showing these values is showing the saved policy. Each list is one entry per
+#: line, which is how the page renders a list back into its textarea.
+POLICY_FORM: dict[str, str] = {
+    "enabled": "on",
+    "require_manual_review": "on",
+    "prohibited_advertisers": "blocked.example\ncompetitor.example",
+    "prohibited_categories": "gambling",
+    "prohibited_tactics": "false urgency",
+    "default_prohibited_categories": "illegal_content\nhate_speech",
+    "default_prohibited_tactics": "impersonation",
+}
 
 
 _GAM_API = "/api/tenant/{tenant_id}"
@@ -97,6 +117,8 @@ ROUTES: dict[str, TenantScopedRoute] = {
         f"{_GAM_API}/principals/{{principal_id}}/gam/reporting/summary", ("GET",)
     ),
     "media buys page": TenantScopedRoute("/tenant/{tenant_id}/media-buys", ("GET",)),
+    "policy page": TenantScopedRoute("/tenant/{tenant_id}/policy/", ("GET",)),
+    "policy update route": TenantScopedRoute("/tenant/{tenant_id}/policy/update", ("POST",), POLICY_FORM),
 }
 
 #: Where a scenario may say a route redirected to, keyed by the name the Gherkin uses. The
@@ -121,10 +143,10 @@ class TargetTenant(NamedTuple):
 
 
 class TenantState(NamedTuple):
-    """What a request can change for a tenant: how many rows it holds per table, and its policy settings."""
+    """What a request can change for a tenant: how many rows it holds per table, and its advertising policy."""
 
     row_counts: dict[str, int]
-    policy_settings: Any
+    advertising_policy: AdvertisingPolicy | None
 
 
 def _seed_member(tenant: Tenant, email: str, *, role: UserRole, is_active: bool = True) -> None:
@@ -214,7 +236,8 @@ class AdminTenantScopingEnv(AdminAccountEnv):
     def seed_target_tenant(self) -> TargetTenant:
         """A tenant with one catalogue product, one active media buy and an active member who is not the caller."""
         with bound_factory_session():
-            tenant = TenantFactory(tenant_id=self._new_tenant_id("scope"))
+            # Saved no policy: the policy scenarios start from NULL, and the page says so.
+            tenant = TenantFactory(tenant_id=self._new_tenant_id("scope"), advertising_policy=None)
             product = ProductFactory(tenant=tenant, product_id=mint_id("prod"))
             buy = MediaBuyFactory(
                 tenant=tenant,
@@ -257,7 +280,7 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         with get_db_session() as session:
             tenant = session.get(Tenant, self.target.tenant_id)
             assert tenant is not None
-            return TenantState(tenant_row_counts(session, tenant.tenant_id), tenant.policy_settings)
+            return TenantState(tenant_row_counts(session, tenant.tenant_id), tenant.advertising_policy)
 
     @property
     def state_before_request(self) -> TenantState:
@@ -322,6 +345,10 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         return self.client.request(
             method,
             path,
-            data={} if method == "POST" else None,
+            data=dict(route.form or {}) if method == "POST" else None,
             headers={"Accept": "application/json"} if asks_for_json or path.startswith("/api/") else None,
         )
+
+    def reload_policy_page(self) -> AdminResponse:
+        """The target tenant's Policy page as the current caller loads it now, as a browser does."""
+        return self.client.request("GET", ROUTES["policy page"].path.format(tenant_id=self.target.tenant_id))
