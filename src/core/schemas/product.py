@@ -6,9 +6,9 @@ All classes are re-exported from src.core.schemas for backward compatibility.
 
 from typing import Annotated, Any, ClassVar
 
+from adcp.types import BuyingMode, TargetingOverlay
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
-from adcp.types import TargetingOverlay
 
 # The legacy arm is imported from ``adcp.types.legacy``, the module that contains ONLY it.
 # See the note in ``_base.py`` on why the module and not the ``adcp.types`` facade. All five
@@ -257,8 +257,10 @@ class GetProductsRequest(SchemaDependencies, BuyerRequest, LibraryGetProductsReq
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Widen buying_mode from Literal['wholesale'] to str|None (we accept any mode or none)
-    buying_mode: str | None = Field(  # type: ignore[assignment]
+    # Optional, where the pin requires it: get-products-request.json says sellers receiving a
+    # pre-v3 request without buying_mode "SHOULD default to 'brief'", and a missing mode takes
+    # the brief path (#2710, D1). A mode that IS sent must be one the pinned enum lists (#2117).
+    buying_mode: BuyingMode | None = Field(  # type: ignore[assignment]
         None,
         description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
     )

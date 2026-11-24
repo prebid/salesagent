@@ -846,7 +846,9 @@ Feature: BR-UC-001 Discover Available Inventory
     Examples: Invalid partitions
       | partition                    | outcome                                       |
       | missing_buying_mode          | error: buying_mode is required                 |
-      | unknown_value                | error: buying_mode must be one of enum values  |
+      # LOCAL CORRECTION (mirror upstream in adcp-req): a mode outside the pinned enum is a
+      # schema violation, INVALID_REQUEST naming buying_mode; the row graded message text.
+      | unknown_value                | error INVALID_REQUEST on buying_mode with suggestion |
       | brief_mode_missing_brief     | error: brief required for brief mode           |
       | brief_mode_with_refine       | error: refine prohibited for brief mode        |
       | wholesale_with_brief         | error: brief prohibited for wholesale mode     |
@@ -1186,7 +1188,9 @@ Feature: BR-UC-001 Discover Available Inventory
       | buying_mode='refine' with refine=[1 entry] (valid refine mode, minItems boundary) | valid |
       | buying_mode absent, pre-v3 client (defaulted to brief)                    | valid     |
       | buying_mode absent, v3 client (required field missing)                    | invalid   |
-      | buying_mode='auction' (unknown enum value)                                | invalid   |
+      # LOCAL CORRECTION (mirror upstream in adcp-req): "invalid" named no wire fact; a mode
+      # outside the pinned enum is INVALID_REQUEST naming buying_mode.
+      | buying_mode='auction' (unknown enum value)                                | error INVALID_REQUEST on buying_mode with suggestion |
       | buying_mode='brief', brief absent (required companion missing)            | invalid   |
       | buying_mode='brief', refine present (prohibited companion present)        | invalid   |
       | buying_mode='wholesale', brief present (prohibited companion present)     | invalid   |
