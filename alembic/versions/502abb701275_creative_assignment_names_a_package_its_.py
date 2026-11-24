@@ -14,7 +14,7 @@ This revision changes structure only. On a database that already holds an assign
 naming a package its buy does not hold, the upgrade fails on that row.
 
 Revision ID: 502abb701275
-Revises: 9fdf18a56063
+Revises: b9b8e637b56c
 Create Date: 2026-11-20 19:36:37.210354
 
 """
@@ -25,7 +25,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "502abb701275"
-down_revision: str | Sequence[str] | None = "9fdf18a56063"
+down_revision: str | Sequence[str] | None = "b9b8e637b56c"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
