@@ -389,9 +389,13 @@ Feature: BR-UC-001 Discover Available Inventory
     # The <field> column is the member the refusal names, graded on errors[0].field.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json pointer=/properties/brief
 
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the "missing buying_mode (v3 client)" row is
+    # dropped: a request without buying_mode cannot be told apart from a pre-v3 one (this seller
+    # serves major 3 only, so a client that declares major 2 is refused VERSION_UNSUPPORTED),
+    # and the pin says such a request SHOULD default to 'brief'. This seller does (#2710 D1).
+
     Examples:
       | violation                              | invalid_fields                                                    | field       |
-      | missing buying_mode (v3 client)        | no buying_mode field                                              | buying_mode |
       | brief mode without brief               | buying_mode=brief, no brief field                                 | brief       |
       | wholesale mode with brief              | buying_mode=wholesale, brief present                              | brief       |
       | wholesale mode with refine             | buying_mode=wholesale, refine present                             | refine      |
@@ -1214,7 +1218,7 @@ Feature: BR-UC-001 Discover Available Inventory
       | buying_mode='wholesale', refine present (prohibited companion present)    | error INVALID_REQUEST on refine with suggestion |
       | buying_mode='refine', refine absent (required companion missing)          | error INVALID_REQUEST on refine with suggestion |
       | buying_mode='refine', refine=[] (minItems:1 boundary violation)           | error INVALID_REQUEST on refine with suggestion |
-      | buying_mode='refine', brief present (prohibited companion present)        | invalid   |
+      | buying_mode='refine', brief present (prohibited companion present)        | error INVALID_REQUEST on brief with suggestion |
 
   @T-UC-001-buying-mode-enum @invariant @BR-RULE-079 @error
   Scenario: buying_mode outside the pinned enum is refused

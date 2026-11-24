@@ -68,3 +68,8 @@ def test_channels_filter_partitions() -> None:
 @scenario(FEATURE, "buying_mode outside the pinned enum is refused")
 def test_buying_mode_outside_enum_refused() -> None:
     """A mode the pinned enum does not list is refused with INVALID_REQUEST naming buying_mode."""
+
+
+@scenario(FEATURE, "Extension *d - buying mode constraint violation - <violation>")
+def test_buying_mode_companion_violations() -> None:
+    """Each broken companion rule is refused with INVALID_REQUEST naming the companion."""

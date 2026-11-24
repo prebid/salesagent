@@ -312,9 +312,18 @@ def then_full_catalog_in_catalog_order(ctx: dict) -> None:
 # Every row also sends a brand, the search criterion the seller's own check wants when a
 # mode sends no brief.
 
+_REFINE = [{"scope": "request", "ask": "more video inventory"}]
+
 #: The fields each row sends besides the brand, by the wording of its When.
 _BUYING_MODE_ROWS: dict[str, dict[str, Any]] = {
     "buying_mode=auction, brief present": {"buying_mode": "auction", "brief": _BRIEF},
+    # ext-d: the companion rules, written in get-products-request.json's field descriptions.
+    "buying_mode=brief, no brief field": {"buying_mode": "brief"},
+    "buying_mode=wholesale, brief present": {"buying_mode": "wholesale", "brief": _BRIEF},
+    "buying_mode=wholesale, refine present": {"buying_mode": "wholesale", "refine": _REFINE},
+    "buying_mode=refine, no refine array": {"buying_mode": "refine"},
+    "buying_mode=refine, brief present, refine present": {"buying_mode": "refine", "brief": _BRIEF, "refine": _REFINE},
+    "buying_mode=brief, brief present, refine present": {"buying_mode": "brief", "brief": _BRIEF, "refine": _REFINE},
 }
 
 
