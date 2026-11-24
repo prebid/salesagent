@@ -59,3 +59,14 @@ def test_ranking_falls_back_to_catalog_order() -> None:
 @scenario(FEATURE, "channels partition validation - <partition>")
 def test_channels_filter_partitions() -> None:
     """A product matches on the channels it stores; one storing none, on the tenant ad server's defaults."""
+
+
+# ── Catalog-driven discovery (#2710 item 8) ────────────────────────
+# Graded as the conformant "seller does not match catalogs" path: get_products.mdx at the
+# pinned 3.2.7 makes catalog_applied "Absent or false if ... the seller does not support
+# catalog matching". Ungraded by any storyboard.
+
+
+@scenario(FEATURE, "Catalog-driven discovery - typed catalog matching")
+def test_catalog_accepted_without_matching() -> None:
+    """A catalog with a brand is accepted; products[] is not narrowed and no match is claimed."""

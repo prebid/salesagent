@@ -26,12 +26,13 @@ model (``ProductEnv.set_ranking_scores``).
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import assert_wire_rejection, wire_product_ids
+from tests.bdd.steps._outcome_helpers import WIRE_MISSING, assert_wire_rejection, wire_lookup, wire_product_ids
 from tests.bdd.steps.domain.uc_get_products_inventory import given_tenant
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import PricingOptionFactory, ProductFactory
@@ -303,3 +304,38 @@ def then_full_catalog_in_catalog_order(ctx: dict) -> None:
     expected = ctx["catalog"]
     actual = wire_product_ids(ctx)
     assert actual == expected, f"Expected the catalog {expected} in catalog order, got {actual}"
+
+
+# ── Catalog-driven discovery (#2710 item 8) ─────────────────────────
+#
+# This seller does not match catalogs (#2710 D3). get_products.mdx at the pinned 3.2.7
+# allows that: catalog_applied is "Absent or `false` if no catalog was provided or the
+# seller does not support catalog matching". Ungraded by any storyboard.
+
+
+def _table_value(value: str) -> Any:
+    """A data-table cell: JSON when it is an object or array, the text otherwise."""
+    return json.loads(value) if value.startswith(("{", "[")) else value
+
+
+@when("the Buyer Agent sends a get_products request with:")
+def when_get_products_with_table(ctx: dict, datatable: list) -> None:
+    """Dispatch get_products with the field/value rows of the step's data table."""
+    header, *rows = datatable
+    assert header == ["field", "value"], f"expected a field/value table, got header {header}"
+    dispatch_request(ctx, **{row[0].strip(): _table_value(row[1].strip()) for row in rows})
+
+
+@then("the products should be the catalog, unfiltered by the buyer's catalog")
+def then_products_unfiltered_by_catalog(ctx: dict) -> None:
+    """products[] is every seeded product: a seller that does not match catalogs narrows nothing."""
+    expected = ctx["catalog"]
+    actual = wire_product_ids(ctx)
+    assert sorted(actual) == sorted(expected), f"Expected the whole catalog {expected}, got {actual}"
+
+
+@then(parsers.parse('the response should have "{field}" absent or false'))
+def then_field_absent_or_false(ctx: dict, field: str) -> None:
+    """The wire omits ``field`` or carries ``false``; any other value claims what did not happen."""
+    value = wire_lookup(ctx, field)
+    assert value is WIRE_MISSING or value is False, f"Expected {field!r} absent or false on the wire, got {value!r}"
