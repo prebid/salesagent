@@ -133,8 +133,8 @@ def update(tenant_id):
         if tenant is None:
             raise TenantNotFound(tenant_id)
         stored = tenant.advertising_policy
-        uow.tenant_config.update_tenant(
-            advertising_policy=AdvertisingPolicy(
+        uow.tenant_config.save_advertising_policy(
+            AdvertisingPolicy(
                 enabled=request.form.get("enabled") == "on",
                 require_manual_review=request.form.get("require_manual_review") == "on",
                 prohibited_advertisers=_form_lines("prohibited_advertisers"),
