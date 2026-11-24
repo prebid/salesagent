@@ -857,7 +857,12 @@ Feature: BR-UC-001 Discover Available Inventory
     # field descriptions, enums/error-code.json); refine=[] breaks refine's minItems.
 
     # LOCAL CORRECTION (mirror upstream in adcp-req): pre_v3_default is "success" and the
-    # missing_buying_mode row is dropped: a request without buying_mode cannot be told apart from a pre-v3 one (this seller
+    # missing_buying_mode row is dropped; and refine_mode, a well-formed refine request,
+    # is refused: refine is refused UNSUPPORTED_FEATURE naming
+    # buying_mode: this seller declares no media_buy.buying_modes, so it does not offer
+    # refine (#2710 D2). enums/error-code.json: UNSUPPORTED_FEATURE, "check
+    # get_adcp_capabilities and remove unsupported fields".
+    # The missing_buying_mode row's reason: a request without buying_mode cannot be told apart from a pre-v3 one (this seller
     # serves major 3 only, so a client that declares major 2 is refused VERSION_UNSUPPORTED),
     # and the pin says such a request SHOULD default to 'brief'. This seller does (#2710 D1).
 
@@ -865,7 +870,7 @@ Feature: BR-UC-001 Discover Available Inventory
       | partition         | outcome                          |
       | brief_mode        | success                          |
       | wholesale_mode    | success                          |
-      | refine_mode       | request proceeds to refine pipeline |
+      | refine_mode       | error UNSUPPORTED_FEATURE on buying_mode with suggestion |
       | pre_v3_default    | success                          |
 
     Examples: Invalid partitions
@@ -1208,6 +1213,10 @@ Feature: BR-UC-001 Discover Available Inventory
     # LOCAL CORRECTION (mirror upstream in adcp-req): "valid" / "invalid" named no wire fact.
     # A mode with its companions is "success"; a broken companion rule is INVALID_REQUEST
     # naming the companion (get-products-request.json field descriptions, refine minItems).
+    # A well-formed refine request is refused: refine is refused UNSUPPORTED_FEATURE naming
+    # buying_mode: this seller declares no media_buy.buying_modes, so it does not offer
+    # refine (#2710 D2). enums/error-code.json: UNSUPPORTED_FEATURE, "check
+    # get_adcp_capabilities and remove unsupported fields".
     # The "buying_mode absent, v3 client" row is dropped: a request without buying_mode cannot be told apart from a pre-v3 one (this seller
     # serves major 3 only, so a client that declares major 2 is refused VERSION_UNSUPPORTED),
     # and the pin says such a request SHOULD default to 'brief'. This seller does (#2710 D1).
@@ -1216,7 +1225,7 @@ Feature: BR-UC-001 Discover Available Inventory
       | boundary_point                                                            | outcome   |
       | buying_mode='brief' with brief present (valid brief mode)                 | success |
       | buying_mode='wholesale' with no brief, no refine (valid wholesale mode)   | success |
-      | buying_mode='refine' with refine=[1 entry] (valid refine mode, minItems boundary) | valid |
+      | buying_mode='refine' with refine=[1 entry] (valid refine mode, minItems boundary) | error UNSUPPORTED_FEATURE on buying_mode with suggestion |
       | buying_mode absent, pre-v3 client (defaulted to brief)                    | success   |
       # LOCAL CORRECTION (mirror upstream in adcp-req): "invalid" named no wire fact; a mode
       # outside the pinned enum is INVALID_REQUEST naming buying_mode.

@@ -75,6 +75,16 @@ def test_buying_mode_companion_violations() -> None:
     """Each broken companion rule is refused with INVALID_REQUEST naming the companion."""
 
 
+@scenario(FEATURE, "buying_mode partition validation - <partition>")
+def test_buying_mode_partitions() -> None:
+    """brief and wholesale are served, refine is refused as unsupported, and the rest by schema."""
+
+
+@scenario(FEATURE, "buying_mode boundary validation - <boundary_point>")
+def test_buying_mode_boundaries() -> None:
+    """The enum, companion and minItems boundaries of buying_mode."""
+
+
 @scenario(FEATURE, "BR-RULE-079 INV-6 holds - pre-v3 client without buying_mode defaults to brief")
 def test_missing_buying_mode_served_as_brief() -> None:
     """A request without buying_mode is served as a brief, not refused."""

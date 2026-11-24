@@ -325,10 +325,53 @@ _BUYING_MODE_ROWS: dict[str, dict[str, Any]] = {
     "buying_mode=refine, no refine array": {"buying_mode": "refine"},
     "buying_mode=refine, brief present, refine present": {"buying_mode": "refine", "brief": _BRIEF, "refine": _REFINE},
     "buying_mode=brief, brief present, refine present": {"buying_mode": "brief", "brief": _BRIEF, "refine": _REFINE},
+    # The partition outline, by <partition>.
+    "buying_mode configuration brief_mode": {"buying_mode": "brief", "brief": _BRIEF},
+    "buying_mode configuration wholesale_mode": {"buying_mode": "wholesale"},
+    "buying_mode configuration refine_mode": {"buying_mode": "refine", "refine": _REFINE},
+    "buying_mode configuration pre_v3_default": {"brief": _BRIEF},
+    "buying_mode configuration unknown_value": {"buying_mode": "auction", "brief": _BRIEF},
+    "buying_mode configuration brief_mode_missing_brief": {"buying_mode": "brief"},
+    "buying_mode configuration brief_mode_with_refine": {"buying_mode": "brief", "brief": _BRIEF, "refine": _REFINE},
+    "buying_mode configuration wholesale_with_brief": {"buying_mode": "wholesale", "brief": _BRIEF},
+    "buying_mode configuration wholesale_with_refine": {"buying_mode": "wholesale", "refine": _REFINE},
+    "buying_mode configuration refine_mode_missing_refine": {"buying_mode": "refine"},
+    "buying_mode configuration refine_mode_empty_refine": {"buying_mode": "refine", "refine": []},
+    "buying_mode configuration refine_mode_with_brief": {"buying_mode": "refine", "brief": _BRIEF, "refine": _REFINE},
+    # The boundary outline, by <boundary_point>.
+    "buying_mode='brief' with brief present (valid brief mode)": {"buying_mode": "brief", "brief": _BRIEF},
+    "buying_mode='wholesale' with no brief, no refine (valid wholesale mode)": {"buying_mode": "wholesale"},
+    "buying_mode='refine' with refine=[1 entry] (valid refine mode, minItems boundary)": {
+        "buying_mode": "refine",
+        "refine": _REFINE,
+    },
+    "buying_mode absent, pre-v3 client (defaulted to brief)": {"brief": _BRIEF},
+    "buying_mode='auction' (unknown enum value)": {"buying_mode": "auction", "brief": _BRIEF},
+    "buying_mode='brief', brief absent (required companion missing)": {"buying_mode": "brief"},
+    "buying_mode='brief', refine present (prohibited companion present)": {
+        "buying_mode": "brief",
+        "brief": _BRIEF,
+        "refine": _REFINE,
+    },
+    "buying_mode='wholesale', brief present (prohibited companion present)": {
+        "buying_mode": "wholesale",
+        "brief": _BRIEF,
+    },
+    "buying_mode='wholesale', refine present (prohibited companion present)": {
+        "buying_mode": "wholesale",
+        "refine": _REFINE,
+    },
+    "buying_mode='refine', refine absent (required companion missing)": {"buying_mode": "refine"},
+    "buying_mode='refine', refine=[] (minItems:1 boundary violation)": {"buying_mode": "refine", "refine": []},
+    "buying_mode='refine', brief present (prohibited companion present)": {
+        "buying_mode": "refine",
+        "brief": _BRIEF,
+        "refine": _REFINE,
+    },
 }
 
 
-@when(parsers.re(r"the Buyer Agent sends a get_products request with (?P<row>buying_mode=.+)$"))
+@when(parsers.re(r"the Buyer Agent sends a get_products request (?:with |at boundary )(?P<row>buying_mode.+)$"))
 def when_get_products_buying_mode(ctx: dict, row: str) -> None:
     """Dispatch get_products with a brand and the mode and companions the row names."""
     dispatch_request(ctx, brand={"domain": "acme.com"}, **_BUYING_MODE_ROWS[row])

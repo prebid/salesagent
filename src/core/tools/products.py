@@ -10,7 +10,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from adcp.types import PropertyListReference
+from adcp.types import BuyingMode, PropertyListReference
 from adcp.types.legacy import LegacyProduct as LibraryProduct
 
 # The FIXME(#1388) import of FormatReferenceStructuredObject that stood here is gone with
@@ -20,9 +20,10 @@ from adcp.types.legacy import LegacyProduct as LibraryProduct
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
 from src.core.errors.codes import ErrorCode
-from src.core.errors.details import ErrorDetails, PolicyViolationDetails
+from src.core.errors.details import CapabilityRefusalDetails, ErrorDetails, PolicyViolationDetails
 from src.core.exceptions import (
     AdCPAuthorizationError,
+    AdCPCapabilityNotSupportedError,
     AdCPInternalError,
     AdCPPolicyViolationError,
     AdCPSalesAgentError,
@@ -226,6 +227,18 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         GetProductsResponse containing matching products
     """
     start_time = time.time()
+
+    # refine is a buying mode this seller does not serve (#2710 D2): it declares no
+    # media_buy.buying_modes, so it does not offer refine (refine_products.yaml requires it
+    # there), and get_products is deprecated in 3.2 for refine_proposals. Refused rather than
+    # answered as a brief, which would drop the refine array and its refinement_applied.
+    if req.buying_mode == BuyingMode.refine:
+        raise AdCPCapabilityNotSupportedError(
+            field="buying_mode",
+            details=CapabilityRefusalDetails(
+                capability="buying_mode", rejected_value="refine", accepted_values=["brief", "wholesale"]
+            ),
+        )
 
     # Require at least one search criterion (brief, brand, or filters)
     if not req.brief and not req.brand and not req.filters:
