@@ -67,12 +67,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/gam/managers/targeting.py", "_load_axe_keys"),
     ("src/adapters/gam/managers/targeting.py", "_load_custom_targeting_key_ids"),
     # sync_custom_targeting_keys removed — uses AdapterConfigRepository
-    ("src/adapters/gam_reporting_api.py", "get_ad_unit_breakdown"),
-    ("src/adapters/gam_reporting_api.py", "get_advertiser_summary"),
-    ("src/adapters/gam_reporting_api.py", "get_country_breakdown"),
-    ("src/adapters/gam_reporting_api.py", "get_gam_reporting"),
-    ("src/adapters/gam_reporting_api.py", "get_principal_reporting"),
-    ("src/adapters/gam_reporting_api.py", "get_principal_summary"),
     ("src/adapters/google_ad_manager.py", "create_media_buy"),
     ("src/adapters/google_ad_manager.py", "get_packages_snapshot"),
     ("src/adapters/xandr.py", "_create_human_task"),
@@ -82,7 +76,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     # ── Admin blueprints ──
     ("src/admin/blueprints/activity_stream.py", "get_recent_activities"),
     ("src/admin/blueprints/adapters.py", "list_broadstreet_zones"),
-    ("src/admin/blueprints/adapters.py", "mock_config"),
     ("src/admin/blueprints/adapters.py", "save_adapter_config"),
     ("src/admin/blueprints/api.py", "get_tenant_products"),
     ("src/admin/blueprints/auth.py", "gam_authorize"),
@@ -111,7 +104,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/gam.py", "get_gam_custom_targeting_keys"),
     ("src/admin/blueprints/gam.py", "get_gam_line_item_api"),
     ("src/admin/blueprints/gam.py", "get_latest_sync_status"),
-    ("src/admin/blueprints/gam.py", "get_sync_status"),
     ("src/admin/blueprints/gam.py", "reset_stuck_sync"),
     ("src/admin/blueprints/gam.py", "test_gam_connection"),
     ("src/admin/blueprints/gam.py", "view_gam_line_item"),
@@ -121,7 +113,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/inventory.py", "get_inventory_sizes"),
     ("src/admin/blueprints/inventory.py", "_batch_fetch_ancestors"),  # FIXME(#1119): extract to repository
     ("src/admin/blueprints/inventory.py", "get_inventory_tree"),
-    ("src/admin/blueprints/inventory.py", "get_order_details"),
     ("src/admin/blueprints/inventory.py", "get_orders"),
     ("src/admin/blueprints/inventory.py", "get_sync_status"),
     ("src/admin/blueprints/inventory.py", "get_targeting_data"),
@@ -143,7 +134,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/operations.py", "media_buy_detail"),
     ("src/admin/blueprints/operations.py", "reporting"),
     ("src/admin/blueprints/policy.py", "index"),
-    ("src/admin/blueprints/policy.py", "review_task"),
     ("src/admin/blueprints/policy.py", "update"),
     ("src/admin/blueprints/principals.py", "create_principal"),
     # delete_principal removed — the lookup goes through PrincipalRepository.get()
@@ -172,7 +162,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/settings.py", "update_business_rules"),
     ("src/admin/blueprints/settings.py", "update_general"),
     ("src/admin/blueprints/signals_agents.py", "add_signals_agent"),
-    ("src/admin/blueprints/signals_agents.py", "delete_signals_agent"),
     ("src/admin/blueprints/signals_agents.py", "edit_signals_agent"),
     ("src/admin/blueprints/signals_agents.py", "list_signals_agents"),
     ("src/admin/blueprints/signals_agents.py", "test_signals_agent"),
@@ -181,7 +170,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/tenants.py", "remove_favicon"),
     ("src/admin/blueprints/tenants.py", "setup_checklist"),
     ("src/admin/blueprints/tenants.py", "tenant_settings"),
-    ("src/admin/blueprints/tenants.py", "test_slack"),
     ("src/admin/blueprints/tenants.py", "update"),
     ("src/admin/blueprints/tenants.py", "update_favicon_url"),
     ("src/admin/blueprints/tenants.py", "upload_favicon"),
@@ -222,7 +210,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     # is_super_admin and require_tenant_access fixed — the super-admin rows go through
     # TenantManagementConfigRepository, the caller's User row through TenantConfigRepository
     ("src/admin/utils/helpers.py", "get_tenant_config_from_db"),
-    ("src/admin/utils/helpers.py", "is_tenant_admin"),
     # ── Core ──
     ("src/core/audit_logger.py", "log_operation"),
     ("src/core/audit_logger.py", "log_security_violation"),

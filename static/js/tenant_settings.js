@@ -19,7 +19,6 @@ const config = (function() {
     }
 
     return {
-        scriptName: configEl.dataset.scriptName || '',
         tenantId: configEl.dataset.tenantId || '',
         tenantName: configEl.dataset.tenantName || '',
         activeAdapter: configEl.dataset.activeAdapter || '',
@@ -127,21 +126,14 @@ function formatJSON() {
 }
 
 // Test Slack
+// The route tests the SAVED webhook (the page never holds it), so nothing is sent.
 function testSlack() {
-    const webhookUrl = document.getElementById('slack_webhook_url').value;
-    if (!webhookUrl) {
-        alert('Please enter a webhook URL first');
-        return;
-    }
-
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/test_slack`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/test_slack`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-            webhook_url: webhookUrl
-        })
+        body: JSON.stringify({})
     })
     .then(response => response.json())
     .then(data => {
@@ -160,7 +152,7 @@ function testSlack() {
 function saveAdapter() {
     const adapterType = document.querySelector('select[name="adapter_type"]').value;
 
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/settings/adapter`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/settings/adapter`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -185,7 +177,7 @@ function saveAdapter() {
 
 // Check OAuth status (for GAM)
 function checkOAuthStatus() {
-    fetch(`${config.scriptName}/api/oauth/status`)
+    fetch(`${scriptRoot}/api/oauth/status`)
         .then(response => response.json())
         .then(data => {
             const statusBadge = document.getElementById('oauth-status-badge');
@@ -214,7 +206,7 @@ function checkOAuthStatus() {
 // Initiate GAM OAuth
 function initiateGAMAuth() {
     const tenantId = config.tenantId;
-    const oauthUrl = `${config.scriptName}/auth/gam/authorize/${tenantId}`;
+    const oauthUrl = `${scriptRoot}/auth/gam/authorize/${tenantId}`;
 
     // Open OAuth flow in popup
     const width = 600;
@@ -247,7 +239,7 @@ function detectGAMNetwork() {
     button.disabled = true;
     button.textContent = 'Detecting...';
 
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/gam/detect-network`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/gam/detect-network`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -305,8 +297,8 @@ function showNetworkSelector(networks) {
         <p style="color: #666;">You have access to multiple GAM networks. Please select which one to use:</p>
         <select id="network-selector" class="form-control" style="margin: 1rem 0; padding: 0.5rem; font-size: 1rem;">
             ${networks.map(net => `
-                <option value="${net.network_code}">
-                    ${net.network_name} (${net.network_code})
+                <option value="${escapeHtml(net.network_code)}">
+                    ${escapeHtml(net.network_name)} (${escapeHtml(net.network_code)})
                 </option>
             `).join('')}
         </select>
@@ -349,7 +341,7 @@ function confirmNetworkSelection() {
     cancelNetworkSelection();
 
     // Get trafficker ID for selected network
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/gam/detect-network`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/gam/detect-network`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -397,7 +389,7 @@ function saveManualToken() {
     button.disabled = true;
     button.textContent = 'Saving...';
 
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/settings/adapter`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/settings/adapter`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -455,7 +447,7 @@ function saveGAMConfig() {
     button.disabled = true;
     button.textContent = 'Saving...';
 
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/settings/adapter`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/settings/adapter`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -502,7 +494,7 @@ function refreshGAMInfo() {
     button.textContent = 'Refreshing...';
 
     // First, call test-connection to get current GAM network info
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/gam/test-connection`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/gam/test-connection`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh_token: refreshToken })
@@ -513,7 +505,7 @@ function refreshGAMInfo() {
             const network = data.networks[0];
             // Save updated currency/timezone info via configure endpoint
             // Note: test-connection returns currencyCode/secondaryCurrencyCodes/timeZone (camelCase from GAM API)
-            return fetch(`${config.scriptName}/tenant/${config.tenantId}/gam/configure`, {
+            return fetch(`${scriptRoot}/tenant/${config.tenantId}/gam/configure`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -556,7 +548,7 @@ function testGAMConnection() {
     button.disabled = true;
     button.textContent = 'Testing...';
 
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/gam/test-connection`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/gam/test-connection`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -621,7 +613,7 @@ function saveBusinessRules() {
     // Now create FormData with the updated form
     const formData = new FormData(form);
 
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/settings/business-rules`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/settings/business-rules`, {
         method: 'POST',
         body: formData,
         redirect: 'follow'  // Follow redirects to get flash messages
@@ -688,7 +680,7 @@ function configureGAM() {
     const form = document.getElementById('gam-config-form');
     const formData = new FormData(form);
 
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/gam/configure`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/gam/configure`, {
         method: 'POST',
         body: formData
     })
@@ -714,7 +706,7 @@ function editGAMConfig() {
     }
 
     // Clear network code from database to trigger form display
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/settings/adapter`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/settings/adapter`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -739,6 +731,14 @@ function editGAMConfig() {
     });
 }
 
+// A copy of el's children now, and a function that puts that copy back (each call a fresh one),
+// so a button can show progress and be restored without passing its markup around.
+function snapshotChildren(el) {
+    const nodes = Array.from(el.childNodes, node => node.cloneNode(true));
+    return () => el.replaceChildren(...nodes.map(node => node.cloneNode(true)));
+}
+
+
 // Check for in-progress sync on page load
 function checkForInProgressSync() {
     // Only check if we're on a page with the sync button
@@ -746,7 +746,7 @@ function checkForInProgressSync() {
     if (!button) return;
 
     // Check if there's a running sync
-    const checkUrl = `${config.scriptName}/tenant/${config.tenantId}/gam/sync-status/latest`;
+    const checkUrl = `${scriptRoot}/tenant/${config.tenantId}/gam/sync-status/latest`;
 
     fetch(checkUrl)
         .then(response => {
@@ -759,7 +759,7 @@ function checkForInProgressSync() {
         .then(data => {
             if (data && data.status === 'running') {
                 // Resume polling the existing sync
-                const originalText = button.innerHTML;
+                const restoreButton = snapshotChildren(button);
                 button.disabled = true;
 
                 // Start loading animation
@@ -767,11 +767,11 @@ function checkForInProgressSync() {
                 button.innerHTML = '⏳ Syncing';
                 const loadingInterval = setInterval(() => {
                     dots = dots.length >= 3 ? '' : dots + '.';
-                    button.innerHTML = `⏳ Syncing${dots}`;
+                    button.innerHTML = `⏳ Syncing${escapeHtml(dots)}`;
                 }, 300);
 
                 // Start polling the existing sync
-                pollSyncStatus(data.sync_id, button, originalText, loadingInterval);
+                pollSyncStatus(data.sync_id, button, restoreButton, loadingInterval);
             }
         })
         .catch(error => {
@@ -792,7 +792,7 @@ function syncGAMInventory(mode = 'full') {
         return;
     }
 
-    const originalText = button.innerHTML;
+    const restoreButton = snapshotChildren(button);
 
     // Disable both buttons during sync
     const allButtons = document.querySelectorAll('button[onclick*="syncGAMInventory"]');
@@ -801,13 +801,13 @@ function syncGAMInventory(mode = 'full') {
     // Simple animated dots loading indicator
     let dots = '';
     const syncLabel = mode === 'incremental' ? 'Syncing (Incremental)' : 'Syncing (Full Reset)';
-    button.innerHTML = `⏳ ${syncLabel}`;
+    button.innerHTML = `⏳ ${escapeHtml(syncLabel)}`;
     const loadingInterval = setInterval(() => {
         dots = dots.length >= 3 ? '' : dots + '.';
-        button.innerHTML = `⏳ ${syncLabel}${dots}`;
+        button.innerHTML = `⏳ ${escapeHtml(syncLabel)}${escapeHtml(dots)}`;
     }, 300);
 
-    const url = `${config.scriptName}/api/tenant/${config.tenantId}/inventory/sync`;
+    const url = `${scriptRoot}/api/tenant/${config.tenantId}/inventory/sync`;
 
     fetch(url, {
         method: 'POST',
@@ -824,7 +824,7 @@ function syncGAMInventory(mode = 'full') {
         // New response format: {sync_id, status, message} or {error, sync_id}
         if (data.sync_id && (data.status === 'running' || data.status === 'in_progress')) {
             // Sync started or already running - poll for status
-            pollSyncStatus(data.sync_id, button, originalText, loadingInterval);
+            pollSyncStatus(data.sync_id, button, restoreButton, loadingInterval);
         } else if (data.error) {
             // Error response
             clearInterval(loadingInterval);
@@ -833,7 +833,7 @@ function syncGAMInventory(mode = 'full') {
             const allButtons = document.querySelectorAll('button[onclick*="syncGAMInventory"]');
             allButtons.forEach(btn => btn.disabled = false);
 
-            button.innerHTML = originalText;
+            restoreButton();
             alert('❌ Sync failed: ' + adminErrorText(data));
         } else {
             // Unexpected response format
@@ -843,7 +843,7 @@ function syncGAMInventory(mode = 'full') {
             const allButtons = document.querySelectorAll('button[onclick*="syncGAMInventory"]');
             allButtons.forEach(btn => btn.disabled = false);
 
-            button.innerHTML = originalText;
+            restoreButton();
             alert('❌ Sync failed: ' + adminErrorText(data));
         }
     })
@@ -854,14 +854,14 @@ function syncGAMInventory(mode = 'full') {
         const allButtons = document.querySelectorAll('button[onclick*="syncGAMInventory"]');
         allButtons.forEach(btn => btn.disabled = false);
 
-        button.innerHTML = originalText;
+        restoreButton();
         alert('❌ Error: ' + error.message);
     });
 }
 
 // Poll sync status until completion
-function pollSyncStatus(syncId, button, originalText, loadingInterval) {
-    const statusUrl = `${config.scriptName}/tenant/${config.tenantId}/gam/sync-status/${syncId}`;
+function pollSyncStatus(syncId, button, restoreButton, loadingInterval) {
+    const statusUrl = `${scriptRoot}/tenant/${config.tenantId}/gam/sync-status/${syncId}`;
 
     // Show "navigate away" message
     const syncMessage = document.createElement('div');
@@ -884,9 +884,9 @@ function pollSyncStatus(syncId, button, originalText, loadingInterval) {
                     const totalPhases = progress.total_phases || 6;
 
                     if (count > 0) {
-                        button.innerHTML = `⏳ ${phaseText}: ${count} items (${phaseNum}/${totalPhases})`;
+                        button.textContent = `⏳ ${phaseText}: ${count} items (${phaseNum}/${totalPhases})`;
                     } else {
-                        button.innerHTML = `⏳ ${phaseText} (${phaseNum}/${totalPhases})`;
+                        button.textContent = `⏳ ${phaseText} (${phaseNum}/${totalPhases})`;
                     }
                 }
 
@@ -898,7 +898,7 @@ function pollSyncStatus(syncId, button, originalText, loadingInterval) {
                     allButtons.forEach(btn => btn.disabled = false);
 
                     // Reset the button that was clicked
-                    button.innerHTML = originalText;
+                    restoreButton();
 
                     // Remove progress message
                     const msg = document.getElementById('sync-progress-message');
@@ -924,7 +924,7 @@ function pollSyncStatus(syncId, button, originalText, loadingInterval) {
                 } else if (data.status === 'failed') {
                     clearInterval(loadingInterval);
                     button.disabled = false;
-                    button.innerHTML = originalText;
+                    restoreButton();
 
                     // Remove progress message
                     const msg = document.getElementById('sync-progress-message');
@@ -938,7 +938,7 @@ function pollSyncStatus(syncId, button, originalText, loadingInterval) {
                     // Unknown status
                     clearInterval(loadingInterval);
                     button.disabled = false;
-                    button.innerHTML = originalText;
+                    restoreButton();
 
                     // Remove progress message
                     const msg = document.getElementById('sync-progress-message');
@@ -950,7 +950,7 @@ function pollSyncStatus(syncId, button, originalText, loadingInterval) {
             .catch(error => {
                 clearInterval(loadingInterval);
                 button.disabled = false;
-                button.innerHTML = originalText;
+                restoreButton();
 
                 // Remove progress message
                 const msg = document.getElementById('sync-progress-message');
@@ -976,7 +976,7 @@ function resetStuckSync() {
         button.innerHTML = '⏳ Resetting...';
     }
 
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/gam/reset-stuck-sync`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/gam/reset-stuck-sync`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
@@ -1006,14 +1006,14 @@ function resetStuckSync() {
 
 // Check OAuth token status
 function checkTokenStatus() {
-    fetch(`${config.scriptName}/api/oauth/status`)
+    fetch(`${scriptRoot}/api/oauth/status`)
         .then(response => response.json())
         .then(data => {
             const statusDiv = document.getElementById('token-status');
             if (data.authenticated) {
                 statusDiv.innerHTML = `
                     <div class="alert alert-success">
-                        ✅ Authenticated as ${data.user_email}
+                        ✅ Authenticated as ${escapeHtml(data.user_email)}
                         <button onclick="revokeToken()" class="btn btn-sm btn-danger ml-2">Revoke</button>
                     </div>
                 `;
@@ -1057,7 +1057,7 @@ function rotateToken(principalId, principalName) {
     if (!confirm(`Rotate the API token for "${principalName}"? The current token stops working immediately.`)) {
         return;
     }
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/principal/${principalId}/rotate-token`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/principal/${principalId}/rotate-token`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'X-Requested-With': 'XMLHttpRequest' },
@@ -1083,7 +1083,7 @@ function deletePrincipal(principalId, principalName) {
         return;
     }
 
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/principals/${principalId}/delete`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/principals/${principalId}/delete`, {
         method: 'DELETE',
         headers: {
             'Content-Type': 'application/json',
@@ -1118,7 +1118,7 @@ function testSignalsEndpoint() {
         return;
     }
 
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/settings/test_signals`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/settings/test_signals`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -1146,7 +1146,7 @@ function updatePrincipal(principalId) {
     const name = document.getElementById(`principal_name_${principalId}`).value;
     const advertiserIds = document.getElementById(`advertiser_ids_${principalId}`).value;
 
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/principal/${principalId}`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/principal/${principalId}`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -1183,7 +1183,7 @@ function fetchGAMAdvertisers() {
     button.disabled = true;
     button.textContent = 'Fetching...';
 
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/api/gam/get-advertisers`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/api/gam/get-advertisers`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -1224,10 +1224,10 @@ function displayGAMAdvertisers(advertisers) {
         const item = document.createElement('li');
         item.className = 'list-group-item';
         item.innerHTML = `
-            <strong>${adv.name}</strong>
+            <strong>${escapeHtml(adv.name)}</strong>
             <br>
-            <small class="text-muted">ID: ${adv.id}</small>
-            <button class="btn btn-sm btn-primary float-right" onclick="selectAdvertiser('${adv.id}', '${adv.name}')">
+            <small class="text-muted">ID: ${escapeHtml(adv.id)}</small>
+            <button class="btn btn-sm btn-primary float-right" onclick="selectAdvertiser(${jsArg(adv.id)}, ${jsArg(adv.name)})">
                 Select
             </button>
         `;
@@ -1306,7 +1306,7 @@ document.addEventListener('DOMContentLoaded', function() {
 // Adapter selection functions (called from template onclick handlers)
 function selectAdapter(adapterType) {
     // Save the adapter selection via API
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/settings/adapter`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/settings/adapter`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -1443,7 +1443,7 @@ function editPrincipalMappings(principalId, principalName) {
     document.getElementById('saveMappingsBtn').dataset.principalId = principalId;
 
     // Fetch current principal configuration
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/principal/${principalId}`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/principal/${principalId}`, {
         method: 'GET',
         headers: {
             'Content-Type': 'application/json',
@@ -1486,10 +1486,10 @@ function displayPrincipalMappingsForm(principal) {
             <div id="gam_config" style="${gamMapping.enabled ? '' : 'display: none;'}">
                 <label for="gam_advertiser_select" class="form-label">GAM Advertiser</label>
                 <select class="form-select" id="gam_advertiser_select" style="width: 100%;">
-                    ${gamMapping.advertiser_id ? `<option value="${gamMapping.advertiser_id}" selected>${gamMapping.advertiser_id}</option>` : ''}
+                    ${gamMapping.advertiser_id ? `<option value="${escapeHtml(gamMapping.advertiser_id)}" selected>${escapeHtml(gamMapping.advertiser_id)}</option>` : ''}
                 </select>
                 <small class="form-text text-muted">Search for a GAM advertiser by name or ID</small>
-                <input type="hidden" id="gam_advertiser_id" value="${gamMapping.advertiser_id || ''}">
+                <input type="hidden" id="gam_advertiser_id" value="${escapeHtml(gamMapping.advertiser_id || '')}">
             </div>
         </div>
         <hr>
@@ -1523,7 +1523,7 @@ function displayPrincipalMappingsForm(principal) {
         allowClear: true,
         minimumInputLength: 0,
         ajax: {
-            url: `${config.scriptName}/tenant/${config.tenantId}/api/gam/get-advertisers`,
+            url: `${scriptRoot}/tenant/${config.tenantId}/api/gam/get-advertisers`,
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -1607,7 +1607,7 @@ function savePrincipalMappings() {
     }
 
     // Save via API
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/principal/${principalId}/update_mappings`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/principal/${principalId}/update_mappings`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -1640,7 +1640,7 @@ function createServiceAccount() {
     button.disabled = true;
     button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Creating...';
 
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/gam/create-service-account`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/gam/create-service-account`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
@@ -1698,7 +1698,7 @@ function saveServiceAccountNetworkCode() {
     button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Saving...';
 
     // Save network code via the GAM configure endpoint
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/gam/configure`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/gam/configure`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
@@ -1764,7 +1764,7 @@ function saveManualServiceAccount() {
     button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Saving...';
 
     // Save service account JSON and network code
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/gam/configure`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/gam/configure`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
@@ -1801,7 +1801,7 @@ function testGAMServiceAccountConnection() {
 
     // Use existing GAM test connection endpoint
     // The backend will automatically use service account if configured
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/gam/test-connection`, {
+    fetch(`${scriptRoot}/tenant/${config.tenantId}/gam/test-connection`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
@@ -1876,7 +1876,7 @@ function addCurrencyLimit() {
             <div style="display: grid; grid-template-columns: 150px 1fr 1fr; gap: 1rem; align-items: center;">
                 <div>
                     <label style="display: block; font-weight: 600; color: #1f2937; margin-bottom: 0.25rem;">Currency</label>
-                    <input type="text" readonly value="${currencyCode}"
+                    <input type="text" readonly value="${escapeHtml(currencyCode)}"
                            style="padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; background: #f3f4f6; width: 100%; font-weight: 600;">
                 </div>
                 <div>
@@ -1884,8 +1884,8 @@ function addCurrencyLimit() {
                         Min Package Budget
                     </label>
                     <input type="number"
-                           name="currency_limits[${currencyCode}][min_package_budget]"
-                           value="${minBudget}"
+                           name="currency_limits[${escapeHtml(currencyCode)}][min_package_budget]"
+                           value="${escapeHtml(minBudget)}"
                            min="0" step="0.01"
                            placeholder="No minimum"
                            style="padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; width: 100%;">
@@ -1895,8 +1895,8 @@ function addCurrencyLimit() {
                         Max Daily Package Spend
                     </label>
                     <input type="number"
-                           name="currency_limits[${currencyCode}][max_daily_package_spend]"
-                           value="${maxSpend}"
+                           name="currency_limits[${escapeHtml(currencyCode)}][max_daily_package_spend]"
+                           value="${escapeHtml(maxSpend)}"
                            min="0" step="0.01"
                            placeholder="No maximum"
                            style="padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; width: 100%;">
@@ -1906,10 +1906,10 @@ function addCurrencyLimit() {
                 Limits apply per package/line item to prevent budget splitting
             </small>
         </div>
-        <button type="button" class="btn btn-sm btn-danger" onclick="removeCurrencyLimit('${currencyCode}')" title="Remove Currency">
+        <button type="button" class="btn btn-sm btn-danger" onclick="removeCurrencyLimit(${jsArg(currencyCode)})" title="Remove Currency">
             <i class="fas fa-times"></i>
         </button>
-        <input type="hidden" name="currency_limits[${currencyCode}][_delete]" value="false">
+        <input type="hidden" name="currency_limits[${escapeHtml(currencyCode)}][_delete]" value="false">
     `;
 
     container.appendChild(newItem);
@@ -2006,7 +2006,8 @@ function updateNamingPreview() {
 
     const lineItemPreviewEl = document.getElementById('lineitem-preview');
     if (lineItemPreviewEl) {
-        lineItemPreviewEl.innerHTML = lineItemNames.join('<br>');
+        const lineItemNamesHtml = lineItemNames.map(escapeHtml).join('<br>');
+        lineItemPreviewEl.innerHTML = lineItemNamesHtml;
     }
 }
 
@@ -2057,127 +2058,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // =============================================================================
 // Publisher Partners Management
+// The client is static/js/publisher_partners.js, shared with the inventory page; this
+// section adds only its own add-publisher form around it.
 // =============================================================================
-
-// Load publishers when the publishers section becomes active
-document.addEventListener('DOMContentLoaded', function() {
-    // Check if we're on publishers section or hash indicates it
-    const hash = window.location.hash.substring(1);
-    if (hash === 'publishers') {
-        loadPublishers();
-    }
-
-    // Also load when switching to publishers section
-    const publishersNavItem = document.querySelector('[data-section="publishers"]');
-    if (publishersNavItem) {
-        publishersNavItem.addEventListener('click', function() {
-            loadPublishers();
-        });
-    }
-});
-
-// Load and display publishers
-function loadPublishers() {
-    const container = document.getElementById('publishers-list');
-    if (!container) return;
-
-    container.innerHTML = `
-        <div style="text-align: center; padding: 2rem; color: #6b7280;">
-            <span style="font-size: 1.5rem;">⏳</span>
-            <p>Loading publishers...</p>
-        </div>
-    `;
-
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/publisher-partners`, {
-        credentials: 'same-origin'
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.error) {
-            container.innerHTML = `
-                <div style="text-align: center; padding: 2rem; color: #dc2626;">
-                    <span style="font-size: 1.5rem;">❌</span>
-                    <p>Error: ${escapeHtml(adminErrorText(data))}</p>
-                </div>
-            `;
-            return;
-        }
-
-        if (!data.partners || data.partners.length === 0) {
-            container.innerHTML = `
-                <div style="text-align: center; padding: 3rem; background: #f9fafb; border: 2px dashed #e5e7eb; border-radius: 8px;">
-                    <span style="font-size: 2rem;">🌐</span>
-                    <h3 style="margin: 1rem 0 0.5rem 0; color: #374151;">No Publishers Yet</h3>
-                    <p style="color: #6b7280; margin-bottom: 1rem;">Add your first publisher partner to start selling their inventory.</p>
-                    <button onclick="showAddPublisherModal()" class="btn btn-primary">+ Add Publisher</button>
-                </div>
-            `;
-            return;
-        }
-
-        // Render publishers table
-        let html = `
-            <div style="margin-bottom: 1rem; padding: 0.75rem; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px;">
-                <strong>${data.verified}</strong> verified, <strong>${data.pending}</strong> pending verification
-            </div>
-            <table style="width: 100%; border-collapse: collapse;">
-                <thead>
-                    <tr style="border-bottom: 2px solid #e5e7eb;">
-                        <th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #374151;">Publisher</th>
-                        <th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #374151;">Status</th>
-                        <th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #374151;">Properties</th>
-                        <th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #374151;">Last Synced</th>
-                        <th style="text-align: right; padding: 0.75rem; font-weight: 600; color: #374151;">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-        `;
-
-        data.partners.forEach(partner => {
-            const statusBadge = partner.is_verified
-                ? '<span style="display: inline-block; padding: 0.25rem 0.5rem; background: #d1fae5; color: #065f46; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">Verified</span>'
-                : partner.sync_status === 'error'
-                    ? '<span style="display: inline-block; padding: 0.25rem 0.5rem; background: #fee2e2; color: #991b1b; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">Error</span>'
-                    : '<span style="display: inline-block; padding: 0.25rem 0.5rem; background: #fef3c7; color: #92400e; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">Pending</span>';
-
-            const lastSynced = partner.last_synced_at
-                ? new Date(partner.last_synced_at).toLocaleDateString()
-                : 'Never';
-
-            html += `
-                <tr style="border-bottom: 1px solid #f3f4f6;">
-                    <td style="padding: 0.75rem;">
-                        <div style="font-weight: 600;">${escapeHtml(partner.display_name)}</div>
-                        <div style="font-size: 0.875rem; color: #6b7280;">${escapeHtml(partner.publisher_domain)}</div>
-                    </td>
-                    <td style="padding: 0.75rem;">
-                        ${statusBadge}
-                        ${partner.sync_error ? `<div style="font-size: 0.75rem; color: #dc2626; margin-top: 0.25rem;">${escapeHtml(partner.sync_error)}</div>` : ''}
-                    </td>
-                    <td style="padding: 0.75rem; color: #6b7280;">${partner.property_count || 0}</td>
-                    <td style="padding: 0.75rem; color: #6b7280;">${lastSynced}</td>
-                    <td style="padding: 0.75rem; text-align: right;">
-                        <button onclick="deletePublisher(${partner.id}, '${escapeHtml(partner.publisher_domain)}')"
-                                class="btn btn-sm" style="background: #fee2e2; color: #991b1b; border: none; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer;">
-                            Delete
-                        </button>
-                    </td>
-                </tr>
-            `;
-        });
-
-        html += '</tbody></table>';
-        container.innerHTML = html;
-    })
-    .catch(error => {
-        container.innerHTML = `
-            <div style="text-align: center; padding: 2rem; color: #dc2626;">
-                <span style="font-size: 1.5rem;">❌</span>
-                <p>Error loading publishers: ${escapeHtml(error.message)}</p>
-            </div>
-        `;
-    });
-}
 
 // Show add publisher modal
 function showAddPublisherModal() {
@@ -2205,124 +2088,34 @@ document.addEventListener('click', function(e) {
     }
 });
 
-// Add publisher
-function addPublisher(event) {
+// Add the publisher the form names, with its display name, through the shared client
+async function submitAddPublisherForm(event) {
     event.preventDefault();
-
-    const domain = document.getElementById('publisher-domain').value.trim();
-    const displayName = document.getElementById('publisher-display-name').value.trim();
     const submitBtn = document.getElementById('add-publisher-submit');
-
-    if (!domain) {
-        alert('Please enter a publisher domain');
-        return;
-    }
-
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Adding...';
-
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/publisher-partners`, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            publisher_domain: domain,
-            display_name: displayName || domain
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Add Publisher';
-
-        if (data.error) {
-            alert('Error: ' + adminErrorText(data));
-            return;
-        }
-
+    const added = await addPublisher(
+        document.getElementById('publisher-domain').value,
+        document.getElementById('publisher-display-name').value
+    );
+    submitBtn.disabled = false;
+    if (added) {
         hideAddPublisherModal();
-        loadPublishers();
-
-        // Show success message
-        if (data.message) {
-            alert(data.message);
-        }
-    })
-    .catch(error => {
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Add Publisher';
-        alert('Error: ' + error.message);
-    });
+    }
 }
 
-// Delete publisher
-function deletePublisher(partnerId, domain) {
-    if (!confirm(`Are you sure you want to remove ${domain}? This will remove authorization to sell their inventory.`)) {
-        return;
+// Load publishers when the publishers section becomes active
+document.addEventListener('DOMContentLoaded', function() {
+    // Check if we're on publishers section or hash indicates it
+    const hash = window.location.hash.substring(1);
+    if (hash === 'publishers') {
+        loadPublishers();
     }
 
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/publisher-partners/${partnerId}`, {
-        method: 'DELETE',
-        credentials: 'same-origin'
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.error) {
-            alert('Error: ' + adminErrorText(data));
-            return;
-        }
-
-        loadPublishers();
-    })
-    .catch(error => {
-        alert('Error: ' + error.message);
-    });
-}
-
-// Sync all publishers
-function syncAllPublishers() {
-    const btn = document.getElementById('sync-publishers-btn');
-    const icon = document.getElementById('sync-publishers-icon');
-
-    btn.disabled = true;
-    icon.style.animation = 'spin 1s linear infinite';
-
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/publisher-partners/sync`, {
-        method: 'POST',
-        credentials: 'same-origin'
-    })
-    .then(response => response.json())
-    .then(data => {
-        btn.disabled = false;
-        icon.style.animation = '';
-
-        if (data.error) {
-            alert('Error: ' + adminErrorText(data));
-            return;
-        }
-
-        loadPublishers();
-
-        // Show summary
-        if (data.results) {
-            const verified = data.results.filter(r => r.is_verified).length;
-            const failed = data.results.filter(r => !r.is_verified).length;
-            alert(`Verification complete: ${verified} verified, ${failed} not verified`);
-        }
-    })
-    .catch(error => {
-        btn.disabled = false;
-        icon.style.animation = '';
-        alert('Error: ' + error.message);
-    });
-}
-
-// Helper function to escape HTML
-function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
+    // Also load when switching to publishers section
+    const publishersNavItem = document.querySelector('[data-section="publishers"]');
+    if (publishersNavItem) {
+        publishersNavItem.addEventListener('click', function() {
+            loadPublishers();
+        });
+    }
+});

@@ -30,6 +30,7 @@ from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.database.repositories.tenant_counts import count_by_tenant
 from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 from src.core.signing.posture import KeyBacking, signing_key_backed
+from src.services.ai.factory import tenant_ai_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,34 @@ def _custom_domain_task(tenant_id: str, virtual_host: str) -> "SetupTask":
         is_complete=is_custom,
         action_url=f"/tenant/{tenant_id}/settings#account",
         details=(f"Using {virtual_host}" if is_custom else f"Using this deployment's own host ({virtual_host})"),
+    )
+
+
+def _ai_features_task(tenant_id: str, tenant: Tenant) -> "SetupTask":
+    """The optional "AI Features" task: done when the seller's own AI configuration can run.
+
+    ``tenant_ai_enabled`` resolves through ``TenantAIConfig.from_tenant`` (``ai_config``
+    first, the legacy ``gemini_api_key`` column second), the same answer the AI steps act
+    on. Reading the legacy column alone kept this task incomplete for every seller who
+    configured AI under Integrations -> AI Services, which writes ``ai_config`` (#2224).
+
+    No platform fallback: the task asks the seller to configure their own key, and the
+    advertising policy check runs only on it. A keyless row (what the AI Services form
+    stores when the key field is left blank) does not count.
+
+    One function, because the live path and the dashboard's pre-fetched path both build this
+    task and a second copy is how they would come to disagree.
+    """
+    ai_configured = tenant_ai_enabled(tenant, platform_fallback=False)
+    return SetupTask(
+        key="ai_provider_key",
+        name="AI Features",
+        description="Enable AI-assisted product recommendations and creative policy checks",
+        is_complete=ai_configured,
+        action_url=f"/tenant/{tenant_id}/settings#integrations",
+        details=(
+            "AI features enabled" if ai_configured else "Optional: Configure an AI provider API key for AI features"
+        ),
     )
 
 
@@ -678,20 +707,8 @@ class SetupChecklistService:
             )
         )
 
-        # 2. Gemini AI Features (Optional - Tenant-Specific)
-        gemini_configured = bool(tenant.gemini_api_key)
-        tasks.append(
-            SetupTask(
-                key="gemini_api_key",
-                name="Gemini AI Features",
-                description="Enable AI-assisted product recommendations and creative policy checks",
-                is_complete=gemini_configured,
-                action_url=f"/tenant/{self.tenant_id}/settings#integrations",
-                details=(
-                    "AI features enabled" if gemini_configured else "Optional: Configure Gemini API key for AI features"
-                ),
-            )
-        )
+        # 2. AI Features (Optional - Tenant-Specific)
+        tasks.append(_ai_features_task(self.tenant_id, tenant))
 
         # 3. Message Signing Key
         tasks.append(
@@ -1059,20 +1076,8 @@ class SetupChecklistService:
             )
         )
 
-        # 2. Gemini AI Features
-        gemini_configured = bool(tenant.gemini_api_key)
-        tasks.append(
-            SetupTask(
-                key="gemini_api_key",
-                name="Gemini AI Features",
-                description="Enable AI-assisted product recommendations and creative policy checks",
-                is_complete=gemini_configured,
-                action_url=f"/tenant/{self.tenant_id}/settings#integrations",
-                details=(
-                    "AI features enabled" if gemini_configured else "Optional: Configure Gemini API key for AI features"
-                ),
-            )
-        )
+        # 2. AI Features (Optional - Tenant-Specific)
+        tasks.append(_ai_features_task(self.tenant_id, tenant))
 
         # 3. Message Signing Key
         tasks.append(self._signing_key_task(key_backing))
@@ -1108,11 +1113,20 @@ class SetupChecklistService:
         telling an operator that is "configured" is the dishonest half of the
         distinction the two selectors exist to keep apart.
 
+        An active key that cannot sign gets the advice for its cause (#2288), from
+        :attr:`~src.core.signing.posture.ActiveKeyFault.advice`, the text the
+        signing-keys page shows too. A KEK fault must not be told "provision a
+        replacement": that publishes a second JWK and strands the one counterparties
+        already trust. That advice is only for a published key outside its active
+        window.
+
         One builder for both enumeration paths (per-tenant and bulk) so the two
         cannot disagree about the task's key, name or done-ness.
         """
         if key_backing.signs:
             details = "Signing key provisioned and published"
+        elif key_backing.active_key_fault is not None:
+            details = f"Active key {key_backing.active_kid} cannot sign. {key_backing.active_key_fault.advice}"
         elif key_backing.publishes:
             details = "Published key is revoked or not yet active — provision a replacement"
         else:

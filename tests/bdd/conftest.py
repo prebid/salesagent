@@ -104,10 +104,13 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.admin_operator_refusals",
+    "tests.bdd.steps.domain.admin_super_admin",
     "tests.bdd.steps.domain.admin_unexpected_errors",
     "tests.bdd.steps.domain.admin_tenant_scoping",
+    "tests.bdd.steps.domain.admin_workflow_step_review",
     "tests.bdd.steps.domain.admin_inventory_profiles",
     "tests.bdd.steps.domain.admin_media_buy_page",
+    "tests.bdd.steps.domain.admin_signing_keys",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
     "tests.bdd.steps.domain.uc_get_products_publisher_domain",
@@ -6085,6 +6088,17 @@ def _build_admin_inventory_profile_env(e2e_config: object | None) -> AbstractCon
     return AdminInventoryProfileEnv(e2e_config=e2e_config)
 
 
+def _build_admin_signing_keys_env(e2e_config: object | None) -> AbstractContextManager:
+    """A tenant with one signing key in a seeded state, and the operator's two pages (#2288).
+
+    The admin requests follow the env's own transport: in process without ``e2e_config``,
+    over the live stack with it.
+    """
+    from tests.harness.admin_signing_keys import AdminSigningKeysEnv
+
+    return AdminSigningKeysEnv(e2e_config=e2e_config)
+
+
 def _build_capabilities_env(e2e_config: object | None) -> AbstractContextManager:
     """UC-010 get_adcp_capabilities. Named rather than ``_env(...)``-generated so
     the parked/wired/not-wired rows below — and ``_uc010_dormancy_rows()`` above —
@@ -6763,6 +6777,13 @@ ENV_ROUTES: list[EnvRoute] = [
         when=lambda m: any(t.startswith("T-ADMIN-SCOPE-") for t in m),
         env_builder=_admin_env_builder("tests.harness.admin_tenant_scoping.AdminTenantScopingEnv"),
     ),
+    # BR-ADMIN-WORKFLOW-STEP-REVIEW (GHSA-2968-2px9-6rjm) carries T-ADMIN-STEPREVIEW- and
+    # seeds a workflow step besides the target tenant, so it is claimed here the same way.
+    EnvRoute(
+        tag="admin-workflow-step-review",
+        when=lambda m: any(t.startswith("T-ADMIN-STEPREVIEW-") for t in m),
+        env_builder=_admin_env_builder("tests.harness.admin_workflow_step_review.AdminWorkflowStepReviewEnv"),
+    ),
     # ── @ctxecho (local context-echo-on-every-outcome feature) ──────────────
     # Same reason the @egress rows below are UNSCOPED `when` rows: these
     # scenarios carry T-CTXECHO-* identity tags, not T-UC-<n>, so
@@ -7028,6 +7049,15 @@ ENV_ROUTES: list[EnvRoute] = [
         # factories or products.
         when=lambda m: "admin_inventory_profile" in m,
         env_builder=_build_admin_inventory_profile_env,
+    ),
+    EnvRoute(
+        tag="admin-signing-keys",
+        # BR-ADMIN-SIGNING-KEYS (#2288): the signing-keys page and the setup checklist for a
+        # key in each seeded state. Its T-ADMIN- tags parametrize it over the admin
+        # transports, and this row claims it before the ADMIN bucket, whose AdminAccountEnv
+        # has no factories.
+        when=lambda m: "admin_signing_keys" in m,
+        env_builder=_build_admin_signing_keys_env,
     ),
     EnvRoute(
         tag="get-products-format-options",

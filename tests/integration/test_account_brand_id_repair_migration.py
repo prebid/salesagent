@@ -40,6 +40,7 @@ from src.core.database.models import Account
 from src.core.helpers.brand_key import brand_key_parts
 from tests.integration.migration_helpers import (
     reset_to_revision,
+    row_xmins,
     run_alembic_downgrade,
     run_alembic_upgrade,
     seed_account,
@@ -124,18 +125,8 @@ def _load_through_orm(engine, account_id: str) -> Account:
 
 
 def _xmins(engine) -> dict[str, str]:
-    """Per-row ``xmin`` — the transaction that last wrote the row.
-
-    PostgreSQL bumps it on ANY update, including a rewrite of a row to itself,
-    which is what makes this the only assertion that can tell "issued no
-    statement" apart from "churned every row back to the same value".
-    """
-    with engine.connect() as conn:
-        rows = conn.execute(
-            text("SELECT account_id, xmin::text AS xmin FROM accounts WHERE tenant_id = :tid"),
-            {"tid": _TENANT},
-        ).all()
-    return {row.account_id: row.xmin for row in rows}
+    """Per-row ``xmin`` of this tenant's accounts; see ``row_xmins`` for why it is the oracle."""
+    return row_xmins(engine, table="accounts", key_column="account_id", tenant_id=_TENANT)
 
 
 class TestTheMigrationRepairsPoisonedRows:

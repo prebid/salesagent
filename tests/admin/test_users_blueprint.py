@@ -174,6 +174,18 @@ class TestAuthorizedDomains:
         refreshed = factory_session.get(Tenant, tenant.tenant_id)
         assert "new-domain.com" in refreshed.authorized_domains
 
+    @pytest.mark.parametrize("domain", ["a',alert(document.domain),'.example", "<b>x</b>.example.com", "localhost"])
+    def test_add_domain_refuses_a_value_that_is_not_a_domain_name(self, client, factory_session, domain):
+        tenant = TenantFactory(authorized_domains=["example.com"])
+        _auth_session(client, tenant.tenant_id)
+
+        response = client.post(f"/tenant/{tenant.tenant_id}/users/domains", json={"domain": domain})
+
+        assert response.status_code == 400
+        factory_session.expire_all()
+        refreshed = factory_session.get(Tenant, tenant.tenant_id)
+        assert refreshed.authorized_domains == ["example.com"]
+
     def test_add_domain_rejects_duplicate(self, client, factory_session):
         tenant = TenantFactory(authorized_domains=["example.com"])
         _auth_session(client, tenant.tenant_id)

@@ -14,10 +14,10 @@ from src.admin.utils.helpers import (
     get_tenant_config_from_db,
     is_admin_production,
     is_super_admin,
-    is_tenant_admin,
     parse_json_config,
     require_auth,
     require_tenant_access,
+    tenant_access_refusal,
     translate_custom_targeting,
     validate_gam_network_response,
     validate_gam_user_response,
@@ -32,9 +32,9 @@ __all__ = [
     # Auth/authorization functions
     "is_admin_production",
     "is_super_admin",
-    "is_tenant_admin",
     "require_auth",
     "require_tenant_access",
+    "tenant_access_refusal",
     # Utility functions
     "parse_json_config",
     "get_tenant_config_from_db",

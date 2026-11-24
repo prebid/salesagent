@@ -61,7 +61,7 @@ def request_signer_for_tenant(*, tenant_id: str | None) -> SignMcpAttempt | None
     cannot drift apart on when a tenant signs. They previously held three
     independent copies of the gate below, and they had ALREADY drifted: the
     creative registry spelled the key-presence half ``signing_key_backed(repo,
-    now=now).signs``, whose ``_private_half_is_resolvable`` conjunct folds an
+    now=now).signs``, whose ``_private_half_unresolvable_because`` conjunct folds an
     unreadable private half into ``False`` -- so one registry raised on a
     broken KEK while the other dialled unsigned, on the same tenant, in the
     same deployment. That is precisely the failure a single home makes

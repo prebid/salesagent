@@ -30,7 +30,7 @@
 
 <div class="filter-bar">
     <label>Status:</label>
-    <select onchange="window.location.href='{{ url_for('accounts.list_accounts', tenant_id=tenant_id) }}' + (this.value ? '?status=' + this.value : '')">
+    <select onchange="filterAccountsByStatus(this.value)">
         <option value="">All</option>
         {% for s in statuses %}
         <option value="{{ s }}" {{ 'selected' if status_filter == s }}>{{ s | replace('_', ' ') | title }}</option>
@@ -52,7 +52,7 @@
     </thead>
     <tbody>
         {% for acct in accounts %}
-        <tr onclick="window.location='{{ url_for('accounts.account_detail', tenant_id=tenant_id, account_id=acct.account_id) }}'" style="cursor: pointer;">
+        <tr onclick="window.location={{ url_for('accounts.account_detail', tenant_id=tenant_id, account_id=acct.account_id)|tojson|forceescape }}" style="cursor: pointer;">
             <td><strong>{{ acct.name }}</strong><br><small style="color: #9ca3af;">{{ acct.account_id }}</small></td>
             <td>
                 {% if acct.brand %}
@@ -74,4 +74,9 @@
     <a href="{{ url_for('accounts.create_account', tenant_id=tenant_id) }}" class="btn btn-primary">Create First Account</a>
 </div>
 {% endif %}
+<script>
+function filterAccountsByStatus(status) {
+    window.location.href = {{ url_for('accounts.list_accounts', tenant_id=tenant_id)|tojson }} + (status ? '?status=' + encodeURIComponent(status) : '');
+}
+</script>
 {% endblock %}
