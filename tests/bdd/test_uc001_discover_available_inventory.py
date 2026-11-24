@@ -59,3 +59,10 @@ def test_ranking_falls_back_to_catalog_order() -> None:
 @scenario(FEATURE, "channels partition validation - <partition>")
 def test_channels_filter_partitions() -> None:
     """A product matches on the channels it stores; one storing none, on the tenant ad server's defaults."""
+
+
+# NFR-003 (#2710): the audit rows a get_products call writes, read from audit_logs on every
+# transport. Implementation-only, so no storyboard grades it.
+@scenario(FEATURE, "NFR-003 - Audit logging for product discovery")
+def test_get_products_is_audited() -> None:
+    """The get_products row (who, when, request summary, product count) and the policy_check row."""

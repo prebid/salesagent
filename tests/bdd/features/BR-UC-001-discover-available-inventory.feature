@@ -1467,11 +1467,21 @@ Feature: BR-UC-001 Discover Available Inventory
 
   @T-UC-001-nfr-003 @nfr @nfr-003 @analysis-2026-03-09 @schema-v3.1
   Scenario: NFR-003 - Audit logging for product discovery
-    Given the Seller Agent has audit logging enabled
-    When the Buyer Agent sends a get_products request
+    Given the tenant has advertising_policy enabled
+    And the seller's AI is configured in ai_config
+    And the LLM evaluates the brief as ALLOWED
+    When the Buyer Agent sends a get_products request with a compliant brief
     Then the request should be logged with timestamp, principal_id, and request parameters
     And the response should be logged with status and product count
     And policy check results should be logged (operation: policy_check)
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the Given read "the Seller Agent has
+    # audit logging enabled", which no seller state expresses (every get_products call writes
+    # its audit row), and nothing ran the policy check the third Then reads. The Givens now
+    # enable the advertising policy on the seller's own AI with an ALLOWED verdict, so a
+    # policy_check row exists, and the When sends the brief that verdict answers to. "Request
+    # parameters" is the summary the get_products row records (brief_length, has_filters,
+    # has_brand), not the request verbatim. Audit logging is implementation-only: no AdCP
+    # obligation, and no storyboard grades it.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-nfr-004 @nfr @nfr-004 @analysis-2026-03-09 @schema-v3.1
