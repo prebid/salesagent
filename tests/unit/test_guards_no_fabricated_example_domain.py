@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._architecture_helpers import REPO_ROOT, assert_violations_match_allowlist
+from tests.unit._architecture_helpers import REPO_ROOT, assert_violations_match_allowlist, rel
 
 _SRC_DIR = REPO_ROOT / "src"
 
@@ -52,10 +52,10 @@ def _scan() -> set[tuple[str, int]]:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except SyntaxError:
             continue
-        rel = str(path.relative_to(REPO_ROOT))
+        rel_path = rel(path)
         for node in ast.walk(tree):
             if isinstance(node, ast.JoinedStr) and _ends_with_fabricated_example_com(node):
-                violations.add((rel, node.lineno))
+                violations.add((rel_path, node.lineno))
     return violations
 
 

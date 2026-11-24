@@ -39,9 +39,11 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
-import fcntl
+import errno
 import ipaddress
 import os
+import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -50,6 +52,49 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+
+# ``fcntl`` is POSIX-only. On Windows the same exclusive lock is ``msvcrt.locking``
+# over the lock file's first byte; the POSIX path is unchanged.
+if sys.platform == "win32":
+    import msvcrt
+
+    def _lock(lock_fp: Any) -> None:
+        lock_fp.seek(0)
+        while True:
+            try:
+                msvcrt.locking(lock_fp.fileno(), msvcrt.LK_LOCK, 1)
+                return
+            except OSError as exc:
+                # LK_LOCK gives up with EDEADLOCK after ten one-second retries; keep
+                # waiting, as flock does. Any other error (EBADF, EACCES) is permanent.
+                if exc.errno != errno.EDEADLOCK:
+                    raise
+
+    def _unlock(lock_fp: Any) -> None:
+        lock_fp.seek(0)
+        msvcrt.locking(lock_fp.fileno(), msvcrt.LK_UNLCK, 1)
+
+    def _replace(src: Path, dst: Path) -> None:
+        # Windows refuses to replace a file another process has open (a concurrent
+        # worker reading the bundle); the reader closes it within moments.
+        for _ in range(50):
+            try:
+                os.replace(src, dst)
+                return
+            except PermissionError:
+                time.sleep(0.1)
+        os.replace(src, dst)
+
+else:
+    import fcntl
+
+    def _lock(lock_fp: Any) -> None:
+        fcntl.flock(lock_fp, fcntl.LOCK_EX)
+
+    def _unlock(lock_fp: Any) -> None:
+        fcntl.flock(lock_fp, fcntl.LOCK_UN)
+
+    _replace = os.replace
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TLS_DIR = REPO_ROOT / ".test-tls"
@@ -250,7 +295,7 @@ def _write(path: Path, data: bytes, *, private: bool) -> None:
     tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
     tmp_path.write_bytes(data)
     tmp_path.chmod(0o600 if private else 0o644)
-    os.replace(tmp_path, path)
+    _replace(tmp_path, path)
 
 
 def _pem_cert(cert: x509.Certificate) -> bytes:
@@ -348,19 +393,19 @@ def _regeneration_lock():
     worker B's atomic write of ``CA_CERT`` (from a DIFFERENT, concurrently
     generated CA key) lands last — the leaf on disk no longer chains to the
     CA on disk, and every TLS handshake against it fails with a genuine but
-    maddeningly intermittent certificate error. ``fcntl.flock`` blocks the
+    maddeningly intermittent certificate error. The file lock blocks the
     whole regenerate-and-write sequence to one worker at a time; the others
     proceed only once the lock holder's now-current material is on disk, at
     which point their own ``_is_current()`` check (called again after
     acquiring the lock, not just before) finds it and short-circuits.
     """
     TLS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(_LOCK_FILE, "w") as lock_fp:
-        fcntl.flock(lock_fp, fcntl.LOCK_EX)
+    with open(_LOCK_FILE, "w", encoding="utf-8") as lock_fp:
+        _lock(lock_fp)
         try:
             yield
         finally:
-            fcntl.flock(lock_fp, fcntl.LOCK_UN)
+            _unlock(lock_fp)
 
 
 def ensure_test_tls(*, force: bool = False) -> Path:

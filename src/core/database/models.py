@@ -2,7 +2,7 @@
 
 import logging
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -43,8 +43,9 @@ from src.core.credentials import hash_token, mint_token, token_prefix
 from src.core.database.json_type import JSONType
 from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError, AdCPPersistedStateError
-from src.core.http_utils import canonical_publisher_domain
+from src.core.http_utils import canonical_publisher_domain, is_publisher_domain
 from src.core.json_validators import PLACEMENTS_ARE_EXPLICIT_CHECK, PLACEMENTS_ARE_EXPLICIT_SQL, JSONValidatorMixin
+from src.core.operator_errors import InvalidDomainNameError
 
 # The ONE NotificationConfig, whose authentication block is the one Authentication class
 # (src/core/schemas/notification.py): a stored row reads back as the same type the request
@@ -301,12 +302,14 @@ class Tenant(Base, JSONValidatorMixin):
         step. The routing lookups in ``TenantLookupRepository`` fold the column as well,
         which is what resolves a row that was stored mixed-case before this hook existed.
         """
-        from src.core.http_utils import hostname_of, validate_virtual_host
+        from src.core.http_utils import InvalidVirtualHost, hostname_of, validate_virtual_host
 
         try:
             host = validate_virtual_host(value)
-        except ValueError as exc:
-            raise ValueError(f"tenant {self.tenant_id!r}: {exc}") from exc
+        except InvalidVirtualHost as exc:
+            # The same type, so the admin error handler answers it as the refusal it is;
+            # the tenant id is in the logged text, never in the answer (that is MESSAGE).
+            raise InvalidVirtualHost(f"tenant {self.tenant_id!r}: {exc}") from exc
         # The hostname is derived here, by stdlib, and stored, so the unique key below is a
         # plain column and nothing takes a URL apart in SQL.
         self.virtual_host_name = hostname_of(host)
@@ -439,7 +442,7 @@ class Product(Base, JSONValidatorMixin):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Type hint: countries list
     countries: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
-    # Advertising channels (e.g., ["display", "video", "native"])
+    # Advertising channels: MediaChannel values (e.g., ["display", "olv", "ctv"])
     channels: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     # Type hint: implementation config dict
     implementation_config: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
@@ -870,6 +873,19 @@ class Principal(Base, JSONValidatorMixin):
         return resolve_adapter_id(self.platform_mappings, adapter_name)
 
 
+class UserRole(StrEnum):
+    """The roles a tenant ``User`` may hold, from least to most access.
+
+    The one list of roles: the ``users.role`` check constraint, the admin UI's role
+    pickers and ``role_permits`` (src/admin/utils/helpers.py) all read it. ``StrEnum``,
+    so a member compares equal to the string stored in the column.
+    """
+
+    VIEWER = "viewer"
+    MANAGER = "manager"
+    ADMIN = "admin"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -889,7 +905,8 @@ class User(Base):
     tenant = relationship("Tenant", back_populates="users")
 
     __table_args__ = (
-        CheckConstraint("role IN ('admin', 'manager', 'viewer')"),
+        # Sorted, so the SQL is the same text the migrations created: role IN ('admin', 'manager', 'viewer').
+        CheckConstraint(f"role IN ({', '.join(repr(str(role)) for role in sorted(UserRole))})"),
         UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),  # Unique per tenant
         Index("idx_users_tenant", "tenant_id"),
         Index("idx_users_email", "email"),
@@ -1827,7 +1844,12 @@ class AdapterConfig(Base):
 
     # Google Ad Manager
     gam_network_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    gam_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    _gam_refresh_token: Mapped[str | None] = mapped_column(
+        "gam_refresh_token",
+        Text,
+        nullable=True,
+        comment="Encrypted OAuth refresh token (OAuth auth method). A credential to the publisher's GAM network.",
+    )
     _gam_service_account_json: Mapped[str | None] = mapped_column(
         "gam_service_account_json",
         Text,
@@ -1938,6 +1960,29 @@ class AdapterConfig(Base):
         from src.core.utils.encryption import encrypt_api_key
 
         self._gam_service_account_json = encrypt_api_key(value)
+
+    @property
+    def gam_refresh_token(self) -> str | None:
+        """Get the decrypted GAM OAuth refresh token."""
+        if not self._gam_refresh_token:
+            return None
+        from src.core.utils.encryption import decrypt_api_key
+
+        try:
+            return decrypt_api_key(self._gam_refresh_token)
+        except ValueError as exc:
+            raise AdCPConfigurationError(details=ConfigurationDetails(tenant_id=self.tenant_id)) from exc
+
+    @gam_refresh_token.setter
+    def gam_refresh_token(self, value: str | None) -> None:
+        """Set the GAM OAuth refresh token, encrypted."""
+        if not value:
+            self._gam_refresh_token = None
+            return
+
+        from src.core.utils.encryption import encrypt_api_key
+
+        self._gam_refresh_token = encrypt_api_key(value)
 
 
 class CreativeAgent(Base):
@@ -2378,6 +2423,15 @@ class SyncJob(Base):
         Index("idx_sync_jobs_started", "started_at"),
     )
 
+    def mark_failed(self, operator_message: str) -> None:
+        """Record the failure. The status endpoints return ``error_message`` to the admin UI,
+        so ``operator_message`` is fixed text: ``safe_error_message(exc, context)`` for a
+        caught exception (which logs it under the reference the text ends with), never
+        ``str(exc)``."""
+        self.status = "failed"
+        self.completed_at = datetime.now(UTC)
+        self.error_message = operator_message
+
 
 class Context(Base):
     """Simple conversation tracker for asynchronous operations.
@@ -2655,6 +2709,13 @@ class Publisher(Base, JSONValidatorMixin):
     format_options: Mapped[list["PublisherFormatOption"]] = relationship(
         back_populates="publisher", cascade="all, delete-orphan", passive_deletes=True
     )
+
+    @validates("domain")
+    def _require_host(self, _key: str, value: str) -> str:
+        """A publisher domain is a hostname, optionally with a port: the host its document is fetched from."""
+        if not is_publisher_domain(value):
+            raise InvalidDomainNameError()
+        return value
 
     def is_fresh(self, now: datetime) -> bool:
         """Whether the stored document may still be used at *now* (:data:`PUBLISHER_DOCUMENT_FRESHNESS`)."""

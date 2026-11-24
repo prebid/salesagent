@@ -10,13 +10,12 @@ Asserts the resolved contract via the ``RUN_ALL_TESTS_RESOLVE_ONLY`` seam so no
 Docker stack is needed.
 """
 
-import os
 import re
-import subprocess
 
 import pytest
 
 from scripts.ci.shard_split import SHARD_COUNTS
+from tests.helpers.bash_stubs import run_bash_with_stubs
 from tests.unit._run_all_tests_helpers import REPO_ROOT, RUNNER
 
 _HOST_RUNNER = REPO_ROOT / "run_all_tests_host.sh"
@@ -24,14 +23,13 @@ _TOX_INI = REPO_ROOT / "tox.ini"
 _ALL_SUITES = "unit,integration,bdd,admin,e2e,ui,quality,storyboard,collection"
 
 
-def _resolve(*args: str) -> str:
-    proc = subprocess.run(
-        ["bash", str(RUNNER), *args],
+def _resolve(tmp_path, *args: str) -> str:
+    proc = run_bash_with_stubs(
+        [str(RUNNER), *args],
+        stub_dir=tmp_path / "bin",
+        stubs={"docker": "#!/usr/bin/env bash\nexit 0\n"},
+        env={"RUN_ALL_TESTS_RESOLVE_ONLY": "1"},
         cwd=REPO_ROOT,
-        env={**os.environ, "RUN_ALL_TESTS_RESOLVE_ONLY": "1"},
-        capture_output=True,
-        text=True,
-        timeout=30,
     )
     assert proc.returncode == 0, f"resolve-only exited {proc.returncode}: {proc.stderr}"
     return proc.stdout.strip()
@@ -50,19 +48,19 @@ def _resolve(*args: str) -> str:
         ),
     ],
 )
-def test_run_all_tests_arg_contract(args, expected):
-    assert _resolve(*args) == expected
+def test_run_all_tests_arg_contract(tmp_path, args, expected):
+    assert _resolve(tmp_path, *args) == expected
 
 
 def _tox_env_list() -> set[str]:
     """Canonical parallel suite set from tox.ini (coverage runs separately)."""
-    m = re.search(r"^env_list\s*=\s*(.+)$", _TOX_INI.read_text(), re.MULTILINE)
+    m = re.search(r"^env_list\s*=\s*(.+)$", _TOX_INI.read_text(encoding="utf-8"), re.MULTILINE)
     assert m, "tox.ini has no env_list"
     return {s.strip() for s in m.group(1).split(",") if s.strip()}
 
 
 def _runner_all_suites() -> set[str]:
-    m = re.search(r'ALL_SUITES="([^"]+)"', RUNNER.read_text())
+    m = re.search(r'ALL_SUITES="([^"]+)"', RUNNER.read_text(encoding="utf-8"))
     assert m, "run_all_tests.sh has no ALL_SUITES"
     return {s.strip() for s in m.group(1).split(",") if s.strip()}
 
@@ -76,7 +74,7 @@ def _host_runner_collect_suites() -> set[str]:
     read. The contract is unchanged — the host runner's suites must match tox's
     ``env_list`` — only the spelling moved.
     """
-    m = re.search(r'^_REPORT_SUITES="([^"]+)"', _HOST_RUNNER.read_text(), re.MULTILINE)
+    m = re.search(r'^_REPORT_SUITES="([^"]+)"', _HOST_RUNNER.read_text(encoding="utf-8"), re.MULTILINE)
     assert m, "run_all_tests_host.sh has no _REPORT_SUITES"
     return set(m.group(1).split())
 
@@ -100,11 +98,11 @@ def test_six_suite_list_is_single_sourced():
 
 def test_tox_declares_one_in_process_env_per_bdd_shard():
     """The runner asks for SHARD_COUNTS["bdd"] envs and the compose block forwards their paths."""
-    match = re.search(r"^\[testenv:bdd-inprocess-s\{([\d,]+)\}\]", _TOX_INI.read_text(), re.MULTILINE)
+    match = re.search(r"^\[testenv:bdd-inprocess-s\{([\d,]+)\}\]", _TOX_INI.read_text(encoding="utf-8"), re.MULTILINE)
     assert match, "tox.ini no longer declares the bdd-inprocess-s{...} envs"
     expected = [str(shard) for shard in range(1, SHARD_COUNTS["bdd"] + 1)]
     assert match.group(1).split(",") == expected
 
     for carrier in (_TOX_INI, REPO_ROOT / "docker-compose.e2e.yml"):
-        carried = re.findall(r"BDD_SHARD_PATHS_(\d+)", carrier.read_text())
+        carried = re.findall(r"BDD_SHARD_PATHS_(\d+)", carrier.read_text(encoding="utf-8"))
         assert sorted(set(carried)) == expected, f"{carrier.name} forwards the wrong shard path variables"

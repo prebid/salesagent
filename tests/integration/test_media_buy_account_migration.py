@@ -24,7 +24,7 @@ from tests.integration.migration_helpers import (
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 _REVISION = "5b0563cb0ac6"
-_PREVIOUS = "e2af0c242a7f"
+_PREVIOUS = "b9b8e637b56c"
 _TENANT = "account_migration"
 _PRINCIPAL = "buyer"
 
@@ -39,26 +39,21 @@ def legacy(migration_db):
         subdomain="account-migration",
     )
     seed_principal(engine, tenant_id=_TENANT, principal_id=_PRINCIPAL)
-    seed_account(
-        engine,
-        tenant_id=_TENANT,
-        account_id="acc_live",
-        name="Live",
-        domain="brand.example",
-        operator="agent.example",
-        sandbox=None,
-        created_at="2026-01-01",
-    )
-    seed_account(
-        engine,
-        tenant_id=_TENANT,
-        account_id="acc_sandbox",
-        name="Sandbox",
-        domain="brand.example",
-        operator="agent.example",
-        sandbox=True,
-        created_at="2026-01-01",
-    )
+    for account_id, sandbox, brand_id in (
+        ("acc_live", None, None),
+        ("acc_sandbox", True, None),
+        ("acc_branded", True, "b1"),
+    ):
+        seed_account(
+            engine,
+            tenant_id=_TENANT,
+            account_id=account_id,
+            domain="brand.example",
+            operator="agent.example",
+            brand_id=brand_id,
+            sandbox=sandbox,
+            created_at="2026-01-01",
+        )
     return engine, url
 
 
@@ -202,7 +197,10 @@ def test_exact_same_buy_evidence_recovers_sandbox(legacy, source):
     assert _accounts(engine) == {"buy": "acc_sandbox"}
 
 
-@pytest.mark.parametrize("mode,account", [(False, "acc_live"), (True, "acc_sandbox")])
+@pytest.mark.parametrize(
+    "mode,account",
+    [(False, "acc_live"), (True, "acc_sandbox"), pytest.param(True, "acc_branded", id="omitted_brand_id")],
+)
 def test_natural_key_mode_requires_independent_resolved_id(legacy, mode, account):
     engine, url = legacy
     _buy(engine, request={"account": _ref(mode)})
@@ -298,12 +296,15 @@ def test_unrelated_cache_cannot_supply_ownership(legacy, change):
         ("missing_account", "account_missing"),
         ("natural_key", "natural_key_mismatch:acc_sandbox"),
         ("brand", "natural_key_mismatch:acc_sandbox"),
+        ("brand_id", "natural_key_mismatch:acc_branded"),
         ("account_mode", "account_mode_changed:acc_live"),
         ("account_age", "account_newer_than_buy:acc_sandbox"),
         ("payload_hash", "conflicting_payload_hash"),
         ("idempotency_key", "conflicting_idempotency_key"),
         ("unsupported_identity", "unsupported_natural_key_identity"),
         ("malformed_reference", "malformed_account_reference"),
+        ("malformed_id_reference", "malformed_account_reference"),
+        ("completed_response_mode", "conflicting_create_response"),
         ("malformed_natural_key", "malformed_natural_key"),
         ("malformed_brand", "malformed_natural_key"),
     ],
@@ -321,6 +322,8 @@ def test_conflicting_evidence_aborts_entire_upgrade(legacy, kind, reason):
         "mode",
         "natural_key",
         "brand",
+        "brand_id",
+        "completed_response_mode",
         "account_mode",
         "unsupported_identity",
         "malformed_natural_key",
@@ -331,6 +334,8 @@ def test_conflicting_evidence_aborts_entire_upgrade(legacy, kind, reason):
             request["account"]["operator"] = "wrong.example"
         elif kind == "brand":
             request["account"]["brand"]["domain"] = "wrong.example"
+        elif kind == "brand_id":
+            request["account"]["brand"]["brand_id"] = "b2"
         elif kind == "unsupported_identity":
             request["account"]["operator_unit"] = {"id": "seat"}
         elif kind == "malformed_natural_key":
@@ -339,6 +344,8 @@ def test_conflicting_evidence_aborts_entire_upgrade(legacy, kind, reason):
             request["account"]["brand"] = "brand.example"
     elif kind == "malformed_reference":
         request = {"account": "acc_sandbox"}
+    elif kind == "malformed_id_reference":
+        request["account"]["sandbox"] = True
     _buy(
         engine,
         "unsafe",
@@ -350,8 +357,14 @@ def test_conflicting_evidence_aborts_entire_upgrade(legacy, kind, reason):
     _cache(
         engine,
         "unsafe",
-        account="missing" if kind == "missing_account" else "acc_live" if kind == "account_mode" else "acc_sandbox",
-        response={"media_buy_id": "unsafe"} if kind == "account_mode" else None,
+        account={"missing_account": "missing", "account_mode": "acc_live", "brand_id": "acc_branded"}.get(
+            kind, "acc_sandbox"
+        ),
+        response={"media_buy_id": "unsafe"}
+        if kind == "account_mode"
+        else {"media_buy_id": "unsafe", "sandbox": False}
+        if kind == "completed_response_mode"
+        else None,
         payload_hash="b" * 64 if kind == "payload_hash" else None,
     )
     with pytest.raises(RuntimeError, match=reason) as failure:

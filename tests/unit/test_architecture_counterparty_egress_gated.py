@@ -43,7 +43,7 @@ import ast
 
 import pytest
 
-from tests.unit._architecture_helpers import called_function_names, format_failure, parse_module, repo_root
+from tests.unit._architecture_helpers import called_function_names, format_failure, parse_module, rel, repo_root
 
 #: Callables that dial a counterparty-supplied URL, and the seam call each must make.
 #: Adding a row is how a new egress path gets classified; removing one needs the
@@ -141,7 +141,7 @@ def test_raw_http_module_count_does_not_grow() -> None:
     """
     repo = repo_root()
     offenders = sorted(
-        str(path.relative_to(repo))
+        rel(path, repo)
         for path in (repo / "src").rglob("*.py")
         if any(marker in path.read_text(encoding="utf-8") for marker in _RAW_HTTP_MARKERS)
     )

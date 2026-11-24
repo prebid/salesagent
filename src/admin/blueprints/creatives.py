@@ -21,7 +21,7 @@ from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import run_async_in_sync_context
 from src.core.webhooks.delivery import WebhookTaskContext
 from src.core.webhooks.registration import accept_push_notification_config, stored_registration_fields
-from src.services.ai.factory import tenant_ai_enabled
+from src.services.ai.factory import AIProviderError, tenant_ai_enabled
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 # TODO: Missing module - these functions need to be implemented
@@ -41,15 +41,24 @@ def discover_creative_formats_from_url(url):
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
+from src.admin.form_validation import json_object_body
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
+from src.core.operator_errors import StateConflict, best_effort, safe_error_message
 from src.core.tools.media_buy_create import execute_approved_media_buy, push_creative_to_existing_buy
 
 # Note: CreativeFormat table was dropped in migration f2addf453200
 # All format-related routes have been removed
 
 logger = logging.getLogger(__name__)
+
+
+class AIReviewUnavailable(StateConflict):
+    """The AI review gave no verdict; its details say why (AI not configured, no criteria, a logged failure)."""
+
+    MESSAGE = "The AI review did not run; the creative needs a manual review"
+
 
 # Buy statuses where the order is live in the ad server (retroactive creative push, #1038).
 # pending_start is booked and has not started: a change approved now reaches GAM before it serves.
@@ -81,7 +90,6 @@ def _cleanup_completed_tasks():
 
 async def _deliver_sync_creatives_webhook(
     *,
-    creative_id,
     reviewed_count: int,
     complete_result: SyncCreativesResponse,
     push_notification_config,
@@ -108,39 +116,38 @@ async def _deliver_sync_creatives_webhook(
         True if the buyer's endpoint took the notification, False if the send failed.
     """
     service = get_protocol_webhook_service()
-    try:
-        # The payload is not built here: notify() builds the one envelope, and it takes a
-        # typed context whose fields have to be named.
-        #
-        # tenant_id and principal_id are the two a hand-built metadata dict drops. Both are
-        # in scope -- the caller raises without tenant_id, and the creative row carries
-        # principal_id -- and without them records_delivery_log is False, so an
-        # admin-originated delivery writes no webhook_delivery_log row and says nothing
-        # about it.
-        await service.notify(
-            push_notification_config,
-            task=WebhookTaskContext(
-                task_id=step_step_id,
-                task_type=step_tool_name,
-                tenant_id=tenant_id,
-                principal_id=principal_id,
-                media_buy_id=None,
-                sequence_number=1,
-                notification_type=None,
-            ),
-            status=GeneratedTaskStatus.completed,
-            result=complete_result,
-        )
+    # The payload is not built here: notify() builds the one envelope, and it takes a
+    # typed context whose fields have to be named.
+    #
+    # tenant_id and principal_id are the two a hand-built metadata dict drops. Both are
+    # in scope -- the caller raises without tenant_id, and the creative row carries
+    # principal_id -- and without them records_delivery_log is False, so an
+    # admin-originated delivery writes no webhook_delivery_log row and says nothing
+    # about it.
+    #
+    # A send that raises reaches the caller's best_effort block, which logs it.
+    delivered = await service.notify(
+        push_notification_config,
+        task=WebhookTaskContext(
+            task_id=step_step_id,
+            task_type=step_tool_name,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            media_buy_id=None,
+            sequence_number=1,
+            notification_type=None,
+        ),
+        status=GeneratedTaskStatus.completed,
+        result=complete_result,
+    )
 
+    if delivered:
         logger.info(
             f"Successfully sent protocol webhook for sync_creatives task {step_step_id} "
             f"with {reviewed_count} reviewed creatives"
         )
 
-        return True
-    except Exception as send_e:
-        logger.error("Failed to send protocol webhook for creative %r: %s", creative_id, send_e)
-        return False
+    return delivered
 
 
 async def _call_webhook_for_creative_status(
@@ -161,7 +168,9 @@ async def _call_webhook_for_creative_status(
 
     from src.core.schemas import CreativeStatusEnum
 
-    try:
+    # A post-commit notice: the review it reports is already committed, so a failure here is
+    # logged and the caller carries on.
+    with best_effort(f"Failed to send the protocol webhook for creative {creative_id}"):
         with AdminCreativeUoW(tenant_id) as uow:
             assert uow.workflows is not None
             assert uow.creatives is not None
@@ -276,7 +285,6 @@ async def _call_webhook_for_creative_status(
         # --- Session closed here; webhook delivery is outside the transaction ---
 
         return await _deliver_sync_creatives_webhook(
-            creative_id=creative_id,
             reviewed_count=len(all_creatives),
             complete_result=complete_result,
             push_notification_config=push_notification_config,
@@ -287,10 +295,7 @@ async def _call_webhook_for_creative_status(
             tenant_id=tenant_id,
             principal_id=step_principal_id,
         )
-
-    except Exception as e:
-        logger.error(f"Error sending protocol webhook for creative {creative_id}: {e}", exc_info=True)
-        return False
+    return False
 
 
 @creatives_bp.route("/", methods=["GET"])
@@ -414,22 +419,17 @@ def list_creatives(tenant_id, **kwargs):
 @require_tenant_access()
 def analyze(tenant_id, **kwargs):
     """Analyze creative format with AI."""
-    try:
-        url = request.form.get("url", "").strip()
-        if not url:
-            return jsonify({"error": "URL is required"}), 400
+    url = request.form.get("url", "").strip()
+    if not url:
+        return jsonify({"error": "URL is required"}), 400
 
-        # Use the creative format parser
-        result = parse_creative_spec(url)
+    # Use the creative format parser
+    result = parse_creative_spec(url)
 
-        if result.get("error"):
-            return jsonify({"error": result["error"]}), 400
+    if result.get("error"):
+        return jsonify({"error": result["error"]}), 400
 
-        return jsonify(result)
-
-    except Exception as e:
-        logger.error(f"Error analyzing creative format: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+    return jsonify(result)
 
 
 def _create_human_review_record(
@@ -501,14 +501,12 @@ def _send_post_commit_side_effects(
 
     # Send Slack notification
     if slack_data:
-        try:
+        with best_effort(f"Failed to send the Slack notification for {operation}"):
             from src.services.slack_notifier import get_slack_notifier
 
             tenant_config = {"features": {"slack_webhook_url": slack_data["slack_webhook_url"]}}
             notifier = get_slack_notifier(tenant_config)
             notifier.send_message(slack_data["message"])
-        except Exception as slack_e:
-            logger.warning(f"Failed to send Slack notification: {slack_e}")
 
     # Log audit trail
     if audit_data:
@@ -529,179 +527,171 @@ def _send_post_commit_side_effects(
 @require_tenant_access()
 def approve_creative(tenant_id, creative_id, **kwargs):
     """Approve a creative."""
-    try:
-        data = request.get_json() or {}
-        approved_by = data.get("approved_by", "admin")
+    data = json_object_body()
+    approved_by = data.get("approved_by", "admin")
 
-        # Collect data needed for post-commit side effects
-        webhook_data: dict[str, Any] = {}
-        slack_data: dict[str, Any] = {}
-        audit_data: dict[str, Any] = {}
-        media_buy_actions: list[dict[str, Any]] = []
-        push_warnings: list[str] = []
+    # Collect data needed for post-commit side effects
+    webhook_data: dict[str, Any] = {}
+    slack_data: dict[str, Any] = {}
+    audit_data: dict[str, Any] = {}
+    media_buy_actions: list[dict[str, Any]] = []
+    push_warnings: list[str] = []
 
-        with AdminCreativeUoW(tenant_id) as uow:
-            assert uow.creatives is not None
-            assert uow.assignments is not None
-            assert uow.media_buys is not None
-            assert uow.tenant_config is not None
+    with AdminCreativeUoW(tenant_id) as uow:
+        assert uow.creatives is not None
+        assert uow.assignments is not None
+        assert uow.media_buys is not None
+        assert uow.tenant_config is not None
 
-            creative = uow.creatives.admin_get_by_id(creative_id)
+        creative = uow.creatives.require(uow.creatives.admin_get_by_id, creative_id)
 
-            if not creative:
-                return jsonify({"error": "Creative not found"}), 404
+        # Check if there was a prior AI review that disagreed
+        prior_ai_review = uow.creatives.get_prior_ai_review(creative_id)
 
-            # Check if there was a prior AI review that disagreed
-            prior_ai_review = uow.creatives.get_prior_ai_review(creative_id)
+        # Check if this is a human override (AI recommended reject, human approved)
+        is_override = bool(prior_ai_review and prior_ai_review.ai_decision in ["rejected", "reject"])
 
-            # Check if this is a human override (AI recommended reject, human approved)
-            is_override = bool(prior_ai_review and prior_ai_review.ai_decision in ["rejected", "reject"])
-
-            _create_human_review_record(
-                uow.creatives,
-                creative_id=creative_id,
-                tenant_id=tenant_id,
-                principal_id=creative.principal_id,
-                reviewer_email=approved_by,
-                reason="Human approval",
-                is_override=is_override,
-                final_decision="approved",
-            )
-
-            # Update creative status
-            creative.status = "approved"
-            creative.approved_at = datetime.now(UTC)
-            creative.approved_by = approved_by
-
-            # Collect webhook data for post-commit
-            webhook_data = {"creative_id": creative_id, "tenant_id": tenant_id}
-
-            # Collect Slack data for post-commit
-            format_label = CreativeFormatIdentity.from_row(creative).label
-            tenant = uow.tenant_config.get_tenant()
-            if tenant and tenant.slack_webhook_url:
-                principal_name = uow.creatives.get_principal_name(creative.principal_id)
-
-                slack_data = {
-                    "slack_webhook_url": tenant.slack_webhook_url,
-                    "message": f"\u2705 Creative approved: {creative.name} ({format_label}) from {principal_name}",
-                }
-
-            # Collect audit data for post-commit
-            audit_data = {
-                "creative_id": creative_id,
-                "creative_name": creative.name,
-                "format": format_label,
-                "principal_id": creative.principal_id,
-                "human_override": is_override,
-            }
-
-            # Check if this creative approval unblocks any media buys
-            assignments = uow.assignments.get_by_creative(creative_id)
-            # Snapshot IDs as plain strings — ORM objects expire on session close (#1038)
-            assignment_buy_ids = [a.media_buy_id for a in assignments]
-
-            logger.info(
-                f"[CREATIVE APPROVAL] Creative {creative_id} approved, checking {len(assignments)} media buy assignments"
-            )
-
-            # Snapshot buy statuses here to avoid a second UoW after commit
-            assignment_buy_statuses: dict[str, str] = {}
-            for assignment in assignments:
-                media_buy_id = assignment.media_buy_id
-                media_buy = uow.media_buys.get_by_id(media_buy_id)
-
-                if not media_buy:
-                    continue
-
-                assignment_buy_statuses[media_buy_id] = media_buy.status
-                logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} status: {media_buy.status}")
-
-                if media_buy.status in {"pending_creatives", "draft"}:
-                    # The same gate the writer applies, asked once. Open-coding it here
-                    # meant the route evaluated it, decided to call execute, and the
-                    # callee then evaluated it again in the same request.
-                    unapproved_creatives = uow.assignments.unapproved_creative_ids(media_buy_id)
-
-                    logger.info(
-                        f"[CREATIVE APPROVAL] Media buy {media_buy_id} has {len(unapproved_creatives)} unapproved creatives remaining"
-                    )
-
-                    if not unapproved_creatives:
-                        media_buy_actions.append({"media_buy_id": media_buy_id})
-                    else:
-                        logger.info(
-                            f"[CREATIVE APPROVAL] Media buy {media_buy_id} still waiting for {len(unapproved_creatives)} creatives: {unapproved_creatives}"
-                        )
-
-            # UoW auto-commits here
-
-        # --- Post-commit side effects (outside transaction) ---
-        _send_post_commit_side_effects(
-            webhook_data=webhook_data,
-            slack_data=slack_data,
-            audit_data=audit_data,
-            operation="approve_creative",
+        _create_human_review_record(
+            uow.creatives,
+            creative_id=creative_id,
             tenant_id=tenant_id,
-            actor=approved_by,
+            principal_id=creative.principal_id,
+            reviewer_email=approved_by,
+            reason="Human approval",
+            is_override=is_override,
+            final_decision="approved",
         )
 
-        # Execute adapter creation for unblocked media buys
-        for action in media_buy_actions:
-            logger.info(
-                f"[CREATIVE APPROVAL] All creatives approved for media buy {action['media_buy_id']}, executing adapter creation"
-            )
+        # Update creative status
+        creative.status = "approved"
+        creative.approved_at = datetime.now(UTC)
+        creative.approved_by = approved_by
 
-            approval = execute_approved_media_buy(
-                action["media_buy_id"],
-                tenant_id,
-                approved_by="system",
-                approved_at=datetime.now(UTC),
-            )
+        # Collect webhook data for post-commit
+        webhook_data = {"creative_id": creative_id, "tenant_id": tenant_id}
 
-            if approval.ok:
-                # No post-execute read or write here. The callee resolved the flight
-                # window and committed it in the same write that bumped the revision;
-                # this route only reports what it was told.
+        # Collect Slack data for post-commit
+        format_label = CreativeFormatIdentity.from_row(creative).label
+        tenant = uow.tenant_config.get_tenant()
+        if tenant and tenant.slack_webhook_url:
+            principal_name = uow.creatives.get_principal_name(creative.principal_id)
+
+            slack_data = {
+                "slack_webhook_url": tenant.slack_webhook_url,
+                "message": f"\u2705 Creative approved: {creative.name} ({format_label}) from {principal_name}",
+            }
+
+        # Collect audit data for post-commit
+        audit_data = {
+            "creative_id": creative_id,
+            "creative_name": creative.name,
+            "format": format_label,
+            "principal_id": creative.principal_id,
+            "human_override": is_override,
+        }
+
+        # Check if this creative approval unblocks any media buys
+        assignments = uow.assignments.get_by_creative(creative_id)
+        # Snapshot IDs as plain strings — ORM objects expire on session close (#1038)
+        assignment_buy_ids = [a.media_buy_id for a in assignments]
+
+        logger.info(
+            f"[CREATIVE APPROVAL] Creative {creative_id} approved, checking {len(assignments)} media buy assignments"
+        )
+
+        # Snapshot buy statuses here to avoid a second UoW after commit
+        assignment_buy_statuses: dict[str, str] = {}
+        for assignment in assignments:
+            media_buy_id = assignment.media_buy_id
+            media_buy = uow.media_buys.get_by_id(media_buy_id)
+
+            if not media_buy:
+                continue
+
+            assignment_buy_statuses[media_buy_id] = media_buy.status
+            logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} status: {media_buy.status}")
+
+            if media_buy.status in {"pending_creatives", "draft"}:
+                # The same gate the writer applies, asked once. Open-coding it here
+                # meant the route evaluated it, decided to call execute, and the
+                # callee then evaluated it again in the same request.
+                unapproved_creatives = uow.assignments.unapproved_creative_ids(media_buy_id)
+
                 logger.info(
-                    f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} created in adapter -> {approval.status}"
-                )
-            else:
-                logger.error(
-                    f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: {approval.error_msg}"
+                    f"[CREATIVE APPROVAL] Media buy {media_buy_id} has {len(unapproved_creatives)} unapproved creatives remaining"
                 )
 
-        # Retroactive push for already-live buys (#1038):
-        # Buys in pending_creatives/draft were handled above. For buys that are
-        # live in the ad server, push this newly-approved creative to the line item.
+                if not unapproved_creatives:
+                    media_buy_actions.append({"media_buy_id": media_buy_id})
+                else:
+                    logger.info(
+                        f"[CREATIVE APPROVAL] Media buy {media_buy_id} still waiting for {len(unapproved_creatives)} creatives: {unapproved_creatives}"
+                    )
 
-        # Use the status snapshot from the first loop — no need for a second UoW
-        buys_to_push = [
-            buy_id for buy_id in assignment_buy_ids if assignment_buy_statuses.get(buy_id) in _LIVE_BUY_STATUSES
-        ]
+        # UoW auto-commits here
 
-        for buy_id in buys_to_push:
-            logger.info(f"[CREATIVE APPROVAL] Retroactive push: creative {creative_id} → live buy {buy_id}")
-            push_failure = push_creative_to_existing_buy(
-                creative_id=creative_id,
-                media_buy_id=buy_id,
-                tenant_id=tenant_id,
+    # --- Post-commit side effects (outside transaction) ---
+    _send_post_commit_side_effects(
+        webhook_data=webhook_data,
+        slack_data=slack_data,
+        audit_data=audit_data,
+        operation="approve_creative",
+        tenant_id=tenant_id,
+        actor=approved_by,
+    )
+
+    # Execute adapter creation for unblocked media buys
+    for action in media_buy_actions:
+        logger.info(
+            f"[CREATIVE APPROVAL] All creatives approved for media buy {action['media_buy_id']}, executing adapter creation"
+        )
+
+        approval = execute_approved_media_buy(
+            action["media_buy_id"],
+            tenant_id,
+            approved_by="system",
+            approved_at=datetime.now(UTC),
+        )
+
+        if approval.ok:
+            # No post-execute read or write here. The callee resolved the flight
+            # window and committed it in the same write that bumped the revision;
+            # this route only reports what it was told.
+            logger.info(
+                f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} created in adapter -> {approval.status}"
             )
-            if push_failure is not None:
-                logger.error(
-                    f"[CREATIVE APPROVAL] Retroactive push failed for creative {creative_id} → buy {buy_id}: "
-                    f"{push_failure.reason}"
-                )
-                push_warnings.append(f"Creative push to buy {buy_id} failed — see server logs for details")
+        else:
+            logger.error(
+                f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: {approval.error_msg}"
+            )
 
-        response_body: dict[str, Any] = {"success": True, "status": "approved"}
-        if push_warnings:
-            response_body["warnings"] = push_warnings
-        return jsonify(response_body)
+    # Retroactive push for already-live buys (#1038):
+    # Buys in pending_creatives/draft were handled above. For buys that are
+    # live in the ad server, push this newly-approved creative to the line item.
 
-    except Exception as e:
-        logger.error(f"Error approving creative: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+    # Use the status snapshot from the first loop — no need for a second UoW
+    buys_to_push = [
+        buy_id for buy_id in assignment_buy_ids if assignment_buy_statuses.get(buy_id) in _LIVE_BUY_STATUSES
+    ]
+
+    for buy_id in buys_to_push:
+        logger.info(f"[CREATIVE APPROVAL] Retroactive push: creative {creative_id} → live buy {buy_id}")
+        push_failure = push_creative_to_existing_buy(
+            creative_id=creative_id,
+            media_buy_id=buy_id,
+            tenant_id=tenant_id,
+        )
+        if push_failure is not None:
+            logger.error(
+                f"[CREATIVE APPROVAL] Retroactive push failed for creative {creative_id} → buy {buy_id}: "
+                f"{push_failure.reason}"
+            )
+            push_warnings.append(f"Creative push to buy {buy_id} failed — see server logs for details")
+
+    response_body: dict[str, Any] = {"success": True, "status": "approved"}
+    if push_warnings:
+        response_body["warnings"] = push_warnings
+    return jsonify(response_body)
 
 
 @creatives_bp.route("/review/<creative_id>/reject", methods=["POST"])
@@ -709,100 +699,95 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 @require_tenant_access()
 def reject_creative(tenant_id, creative_id, **kwargs):
     """Reject a creative with comments."""
-    try:
-        data = request.get_json() or {}
-        rejected_by = data.get("rejected_by", "admin")
-        rejection_reason = data.get("rejection_reason", "")
+    data = json_object_body()
+    rejected_by = data.get("rejected_by", "admin")
+    rejection_reason = data.get("rejection_reason", "")
 
-        if not rejection_reason:
-            return jsonify({"error": "Rejection reason is required"}), 400
+    if not rejection_reason:
+        return jsonify({"error": "Rejection reason is required"}), 400
 
-        # Collect data for post-commit side effects
-        webhook_data: dict[str, Any] = {}
-        slack_data: dict[str, Any] = {}
-        audit_data: dict[str, Any] = {}
+    # Collect data for post-commit side effects
+    webhook_data: dict[str, Any] = {}
+    slack_data: dict[str, Any] = {}
+    audit_data: dict[str, Any] = {}
 
-        with AdminCreativeUoW(tenant_id) as uow:
-            assert uow.creatives is not None
-            assert uow.tenant_config is not None
+    with AdminCreativeUoW(tenant_id) as uow:
+        assert uow.creatives is not None
+        assert uow.tenant_config is not None
 
-            creative = uow.creatives.admin_get_by_id(creative_id)
+        creative = uow.creatives.admin_get_by_id(creative_id)
 
-            if not creative:
-                return jsonify({"error": "Creative not found"}), 404
+        if not creative:
+            return jsonify({"error": "Creative not found"}), 404
 
-            # Check if there was a prior AI review that disagreed
-            prior_ai_review = uow.creatives.get_prior_ai_review(creative_id)
+        # Check if there was a prior AI review that disagreed
+        prior_ai_review = uow.creatives.get_prior_ai_review(creative_id)
 
-            # Check if this is a human override (AI recommended approve, human rejected)
-            is_override = bool(prior_ai_review and prior_ai_review.ai_decision in ["approved", "approve"])
+        # Check if this is a human override (AI recommended approve, human rejected)
+        is_override = bool(prior_ai_review and prior_ai_review.ai_decision in ["approved", "approve"])
 
-            _create_human_review_record(
-                uow.creatives,
-                creative_id=creative_id,
-                tenant_id=tenant_id,
-                principal_id=creative.principal_id,
-                reviewer_email=rejected_by,
-                reason=rejection_reason,
-                is_override=is_override,
-                final_decision="rejected",
-            )
-
-            # Update creative status
-            creative.status = "rejected"
-            creative.approved_at = datetime.now(UTC)
-            creative.approved_by = rejected_by
-
-            # Store rejection reason in data field
-            if not creative.data:
-                creative.data = {}
-            creative.data["rejection_reason"] = rejection_reason
-            creative.data["rejected_at"] = datetime.now(UTC).isoformat()
-
-            # Flag JSONB field as modified
-            uow.creatives.update_data(creative, creative.data)
-
-            # Collect webhook data for post-commit
-            webhook_data = {"creative_id": creative_id, "tenant_id": tenant_id}
-
-            # Collect Slack data for post-commit
-            format_label = CreativeFormatIdentity.from_row(creative).label
-            tenant = uow.tenant_config.get_tenant()
-            if tenant and tenant.slack_webhook_url:
-                principal_name = uow.creatives.get_principal_name(creative.principal_id)
-
-                slack_data = {
-                    "slack_webhook_url": tenant.slack_webhook_url,
-                    "message": f"\u274c Creative rejected: {creative.name} ({format_label}) from {principal_name}\nReason: {rejection_reason}",
-                }
-
-            # Collect audit data for post-commit
-            audit_data = {
-                "creative_id": creative_id,
-                "creative_name": creative.name,
-                "format": format_label,
-                "principal_id": creative.principal_id,
-                "rejection_reason": rejection_reason,
-                "human_override": is_override,
-            }
-
-            # UoW auto-commits here
-
-        # --- Post-commit side effects (outside transaction) ---
-        _send_post_commit_side_effects(
-            webhook_data=webhook_data,
-            slack_data=slack_data,
-            audit_data=audit_data,
-            operation="reject_creative",
+        _create_human_review_record(
+            uow.creatives,
+            creative_id=creative_id,
             tenant_id=tenant_id,
-            actor=rejected_by,
+            principal_id=creative.principal_id,
+            reviewer_email=rejected_by,
+            reason=rejection_reason,
+            is_override=is_override,
+            final_decision="rejected",
         )
 
-        return jsonify({"success": True, "status": "rejected"})
+        # Update creative status
+        creative.status = "rejected"
+        creative.approved_at = datetime.now(UTC)
+        creative.approved_by = rejected_by
 
-    except Exception as e:
-        logger.error(f"Error rejecting creative: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        # Store rejection reason in data field
+        if not creative.data:
+            creative.data = {}
+        creative.data["rejection_reason"] = rejection_reason
+        creative.data["rejected_at"] = datetime.now(UTC).isoformat()
+
+        # Flag JSONB field as modified
+        uow.creatives.update_data(creative, creative.data)
+
+        # Collect webhook data for post-commit
+        webhook_data = {"creative_id": creative_id, "tenant_id": tenant_id}
+
+        # Collect Slack data for post-commit
+        format_label = CreativeFormatIdentity.from_row(creative).label
+        tenant = uow.tenant_config.get_tenant()
+        if tenant and tenant.slack_webhook_url:
+            principal_name = uow.creatives.get_principal_name(creative.principal_id)
+
+            slack_data = {
+                "slack_webhook_url": tenant.slack_webhook_url,
+                "message": f"\u274c Creative rejected: {creative.name} ({format_label}) from {principal_name}\nReason: {rejection_reason}",
+            }
+
+        # Collect audit data for post-commit
+        audit_data = {
+            "creative_id": creative_id,
+            "creative_name": creative.name,
+            "format": format_label,
+            "principal_id": creative.principal_id,
+            "rejection_reason": rejection_reason,
+            "human_override": is_override,
+        }
+
+        # UoW auto-commits here
+
+    # --- Post-commit side effects (outside transaction) ---
+    _send_post_commit_side_effects(
+        webhook_data=webhook_data,
+        slack_data=slack_data,
+        audit_data=audit_data,
+        operation="reject_creative",
+        tenant_id=tenant_id,
+        actor=rejected_by,
+    )
+
+    return jsonify({"success": True, "status": "rejected"})
 
 
 def _ai_review_creative(
@@ -835,7 +820,11 @@ def _ai_review_creative(
     should_call_webhook = False
     creative_format_str = ""
 
-    try:
+    # This runs on a pool worker whose Future nobody reads, so a failure that escaped would
+    # vanish: best_effort logs it, and the creative is then marked as failed review below.
+    # Only the verdict's own unit of work is inside, so a failure after the verdict is
+    # committed cannot revert it (#1972).
+    with best_effort(f"AI review failed for creative {creative_id}") as review:
         with AdminCreativeUoW(tenant_id) as uow:
             assert uow.creatives is not None
 
@@ -891,62 +880,66 @@ def _ai_review_creative(
 
             # UoW auto-commits here
 
-        logger.info(f"[AI Review Async] Database updated for {creative_id}: status={ai_result['status']}")
+    if review.operator_message is not None:
+        _record_ai_review_failure(tenant_id, creative_id, review.operator_message)
+        return
 
-        # --- Post-commit side effects ---
+    logger.info(f"[AI Review Async] Database updated for {creative_id}: status={ai_result['status']}")
 
-        if slack_notification_data:
-            try:
-                from src.services.slack_notifier import get_slack_notifier
+    # --- Post-commit side effects ---
 
-                tenant_config = {"features": {"slack_webhook_url": slack_notification_data["slack_webhook_url"]}}
-                notifier = get_slack_notifier(tenant_config)
-                notifier.notify_creative_pending(
-                    creative_id=creative_id,
-                    principal_name=slack_notification_data["principal_name"],
-                    format_type=creative_format_str,
-                    media_buy_id=None,
-                    tenant_id=tenant_id,
-                    ai_review_reason=slack_notification_data["ai_review_reason"],
-                )
-                logger.info(f"[AI Review Async] Slack notification sent for {creative_id}")
-            except Exception as slack_e:
-                logger.warning(f"[AI Review Async] Failed to send Slack notification: {slack_e}")
+    if slack_notification_data:
+        with best_effort(f"[AI Review Async] Failed to send the Slack notification for creative {creative_id}"):
+            from src.services.slack_notifier import get_slack_notifier
 
-        if should_call_webhook:
-            # run_async_in_sync_context, not asyncio.run: the sanctioned bridge
-            # (disease-scan row 2). It takes a COROUTINE OBJECT and raises
-            # TypeError on a coroutine FUNCTION, so it cannot silently no-op the
-            # way submit() did. asyncio.run would also work now that this
-            # function is a plain def on a pool worker with no running loop, but
-            # that correctness would be incidental -- it was the live landmine
-            # while the caller was async (#1972).
-            run_async_in_sync_context(_call_webhook_for_creative_status(creative_id=creative_id, tenant_id=tenant_id))
-            logger.info(f"[AI Review Async] Webhook called for {creative_id}")
+            tenant_config = {"features": {"slack_webhook_url": slack_notification_data["slack_webhook_url"]}}
+            notifier = get_slack_notifier(tenant_config)
+            notifier.notify_creative_pending(
+                creative_id=creative_id,
+                principal_name=slack_notification_data["principal_name"],
+                format_type=creative_format_str,
+                media_buy_id=None,
+                tenant_id=tenant_id,
+                ai_review_reason=slack_notification_data["ai_review_reason"],
+            )
+            logger.info(f"[AI Review Async] Slack notification sent for {creative_id}")
 
-    except Exception as e:
-        logger.error(f"[AI Review Async] Error reviewing creative {creative_id}: {e}", exc_info=True)
+    if should_call_webhook:
+        # run_async_in_sync_context, not asyncio.run: the sanctioned bridge
+        # (disease-scan row 2). It takes a COROUTINE OBJECT and raises
+        # TypeError on a coroutine FUNCTION, so it cannot silently no-op the
+        # way submit() did. asyncio.run would also work now that this
+        # function is a plain def on a pool worker with no running loop, but
+        # that correctness would be incidental -- it was the live landmine
+        # while the caller was async (#1972).
+        run_async_in_sync_context(_call_webhook_for_creative_status(creative_id=creative_id, tenant_id=tenant_id))
+        logger.info(f"[AI Review Async] Webhook called for {creative_id}")
 
-        # Try to mark creative as pending with error (separate UoW)
-        try:
-            with AdminCreativeUoW(tenant_id) as uow:
-                assert uow.creatives is not None
 
-                creative = uow.creatives.admin_get_by_id(creative_id)
+def _record_ai_review_failure(tenant_id: str, creative_id: str, operator_message: str) -> None:
+    """Park a creative whose AI review raised at ``pending_review``, with ``ai_review_error`` saying so.
 
-                if creative:
-                    creative.status = "pending_review"
-                    if not isinstance(creative.data, dict):
-                        creative.data = {}
-                    creative.data["ai_review_error"] = {
-                        "error": str(e),
-                        "timestamp": datetime.now(UTC).isoformat(),
-                    }
-                    uow.creatives.update_data(creative, creative.data)
-                    # UoW auto-commits
-                    logger.info(f"[AI Review Async] Creative {creative_id} marked as pending_review due to error")
-        except Exception as inner_e:
-            logger.error(f"[AI Review Async] Failed to mark creative as pending: {inner_e}")
+    The review's failure is already logged; *operator_message* is the text it was answered
+    with, reference included. This writes it in a unit of work of its own, and a failure
+    here is logged too rather than raised.
+    """
+    with best_effort(f"[AI Review Async] Failed to mark creative {creative_id} as pending"):
+        with AdminCreativeUoW(tenant_id) as uow:
+            assert uow.creatives is not None
+
+            creative = uow.creatives.admin_get_by_id(creative_id)
+
+            if creative:
+                creative.status = "pending_review"
+                if not isinstance(creative.data, dict):
+                    creative.data = {}
+                creative.data["ai_review_error"] = {
+                    "error": operator_message,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+                uow.creatives.update_data(creative, creative.data)
+                # UoW auto-commits
+                logger.info(f"[AI Review Async] Creative {creative_id} marked as pending_review due to error")
 
 
 def get_ai_review_status(task_id: str) -> dict:
@@ -971,11 +964,8 @@ def get_ai_review_status(task_id: str) -> dict:
             return {"status": "running", "creative_id": task_info["creative_id"]}
 
         # Task is done - get result or exception
-        try:
-            result = future.result()
-            return {"status": "completed", "result": result, "creative_id": task_info["creative_id"]}
-        except Exception as e:
-            return {"status": "failed", "error": str(e), "creative_id": task_info["creative_id"]}
+        result = future.result()
+        return {"status": "completed", "result": result, "creative_id": task_info["creative_id"]}
 
 
 def _create_review_record(
@@ -1002,33 +992,28 @@ def _create_review_record(
     """
     from src.core.database.models import CreativeReview
 
-    try:
-        review_id = f"review_{uuid.uuid4().hex[:12]}"
+    review_id = f"review_{uuid.uuid4().hex[:12]}"
 
-        review_record = CreativeReview(
-            review_id=review_id,
-            creative_id=creative_id,
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            reviewed_at=datetime.now(UTC),
-            review_type="ai",
-            reviewer_email=None,
-            ai_decision=ai_result.get("ai_recommendation") or ai_result["status"],
-            confidence_score=ai_result.get("confidence_score"),
-            policy_triggered=ai_result.get("policy_triggered"),
-            reason=ai_result.get("reason"),
-            recommendations=None,
-            human_override=False,
-            final_decision=ai_result["status"],
-        )
+    review_record = CreativeReview(
+        review_id=review_id,
+        creative_id=creative_id,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        reviewed_at=datetime.now(UTC),
+        review_type="ai",
+        reviewer_email=None,
+        ai_decision=ai_result.get("ai_recommendation") or ai_result["status"],
+        confidence_score=ai_result.get("confidence_score"),
+        policy_triggered=ai_result.get("policy_triggered"),
+        reason=ai_result.get("reason"),
+        recommendations=None,
+        human_override=False,
+        final_decision=ai_result["status"],
+    )
 
-        creative_repo.create_review(review_record)
+    creative_repo.create_review(review_record)
 
-        logger.debug(f"Created review record {review_id} for creative {creative_id}")
-
-    except Exception as e:
-        logger.error(f"Error creating review record for creative {creative_id}: {e}", exc_info=True)
-        # Don't fail the review if we can't create the record — let UoW handle rollback
+    logger.debug(f"Created review record {review_id} for creative {creative_id}")
 
 
 def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_offering=None):
@@ -1061,11 +1046,17 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
             db_session=db_session,
             promoted_offering=promoted_offering,
         )
-    except Exception as e:
-        logger.error(f"Error running AI review: {e}", exc_info=True)
+    except (AIProviderError, TimeoutError) as e:
+        # The provider failed the call (run_agent classifies it: unreachable, refused, or an
+        # unusable answer) or did not answer within the review's timeout: the creative waits
+        # for a human. Anything else is a fault and reaches the caller.
         # Record error metrics (error_type bounded to a fixed enum)
         record_ai_review_error(tenant_id=tenant_id, error=e)
-        return {"status": "pending_review", "error": str(e), "reason": "AI review failed - requires manual approval"}
+        return {
+            "status": "pending_review",
+            "error": safe_error_message(e, "AI review failed"),
+            "reason": "AI review failed - requires manual approval",
+        }
     finally:
         # Record duration and decrement active reviews
         duration = time.time() - start_time
@@ -1100,8 +1091,8 @@ def _ai_review_creative_impl_inner(
     with cm as uow:
         if uow is not None:
             # Use repos from UoW — don't create duplicates
-            assert uow.session is not None
-            db_session = uow.session
+            assert uow.tenant_config is not None and uow.creatives is not None
+            assert uow.media_buys is not None and uow.products is not None
             tenant_config_repo = uow.tenant_config
             creative_repo = uow.creatives
             mb_repo = uow.media_buys
@@ -1238,7 +1229,7 @@ def _ai_review_creative_impl_inner(
                     "policy_triggered": "auto_approve",
                 }
                 _create_review_record(
-                    db_session,
+                    creative_repo,
                     creative_id,
                     tenant_id,
                     result_dict,
@@ -1259,7 +1250,7 @@ def _ai_review_creative_impl_inner(
                     "ai_reason": review_result.reason,
                 }
                 _create_review_record(
-                    db_session,
+                    creative_repo,
                     creative_id,
                     tenant_id,
                     result_dict,
@@ -1283,7 +1274,7 @@ def _ai_review_creative_impl_inner(
                     "policy_triggered": "auto_reject",
                 }
                 _create_review_record(
-                    db_session,
+                    creative_repo,
                     creative_id,
                     tenant_id,
                     result_dict,
@@ -1304,7 +1295,7 @@ def _ai_review_creative_impl_inner(
                     "ai_reason": review_result.reason,
                 }
                 _create_review_record(
-                    db_session,
+                    creative_repo,
                     creative_id,
                     tenant_id,
                     result_dict,
@@ -1345,7 +1336,7 @@ def ai_review_creative(tenant_id, creative_id, **kwargs):
     result = _ai_review_creative_impl(tenant_id, creative_id)
 
     if "error" in result:
-        return jsonify({"success": False, "error": result["error"]}), 400
+        raise AIReviewUnavailable(f"AI review of creative {creative_id}: {result['error']}", details=(result["error"],))
 
     return jsonify(
         {

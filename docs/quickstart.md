@@ -5,7 +5,7 @@ Get the Prebid Sales Agent running locally in under 5 minutes.
 ## Prerequisites
 
 - Docker installed
-- (Optional) OAuth credentials from your identity provider for SSO
+- OAuth credentials from your identity provider, such as Google, to sign in to the Admin UI
 
 ## Option 1: Docker Run (Quickest)
 
@@ -13,8 +13,8 @@ If you have an existing PostgreSQL database:
 
 ```bash
 # Generate an encryption key (run once, save the output)
-docker run --rm ghcr.io/prebid/salesagent:latest \
-  python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+docker run --rm --entrypoint python ghcr.io/prebid/salesagent:latest \
+  -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
 
 # Run the sales agent (replace YOUR_KEY with the generated key)
 docker run -p 8000:8000 \
@@ -42,13 +42,25 @@ curl http://localhost:8000/health
 
 ## First-Time Setup
 
-1. Configure Google OAuth before you start: set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
-   and `SUPER_ADMIN_EMAILS` in `.env.secrets` (see
+1. Configure Google OAuth before you start: set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+   and `SUPER_ADMIN_EMAILS` (see
    [Environment variables](deployment/environment-variables.md#authentication)). The login
-   page says so too, and offers nothing else.
-2. Open http://localhost:8000/admin
-3. Log in with Google as one of the `SUPER_ADMIN_EMAILS` addresses
-4. Configure per-tenant SSO in **Users & Access** (see [SSO Setup Guide](user-guide/sso-setup.md))
+   page says so too, and offers nothing else. Where you set them depends on the option you ran:
+   - For Option 1, add each one to the `docker run` command with `-e`. Add `FLASK_SECRET_KEY`
+     too, set to a long random value, so that sessions survive a restart.
+   - For Option 2, put them in `.env` with an `ENCRYPTION_KEY`, which saving a tenant's SSO
+     client secret needs. The first command under Option 1 prints one. Then run
+     `docker compose up -d` again.
+2. Register both of these redirect URIs with the OAuth client:
+   `http://localhost:8000/admin/auth/google/callback` and
+   `http://localhost:8000/auth/google/callback`.
+   [Deployment OAuth](deployment/environment-variables.md#deployment-oauth) explains why it
+   needs both.
+3. Open http://localhost:8000/admin/
+4. Log in with Google as one of the `SUPER_ADMIN_EMAILS` addresses
+5. In **Settings > Account**, set **Custom Domain** to `localhost:8000`. **Users & Access**
+   builds the SSO redirect URI from it.
+6. Configure per-tenant SSO in **Users & Access** (see [SSO Setup Guide](user-guide/sso-setup.md))
 
 There is no password login. A route that accepted a fixed password existed for local use and
 is gone: it was composed only when a test-mode flag was set, which made the app under test a
@@ -99,9 +111,12 @@ than a fourth one nothing else runs. A request naming no tenant is refused with
 is how a caller ends up served another tenant's catalogue.
 
 ```python
+import uuid
+
 from fastmcp.client import Client, StreamableHttpTransport
 
-# Get your token from Admin UI > Advertisers > View Token
+# The Admin UI shows an advertiser's token once: when you add the advertiser
+# (Settings > Advertisers > Add Advertiser) or rotate its token.
 transport = StreamableHttpTransport(
     url="http://localhost:8000/mcp/",
     headers={
@@ -114,12 +129,19 @@ async with Client(transport=transport) as client:
     # List available products
     products = await client.call_tool("get_products", {"brief": "video ads"})
 
-    # Create a media buy
+    # Create a media buy. Each package names a product and one of its pricing options.
     result = await client.call_tool("create_media_buy", {
-        "product_ids": ["prod_123"],
-        "budget": {"amount": 10000, "currency": "USD"},
-        "flight_start": "2024-02-01",
-        "flight_end": "2024-02-28"
+        # A fresh UUID v4 per request; resend the same key only to retry the identical payload.
+        "idempotency_key": str(uuid.uuid4()),
+        "account": {"account_id": "acc_123"},  # from sync_accounts or list_accounts
+        "brand": {"domain": "acme.example"},
+        "start_time": "2030-02-01T00:00:00Z",  # ISO 8601, or "asap"
+        "end_time": "2030-02-28T23:59:59Z",
+        "packages": [{
+            "product_id": "prod_123",
+            "pricing_option_id": "cpm_usd_fixed",  # from the product's pricing_options
+            "budget": 10000
+        }]
     })
 ```
 

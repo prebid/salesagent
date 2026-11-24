@@ -326,8 +326,8 @@ def docker_services_e2e(request):
         # clear of the Linux ephemeral range (32768+), which the 20000-30000
         # choice for those two was already picked to avoid.
         tls_port = int(os.getenv("ADCP_TLS_PORT")) if os.getenv("ADCP_TLS_PORT") else find_free_port(15000, 20000)
-        # webhook-capture's plain-HTTP READBACK control-plane (salesagent-amht.3)
-        # — same dynamic-allocation reasoning as tls_port above (a fixed default
+        # webhook-capture's plain-HTTP READBACK control-plane — same
+        # dynamic-allocation reasoning as tls_port above (a fixed default
         # would let two concurrent stacks cross-wire onto the same host port).
         # DELIVERY never uses this port; it goes through tls_port above.
         webhook_capture_port = (
@@ -855,7 +855,7 @@ def _get_gam_service_account_json():
     # 2. File path from env var
     key_file = os.environ.get("GAM_SERVICE_ACCOUNT_KEY_FILE")
     if key_file and os.path.exists(key_file):
-        with open(key_file) as f:
+        with open(key_file, encoding="utf-8") as f:
             return f.read()
 
     return None

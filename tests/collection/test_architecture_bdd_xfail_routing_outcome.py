@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from tests._collection_manifest import load, manifest_dir
+from tests.unit._architecture_helpers import rel
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _UC003_MODULE = _REPO_ROOT / "tests" / "bdd" / "test_uc003_update_media_buy.py"
@@ -39,7 +40,7 @@ class TestTheRoutingOutcome:
         its file list, which moves whenever a bdd file is added.
         """
         rows = load(manifest_dir(), target=None, filter="")
-        uc003 = f"{_UC003_MODULE.relative_to(_REPO_ROOT).as_posix()}::"
+        uc003 = f"{rel(_UC003_MODULE, _REPO_ROOT)}::"
         module_rows = [row for row in rows if row["nodeid"].startswith(uc003)]
         assert module_rows, (
             f"no collected rows for {uc003} in any unfiltered collection record. Without them this test grades nothing."

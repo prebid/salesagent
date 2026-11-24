@@ -13,6 +13,7 @@ This guide surfaces the repository-specific rules for the Prebid Sales Agent cod
 - **Database changes**: Reach the data through a repository inside a Unit of Work → Use `JSONType` for JSON columns → Create migration with `alembic revision`
 - **Any feature or bug fix**: TDD — the failing test comes first, and every change is gated by `make quality` (full cycles in `.claude/rules/workflows/tdd-workflow.md` and `bug-reporting.md`)
 - **Refactorings**: additionally run `tox -e integration` and verify imports with `uv run python -c "from module import thing"` — pre-commit hooks can't catch import errors
+- **Scope and review**: read [engineering-standards.md § Keep the change to that outcome](docs/development/engineering-standards.md#keep-the-change-to-that-outcome) and [§ Review the change](docs/development/engineering-standards.md#review-the-change) before opening or reviewing a pull request
 
 ### Key files to know
 - `src/core/main.py` — MCP server and tool registration
@@ -28,7 +29,7 @@ This guide surfaces the repository-specific rules for the Prebid Sales Agent cod
 
 **DRY is a correctness requirement, equivalent to type safety or test integrity — not "premature optimization," and not "refactoring beyond what was asked."**
 
-- If you write a block of logic that is structurally similar to a block already in the codebase (same pattern, different variables), you **MUST** extract a shared helper function
+- If you write a block of logic that is structurally similar to a block already in the codebase (same pattern, different variables), you **MUST** extract a shared helper function. Pre-existing duplicates elsewhere are paid down through `.duplication-baseline`, not folded into an unrelated change.
 - If you are asked to refactor duplicated code, that is a **bug fix**, not an "improvement"
 - **NEVER** cite "avoid over-engineering" or "keep it simple" to justify leaving duplicated logic in place
 - Duplicated code is a defect. It means the next person who fixes a bug in one copy misses the other copy, and it has caused real bugs in this codebase
@@ -45,44 +46,39 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 
 **The following table is a representative subset, not the full set.** There are over 150 guard tests (`tests/unit/test_architecture_*.py`, plus a handful of boundary guards like `test_transport_agnostic_impl.py`); `ls tests/unit/test_architecture_*.py` prints the current set, which is the only count that cannot go stale. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for design rationale (its written inventory covers only a subset).
 
-| Guard | Enforces | Test file |
-|-------|----------|-----------|
-| No ToolError anywhere but the edge | Business logic raises AdCPSalesAgentError; ToolError is minted only on the way out | `ruff-boundary.toml` (TID251 over `src/` + `scripts/`, in `make quality`) + `test_ruff_boundary_bans.py` |
-| Transport-agnostic _impl | `_impl` has zero transport imports | `test_transport_agnostic_impl.py` |
-| `_impl` signature | Every implementation is exactly `(req: <DTO>, identity: ResolvedIdentity)` for a protected tool, `identity: AccountIdentity` when the DTO requires `account`, or `identity: PublicIdentity` for a public one; the DTO matches the registry row, and the identity annotation IS the row's credential policy (`ToolSpec.requires_credential` derives it; the registry refuses `AccountIdentity` on a DTO whose `account` is optional) | `ToolImpl` protocol on `ToolSpec.impl` (mypy) + `.ast-grep/rules/impl-signature-is-request-and-identity.yml` |
-| One identity constructor | `ResolvedIdentity(...)` / `AccountIdentity(...)` / `PublicIdentity(...)` only in the resolver and `PrincipalFactory`; the resolver builds the identity once, account inside, and nothing calls `model_copy` on one | `.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml` |
-| Principal rows are repository-private | `src.core.database.models.Principal` is importable only by the four repository modules that query it; a tool reads `identity.principal`, an admin view uses `PrincipalRepository` | `ruff-boundary.toml` (TID251) |
-| Principal and account obtained from the identity alone | `repositories.principal`, `repositories.principal_lookup`, `auth_utils`, `repositories.account`, and `uow.AccountUoW` are importable only by the resolver, the repositories, the admin UI, the setup scripts, and the two account-management tools; a tool reads `identity.principal` / `identity.account` | `ruff-ownership.toml` (TID251) |
-| Auth refusals minted by the resolver alone | `AdCPAuthRequiredError` / `AdCPAuthenticationError` raised only by the resolver; a protected tool's `ResolvedIdentity` carries principal and tenant by type, so nothing downstream re-checks (a seller's `require_auth` brand policy is asked by the resolver through `requires_credential(tenant)`) | `ruff-boundary.toml` (TID251) |
-| Account resolved by the resolver alone | `src.core.database.repositories.account_lookup` is importable only by the resolver, which builds the identity with the request's account inside; tools read `identity.account` | `ruff-boundary.toml` (TID251) |
-| Context written by the boundary alone | No `context=` keyword and no `ContextObject` import outside the boundary and the schemas; `AdcpResponse` refuses the field on construction and assignment | `ruff-boundary.toml` (TID251) + `.ast-grep/rules/context-is-written-by-the-boundary-alone.yml` + `test_response_context_is_boundary_owned.py` |
-| Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
-| Serialize only at the edges | No `.model_dump()`, `.model_dump_json()`, `pydantic_core.to_json` or `to_jsonable_python` outside the named edge modules; a tool hands the model through | `ruff-serialization.toml` (TID251) + `.ast-grep/rules/serialize-only-at-the-edges.yml` |
-| Environment read once | No `os.environ` / `os.getenv` under `src/` or `scripts/` outside the settings loader (`src/core/config.py`) and the two writes of variables another library reads; a composition root calls `load_settings()` and everything else reads a named fact off the object | `ruff-environment.toml` (TID251) + `test_ruff_boundary_bans.py` |
-| Test flags never reach production | No read of `adcp_testing` under `src/` outside the settings loader that declares it; a behavior that differs under test reads a real input (a tenant column, an `AdapterConfig` row, a settings field) that the test seeds. The loader's seven properties that still fork on it are pinned shrink-only, not exempted (GH #2255) | `.ast-grep/rules/test-flag-never-reaches-production.yml` + `test_ast_grep_test_flag_ban.py` + `test_test_flag_properties_only_shrink.py` |
-| internal_detail is an exception | `internal_detail=` (and `x.internal_detail =`) never takes an authored string in any spelling (literal, f-string, `+`, `%`, `.format`, `str()`, conditional), under `src/`, `scripts/` or `tests/`; the parameter is typed `BaseException \| None`, and the boundary writes one record per failure with the traceback attached when the error has a `__cause__` or an `internal_detail` | `.ast-grep/rules/internal-detail-is-an-exception.yml` + mypy on `src/` + `test_tool_error_logging.py` |
-| No direct DB access | No `get_db_session()` or `session.add()` anywhere outside repositories/UoW/infrastructure | `test_architecture_repository_pattern.py` |
-| Migration completeness | Every migration has non-empty `upgrade()` and `downgrade()` | `test_architecture_migration_completeness.py` |
-| No raw MediaPackage select | All MediaPackage access goes through repository, not raw `select()` | `test_architecture_no_raw_media_package_select.py` |
-| No import-time filesystem I/O | `src/` and `scripts/` modules touch no files while being imported | `test_architecture_no_import_time_fs_io.py` |
-| No raw select outside repos | All ORM model queries go through repositories, not raw `select()` | `test_architecture_no_raw_select.py` |
-| No raw egress | All outbound HTTP goes through `src/core/security/outbound_http.py`; the gateway modules bind their imports privately so re-export is an ImportError | `ruff-egress.toml` (TID251 over `src/` + `scripts/`, `--ignore-noqa`, in `make quality-ci`) + `test_ruff_egress_bans.py` |
-| No destination rewrite | Nothing under `src/` rebuilds a URL or swaps its netloc/scheme ahead of the gateway | `test_architecture_no_destination_rewrite.py` |
-| BDD no-op Then steps | Then steps must assert, not delegate to `_pending()`-like no-ops | `test_architecture_bdd_no_pass_steps.py` |
-| BDD assertion reachability | A Then must not be able to RETURN without executing a meaningful assertion — presence is not enough | `test_architecture_bdd_no_trivial_assertions.py` |
-| BDD no dict registry | Given steps must use factories, not raw dicts | `test_architecture_bdd_no_dict_registry.py` |
-| BDD no duplicate steps | No 3+ step functions with identical bodies | `test_architecture_bdd_no_duplicate_steps.py` |
-| BDD no silent env | No `ctx.get("env")` or `hasattr(env, ...)` in step functions | `test_architecture_bdd_no_silent_env.py` |
-| Code duplication (DRY) | Duplicate block count in src/ and tests/ cannot increase | `check_code_duplication.py` (make quality) |
-| Workflow tenant isolation | WorkflowRepository queries join DBContext for tenant scoping | `test_architecture_workflow_tenant_isolation.py` |
-| No split mock assertions | Tests use `assert_called_once_with()`, not `assert_called_once()` + `call_args` | `test_architecture_weak_mock_assertions.py` |
-| Single migration head | Alembic migration graph has exactly one head | `test_architecture_single_migration_head.py` |
-| Pre-commit no additional_deps | No `additional_dependencies` in `.pre-commit-config.yaml` (ADR-001) | `test_architecture_pre_commit_no_additional_deps.py` |
-| Pre-commit hook count | Commit-stage hooks stay within D27 ceiling (≤12) | `test_architecture_pre_commit_hook_count.py` |
-| No tenant.config access | Per-field tenant columns, not legacy `tenant.config` | `test_architecture_no_tenant_config.py` |
-| JSONType columns | JSON DB columns use `JSONType`, not plain `JSON` | `test_architecture_jsontype_columns.py` |
-| No defensive RootModel | No `hasattr(x, "root")` without `# noqa: rootmodel` | `test_architecture_no_defensive_rootmodel.py` |
-| Import usage in src/ | Classes/functions used in `src/` must be imported | `test_architecture_import_usage.py` |
+| Guard | Enforces |
+|-------|----------|
+| No ToolError anywhere but the edge | Business logic raises `AdCPSalesAgentError`; `ToolError` only on the way out |
+| Transport-agnostic `_impl` | Zero transport imports in `_impl` |
+| `_impl` signature | `(req: <DTO>, identity: ResolvedIdentity\|AccountIdentity\|PublicIdentity)` — annotation IS credential policy |
+| One identity constructor | Identity built only in the resolver and `PrincipalFactory` |
+| Principal rows are repository-private | `Principal` importable only by its four repository modules |
+| Principal/account from identity alone | Auth repos importable only by resolver, repos, admin, setup scripts |
+| Auth refusals by resolver alone | `AdCPAuthRequiredError`/`AdCPAuthenticationError` raised only by the resolver |
+| Account resolved by resolver alone | `account_lookup` importable only by the resolver |
+| Context written by boundary alone | No `context=` or `ContextObject` outside boundary and schemas |
+| Query type safety | DB queries use types matching column definitions |
+| Serialize only at the edges | No `.model_dump()` etc. outside named edge modules |
+| Environment read once | No `os.environ`/`os.getenv` outside settings loader |
+| Test flags never reach production | No `adcp_testing` read outside settings loader (GH #2255) |
+| `internal_detail` is an exception | Never an authored string — typed `BaseException \| None` |
+| No direct DB access | No `get_db_session()`/`session.add()` outside repos/UoW |
+| Migration completeness | Non-empty `upgrade()` and `downgrade()` |
+| No raw MediaPackage select | All access through repository |
+| No import-time filesystem I/O | `src/` and `scripts/` touch no files at import |
+| No raw select outside repos | ORM queries only through repositories |
+| No raw egress | All outbound HTTP through `outbound_http.py` |
+| No destination rewrite | No URL/netloc/scheme rewrite ahead of the gateway |
+| BDD step quality (5 guards) | Then steps assert; assertions reachable; Given uses factories; no duplicate steps; no silent env |
+| Code duplication (DRY) | Duplicate block count cannot increase |
+| Workflow tenant isolation | Queries join DBContext for tenant scoping |
+| No split mock assertions | `assert_called_once_with()`, not `assert_called_once()` + `call_args` |
+| Single migration head | One Alembic head |
+| Pre-commit discipline | No `additional_dependencies`; commit-stage hooks ≤12 |
+| No tenant.config access | Per-field columns, not legacy `tenant.config` |
+| JSONType columns | `JSONType`, not plain `JSON` |
+| No defensive RootModel | No `hasattr(x, "root")` without `# noqa: rootmodel` |
+| Import usage | Classes/functions used in `src/` must be imported |
 
 **Rules for guards:**
 - Allowlists can only shrink — never add new violations, fix them instead
@@ -114,9 +110,9 @@ pin and for the bump procedure. The CI guard at
     SPEC=$(uv run python -c 'import adcp; print(adcp.get_adcp_spec_version())')
     gh api "repos/adcontextprotocol/adcp/contents/docs/building/by-layer/L1/security.mdx?ref=v$SPEC" --jq '.content' | base64 -d
 
-which returns the literal text. **Never type a version here — not into the ref, not into a `dist/` path segment.** This line used to carry a typed tag one minor behind the installed SDK, so every agent obeying this MANDATORY gate read the wrong spec; it cost two lanes a design each, because they quoted a clause that exists at the older version and was deliberately REMOVED at the pinned one. A removed clause is the spec declining to require something — a different answer, not a missing one. A typed path is the same trap and quieter: an older bundle's `dist/schemas/<older>/…` still resolves at the pinned tag, so it reads the wrong schema without erroring. `WebFetch` on the `raw.githubusercontent.com` URL is the fallback when the gh rate limit is spent, but it summarizes: trust its verbatim quotes, not its interpretation. The installed `adcp` SDK — codes, types, even reference implementations such as `adcp.server.idempotency` — is a CROSS-CHECK, **not** the authority; it can diverge from the spec, and does (see #2215).
-- **Why:** grounding protocol behavior in downstream artifacts (an internal contract item, or the mere existence of an SDK error code) instead of the written spec + storyboard has produced an entire feature built inverse to the spec. The spec is the contract; everything else is derived.
-- **Enforcement:** reviewers reject protocol-behavior changes that don't cite the spec; this complements the pin-drift guard above. Background: [docs/adcp-spec-version.md](docs/adcp-spec-version.md).
+**Never type a version into the ref or a dist/ path segment** — derive it from the installed SDK. The SDK is a CROSS-CHECK, not the authority; it can diverge from the spec.
+- **Why:** grounding protocol behavior in downstream artifacts instead of the written spec has produced features built inverse to the spec.
+- **Enforcement:** reviewers reject protocol-behavior changes that don't cite the spec. Background: [docs/adcp-spec-version.md](docs/adcp-spec-version.md).
 
 ---
 
@@ -139,38 +135,8 @@ class Product(LibraryProduct):
 - Only redeclare a parent field to narrow it to a local subclass (Pattern #4 re-serializes the instance)
 - Mark internal-only fields with `exclude=True`
 - Run `pytest tests/unit/test_adcp_contract.py` before commit
-- **A FIELD YOU ADD MUST HAVE A DECLARED SURFACE.** Extending a pinned model by inheritance
-  is the point of adopting it and is not restricted. What causes trouble is adding a field
-  without deciding its surface, because two of the three are buyer-visible: a field on a
-  **request DTO is ADVERTISED** (`_register_tool` derives the announced shape from the DTO —
-  `ListAccountsRequest.idempotency_key` reached the advertised contract and grew a boundary
-  predicate to ignore itself); a field on a **response model is ON THE WIRE** unless
-  `Field(exclude=True)` (nine were emitted to buyers until `9094a72d2`); and
-  **`exclude=True` means gone, not internal** — it strips from the wire, persistence and the
-  idempotency hash alike, so such a field cannot persist where it lives (16 are in that state,
-  including `Product.implementation_config`). A seller-owned field that must PERSIST has no
-  spelling on a wire model today; `salesagent-3zmsd` is the ORM/mapper layer that gives it one.
-- **Most existing additions have no live reason.** Measured 2026-10-17: 51 added-field
-  declaration sites across 99 adoption sites. Three carried justifications the regenerated SDK
-  has since absorbed, and `TaskSummary`'s six are a field set `GetTaskStatusResponse` lost a
-  release earlier. The capability is fine; those were not using it deliberately.
-- **There is no structural guard for this, deliberately.** `test_architecture_schema_inheritance.py`
-  was deleted on 2026-10-17, for the second time in this repo's history — the first deletion
-  is recorded below. It did not have a hole; it SPECIFIED the defect. Its rule was "a
-  redeclaration needs an allowlist row unless it is neither reshaped nor weakened", and an
-  identical restatement is neither, so six pure restatements passed it by design and one had
-  silently dropped the pin's `deprecated=True`. 178 guard files and 1525 guard tests did not
-  catch any of the 51 additions; a box run, a per-nodeid delta and a field census did. The
-  owner's ruling: a guard that promises consistency it does not deliver costs refactoring
-  speed twice over, so it goes.
-- Its first deletion was argued on the ground that such a guard "has to enumerate how this
-  repo spells its imports — every spelling it does not know is a silent hole", and it was
-  reinstated on the ground that walking the live MRO answers that. Both are true and neither
-  mattered: the rule it enforced admitted the thing it existed to prevent.
-- **What grades this instead:** behaviour. `tests/unit/test_adcp_contract.py` before commit,
-  and the BDD scenarios on a2a, mcp, rest and e2e_rest, measured on a box run against a named
-  baseline per nodeid. A field invented on a DTO is observable — `_register_tool` derives the
-  advertised shape from the DTO, so an invented field becomes a parameter buyers can send.
+- **A FIELD YOU ADD MUST HAVE A DECLARED SURFACE.** A field on a **request DTO is ADVERTISED** (`_register_tool` derives the announced shape from the DTO). A field on a **response model is ON THE WIRE** unless `Field(exclude=True)`. **`exclude=True` means gone, not internal** — it strips from the wire, persistence and the idempotency hash alike.
+- **No structural guard — graded by behaviour instead:** `tests/unit/test_adcp_contract.py` before commit, and BDD scenarios across all transports.
 
 ### 2. Flask: prevent route conflicts
 **Pre-commit hook detects duplicate routes** — run it manually: `uv run python .pre-commit-hooks/check_route_conflicts.py`
@@ -201,14 +167,9 @@ with MediaBuyUoW(identity.tenant_id) as uow:
     media_buy = uow.media_buys.get_by_id(req.media_buy_id)
 ```
 
-`BaseUoW` and the per-domain classes live in `src/core/database/repositories/uow.py`. A UoW
-is how an `_impl` gets a repository — it is the only sanctioned place a session is created,
-which is what keeps `get_db_session()` out of business logic.
+`BaseUoW` and per-domain classes live in `src/core/database/repositories/uow.py`. `uow.session` raises a `DeprecationWarning` — add a repository method instead.
 
-`uow.session` raises a `DeprecationWarning`. If a repository has no method for the data you
-need, add one; do not reach past it to the raw session.
-
-See [patterns-reference.md](docs/development/patterns-reference.md) §§1–2 for both patterns in full — canonical repository files, worked correct/wrong examples, and how to add a repository.
+See [patterns-reference.md](docs/development/patterns-reference.md) §§1–2 for both patterns in full.
 
 ### 4. Pydantic: one serializer per model, and serialization only at the edges
 A model is serialized in three ways — `model_dump()`, `model_dump_json()`, and
@@ -228,124 +189,45 @@ class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSucc
     creatives: list[SyncCreativeResult]   # a local subclass: re-dumped through its own serializer
 ```
 
-`WireSerializerMixin` (`src/core/schemas/_base.py`) is the one serializer, and it
-carries exactly two concerns: `NestedModelSerializerMixin` re-serializes children by their
-INSTANCE rather than the declared (library) type, which is what keeps a local subclass's
-extra fields on the wire; and required-nullable retention keeps a required field whose
-value is `None` on the wire under `exclude_none`. A per-class "last word" hook
-(`_finish_wire`) and a per-class strip set (`_INTERNAL_ONLY_FIELDS`) used to be the third
-and fourth. Both are gone: every use was either a redeclaration weakening the library type
-and then patching the output back (the fix is to not redeclare), or a strip of a field that
-belongs on the wire (`Product.expires_at` is pinned), or bookkeeping that belongs off the
-model entirely (an adapter's carrier type, not a wire field). A field that must exist on the
-model and not on the wire is `Field(exclude=True)` at its declaration, nowhere else.
-
-**And business logic never calls `model_dump()` at all.** A model is the value; a dict built
-from it mid-flow is a second representation that drifts. Serialization happens at named
-edges, each with one owner: the wire (`src/core/tools/_wire.py`), outbound HTTP to another
-agent or a webhook target (the agent registries, the webhook services, the registration
-gate), the idempotency payload hash (`src/core/idempotency_canonical.py`), the persistence
-edge, the admin UI's JSON responses (`src/admin/blueprints`), a wire that `to_wire` does
-not own, the two error helpers that project issues and details to their wire shape
-(`src/core/errors/issues.py`, `src/core/errors/details.py`), and the one schema module that
-re-dumps a nested child inside the one serializer (`src/core/schemas/_base.py`). The
-edge list itself lives in `ruff-serialization.toml` and
-`.ast-grep/rules/serialize-only-at-the-edges.yml`; read it there rather than counting from
-here. The persistence edge is
-precisely: the engine's JSON serializer registered in
-`src/core/database/database_session.py` behind the `JSONType` column (hand the model to
-the column and it serializes through that serializer; a tool never calls anything), the
-ORM `@validates` hooks in
-`src/core/json_validators.py` that normalize a column document, and the documents the
-repositories and the context manager compose or compare (`workflow.py`, `media_buy.py`,
-`account_serialization.py`, `idempotency_attempt.py`, `context_manager.py`). A tool, a
-helper, or a pydantic validator on a wire model may not serialize; "validator" in that
-prohibition means a pydantic field or model validator, never the ORM hooks. A receiving
-model adopts a sibling generated class by reading its attributes (`from_attributes=True`,
-or a `mode="before"` validator reading a `RootModel`'s `root`), never by a dump in the
-caller. A field that is off the wire but must persist has no spelling on a wire model:
-`Field(exclude=True)` strips it from the wire, from persistence and from the idempotency
-hash alike, so such a field belongs on a repository-owned carrier.
-**Enforced by:** `ruff-serialization.toml` (TID251 on `pydantic_core.to_jsonable_python` and
-`pydantic_core.to_json`, per-file-ignores for exactly the edge modules) and
-`.ast-grep/rules/serialize-only-at-the-edges.yml` (`.model_dump(...)` and
-`.model_dump_json(...)` outside the same edge list). The edge list lives in those two files.
+**Rules:**
+- Never override `model_dump` — only a `@model_serializer` runs on all three serialization paths
+- `WireSerializerMixin` (`src/core/schemas/_base.py`) handles two concerns: `NestedModelSerializerMixin` re-serializes children by instance type; required-nullable retention keeps `None` on the wire under `exclude_none`
+- A field off the wire is `Field(exclude=True)` at its declaration, nowhere else
+- Business logic never calls `model_dump()` — a model is the value; serialization happens at named edges only
+- A receiving model adopts a sibling class via `from_attributes=True` or a `mode="before"` validator, never by a dump in the caller
+- `Field(exclude=True)` strips from wire, persistence and idempotency hash — a field that must persist belongs on a repository-owned carrier
+- **Enforced by:** `ruff-serialization.toml` + `.ast-grep/rules/serialize-only-at-the-edges.yml`. The edge list lives in those two files.
 
 ### 5. Transport boundary: one path to every implementation
-All tools have two layers: a **transport** (MCP, A2A, REST) that parses a request and writes
-a response, and **business logic** (`_impl` functions). Between them sits ONE seam —
-`src/core/tools/_boundary.py` — and there are no per-tool wrappers at all.
+All tools have two layers: a **transport** (MCP, A2A, REST) and **business logic** (`_impl` functions). Between them sits ONE seam — `src/core/tools/_boundary.py`.
 
-**`_impl` functions** (business logic layer):
 ```python
+# _impl: transport-agnostic business logic
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
-    identity: ResolvedIdentity,    # never Context, headers or a token
-) -> CreateMediaBuyResult:
-    # Business logic only — no transport awareness, no account resolution, no idempotency
-    ...
-```
+    identity: ResolvedIdentity,
+) -> CreateMediaBuyResult: ...
 
-**Transports** name a tool and hand over the raw payload and the request headers:
-```python
-# Every transport, one call. The registry says which function runs and whether the
-# credential must verify; the boundary validates the payload and resolves the caller.
+# Transport: one call to the boundary
 response = await serve("create_media_buy", payload, request.headers, TransportProtocol.REST)
 ```
 
-`serve` validates the payload into the registry row's DTO, resolves the identity once
-(`_resolve_identity`, private to the boundary), resolves the account the request names,
-honours its `idempotency_key`, stamps the buyer's `context` and the served version onto the
-response, and calls the implementation as `impl(req=..., identity=...)`. All of those are
-properties of the REQUEST, not steps in the work, and doing them once is what keeps the
-transports from disagreeing — the fifteen `*_raw` wrappers this replaced disagreed about
-exactly those.
-
-**Controller and service.** An `_impl` is a CONTROLLER: it establishes who is calling and
-then delegates. The work itself belongs in a service function that takes an already-resolved
-caller and asks nothing about transports, auth, or idempotency:
-
-```python
-def _sync_creatives_impl(req, identity: ResolvedIdentity):   # controller
-    # The type carries the boundary's decision: principal and tenant are not optional.
-    return sync_creatives(req, identity=identity, principal_id=identity.principal.principal_id, tenant=identity.tenant)
-
-def sync_creatives(req, *, identity, principal_id, tenant):   # service
-    ...
-```
-
-A tool never re-checks what the boundary decided. A protected tool declares
-`identity: ResolvedIdentity` and the resolver refuses an anonymous caller before it runs;
-a public tool (`get_products`, `list_creative_formats`, `get_adcp_capabilities`) declares
-`identity: PublicIdentity` and branches on `identity.principal is None` itself. The registry
-derives `requires_credential()` from that annotation, so there is no `auth=` literal on the
-row and no `require_principal` helper to call.
-
-**A controller never calls another controller.** When one tool needs another tool's work --
-`update_media_buy` uploads a package's inline creatives (`media_buy_update.py:945`) -- it
-calls the SERVICE. Calling the other `_impl` re-runs an auth check that already passed,
-and drags the outer request's `idempotency_key` into a function with no business seeing it.
-`sync_creatives` is the extracted one; extract the next service when a second tool needs it,
-not before.
+`serve` validates the payload, resolves the identity once, resolves the account, honours `idempotency_key`, stamps `context` and the served version, and calls the implementation.
 
 **Rules for `_impl` functions:**
-- Accept `ResolvedIdentity` (protected), `AccountIdentity` (protected, and the DTO requires `account`), or `PublicIdentity` (public), never `Context`, raw headers, or a token
-- Raise `AdCPSalesAgentError` subclasses, never `ToolError` (that's transport-specific)
+- Accept `ResolvedIdentity` (protected), `AccountIdentity` (protected + DTO requires `account`), or `PublicIdentity` (public — branch on `identity.principal is None`), never `Context`, raw headers, or a token
+- Raise `AdCPSalesAgentError` subclasses, never `ToolError`
 - Zero imports from `fastmcp`, `a2a`, `starlette`, or `fastapi`
-- No auth extraction, tenant resolution, account resolution, idempotency, or context echo — the boundary's job
-- Declare exactly `(req: <DTO>, identity: <one of those three>)`: nothing else can be supplied, and the annotation is the credential policy
+- A controller never calls another controller — call the SERVICE when one tool needs another's work
 
 **Rules for transports:**
-- Hand the raw payload and the request headers to `serve(tool_name, payload, headers, protocol)` — never resolve an identity, never call an implementation directly
-- Catch `AdcpFailure`, serialize its response with `to_wire`, and add only the transport's own failure marker (an HTTP status, an MCP tool error, an A2A task state)
+- Call `serve(tool_name, payload, headers, protocol)` — never resolve an identity or call an implementation directly
 
-**Substituting an implementation in a test** patches the registry ROW, not a module
-attribute: `TOOLS` holds the function object, so `patch("...._x_impl")` renames something
-nothing consults. Use `tests/helpers/capture_wrapper_req.py` (`stub_impl`, `registry_impl`).
+**Substituting an implementation in a test** patches the registry ROW (`stub_impl`, `registry_impl` from `tests/helpers/capture_wrapper_req.py`), not a module attribute.
 
-**Enforced by:** `test_transport_agnostic_impl.py`, the `ToolImpl` protocol typing `ToolSpec.impl` in `src/core/tools/registry.py` (mypy) plus `.ast-grep/rules/impl-signature-is-request-and-identity.yml`, and `ruff-boundary.toml`'s TID251 bans on `fastmcp.exceptions.ToolError` and on the two auth errors outside the resolver and `require_*`
+**Enforced by:** `test_transport_agnostic_impl.py`, `ToolImpl` protocol (mypy), `.ast-grep/rules/impl-signature-is-request-and-identity.yml`, `ruff-boundary.toml` TID251 bans.
 
-Worked transport-boundary and `_impl` examples: `.claude/rules/patterns/mcp-patterns.md` and [patterns-reference.md §6](docs/development/patterns-reference.md).
+Worked examples: `.claude/rules/patterns/mcp-patterns.md` and [patterns-reference.md §6](docs/development/patterns-reference.md).
 
 ### 6. JavaScript: use request.script_root
 **All JavaScript must support reverse-proxy deployments:**
@@ -384,18 +266,9 @@ them inward. The dev/prod split is deliberate and is the whole mechanism: in dev
 undeclared field is a HARD REJECTION so a spec field this seller has not implemented is loud,
 and in production it is silently dropped so a newer buyer is served rather than refused.
 
-**Do not "fix" this.** It has been mistaken for a bug at least twice. The tells are a scenario
-that sends a pin-permitted-but-undeclared field and fails with `INVALID_REQUEST` in dev, or a
-storyboard `known_failures.txt` entry for a tolerance check. Neither is a defect in the strip:
-
-- if you SHOULD accept the field, declare it on the DTO — that is the only mechanism;
-- if you should NOT, the scenario is wrong and gets fixed or deleted.
-
-Declaring a field only to satisfy a tolerance obligation is its own defect — it invents a spec
-field. `ListAccountsRequest.idempotency_key` was added that way once and removed again:
-**reads take no idempotency key.** A read is idempotent by construction, so there is no
-at-most-once guarantee for a key to carry, and `list-accounts-request.json` does not declare
-one. The same holds for every read tool.
+**Do not "fix" this.** If a scenario sends a pin-permitted-but-undeclared field and fails with `INVALID_REQUEST` in dev:
+- if you SHOULD accept the field, declare it on the DTO;
+- if you should NOT, the scenario is wrong. **Reads take no idempotency key** — a read is idempotent by construction.
 
 ### 8. Test fixtures: factory-based, not inline
 **MANDATORY for new integration tests:** Use `factory-boy` factories for test data, not inline `session.add()` boilerplate.
@@ -443,49 +316,20 @@ subclass its type parameter declares. That is the whole API.**
 raise AdCPBudgetExceededError(details=BudgetDetails(requested_budget="500", budget_limit="100"))
 ```
 
-`AdCPSalesAgentError` is generic in its details type and each of the 48 concrete subclasses
-binds one, so **mypy is the enforcement** — it rejects a dict and a foreign details class at
-every raise site. Three things follow, and each has been got wrong:
+**Rules (mypy-enforced — the base is generic in its details type):**
+- Never pass a dict or foreign details class — parameterize the type annotation
+- Never wrap the boundary's `failure_response` in a `try` — make the raise impossible upstream
+- A code with no subclass is a gap — add the subclass, don't name the code on the base
+- No raise site authors text: `message`, `recovery`, `suggestion`, `status_code` are read-only over `CODE_TABLE`
+- `internal_detail` takes an exception, not a string
 
-- **Never a runtime check for what the type already refuses.** A `__new__` branch validating
-  `details` was added and removed in one day: the one site a dict escaped from was annotated
-  `type[AdCPSalesAgentError]` with the parameter dropped, which erases the type variable to
-  `Any`. The type system was not consulted, not insufficient. Parameterize the annotation.
-- **Never a `try` around the boundary's failure builder.** `failure_response` runs inside the
-  boundary's own `except Exception`, so a raise there is past the catch — but the answer is to
-  make the raise impossible upstream, not to catch it and answer INTERNAL_ERROR while the
-  record says otherwise.
-- **A code with no subclass is a gap, not a reason to name it on the base.**
-  `AdCPSalesAgentError(error_code="NOT_CANCELLABLE")` is the one way to put a code on the wire
-  with nothing bound to it. Add the subclass.
-
-No raise site authors text: `message`, `recovery`, `suggestion` and `status_code` are
-read-only properties over `CODE_TABLE`. A diagnostic sentence is logged, never carried —
-`internal_detail` takes an exception, and no `ErrorDetails` class has a free-text field.
-
-**The full rules, and the reasoning for each:**
-[docs/design/error-architecture.md](docs/design/error-architecture.md). Read it before adding
-or changing a raise site; this entry is a pointer and the document is the contract.
+**Full rules:** [docs/design/error-architecture.md](docs/design/error-architecture.md). Read it before adding or changing a raise site.
 
 ### 11. Test flags never reach production behavior
 
-**A production path that branches on `adcp_testing` is a bug, always.**
+**A production path that branches on `adcp_testing` is a bug.** Give the behavior a real input (a tenant column, an `AdapterConfig` row, a settings field) and let the test seed it. The same binds the test side — see [tests/CLAUDE.md](tests/CLAUDE.md) § Which kind of test.
 
-The flag says a suite is running. It says nothing about the seller being served, so a fork on
-it makes the suite grade a seller that no deployment runs — and makes the suite's verdict
-conditional on the suite being what ran it. Both fixes are the same shape and neither is the
-fork: give the behavior a **real input** a deployment can set (a tenant column, an
-`AdapterConfig` row, a settings field) and let the test seed it like any other state.
-
-The same rule binds the test side: patching a production step out so a scenario can run is
-how a scenario comes to grade a seller that does not exist. See
-[tests/CLAUDE.md](tests/CLAUDE.md) § Which kind of test.
-
-**Enforced by:** `.ast-grep/rules/test-flag-never-reaches-production.yml` (ast-grep, not
-ruff — the flag is an attribute read, and TID251 only sees imported names). `src/core/config.py`
-is exempt because it declares the field; the seven properties there that read it are the
-outstanding violations, pinned shrink-only by
-`tests/unit/test_test_flag_properties_only_shrink.py` and owned by GH #2255.
+**Enforced by:** `.ast-grep/rules/test-flag-never-reaches-production.yml` + `test_test_flag_properties_only_shrink.py` (GH #2255).
 
 ---
 
@@ -536,21 +380,7 @@ uv run alembic revision -m "description"        # Create migration
 docker compose exec admin-ui python scripts/ops/migrate.py
 ```
 
-**A migration changes the structure in `upgrade()` and reverts it in `downgrade()`. That is all it does.**
-
-- **Do not preserve data across a migration.** No backup table, no copy-then-restore, no
-  conditional rewrite so a downgrade can put rows back. `downgrade()` reverts the structure;
-  if data is lost, that is accepted. A backup table created "just in case" is a permanent
-  artifact no model declares, and the health check then reports it forever.
-- **Never stack a revision to fix a revision that has not shipped.** The rule is not "never
-  edit a committed migration", it is never edit a migration that has RUN somewhere. A revision
-  that exists only on an unmerged branch has run nowhere: edit it, or delete it. Adding a
-  second revision to clean up after a first one you wrote this week is two migrations where the
-  problem needed zero.
-- **Check before you decide which case you are in:** `git cat-file -e main:alembic/versions/<file>`
-  says whether main has it. If a revision you are editing has children on the branch, re-point
-  the child's `down_revision` in the same change.
-- **A migration that has shipped is immutable.** Then, and only then, a new revision is correct.
+**A migration changes the structure in `upgrade()` and reverts it in `downgrade()`.** Do not preserve data across a migration. Never stack a revision to fix one that has not shipped — edit or delete it (`git cat-file -e main:alembic/versions/<file>` checks). If a revision you are editing has children on the branch, re-point the child's `down_revision` in the same change. A migration that has shipped is immutable.
 
 ### Tenant setup dependencies
 ```
@@ -615,8 +445,10 @@ Follow these rules:
 
 ## Configuration
 
-Local secrets live in `.env.secrets` (required for a working stack: Gemini, Google OAuth,
-GAM OAuth, super-admin emails, Approximated).
+Local secrets live in `.env` (required for a working stack: Gemini, Google OAuth,
+GAM OAuth, super-admin emails, Approximated);
+[Secrets configuration](docs/security.md#secrets-configuration) says which file each Docker
+Compose file reads.
 [docs/deployment/environment-variables.md](docs/deployment/environment-variables.md) documents
 every variable — read it before touching credentials or auth configuration.
 

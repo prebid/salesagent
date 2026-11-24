@@ -7,7 +7,10 @@ Prometheus series accumulating without bound, plus unbounded ``error_type`` (fro
 
 """
 
-from prometheus_client import Histogram
+import pytest
+from prometheus_client import Counter, Histogram
+
+from tests.helpers.metrics import STATUS_SCHEDULER, counter_total
 
 
 def _series_count(collector) -> int:
@@ -33,9 +36,9 @@ def test_no_histogram_has_tenant_id_label():
 
 def test_categorize_error_bounds_error_type_to_enum():
     """categorize_error must collapse arbitrary exceptions into a fixed enum."""
-    from src.core.metrics import categorize_error
+    from src.core.metrics import ERROR_TYPE_VALUES, categorize_error
 
-    allowed = {"validation", "timeout", "model_error", "other"}
+    allowed = set(ERROR_TYPE_VALUES)
 
     # 1000 distinct exception classes must all map into the fixed enum.
     seen = set()
@@ -47,52 +50,106 @@ def test_categorize_error_bounds_error_type_to_enum():
     assert len(allowed) <= 5
 
 
-def test_record_ai_review_error_cardinality_bounded():
-    """Recording 1000 unique error types for one tenant must produce a bounded
-    number of series (<= enum size, accounting for Counter's _total/_created
-    sample pair)."""
+#: Labels a recording helper bounds before the counter sees them.
+_BOUNDED_LABELS = frozenset({"error_type", "scheduler", "policy_triggered"})
+
+#: One row per bounded label on a tenant-scoped counter: the recording call that
+#: receives a free-form value, and the one label set every such value must land on.
+_COLLAPSE_CASES = [
+    pytest.param(
+        "scheduler_isolation_errors",
+        lambda m, v: m.record_scheduler_isolation_error(scheduler=STATUS_SCHEDULER, tenant_id="t1", error_type=v),
+        {"scheduler": STATUS_SCHEDULER, "error_type": "other"},
+        id="scheduler_isolation_errors-error_type",
+    ),
+    pytest.param(
+        "scheduler_isolation_errors",
+        lambda m, v: m.record_scheduler_isolation_error(scheduler=v, tenant_id="t1", error_type="other"),
+        {"scheduler": "other", "error_type": "other"},
+        id="scheduler_isolation_errors-scheduler",
+    ),
+    pytest.param(
+        "ai_review_errors",
+        lambda m, v: m.record_ai_review_error(tenant_id="t1", error=type(v, (Exception,), {})("boom")),
+        {"error_type": "other"},
+        id="ai_review_errors-error_type",
+    ),
+    pytest.param(
+        "ai_review_total",
+        lambda m, v: m.record_ai_review(tenant_id="t1", decision="pending_review", policy_triggered=v),
+        {"decision": "pending_review", "policy_triggered": "other"},
+        id="ai_review_total-policy_triggered",
+    ),
+]
+
+
+def test_every_bounded_label_counter_has_a_collapse_row():
+    """A tenant-scoped Counter with a bounded label must have a row in ``_COLLAPSE_CASES``.
+
+    Derived from ``src.core.metrics``, so a new counter cannot ship with its bound ungraded.
+    """
     from src.core import metrics
 
-    metrics.ai_review_errors.clear()
-    for i in range(1000):
-        exc_cls = type(f"FakeError{i}", (Exception,), {})
-        metrics.record_ai_review_error(tenant_id="t1", error=exc_cls("boom"))
-
-    samples = list(metrics.ai_review_errors.collect())[0].samples
-    # One tenant x <=4 enum error types. prometheus emits _total + _created per
-    # label set, so <= 4 * 2 = 8; allow headroom up to 10.
-    assert len(samples) <= 10, f"Expected bounded error_type series, got {len(samples)}"
-
-
-def test_sanitize_policy_triggered_allowlist():
-    """Unknown / AI-driven free-form policy_triggered values collapse to 'other'."""
-    from src.core.metrics import POLICY_TRIGGERED_ALLOWLIST, sanitize_policy_triggered
-
-    # Known values pass through unchanged.
-    for known in POLICY_TRIGGERED_ALLOWLIST:
-        assert sanitize_policy_triggered(known) == known
-
-    # Arbitrary AI-generated strings collapse to a single bucket.
-    for i in range(1000):
-        assert sanitize_policy_triggered(f"ai_made_up_reason_{i}") == "other"
-
-    assert sanitize_policy_triggered(None) == "other"
+    bounded = {
+        name
+        for name in dir(metrics)
+        if isinstance(counter := getattr(metrics, name), Counter)
+        and "tenant_id" in counter._labelnames
+        and _BOUNDED_LABELS & set(counter._labelnames)
+    }
+    assert bounded == {case.values[0] for case in _COLLAPSE_CASES}
 
 
-def test_ai_review_total_cardinality_bounded_under_freeform_policy():
-    """Feeding 1000 free-form policy_triggered values through the recording
-    path must not explode ai_review_total series for a single tenant/decision."""
+@pytest.mark.parametrize(
+    ("vocabulary", "pinned"),
+    [
+        ("ERROR_TYPE_VALUES", {"validation", "timeout", "model_error", "other"}),
+        ("SCHEDULER_ERROR_TYPE_VALUES", {"db_error", "other"}),
+    ],
+)
+def test_error_type_vocabulary_is_pinned(vocabulary, pinned):
+    """A literal pin, not derived from the module: widening an ``error_type`` enum is a decision."""
     from src.core import metrics
 
-    metrics.ai_review_total.clear()
-    for i in range(1000):
-        metrics.record_ai_review(
-            tenant_id="t1",
-            decision="pending_review",
-            policy_triggered=f"free_form_{i}",
-        )
+    assert set(getattr(metrics, vocabulary)) == pinned
 
-    samples = list(metrics.ai_review_total.collect())[0].samples
-    # tenant t1 x decision pending_review x policy in {whatever known + other}.
-    # Free-form all collapse to 'other' -> 1 label set -> <= 2 samples.
-    assert len(samples) <= 4, f"Expected bounded policy_triggered series, got {len(samples)}"
+
+@pytest.mark.parametrize(("counter_name", "record", "collapsed"), _COLLAPSE_CASES)
+def test_free_form_label_value_collapses_to_one_series(counter_name, record, collapsed):
+    """1000 free-form values through the recording path land on exactly one label set.
+
+    The recording helper is the last line of defense, not the classifier: an
+    unknown value must collapse to its bucket instead of minting a series.
+    """
+    from src.core import metrics
+
+    counter = getattr(metrics, counter_name)
+    counter.clear()
+    for i in range(1000):
+        record(metrics, f"free_form_{i}")
+
+    # One label set; prometheus emits _total + _created for it.
+    assert _series_count(counter) == 2
+    family = list(counter.collect())[0].name
+    assert counter_total(f"{family}_total", tenant_id="t1", **collapsed) == 1000
+
+
+@pytest.mark.parametrize(
+    ("sanitizer", "vocabulary"),
+    [
+        ("sanitize_policy_triggered", "POLICY_TRIGGERED_ALLOWLIST"),
+        ("sanitize_scheduler", "SCHEDULER_ALLOWLIST"),
+        ("sanitize_scheduler_error_type", "SCHEDULER_ERROR_TYPE_VALUES"),
+        ("sanitize_unsigned_reason", "UNSIGNED_REASONS"),
+        ("sanitize_revocation_unavailable_reason", "REVOCATION_UNAVAILABLE_REASONS"),
+    ],
+)
+def test_sanitizer_passes_its_vocabulary_and_collapses_the_rest(sanitizer, vocabulary):
+    """Each vocabulary member passes through unchanged; anything else, and None, is ``"other"``."""
+    from src.core import metrics
+
+    sanitize = getattr(metrics, sanitizer)
+    for known in getattr(metrics, vocabulary):
+        assert sanitize(known) == known
+    assert sanitize("not_in_the_vocabulary") == "other"
+    assert sanitize(None) == "other"

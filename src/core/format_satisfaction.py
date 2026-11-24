@@ -92,7 +92,7 @@ WHAT THIS MODULE DOES NOT DO, deliberately:
 from __future__ import annotations
 
 import logging
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from decimal import Decimal, InvalidOperation
@@ -2510,16 +2510,17 @@ def outside_common_intersection(product: Any) -> tuple[LibraryFormatDeclaration,
     return tuple(d for d in declared if any(d not in (layer.declarations or ()) for layer in slices))
 
 
-def refuse_outside_common_intersection(product: Any) -> None:
-    """``ValueError`` when a product's served contract is not the common intersection the pin requires of it.
+def refuse_outside_common_intersection(product: Any, refused: Callable[[str], Exception] = ValueError) -> None:
+    """``refused(<why>)`` when a product's served contract is not the common intersection the pin requires of it.
 
     Asked of every product save -- the admin product forms, an inventory profile's save for
     each product it supplies the contract to, and :class:`ProductRepository`'s writes -- so
-    no write path stores what :func:`outside_common_intersection` finds.
+    no write path stores what :func:`outside_common_intersection` finds. The admin forms
+    pass the refusal they answer the operator with; the repository raises ``ValueError``.
     """
     outside = outside_common_intersection(product)
     if outside:
-        raise ValueError(
+        raise refused(
             f"Product {product.product_id!r} sells inventory of several publishers and publishes no "
             f"placements, so every format option must be accepted by all of them. Scoped to one "
             f"publisher: {', '.join(sorted({_declaration_label(d) for d in outside}))}. Declare "

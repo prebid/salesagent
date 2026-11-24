@@ -103,7 +103,7 @@ class TestCoverageConfig:
 
     @pytest.fixture
     def pyproject_content(self):
-        return PYPROJECT.read_text()
+        return PYPROJECT.read_text(encoding="utf-8")
 
     def test_coverage_run_source(self, pyproject_content):
         """[tool.coverage.run] must specify source = ['src']."""
@@ -130,7 +130,7 @@ class TestPerEnvCoverageIsolation:
     def tox_content(self):
         if not TOX_INI.is_file():
             pytest.skip("tox.ini not found")
-        return TOX_INI.read_text()
+        return TOX_INI.read_text(encoding="utf-8")
 
     def test_coverage_file_uses_envname(self, tox_content):
         """COVERAGE_FILE must contain {envname} for per-env isolation."""

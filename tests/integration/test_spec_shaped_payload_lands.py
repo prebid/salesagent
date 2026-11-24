@@ -31,7 +31,7 @@ def _pinned_request_properties(filename: str) -> dict:
     """The pinned schema's declared top-level properties for a request."""
     matches = list(_PINNED.rglob(filename))
     assert matches, f"{filename} not found under the pinned schema tree {_PINNED}"
-    return json.loads(matches[0].read_text()).get("properties", {})
+    return json.loads(matches[0].read_text(encoding="utf-8")).get("properties", {})
 
 
 @pytest.mark.requires_db

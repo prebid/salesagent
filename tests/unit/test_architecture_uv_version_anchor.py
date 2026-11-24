@@ -18,12 +18,13 @@ from tests.unit._architecture_helpers import (
     assert_setup_uv_single_pinned_source,
     extract_dockerfile_python_version,
     extract_python_version_anchors,
+    iter_action_pins,
     iter_hardcoded_python_version_yaml,
     iter_hardcoded_uv_version_env,
     iter_python_version_anchors,
-    iter_setup_uv_action_pins,
     iter_workflow_files,
     python_version_pattern_map,
+    rel,
     repo_root,
     uv_version_pattern_map,
 )
@@ -48,8 +49,8 @@ _KNOWN_BAD_TARGET_VERSION_SOURCES = [
 ]
 
 _KNOWN_BAD_SETUP_UV_PINS = [
-    (Path(".github/actions/_install-uv/action.yml"), "astral-sh/setup-uv@1111111111111111111111111111111111111111"),
-    (Path(".github/workflows/ci.yml"), "astral-sh/setup-uv@2222222222222222222222222222222222222222"),
+    (Path(".github/actions/_install-uv/action.yml"), "1111111111111111111111111111111111111111"),
+    (Path(".github/workflows/ci.yml"), "2222222222222222222222222222222222222222"),
 ]
 
 _BAD_PYTHON_VERSION_WORKFLOW = """\
@@ -76,9 +77,9 @@ env:
 """
 
 
-def _github_yaml_repo(tmp_path: Path, rel: str, content: str) -> Path:
+def _github_yaml_repo(tmp_path: Path, rel_path: str, content: str) -> Path:
     """Throwaway git repo with one tracked workflow file (detector scans via ``git ls-files``)."""
-    target = tmp_path / rel
+    target = tmp_path / rel_path
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
@@ -108,7 +109,7 @@ def test_uv_version_consistent() -> None:
 def test_workflows_do_not_hardcode_uv_version_env() -> None:
     """Workflow/action env blocks must not copy uv version literals — use _install-uv instead."""
     violations = [
-        f"{path.relative_to(repo_root())}:{lineno}: {line}"
+        f"{rel(path, repo_root())}:{lineno}: {line}"
         for path, lineno, line in iter_hardcoded_uv_version_env(repo_root())
     ]
     assert not violations, (
@@ -121,11 +122,11 @@ def test_workflows_do_not_hardcode_uv_version_env() -> None:
 def test_setup_uv_action_pinned_in_single_source() -> None:
     """``astral-sh/setup-uv`` SHA pin lives only in _install-uv (guard widened per review)."""
     repo = repo_root()
-    assert_setup_uv_single_pinned_source(iter_setup_uv_action_pins(repo), repo)
+    assert_setup_uv_single_pinned_source(iter_action_pins(repo, "astral-sh/setup-uv"), repo)
 
     for wf in iter_workflow_files(repo):
         assert "astral-sh/setup-uv@" not in wf.read_text(encoding="utf-8"), (
-            f"{wf.relative_to(repo)} must use ./_install-uv, not astral-sh/setup-uv directly"
+            f"{rel(wf, repo)} must use ./_install-uv, not astral-sh/setup-uv directly"
         )
 
 
@@ -160,9 +161,20 @@ def test_python_dockerfile_anchor_detector_catches_templated_from_only() -> None
 def test_setup_uv_pin_detector_catches_known_bad_multi_source() -> None:
     """Mutation self-test: setup-uv referenced outside _install-uv must fail the guard."""
     repo = repo_root()
-    bad_pins = [(repo / rel, pin) for rel, pin in _KNOWN_BAD_SETUP_UV_PINS]
+    bad_pins = [(repo / rel_path, pin) for rel_path, pin in _KNOWN_BAD_SETUP_UV_PINS]
     with pytest.raises(AssertionError, match="astral-sh/setup-uv must be referenced only"):
         assert_setup_uv_single_pinned_source(bad_pins, repo)
+
+
+@pytest.mark.arch_guard
+def test_action_pin_walk_reports_every_tracked_reference(tmp_path: Path) -> None:
+    """The walk yields tag refs as well as SHAs, from any tracked workflow, so the SHA rule can see them."""
+    repo = _github_yaml_repo(
+        tmp_path,
+        ".github/workflows/scorecard.yml",
+        "steps:\n  - uses: actions/checkout@v7\n  - uses: actions/checkout@" + "3" * 40 + " # v7.0.1\n",
+    )
+    assert sorted(ref for _, ref in iter_action_pins(repo, "actions/checkout")) == ["3" * 40, "v7"]
 
 
 @pytest.mark.arch_guard
@@ -198,7 +210,7 @@ def test_python_version_anchors_consistent() -> None:
         if anchor_kind == "target-version":
             continue
         if version != major_minor:
-            drift.append(f"{path.relative_to(repo)} ({anchor_kind}): {version}")
+            drift.append(f"{rel(path, repo)} ({anchor_kind}): {version}")
 
     assert not drift, f"python version drift — canonical {major_minor} from .python-version:\n" + "\n".join(drift)
 
@@ -212,7 +224,7 @@ def test_python_anchor_scan_includes_github_yaml_surfaces() -> None:
 
     repo = repo_root()
     candidates = {
-        str(path.relative_to(repo))
+        rel(path, repo)
         for path in iter_git_tracked_files(repo)
         if _python_anchor_candidate(path, repo) and path.suffix in {".yml", ".yaml"}
     }
@@ -263,7 +275,7 @@ def test_hardcoded_uv_version_env_detector_catches_known_bad(tmp_path: Path) -> 
 def test_workflows_use_python_version_file() -> None:
     """Workflows/actions must not hardcode python-version when setup-env reads .python-version."""
     violations = [
-        f"{path.relative_to(repo_root())}:{lineno}: {line}"
+        f"{rel(path, repo_root())}:{lineno}: {line}"
         for path, lineno, line in iter_hardcoded_python_version_yaml(repo_root())
     ]
     assert not violations, (

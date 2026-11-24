@@ -10,10 +10,9 @@ Requires: integration_db fixture.
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
-from tests.factories.mint import mint
+from tests.factories.mint import mint_id
 from tests.harness._base import IntegrationEnv
 
 
@@ -31,9 +30,8 @@ class MediaBuyAccountEnv(IntegrationEnv):
 
     def __init__(self, **kwargs: Any) -> None:
         # Generate unique tenant/principal IDs to avoid collisions
-        suffix = uuid.uuid4().hex[:8]
-        kwargs.setdefault("tenant_id", mint(f"mb_acct_{suffix}"))
-        kwargs.setdefault("principal_id", mint(f"agent_{suffix}"))
+        kwargs.setdefault("tenant_id", mint_id("mb_acct"))
+        kwargs.setdefault("principal_id", mint_id("agent"))
         super().__init__(**kwargs)
 
     def call_impl(self, **kwargs: Any) -> str:

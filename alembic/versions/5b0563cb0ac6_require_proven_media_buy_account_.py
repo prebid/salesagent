@@ -1,7 +1,7 @@
 """Require proven media-buy account ownership.
 
 Revision ID: 5b0563cb0ac6
-Revises: e2af0c242a7f
+Revises: b9b8e637b56c
 
 Only the original create request, its scoped creation workflow, or a cached
 create response naming this exact buy can identify its account. Current grants
@@ -26,7 +26,7 @@ from alembic import op
 from src.core.database.migration_guards import abort_if_rows
 
 revision = "5b0563cb0ac6"
-down_revision = "e2af0c242a7f"
+down_revision = "b9b8e637b56c"
 branch_labels = None
 depends_on = None
 
@@ -170,8 +170,12 @@ def _recover(bind: sa.Connection, buy: Mapping[str, Any]) -> tuple[str | None, s
         return None, f"account_mode_changed:{account_id}"
     brand = _document(account["brand"])
     for ref in natural_refs:
-        if ref["operator"] != account["operator"] or any(
-            ref["brand"].get(key) != brand.get(key) for key in ("domain", "brand_id", "countries")
+        # Match historical AccountRepository._scope_natural_key: an omitted
+        # brand_id does not narrow the account lookup.
+        if (
+            ref["operator"] != account["operator"]
+            or any(ref["brand"].get(key) != brand.get(key) for key in ("domain", "countries"))
+            or (ref["brand"].get("brand_id") is not None and ref["brand"]["brand_id"] != brand.get("brand_id"))
         ):
             return None, f"natural_key_mismatch:{account_id}"
     return account_id, None

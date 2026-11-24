@@ -5,7 +5,6 @@ issues caused by multiple overlapping data models. It uses ONLY the audit_logs
 table for activity data, eliminating dependencies on workflow_steps, tasks, etc.
 """
 
-import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -14,9 +13,8 @@ from src.admin.services.media_buy_readiness_service import MediaBuyReadinessServ
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, PersistedMediaBuyStatus, Product, Tenant
 from src.core.database.repositories import MediaBuyRepository
+from src.core.operator_errors import best_effort
 from src.core.schemas import CreativeStatusEnum
-
-logger = logging.getLogger(__name__)
 
 
 class DashboardService:
@@ -53,95 +51,90 @@ class DashboardService:
         if not tenant:
             raise ValueError(f"Tenant {self.tenant_id} not found")
 
-        try:
-            with get_db_session() as db_session:
-                repo = MediaBuyRepository(db_session, self.tenant_id)
+        with get_db_session() as db_session:
+            repo = MediaBuyRepository(db_session, self.tenant_id)
 
-                # Get readiness summary (replaces simple status counts)
-                readiness_summary = MediaBuyReadinessService.get_tenant_readiness_summary(self.tenant_id)
+            # Get readiness summary (replaces simple status counts)
+            readiness_summary = MediaBuyReadinessService.get_tenant_readiness_summary(self.tenant_id)
 
-                # Core business metrics
-                from sqlalchemy import func, select
+            # Core business metrics
+            from sqlalchemy import func, select
 
-                from src.core.database.repositories.principal import PrincipalRepository
+            from src.core.database.repositories.principal import PrincipalRepository
 
-                principals_count = PrincipalRepository(db_session, self.tenant_id).count()
-                products_count = db_session.scalar(
-                    select(func.count()).select_from(Product).where(Product.tenant_id == self.tenant_id)
-                )
+            principals_count = PrincipalRepository(db_session, self.tenant_id).count()
+            products_count = db_session.scalar(
+                select(func.count()).select_from(Product).where(Product.tenant_id == self.tenant_id)
+            )
 
-                # Calculate total spend from live and completed media buys
-                total_spend_buys = repo.list_by_statuses(
-                    [PersistedMediaBuyStatus.ACTIVE, PersistedMediaBuyStatus.COMPLETED]
-                )
-                total_spend_amount = float(sum(buy.budget or 0 for buy in total_spend_buys))
+            # Calculate total spend from live and completed media buys
+            total_spend_buys = repo.list_by_statuses(
+                [PersistedMediaBuyStatus.ACTIVE, PersistedMediaBuyStatus.COMPLETED]
+            )
+            total_spend_amount = float(sum(buy.budget or 0 for buy in total_spend_buys))
 
-                # Revenue trend data (last 30 days)
-                revenue_data = self._calculate_revenue_trend(db_session, repo=repo)
+            # Revenue trend data (last 30 days)
+            revenue_data = self._calculate_revenue_trend(db_session, repo=repo)
 
-                # Calculate revenue change (last 7 vs previous 7 days)
-                revenue_change = self._calculate_revenue_change(revenue_data)
+            # Calculate revenue change (last 7 vs previous 7 days)
+            revenue_change = self._calculate_revenue_change(revenue_data)
 
-                # Get recent BUSINESS activities (not raw audit logs)
-                recent_activity = get_business_activities(self.tenant_id, limit=10)
+            # Get recent BUSINESS activities (not raw audit logs)
+            recent_activity = get_business_activities(self.tenant_id, limit=10)
 
-                # Count creatives pending review
-                pending_creatives_count = db_session.scalar(
-                    select(func.count())
-                    .select_from(Creative)
-                    .where(Creative.tenant_id == self.tenant_id)
-                    .where(Creative.status == CreativeStatusEnum.pending_review.value)
-                )
+            # Count creatives pending review
+            pending_creatives_count = db_session.scalar(
+                select(func.count())
+                .select_from(Creative)
+                .where(Creative.tenant_id == self.tenant_id)
+                .where(Creative.status == CreativeStatusEnum.pending_review.value)
+            )
 
-                # Calculate needs attention count (includes pending creatives)
-                needs_attention = (
-                    readiness_summary.get("needs_creatives", 0)
-                    + readiness_summary.get("needs_approval", 0)
-                    + readiness_summary.get("failed", 0)
-                    + (pending_creatives_count or 0)
-                )
+            # Calculate needs attention count (includes pending creatives)
+            needs_attention = (
+                readiness_summary.get("needs_creatives", 0)
+                + readiness_summary.get("needs_approval", 0)
+                + readiness_summary.get("failed", 0)
+                + (pending_creatives_count or 0)
+            )
 
-                return {
-                    # Real business metrics with operational readiness
-                    "total_revenue": total_spend_amount,
-                    "live_buys": readiness_summary.get("live", 0),
-                    "scheduled_buys": readiness_summary.get("scheduled", 0),
-                    "needs_attention": needs_attention,
-                    "needs_creatives": readiness_summary.get("needs_creatives", 0),
-                    "needs_approval": readiness_summary.get("needs_approval", 0),
-                    "pending_creatives": pending_creatives_count or 0,
-                    "paused_buys": readiness_summary.get("paused", 0),
-                    "completed_buys": readiness_summary.get("completed", 0),
-                    "failed_buys": readiness_summary.get("failed", 0),
-                    "draft_buys": readiness_summary.get("draft", 0),
-                    "active_advertisers": principals_count,
-                    "total_advertisers": principals_count,
-                    "products_count": products_count,
-                    # Revenue trend
-                    "revenue_change": round(revenue_change, 1),
-                    "revenue_change_abs": round(abs(revenue_change), 1),
-                    "revenue_data": revenue_data,
-                    # Activity data (SINGLE SOURCE: audit_logs only)
-                    "recent_activity": recent_activity,
-                    # Readiness summary for detailed view
-                    "readiness_summary": readiness_summary,
-                    # Workflow metrics (hardcoded until unified system implemented)
-                    "pending_workflows": 0,
-                    "approval_needed": 0,
-                    "pending_approvals": 0,
-                    "conversion_rate": 0.0,
-                }
-
-        except (ValueError, TypeError) as e:
-            logger.error(f"Data validation error calculating metrics for {self.tenant_id}: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error calculating dashboard metrics for {self.tenant_id}: {e}", exc_info=True)
-            raise
+            return {
+                # Real business metrics with operational readiness
+                "total_revenue": total_spend_amount,
+                "live_buys": readiness_summary.get("live", 0),
+                "scheduled_buys": readiness_summary.get("scheduled", 0),
+                "needs_attention": needs_attention,
+                "needs_creatives": readiness_summary.get("needs_creatives", 0),
+                "needs_approval": readiness_summary.get("needs_approval", 0),
+                "pending_creatives": pending_creatives_count or 0,
+                "paused_buys": readiness_summary.get("paused", 0),
+                "completed_buys": readiness_summary.get("completed", 0),
+                "failed_buys": readiness_summary.get("failed", 0),
+                "draft_buys": readiness_summary.get("draft", 0),
+                "active_advertisers": principals_count,
+                "total_advertisers": principals_count,
+                "products_count": products_count,
+                # Revenue trend
+                "revenue_change": round(revenue_change, 1),
+                "revenue_change_abs": round(abs(revenue_change), 1),
+                "revenue_data": revenue_data,
+                # Activity data (SINGLE SOURCE: audit_logs only)
+                "recent_activity": recent_activity,
+                # Readiness summary for detailed view
+                "readiness_summary": readiness_summary,
+                # Workflow metrics (hardcoded until unified system implemented)
+                "pending_workflows": 0,
+                "approval_needed": 0,
+                "pending_approvals": 0,
+                "conversion_rate": 0.0,
+            }
 
     def get_recent_media_buys(self, limit: int = 10) -> list:
-        """Get recent media buys with relationships loaded and readiness state."""
-        try:
+        """Get recent media buys with relationships loaded and readiness state.
+
+        A dashboard tile: if it cannot be built, the dashboard renders without it.
+        """
+        with best_effort(f"Could not load recent media buys for tenant {self.tenant_id}"):
             with get_db_session() as db_session:
                 repo = MediaBuyRepository(db_session, self.tenant_id)
                 recent_buys = repo.list_recent(limit, eager_load_principal=True)
@@ -171,13 +164,7 @@ class DashboardService:
                     object.__setattr__(media_buy, "readiness_details", readiness)
 
                 return list(recent_buys)
-
-        except (ValueError, TypeError) as e:
-            logger.error(f"Data validation error getting media buys for {self.tenant_id}: {e}")
-            return []
-        except Exception as e:
-            logger.error(f"Database error getting recent media buys for {self.tenant_id}: {e}", exc_info=True)
-            return []
+        return []
 
     def _calculate_revenue_trend(
         self, db_session, days: int = 30, *, repo: MediaBuyRepository | None = None
@@ -300,25 +287,3 @@ class DashboardService:
         revenue_data = metrics["revenue_data"]
 
         return {"labels": [d["date"] for d in revenue_data], "data": [d["revenue"] for d in revenue_data]}
-
-    @staticmethod
-    def health_check() -> dict[str, Any]:
-        """Check dashboard service health."""
-        try:
-            # Test database connection
-            from sqlalchemy import text
-
-            with get_db_session() as db_session:
-                db_session.execute(text("SELECT 1")).scalar()
-
-            # Test audit logs table (our single data source)
-            test_activities = get_business_activities("health_check", limit=1)
-
-            return {
-                "status": "healthy",
-                "single_data_source": "audit_logs",
-                "deprecated_sources": ["tasks", "human_tasks", "workflow_steps"],
-                "message": "Dashboard service using single data source pattern",
-            }
-        except Exception as e:
-            return {"status": "unhealthy", "error": str(e), "message": "Dashboard service health check failed"}

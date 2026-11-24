@@ -31,7 +31,7 @@ Site 4's two halves are both load-bearing and pull in opposite directions:
   --subnet 223.255.255.0/24`` succeeds once and the SECOND stack fails with
   "Pool overlaps with other one on this address space" — even for a /28 inside
   the held /24. This repo runs concurrent stacks BY DESIGN
-  (``scripts/test-stack.sh`` sets ``COMPOSE_PROJECT_NAME="adcp-test-$$"``), so
+  (``scripts/test-stack.sh`` sets a per-run ``COMPOSE_PROJECT_NAME="adcp-test-<random>"``), so
   a hardcoded CIDR in the BASE compose file — the file the in-network runner
   uses alone — means the second stack on the box never comes up.
 
@@ -47,7 +47,9 @@ reason its own ticket does not own is a guard people learn to ignore.
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
+import subprocess
 
 import pytest
 
@@ -301,7 +303,7 @@ def test_base_compose_never_hardcodes_the_network_subnet() -> None:
     the second stack fails with "Pool overlaps with other one on this address
     space", and even a /28 inside the held /24 is refused. The base file is the
     one the in-network runner uses alone, and this repo runs stacks concurrently
-    by design (``COMPOSE_PROJECT_NAME="adcp-test-$$"``).
+    by design (a per-run ``COMPOSE_PROJECT_NAME="adcp-test-<random>"``).
     """
     violations = find_hardcoded_subnets(load_yaml(_BASE_COMPOSE))
 
@@ -410,6 +412,15 @@ _STACK_ENTRY_POINTS = ("run_all_tests.sh", "scripts/test-stack.sh")
 _SUBNET_ALLOCATOR = "scripts/dev/alloc-e2e-subnet.sh"
 
 
+def _file_mode(relative: str) -> int:
+    """The mode the entry points see. NTFS has no execute bit, so on Windows read the
+    mode git records for the file (``100755`` or ``100644``) instead."""
+    if os.name == "nt":
+        staged = subprocess.check_output(["git", "ls-files", "--stage", "--", relative], cwd=repo_root(), text=True)
+        return int(staged.split()[0], 8) if staged else 0
+    return (repo_root() / relative).stat().st_mode
+
+
 @pytest.mark.arch_guard
 def test_a_subnet_allocator_exists_and_is_executable() -> None:
     """Templating the subnet without shipping an allocator just moves the collision.
@@ -430,9 +441,10 @@ def test_a_subnet_allocator_exists_and_is_executable() -> None:
             "back to the shared compose default."
         ),
     )
-    assert allocator.stat().st_mode & 0o111, format_failure(
+    mode = _file_mode(_SUBNET_ALLOCATOR)
+    assert mode & 0o111, format_failure(
         summary=f"{_SUBNET_ALLOCATOR} is not executable",
-        violations=[f"{_SUBNET_ALLOCATOR}: mode {allocator.stat().st_mode & 0o777:o}"],
+        violations=[f"{_SUBNET_ALLOCATOR}: mode {mode & 0o777:o}"],
         fix_hint="chmod +x it — the entry points invoke it directly.",
     )
 

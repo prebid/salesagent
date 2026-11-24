@@ -580,7 +580,7 @@
             {% if metrics.recent_activity %}
                 {% for activity in metrics.recent_activity %}
                     <div class="activity-item {{ activity.type }} {{ 'action-required' if activity.action_required else '' }}" data-activity-id="activity-{{ loop.index }}">
-                        <div class="activity-header" style="cursor: pointer; padding: 1rem;" onclick="toggleActivityDetails('activity-{{ loop.index }}')">
+                        <div class="activity-header" style="cursor: pointer; padding: 1rem;" onclick="toggleActivityDetails({{ ('activity-' ~ loop.index)|tojson|forceescape }})">
                             <div class="activity-main">
                                 <span class="activity-icon">
                                     {% if activity.type == 'product_search' %}🔍
@@ -628,7 +628,7 @@
                                         <h5 style="margin: 0 0 0.5rem 0; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: #6b7280;">Quick Links</h5>
                                         <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
                                             {% for link in activity.links %}
-                                                <a href="{{ script_name }}{{ link.url }}"
+                                                <a href="{{ script_name }}{{ link.url|safe_url }}"
                                                    class="btn btn-sm btn-link"
                                                    style="text-decoration: none; font-size: 0.875rem; padding: 0.25rem 0.75rem; border: 1px solid #e5e7eb; border-radius: 4px; background: #f9fafb; color: #374151; display: inline-flex; align-items: center; gap: 0.25rem;"
                                                    onclick="event.stopPropagation();">
@@ -646,14 +646,14 @@
                                             <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/workflows/{{ activity.metadata.workflow_id }}/steps/{{ activity.metadata.step_id }}/review" class="btn btn-primary" style="text-decoration: none;">
                                                 → View Full Details & Approve
                                             </a>
-                                            <button class="btn btn-secondary" onclick="event.stopPropagation(); quickRejectWorkflow('{{ activity.metadata.workflow_id }}', '{{ activity.metadata.step_id }}')">
+                                            <button class="btn btn-secondary" onclick="event.stopPropagation(); quickRejectWorkflow({{ activity.metadata.workflow_id|tojson|forceescape }}, {{ activity.metadata.step_id|tojson|forceescape }})">
                                                 ✗ Quick Reject
                                             </button>
                                         {% elif activity.type == 'creative_review' %}
                                             <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/creatives/{{ activity.metadata.creative_id }}/review" class="btn btn-primary" style="text-decoration: none;">
                                                 → View Creative & Approve
                                             </a>
-                                            <button class="btn btn-secondary" onclick="event.stopPropagation(); quickRejectCreative('{{ activity.metadata.creative_id }}')">
+                                            <button class="btn btn-secondary" onclick="event.stopPropagation(); quickRejectCreative({{ activity.metadata.creative_id|tojson|forceescape }})">
                                                 ✗ Quick Reject
                                             </button>
                                         {% endif %}
@@ -782,7 +782,7 @@
         </thead>
         <tbody>
             {% for buy in recent_media_buys[:5] %}
-            <tr {% if buy.media_buy_id %}style="cursor: pointer;" onclick="window.location='{{ script_name }}/tenant/{{ tenant.tenant_id }}/media-buy/{{ buy.media_buy_id }}'"{% endif %}>
+            <tr {% if buy.media_buy_id %}style="cursor: pointer;" onclick="window.location={{ (script_name ~ '/tenant/' ~ tenant.tenant_id ~ '/media-buy/' ~ (buy.media_buy_id|urlencode))|tojson|forceescape }}"{% endif %}>
                 <td class="advertiser-name">{{ buy.advertiser_name }}</td>
                 <td><code style="font-size: 0.75rem;">{{ buy.media_buy_id or 'N/A' }}</code></td>
                 <td>
@@ -809,32 +809,13 @@ let activityBuffer = [];
 const MAX_ACTIVITIES = 50;
 const expandedStates = new Set(); // Track which activities are expanded
 
-// HTML escaping functions to prevent XSS
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text || '';
-    return div.innerHTML;
-}
-
-function escapeHtmlAttr(text) {
-    return String(text || '').replace(/["'<>&]/g, function(match) {
-        const escapeMap = {
-            '"': '&quot;',
-            "'": '&#39;',
-            '<': '&lt;',
-            '>': '&gt;',
-            '&': '&amp;'
-        };
-        return escapeMap[match];
-    });
-}
 
 async function pollActivities() {
     const statusEl = document.getElementById('connection-status');
     const statusDot = document.querySelector('.status-dot');
 
     try {
-        const activityUrl = `{{ script_name }}/tenant/{{ tenant.tenant_id }}/activity`;
+        const activityUrl = `${scriptRoot}/tenant/${ {{ tenant.tenant_id|tojson }} }/activity`;
         console.log('Polling activities from:', activityUrl);
 
         const response = await fetch(activityUrl, {
@@ -870,7 +851,7 @@ async function pollActivities() {
         }
 
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+            throw new Error(adminErrorText(await response.json()));
         }
 
         const data = await response.json();
@@ -968,7 +949,7 @@ async function connectActivityStream() {
         }
 
         // Use simple polling instead of EventSource for reliability
-        const activityUrl = `{{ script_name }}/tenant/{{ tenant.tenant_id }}/activity`;
+        const activityUrl = `${scriptRoot}/tenant/${ {{ tenant.tenant_id|tojson }} }/activity`;
         console.log('Starting activity polling to:', activityUrl);
 
         // Start polling immediately, then every 5 seconds
@@ -1006,17 +987,14 @@ function addActivity(activity, isNewActivity = true) {
     const activityId = activity.id || Date.now();
     item.dataset.activityId = activityId;
 
-    // Safely escape all user-provided content to prevent XSS
-    const safeActivityId = escapeHtmlAttr(activityId);
+    // Every value below is raw; it is escaped where it enters the markup.
     // Show "System" instead of "anonymous" for better UX
     const principalName = activity.principal_name || 'System';
-    const safePrincipalName = escapeHtml(principalName === 'anonymous' ? 'System' : principalName);
-    const safeAction = escapeHtml(activity.action);
-    const safePrimary = activity.details ? escapeHtml(activity.details.primary) : '';
-    const safeSecondary = activity.details && activity.details.secondary ? escapeHtml(activity.details.secondary) : '';
-    const safeTimeRelative = escapeHtml(activity.time_relative);
-    const safeTaskId = activity.full_details && activity.full_details.task_id ? escapeHtmlAttr(activity.full_details.task_id) : '';
-    const safeMediaBuyId = activity.full_details && activity.full_details.media_buy_id ? escapeHtmlAttr(activity.full_details.media_buy_id) : '';
+    const displayPrincipal = principalName === 'anonymous' ? 'System' : principalName;
+    const primary = activity.details ? activity.details.primary || '' : '';
+    const secondary = activity.details && activity.details.secondary ? activity.details.secondary : '';
+    const taskId = activity.full_details && activity.full_details.task_id ? activity.full_details.task_id : '';
+    const mediaBuyId = activity.full_details && activity.full_details.media_buy_id ? activity.full_details.media_buy_id : '';
 
     // Determine icon based on activity type
     const iconMap = {
@@ -1031,41 +1009,41 @@ function addActivity(activity, isNewActivity = true) {
 
     // Build a clear summary line
     let summaryText = '';
-    const operation = escapeHtml(activity.operation || 'Unknown operation');
+    const operation = activity.operation || 'Unknown operation';
 
     // Remove common prefixes for cleaner display
     const cleanOperation = operation.replace(/^(AdCP\.|MCP\.|A2A\.)/, '');
 
     if (operation.includes('get_products')) {
-        summaryText = `${safePrincipalName} searched for products`;
-        if (safePrimary) {
-            summaryText += ` - ${safePrimary}`;
+        summaryText = `${displayPrincipal} searched for products`;
+        if (primary) {
+            summaryText += ` - ${primary}`;
         }
     } else if (operation.includes('create_media_buy')) {
-        summaryText = `${safePrincipalName} created a media buy`;
-        if (safePrimary) {
-            summaryText += ` - ${safePrimary}`;
+        summaryText = `${displayPrincipal} created a media buy`;
+        if (primary) {
+            summaryText += ` - ${primary}`;
         }
     } else if (operation.includes('upload_creative')) {
-        summaryText = `${safePrincipalName} uploaded a creative`;
-        if (safePrimary) {
-            summaryText += ` - ${safePrimary}`;
+        summaryText = `${displayPrincipal} uploaded a creative`;
+        if (primary) {
+            summaryText += ` - ${primary}`;
         }
     } else if (operation.includes('policy_check')) {
-        summaryText = `${safePrincipalName} ran policy check`;
-        if (safePrimary) {
-            summaryText += ` - ${safePrimary}`;
+        summaryText = `${displayPrincipal} ran policy check`;
+        if (primary) {
+            summaryText += ` - ${primary}`;
         }
     } else if (operation.startsWith('A2A.')) {
-        summaryText = `${safePrincipalName} via A2A: ${cleanOperation}`;
-        if (safeSecondary) {
-            summaryText += ` - ${safeSecondary}`;
+        summaryText = `${displayPrincipal} via A2A: ${cleanOperation}`;
+        if (secondary) {
+            summaryText += ` - ${secondary}`;
         }
     } else {
         // For other operations, show clean operation name
-        summaryText = `${safePrincipalName}: ${cleanOperation}`;
-        if (safePrimary) {
-            summaryText += ` - ${safePrimary}`;
+        summaryText = `${displayPrincipal}: ${cleanOperation}`;
+        if (primary) {
+            summaryText += ` - ${primary}`;
         }
     }
 
@@ -1085,22 +1063,22 @@ function addActivity(activity, isNewActivity = true) {
     }
 
     item.innerHTML = `
-        <div class="activity-header" onclick="toggleActivityDetails('${safeActivityId}')">
+        <div class="activity-header" onclick="toggleActivityDetails(${jsArg(String(activityId))})">
             <div class="activity-main">
-                <span class="activity-icon">${icon}</span>
+                <span class="activity-icon">${escapeHtml(icon)}</span>
                 <div class="activity-content-text">
-                    <div class="activity-summary">${summaryText}</div>
+                    <div class="activity-summary">${escapeHtml(summaryText)}</div>
                     <div class="activity-meta">
-                        <span class="activity-badge ${badgeClass}">${badgeText}</span>
-                        ${safeSecondary ? `<span>${safeSecondary}</span>` : ''}
-                        <span style="margin-left: auto; white-space: nowrap;">${safeTimeRelative}</span>
+                        <span class="activity-badge ${escapeHtml(badgeClass)}">${escapeHtml(badgeText)}</span>
+                        ${secondary ? `<span>${escapeHtml(secondary)}</span>` : ''}
+                        <span style="margin-left: auto; white-space: nowrap;">${escapeHtml(activity.time_relative)}</span>
                     </div>
                 </div>
             </div>
-            <div class="expand-indicator" id="indicator-${safeActivityId}">▼</div>
+            <div class="expand-indicator" id="indicator-${escapeHtml(activityId)}">▼</div>
         </div>
 
-        <div class="activity-expanded" id="expanded-${safeActivityId}" style="display: none;">
+        <div class="activity-expanded" id="expanded-${escapeHtml(activityId)}" style="display: none;">
             ${activity.full_details && Object.keys(activity.full_details).length > 0 ? `
                 <div class="expanded-content">
                     <h4 style="margin: 0 0 0.5rem 0;">Full Details:</h4>
@@ -1108,10 +1086,10 @@ function addActivity(activity, isNewActivity = true) {
 
                     ${activity.action_required ? `
                         <div class="action-buttons">
-                            <button class="btn btn-primary" onclick="handleTask('${safeActivityId}', '${safeTaskId}')">
+                            <button class="btn btn-primary" onclick="handleTask(${jsArg(String(activityId))}, ${jsArg(String(taskId))})">
                                 Review & Approve
                             </button>
-                            <button class="btn btn-secondary" onclick="viewTaskDetails('${safeActivityId}')">
+                            <button class="btn btn-secondary" onclick="viewTaskDetails(${jsArg(String(activityId))})">
                                 View Details
                             </button>
                         </div>
@@ -1119,7 +1097,7 @@ function addActivity(activity, isNewActivity = true) {
 
                     ${activity.type === 'media-buy' && activity.full_details.media_buy_id ? `
                         <div class="action-buttons">
-                            <a href="{{ script_name }}/tenant/{{ tenant.tenant_id }}/media-buy/${safeMediaBuyId}"
+                            <a href="${safeUrl(scriptRoot + '/tenant/' + {{ tenant.tenant_id|tojson }} + '/media-buy/' + encodeURIComponent(mediaBuyId))}"
                                class="btn btn-primary" style="text-decoration: none; display: inline-block;">View Media Buy</a>
                         </div>
                     ` : ''}
@@ -1206,7 +1184,7 @@ document.querySelectorAll('.filter-button').forEach(button => {
 });
 
 function fetchChartData(period) {
-    fetch(`{{ script_name }}/api/tenant/{{ tenant.tenant_id }}/revenue-chart?period=${period}`)
+    fetch(`${scriptRoot}/api/tenant/${ {{ tenant.tenant_id|tojson }} }/revenue-chart?period=${period}`)
         .then(response => response.json())
         .then(data => {
             revenueChart.data.labels = data.labels;
@@ -1245,7 +1223,7 @@ async function quickRejectWorkflow(workflowId, stepId) {
     if (!reason) return;
 
     try {
-        const response = await fetch(`{{ script_name }}/tenant/{{ tenant.tenant_id }}/workflows/${workflowId}/steps/${stepId}/reject`, {
+        const response = await fetch(`${scriptRoot}/tenant/${ {{ tenant.tenant_id|tojson }} }/workflows/${encodeURIComponent(workflowId)}/steps/${encodeURIComponent(stepId)}/reject`, {
             method: 'POST',
             credentials: 'same-origin',
             headers: {
@@ -1272,7 +1250,7 @@ async function quickRejectCreative(creativeId) {
     if (!reason) return;
 
     try {
-        const response = await fetch(`{{ script_name }}/tenant/{{ tenant.tenant_id }}/creatives/${creativeId}/reject`, {
+        const response = await fetch(`${scriptRoot}/tenant/${ {{ tenant.tenant_id|tojson }} }/creatives/${encodeURIComponent(creativeId)}/reject`, {
             method: 'POST',
             credentials: 'same-origin',
             headers: {
@@ -1300,7 +1278,7 @@ function handleTask(activityId, taskId) {
         return;
     }
     // Navigate to task approval page
-    window.location.href = `{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/tasks/${taskId}/approve`;
+    window.location.href = `${scriptRoot}/tenant/${ {{ tenant.tenant_id|tojson }} }/tasks/${taskId}/approve`;
 }
 
 // View task details

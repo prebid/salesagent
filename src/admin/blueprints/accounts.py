@@ -9,15 +9,24 @@ import logging
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
+from src.admin.form_validation import json_object_body, required_values
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import require_tenant_access
 from src.core.billing_policy import BILLING_PARTY_VALUES
-from src.core.database.repositories.account import AccountRepository
+from src.core.database.repositories.account import AccountRepository, NaturalKeyConflict
 from src.core.database.repositories.uow import AccountUoW
+from src.core.operator_errors import StateConflict
 
 logger = logging.getLogger(__name__)
 
 accounts_bp = Blueprint("accounts", __name__)
+
+
+class AccountStatusTransitionRefused(StateConflict):
+    """The account's current status does not allow the requested one; *details* say which ones it allows."""
+
+    MESSAGE = "The account cannot change to that status"
+
 
 # Valid status transitions
 _STATUS_TRANSITIONS: dict[str, set[str]] = {
@@ -97,17 +106,16 @@ def create_account(tenant_id):
                 },
             )
             uow.accounts.create(new_account)
-    except ValueError as exc:
+    except NaturalKeyConflict as exc:
         # The repository refuses a create whose natural key is already occupied
         # (salesagent-0njj). Surfaced as a form error rather than a 500: this is
         # an operator mistake with an obvious remedy — edit the existing account.
         #
-        # `operator_message` rather than str(exc): NaturalKeyConflict is now an
-        # AdCPConflictError too, so str() returns CODE_TABLE's buyer-facing sentence
-        # ("Revision conflict - refetch and retry"), which tells an OPERATOR nothing
-        # about which account to edit. This is an operator surface, not the buyer
-        # wire, so the specific text is appropriate here and only here.
-        flash(getattr(exc, "operator_message", None) or str(exc), "error")
+        # `operator_message`, which the repository writes from the submitted key and the
+        # occupying account's id, names the account to edit; the error's own text is
+        # CODE_TABLE's buyer-facing CONFLICT sentence. Any other failure of the create is
+        # the admin error handler's.
+        flash(exc.operator_message, "error")
         return redirect(request.url)
 
     flash(f"Account '{name}' created successfully.", "success")
@@ -191,26 +199,21 @@ def edit_account(tenant_id, account_id):
 @log_admin_action("change_account_status")
 def change_status(tenant_id, account_id):
     """Change account status (JSON API for AJAX calls)."""
-    data = request.get_json(silent=True) or {}
-    new_status = data.get("status")
-
-    if not new_status:
-        return jsonify({"success": False, "error": "Status is required."}), 400
+    [new_status] = required_values(json_object_body(), "status")
 
     with AccountUoW(tenant_id) as uow:
-        account = uow.accounts.get_by_id(account_id)
-        if account is None:
-            return jsonify({"success": False, "error": "Account not found."}), 404
+        assert uow.accounts is not None
+        account = uow.accounts.require(uow.accounts.get_by_id, account_id)
 
         allowed = _STATUS_TRANSITIONS.get(account.status, set())
         if new_status not in allowed:
-            return jsonify(
-                {
-                    "success": False,
-                    "error": f"Cannot transition from '{account.status}' to '{new_status}'. "
+            raise AccountStatusTransitionRefused(
+                f"Account {account_id} of tenant {tenant_id}: {account.status} -> {new_status}",
+                details=(
+                    f"Cannot transition from '{account.status}' to '{new_status}'. "
                     f"Allowed: {', '.join(sorted(allowed)) if allowed else 'none (terminal state)'}.",
-                }
-            ), 400
+                ),
+            )
 
         uow.accounts.update_status(account_id, new_status)
 

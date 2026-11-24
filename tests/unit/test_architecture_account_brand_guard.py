@@ -83,7 +83,7 @@ def function_guards_brand_before_domain(func: ast.FunctionDef | ast.AsyncFunctio
 
 
 def _find_extractor() -> ast.FunctionDef | ast.AsyncFunctionDef:
-    tree = ast.parse(ACCOUNTS_MODULE.read_text(), filename=str(ACCOUNTS_MODULE))
+    tree = ast.parse(ACCOUNTS_MODULE.read_text(encoding="utf-8"), filename=str(ACCOUNTS_MODULE))
     for node in ast.walk(tree):
         if isinstance(node, FuncDef) and node.name == EXTRACTOR_NAME:
             return node

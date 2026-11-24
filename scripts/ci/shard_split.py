@@ -67,7 +67,7 @@ def list_suite_files(suite: str, repo_root: Path | None = None) -> list[str]:
     if suite not in SUITE_GLOBS:
         raise KeyError(f"Unknown suite {suite!r}")
     root = repo_root or _REPO_ROOT
-    return sorted(str(p.relative_to(root)) for p in root.glob(SUITE_GLOBS[suite]))
+    return sorted(p.relative_to(root).as_posix() for p in root.glob(SUITE_GLOBS[suite]))
 
 
 def targets_cover_suite(suite: str, targets: Iterable[str], repo_root: Path | None = None) -> bool:

@@ -183,8 +183,9 @@ case "${1:-ci}" in
     *) SUITES="$1" ;;
 esac
 
-# Testability seam: resolve the argument contract and exit BEFORE any Docker
-# call so tests/unit/test_run_all_tests_contract.py can assert it without a stack.
+# Testability seam: resolve the argument contract and exit before any stack is
+# built. The `docker info` memory probe above still runs, so the tests that use
+# this seam put a stub `docker` first on PATH.
 if [ -n "${RUN_ALL_TESTS_RESOLVE_ONLY:-}" ]; then
     if [ "$DELEGATE" = 1 ]; then echo "RESOLVED delegate-host: $*"; else echo "RESOLVED suites=$SUITES"; fi
     exit 0
@@ -451,8 +452,11 @@ source scripts/dev/storyboard-signing-env.sh
 # "Pool overlaps with other one on this address space". Measured, not theorised.
 # Without this export the compose default applies and every concurrent stack
 # asks for the same slice.
+# Assigned first, so the allocator's refusal stops the run with its own message
+# (`eval "export $(...)"` returns export's status and hides it).
 if [ -z "${E2E_NETWORK_SUBNET:-}" ]; then
-    eval "export $(scripts/dev/alloc-e2e-subnet.sh)"
+    _slice=$(scripts/dev/alloc-e2e-subnet.sh) || exit
+    export "$_slice"
     echo "  e2e network slice: $E2E_NETWORK_SUBNET"
 fi
 

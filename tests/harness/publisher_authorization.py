@@ -33,10 +33,11 @@ from unittest.mock import patch
 
 from adcp import AdagentsHTTPError, AdagentsNotFoundError
 
-from src.core.database.models import Publisher, PublisherProperty
+from src.core.database.models import Publisher, PublisherFormatOption, PublisherProperty, User, UserRole
 from src.core.http_utils import canonical_publisher_domain
 from tests.harness._base import IntegrationEnv
-from tests.harness.admin_client import AdminOperatorMixin, AdminResponse
+from tests.harness.admin_client import NO_BROWSER_HEADERS, AdminClient, AdminOperatorMixin, AdminResponse
+from tests.utils.database_helpers import tenant_rows
 
 if TYPE_CHECKING:
     from tests.harness.transport import E2EConfig
@@ -80,12 +81,14 @@ class PublisherAdagentsMixin:
     _adagents_documents: dict[str, dict[str, Any]]
     _failure_statuses: dict[str, int]
     _server_files: Path | None
+    _state_before_request: tuple[list[tuple[Any, ...]], ...] | None
 
     def _enter_pre(self) -> None:
         super()._enter_pre()  # type: ignore[misc]
         self._adagents_documents = {}
         self._failure_statuses = {}
         self._server_files = None
+        self._state_before_request = None
         if not self.is_e2e:
             patcher = patch(_FETCH_ADAGENTS_SITE, side_effect=self._serve_adagents)
             patcher.start()
@@ -149,7 +152,7 @@ class PublisherAdagentsMixin:
         elif status is None and document is not None:
             well_known = directory / ".well-known"
             well_known.mkdir(parents=True)
-            (well_known / "adagents.json").write_text(json.dumps(document))
+            (well_known / "adagents.json").write_text(json.dumps(document), encoding="utf-8")
         else:
             # A missing file is how a 404 answers.
             assert status in (None, 404), f"publisher-origin answers 404 or 503, not {status}"
@@ -167,19 +170,19 @@ class PublisherAdagentsMixin:
 
     def add_publisher(self, publisher: str) -> AdminResponse:
         """The operator adds *publisher*, spelled as the scenario wrote it; the route ingests its file at once."""
-        return self._publisher_route("post", "publisher-partners", json={"publisher_domain": publisher})
+        return self._partner_route("post", json={"publisher_domain": publisher})
 
     def sync_publisher_partners(self) -> AdminResponse:
         """The operator syncs every publisher; the route ingests each one's file."""
-        return self._publisher_route("post", "publisher-partners/sync")
+        return self._partner_route("post", "/sync")
 
     def remove_publisher(self, publisher: str) -> AdminResponse:
         """The operator removes *publisher*: its derived rows and every selection of it go with it."""
-        return self._publisher_route("delete", f"publisher-partners/{self.publisher_address(publisher)}")
+        return self._partner_route("delete", f"/{self.publisher_address(publisher)}")
 
     def open_publishers(self) -> AdminResponse:
         """The operator's publishers list: each publisher with what its stored file authorizes."""
-        return self._publisher_route("get", "publisher-partners")
+        return self._partner_route("get")
 
     def open_authorized_properties(self) -> AdminResponse:
         """The operator's authorized-properties page."""
@@ -190,7 +193,7 @@ class PublisherAdagentsMixin:
         return self._publisher_route("get", "setup-checklist")
 
     def open_partner_properties(self, publisher: str) -> AdminResponse:
-        return self._publisher_route("get", f"publisher-partners/{self.publisher_address(publisher)}/properties")
+        return self._partner_route("get", f"/{self.publisher_address(publisher)}/properties")
 
     def ingest_publisher(self, publisher: str) -> None:
         """The seller ingests *publisher*'s adagents.json, through the operator's routes.
@@ -204,17 +207,43 @@ class PublisherAdagentsMixin:
             f"the seller's ingest of {publisher!r} answered {response.status_code}: {response.data[:300]!r}"
         )
 
-    def _publisher_route(self, method: str, path: str, **kwargs: Any) -> AdminResponse:
-        """One authenticated request to the tenant's admin route at *path*, on the env's transport.
+    def _partner_route(self, method: str, suffix: str = "", **kwargs: Any) -> AdminResponse:
+        """One request to the publisher-partner API at *suffix*, sent as a client with no browser sends it.
 
-        The publishers' files are served first, so the route reads what the scenario chose.
+        The pages call these routes from script, and a refusal is answered to a script with
+        JSON, so the request carries none of the headers a browser's page load does.
+        """
+        return self._publisher_route(method, f"publisher-partners{suffix}", headers=NO_BROWSER_HEADERS, **kwargs)
+
+    def _publisher_route(self, method: str, path: str, **kwargs: Any) -> AdminResponse:
+        """One request to the tenant's admin route at *path*, on the env's transport, as the current caller.
+
+        The publishers' files are served first, so the route reads what the scenario chose,
+        and the tenant's publisher rows are read first, so a Then can compare against them.
         """
         tenant, _principal = self.setup_default_data()  # type: ignore[attr-defined]
         self._commit_factory_data()  # type: ignore[attr-defined]
         self.serve_adagents()
+        self._state_before_request = self.target_state()
         return self.admin_request(tenant.tenant_id, method, path, **kwargs)
 
     # ── the seller's state ─────────────────────────────────────────────────
+
+    def target_state(self) -> tuple[list[tuple[Any, ...]], ...]:
+        """Every column of the tenant's publisher rows and of what was derived from them, as last committed.
+
+        What the publisher-partner routes write. Read again before each request
+        (:attr:`state_before_request`), so a Then can say a refused one changed nothing.
+        """
+        session = self.get_session()  # type: ignore[attr-defined]
+        session.expire_all()
+        return tenant_rows(session, self._tenant_id, (Publisher, PublisherProperty, PublisherFormatOption))  # type: ignore[attr-defined]
+
+    @property
+    def state_before_request(self) -> tuple[list[tuple[Any, ...]], ...]:
+        """:meth:`target_state` as the last request to a publisher route found it."""
+        assert self._state_before_request is not None, "no request has been sent to a publisher route"
+        return self._state_before_request
 
     def stored_publisher_or_none(self, publisher: str) -> Publisher | None:
         """The seller's row for *publisher* as the last request committed it, or ``None``."""
@@ -290,6 +319,36 @@ class PublisherAdagentsMixin:
 
 class PublisherAuthorizationEnv(AdminOperatorMixin, PublisherAdagentsMixin, IntegrationEnv):
     """Drive the operator's publisher routes, and read what they wrote."""
+
+    # ── who sends the operator's requests ─────────────────────────────────
+    # The operator is a super admin, who passes every access check. These state another
+    # caller's session on the same client, so a scenario can grade the check itself. The
+    # names, and the steps that call them, are BR-ADMIN-TENANT-SCOPING.feature's.
+
+    def clear_auth(self) -> None:
+        """The next request arrives with no session."""
+        self._operator_client().clear_auth()
+
+    def login_as_member_of_other_tenant(self) -> None:
+        """An admin of another tenant, holding no row in this one: only the membership check can refuse."""
+        from tests.factories import TenantFactory, UserFactory
+
+        self._sign_in(UserFactory(tenant=TenantFactory(), role=UserRole.ADMIN))
+
+    def login_with_target_membership(self, *, is_active: bool, role: UserRole) -> None:
+        """A user of this tenant, holding *role*."""
+        from tests.factories import UserFactory
+
+        tenant, _principal = self.setup_default_data()
+        self._sign_in(UserFactory(tenant=tenant, role=role, is_active=is_active))
+
+    def _sign_in(self, user: User) -> None:
+        """State the session *user*'s own sign-in writes: their tenant, and no super-admin or setup-mode key."""
+        self._operator_client().authenticate(user.tenant_id, tenant_user=user.email)
+
+    def _operator_client(self) -> AdminClient:
+        tenant, _principal = self.setup_default_data()
+        return self.admin_client(tenant.tenant_id)
 
     def run_ad_server(self, adapter_type: str) -> None:
         """Give the tenant an adapter configuration of *adapter_type*."""

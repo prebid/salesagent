@@ -27,23 +27,25 @@ The following diagram shows how a product's GAM configuration flows from creatio
 
 ```mermaid
 flowchart LR
-    Create["Product creation\n(Admin UI)"] --> Defaults["Smart defaults\nGAMProductConfigService"]
-    Defaults --> UI["GAM config UI\n/adapters/gam/config/..."]
-    UI --> Validate["validate_config()"]
-    Validate --> Buy["Media buy creation"]
-    Buy --> LI["GAM line item"]
+    Create["Product form\n(Admin UI)"] --> Defaults["Smart defaults\nGAMProductConfigService"]
+    Defaults --> Stored["implementation_config\nstored with the product"]
+    Stored --> Buy["Media buy creation"]
+    Buy --> Validate["validate_config()"]
+    Validate --> LI["GAM line item"]
 ```
 
 For where adapters sit in the overall system, see [Architecture](../../development/architecture.md). For the adapter interface itself, see [Creating an adapter](../creating-an-adapter.md).
 
 ## Quick start
 
-1. Create the product in the Admin UI (name, price, delivery type, formats). The system generates a default GAM configuration from the delivery type and formats.
-2. On the product edit page, click **Configure GAM Adapter** to open the GAM configuration UI.
-3. Use the inventory picker to select ad units or placements.
-4. Adjust priority and other settings if needed.
-5. Save the configuration.
-6. Create a media buy. The adapter creates the GAM line items from the stored configuration. If a product still has no configuration at media buy time, the system generates defaults then.
+1. In the Admin UI's inventory browser, click **Sync All** to sync the GAM inventory.
+2. Open the product form, as [Create a product](../../user-guide/products.md#create-a-product) describes.
+3. Under **Inventory Configuration**, click **Browse Ad Units** or **Browse Placements** and select the inventory.
+4. Set the pricing options. The first pricing option sets the delivery type: a fixed price is guaranteed, and an auction price is non-guaranteed.
+5. Click **Create Product**. The system generates a default GAM configuration from the delivery type and the formats, and stores it with the inventory you selected.
+6. Create a media buy. The adapter creates the GAM line items from the stored configuration. If a product has no configuration at media buy time, the system generates defaults then.
+
+For the sections of the product form that are not specific to GAM, such as the pricing options and the publisher properties, see [Product form](../../user-guide/products.md#product-form).
 
 ## Configuration workflow
 
@@ -85,30 +87,36 @@ Non-guaranteed products:
 }
 ```
 
-### GAM configuration UI
+### GAM settings on the product form
 
-Open the product edit page in the Admin UI and click **Configure GAM Adapter**. The UI is served at `/adapters/gam/config/<tenant_id>/<product_id>`.
+A tenant that uses GAM gets the GAM product form. You set a product's GAM settings on that form when you create or edit the product. The form has the following GAM controls:
 
-The UI provides the following features:
+- **Inventory Configuration**: An inventory profile, which supplies the ad units, the placements, the creative formats, and the publisher properties, or the ad units and placements that you select with **Browse Ad Units** and **Browse Placements**. The form stores a manual selection in `targeted_ad_unit_ids` and `targeted_placement_ids`.
+- **Include child ad units in targeting**: A checkbox that the form stores in `include_descendants`.
+- **Custom Targeting (Optional)**: Key-value targeting that the form stores in `custom_targeting_keys`.
 
-- Searchable inventory picker for ad units and placements
-- Priority selection (1-16)
-- Frequency cap configuration
-- Creative placeholder management
-- Custom targeting options
+**Browse Ad Units** and **Browse Placements** stay inactive until you sync the GAM inventory.
+
+To create an inventory profile, open **Settings > Inventory**, click **Browse Inventory**, and click **Create Profile** on the **Inventory Profiles** tab. The form's own **Create New** button does nothing. Known issue: [#2678](https://github.com/prebid/salesagent/issues/2678).
+
+The **GAM Line Item Configuration** section of the form has no input. The adapter selects the line item type of each package, as [Line item type selection](#line-item-type-selection) describes, and books that type's priority, which [Priority](#priority) lists.
+
+A product starts with the generated defaults. The form has no control for the other fields, such as `line_item_type`, `frequency_caps`, `creative_rotation_type`, and `delivery_rate_type`. When you edit a product, the form keeps the stored fields that it does not show.
 
 ### Validation
 
-`GAMProductConfigService.validate_config()` checks the configuration when you save it and again when a media buy is created:
+`GAMProductConfigService.validate_config()` checks the configuration when a media buy is created. It checks the following conditions:
 
 - `priority` and `creative_placeholders` are present.
 - `priority` is an integer between 1 and 16.
 - Every creative placeholder has a `width` and a `height`.
 - `line_item_type`, if present, is one of the valid values.
 
-If no inventory targeting is set, validation passes but the adapter logs a warning and falls back to the network root ad unit.
+An invalid configuration fails the media buy with `VALIDATION_ERROR`. The error names the product and the failed check.
 
-At media buy creation, a missing or invalid configuration fails with an explicit error message.
+Validation passes when the configuration names no ad unit and no placement. The adapter then refuses the media buy with `PRODUCT_UNAVAILABLE`, because every GAM line item must target ad units or placements.
+
+The product form does not run `validate_config()`. When you save a product, the form refuses ad unit IDs that are not numeric and custom targeting that GAM cannot take.
 
 ## Line item type selection
 
@@ -143,12 +151,8 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 
 - **Field**: `priority` (required)
 - **Type**: Integer, 1-16, where 1 is the highest priority
-- **Defaults**: 6 for guaranteed, 10 for non-guaranteed
-- **Guidelines**:
-  - 1-4: Reserved for emergency or critical campaigns
-  - 4-6: Guaranteed inventory
-  - 8-12: Non-guaranteed and price priority
-  - 16: House ads
+- **Stored default**: 6 for guaranteed, 10 for non-guaranteed. `generate_default_config()` stores it.
+- **Booked priority**: Validation requires the field, but the adapter does not read it. Known issue: [#2374](https://github.com/prebid/salesagent/issues/2374). The adapter books each line item at the priority of its line item type: 4 for `SPONSORSHIP`, 8 for `STANDARD`, 12 for `PRICE_PRIORITY`, `BULK`, and `NETWORK`, and 16 for `HOUSE`.
 
 #### Creative placeholders
 
@@ -188,8 +192,7 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 #### Inventory targeting
 
 - **Fields**: `targeted_ad_unit_ids`, `excluded_ad_unit_ids`, `targeted_placement_ids` (arrays of strings), `include_descendants` (boolean, default `true`)
-- **Behavior**: If no targeting is specified, the adapter uses the network root ad unit
-- **Best practice**: Always specify targeting for production campaigns. GAM requires numeric IDs.
+- **Behavior**: The adapter refuses a media buy for a product that has neither ad units nor placements. GAM requires numeric IDs.
 
 #### Frequency caps
 
@@ -256,7 +259,7 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 
 ## Testing
 
-### Test the configuration UI
+### Test the product form
 
 ```bash
 # Start Docker services
@@ -266,7 +269,7 @@ docker compose up -d
 open http://localhost:8000
 ```
 
-In the Admin UI, open a product, click **Configure GAM Adapter**, and exercise the inventory picker, priority setting, and save-time validation.
+In the Admin UI of a GAM tenant, open the product form. Exercise the inventory selection, the custom targeting, and the checks the form runs when you save.
 
 ### Verify the stored configuration
 
@@ -285,10 +288,11 @@ WHERE implementation_config IS NOT NULL;
 
 Through the Admin UI:
 
-1. Open a product and click **Configure GAM Adapter**.
-2. Verify that the fields are populated.
-3. Make a change and save it.
-4. Reload the page and confirm that the change persists.
+1. On the products page, click **Edit** for the product.
+2. Verify that the form shows the stored inventory and custom targeting.
+3. Change the inventory selection.
+4. Click **Update Product**.
+5. Open the product again and confirm that the change persists.
 
 ### Test media buy creation
 
@@ -299,10 +303,10 @@ For the automated end-to-end stack, see [E2E testing](../../development/e2e-test
 
 ## Troubleshooting
 
-### "GAM configuration validation failed"
+### "Product ... has invalid GAM configuration"
 
-- **Cause**: Required fields are missing from `implementation_config`.
-- **Fix**: Click **Configure GAM Adapter** on the product and complete the required fields.
+- **Cause**: `validate_config()` rejects the product's stored `implementation_config` at media buy creation. The message ends with the reason, for example `Missing required GAM field: priority`.
+- **Fix**: The Admin UI cannot correct these fields on an existing product. The product form has no control for `priority`, `line_item_type`, or `creative_placeholders`, and saving the form keeps their stored values. A product created with the form starts with valid values for all three.
 
 ### Inventory picker not loading
 
@@ -326,9 +330,6 @@ config = service.generate_default_config(
 
 # Validate a config
 is_valid, error_msg = service.validate_config(config)
-
-# Parse GAM config form data
-impl_config = service.parse_form_config(request.form)
 ```
 
 ### Inventory list endpoint
@@ -367,16 +368,9 @@ Response:
 
 ## Best practices
 
-### Priority
-
-- **Emergency or critical**: 1-4 (use sparingly)
-- **Guaranteed**: 4-6
-- **Non-guaranteed**: 8-12
-- **House ads**: 16
-
 ### Inventory targeting
 
-- Always specify ad units or placements rather than relying on the network-root fallback.
+- Specify ad units or placements for every product. The adapter refuses a media buy for a product without them.
 - Use placements for grouped inventory.
 - Use ad units with `include_descendants` for hierarchies.
 - Test targeting in GAM before production.
