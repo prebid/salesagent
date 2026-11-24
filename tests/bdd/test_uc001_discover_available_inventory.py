@@ -59,3 +59,33 @@ def test_ranking_falls_back_to_catalog_order() -> None:
 @scenario(FEATURE, "channels partition validation - <partition>")
 def test_channels_filter_partitions() -> None:
     """A product matches on the channels it stores; one storing none, on the tenant ad server's defaults."""
+
+
+# BR-RULE-084: catalog requires brand. Spec grounding: media-buy/get-products-request.json
+# ``dependencies: {"catalog": ["brand"]}`` and get_products.mdx ("Requires `brand`") at the
+# pinned 3.2.7; no storyboard grades it.
+
+
+@scenario(FEATURE, "BR-RULE-084 INV-1 holds - catalog with brand present")
+def test_catalog_with_brand_accepted() -> None:
+    """A catalog sent with its brand is accepted."""
+
+
+@scenario(FEATURE, "BR-RULE-084 INV-2 violated - catalog without brand")
+def test_catalog_without_brand_refused() -> None:
+    """A catalog without a brand is refused with INVALID_REQUEST naming brand."""
+
+
+@scenario(FEATURE, "BR-RULE-084 INV-3 holds - no catalog, no dependency constraint")
+def test_no_catalog_no_constraint() -> None:
+    """Without a catalog, brand is not required."""
+
+
+@scenario(FEATURE, "catalog brand dependency partition validation - <partition>")
+def test_catalog_brand_partitions() -> None:
+    """Each catalog/brand combination is accepted, except a catalog without a brand."""
+
+
+@scenario(FEATURE, "catalog brand dependency boundary validation - <boundary_point>")
+def test_catalog_brand_boundaries() -> None:
+    """The catalog/brand boundaries, minimal and full brand references included."""

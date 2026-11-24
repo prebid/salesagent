@@ -303,3 +303,48 @@ def then_full_catalog_in_catalog_order(ctx: dict) -> None:
     expected = ctx["catalog"]
     actual = wire_product_ids(ctx)
     assert actual == expected, f"Expected the catalog {expected} in catalog order, got {actual}"
+
+
+# ── BR-RULE-084: a catalog needs a brand ────────────────────────────
+#
+# ``dependencies: {"catalog": ["brand"]}`` in media-buy/get-products-request.json at the
+# pinned 3.2.7, enforced by ``GetProductsRequest._SCHEMA_DEPENDENCIES``. The seller does no
+# catalog matching, so a catalog with its brand is simply accepted. Graded by the shared
+# outcome Thens (``the request should proceed normally``, ``the result should be``).
+
+_CATALOG_REF = {"type": "product", "catalog_id": "gmc-primary"}
+_BRAND_REF = {"domain": "acme.com"}
+
+#: The catalog and brand each row sends, by the wording of its When.
+_CATALOG_BRAND_ROWS: dict[str, dict[str, Any]] = {
+    "with catalog and brand": {"catalog": _CATALOG_REF, "brand": _BRAND_REF},
+    "with catalog but no brand": {"catalog": _CATALOG_REF},
+    "without catalog": {},
+    "with catalog_with_brand field combination": {"catalog": _CATALOG_REF, "brand": _BRAND_REF},
+    "with no_catalog_no_brand field combination": {},
+    "with no_catalog_with_brand field combination": {"brand": _BRAND_REF},
+    "with catalog_without_brand field combination": {"catalog": _CATALOG_REF},
+    "at boundary catalog present + brand present (both provided)": {"catalog": _CATALOG_REF, "brand": _BRAND_REF},
+    "at boundary catalog absent + brand absent (neither provided)": {},
+    "at boundary catalog absent + brand present (brand alone)": {"brand": _BRAND_REF},
+    "at boundary catalog present + brand absent (dependency violation)": {"catalog": _CATALOG_REF},
+    "at boundary catalog present + brand with domain only (minimal brand-ref)": {
+        "catalog": _CATALOG_REF,
+        "brand": _BRAND_REF,
+    },
+    "at boundary catalog present + brand with domain and brand_id (full brand-ref)": {
+        "catalog": _CATALOG_REF,
+        "brand": {**_BRAND_REF, "brand_id": "acme_outdoor"},
+    },
+}
+
+
+@when(
+    parsers.re(
+        r"the Buyer Agent sends a get_products request (?P<row>with catalog and brand|with catalog but no brand"
+        r"|without catalog|with \w*catalog\w* field combination|at boundary catalog .+)$"
+    )
+)
+def when_get_products_catalog_brand(ctx: dict, row: str) -> None:
+    """Dispatch get_products with a brief and the catalog and brand the row names."""
+    dispatch_request(ctx, brief=ctx["env"].scripted_brief(_BRIEF), **_CATALOG_BRAND_ROWS[row])

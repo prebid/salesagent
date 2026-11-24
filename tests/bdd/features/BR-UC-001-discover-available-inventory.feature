@@ -729,28 +729,42 @@ Feature: BR-UC-001 Discover Available Inventory
   Scenario: BR-RULE-084 INV-1 holds - catalog with brand present
     Given the Buyer is authenticated with a valid principal_id
     When the Buyer Agent sends a get_products request with catalog and brand
-    Then the request should proceed to catalog-driven discovery
+    Then the request should proceed normally
     # INV-1 holds: catalog present and brand present
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the Then read "the request should
+    # proceed to catalog-driven discovery". The pin's dependencies make brand the only
+    # condition on catalog, and get_products.mdx lets a seller that does not match catalogs
+    # answer without it ("catalog_applied ... Absent or false if ... the seller does not
+    # support catalog matching"), so what INV-1 grades is that the request is accepted.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/get_products.mdx
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-084-2v @invariant @BR-RULE-084 @error @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-084 INV-2 violated - catalog without brand
     Given the Buyer is authenticated with a valid principal_id
     When the Buyer Agent sends a get_products request with catalog but no brand
-    Then the operation should fail with validation error
-    And the error code should be "BRAND_REQUIRED"
-    And the error should indicate brand is required when catalog is provided
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the response error field is brand
     And the error should include "suggestion" field
     # INV-2 violated: catalog present and brand absent
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the code line asserted BRAND_REQUIRED,
+    # and the field was graded by message text. catalog -> brand is the pin's schema
+    # "dependencies" keyword, so a request missing brand "violates schema constraints":
+    # INVALID_REQUEST in enums/error-code.json. BRAND_REQUIRED is for "a billable operation
+    # ... without a brand reference", and get_products bills nothing. The refusal names its
+    # field, which is what tells the buyer what to add.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-084-3 @invariant @BR-RULE-084 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-084 INV-3 holds - no catalog, no dependency constraint
     Given the Buyer is authenticated with a valid principal_id
     When the Buyer Agent sends a get_products request without catalog
-    Then the catalog-brand dependency should not apply
-    And the request should proceed normally
+    Then the request should proceed normally
     # INV-3 holds: no catalog, no constraint
+    # LOCAL CORRECTION (mirror upstream in adcp-req): "the catalog-brand dependency should
+    # not apply" is dropped. It restated the acceptance the next line grades and has no wire
+    # fact of its own.
 
   @T-UC-001-inv-085 @invariant @BR-RULE-085 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-085 INV-1 holds - refinement_applied length matches refine array
@@ -1012,15 +1026,21 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the valid rows read "request proceeds
+    # to ..." and the invalid row graded message text, which comes from the error-code table
+    # and never names the field. Valid rows are "success"; the invalid row is the schema
+    # refusal the pin's dependencies keyword makes it, INVALID_REQUEST naming brand.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json pointer=/dependencies
+
     Examples: Valid partitions
-      | partition               | outcome                                 |
-      | catalog_with_brand      | request proceeds to catalog discovery   |
-      | no_catalog_no_brand     | request proceeds (no catalog dependency)|
-      | no_catalog_with_brand   | request proceeds (brand-scoped)         |
+      | partition               | outcome |
+      | catalog_with_brand      | success |
+      | no_catalog_no_brand     | success |
+      | no_catalog_with_brand   | success |
 
     Examples: Invalid partitions
       | partition               | outcome                                    |
-      | catalog_without_brand   | error: brand required when catalog provided |
+      | catalog_without_brand   | error INVALID_REQUEST on brand with suggestion |
 
   @T-UC-001-partition-refinement @partition @refinement_applied @analysis-2026-05-25 @schema-v3.1
   Scenario Outline: refinement_applied partition validation - <partition>
@@ -1334,14 +1354,19 @@ Feature: BR-UC-001 Discover Available Inventory
     # ----------------------------------------------------------
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
+    # LOCAL CORRECTION (mirror upstream in adcp-req): "valid" / "invalid" named no wire
+    # fact. "valid" is "success"; "invalid" is the refusal the pin's dependencies keyword
+    # makes it, INVALID_REQUEST naming brand.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json pointer=/dependencies
+
     Examples: Boundary values
       | boundary_point                                                       | outcome   |
-      | catalog present + brand present (both provided)                      | valid     |
-      | catalog absent + brand absent (neither provided)                     | valid     |
-      | catalog absent + brand present (brand alone)                         | valid     |
-      | catalog present + brand absent (dependency violation)                | invalid   |
-      | catalog present + brand with domain only (minimal brand-ref)         | valid     |
-      | catalog present + brand with domain and brand_id (full brand-ref)    | valid     |
+      | catalog present + brand present (both provided)                      | success   |
+      | catalog absent + brand absent (neither provided)                     | success   |
+      | catalog absent + brand present (brand alone)                         | success   |
+      | catalog present + brand absent (dependency violation)                | error INVALID_REQUEST on brand with suggestion |
+      | catalog present + brand with domain only (minimal brand-ref)         | success   |
+      | catalog present + brand with domain and brand_id (full brand-ref)    | success   |
 
   @T-UC-001-boundary-refinement @boundary @refinement_applied @analysis-2026-05-25 @schema-v3.1
   Scenario Outline: refinement_applied boundary validation - <boundary_point>
