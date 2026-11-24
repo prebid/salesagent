@@ -383,8 +383,7 @@
 
 <!-- Sync Progress Modal -->
 <script>
-const tenantId = '{{ tenant.tenant_id }}';
-const scriptRoot = '{{ request.script_root }}';  // Base path for URLs (e.g., '/admin' or '')
+const tenantId = {{ tenant.tenant_id|tojson }};
 let currentKeyId = null;
 let targetingData = {
     customKeys: [],
@@ -405,7 +404,7 @@ async function syncTargetingData() {
     syncMessage.textContent = 'Starting sync...';
 
     try {
-        const response = await fetch(`{{ script_name }}/api/tenant/${tenantId}/inventory/sync`, {
+        const response = await fetch(`${scriptRoot}/api/tenant/${tenantId}/inventory/sync`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -419,7 +418,7 @@ async function syncTargetingData() {
 
         if (!response.ok) {
             const error = await response.json();
-            throw new Error(error.error || 'Sync failed');
+            throw new Error(adminErrorText(error));
         }
 
         const result = await response.json();
@@ -447,21 +446,19 @@ async function syncTargetingData() {
 // Load all targeting data
 async function loadTargetingData() {
     try {
-        const response = await fetch(`{{ script_name }}/api/tenant/${tenantId}/targeting/all`, {
+        const response = await fetch(`${scriptRoot}/api/tenant/${tenantId}/targeting/all`, {
             credentials: 'same-origin'
         });
 
         // Check if we got redirected to login
         if (response.redirected || response.status === 302) {
             const loginUrl = scriptRoot + `/tenant/${tenantId}/login`;
-            window.location.href = response.url || loginUrl;
+            window.location.href = checkedUrl(response.url) || loginUrl;
             return;
         }
 
         if (!response.ok) {
-            const errorText = await response.text();
-            console.error('API Error:', errorText);
-            throw new Error(`Failed to load targeting data: ${response.status}`);
+            throw new Error(`Failed to load targeting data: ${adminErrorText(await response.json())}`);
         }
 
         const data = await response.json();
@@ -506,7 +503,7 @@ function updateSyncInfo(lastSync) {
             timeAgo = 'just now';
         }
 
-        syncMessage.innerHTML = `Last synced: ${date.toLocaleString()} (${timeAgo})`;
+        syncMessage.innerHTML = `Last synced: ${escapeHtml(date.toLocaleString())} (${escapeHtml(timeAgo)})`;
 
         if (diffHours > 24) {
             syncMessage.innerHTML += ' <span class="text-warning">- Consider refreshing</span>';
@@ -708,10 +705,10 @@ async function selectKey(key) {
 
     // Update selected key info
     document.getElementById('selected-key-info').innerHTML = `
-        <h5>${key.display_name || key.name}</h5>
+        <h5>${escapeHtml(key.display_name || key.name)}</h5>
         <p class="mb-2">
-            <span class="text-muted">Type:</span> ${key.type}
-            ${key.metadata && key.metadata.reportable_type ? `| <span class="text-muted">Reportable:</span> ${key.metadata.reportable_type}` : ''}
+            <span class="text-muted">Type:</span> ${escapeHtml(key.type)}
+            ${key.metadata && key.metadata.reportable_type ? `| <span class="text-muted">Reportable:</span> ${escapeHtml(key.metadata.reportable_type)}` : ''}
         </p>
         <div class="spinner-border spinner-border-sm" role="status">
             <span class="visually-hidden">Loading values...</span>
@@ -729,21 +726,19 @@ async function selectKey(key) {
 // Load custom targeting values from API
 async function loadCustomValues(keyId) {
     try {
-        const response = await fetch(`{{ script_name }}/api/tenant/${tenantId}/targeting/values/${keyId}`, {
+        const response = await fetch(`${scriptRoot}/api/tenant/${tenantId}/targeting/values/${keyId}`, {
             credentials: 'same-origin'
         });
 
         // Check if we got redirected to login
         if (response.redirected || response.status === 302) {
             const loginUrl = scriptRoot + `/tenant/${tenantId}/login`;
-            window.location.href = response.url || loginUrl;
+            window.location.href = checkedUrl(response.url) || loginUrl;
             return;
         }
 
         if (!response.ok) {
-            const errorText = await response.text();
-            console.error('API Error:', errorText);
-            throw new Error(`Failed to load values: ${response.status}`);
+            throw new Error(`Failed to load values: ${adminErrorText(await response.json())}`);
         }
 
         const data = await response.json();
@@ -755,12 +750,12 @@ async function loadCustomValues(keyId) {
         const key = targetingData.customKeys.find(k => k.id === keyId);
         if (key) {
             document.getElementById('selected-key-info').innerHTML = `
-                <h5>${key.display_name || key.name}</h5>
+                <h5>${escapeHtml(key.display_name || key.name)}</h5>
                 <p class="mb-2">
-                    <span class="text-muted">Type:</span> ${key.type}
-                    ${key.metadata && key.metadata.reportable_type ? `| <span class="text-muted">Reportable:</span> ${key.metadata.reportable_type}` : ''}
+                    <span class="text-muted">Type:</span> ${escapeHtml(key.type)}
+                    ${key.metadata && key.metadata.reportable_type ? `| <span class="text-muted">Reportable:</span> ${escapeHtml(key.metadata.reportable_type)}` : ''}
                     <br>
-                    <span class="text-muted">Values:</span> <strong>${data.count}</strong>
+                    <span class="text-muted">Values:</span> <strong>${escapeHtml(data.count)}</strong>
                 </p>
             `;
         }
@@ -801,11 +796,11 @@ function renderCustomValues(keyId) {
                 <div class="col">
                     <div class="card h-100">
                         <div class="card-body">
-                            <h6 class="card-title">${value.display_name || value.name}</h6>
-                            <p class="card-text small text-muted mb-1">Value: <code>${value.name}</code></p>
+                            <h6 class="card-title">${escapeHtml(value.display_name || value.name)}</h6>
+                            <p class="card-text small text-muted mb-1">Value: <code>${escapeHtml(value.name)}</code></p>
                             <p class="card-text small mb-0">
-                                ${value.match_type ? `<span class="badge bg-info">${value.match_type}</span>` : ''}
-                                ${value.status && value.status !== 'ACTIVE' ? `<span class="badge bg-warning">${value.status}</span>` : '<span class="badge bg-success">ACTIVE</span>'}
+                                ${value.match_type ? `<span class="badge bg-info">${escapeHtml(value.match_type)}</span>` : ''}
+                                ${value.status && value.status !== 'ACTIVE' ? `<span class="badge bg-warning">${escapeHtml(value.status)}</span>` : '<span class="badge bg-success">ACTIVE</span>'}
                             </p>
                         </div>
                     </div>
@@ -813,7 +808,7 @@ function renderCustomValues(keyId) {
             `).join('')}
         </div>
         <div class="mt-3 text-muted text-center">
-            <small>Showing ${filteredValues.length} of ${values.length} values</small>
+            <small>Showing ${escapeHtml(filteredValues.length)} of ${escapeHtml(values.length)} values</small>
         </div>
     `;
 }
@@ -843,18 +838,18 @@ function renderAudiences() {
             <div class="card h-100">
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-start mb-2">
-                        <h5 class="card-title">${audience.name}</h5>
+                        <h5 class="card-title">${escapeHtml(audience.name)}</h5>
                         ${audience.type ? `<span class="badge bg-${audience.type === 'FIRST_PARTY' ? 'success' : 'info'}">
-                            ${audience.type.replace('_', ' ')}
+                            ${escapeHtml(audience.type.replace('_', ' '))}
                         </span>` : ''}
                     </div>
-                    ${audience.description ? `<p class="card-text small">${audience.description}</p>` : ''}
+                    ${audience.description ? `<p class="card-text small">${escapeHtml(audience.description)}</p>` : ''}
                     <div class="mt-auto">
-                        ${audience.size ? `<p class="mb-1"><small>Size: ${audience.size.toLocaleString()}</small></p>` : ''}
-                        ${audience.data_provider_name ? `<p class="mb-1"><small>Provider: ${audience.data_provider_name}</small></p>` : ''}
+                        ${audience.size ? `<p class="mb-1"><small>Size: ${escapeHtml(audience.size.toLocaleString())}</small></p>` : ''}
+                        ${audience.data_provider_name ? `<p class="mb-1"><small>Provider: ${escapeHtml(audience.data_provider_name)}</small></p>` : ''}
                         <p class="mb-0">
-                            ${audience.segment_type ? `<span class="badge bg-secondary">${audience.segment_type}</span>` : ''}
-                            ${audience.status && audience.status !== 'ACTIVE' ? `<span class="badge bg-warning">${audience.status}</span>` : ''}
+                            ${audience.segment_type ? `<span class="badge bg-secondary">${escapeHtml(audience.segment_type)}</span>` : ''}
+                            ${audience.status && audience.status !== 'ACTIVE' ? `<span class="badge bg-warning">${escapeHtml(audience.status)}</span>` : ''}
                         </p>
                     </div>
                 </div>
@@ -880,15 +875,15 @@ function renderLabels() {
 
     labelsTbody.innerHTML = filteredLabels.map(label => `
         <tr>
-            <td><strong>${label.name}</strong></td>
-            <td>${label.label_type || 'N/A'}</td>
-            <td>${label.ad_category || 'N/A'}</td>
+            <td><strong>${escapeHtml(label.name)}</strong></td>
+            <td>${escapeHtml(label.label_type || 'N/A')}</td>
+            <td>${escapeHtml(label.ad_category || 'N/A')}</td>
             <td>
                 <span class="badge bg-${label.is_active ? 'success' : 'secondary'}">
                     ${label.is_active ? 'Active' : 'Inactive'}
                 </span>
             </td>
-            <td>${label.description || ''}</td>
+            <td>${escapeHtml(label.description || '')}</td>
         </tr>
     `).join('');
 }
@@ -941,13 +936,13 @@ async function saveAxeKey(keyType) {
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
             body: JSON.stringify({
-                adapter: '{{ tenant.ad_server }}',
+                adapter: {{ tenant.ad_server|tojson }},
                 [fieldName]: keyName
             })
         });
 
         if (!response.ok) {
-            throw new Error('Failed to save configuration');
+            throw new Error(adminErrorText(await response.json()));
         }
 
         // Update hidden field
@@ -969,7 +964,7 @@ async function saveAxeKey(keyType) {
 function updateAxeKeyStatus(keyType, keyName) {
     const statusElement = document.getElementById(`axe-${keyType}-status`);
     if (keyName && keyName !== '') {
-        statusElement.innerHTML = `<small class="text-success"><i class="bi bi-check-circle-fill"></i> <code>${keyName}</code></small>`;
+        statusElement.innerHTML = `<small class="text-success"><i class="bi bi-check-circle-fill"></i> <code>${escapeHtml(keyName)}</code></small>`;
     } else {
         statusElement.innerHTML = `<small class="text-muted">Not configured</small>`;
     }

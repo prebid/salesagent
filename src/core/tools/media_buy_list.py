@@ -53,7 +53,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.errors.codes import AppErrorCode
-from src.core.errors.details import ConfigurationDetails, ValidationDetails
+from src.core.errors.details import ConfigurationDetails, EntityRefDetails
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools._media_buy_status import resolve_canonical_status, seller_valid_actions
 
@@ -277,7 +277,6 @@ def _get_media_buys_impl(
                             field_path=f"{package_path}.targeting_overlay",
                             media_buy_id=buy.media_buy_id,
                             package_id=pkg_id,
-                            reason="targeting_rehydration_failed",
                         )
                     )
                     targeting_overlay = None
@@ -431,16 +430,13 @@ def _resolve_blob_field(
                 field_path=field_path,
                 media_buy_id=media_buy_id,
                 package_id=package_id,
-                reason="persisted_field_unrenderable",
             )
         )
         return None
     return value
 
 
-def _persisted_value_advisory(
-    *, field_path: str, media_buy_id: str, reason: str, package_id: str | None = None
-) -> Error:
+def _persisted_value_advisory(*, field_path: str, media_buy_id: str, package_id: str | None = None) -> Error:
     """Report a degraded value in a usable result, with stable identity in details.
 
     AdCP 3.2.7 L3/error-handling.mdx requires failed transport for CONFIGURATION_ERROR.
@@ -454,7 +450,7 @@ def _persisted_value_advisory(
     return Error.of(  # structural-guard: advisory in GetMediaBuysResponse.errors[] for degraded/omitted data
         AppErrorCode.PERSISTED_VALUE_UNRENDERABLE,
         field=field_path,
-        details=ValidationDetails(reasons=[reason], media_buy_id=media_buy_id, package_id=package_id),
+        details=EntityRefDetails(media_buy_id=media_buy_id, package_id=package_id),
     )
 
 
@@ -514,11 +510,7 @@ def _fetch_target_media_buys(
                 # media buy" — a worse answer than the terminal error naming the
                 # seller-side defect (ruling R-M1).
                 raise
-            row_advisories.append(
-                _persisted_value_advisory(
-                    field_path="media_buys", media_buy_id=buy.media_buy_id, reason="MEDIA_BUY_UNRENDERABLE"
-                )
-            )
+            row_advisories.append(_persisted_value_advisory(field_path="media_buys", media_buy_id=buy.media_buy_id))
             continue
         renderable.append(
             _MediaBuyData(

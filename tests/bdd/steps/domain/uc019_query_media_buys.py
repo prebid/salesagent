@@ -17,17 +17,17 @@ from pytest_bdd import given, parsers, then, when
 
 from src.core.schemas._base import GetMediaBuysRequest
 from tests.bdd.steps._outcome_helpers import (
-    WIRE_MISSING,
     capture_created_media_buy,
     parked_media_buy,
     payload_or_none,
     require_payload,
+    wire_advisory_errors,
     wire_dict,
     wire_field,
-    wire_lookup,
 )
 from tests.bdd.steps.generic._create_request import build_create_request_kwargs
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import bracket_list
 from tests.bdd.steps.generic.then_error import _wire_code, _wire_error_object, _wire_suggestion
 from tests.factories import (
     CreativeAssignmentFactory,
@@ -373,6 +373,28 @@ def given_owns_media_buy_with_status(ctx: dict, principal_id: str, mb_id: str, s
     (mid-flight) window: "active" stays active; terminal states pass through.
     """
     _seed_simple_media_buy(ctx, principal_id, mb_id, status)
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with returned wire status "{status}"'))
+def given_owns_media_buy_with_returned_wire_status(ctx: dict, principal_id: str, mb_id: str, status: str) -> None:
+    """Seed a buy that get_media_buys reports with wire status *status* (BR-RULE-290).
+
+    Not stacked on ``with status``: that seed uses the factory's past-start window, and
+    on e2e_rest the live status scheduler promotes a past-start ``pending_start`` buy
+    with no creatives to ``active`` within a minute. Every status except the
+    date-refined serving state keeps the far-future pre-flight window; ``active`` gets
+    a window around the real today, so all transports judge it the same.
+    """
+    from src.core.database.models import PersistedMediaBuyStatus
+    from src.core.tools._media_buy_status import CANONICAL_SERVING, PERSISTED_STATUS_TO_CANONICAL
+
+    assert PERSISTED_STATUS_TO_CANONICAL[PersistedMediaBuyStatus(status)] == status, (
+        f"persisted status {status!r} is not returned as itself on the wire"
+    )
+    if status == CANONICAL_SERVING:
+        _seed_relative_media_buy(ctx, principal_id, mb_id, "30 days ago", "in 30 days")
+    else:
+        _seed_media_buy_with_persisted_status(ctx, principal_id, mb_id, status)
 
 
 @given(
@@ -3261,6 +3283,15 @@ def _wire_media_buy_position(ctx: dict, mb_id: str) -> int:
     return matching[0]
 
 
+@then(parsers.parse('the media buy "{mb_id}" valid_actions set should equal {expected_actions}'))
+def then_media_buy_valid_actions_set_equal(ctx: dict, mb_id: str, expected_actions: str) -> None:
+    """Compare the buyer-visible valid_actions set with the scenario's expected values."""
+    expected = bracket_list(expected_actions)
+    actual = _wire_media_buy(ctx, mb_id).get("valid_actions")
+    assert isinstance(actual, list), f"Expected valid_actions array on the wire, got {actual!r}"
+    assert sorted(actual) == sorted(expected), f"valid_actions for {mb_id!r}: {actual!r} != {expected!r}"
+
+
 def _wire_media_buy(ctx: dict, mb_id: str) -> dict:
     """Return the uniquely identified media buy on the wire."""
     return wire_field(ctx, "media_buys")[_wire_media_buy_position(ctx, mb_id)]
@@ -3293,21 +3324,6 @@ def _reported_creative_ids(ctx: dict, pkg_id: str) -> list[str]:
     package, so this is the seller's record of the package's creatives as the buyer reads it.
     """
     return sorted(approval["creative_id"] for approval in _wire_package(ctx, pkg_id).get("creative_approvals") or [])
-
-
-def _wire_advisories(ctx: dict) -> list[dict]:
-    """Return the non-fatal ``errors[]`` advisories carried by the 200-OK document.
-
-    Read off the success-path wire, never off a reconstructed exception: these
-    advisories live INSIDE a successful response, so ``wire_error_envelope`` is
-    empty for them and the typed payload would show already-coerced values.
-    ``errors`` is dropped by ``exclude_none`` when the listing is clean, so an
-    absent key means "no advisories" — the TRI-STATE case ``wire_lookup`` exists
-    for. Where the channel sits in the document is the harness's business, so the
-    key is resolved there rather than dug out of the body here.
-    """
-    advisories = wire_lookup(ctx, "errors")
-    return [] if advisories is WIRE_MISSING or advisories is None else list(advisories)
 
 
 @then(parsers.parse('the response should include media buy "{mb_id}" with package "{pkg_id}"'))
@@ -3391,7 +3407,7 @@ def _wire_advisory(ctx: dict, field: str | None, *, mb_id: str | None = None, pk
         field_path += f".{field}"
     matching = [
         advisory
-        for advisory in _wire_advisories(ctx)
+        for advisory in wire_advisory_errors(ctx)
         if advisory.get("field") == field_path
         and (advisory.get("details") or {}).get("media_buy_id") == real_id
         and (pkg_id is None or (advisory.get("details") or {}).get("package_id") == pkg_id)
@@ -3627,7 +3643,7 @@ def then_package_creative_deadline_overrides_buy(ctx: dict, pkg_id: str, timesta
 @then(parsers.parse('response.errors[] should carry exactly {count:d} advisories with code "{code}"'))
 def then_advisory_count_and_classification(ctx: dict, count: int, code: str) -> None:
     """Assert the whole advisory array, including missing or duplicated entries."""
-    advisories = _wire_advisories(ctx)
+    advisories = wire_advisory_errors(ctx)
     assert len(advisories) == count
     assert [advisory.get("code") for advisory in advisories] == [code] * count
 
@@ -3658,5 +3674,5 @@ def then_no_creative_deadline_at_either_level(ctx: dict, mb_id: str, pkg_id: str
     """
     _assert_wire_creative_deadline(_wire_package(ctx, pkg_id, mb_id=mb_id), None, f"package {pkg_id!r}")
     _assert_wire_creative_deadline(_wire_media_buy(ctx, mb_id), None, f"media buy {mb_id!r}")
-    advisories = _wire_advisories(ctx)
+    advisories = wire_advisory_errors(ctx)
     assert advisories == [], f"expected no errors[] advisories for a buy with no deadline; got {advisories!r}"

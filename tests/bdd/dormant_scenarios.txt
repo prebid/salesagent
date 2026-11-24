@@ -339,10 +339,3 @@ T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy 
 
 # Graduated T-UC-019-partition-targeting-rehydration: real persisted seeds and exact wire assertions;
 # PR #2521 live run 2026-11-09: 16 passed across a2a/mcp/rest/e2e_rest.
-
-# T-UC-019-partition-valid-actions  (test_uc019_query_media_buys.py)
-T-UC-019-partition-valid-actions :: then the media buy "<>" valid_actions should equal []
-T-UC-019-partition-valid-actions :: then the media buy "<>" valid_actions should equal [cancel, update_budget, update_dates, update_packages, add_packages, sync_creatives]
-T-UC-019-partition-valid-actions :: then the media buy "<>" valid_actions should equal [cancel, update_budget, update_dates, update_packages, add_packages]
-T-UC-019-partition-valid-actions :: then the media buy "<>" valid_actions should equal [pause, cancel, update_budget, update_dates, update_packages, add_packages]
-T-UC-019-partition-valid-actions :: then the media buy "<>" valid_actions should equal [resume, cancel, update_budget, update_dates]

@@ -1,0 +1,64 @@
+# No blanket `except` in the admin app.
+#
+# The admin app registers one error handler for every exception a route lets escape
+# (src/admin/utils/operator_errors.py::handle_unexpected_error). It logs the exception once
+# under a reference and answers with fixed text, so a route has no reason to catch
+# everything in order to answer, and every such block was a place where exception text
+# reached the operator and the same failure was logged twice.
+#
+# WHAT THIS BANS, in src/admin only: `except Exception`, `except BaseException`, a bare
+# `except:`, and a tuple holding either name, each with or without `as name`, parenthesized
+# or reached as an attribute (`builtins.Exception`). A handler for a named type
+# (`except ValueError`, `except (ValueError, KeyError)`) is what the rule steers toward and
+# matches nothing.
+#
+# THE ONE CATCH-ALL. A step whose failure must not fail its caller (a Slack notice, an audit
+# row, a dashboard tile) runs under `with best_effort("<what failed>"):`. That catch-all lives
+# in src/core/operator_errors.py, outside this rule's files, so the rule needs no ignores.
+#
+# WHY AST-GREP AND NOT RUFF. BLE001 exempts a blanket handler that logs with exc_info or
+# re-raises, and the handlers this rule replaces were mostly exactly that: log, then answer.
+# The rule refuses the clause itself, whatever its body does.
+#
+# Enforced by `ast-grep scan` in `make quality` and the ast-grep-structural-rules pre-commit hook.
+id: admin-no-blanket-except
+language: Python
+severity: error
+message: >-
+  No blanket except in src/admin. Let the exception reach the admin error handler (it logs
+  once under a reference and answers with fixed text), catch the specific type you expect,
+  or run a step that must not fail its caller under `with best_effort("<what failed>"):`
+  from src.core.operator_errors.
+files:
+  # The GAM reporting blueprint lives here too, at src/admin/blueprints/gam_reporting_api.py.
+  - "src/admin/**/*.py"
+utils:
+  # A type expression that names Exception or BaseException anywhere a handler can put it.
+  # Recursive, so `((Exception))` and a tuple nested in a tuple are covered too. `has`
+  # looks at direct children only, which keeps the alias in `as e` out of it.
+  blanket-type:
+    any:
+      - kind: identifier
+        regex: ^(Exception|BaseException)$
+      - kind: attribute
+        has:
+          field: attribute
+          regex: ^(Exception|BaseException)$
+      - kind: as_pattern
+        has:
+          nthChild: 1
+          matches: blanket-type
+      - kind: tuple
+        has:
+          matches: blanket-type
+      - kind: parenthesized_expression
+        has:
+          matches: blanket-type
+rule:
+  kind: except_clause
+  any:
+    # A bare `except:` has no value field; its text goes straight from the keyword to the colon.
+    - regex: '^except\s*:'
+    - has:
+        field: value
+        matches: blanket-type

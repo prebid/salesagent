@@ -28,7 +28,7 @@ class TestNoTempKeyfileForServiceAccount:
         from_service_account_file. Temp files risk credential leakage
         if cleanup fails.
         """
-        source = _SYNC_FILE.read_text()
+        source = _SYNC_FILE.read_text(encoding="utf-8")
         tree = ast.parse(source)
 
         for node in ast.walk(tree):
@@ -41,7 +41,7 @@ class TestNoTempKeyfileForServiceAccount:
 
     def test_uses_from_service_account_info(self):
         """background_sync_service must use from_service_account_info (not _file)."""
-        source = _SYNC_FILE.read_text()
+        source = _SYNC_FILE.read_text(encoding="utf-8")
 
         assert "from_service_account_info" in source, (
             "background_sync_service.py should use from_service_account_info "

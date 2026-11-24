@@ -293,7 +293,7 @@ def test_bdd_conftest_has_exactly_one_transport_derivation():
     N times, because each copy is free to disagree about `e2e_rest`. Route new
     code through `_transport_of(nodeid)`.
     """
-    hits = _handrolled_derivations(_BDD_CONFTEST.read_text())
+    hits = _handrolled_derivations(_BDD_CONFTEST.read_text(encoding="utf-8"))
 
     assert hits == [], (
         "transport identity is being re-derived from a nodeid by hand in "

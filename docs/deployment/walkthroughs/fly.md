@@ -2,7 +2,7 @@
 
 This walkthrough covers deploying the Prebid Sales Agent to Fly.io. The reference implementation maintained by Prebid uses this setup.
 
-> **Single-Tenant by Default**: Fly.io deployments run in single-tenant mode by default, which is appropriate for most publishers deploying their own sales agent. Session cookies use the actual request domain, so authentication works with any custom domain. For multi-tenant mode with subdomain routing, see [Multi-Tenant Setup](../multi-tenant.md).
+> **Single-Tenant by Default**: Fly.io deployments run in single-tenant mode by default, which is appropriate for most publishers deploying their own sales agent. Session cookies use the actual request domain. For multi-tenant mode with subdomain routing, see [Multi-Tenant Setup](../multi-tenant.md).
 
 > **Template**: A ready-to-use `fly.toml` template is available at [`fly.toml.template`](fly.toml.template). Copy it to your project root and customize.
 
@@ -69,18 +69,53 @@ fly secrets list --app your-app-name
 
 ## Step 4: Set Required Secrets
 
-Before deploying, set the encryption key used for storing sensitive data (like OIDC client secrets):
+Before deploying, set the encryption key used for storing sensitive data (like OIDC client secrets) and the key that signs session cookies:
 
 ```bash
 # Generate and set encryption key
 fly secrets set ENCRYPTION_KEY="$(openssl rand -base64 32)"
+
+# Generate and set the session key, so that sessions survive a restart and work on every machine
+fly secrets set FLASK_SECRET_KEY="$(openssl rand -hex 32)"
 ```
 
-> **Important**: Store this key securely. If lost, encrypted data (OIDC credentials) will need to be reconfigured.
+> **Important**: Store `ENCRYPTION_KEY` securely. If you lose it, you must configure the encrypted data (OIDC credentials) again.
 
 ## Step 5: Authentication
 
-Authentication is configured **per-tenant** via the Admin UI. No OAuth environment variables are required for initial deployment.
+Each tenant configures its own SSO in the Admin UI. The first sign-in uses the deployment's own OAuth client, with an address listed in `SUPER_ADMIN_EMAILS`, so set both before you deploy.
+
+### Deployment OAuth and super admins
+
+Set the client's credentials and your address with the command for your provider:
+
+```bash
+# Google OAuth
+fly secrets set GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com" \
+  GOOGLE_CLIENT_SECRET="your-client-secret" \
+  SUPER_ADMIN_EMAILS="you@example.com"
+
+# Other OIDC providers
+fly secrets set OAUTH_CLIENT_ID="your-client-id" \
+  OAUTH_CLIENT_SECRET="your-client-secret" \
+  OAUTH_DISCOVERY_URL="https://your-provider/.well-known/openid-configuration" \
+  SUPER_ADMIN_EMAILS="you@example.com"
+
+# Optional: make every user in a domain a super admin
+fly secrets set SUPER_ADMIN_DOMAINS="example.com"
+```
+
+**Format:**
+- `SUPER_ADMIN_EMAILS`: Comma-separated: `user1@example.com,user2@example.com`
+- `SUPER_ADMIN_DOMAINS`: Comma-separated domains: `example.com,company.org`
+
+Set `SALES_AGENT_DOMAIN` to the host where you open the Admin UI:
+
+```bash
+fly secrets set SALES_AGENT_DOMAIN="your-app-name.fly.dev"
+```
+
+Fly.io deployments run in production, where the deployment creates its default tenant at that host and creates none without it. A sign-in through the deployment's OAuth client sends `/admin/auth/google/callback` on the host you sign in at, which must equal `SALES_AGENT_DOMAIN`, so register `https://your-app-name.fly.dev/admin/auth/google/callback` with that client. [Deployment OAuth](../environment-variables.md#deployment-oauth) states the rule.
 
 ### Initial Setup Flow
 
@@ -89,31 +124,9 @@ Authentication is configured **per-tenant** via the Admin UI. No OAuth environme
 3. Log in with the deployment's own OAuth account (the address you put in
    `SUPER_ADMIN_EMAILS`). Setup Mode, enabled by default for new tenants, lets you verify
    a tenant's OIDC login before you enable it.
-4. Go to **Users & Access** and configure your SSO provider (Google, Microsoft, Okta, Auth0, Keycloak, or any OIDC provider)
-5. Copy the **Redirect URI** shown and add it to your provider: `https://your-app-name.fly.dev/auth/oidc/callback`
-6. **Add yourself**: Add your email as a user OR add your domain to Allowed Domains
-7. Click **Save Configuration**, then **Test Connection** - SSO is automatically enabled on success
-8. Click **Disable Setup Mode** to require SSO for all logins
-
-> **Important**: You must add yourself as a user or add your email domain BEFORE testing. Otherwise you'll see "Access denied" after authenticating.
+4. Configure the tenant's SSO with the [SSO quick start](../../user-guide/sso-setup.md#quick-start). In its first step, set **Custom Domain** to `your-app-name.fly.dev`. **Users & Access** then shows the **Required Redirect URI** `https://your-app-name.fly.dev/admin/auth/oidc/callback`, which you add to your SSO provider (Google, Microsoft, Okta, Auth0, Keycloak, or any OIDC provider).
 
 See [SSO Setup Guide](../../user-guide/sso-setup.md) for detailed provider-specific instructions.
-
-### Legacy: Global Super Admin (Optional)
-
-For backward compatibility or multi-tenant deployments where you need global admin access:
-
-```bash
-# Optional: Global super admin access
-fly secrets set SUPER_ADMIN_EMAILS="admin@example.com,admin2@example.com"
-
-# Optional: Grant admin to all users in a domain
-fly secrets set SUPER_ADMIN_DOMAINS="example.com"
-```
-
-**Format:**
-- `SUPER_ADMIN_EMAILS`: Comma-separated, no spaces: `user1@example.com,user2@example.com`
-- `SUPER_ADMIN_DOMAINS`: Comma-separated domains: `example.com,company.org`
 
 ## Step 6: Deploy
 
@@ -208,8 +221,8 @@ fly ssh console --app your-app-name -C "cd /app && python scripts/ops/migrate.py
 ### Cannot access Admin UI
 
 1. **Check the deployment's own sign-in:** `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
-   (or the `OAUTH_*` variables) must be set, and your address must be in
-   `SUPER_ADMIN_EMAILS`.
+   (or the `OAUTH_*` variables) must be set, `SALES_AGENT_DOMAIN` must name the host you
+   sign in at, and your address must be in `SUPER_ADMIN_EMAILS`.
 
    Then configure SSO in **Users & Access** and disable Setup Mode.
 
@@ -219,13 +232,12 @@ fly ssh console --app your-app-name -C "cd /app && python scripts/ops/migrate.py
    - Add your email as a user OR add your domain to Allowed Domains
    - Try the SSO test again
 
-3. **Using legacy global super admin:** If you set `SUPER_ADMIN_EMAILS`, verify the format:
+3. **Check the super admin list:** If you set `SUPER_ADMIN_EMAILS`, verify the format:
    ```bash
    fly ssh console --app your-app-name -C "echo \$SUPER_ADMIN_EMAILS"
    ```
    - Correct: `user1@example.com,user2@example.com`
    - Wrong: `["user1@example.com"]` (JSON array)
-   - Wrong: `user1@example.com, user2@example.com` (spaces)
 
 4. Restart to pick up changes:
    ```bash

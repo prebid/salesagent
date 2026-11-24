@@ -15,6 +15,8 @@ protected only by a docstring.
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import rel
+
 SRC = Path(__file__).parent.parent.parent / "src"
 SEAM_MODULE = "adcp.server.idempotency"
 # The single production module permitted to import the engine (path relative to src/).
@@ -51,7 +53,7 @@ def _seam_import_line(file_path: Path) -> int | None:
     a module path assembled at runtime from non-literal fragments (e.g.
     ``"adcp.server." + "idempotency"``) — not statically detectable.
     """
-    tree = ast.parse(file_path.read_text(), filename=str(file_path))
+    tree = ast.parse(file_path.read_text(encoding="utf-8"), filename=str(file_path))
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
             if _reaches_seam(node.module):
@@ -79,12 +81,12 @@ def test_sdk_idempotency_canonicalizer_has_single_import_seam():
     """No src/ module outside the allowlist imports the SDK canonicalizer directly."""
     violations = []
     for py in SRC.rglob("*.py"):
-        rel = py.relative_to(SRC).as_posix()
-        if rel in ALLOWED:
+        rel_path = rel(py, SRC)
+        if rel_path in ALLOWED:
             continue
         line = _seam_import_line(py)
         if line is not None:
-            violations.append(f"{rel}:{line}")
+            violations.append(f"{rel_path}:{line}")
 
     assert not violations, (
         f"'{SEAM_MODULE}' may be imported only by {sorted(ALLOWED)} (the single production "
@@ -132,9 +134,9 @@ def test_matcher_models_every_reaching_form(tmp_path):
     ]
     for i, src in enumerate(positives):
         f = tmp_path / f"pos_{i}.py"
-        f.write_text(src + "\n")
+        f.write_text(src + "\n", encoding="utf-8")
         assert _seam_import_line(f) is not None, f"matcher missed: {src!r}"
     for i, src in enumerate(negatives):
         f = tmp_path / f"neg_{i}.py"
-        f.write_text(src + "\n")
+        f.write_text(src + "\n", encoding="utf-8")
         assert _seam_import_line(f) is None, f"matcher false-positive: {src!r}"

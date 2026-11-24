@@ -75,9 +75,10 @@
         <div class="product-card-grid">
             {% for product in products %}
             <div class="product-card">
-                {% if product.product_card and product.product_card.manifest and product.product_card.manifest.product_image %}
-                    <!-- Product with image -->
-                    <div class="product-card-image" style="background-image: url('{{ product.product_card.manifest.product_image }}');"></div>
+                {% set product_image = product.product_card.manifest.product_image if product.product_card and product.product_card.manifest else none %}
+                {% if product_image and product_image.lower().startswith(('https://', 'http://')) %}
+                    <!-- Product with image: an http(s) URL in an <img src>, never inside CSS -->
+                    <img class="product-card-image" src="{{ product_image|safe_url }}" alt="" style="object-fit: cover; display: block;">
                 {% else %}
                     <!-- Product without image - show icon -->
                     <div class="product-card-image product-card-no-image">
@@ -91,7 +92,7 @@
 
                     <div class="product-card-description">
                         {% if product.description %}
-                            {{ (product.description[:120] + '...' if product.description|length > 120 else product.description)|markdown }}
+                            <p>{{ product.description[:120] + '...' if product.description|length > 120 else product.description }}</p>
                         {% else %}
                             <p style="color: #999; font-style: italic;">No description provided</p>
                         {% endif %}
@@ -135,7 +136,7 @@
 
                     <div class="product-card-actions">
                         <a href="{{ url_for('products.edit_product', tenant_id=tenant_id, product_id=product.product_id) }}" class="btn btn-secondary btn-sm" style="flex: 1;">Edit</a>
-                        <button onclick="deleteProduct('{{ product.product_id }}', '{{ product.name }}')" class="btn btn-danger btn-sm" style="background: #dc3545; border-color: #dc3545;">Delete</button>
+                        <button onclick="deleteProduct({{ product.product_id|tojson|forceescape }}, {{ product.name|tojson|forceescape }})" class="btn btn-danger btn-sm" style="background: #dc3545; border-color: #dc3545;">Delete</button>
                     </div>
                 </div>
             </div>
@@ -283,7 +284,7 @@
                 <td>
                     <div style="display: flex; gap: 0.5rem;">
                         <a href="{{ url_for('products.edit_product', tenant_id=tenant_id, product_id=product.product_id) }}" class="btn btn-secondary btn-sm">Edit</a>
-                        <button onclick="deleteProduct('{{ product.product_id }}', '{{ product.name }}')" class="btn btn-danger btn-sm" style="background: #dc3545; border-color: #dc3545;">Delete</button>
+                        <button onclick="deleteProduct({{ product.product_id|tojson|forceescape }}, {{ product.name|tojson|forceescape }})" class="btn btn-danger btn-sm" style="background: #dc3545; border-color: #dc3545;">Delete</button>
                     </div>
                 </td>
             </tr>
@@ -473,7 +474,7 @@
 <script>
 function deleteProduct(productId, productName) {
     if (confirm(`Are you sure you want to delete product "${productName}"?\n\nThis action cannot be undone and may affect active campaigns.`)) {
-        fetch(`{{ script_name }}/tenant/{{ tenant_id }}/products/${productId}/delete`, {
+        fetch(`${scriptRoot}/tenant/${ {{ tenant_id|tojson }} }/products/${productId}/delete`, {
             method: 'DELETE',
             headers: {
                 'Content-Type': 'application/json'
@@ -485,7 +486,7 @@ function deleteProduct(productId, productName) {
                 window.location.reload();
             } else {
                 return response.json().then(err => {
-                    alert(err.error || 'Could not delete product');
+                    alert(adminErrorText(err));
                     return Promise.reject(err);
                 });
             }

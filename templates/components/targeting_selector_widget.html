@@ -649,11 +649,10 @@
 <script>
 // Initialize targeting widget with tenant context and script root for proxy support
 document.addEventListener('DOMContentLoaded', function() {
-    const tenantId = '{{ tenant_id }}';
-    const scriptRoot = '{{ request.script_root }}' || '';
+    const tenantId = {{ tenant_id|tojson }};
 
     if (tenantId) {
-        new TargetingWidget(tenantId, 'targeting-widget', scriptRoot);
+        new TargetingWidget(tenantId, 'targeting-widget');
     }
 });
 </script>

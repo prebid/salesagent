@@ -81,7 +81,7 @@ def _ruff_on(source: str, tmp_path: Path, config: Path) -> str:
     point: the bans are proven at a location where nothing can excuse them.
     """
     probe = tmp_path / "boundary_ban_probe.py"
-    probe.write_text(source)
+    probe.write_text(source, encoding="utf-8")
     result = subprocess.run(
         [
             sys.executable,

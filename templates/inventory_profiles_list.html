@@ -114,7 +114,7 @@
                                             <div>
                                                 {% if profile.product_count == 0 %}
                                                 <button class="btn btn-sm btn-danger"
-                                                        onclick="deleteProfile({{ profile.id }}, '{{ profile.name }}')">
+                                                        onclick="deleteProfile({{ profile.id|tojson|forceescape }}, {{ profile.name|tojson|forceescape }})">
                                                     <i class="fas fa-trash"></i> Delete
                                                 </button>
                                                 {% else %}
@@ -155,7 +155,7 @@ function deleteProfile(profileId, profileName) {
         return;
     }
 
-    fetch(`/admin/tenant/{{ tenant_id }}/inventory-profiles/${profileId}/delete`, {
+    fetch(`${scriptRoot}/tenant/${ {{ tenant_id|tojson }} }/inventory-profiles/${profileId}/delete`, {
         method: 'DELETE',
         headers: {
             'Content-Type': 'application/json',
@@ -166,7 +166,7 @@ function deleteProfile(profileId, profileName) {
         if (data.success) {
             location.reload();
         } else {
-            alert('Error: ' + (data.error || 'Failed to delete profile'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {

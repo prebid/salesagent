@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, rel
 
 _SRC_DIR = Path(__file__).resolve().parents[2] / "src"
 
@@ -96,12 +96,12 @@ def _scan_file(filepath: Path) -> list[tuple[str, int, str]]:
     """
     violations = []
     try:
-        source = filepath.read_text()
+        source = filepath.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(filepath))
     except SyntaxError:
         return violations
 
-    rel_path = str(filepath.relative_to(_SRC_DIR))
+    rel_path = rel(filepath, _SRC_DIR)
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.ExceptHandler):

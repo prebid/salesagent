@@ -104,6 +104,7 @@ from tests.bdd.steps._outcome_helpers import (
     assert_listed_format_option_ref,
     assert_listed_on_canonical_kind,
     error_envelope_or_none,
+    wire_advisory_errors,
     wire_dict,
     wire_field,
 )
@@ -515,14 +516,13 @@ def given_principal_has_n_creatives(ctx: dict, principal_id: str, count: int) ->
     Two ``@given`` phrasings map to this one body: ``parsers.parse`` requires a
     whole-string match, so the "in the same tenant" variant needs its own decorator.
     """
-    from uuid import uuid4
-
     from tests.factories import PrincipalFactory, TenantFactory
+    from tests.factories.mint import mint_id
 
     env = ctx["env"]
     tenant = ctx.get("tenant")
     if tenant is None:
-        tenant_id = f"uc018_iso_{uuid4().hex[:8]}"
+        tenant_id = mint_id("uc018_iso")
         tenant = TenantFactory(tenant_id=tenant_id)
         env.switch_tenant(tenant_id)
         ctx["tenant"] = tenant
@@ -2615,7 +2615,7 @@ def then_one_advisory_names_the_creative(ctx: dict, code: str) -> None:
     assert len(creatives) == 1, f"expected the one seeded creative, got {len(creatives)}"
     creative_id = creatives[0]["creative_id"]
 
-    errors = wire_dict(ctx)["errors"]
+    errors = wire_advisory_errors(ctx)
     advisories = [entry for entry in errors if entry.get("details", {}).get("creative_id") == creative_id]
     assert len(advisories) == 1, (
         f"expected exactly one errors[] entry naming creative {creative_id!r}, got {len(advisories)}: {errors!r}"

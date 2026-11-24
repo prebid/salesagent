@@ -1,32 +1,36 @@
-# Advertiser Management
+# Advertiser management
 
 Advertisers (also called "principals") are the entities that can access your MCP API to create media buys. Each advertiser gets their own API token.
 
-## Creating Advertisers
+## Create advertisers
 
-### Via Admin UI
+To add an advertiser in the Admin UI, do the following:
 
-1. Navigate to **Advertisers** in the Admin UI
-2. Click **Add Advertiser**
-3. Enter advertiser details:
-   - **Name**: Display name
-   - **Contact Email**: For notifications
-   - **GAM Advertiser ID** (if using GAM): Links to existing GAM advertiser
+1. Open **Settings** and select the **Advertisers** section.
+2. Click **Add Advertiser**.
+3. Enter the advertiser details:
+   - **Advertiser ID**: The form requires a value made of letters, digits, underscores, and hyphens. The sales agent does not store it.
+   - **Advertiser Name**: The company name as it appears in reports.
+   - **GAM Advertiser**: The GAM advertiser that owns this advertiser's campaigns. Only a Google Ad Manager tenant has this field.
+4. Click **Add Advertiser**.
 
-### API Token
+The sales agent assigns the principal ID itself: `prin_` followed by eight hexadecimal
+characters.
+
+### API token
 
 Each advertiser gets a unique API token, sent as `Authorization: Bearer <token>` on every
-transport. The server stores only a hash of it, so the token is shown exactly once, when the
-advertiser is created. The advertisers list shows the first characters of each token so you
-can tell them apart, never the whole token.
+transport. The database keeps a hash of the token and the token's first 12 characters. The
+Admin UI shows the full token once, when you create the advertiser. The advertisers list
+shows the first characters of each token so you can tell them apart, never the whole token.
 
 If a token is lost or compromised, rotate it:
 
-1. Go to **Advertisers** > select advertiser
-2. Click **Rotate token**
-3. Copy the new token now; it is not shown again, and the old one stops working at once
+1. Open **Settings** and select the **Advertisers** section.
+2. In the **Access Token** column, click the rotate button next to the token, and confirm.
+3. Copy the new token now; it is not shown again, and the old one stops working at once.
 
-## Platform Mappings
+## Platform mappings
 
 For ad server integration, advertisers need platform mappings:
 
@@ -45,17 +49,22 @@ For ad server integration, advertisers need platform mappings:
 
 The `advertiser_id` links to the GAM advertiser for order creation.
 
-## Access Control
+## Access control
 
-Advertisers can only:
-- View products available to them
-- Create media buys under their account
-- Manage their own creatives
-- View their own campaigns
+An advertiser's token reaches every tool that the sales agent serves. With the token, an
+advertiser can do the following:
 
-They cannot access other advertisers' data or system configuration.
+- Read the sales agent's capabilities and creative formats
+- Discover products
+- Manage accounts
+- Create and update media buys, and read their delivery
+- Upload and list creatives
+- Track and complete tasks
 
-## MCP Client Configuration
+`get_products` returns only the products open to all advertisers or to that advertiser.
+`get_media_buys` and `list_creatives` return only that advertiser's media buys and creatives.
+
+## MCP client configuration
 
 Advertisers connect via MCP using their token:
 
@@ -74,7 +83,6 @@ async with Client(transport=transport) as client:
 
 ## Notifications
 
-Configure email notifications for advertisers:
-- Media buy status changes
-- Creative approval/rejection
-- Campaign delivery alerts
+- **Slack**: The tenant can post notices about tasks, media buys, and creatives to a Slack channel, as [Creative management](creatives.md#notifications) describes.
+- **Buyer webhooks**: A buyer names its own webhook in the `push_notification_config` field of a `create_media_buy`, `update_media_buy`, or `sync_creatives` request. The sales agent posts status changes for that request there. For `sync_creatives`, see [Creative management](creatives.md#notifications). A `sync_accounts` request also accepts the field, but the sales agent sends nothing to it. Known issue: [#1608](https://github.com/prebid/salesagent/issues/1608).
+- **Delivery reports**: A buyer sets `reporting_webhook` on `create_media_buy` to receive delivery reports.

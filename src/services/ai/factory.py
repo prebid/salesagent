@@ -5,7 +5,7 @@ import pkgutil
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from pydantic_ai.exceptions import AgentRunError, UserError
+from pydantic_ai.exceptions import AgentRunError, ModelHTTPError, UserError
 
 from src.core.logging_config import log_safe
 from src.core.security.outbound_http import is_transport_failure
@@ -61,6 +61,9 @@ _logfire_configured = False
 
 def configure_logfire(token: str | None = None) -> bool:
     """Configure Logfire for AI observability.
+
+    This configures the whole PROCESS: every tenant's AI spans go to the project the token
+    names. Only the platform's own token belongs here, never a tenant's ``logfire_token``.
 
     Args:
         token: Optional Logfire token. If not provided, uses LOGFIRE_TOKEN env var
@@ -165,9 +168,6 @@ class AIServiceFactory:
         resolved = self.resolve(seller_ai, platform_fallback=platform_fallback)
         if resolved is None:
             return None
-        if isinstance(seller_ai, TenantAIConfig) and seller_ai.logfire_token:
-            configure_logfire(seller_ai.logfire_token)
-
         logger.debug("Creating Pydantic AI model: %s:%s", resolved.provider, resolved.model)
         model_path, provider_path = PROVIDER_MODELS[resolved.provider]
         try:
@@ -183,8 +183,14 @@ class AIProviderError(Exception):
 
     Raised by :func:`run_agent` so a consumer that degrades when the model is unavailable
     (ranking, the policy check, order naming) catches this one type, while a defect in its
-    own code still propagates.
+    own code still propagates. ``status_code`` is the HTTP status the provider answered
+    with (pydantic-ai's ``ModelHTTPError``), or ``None`` when it answered none, so a
+    caller decides on the cause without reading the provider's text.
     """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 async def run_agent[OutputT](agent: "Agent[None, OutputT]", prompt: str) -> "AgentRunResult[OutputT]":
@@ -203,7 +209,8 @@ async def run_agent[OutputT](agent: "Agent[None, OutputT]", prompt: str) -> "Age
         return await agent.run(prompt)
     except Exception as e:
         if isinstance(e, AgentRunError | UserError) or is_transport_failure(e):
-            raise AIProviderError(f"{type(e).__name__}: {e}") from e
+            status_code = e.status_code if isinstance(e, ModelHTTPError) else None
+            raise AIProviderError(f"{type(e).__name__}: {e}", status_code=status_code) from e
         raise
 
 

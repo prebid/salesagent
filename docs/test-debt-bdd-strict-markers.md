@@ -1,3 +1,6 @@
+<!-- FIXME(#2613): this page still names code by line number. Name the function, class, test,
+constant, or section instead, and lower its count in BASELINE in
+tests/unit/test_architecture_docs_no_line_numbers.py in the same change. -->
 # BDD strict-marker debt
 
 `tests/bdd/conftest.py` names item ids from this file in the `reason` text of

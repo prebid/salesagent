@@ -860,15 +860,15 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with returned wire status "<status>"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
-    And the media buy "mb-001" valid_actions should equal <expected_actions>
-    # BR-RULE-290: valid_actions deterministically derived from wire status via MEDIA_BUY_STATE_MACHINE
+    And the media buy "mb-001" valid_actions set should equal <expected_actions>
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/new_packages
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
     Examples: Valid partitions
       | partition                  | status            | expected_actions                                                                          |
-      | pending_creatives_actions  | pending_creatives | [cancel, update_budget, update_dates, update_packages, add_packages, sync_creatives]      |
-      | pending_start_actions      | pending_start     | [cancel, update_budget, update_dates, update_packages, add_packages]                      |
-      | active_actions             | active            | [pause, cancel, update_budget, update_dates, update_packages, add_packages]               |
+      | pending_creatives_actions  | pending_creatives | [cancel, update_budget, update_dates, update_packages, sync_creatives]                    |
+      | pending_start_actions      | pending_start     | [cancel, update_budget, update_dates, update_packages]                                    |
+      | active_actions             | active            | [pause, cancel, update_budget, update_dates, update_packages]                             |
       | paused_actions             | paused            | [resume, cancel, update_budget, update_dates]                                             |
       | terminal_empty             | completed         | []                                                                                        |
 

@@ -92,3 +92,8 @@ def comma_list(cell: str) -> list[str]:
     unquoted branch).
     """
     return [item.strip() for item in cell.split(",") if item.strip()]
+
+
+def bracket_list(cell: str) -> list[str]:
+    """A Gherkin ``[a, b]`` cell as its non-empty, stripped items; ``[]`` is ``[]``."""
+    return comma_list(cell.strip().removeprefix("[").removesuffix("]"))

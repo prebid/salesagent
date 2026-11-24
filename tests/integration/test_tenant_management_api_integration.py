@@ -2,11 +2,11 @@
 """Integration tests for the Tenant Management API - tests with actual database."""
 
 import pytest
-from flask import Flask
 from sqlalchemy import delete
 
 from src.admin.tenant_management_api import tenant_management_api
 from src.core.database.models import Tenant
+from tests.helpers.admin_session import admin_blueprint_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -49,10 +49,7 @@ def app(integration_db, mock_api_key_auth):
     """Create test Flask app with auth configured."""
     # integration_db ensures database is properly initialized
     # mock_api_key_auth ensures API key exists in database
-    app = Flask(__name__)
-    app.config["TESTING"] = True
-    app.register_blueprint(tenant_management_api)
-    return app
+    return admin_blueprint_app(tenant_management_api)
 
 
 @pytest.fixture
@@ -219,6 +216,48 @@ class TestTenantManagementAPIIntegration:
         ).json
         assert detail["settings"]["authorized_emails"] == ["ops@authlist.com", "eng@authlist.com"]
         assert detail["settings"]["authorized_domains"] == ["authlist.com", "eng.authlist.com"]
+
+    @pytest.mark.parametrize("domains", [["a',alert(1),'.example"], "authlist.com", [42]])
+    def test_an_authorized_domains_list_that_is_not_domain_names_is_a_400(self, client, mock_api_key_auth, domains):
+        """The column refuses it at assignment with an OperatorRefusal; the API answers 400 with its message."""
+        from src.core.operator_errors import InvalidDomainNameError
+
+        headers = {"X-Tenant-Management-API-Key": mock_api_key_auth}
+        create = client.post(
+            "/api/v1/tenant-management/tenants",
+            headers=headers,
+            json={
+                "name": "Bad Domains",
+                "subdomain": "bad-domains",
+                "virtual_host": "bad-domains.adcp.test",
+                "ad_server": "mock",
+                "authorized_emails": ["ops@authlist.com"],
+                "authorized_domains": domains,
+            },
+        )
+        assert create.status_code == 400
+        assert create.json == {"success": False, "error": InvalidDomainNameError.MESSAGE}
+
+        created = client.post(
+            "/api/v1/tenant-management/tenants",
+            headers=headers,
+            json={
+                "name": "Good Domains",
+                "subdomain": "good-domains",
+                "virtual_host": "good-domains.adcp.test",
+                "ad_server": "mock",
+                "authorized_domains": ["authlist.com"],
+            },
+        )
+        assert created.status_code == 201
+        tenant_id = created.json["tenant_id"]
+        update = client.put(
+            f"/api/v1/tenant-management/tenants/{tenant_id}", headers=headers, json={"authorized_domains": domains}
+        )
+        assert update.status_code == 400
+        assert update.json == {"success": False, "error": InvalidDomainNameError.MESSAGE}
+        detail = client.get(f"/api/v1/tenant-management/tenants/{tenant_id}", headers=headers).json
+        assert detail["settings"]["authorized_domains"] == ["authlist.com"]
 
     def test_duplicate_subdomain_returns_409(self, client, mock_api_key_auth):
         """A subdomain that is already taken answers 409, not 500.
@@ -398,9 +437,7 @@ class TestTenantManagementEnvVarAuth:
         """TENANT_MANAGEMENT_API_KEY env var → auth succeeds."""
         monkeypatch.setenv("TENANT_MANAGEMENT_API_KEY", "env-test-key")
 
-        app = Flask(__name__)
-        app.config["TESTING"] = True
-        app.register_blueprint(tenant_management_api)
+        app = admin_blueprint_app(tenant_management_api)
 
         with app.test_client() as client:
             resp = client.get(
@@ -413,9 +450,7 @@ class TestTenantManagementEnvVarAuth:
         """When both env var and DB have keys, env var wins."""
         monkeypatch.setenv("TENANT_MANAGEMENT_API_KEY", "env-priority-key")
 
-        app = Flask(__name__)
-        app.config["TESTING"] = True
-        app.register_blueprint(tenant_management_api)
+        app = admin_blueprint_app(tenant_management_api)
 
         with app.test_client() as client:
             # DB key should be rejected when env var is set
@@ -453,9 +488,7 @@ class TestTenantManagementAuthRejection:
 
     def test_unconfigured_returns_503(self, integration_db):
         """When no key is configured anywhere, returns 503."""
-        app = Flask(__name__)
-        app.config["TESTING"] = True
-        app.register_blueprint(tenant_management_api)
+        app = admin_blueprint_app(tenant_management_api)
 
         with app.test_client() as client:
             resp = client.get(
@@ -474,10 +507,7 @@ class TestSyncApiAuth:
         """Create test Flask app with sync API blueprint."""
         from src.admin.sync_api import sync_api
 
-        app = Flask(__name__)
-        app.config["TESTING"] = True
-        app.register_blueprint(sync_api)
-        return app
+        return admin_blueprint_app(sync_api)
 
     def test_env_var_auth_succeeds(self, sync_app, monkeypatch):
         """SYNC_API_KEY env var → auth succeeds (hits real route)."""

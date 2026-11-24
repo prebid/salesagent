@@ -107,9 +107,13 @@ from src.core.exceptions import AdCPConfigurationError
 from src.core.signing.provider import _provider_cache
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.signing import (
+    KEK_POINTER_SETTING,
     REQUEST_SIGNING,
     SIGNATURE_BASE,
+    TEST_KEK_VARIABLE,
+    install_kek,
     just_after_provisioning,
+    remove_kek,
     resolve_provider,
     signing_key_repo,
 )
@@ -142,12 +146,6 @@ _REVOKE_URL = "/tenant/{tenant_id}/signing-keys/{kid}/revoke"
 #: would have two definition sites and the one in git would win.
 _ENV_TEMPLATE = ".env.template"
 
-#: The SETTING that names the KEK variable. Pinned as a literal because it is
-#: ``SigningSettings.key_passphrase_env``'s env name and so is not compose's to
-#: rename; the variable it POINTS AT is read out of the file instead, so a
-#: deliberate consistent rename stays green while a broken pointer goes red.
-_KEK_POINTER_SETTING = "ADCP_SIGNING_KEY_PASSPHRASE_ENV"
-
 #: What ``generate_signing_keypair(passphrase=...)`` returns, verbatim. The
 #: ciphertext to store IS the PEM -- no envelope format, no encryption code.
 _ENCRYPTED_PEM_HEADER = b"-----BEGIN ENCRYPTED PRIVATE KEY-----"
@@ -156,18 +154,6 @@ _ENCRYPTED_PEM_HEADER = b"-----BEGIN ENCRYPTED PRIVATE KEY-----"
 #: error carries only wire-safe tokens, the OPERATOR diagnostic (which key, why)
 #: goes here (``src/core/signing/provider.py`` ``_refuse``).
 _RESOLVER_LOGGER = "src.core.signing.provider"
-
-
-def _drop_cached_settings(monkeypatch) -> None:
-    """Make the next ``get_settings()`` re-read the environment.
-
-    ``Settings`` is composed once and cached in ``src.core.config._settings``, so a
-    test that changes ``ADCP_SIGNING_*`` after the first read sees nothing until the
-    cached object is dropped. One spelling of that, because the wrong one is silent:
-    this suite arrived patching a ``_config`` global that #1721 does not have, which
-    ``raising=False`` turned into a no-op rather than an error.
-    """
-    monkeypatch.setattr("src.core.config._settings", None)
 
 
 class Seeded(NamedTuple):
@@ -214,16 +200,12 @@ def signing_tenant(integration_db, request) -> Any:
 def deployment_kek(monkeypatch) -> Iterator[None]:
     """Configure the one deployment-wide KEK.
 
-    The KEK half is DELEGATED to ``tests.helpers.signing.deployment_kek`` rather
-    than re-spelled: every suite that provisions through production needs the same
-    pointer-plus-variable pair, and a second copy is how one of them ends up
-
-    ``key_passphrase`` is resolved from the environment on EVERY use (deliberately
-    uncached in production), but the ``Settings`` object that carries
-    ``key_passphrase_env`` is a process global, so the cache is dropped here.
+    DELEGATED to ``tests.helpers.signing.deployment_kek`` rather than re-spelled:
+    every suite that provisions through production needs the same pointer, variable
+    and settings-cache reset, and that helper (through ``install_kek``) is the one
+    place they are made.
     """
     with _configure_deployment_kek(monkeypatch):
-        _drop_cached_settings(monkeypatch)
         yield
 
 
@@ -505,7 +487,7 @@ class TestNoKeyMaterialTouchesAFilesystem:
             f"Nothing was written to {structured}"
         )
 
-        entries = [json.loads(line) for line in structured.read_text().splitlines() if line.strip()]
+        entries = [json.loads(line) for line in structured.read_text(encoding="utf-8").splitlines() if line.strip()]
         provisioning = [
             entry for entry in entries if entry.get("operation") == "provision_signing_key" and entry.get("success")
         ]
@@ -555,8 +537,7 @@ class TestMintingRefusesWithoutAKek:
         either one turns this red.
         """
         env, tenant, client = signing_tenant
-        monkeypatch.delenv(_KEK_POINTER_SETTING, raising=False)
-        _drop_cached_settings(monkeypatch)
+        remove_kek(monkeypatch, TEST_KEK_VARIABLE)
 
         response = _provision_via_admin_route(authenticated_admin_client, tenant.tenant_id)
 
@@ -584,9 +565,7 @@ class TestProvisioningHandsBackNoKeyMaterial:
     caller. The admin route then ``flash()``es that PEM, and ``flash()`` writes to
     Flask's DEFAULT session store -- ``SecureCookieSessionInterface``, a
     CLIENT-SIDE cookie that is SIGNED BUT NOT ENCRYPTED, so its contents are
-    readable by anyone holding the cookie. ``src/admin/app.py:128`` additionally
-    sets ``SESSION_COOKIE_HTTPONLY=False`` in production so JavaScript can read
-    it. The path an operator picks to keep private keys OUT of any store is the
+    readable by anyone holding the cookie. The path an operator picks to keep private keys OUT of any store is the
     path that writes one into a browser cookie.
 
     The fix is not to stop flashing it. It is that provisioning has no private
@@ -658,9 +637,8 @@ class TestProvisioningHandsBackNoKeyMaterial:
             "a provisioning response that carries private key material IS the defect "
             "(salesagent-9misv), and it must be unreachable rather than merely unused: "
             f"found {sorted(leaked.items())}. flash() writes to Flask's default client-side "
-            "SecureCookieSessionInterface -- signed, NOT encrypted -- and src/admin/app.py:128 "
-            "sets SESSION_COOKIE_HTTPONLY=False in production, so a PEM flashed here is a PEM "
-            "any script on the page can read. Provisioning must have no private half to return."
+            "SecureCookieSessionInterface -- signed, NOT encrypted -- so a PEM flashed here is a "
+            "PEM anyone holding the cookie can read. Provisioning must have no private half to return."
         )
         assert len(_rows(env, tenant.tenant_id)) == 1, (
             "and the mint must still SUCCEED -- this grades that no material comes back, not "
@@ -944,7 +922,7 @@ def _env_template_values() -> dict[str, str]:
     needs the two literals the file DEFINES, not what they would expand to in a shell that
     already had them set.
     """
-    lines = (Path(__file__).resolve().parents[2] / _ENV_TEMPLATE).read_text().splitlines()
+    lines = (Path(__file__).resolve().parents[2] / _ENV_TEMPLATE).read_text(encoding="utf-8").splitlines()
     pairs = (line.split("=", 1) for line in lines if "=" in line and not line.lstrip().startswith("#"))
     return {name.strip(): value.strip() for name, value in pairs}
 
@@ -970,21 +948,19 @@ class TestComposeProvisionsWithNoOperatorAction:
 
         template = _env_template_values()
 
-        assert _KEK_POINTER_SETTING in template, (
-            f"{_ENV_TEMPLATE} must set {_KEK_POINTER_SETTING}: without it `cp {_ENV_TEMPLATE} .env` "
+        assert KEK_POINTER_SETTING in template, (
+            f"{_ENV_TEMPLATE} must set {KEK_POINTER_SETTING}: without it `cp {_ENV_TEMPLATE} .env` "
             "followed by `docker compose up` yields a signing-keys page whose every provision "
             "refuses for want of a key encryption key"
         )
-        kek_variable = template[_KEK_POINTER_SETTING]
+        kek_variable = template[KEK_POINTER_SETTING]
         assert template.get(kek_variable), (
-            f"{_KEK_POINTER_SETTING} names {kek_variable!r}, but {_ENV_TEMPLATE} gives that variable "
+            f"{KEK_POINTER_SETTING} names {kek_variable!r}, but {_ENV_TEMPLATE} gives that variable "
             f"no value -- key_passphrase resolves to None and minting refuses. Renaming the KEK "
             f"variable means renaming it in both places; got {sorted(template)}"
         )
         # Exactly the template pair, and nothing this suite would otherwise leave behind.
-        monkeypatch.setenv(_KEK_POINTER_SETTING, kek_variable)
-        monkeypatch.setenv(kek_variable, template[kek_variable])
-        _drop_cached_settings(monkeypatch)
+        install_kek(monkeypatch, kek_variable, template[kek_variable])
 
         _provision_via_ops_script(tenant.tenant_id)
 

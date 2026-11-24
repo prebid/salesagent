@@ -10,110 +10,123 @@ DECORATOR ORDER CONVENTION:
 This order ensures we only log actions by authorized users.
 """
 
-import logging
+import re
 from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
 from flask import g, request, session
 
-logger = logging.getLogger(__name__)
+from src.core.exceptions import AdCPSalesAgentError
+from src.core.operator_errors import best_effort
+from src.core.webhook_validator import UNPARSEABLE_WEBHOOK_URL_FOR_LOG, url_for_record
 
-# Sensitive field patterns to exclude from audit logs
-_SENSITIVE_PATTERNS = frozenset(
-    {
-        "password",
-        "passwd",
-        "pwd",
-        "secret",
-        "secret_key",
-        "webhook_secret",
-        "signing_secret",
-        "token",
-        "access_token",
-        "refresh_token",
-        "bearer_token",
-        "api_token",
-        "auth_token",
-        "key",
-        "api_key",
-        "apikey",
-        "private_key",
-        "public_key",
-        "priv_key",
-        "credential",
-        "credentials",
-        "authorization",
-        "auth",
-        "bearer",
-        "oauth",
-        "oauth_token",
-        "oauth_secret",
-        "cert",
-        "certificate",
-    }
+#: What the audit row of an action that raised records. The exception itself is logged
+#: under a reference by the admin error handler; its text never reaches the audit log.
+_RAISED_MESSAGE = "The action failed with an error; the server log has the details"
+
+# Which field names mark a secret. Names are normalised first (see _normalize_field_name),
+# then a name is sensitive if it CONTAINS one of these...
+_SENSITIVE_SUBSTRINGS = (
+    "password",
+    "passwd",
+    "passphrase",
+    "secret",
+    "token",
+    "credential",
+    "webhook",
+    "api_key",
+    "apikey",
+    "private_key",
+    "key_json",
+    "keyfile",
+    "service_account",
+    "authorization",
+    "bearer",
+    "cookie",
+    "signature",
+    "database_url",
+    "connection_string",
 )
 
-_SENSITIVE_SUFFIXES = ("_secret", "_token", "_key", "_password", "_credential", "_pwd")
+# ...or has one of these as a whole ``_``-separated word, so a short marker such as ``key``
+# or ``dsn`` does not match inside an unrelated word (``keyword``, ``adsnetwork``).
+_SENSITIVE_WORDS = frozenset({"key", "auth", "oauth", "cert", "certificate", "dsn", "jwt", "pwd"})
+
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+_MAX_VALUE_LENGTH = 100
+# Deliberate ceilings: an audit row is a summary of what was submitted, not a copy of it.
+# Containers nested deeper than this, and items past the cap, are left out.
+_MAX_DEPTH = 4
+_MAX_ITEMS = 50
+
+
+def _normalize_field_name(field_name: str) -> str:
+    """``xApiKey``, ``X-Api-Key`` and ``x api key`` all become ``x_api_key``."""
+    return re.sub(r"[-\s.]+", "_", _CAMEL_BOUNDARY.sub("_", field_name.strip())).lower()
 
 
 def _is_sensitive_field(field_name: str) -> bool:
-    """Check if field name indicates sensitive data.
+    """Whether a field with this name may hold a secret."""
+    name = _normalize_field_name(field_name)
+    return any(part in name for part in _SENSITIVE_SUBSTRINGS) or not _SENSITIVE_WORDS.isdisjoint(name.split("_"))
 
-    Args:
-        field_name: Name of the field to check
 
-    Returns:
-        True if field is likely to contain sensitive data
+def _sanitize_value(value: Any) -> Any:
+    """A scalar as an audit row may hold it.
+
+    ``None``, booleans and numbers are kept. Anything else becomes a string cut to 100
+    characters, and an http(s) URL is first reduced by the one URL reducer
+    (:func:`~src.core.webhook_validator.url_for_record`).
     """
-    lower_field = field_name.lower()
-
-    # Check exact matches
-    if lower_field in _SENSITIVE_PATTERNS:
-        return True
-
-    # Check suffixes
-    if lower_field.endswith(_SENSITIVE_SUFFIXES):
-        return True
-
-    return False
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    text = str(value).strip()
+    if text.lower().startswith(("http://", "https://")):
+        text = url_for_record(text, keep_path=False) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG
+    return text[:_MAX_VALUE_LENGTH]
 
 
-def _sanitize_value(value: Any) -> str:
-    """Sanitize and truncate value for audit log storage.
+def _redact(value: Any, depth: int = 0) -> Any:
+    """*value* with every sensitive-named key dropped at every level of nesting.
 
-    Args:
-        value: Value to sanitize
-
-    Returns:
-        Sanitized string (max 100 characters)
+    A container is walked, never ``str()``-ed: the repr of a dict carries its secret
+    values whatever its own key is called. Scalars go through :func:`_sanitize_value`.
     """
-    value_str = str(value)
-    return value_str[:100] if len(value_str) > 100 else value_str
+    if isinstance(value, dict):
+        if depth >= _MAX_DEPTH:
+            return "[omitted]"
+        return {
+            str(key): _redact(item, depth + 1)
+            for key, item in list(value.items())[:_MAX_ITEMS]
+            if not _is_sensitive_field(str(key))
+        }
+    if isinstance(value, list | tuple):
+        if depth >= _MAX_DEPTH:
+            return "[omitted]"
+        return [_redact(item, depth + 1) for item in value[:_MAX_ITEMS]]
+    return _sanitize_value(value)
 
 
-def _extract_safe_request_data() -> dict[str, str]:
-    """Extract non-sensitive data from request (form or JSON).
+def _declared_request_fields(audit_fields: tuple[str, ...]) -> dict[str, Any]:
+    """The submitted values of the fields a route named in ``audit_fields``, and nothing else.
 
-    Returns:
-        Dictionary of safe field names to sanitized values
+    The body is NOT copied by default: what reaches a row every tenant user reads is what the
+    route declared, so an undeclared field, whatever its name, never gets there.
     """
-    safe_fields: dict[str, str] = {}
-
-    # Form data
+    if not audit_fields:
+        return {}
     if request.form:
-        for key, value in request.form.items():
-            if not _is_sensitive_field(key):
-                safe_fields[key] = _sanitize_value(value)
-
-    # JSON data
+        submitted: Any = request.form
     elif request.is_json:
-        json_data = request.get_json() or {}
-        for key, value in json_data.items():
-            if not _is_sensitive_field(key):
-                safe_fields[key] = _sanitize_value(value)
-
-    return safe_fields
+        submitted = request.get_json(silent=True)
+    else:
+        return {}
+    # A JSON body that is not an object (a list, a string) has no fields to pick.
+    if not hasattr(submitted, "get"):
+        return {}
+    return {name: submitted.get(name) for name in audit_fields if name in submitted}
 
 
 def _get_or_create_audit_logger(tenant_id: str):
@@ -142,12 +155,16 @@ def _get_or_create_audit_logger(tenant_id: str):
 _HANDLED_FAILURE_KEY = "_admin_action_failure"
 
 
-def record_admin_action_failure(error: object) -> None:
+def record_admin_action_failure(error: AdCPSalesAgentError | str) -> None:
     """Mark the current admin action as FAILED even though the handler returns normally.
 
+    The audit row (shown in the admin UI) records ``str(error)``: a typed error's text is
+    its code's ``CODE_TABLE`` sentence, and a ``str`` is the handler's own sentence. No
+    other exception is accepted, because its text is not ours to show.
+
     A handler that catches its own domain refusal, flashes it, and returns a
-    redirect never raises — so :func:`log_admin_action`'s ``except`` never fires
-    and ``success`` stays ``True``. The refusal is then written to the audit log
+    redirect never raises — so :func:`log_admin_action` sees it return
+    and ``success`` becomes ``True``. The refusal is then written to the audit log
     as a successful admin action.
 
     That is not hypothetical: ``register_webhook`` refuses an SSRF-blocked URL
@@ -176,13 +193,20 @@ def _apply_handled_failure(success: bool, error_message: str | None) -> tuple[bo
 def log_admin_action(
     operation_name: str,
     extract_details: Callable[..., dict[str, Any]] | None = None,
+    audit_fields: tuple[str, ...] = (),
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator to log admin UI actions to audit_logs table.
+
+    Every tenant user, viewers included, reads the rows this writes, so nothing from the
+    request body is stored unless the route names it, and the assembled ``details`` are
+    redacted once (secret-named keys dropped at every level, URLs reduced) before writing.
 
     Args:
         operation_name: Name of the operation (e.g., "update_tenant_settings")
         extract_details: Optional function to extract details from request/response
                         Signature: extract_details(result, **kwargs) -> dict
+        audit_fields: Request fields (form or top-level JSON) to copy into
+                      ``details["request_data"]`` on a POST. Empty by default: no body.
 
     Usage:
         @log_admin_action("update_tenant_settings")
@@ -218,28 +242,25 @@ def log_admin_action(
             # did with them, so it is the reliable source.
             tenant_id: str | None = kwargs.get("tenant_id") or (request.view_args or {}).get("tenant_id")
 
-            # Call the actual route function
+            # Call the actual route function. It failed unless it returned: what it raised
+            # goes on to the admin error handler, which logs it, and the audit row (shown in
+            # the admin UI) records fixed text rather than the exception's.
             result: Any = None
-            success: bool = True
-            error_message: str | None = None
+            success: bool = False
+            error_message: str | None = _RAISED_MESSAGE
 
             try:
                 result = f(*args, **kwargs)
-            except Exception as e:
-                # Log failed actions too
-                success = False
-                error_message = str(e)
-                # Re-raise to let Flask handle it
-                raise
+                success, error_message = True, None
             finally:
-                # A handler that CAUGHT its own refusal and returned normally never
-                # reaches the except above. Without this, such a refusal audits as a
+                # A handler that CAUGHT its own refusal returned normally, so the block
+                # above marked it a success. Without this, such a refusal audits as a
                 # success — see record_admin_action_failure.
                 success, error_message = _apply_handled_failure(success, error_message)
 
-                # Log the admin action (even if it failed)
+                # Log the admin action (even if it failed). Auditing never fails the request.
                 if tenant_id:
-                    try:
+                    with best_effort(f"Could not write the admin audit log for {operation_name}"):
                         # Use cached audit logger to reduce DB connections
                         audit_logger = _get_or_create_audit_logger(tenant_id)
 
@@ -251,18 +272,13 @@ def log_admin_action(
                         }
 
                         if extract_details and callable(extract_details):
-                            try:
+                            with best_effort(f"Could not extract audit details for {operation_name}"):
                                 extracted = extract_details(result, **kwargs)
                                 if isinstance(extracted, dict):
                                     details.update(extracted)
-                            except Exception as e:
-                                logger.warning(f"Failed to extract details for {operation_name}: {e}")
 
-                        # Add request data for POST requests (sanitized)
-                        if request.method == "POST":
-                            safe_fields = _extract_safe_request_data()
-                            if safe_fields:
-                                details["request_data"] = safe_fields
+                        if request.method == "POST" and (declared := _declared_request_fields(audit_fields)):
+                            details["request_data"] = declared
 
                         audit_logger.log_operation(
                             operation=operation_name,
@@ -270,13 +286,10 @@ def log_admin_action(
                             principal_id=user_email,
                             adapter_id="admin_ui",
                             success=success,
-                            details=details,
+                            details=_redact(details),
                             error=error_message,
                             tenant_id=tenant_id,
                         )
-                    except Exception as e:
-                        # Don't fail the request if audit logging fails
-                        logger.warning(f"Failed to write admin audit log for {operation_name}: {e}")
 
             return result
 

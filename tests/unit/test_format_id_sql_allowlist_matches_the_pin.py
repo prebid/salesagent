@@ -50,7 +50,7 @@ _MIGRATION = (
 def _pinned_properties() -> set[str]:
     """Every property ``core/format-id.json`` declares, from the installed pin's own bundle."""
     schema = pathlib.Path(adcp.__file__).parent / "_schemas" / "3.2" / "core" / "format-id.json"
-    return set(json.loads(schema.read_text())["properties"])
+    return set(json.loads(schema.read_text(encoding="utf-8"))["properties"])
 
 
 def _sql_names(sql_array: str) -> set[str]:
@@ -80,7 +80,7 @@ def _allowed_constant() -> str:
     the FILE declares, and a loud failure when the name is absent is what makes this test fail
     honestly against a revision that does not have it rather than passing on a default.
     """
-    for node in ast.parse(_MIGRATION.read_text()).body:
+    for node in ast.parse(_MIGRATION.read_text(encoding="utf-8")).body:
         if isinstance(node, ast.AnnAssign | ast.Assign):
             targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
             if any(isinstance(t, ast.Name) and t.id == "_ALLOWED" for t in targets):

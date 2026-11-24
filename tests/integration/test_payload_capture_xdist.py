@@ -72,7 +72,7 @@ def test_dispatches_survive_the_worker_to_controller_trip(tmp_path: Path, integr
     )
     assert artifact.exists(), f"no artifact written under xdist.\n{result.stdout[-3000:]}"
 
-    data = json.loads(artifact.read_text())
+    data = json.loads(artifact.read_text(encoding="utf-8"))
     nodes = data["nodes"]
     assert data["run"]["workers"] == 2, f"the run was not distributed: {data['run']}"
     assert len(nodes) == data["run"]["collected"], (

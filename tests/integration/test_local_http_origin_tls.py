@@ -165,7 +165,7 @@ class TestLocalOriginTLSFront:
         server_ctx = server_ssl_context(gen_test_tls)
 
         empty_ca = tmp_path / "empty_ca.pem"
-        empty_ca.write_text("")
+        empty_ca.write_text("", encoding="utf-8")
         monkeypatch.setenv("SSL_CERT_FILE", str(empty_ca))
 
         with run_local_origin(listen_host="localhost", ssl_context=server_ctx) as origin:
@@ -194,7 +194,7 @@ class TestLocalOriginTLSFront:
         server_ctx = server_ssl_context(gen_test_tls)
 
         empty_ca = tmp_path / "empty_ca.pem"
-        empty_ca.write_text("")
+        empty_ca.write_text("", encoding="utf-8")
         monkeypatch.setenv("SSL_CERT_FILE", str(empty_ca))
         set_flags(monkeypatch, private=True)
 

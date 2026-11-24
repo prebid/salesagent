@@ -122,7 +122,7 @@ def load_env_file(path: Path) -> dict[str, str]:
     """Parse a .env file into a dict, preserving values. Comments/blanks skipped."""
     if not path.exists():
         return {}
-    return _parse_env_lines(path.read_text())
+    return _parse_env_lines(path.read_text(encoding="utf-8"))
 
 
 def merge_env(existing: dict[str, str], defaults: dict[str, str]) -> dict[str, str]:
@@ -159,7 +159,7 @@ def build_env_from_template(template_path: Path) -> dict[str, str]:
     """Extract uncommented KEY=VALUE pairs from the template as defaults."""
     if not template_path.exists():
         return {}
-    return _parse_env_lines(template_path.read_text())
+    return _parse_env_lines(template_path.read_text(encoding="utf-8"))
 
 
 def render_env_from_template(template_path: Path, values: dict[str, str]) -> str:
@@ -172,7 +172,7 @@ def render_env_from_template(template_path: Path, values: dict[str, str]) -> str
     if not template_path.exists():
         return serialize_env(values)
 
-    lines = template_path.read_text().splitlines()
+    lines = template_path.read_text(encoding="utf-8").splitlines()
     output: list[str] = []
     used_keys: set[str] = set()
 
@@ -298,7 +298,7 @@ def ensure_env() -> StepResult:
     if existing == merged:
         return StepResult(name="env", ok=True, message=".env already up to date", skipped=True)
 
-    ENV_FILE.write_text(render_env_from_template(ENV_TEMPLATE, merged))
+    ENV_FILE.write_text(render_env_from_template(ENV_TEMPLATE, merged), encoding="utf-8")
     verb = "Updated" if existing else "Created"
     return StepResult(name="env", ok=True, message=f"{verb} .env ({len(merged)} keys)")
 
