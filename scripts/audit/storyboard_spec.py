@@ -953,10 +953,15 @@ def tagged_scenarios(features_dir: Path, tag: str = TAG) -> list[TaggedScenario]
                 continue
             tags = line.split()
             title, title_line = "", idx + 1
-            for probe in range(idx + 1, min(idx + 4, len(lines))):
+            # Comment lines may sit between the tags and the Scenario line (several
+            # generated features explain a scenario there), so skip them; any other
+            # line ends the search.
+            for probe in range(idx + 1, len(lines)):
+                if (stripped := lines[probe].strip()).startswith("#") or not stripped:
+                    continue
                 if match := _SCENARIO_RE.match(lines[probe]):
                     title, title_line = match.group("title"), probe + 1
-                    break
+                break
             ident = next((m.group(1) for t in tags if (m := _IDENT_TAG_RE.match(t))), "(unnamed)")
             block_lines: list[str] = []
             for probe in range(idx, min(idx + 80, len(lines))):

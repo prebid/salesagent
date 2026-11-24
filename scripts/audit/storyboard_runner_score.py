@@ -34,7 +34,7 @@ from scripts.audit import storyboard_spec  # noqa: E402
 RESULTS_GLOB = "test-results/*/storyboard/summary_*.json"
 
 
-def _score(path: Path) -> dict[str, Any]:
+def score(path: Path) -> dict[str, Any]:
     """One protocol's score. ``storyboards`` counts what the runner actually executed."""
     data = json.loads(path.read_text(encoding="utf-8"))
     executed = data.get("storyboardsExecuted") or data.get("storyboards_executed") or []
@@ -65,7 +65,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     chosen = [p for p in summaries if newest is not None and p.parent.parent == newest]
     return {
         "run": newest.name if newest else None,
-        "scores": sorted((_score(p) for p in chosen), key=lambda s: s["protocol"]),
+        "scores": sorted((score(p) for p in chosen), key=lambda s: s["protocol"]),
         "runs_available": sorted({p.parent.parent.name for p in summaries}),
     }
 

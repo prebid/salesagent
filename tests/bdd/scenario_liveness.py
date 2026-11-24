@@ -116,6 +116,11 @@ class Observation:
     #: False, whatever its reason string says. This is the structural fact
     #: ``harness_wired`` is derived from; the reason string is metadata.
     steps_executed: bool = False
+    #: For an ``xfailed`` outcome: whether an XPASS would fail the run. True only
+    #: when an ``xfail`` marker with ``strict`` (or the ``xfail_strict`` ini default)
+    #: produced it; an imperative ``pytest.xfail()`` or a conftest auto-xfail cannot
+    #: XPASS, so it records False. None for every other outcome.
+    strict: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -125,6 +130,7 @@ class Observation:
             "reason": self.reason,
             "reason_category": self.reason_category,
             "steps_executed": self.steps_executed,
+            "strict": self.strict,
         }
 
 
@@ -403,8 +409,17 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Any:
             reason=reason,
             reason_category=category,
             steps_executed=item.nodeid in _STEPS_RAN,
+            strict=_xfail_strict(item) if outcome_name == "xfailed" else None,
         )
     )
+
+
+def _xfail_strict(item: pytest.Item) -> bool:
+    """Whether *item*'s xfail marker is strict; False when no marker produced the xfail."""
+    marker = item.get_closest_marker("xfail")
+    if marker is None:
+        return False
+    return bool(marker.kwargs.get("strict", item.config.getini("xfail_strict")))
 
 
 def artifact_path() -> Path:

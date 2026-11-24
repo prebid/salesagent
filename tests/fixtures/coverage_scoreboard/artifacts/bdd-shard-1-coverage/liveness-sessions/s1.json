@@ -1,0 +1,13 @@
+{"run": {}, "scenarios": [
+ {"scenario_id": "T-UC-900-green", "observations": [
+  {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_green[mcp]", "outcome": "passed", "reason": null, "reason_category": "live"},
+  {"transport": "rest", "nodeid": "tests/bdd/test_demo.py::test_green[rest]", "outcome": "passed", "reason": null, "reason_category": "live"}]},
+ {"scenario_id": "T-UC-900-split", "observations": [
+  {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_split[mcp]", "outcome": "passed", "reason": null, "reason_category": "live"},
+  {"transport": "e2e_rest", "nodeid": "tests/bdd/test_demo.py::test_split[e2e_rest]", "outcome": "xfailed", "reason": "ledgered in-network", "reason_category": "ledgered", "strict": false}]},
+ {"scenario_id": "T-UC-900-gap", "observations": [
+  {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_gap[mcp-a]", "outcome": "xfailed", "reason": "production gap", "reason_category": "ledgered", "strict": true},
+  {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_gap[mcp-b]", "outcome": "xfailed", "reason": "production gap", "reason_category": "ledgered", "strict": true}]},
+ {"scenario_id": "T-UC-900-red", "observations": [
+  {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_red[mcp]", "outcome": "failed", "reason": null, "reason_category": "live"}]}
+]}
