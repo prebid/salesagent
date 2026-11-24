@@ -9,7 +9,7 @@ from flask import Blueprint, jsonify, render_template
 from googleads import ad_manager, oauth2
 from sqlalchemy import select
 
-from src.adapters.gam.client import GAMCallFailed, accessible_networks, current_network_user, safe_get
+from src.adapters.gam.client import GAMCallFailed, accessible_networks, current_network, current_network_user
 from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
 from src.adapters.gam_reporting_service import GAMReportingService
 from src.admin.form_validation import json_object_body, parse_json_field
@@ -213,103 +213,83 @@ def detect_gam_network(tenant_id):
     # get trafficker ID and network currency for that network
     if network_code_provided:
         client.network_code = network_code_provided
-        user_service = client.GetService("UserService")
-        current_user = user_service.getCurrentUser()
-
-        trafficker_id = str(current_user.id) if current_user else None
-
-        # Also get network info for currency and timezone
-        network_service = client.GetService("NetworkService")
-        current_network = network_service.getCurrentNetwork()
-        currency_code = safe_get(current_network, "currencyCode", "USD") if current_network else "USD"
-        secondary_currencies = safe_get(current_network, "secondaryCurrencyCodes") or [] if current_network else []
-        timezone = safe_get(current_network, "timeZone") if current_network else None
-
+        trafficker_id = str(current_network_user(client).id)
+        network = current_network(client)
         return jsonify(
             {
                 "success": True,
                 "network_code": network_code_provided,
                 "trafficker_id": trafficker_id,
-                "currency_code": currency_code,
-                "secondary_currencies": secondary_currencies,
-                "timezone": timezone,
+                "currency_code": network["currencyCode"],
+                "secondary_currencies": network["secondaryCurrencyCodes"],
+                "timezone": network["timeZone"],
             }
         )
 
-    # Get network service and retrieve network info
-    network_service = client.GetService("NetworkService")
-
-    # Try getAllNetworks first (doesn't require network_code)
-    try:
-        all_networks = network_service.getAllNetworks()
-        logger.info(f"getAllNetworks() returned: {all_networks}")
-        if all_networks and len(all_networks) > 0:
-            # Validate all networks
-            validated_networks = []
-            for network in all_networks:
-                is_valid, error_msg = validate_gam_network_response(network)
-                if is_valid:
-                    validated_networks.append(
-                        {
-                            "network_code": str(network["networkCode"]),
-                            "network_name": network["displayName"],
-                            "network_id": str(network["id"]),
-                            "currency_code": safe_get(network, "currencyCode", "USD"),
-                            "secondary_currencies": safe_get(network, "secondaryCurrencyCodes") or [],
-                            "timezone": safe_get(network, "timeZone"),
-                        }
-                    )
-                else:
-                    logger.warning(f"Invalid network in list: {error_msg}")
-
-            if not validated_networks:
-                raise ConnectionTestFailed(
-                    f"GAM network detection for tenant {tenant_id}: no network validated",
-                    details=("No valid networks found in GAM account",),
-                )
-
-            # If multiple networks, return list for user to choose
-            if len(validated_networks) > 1:
-                return jsonify(
+    all_networks = accessible_networks(client, "oauth")
+    if all_networks:
+        # Validate all networks
+        validated_networks = []
+        for network in all_networks:
+            is_valid, error_msg = validate_gam_network_response(network)
+            if is_valid:
+                validated_networks.append(
                     {
-                        "success": True,
-                        "multiple_networks": True,
-                        "networks": validated_networks,
-                        "network_count": len(validated_networks),
+                        "network_code": str(network["networkCode"]),
+                        "network_name": network["displayName"],
+                        "network_id": str(network["id"]),
+                        "currency_code": network["currencyCode"],
+                        "secondary_currencies": network["secondaryCurrencyCodes"],
+                        "timezone": network["timeZone"],
                     }
                 )
+            else:
+                logger.warning(f"Invalid network in list: {error_msg}")
 
-            # Single network - auto-select and get trafficker ID
-            network = all_networks[0]
-            trafficker_id = None
-            try:
-                # Set the network code in the client so we can get user info
-                client.network_code = str(network["networkCode"])
-                trafficker_id = str(current_network_user(client).id)
-                logger.info(f"Detected current user ID: {trafficker_id}")
-            except GAMCallFailed:
-                # The trafficker id is optional here: the operator can enter it. The fault is logged.
-                logger.warning("Could not get the current GAM user; trafficker id left unset")
+        if not validated_networks:
+            raise ConnectionTestFailed(
+                f"GAM network detection for tenant {tenant_id}: no network validated",
+                details=("No valid networks found in GAM account",),
+            )
 
+        # If multiple networks, return list for user to choose
+        if len(validated_networks) > 1:
             return jsonify(
                 {
                     "success": True,
-                    "network_code": str(network["networkCode"]),
-                    "network_name": network["displayName"],
-                    "network_id": str(network["id"]),
-                    "network_count": 1,
-                    "trafficker_id": trafficker_id,
-                    "currency_code": safe_get(network, "currencyCode", "USD"),
-                    "secondary_currencies": safe_get(network, "secondaryCurrencyCodes") or [],
-                    "timezone": safe_get(network, "timeZone"),
+                    "multiple_networks": True,
+                    "networks": validated_networks,
+                    "network_count": len(validated_networks),
                 }
             )
-    except AttributeError as e:
-        # getAllNetworks might not be available in this GAM version
-        logger.info(f"getAllNetworks AttributeError: {e}")
-        pass
 
-    # If getAllNetworks didn't work, we can't get the network without a network_code
+        # Single network - auto-select and get trafficker ID
+        network = all_networks[0]
+        trafficker_id = None
+        try:
+            # Set the network code in the client so we can get user info
+            client.network_code = str(network["networkCode"])
+            trafficker_id = str(current_network_user(client).id)
+            logger.info(f"Detected current user ID: {trafficker_id}")
+        except GAMCallFailed:
+            # The trafficker id is optional here: the operator can enter it. The fault is logged.
+            logger.warning("Could not get the current GAM user; trafficker id left unset")
+
+        return jsonify(
+            {
+                "success": True,
+                "network_code": str(network["networkCode"]),
+                "network_name": network["displayName"],
+                "network_id": str(network["id"]),
+                "network_count": 1,
+                "trafficker_id": trafficker_id,
+                "currency_code": network["currencyCode"],
+                "secondary_currencies": network["secondaryCurrencyCodes"],
+                "timezone": network["timeZone"],
+            }
+        )
+
+    # getAllNetworks() answered no network, and without a network_code there is nothing else to ask for
     raise ConnectionTestFailed(
         f"GAM network detection for tenant {tenant_id}: getAllNetworks() returned nothing",
         details=(

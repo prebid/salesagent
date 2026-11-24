@@ -114,6 +114,7 @@ def stub_gam_client(
     line_items: tuple[SoapObject, ...] | list[SoapObject] = (),
     network_time_zone: str = STAND_IN_NETWORK_TIME_ZONE,
     network_fault: str | None = None,
+    user_fault: str | None = None,
     custom_targeting_values: dict[tuple[int, str], int] | None = None,
 ) -> MagicMock:
     """An ``AdManagerClient`` stand-in: one recorded GAM network.
@@ -133,6 +134,8 @@ def stub_gam_client(
       reader of the network record fails loudly instead of reading a ``MagicMock``. Given
       ``network_fault``, an ``ApiError`` reason such as ``"QuotaError.EXCEEDED_QUOTA"``, it
       refuses instead, raising ``gam_fault``.
+    * ``UserService.getCurrentUser``, given ``user_fault`` (an ``ApiError`` reason), refuses with
+      ``gam_fault``. Without one it is unconfigured.
     * ``LineItemService.getLineItemsByStatement`` answers the line items the network holds,
       read at call time: ``client.line_items`` (seeded from ``line_items``; a test adds held
       line items there), then the line items it created.
@@ -200,6 +203,9 @@ def stub_gam_client(
                 return_value=SoapObject(timeZone=network_time_zone),
                 side_effect=None if network_fault is None else gam_fault(network_fault),
             )
+        ),
+        "UserService": MagicMock(
+            getCurrentUser=MagicMock(side_effect=None if user_fault is None else gam_fault(user_fault))
         ),
         "CustomTargetingService": MagicMock(
             getCustomTargetingValuesByStatement=MagicMock(

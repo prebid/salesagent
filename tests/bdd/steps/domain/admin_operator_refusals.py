@@ -344,10 +344,28 @@ def given_another_tenant_on_gam_with_service_account_key(ctx: dict) -> None:
     env.onboard_gam(tenant_id=ctx["admin_other_tenant_id"], service_account_json=service_account_json())
 
 
-@given(parsers.parse('Google Ad Manager refuses the current network lookup with "{reason}"'))
-def given_gam_refuses_current_network_lookup(ctx: dict, reason: str) -> None:
+#: The stand-in network's keyword (``stub_gam_client``) that makes GAM refuse each lookup.
+_GAM_LOOKUP_FAULTS: dict[str, str] = {"network": "network_fault", "user": "user_fault"}
+
+
+@given(parsers.re(r'Google Ad Manager refuses the current (?P<lookup>network|user) lookup with "(?P<reason>[^"]+)"'))
+def given_gam_refuses_current_lookup(ctx: dict, lookup: str, reason: str) -> None:
     ctx["gam_fault_reason"] = reason
-    _env(ctx).serve_gam_network(network_fault=reason)
+    _env(ctx).serve_gam_network(**{_GAM_LOOKUP_FAULTS[lookup]: reason})
+
+
+@given("the deployment has a GAM OAuth client")
+def given_gam_oauth_client(ctx: dict) -> None:
+    _env(ctx).serve_gam_oauth_client()
+
+
+@when(
+    parsers.parse(
+        'the settings page detects that tenant\'s GAM network "{network_code}" with the refresh token "{token}"'
+    )
+)
+def when_detect_named_gam_network(ctx: dict, network_code: str, token: str) -> None:
+    ctx["admin_page"] = _env(ctx).detect_gam_network(_other_tenant_id(ctx), token, network_code)
 
 
 @when("the settings page tests that tenant's GAM connection with its service account")

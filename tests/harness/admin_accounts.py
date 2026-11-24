@@ -51,6 +51,13 @@ class AdminTransport(StrEnum):
     E2E = "e2e_admin"  # requests.Session against the live stack
 
 
+#: Why a Given that stands in for Google Ad Manager has no live-server realization.
+_NO_STAND_IN_GAM_ON_E2E = e2e_unsupported(
+    "the live server has no stand-in Google Ad Manager network, and CI has no GAM network "
+    "to call instead (#2583): a GAM call there would call Google"
+)
+
+
 class AdminAccountEnv:
     """Test environment for admin account management BDD scenarios.
 
@@ -351,11 +358,13 @@ class AdminAccountEnv:
             headers={"Content-Type": "application/json"},
         )
 
-    def detect_gam_network(self, tenant_id: str, refresh_token: str) -> AdminResponse:
-        """POST *refresh_token* to *tenant_id*'s GAM network detection, as the settings page does with fetch()."""
-        return self.client.request(
-            "post", f"/tenant/{tenant_id}/gam/detect-network", json={"refresh_token": refresh_token}
-        )
+    def detect_gam_network(self, tenant_id: str, refresh_token: str, network_code: str | None = None) -> AdminResponse:
+        """POST *refresh_token* to *tenant_id*'s GAM network detection, as the settings page does with fetch().
+
+        Given *network_code*, the request names the network the operator picked from several.
+        """
+        body = {"refresh_token": refresh_token} | ({"network_code": network_code} if network_code else {})
+        return self.client.request("post", f"/tenant/{tenant_id}/gam/detect-network", json=body)
 
     def post_adapter_update(self, tenant_id: str, body: dict[str, Any]) -> AdminResponse:
         """POST *body* to *tenant_id*'s adapter choice, as the settings page does with fetch()."""
@@ -862,12 +871,7 @@ class AdminAccountEnv:
             )
         return self._llm_origin
 
-    @realize_e2e(
-        e2e_unsupported(
-            "the live server has no stand-in Google Ad Manager network, and CI has no GAM network "
-            "to call instead (#2583): a GAM call there would call Google"
-        )
-    )
+    @realize_e2e(_NO_STAND_IN_GAM_ON_E2E)
     def serve_gam_network(self, **network_answers: Any) -> None:
         """Every GAM client the admin app builds is one stand-in network, until ``__exit__``.
 
@@ -881,3 +885,22 @@ class AdminAccountEnv:
 
         client = stub_gam_client(**network_answers)
         self._in_process_cleanups.enter_context(patch(GAM_CLIENT_PATCH["gam_client"], return_value=client))
+
+    @realize_e2e(_NO_STAND_IN_GAM_ON_E2E)
+    def serve_gam_oauth_client(self) -> None:
+        """The deployment has a GAM OAuth client, and Google accepts every refresh token for it, until ``__exit__``.
+
+        Patches the client id and secret onto this process's settings and stands in for
+        googleads' ``GoogleRefreshTokenClient``, so ``Refresh()`` calls nobody.
+        """
+        from unittest.mock import patch
+
+        from src.core.config import get_settings
+
+        gam_auth = get_settings().auth
+        for field, value in (
+            ("gam_oauth_client_id", "bdd-gam-oauth-client.apps.googleusercontent.com"),
+            ("gam_oauth_client_secret", "GOCSPX-bdd-gam-oauth-client-secret"),
+        ):
+            self._in_process_cleanups.enter_context(patch.object(gam_auth, field, value))
+        self._in_process_cleanups.enter_context(patch("googleads.oauth2.GoogleRefreshTokenClient"))

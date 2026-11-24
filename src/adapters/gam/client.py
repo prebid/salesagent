@@ -84,19 +84,27 @@ def accessible_networks(client: ad_manager.AdManagerClient, auth_method: str) ->
     OAuth asks for all networks, and falls back to the current one when this API version
     has no ``getAllNetworks``.
     """
-    with _operator_call("network lookup"):
-        network_service = client.GetService("NetworkService")
-        if auth_method != "service_account":
+    if auth_method != "service_account":
+        with _operator_call("network lookup"):
             try:
-                all_networks = network_service.getAllNetworks()
+                all_networks = client.GetService("NetworkService").getAllNetworks()
             except AttributeError:
                 logger.info("getAllNetworks not available, falling back to getCurrentNetwork")
             else:
                 logger.info(f"getAllNetworks() returned {len(all_networks or [])} networks")
                 return [_network_summary(network) for network in all_networks or []]
-        current_network = network_service.getCurrentNetwork()
-        logger.info(f"getCurrentNetwork() returned: {current_network}")
-        return [_network_summary(current_network)]
+    return [current_network(client)]
+
+
+def current_network(client: ad_manager.AdManagerClient) -> dict[str, Any]:
+    """The network *client*'s network code names, summarized as :func:`accessible_networks` reports it.
+
+    Raises :class:`GAMCallFailed` when GAM fails.
+    """
+    with _operator_call("current network lookup"):
+        network = client.GetService("NetworkService").getCurrentNetwork()
+    logger.info(f"getCurrentNetwork() returned: {network}")
+    return _network_summary(network)
 
 
 class GAMUser(Protocol):

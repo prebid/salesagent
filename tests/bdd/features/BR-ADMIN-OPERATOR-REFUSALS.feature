@@ -372,7 +372,22 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     Then the page returns status 502
     And the JSON response has "success" as false
     And the JSON error is the "GAMCallFailed" refusal
-    And the JSON details are the logged failure "GAM network lookup failed" with a reference
+    And the JSON details are the logged failure "GAM current network lookup failed" with a reference
+    And the answer does not carry GAM's fault text
+
+  # The operator picked a network from several, so detection asks GAM who the refresh token's
+  # user is on it. The deployment's GAM OAuth client and Google's token exchange are stand-ins
+  # too (AdminAccountEnv.serve_gam_oauth_client): graded in-process only, as above.
+  @T-ADMIN-REFUSAL-044 @json @gam-oauth @gam
+  Scenario: A GAM network detection whose user lookup GAM refuses is answered as a failed GAM call
+    Given another tenant of this seller
+    And the deployment has a GAM OAuth client
+    And Google Ad Manager refuses the current user lookup with "QuotaError.EXCEEDED_QUOTA"
+    When the settings page detects that tenant's GAM network "12345678" with the refresh token "bdd-refresh-token"
+    Then the page returns status 502
+    And the JSON response has "success" as false
+    And the JSON error is the "GAMCallFailed" refusal
+    And the JSON details are the logged failure "GAM current user lookup failed" with a reference
     And the answer does not carry GAM's fault text
 
   # Neither test deployment sets APPROXIMATED_API_KEY.
