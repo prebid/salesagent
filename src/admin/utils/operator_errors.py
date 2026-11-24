@@ -10,12 +10,12 @@ reference of :func:`src.core.operator_errors.safe_error_message`.
 
 import logging
 from collections.abc import Iterable, Mapping, Sequence
-from urllib.parse import urlsplit
 
 from flask import Flask, flash, redirect, render_template, request
 from flask.typing import ResponseReturnValue
 from werkzeug.exceptions import HTTPException
 
+from src.admin.csrf import request_origin
 from src.admin.utils.helpers import caller_reads_json, json_failure, local_path
 from src.core.operator_errors import OperatorRefusal, RecordedFailure, safe_error_message
 
@@ -24,19 +24,17 @@ __all__ = ["flash_refusal", "register_error_handler"]
 logger = logging.getLogger(__name__)
 
 
-def _same_site_referrer(referrer: str | None, host: str, method: str, full_path: str) -> str | None:
-    """The page *referrer* names, as a relative path, when it is on *host* and is not a failed GET of itself.
+def _same_site_referrer(referrer: str | None, origin: str, method: str, full_path: str) -> str | None:
+    """The page *referrer* names, as a relative path, when it is on *origin* and is not a failed GET of itself.
 
-    *method* and *full_path* are the failed request's. Only the referrer's path and query are
-    used, so no scheme or host from the ``Referer`` header reaches ``redirect()``, and together
-    they must be a :func:`~src.admin.utils.helpers.local_path`.
+    *origin* is the request's public ``scheme://host[:port]``; *method* and *full_path* are the
+    failed request's. A ``Referer`` on this site is *origin* followed by a path, so nothing is
+    parsed: only what follows *origin* is used, so no scheme or host from the header reaches
+    ``redirect()``, and it must be a :func:`~src.admin.utils.helpers.local_path`.
     """
-    if not referrer:
+    if not referrer or not referrer.lower().startswith(origin + "/"):
         return None
-    parsed = urlsplit(referrer)
-    if parsed.scheme not in ("http", "https") or parsed.netloc != host:
-        return None
-    target = local_path(parsed.path + (f"?{parsed.query}" if parsed.query else ""))
+    target = local_path(referrer[len(origin) :])
     if target is None:
         return None
     # Going back to the URL that just failed would loop, unless the request was a form
@@ -71,7 +69,7 @@ def _answer(
     """
     if caller_reads_json():
         return json_failure(message, status, fields)
-    back = _same_site_referrer(request.referrer, request.host, request.method, request.full_path)
+    back = _same_site_referrer(request.referrer, request_origin(), request.method, request.full_path)
     if back is None:
         _flash_errors(details)
         return render_template("error.html", error_message=message), status

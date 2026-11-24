@@ -277,7 +277,8 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
   Scenario Outline: A refusal from a page the browser reads as another site's is shown on the error page
     # Only a same-site path is gone back to. A browser reads //host and /\host as another
     # site, so a Referer whose path starts with either names no page here, nor one whose
-    # path does once URL-decoded.
+    # path does once URL-decoded. Nor does a Referer that is not this site's origin followed
+    # by a path, such as one a URL parser would refuse.
     When the operator submits the create tenant form from the page "<page>" with:
       | field        | value                               |
       | name         | Refused Host Seller                 |
@@ -293,6 +294,9 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
       | //elsewhere.example/create_tenant          |
       | /\\elsewhere.example/create_tenant         |
       | /%2F%2Felsewhere.example/create_tenant     |
+      | //[elsewhere.example/create_tenant         |
+      | /%2F[elsewhere.example/create_tenant       |
+      | http://[elsewhere.example/create_tenant    |
 
   # A form the seller cannot save is refused with InvalidFormInput: its MESSAGE says the
   # form was refused, and each issue names a refused field in text the validator wrote,
