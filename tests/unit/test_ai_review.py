@@ -335,20 +335,21 @@ class TestAIReviewCreative:
     @patch("src.services.ai.agents.review_agent.create_review_agent")
     @patch("src.services.ai.AIServiceFactory")
     def test_api_error(self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session):
-        """Test handling of AI API errors."""
+        """Test handling of AI API errors: the provider failure as review_creative_async raises it (run_agent)."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.services.ai.factory import AIProviderError
 
         mock_factory = MagicMock()
         mock_factory.build.return_value = "google-gla:gemini-2.0-flash"
         mock_factory_class.return_value = mock_factory
 
-        mock_review_async.side_effect = Exception("API rate limit exceeded")
+        mock_review_async.side_effect = AIProviderError("ModelHTTPError: API rate limit exceeded")
 
         result = _ai_review_creative_impl("test_tenant", "test_creative_123", db_session=mock_db_session)
 
         assert result["status"] == "pending_review"
-        assert "error" in result
-        assert "API rate limit exceeded" in str(result["error"])
+        assert result["error"].startswith("AI review failed. The details have been logged (reference ")
+        assert "API rate limit exceeded" not in result["error"]
 
     # Edge Case: Confidence threshold at exact boundary (0.90)
     @patch("src.services.ai.agents.review_agent.review_creative_async")

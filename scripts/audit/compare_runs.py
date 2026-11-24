@@ -170,7 +170,7 @@ def outcomes(report: pathlib.Path) -> dict[str, tuple[str, str]]:
     (``[gw3] linux -- Python ...``) -- so "the first phase with a longrepr" read
     the banner for every failure and the traceback for none.
     """
-    data = json.loads(report.read_text())
+    data = json.loads(report.read_text(encoding="utf-8"))
     result: dict[str, tuple[str, str]] = {}
     for test in data.get("tests", []):
         outcome = test.get("outcome", "?")
@@ -195,7 +195,7 @@ def declared_suites(run: pathlib.Path) -> set[str] | None:
     manifest = run / SUITES_MANIFEST
     if not manifest.exists():
         return None
-    return {f"{name.strip()}.json" for name in manifest.read_text().split(",") if name.strip()}
+    return {f"{name.strip()}.json" for name in manifest.read_text(encoding="utf-8").split(",") if name.strip()}
 
 
 def present_suites(run: pathlib.Path) -> set[str]:

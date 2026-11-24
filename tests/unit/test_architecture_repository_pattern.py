@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions, rel
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -39,12 +39,7 @@ _IMPL_LEGACY_EXTRA_FILES = frozenset({"src/core/context_manager.py", "src/admin/
 
 def _glob_python_files(root: Path, dirs: tuple[str, ...]) -> set[str]:
     """``.py`` files under any of ``dirs`` (relative to ``root``), pycache excluded."""
-    return {
-        str(p.relative_to(root))
-        for scan_dir in dirs
-        for p in (root / scan_dir).rglob("*.py")
-        if "__pycache__" not in str(p)
-    }
+    return {rel(p, root) for scan_dir in dirs for p in (root / scan_dir).rglob("*.py") if "__pycache__" not in str(p)}
 
 
 def _discover_impl_files() -> list[str]:
@@ -89,7 +84,8 @@ def _discover_integration_test_files() -> list[str]:
     # database_helpers.py and tenant_setup.py, and two allowlist rows were removed as
     # "fixed" when the calls had only moved somewhere this glob did not reach.
     util_files = glob.glob("tests/utils/**/*.py", recursive=True)
-    return sorted(set(test_files + conftest_files + helper_files + util_files))
+    # glob.glob joins with os.sep; the allowlists spell paths with "/".
+    return sorted({Path(f).as_posix() for f in test_files + conftest_files + helper_files + util_files})
 
 
 INTEGRATION_TEST_FILES = _discover_integration_test_files()
@@ -265,12 +261,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_media_buy_repository_writes.py", "tenant_b"),
     ("tests/integration/test_media_buy_repository_writes.py", "principal_a"),
     ("tests/integration/test_media_buy_repository_writes.py", "principal_b"),
-    # tests/integration/test_media_buy_status_scheduler.py
-    ("tests/integration/test_media_buy_status_scheduler.py", "_create_test_tenant"),
-    ("tests/integration/test_media_buy_status_scheduler.py", "_create_test_principal"),
-    ("tests/integration/test_media_buy_status_scheduler.py", "_create_media_buy"),
-    ("tests/integration/test_media_buy_status_scheduler.py", "_create_creative"),
-    ("tests/integration/test_media_buy_status_scheduler.py", "_create_creative_assignment"),
     # tests/integration/test_media_buy_v3.py
     ("tests/integration/test_media_buy_v3.py", "mb_creatives"),
     ("tests/integration/test_media_buy_v3.py", "test_unsupported_currency_rejected"),
@@ -470,7 +460,7 @@ def _find_matching_calls(file_path: str, predicate: Callable[[ast.expr], bool]) 
     if not source_path.exists():
         return []
 
-    tree = ast.parse(source_path.read_text())
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
     violations = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -575,7 +565,7 @@ class TestImplNoDirectDbSession:
         frozen snapshot masquerading as one (#1721 M2)."""
         scan_dir = tmp_path / "src" / "core" / "tools"
         scan_dir.mkdir(parents=True)
-        (scan_dir / "_never_seen_before.py").write_text("def f():\n    pass\n")
+        (scan_dir / "_never_seen_before.py").write_text("def f():\n    pass\n", encoding="utf-8")
         found = _glob_python_files(tmp_path, ("src/core/tools",))
         assert "src/core/tools/_never_seen_before.py" in found
 
@@ -658,7 +648,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
     ("tests/helpers/creative_test_helpers.py", "assert_stored_creative_assets"),
     ("tests/integration/conftest.py", "authenticated_admin_session"),
-    ("tests/integration/conftest.py", "cleanup_tenant"),
     ("tests/integration/conftest.py", "sample_principal"),
     ("tests/integration/conftest.py", "sample_products"),
     ("tests/integration/conftest.py", "sample_tenant"),
@@ -1004,11 +993,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_media_buy_repository_writes.py", "test_update_config_other_tenant_returns_none"),
     ("tests/integration/test_media_buy_repository_writes.py", "test_update_fields_tenant_isolation"),
     ("tests/integration/test_media_buy_repository_writes.py", "test_update_status_other_tenant_returns_none"),
-    ("tests/integration/test_media_buy_status_scheduler.py", "_create_creative"),
-    ("tests/integration/test_media_buy_status_scheduler.py", "_create_creative_assignment"),
-    ("tests/integration/test_media_buy_status_scheduler.py", "_create_media_buy"),
-    ("tests/integration/test_media_buy_status_scheduler.py", "_create_test_principal"),
-    ("tests/integration/test_media_buy_status_scheduler.py", "_create_test_tenant"),
     ("tests/integration/test_media_buy_v3.py", "mb_creatives"),
     ("tests/integration/test_media_buy_v3.py", "mb_tenant_with_approval"),
     ("tests/integration/test_media_buy_v3.py", "test_adapter_failure_no_db_changes"),
@@ -1116,7 +1100,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_setup_checklist_service.py", "setup_minimal_tenant"),
     ("tests/integration/test_setup_checklist_service.py", "test_bulk_setup_status_for_multiple_tenants"),
     ("tests/integration/test_setup_checklist_service.py", "test_currency_count_in_details"),
-    ("tests/integration/test_setup_checklist_service.py", "test_gemini_api_key_detection"),
     ("tests/integration/test_setup_checklist_service.py", "test_progress_calculation"),
     ("tests/integration/test_setup_checklist_service.py", "test_ready_for_orders_without_sso_in_multi_tenant_mode"),
     ("tests/integration/test_setup_checklist_service.py", "test_sso_is_optional_not_critical_in_multi_tenant_mode"),
@@ -1235,8 +1218,8 @@ def _find_repository_protocol_imports() -> list[tuple[str, str, int]]:
     for py_file in sorted((ROOT / REPOSITORIES_DIR).rglob("*.py")):
         if "__pycache__" in str(py_file):
             continue
-        rel_path = str(py_file.relative_to(ROOT))
-        tree = ast.parse(py_file.read_text())
+        rel_path = rel(py_file, ROOT)
+        tree = ast.parse(py_file.read_text(encoding="utf-8"))
         violations.extend((rel_path, module, lineno) for module, lineno in _scan_for_protocol_imports(tree))
     return violations
 

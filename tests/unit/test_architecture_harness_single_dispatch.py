@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, repo_root
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, rel, repo_root
 
 _TESTS_DIR = repo_root() / "tests"
 
@@ -150,7 +150,7 @@ def _iter_test_modules() -> list[tuple[str, ast.Module]]:
             tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
         except SyntaxError:  # pragma: no cover - a syntax error fails elsewhere
             continue
-        modules.append((str(py_file.relative_to(repo_root())), tree))
+        modules.append((rel(py_file, repo_root()), tree))
     return modules
 
 

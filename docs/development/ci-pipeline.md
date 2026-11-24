@@ -36,6 +36,7 @@ plus the aggregate `CI / BDD Tests` status proxy (replacing PR3's single BDD job
 | `CI / Quickstart` | docker compose health |
 | `CI / Smoke Tests` | import smoke + skip-decorator guard |
 | `CI / Unit Tests` | unit + harness with coverage artifact |
+| `CI / Unit Tests (Windows)` | the same unit + harness run on windows-latest (a row of the `unit-tests` matrix; no coverage) |
 | `CI / Integration (creative)` | integration shard |
 | `CI / Integration (product)` | integration shard |
 | `CI / Integration (media-buy)` | integration shard |
@@ -142,9 +143,13 @@ full monolith compile on warm CI runs.
 workflow runs on `push` to `main` and `workflow_dispatch`. It logs in to
 `ghcr.io` and calls `creative-agent-stack.sh publish`, which builds from the
 pinned tarball and pushes `ghcr.io/<repo>/adcp-creative-agent:${IMAGE_TAG}`.
-`IMAGE_TAG` is `${ADCP_PIN}-p<checksum>`, where the checksum covers the script's two
-patches to the agent source (the Fly size check and the MCP rate limit), so changing
-a patch publishes a new tag instead of reusing an image built without it.
+`IMAGE_TAG` is `${ADCP_PIN}-p<checksum>`, where the checksum covers the script's three
+patches to the agent source (the Fly size check, the MCP rate limit, and the dependency
+updates), so changing a patch publishes a new tag instead of reusing an image built without it.
+The dependency-update patch moves the agent's vulnerable npm packages, the base image's
+bundled npm and its Debian packages to fixed versions without bumping `ADCP_PIN`; the
+Trivy scan after publish shows what is left. It regenerates the lockfile as of a fixed
+date in the patch, so one tag always names one dependency tree.
 If the tag already exists, publish is a no-op. Publish failures fail the
 workflow loudly (unlike the test shard, which degrades gracefully).
 

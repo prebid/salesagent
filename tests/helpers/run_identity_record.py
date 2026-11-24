@@ -68,6 +68,7 @@ def write_run_identity(
                 "fixture-host",
                 "2026-01-01T00:00:00Z",
             )
-        )
+        ),
+        encoding="utf-8",
     )
     return path

@@ -17,7 +17,7 @@ from pathlib import Path
 def extract_function_params(file_path, func_name):
     """Extract parameter names from a function."""
     try:
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             tree = ast.parse(f.read())
     except Exception as e:
         print(f"❌ Failed to parse {file_path}: {e}")

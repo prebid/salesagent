@@ -3,7 +3,9 @@
 Provides access to the Tenant row and AdapterConfig for _impl functions
 that need tenant-level configuration data without calling get_db_session(),
 plus the one write path admin settings handlers need (``update_tenant``) and
-the atomic authorized-list mutators shared by the admin surfaces.
+the atomic authorized-list mutators shared by the admin surfaces, and the tenant's
+users' role and active flag for the admin Users page (``set_user_role``,
+``toggle_user_active``), which refuse to leave the tenant without an active admin.
 
 Core invariant: every query includes tenant_id in the WHERE clause. The tenant_id
 is set at construction time and injected into all queries automatically.
@@ -13,7 +15,7 @@ is set at construction time and injected into all queries automatically.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 from typing import cast as type_cast
 
 from sqlalchemy import inspect as sa_inspect
@@ -23,14 +25,32 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 from src.core.database.jsonb_append import jsonb_list
-from src.core.database.models import AdapterConfig, Tenant
+from src.core.database.models import AdapterConfig, Tenant, User, UserRole
+from src.core.database.repositories.base import Repository
+from src.core.domain_config import get_super_admin_domain
+from src.core.http_utils import authorized_domain
+from src.core.json_validators import checked_authorized_domain
+from src.core.operator_errors import SuperAdminDomainRefused, TenantNotFound
 
 AuthorizedListColumn = Literal["authorized_domains", "authorized_emails"]
 AddOutcome = Literal["added", "duplicate", "missing_tenant"]
 RemoveOutcome = Literal["removed", "absent", "missing_tenant"]
+UserChangeOutcome = Literal["changed", "missing_user", "last_admin"]
 
 
-class TenantConfigRepository:
+class UserChange(NamedTuple):
+    """What ``set_user_role`` / ``toggle_user_active`` did, read before the transaction ends.
+
+    ``email`` and ``is_active`` are empty unless the user exists; ``is_active`` is the
+    value after the call.
+    """
+
+    outcome: UserChangeOutcome
+    email: str = ""
+    is_active: bool = False
+
+
+class TenantConfigRepository(Repository):
     """Tenant-scoped access for configuration models.
 
     All queries filter by tenant_id automatically. Callers cannot bypass
@@ -40,6 +60,8 @@ class TenantConfigRepository:
         session: SQLAlchemy session (caller manages lifecycle).
         tenant_id: Tenant scope for all queries.
     """
+
+    NOT_FOUND = TenantNotFound
 
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session
@@ -117,8 +139,20 @@ class TenantConfigRepository:
         return jsonb_list(getattr(Tenant, column))
 
     def add_to_authorized_list(self, column: AuthorizedListColumn, value: str) -> AddOutcome:
-        """Atomically append ``value`` to the tenant's list if not present."""
+        """Atomically append ``value`` to the tenant's list if not present.
+
+        An authorized domain must be a domain name (``checked_authorized_domain``): this UPDATE
+        bypasses the ORM validator that checks a whole-list assignment. It must also not be the
+        deployment's ``SUPER_ADMIN_DOMAIN``, compared in the form it would be stored in. Every
+        page that lets a tenant add a domain appends through here; a whole-list assignment is
+        the operator's own (tenant creation, the management API, the single-tenant bootstrap,
+        which seeds ``SUPER_ADMIN_DOMAINS``), so this refusal is not on the column.
+        """
         col_j = self._authorized_list_col(column)
+        if column == "authorized_domains":
+            value = checked_authorized_domain(value)
+            if value == authorized_domain(get_super_admin_domain()):
+                raise SuperAdminDomainRefused(f"Tenant {self._tenant_id} authorizing the super-admin domain {value}")
         elem = func.jsonb_build_array(literal(value))
         stmt = (
             update(Tenant)
@@ -156,3 +190,57 @@ class TenantConfigRepository:
         from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
         return AdapterConfigRepository(self._session, self._tenant_id).find_by_tenant()
+
+    # ------------------------------------------------------------------
+    # Tenant users
+    # ------------------------------------------------------------------
+
+    def set_user_role(self, user_id: str, role: UserRole) -> UserChange:
+        """Give the tenant's user *user_id* *role*, unless that demotes the last active admin."""
+        user = self._get_user(user_id)
+        if user is None:
+            return UserChange("missing_user")
+        if role != UserRole.ADMIN and self._is_last_active_admin(user):
+            return UserChange("last_admin", user.email, user.is_active)
+        user.role = role
+        return UserChange("changed", user.email, user.is_active)
+
+    def toggle_user_active(self, user_id: str) -> UserChange:
+        """Flip whether the tenant's user *user_id* is active, unless that deactivates the last active admin."""
+        user = self._get_user(user_id)
+        if user is None:
+            return UserChange("missing_user")
+        if self._is_last_active_admin(user):
+            return UserChange("last_admin", user.email, user.is_active)
+        user.is_active = not user.is_active
+        return UserChange("changed", user.email, user.is_active)
+
+    def get_active_user_by_email(self, email: str) -> User | None:
+        """The tenant's active user with *email* (compared lower-cased), or None."""
+        stmt = select(User).filter_by(tenant_id=self._tenant_id, email=email.lower(), is_active=True)
+        return self._session.scalars(stmt).first()
+
+    def _get_user(self, user_id: str) -> User | None:
+        stmt = select(User).filter_by(tenant_id=self._tenant_id, user_id=user_id)
+        return self._session.scalars(stmt).first()
+
+    def _is_last_active_admin(self, user: User) -> bool:
+        """Whether *user* is the tenant's only active admin.
+
+        Locks the tenant's active admin rows (``FOR UPDATE``, in id order) until the
+        transaction ends, so two admins demoting or deactivating each other at the same
+        time cannot both pass: the second waits for the first to commit, and PostgreSQL
+        re-checks the locked rows against the ``WHERE`` before returning them. This holds
+        because the callers above check and write in the same transaction.
+
+        The answer comes from the locked query alone, never from *user*'s own (unlocked)
+        ``role`` / ``is_active``: a target read as a viewer may have been promoted since,
+        and deciding from that read would take no lock at all.
+        """
+        stmt = (
+            select(User.user_id)
+            .filter_by(tenant_id=self._tenant_id, role=UserRole.ADMIN, is_active=True)
+            .order_by(User.user_id)
+            .with_for_update()
+        )
+        return list(self._session.scalars(stmt).all()) == [user.user_id]

@@ -1562,9 +1562,10 @@ class BaseTestEnv:
         it selects are this env's own. That is the same property the e2e branch has
         always relied on.
         """
-        from tests.helpers.signing import VERIFIED_METRIC, samples_with
+        from tests.helpers.metrics import counter_total
+        from tests.helpers.signing import VERIFIED_METRIC
 
-        return int(sum(samples_with(VERIFIED_METRIC, keyid=self.signing.key_id).values()))
+        return int(counter_total(VERIFIED_METRIC, keyid=self.signing.key_id))
 
     def _realize_e2e_signature_failure_counts(self) -> dict[str, float]:
         """The same claim and the SAME EVENT, read across a process boundary.
@@ -1599,7 +1600,8 @@ class BaseTestEnv:
         (``src/core/metrics.py:325``): a failure is recorded before any key is resolved,
         so the code is the only label that says WHICH rule refused.
         """
-        from tests.helpers.signing import FAILED_METRIC, counter_samples
+        from tests.helpers.metrics import counter_samples
+        from tests.helpers.signing import FAILED_METRIC
 
         return _by_signature_code(counter_samples(FAILED_METRIC))
 
@@ -1712,9 +1714,15 @@ class BaseTestEnv:
                 f"{type(self).__name__} declares no A2A_SKILL and does not override deliver_a2a(). "
                 "Set A2A_SKILL to enable Transport.A2A dispatch."
             )
+        from tests.harness.client import _response_reader
         from tests.harness.transport import Transport
 
-        return self._deliver_via_client(Transport.A2A, self.A2A_SKILL, kwargs)
+        return self._dispatch_via_client(
+            Transport.A2A,
+            self.A2A_SKILL,
+            kwargs,
+            response_reader=lambda body: _response_reader(self.response_parser(self.A2A_SKILL))(body),
+        )
 
     def call_a2a(self, **kwargs: Any) -> Any:
         """The parsed A2A payload. Defined ONCE; never override — override
@@ -1742,7 +1750,23 @@ class BaseTestEnv:
 
         return self._deliver_via_client(Transport.MCP, self.MCP_TOOL, kwargs)
 
-    def _deliver_via_client(self, transport: Any, tool: str, kwargs: dict[str, Any]) -> DeliverResult | TransportResult:
+    def _dispatch_via_client(
+        self,
+        transport: Any,
+        tool: str,
+        kwargs: dict[str, Any],
+        *,
+        response_reader: Callable[[dict[str, Any]], Any] | None = None,
+    ) -> TransportResult:
+        """Present one credential and payload to the shared dispatch core."""
+        from tests.harness.client import _dispatch_core
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE
+
+        payload = dict(kwargs)
+        credential = payload.pop("credential", NO_IDENTITY_OVERRIDE)
+        return _dispatch_core(self, transport, tool, payload, credential, response_reader=response_reader)
+
+    def _deliver_via_client(self, transport: Any, tool: str, kwargs: dict[str, Any]) -> DeliverResult:
         """Dispatch through THE one client core, then parse with this env's parser.
 
         This is The harness's single-dispatch invariant, made literal: ``AdCPTestClient`` is the
@@ -1757,20 +1781,11 @@ class BaseTestEnv:
         that type. The core still owns the DISPATCH; the env owns only how its
         own wire is typed.
 
-        A2A results retain native Task metadata through one local parse and
-        return captured errors. Only call_a2a raises those errors.
+        A2A uses _dispatch_via_client directly to retain its native evidence.
         """
-        from tests.harness.client import _dispatch_core
-        from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
+        from tests.harness.client import _response_reader
 
-        payload = dict(kwargs)
-        credential = payload.pop("credential", NO_IDENTITY_OVERRIDE)
-        if transport is Transport.A2A:
-            parser = self.response_parser(tool)
-            revive = getattr(parser, "revive", None)
-            parse_response = revive if revive is not None else lambda data: parser(**data)
-            return _dispatch_core(self, transport, tool, payload, credential, a2a_parser=parse_response)
-        result = _dispatch_core(self, transport, tool, payload, credential)
+        result = self._dispatch_via_client(transport, tool, kwargs)
         if result.error is not None:
             raise result.error
         wire = result.wire_response
@@ -1787,10 +1802,7 @@ class BaseTestEnv:
         # scenario reported "no response arrived" for a request the seller answered fine.
         # ``revive`` is the reader-side door: it takes the field off the document, validates
         # the rest through the same refusing constructor, and re-attaches the value.
-        parser = self.response_parser(tool)
-        revive = getattr(parser, "revive", None)
-        parse_response = revive if revive is not None else lambda data: parser(**data)
-        return DeliverResult(payload=parse_response(wire), wire_response=wire)
+        return DeliverResult(payload=_response_reader(self.response_parser(tool))(wire), wire_response=wire)
 
     def call_mcp(self, **kwargs: Any) -> Any:
         """The parsed MCP payload. Defined ONCE; never override — override
@@ -1867,7 +1879,7 @@ class BaseTestEnv:
         async def _call():
             return await handler.on_message_send(params, server_context)
 
-        from tests.harness.client import native_task_result, parse_a2a_result, unwrap_delivery_error
+        from tests.harness.client import _response_reader, native_task_result, parse_a2a_result, unwrap_delivery_error
         from tests.harness.transport import Transport
 
         try:
@@ -1877,7 +1889,7 @@ class BaseTestEnv:
             result = native_task_result(Transport.A2A, _a2a_protobuf_task(task_result))
         except Exception as exc:
             return unwrap_delivery_error(exc, Transport.A2A)
-        return result if response_cls is dict else parse_a2a_result(result, lambda data: response_cls(**data))
+        return result if response_cls is dict else parse_a2a_result(result, _response_reader(response_cls))
 
     @staticmethod
     def _a2a_skill_parameters(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -1893,12 +1905,21 @@ class BaseTestEnv:
             return {**req_fields, **kwargs}
         return dict(kwargs)
 
-    def post_a2a(
+    def _refuse_unsignable(self, signed: SignatureRealization) -> None:
+        """Use the signing capability's diagnostic before an unsigned fallback."""
+        if signed and not self.can_sign:
+            _ = self.signing
+
+    def send_a2a(
         self, body: dict[str, Any], credential: dict[str, str], *, signed: SignatureRealization = False
-    ) -> Any:
-        """Send one native A2A frame through the shared HTTP/signing route."""
+    ) -> TransportResult:
+        """Send and read one native frame through the shared HTTP/signing route."""
         from urllib.parse import urlsplit
 
+        from tests.harness.client import jsonrpc_http_result
+        from tests.harness.transport import Transport
+
+        self._refuse_unsignable(signed)
         origin = self.e2e_config.base_url if self.is_e2e else None
         if self.can_sign:
             from tests.helpers.signing import WIRE_ORIGIN
@@ -1914,25 +1935,22 @@ class BaseTestEnv:
                 origin=signing_origin,
             )
         else:
-            if signed:
-                self.signing  # raises with the missing capability  # noqa: B018
             raw = json.dumps(body).encode()
             headers = {"Content-Type": "application/json", **_A2A_VERSION_HEADER, **credential}
-        return self._send_http("POST", _A2A_PATH, content=raw, headers=headers)
+        response = self._send_http("POST", _A2A_PATH, content=raw, headers=headers)
+        transport = Transport.E2E_A2A if self.is_e2e else Transport.A2A
+        return jsonrpc_http_result(transport, response)
 
     def _run_a2a_over_http(self, skill_name: str, response_cls: type, **kwargs: Any) -> TransportResult:
         """Dispatch through the real A2A HTTP route and retain its native receipt."""
-        from tests.harness.client import jsonrpc_http_result, parse_a2a_result
-        from tests.harness.transport import Transport
+        from tests.harness.client import _response_reader, parse_a2a_result
 
         credential = self._pop_credential(kwargs)
         self._commit_factory_data()
         self._seed_ambient_tenant(credential)
         body = _a2a_message_send_body(skill_name, self._a2a_skill_parameters(kwargs))
-        response = self.post_a2a(body, credential, signed=self._signed_dispatch)
-        transport = Transport.E2E_A2A if self.is_e2e else Transport.A2A
-        result = jsonrpc_http_result(transport, response)
-        return result if response_cls is dict else parse_a2a_result(result, lambda data: response_cls(**data))
+        result = self.send_a2a(body, credential, signed=self._signed_dispatch)
+        return result if response_cls is dict else parse_a2a_result(result, _response_reader(response_cls))
 
     def _run_mcp_client(
         self,
@@ -2302,8 +2320,7 @@ class BaseTestEnv:
         body = self.build_rest_body(**kwargs)
 
         if not self.can_sign:
-            if signed:
-                self.signing  # raises, naming enable_request_signing()  # noqa: B018
+            self._refuse_unsignable(signed)
             # The credential travels as HEADERS even on the unsigned leg, and that is
             # ``credential()``'s whole job: the bearer AND ``x-adcp-tenant``, on every
             # leg. The dependency-override era posted bare here and had to bolt the
@@ -3110,8 +3127,9 @@ class IntegrationEnv(BaseTestEnv):
     #: opt-out is scoped to exactly the scenario that calls it.
     REST_RAISE_SERVER_EXCEPTIONS: bool = True
 
-    def ensure_tenant(self, **tenant_kwargs: Any) -> Any:
-        """Get-or-create this env's tenant row alone, with *tenant_kwargs* applied either way.
+    def ensure_tenant(self, tenant_id: str | None = None, **tenant_kwargs: Any) -> Any:
+        """Get-or-create a tenant row alone (this env's, unless *tenant_id* names another),
+        with *tenant_kwargs* applied either way.
 
         The tenant half of :meth:`setup_default_data`, for a setup that configures the
         SELLER and must not seed a principal: the factory derives a principal's token from
@@ -3125,9 +3143,10 @@ class IntegrationEnv(BaseTestEnv):
         from src.core.database.models import Tenant
         from tests.factories import TenantFactory
 
-        tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
+        tenant_id = self._tenant_id if tenant_id is None else tenant_id
+        tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if tenant is None:
-            return TenantFactory(tenant_id=self._tenant_id, **tenant_kwargs)
+            return TenantFactory(tenant_id=tenant_id, **tenant_kwargs)
         if tenant_kwargs:
             for column, value in tenant_kwargs.items():
                 setattr(tenant, column, value)
@@ -3135,13 +3154,19 @@ class IntegrationEnv(BaseTestEnv):
         return tenant
 
     def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]:
-        """Get-or-create default tenant + principal via factories.
+        """Get-or-create this env's own tenant + principal: :meth:`setup_party` with the env's ids."""
+        return self.setup_party(self._tenant_id, self._principal_id, **tenant_kwargs)
+
+    def setup_party(self, tenant_id: str, principal_id: str, **tenant_kwargs: Any) -> tuple[Any, Any]:
+        """Get-or-create a tenant + principal via factories, shaped the way production shapes them.
+
+        A scenario with several tenants calls this once per tenant rather than
+        building rows itself, so every tenant carries the rows production guarantees.
 
         Must be called inside the ``with env:`` block (factories are bound
         to the session during ``__enter__``).
 
-        Returns (tenant, principal) ORM instances. Uses self._tenant_id
-        and self._principal_id from constructor. Idempotent: reuses existing
+        Returns (tenant, principal) ORM instances. Idempotent: reuses existing
         rows rather than re-creating, so it is safe to call after the e2e
         ``__enter__`` auto-seed (``_seed_identity``) already created them.
 
@@ -3158,13 +3183,13 @@ class IntegrationEnv(BaseTestEnv):
         from src.core.database.models import Principal
         from tests.factories import AdapterConfigFactory, PrincipalFactory
 
-        tenant = self.ensure_tenant(**tenant_kwargs)
+        tenant = self.ensure_tenant(tenant_id, **tenant_kwargs)
 
         principal = self._session.scalars(
-            select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=self._principal_id)
+            select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
         ).first()
         if principal is None:
-            principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
+            principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
 
         # AN ``adapter_config`` ROW, because EVERY production tenant has one and a fixture
         # without one is state production cannot be in. Every creation path writes it --
@@ -3179,7 +3204,7 @@ class IntegrationEnv(BaseTestEnv):
         # not see it (salesagent-6d07f, salesagent-8mynh). The posture column is left at its
         # own server default (``false``); this seeds the ROW's existence, which is the fact
         # production guarantees, and states no policy a scenario did not ask for.
-        adapter_config = self._session.scalars(select(DBAdapterConfig).filter_by(tenant_id=self._tenant_id)).first()
+        adapter_config = self._session.scalars(select(DBAdapterConfig).filter_by(tenant_id=tenant_id)).first()
         if adapter_config is None:
             AdapterConfigFactory(tenant=tenant, adapter_type="mock")
             self._commit_factory_data()

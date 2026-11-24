@@ -59,6 +59,17 @@ cosign verify \
 Cosign bundle files uploaded as workflow artifacts support offline `cosign verify-blob`
 for detached signatures; registry-attached signatures use the command above.
 
+**Recovering a release whose signing failed.** Running `release-please.yml` by hand on `main`
+with a `version` input signs that release again. The run refuses unless the `v<version>`
+GitHub release exists and `<image>:<version>` names the same digest on ghcr.io and Docker
+Hub, so the main-branch signature only goes on an image this workflow released. A run from
+any other branch is skipped, because its signature would carry a `refs/heads/<branch>`
+identity that the `cosign verify` command above rejects. A recovery run also calls
+`actions/attest-build-provenance`, so `gh attestation verify` works for the recovered
+release. That attestation names the recovery run as the builder, because it is the run
+that made it; the BuildKit provenance (`provenance: mode=max`) attached by the original
+build still describes the build itself.
+
 ## Consequences
 
 **Positive.**

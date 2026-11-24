@@ -59,7 +59,7 @@ class ToolSchemaValidator:
 
     def parse_main_py_for_tools(self, main_py_path: Path) -> dict[str, list[str]]:
         """Parse main.py to extract tool function signatures."""
-        with open(main_py_path) as f:
+        with open(main_py_path, encoding="utf-8") as f:
             tree = ast.parse(f.read())
 
         tools = {}
@@ -94,7 +94,7 @@ class ToolSchemaValidator:
 
     def find_schema_constructions(self, main_py_path: Path, tool_name: str) -> list[str]:
         """Find which schema classes are constructed in a tool function or its _impl."""
-        with open(main_py_path) as f:
+        with open(main_py_path, encoding="utf-8") as f:
             tree = ast.parse(f.read())
 
         schemas_used = []
@@ -190,7 +190,7 @@ class ToolSchemaValidator:
 
     def parse_tools_py_for_raw_functions(self, tools_py_path: Path) -> dict[str, list[str]]:
         """Parse tools.py to extract *_raw function signatures."""
-        with open(tools_py_path) as f:
+        with open(tools_py_path, encoding="utf-8") as f:
             tree = ast.parse(f.read())
 
         raw_functions = {}
@@ -245,7 +245,7 @@ class ToolSchemaValidator:
                 # 2. Have matching parameters like MCP tools
                 # Since we filtered out 'req' in parsing, if params is empty, it's schema-first
                 original_raw_params = []
-                with open(tools_py_path) as f:
+                with open(tools_py_path, encoding="utf-8") as f:
                     tree = ast.parse(f.read())
                 for node in ast.walk(tree):
                     if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):

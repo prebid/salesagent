@@ -25,10 +25,9 @@
  */
 
 class TargetingWidget {
-    constructor(tenantId, containerId = 'targeting-widget', scriptRoot = '') {
+    constructor(tenantId, containerId = 'targeting-widget') {
         this.tenantId = tenantId;
         this.container = document.getElementById(containerId);
-        this.scriptRoot = scriptRoot;
         this.selectedTargeting = {
             key_value_pairs: {
                 groups: []
@@ -57,7 +56,7 @@ class TargetingWidget {
             this.updateHiddenField();
         } catch (error) {
             console.error('Error initializing targeting widget:', error);
-            this.container.innerHTML = `<div class="alert alert-error">Failed to load targeting options: ${error.message}</div>`;
+            this.container.innerHTML = `<div class="alert alert-error">Failed to load targeting options: ${escapeHtml(error.message)}</div>`;
         }
     }
 
@@ -97,10 +96,10 @@ class TargetingWidget {
     }
 
     async loadTargetingData() {
-        const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/all`;
+        const url = `${scriptRoot}/api/tenant/${this.tenantId}/targeting/all`;
         const response = await fetch(url, { credentials: 'same-origin' });
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            throw new Error(adminErrorText(await response.json()));
         }
         this.targetingData = await response.json();
 
@@ -123,10 +122,10 @@ class TargetingWidget {
      * Throws on a failed request; each caller decides how to surface it.
      */
     async fetchValuesForKey(keyId) {
-        const url = `${this.scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
+        const url = `${scriptRoot}/api/tenant/${this.tenantId}/targeting/values/${keyId}`;
         const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+            throw new Error(adminErrorText(await response.json()));
         }
         const values = (await response.json()).values || [];
 
@@ -182,9 +181,11 @@ class TargetingWidget {
             return;
         }
 
+        const groupsHtml = this.renderGroups();
+        const valueSelectorHtml = this.renderValueSelector();
         this.container.innerHTML = `
             <div class="groups-container" id="groups-container">
-                ${this.renderGroups()}
+                ${groupsHtml}
             </div>
             <button type="button" class="add-group-btn" id="add-group-btn">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -193,7 +194,7 @@ class TargetingWidget {
                 </svg>
                 Or
             </button>
-            ${this.renderValueSelector()}
+            ${valueSelectorHtml}
         `;
     }
 
@@ -221,13 +222,15 @@ class TargetingWidget {
             `;
         }
 
-        return groups.map((group, groupIndex) => `
-            <div class="group-card" data-group-index="${groupIndex}">
+        return groups.map((group, groupIndex) => {
+            const criteriaHtml = this.renderCriteria(group.criteria || [], groupIndex);
+            return `
+            <div class="group-card" data-group-index="${escapeHtml(groupIndex)}">
                 ${groupIndex > 0 ? '<div class="or-divider"><span>Or</span></div>' : ''}
                 <div class="group-header">
-                    <span class="group-label">Group ${groupIndex + 1}</span>
+                    <span class="group-label">Group ${escapeHtml(groupIndex + 1)}</span>
                     ${groups.length > 1 ? `
-                        <button type="button" class="remove-group-btn" data-group-index="${groupIndex}" title="Remove group">
+                        <button type="button" class="remove-group-btn" data-group-index="${escapeHtml(groupIndex)}" title="Remove group">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <line x1="18" y1="6" x2="6" y2="18"></line>
                                 <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -235,10 +238,10 @@ class TargetingWidget {
                         </button>
                     ` : ''}
                 </div>
-                <div class="criteria-list" data-group-index="${groupIndex}">
-                    ${this.renderCriteria(group.criteria || [], groupIndex)}
+                <div class="criteria-list" data-group-index="${escapeHtml(groupIndex)}">
+                    ${criteriaHtml}
                     <div class="add-criterion-row">
-                        <button type="button" class="add-criterion-btn" data-group-index="${groupIndex}">
+                        <button type="button" class="add-criterion-btn" data-group-index="${escapeHtml(groupIndex)}">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <line x1="12" y1="5" x2="12" y2="19"></line>
                                 <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -248,7 +251,8 @@ class TargetingWidget {
                     </div>
                 </div>
             </div>
-        `).join('');
+        `;
+        }).join('');
     }
 
     renderCriteria(criteria, groupIndex) {
@@ -264,36 +268,36 @@ class TargetingWidget {
             return `
                 ${criterionIndex > 0 ? '<div class="and-connector"><span>And</span></div>' : ''}
                 <div class="criterion-row ${criterion.exclude ? 'excluded' : ''} ${isEditing ? 'editing' : ''}"
-                     data-group-index="${groupIndex}"
-                     data-criterion-index="${criterionIndex}">
-                    <div class="criterion-key" title="${keyMeta.display_name}">
-                        ${keyMeta.display_name}
+                     data-group-index="${escapeHtml(groupIndex)}"
+                     data-criterion-index="${escapeHtml(criterionIndex)}">
+                    <div class="criterion-key" title="${escapeHtml(keyMeta.display_name)}">
+                        ${escapeHtml(keyMeta.display_name)}
                     </div>
                     <select class="criterion-operator-select"
-                            data-group-index="${groupIndex}"
-                            data-criterion-index="${criterionIndex}">
+                            data-group-index="${escapeHtml(groupIndex)}"
+                            data-criterion-index="${escapeHtml(criterionIndex)}">
                         <option value="is" ${!criterion.exclude ? 'selected' : ''}>is any of</option>
                         <option value="is_not" ${criterion.exclude ? 'selected' : ''}>is none of</option>
                     </select>
-                    <div class="criterion-values" data-group-index="${groupIndex}" data-criterion-index="${criterionIndex}">
+                    <div class="criterion-values" data-group-index="${escapeHtml(groupIndex)}" data-criterion-index="${escapeHtml(criterionIndex)}">
                         ${valueNames.map((name, valIndex) => `
                             <span class="value-chip ${criterion.exclude ? 'exclude' : 'include'}">
-                                ${name}
+                                ${escapeHtml(name)}
                                 <button type="button" class="chip-remove"
-                                        data-group-index="${groupIndex}"
-                                        data-criterion-index="${criterionIndex}"
-                                        data-value-index="${valIndex}">×</button>
+                                        data-group-index="${escapeHtml(groupIndex)}"
+                                        data-criterion-index="${escapeHtml(criterionIndex)}"
+                                        data-value-index="${escapeHtml(valIndex)}">×</button>
                             </span>
                         `).join('')}
                         <button type="button" class="add-value-btn"
-                                data-group-index="${groupIndex}"
-                                data-criterion-index="${criterionIndex}"
+                                data-group-index="${escapeHtml(groupIndex)}"
+                                data-criterion-index="${escapeHtml(criterionIndex)}"
                                 title="Add value">+</button>
                     </div>
                     <div class="criterion-actions">
                         <button type="button" class="remove-criterion-btn"
-                                data-group-index="${groupIndex}"
-                                data-criterion-index="${criterionIndex}"
+                                data-group-index="${escapeHtml(groupIndex)}"
+                                data-criterion-index="${escapeHtml(criterionIndex)}"
                                 title="Remove criterion">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -328,8 +332,8 @@ class TargetingWidget {
                             <input type="search" id="key-search" placeholder="Search keys..." class="key-search-input">
                             <div class="key-list" id="key-list">
                                 ${sortedKeys.map(k => `
-                                    <div class="key-option" data-key-id="${k.id}" data-key-name="${(k.display_name || k.name).toLowerCase()}">
-                                        ${k.display_name || k.name}
+                                    <div class="key-option" data-key-id="${escapeHtml(k.id)}" data-key-name="${escapeHtml((k.display_name || k.name).toLowerCase())}">
+                                        ${escapeHtml(k.display_name || k.name)}
                                     </div>
                                 `).join('')}
                             </div>
@@ -655,10 +659,10 @@ class TargetingWidget {
             valuesList.innerHTML = values.map(val => `
                 <label class="value-option">
                     <input type="checkbox" class="value-checkbox"
-                           value="${val.id}"
-                           data-name="${val.display_name || val.name}"
+                           value="${escapeHtml(val.id)}"
+                           data-name="${escapeHtml(val.display_name || val.name)}"
                            ${selectedValues.has(val.id) ? 'checked' : ''}>
-                    <span class="value-label">${val.display_name || val.name}</span>
+                    <span class="value-label">${escapeHtml(val.display_name || val.name)}</span>
                 </label>
             `).join('');
 
@@ -666,7 +670,7 @@ class TargetingWidget {
 
         } catch (error) {
             if (!isCurrent()) return;
-            valuesList.innerHTML = `<div class="error-state">Failed to load values: ${error.message}</div>`;
+            valuesList.innerHTML = `<div class="error-state">Failed to load values: ${escapeHtml(error.message)}</div>`;
         }
     }
 
@@ -783,7 +787,8 @@ class TargetingWidget {
     refreshGroups() {
         const groupsContainer = document.getElementById('groups-container');
         if (groupsContainer) {
-            groupsContainer.innerHTML = this.renderGroups();
+            const groupsHtml = this.renderGroups();
+            groupsContainer.innerHTML = groupsHtml;
         }
     }
 

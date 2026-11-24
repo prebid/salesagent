@@ -359,7 +359,7 @@ def find_webhook_internal_tags(tree: ast.Module) -> frozenset[str]:
 
 def test_webhook_internal_tags_match_pin() -> None:
     """The conftest's UC-004 webhook xfail tag set is exactly the pinned set."""
-    actual = find_webhook_internal_tags(ast.parse(_BDD_CONFTEST.read_text()))
+    actual = find_webhook_internal_tags(ast.parse(_BDD_CONFTEST.read_text(encoding="utf-8")))
     added = actual - EXPECTED_WEBHOOK_INTERNAL_TAGS
     removed = EXPECTED_WEBHOOK_INTERNAL_TAGS - actual
     assert actual == EXPECTED_WEBHOOK_INTERNAL_TAGS, (

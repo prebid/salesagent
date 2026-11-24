@@ -13,7 +13,6 @@ from src.core.credentials import hash_token
 from tests.factories import AdapterConfigFactory, MediaBuyFactory, PrincipalFactory, TenantFactory
 from tests.factories.principal import plaintext_token_for
 from tests.harness._base import BareIntegrationEnv, _a2a_jsonrpc_body
-from tests.harness.client import jsonrpc_http_result
 from tests.harness.transport import Transport, TransportResult
 from tests.helpers.credentials import credential_headers
 
@@ -23,6 +22,10 @@ class A2ATaskOwnershipEnv(BareIntegrationEnv):
 
     def response_parser(self, tool: str) -> Any:
         return lambda **data: RootModel(data)
+
+    def _run_a2a_handler(self, skill_name: str, response_cls: type, **kwargs: Any) -> TransportResult:
+        """Invoke on the same HTTP handler that receives subsequent native lookups."""
+        return self._run_a2a_over_http(skill_name, response_cls, **kwargs)
 
     def prepare_task(self, state: str) -> None:
         tenant, principal = self.setup_default_data()
@@ -84,21 +87,14 @@ class A2ATaskOwnershipEnv(BareIntegrationEnv):
             self.requested_task_id = task_id
             request_cls = GetTaskRequest if kwargs["operation"] == "GetTask" else CancelTaskRequest
             body = _a2a_jsonrpc_body(kwargs["operation"], request_cls(id=task_id))
-            result = jsonrpc_http_result(transport, self.post_a2a(body, credential))
+            result = self.send_a2a(body, credential)
         if action == "invoke":
-            self.task_id = result.envelope["task"]["id"]
+            assert result.has_wire, "The receipt and native task lookup must use the same HTTP handler"
+            self.task_id = result.envelope["a2a_task_id"]
             # Preserve the actual submitted handle for a later, independent poll.
             if self.skill == "update_media_buy" and self.parameters["media_buy_id"] != "missing-buy":
-                self.adcp_task_id = self.adcp_result(result)["task_id"]
+                self.adcp_task_id = result.require_wire()["task_id"]
         return result
-
-    @staticmethod
-    def adcp_result(result: TransportResult) -> dict[str, Any]:
-        assert "adcp_task_id" not in result.envelope["task"]["artifacts"][0].get("metadata", {})
-        if result.is_error:
-            return result.error_envelope()
-        assert result.wire_response is not None
-        return result.wire_response
 
     def assert_not_found(self, result: TransportResult) -> None:
         assert result.is_error

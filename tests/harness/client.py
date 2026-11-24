@@ -62,6 +62,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Callable
 from dataclasses import replace
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from tests.harness.address_table import ADDRESS_TABLE, ToolAddress
@@ -357,6 +358,7 @@ def native_task_result(transport: Transport, task: dict[str, Any], *, response: 
     error = None
     try:
         data = _a2a_first_data_part(task)
+        metadata.update(a2a_task_id=task["id"], a2a_task_state=task["status"]["state"])
         failed = task["status"]["state"] == "TASK_STATE_FAILED"
         has_adcp_error = isinstance(data.get("adcp_error"), dict)
         if failed or has_adcp_error:
@@ -440,16 +442,19 @@ def parse_a2a_result(result: TransportResult, parser: Callable[[dict[str, Any]],
         return replace(result, payload=None, error=exc)
 
 
+def _response_reader(model: Any) -> Callable[[dict[str, Any]], Any]:
+    """Read served responses through their boundary-aware reader when available."""
+    revive = getattr(model, "revive", None)
+    return revive if revive is not None else lambda data: model(**data)
+
+
 def _deliver_e2e_a2a(
     env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], credential: Any
 ) -> TransportResult:
     """Send the live A2A frame through the env's HTTP route and shared reader."""
     if not env.e2e_config:
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
-    from tests.harness._base import _a2a_message_send_body
-
-    response = env.post_a2a(_a2a_message_send_body(address.name, wrapped), _presented(env, credential))
-    return jsonrpc_http_result(Transport.E2E_A2A, response)
+    return env._run_a2a_over_http(address.name, dict, **_with_credential(wrapped, credential))
 
 
 DELIVER: dict[Transport, Callable[[BaseTestEnv, ToolAddress, Any, Any], Any]] = {
@@ -494,20 +499,32 @@ def _parse_pinned_response(tool_name: str, raw: dict[str, Any]) -> Any | None:
     # so that the boundary is the only thing which can put one there. ``model(**raw)`` made
     # every REST success of a context-carrying request raise in the TEST process, which the
     # scenario then reported as "no response arrived" for a request the seller answered.
-    revive = getattr(model, "revive", None)
-    return revive(raw) if revive is not None else model(**raw)
+    return _response_reader(model)(raw)
+
+
+def _unwrap_a2a(
+    env: BaseTestEnv,
+    delivered: TransportResult,
+    transport: Transport,
+    response_reader: Callable[[dict[str, Any]], Any],
+) -> TransportResult:
+    """Type one captured A2A result without changing its native evidence."""
+    return parse_a2a_result(delivered, response_reader)
 
 
 def _unwrap_tool_success(
-    env: BaseTestEnv, delivered: DeliverResult, transport: Transport, tool_name: str
+    env: BaseTestEnv,
+    delivered: DeliverResult,
+    transport: Transport,
+    response_reader: Callable[[dict[str, Any]], Any],
 ) -> TransportResult:
-    """Parse the MCP structured body into the tool's pinned response type."""
+    """Parse the MCP structured body with the caller's response reader."""
     return TransportResult(
         # Downstream of DELIVER: the MCP structured_content / A2A artifact
         # DataPart already came back, which is the same declaration the
         # in-process McpDispatcher/A2ADispatcher success sites make.
         has_wire=True,
-        payload=_parse_pinned_response(tool_name, delivered.payload),
+        payload=response_reader(delivered.payload),
         envelope={"transport": transport.value},
         wire_response=delivered.wire_response,
     )
@@ -635,10 +652,11 @@ def unwrap_rest_response(
     )
 
 
-def _unwrap_rest(env: BaseTestEnv, raw: Any, transport: Transport, tool_name: str) -> TransportResult:
-    # spec_response_model(tool_name) parse-back, same as MCP/A2A UNWRAP —
-    # still deepcopy-isolated from wire_response by unwrap_rest_response above.
-    return unwrap_rest_response(env, raw, transport, lambda body: _parse_pinned_response(tool_name, body))
+def _unwrap_rest(
+    env: BaseTestEnv, raw: Any, transport: Transport, response_reader: Callable[[dict[str, Any]], Any]
+) -> TransportResult:
+    # The reader stays deepcopy-isolated from wire_response by unwrap_rest_response.
+    return unwrap_rest_response(env, raw, transport, response_reader)
 
 
 #: Facts the RESOLVER produces, which therefore have no spelling in a request payload.
@@ -680,7 +698,7 @@ def _dispatch_core(
     payload: dict[str, Any],
     credential: Any = NO_IDENTITY_OVERRIDE,
     *,
-    a2a_parser: Callable[[dict[str, Any]], Any] | None = None,
+    response_reader: Callable[[dict[str, Any]], Any] | None = None,
 ) -> TransportResult:
     """Address -> wrap -> deliver -> unwrap -> ``TransportResult``.
 
@@ -692,6 +710,10 @@ def _dispatch_core(
 
     *credential* is the headers dict the dispatch presents; the sentinel means
     "the env's own", and ``{}`` means no headers at all.
+
+    *response_reader* owns typed parsing when supplied by an environment.
+    Otherwise the requested tool's pinned response model is used, independently
+    of the environment's local model.
 
     *payload* is always the flat AdCP request payload as a dict (the same
     shape ``req.model_dump(mode="json", exclude_none=True)`` already produces
@@ -735,10 +757,9 @@ def _dispatch_core(
         # transport.value tag and derived status the dispatcher path produces —
         # one error-unwrap implementation per transport family, not two.
         return UNWRAP_ERROR[transport](exc, transport)
-    if transport in (Transport.A2A, Transport.E2E_A2A):
-        parser = a2a_parser or (lambda body: _parse_pinned_response(tool_name, body))
-        return parse_a2a_result(raw, parser)
-    return UNWRAP_SUCCESS[transport](env, raw, transport, tool_name)
+    if response_reader is None:
+        response_reader = partial(_parse_pinned_response, tool_name)
+    return UNWRAP_SUCCESS[transport](env, raw, transport, response_reader)
 
 
 class AdCPTestClient:
@@ -864,7 +885,11 @@ def unwrap_rest_error(exc: Exception, transport: Transport = Transport.REST) -> 
     )
 
 
-UNWRAP_SUCCESS: dict[Transport, Callable[[BaseTestEnv, Any, Transport, str], TransportResult]] = {
+UNWRAP_SUCCESS: dict[
+    Transport, Callable[[BaseTestEnv, Any, Transport, Callable[[dict[str, Any]], Any]], TransportResult]
+] = {
+    Transport.A2A: _unwrap_a2a,
+    Transport.E2E_A2A: _unwrap_a2a,
     Transport.MCP: _unwrap_tool_success,
     Transport.E2E_MCP: _unwrap_tool_success,
     Transport.REST: _unwrap_rest,

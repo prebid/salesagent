@@ -242,7 +242,7 @@ def _transport_result_sites(module_path: pathlib.Path) -> dict[tuple[str, str, i
     reason string, which can go green by coincidence when the neighbours share a
     value.
     """
-    tree = ast.parse(module_path.read_text())
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
     owner: dict[ast.Call, str] = {}
 
     def walk(node: ast.AST, scope: tuple[str, ...]) -> None:
@@ -302,10 +302,6 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
     # (module, owner, ordinal-in-owner) -> (expected has_wire, why this SITE is what it is)
     EXPECTED_SITES: dict[tuple[str, str, int], tuple[bool, str]] = {
         # ── tests/harness/dispatchers.py — the per-transport dispatch entry points ──
-        ("dispatchers.py", "a2a_transport_result", 0): (
-            False,
-            "registration leg — no native Task or HTTP response observed",
-        ),
         ("dispatchers.py", "McpDispatcher.dispatch", 0): (
             True,
             "success, downstream of the structured_content capture",
@@ -404,10 +400,10 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
         nothing means the exemption is stale and must be deleted.
         """
         repo_root = pathlib.Path(__file__).resolve().parents[2]
-        seam = {str(path.relative_to(repo_root)) for path in _SEAM_MODULES}
+        seam = {path.relative_to(repo_root).as_posix() for path in _SEAM_MODULES}
         allowed = seam | set(self.FIXTURE_CONSTRUCTORS)
         constructors = {
-            str(path.relative_to(repo_root))
+            path.relative_to(repo_root).as_posix()
             for path in repo_root.glob("tests/**/*.py")
             if _transport_result_sites(path)
         }
@@ -591,7 +587,7 @@ class TestWirePresenceIsNeverInferredFromTransportIdentity:
     """
 
     def test_wire_readers_contain_no_transport_identity_check(self):
-        tree = ast.parse(_OUTCOME_HELPERS_PY.read_text())
+        tree = ast.parse(_OUTCOME_HELPERS_PY.read_text(encoding="utf-8"))
         readers = {
             node.name: node
             for node in ast.walk(tree)

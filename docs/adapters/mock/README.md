@@ -294,7 +294,7 @@ The `adapter_config` table row with `adapter_type = 'mock'` carries:
   It is the whole of the mock adapter's connection configuration; the
   `dry_run` field it once carried is gone, along with the column behind it,
   because a preview is a rolled-back unit of work rather than an adapter mode
-  (`src/adapters/mock_ad_server.py:82-89`).
+  (the `MockConnectionConfig` docstring in `src/adapters/mock_ad_server.py`).
 - `config_json.test_behavior` — the
   [failure-injection block](#failure-injection-from-the-database).
 

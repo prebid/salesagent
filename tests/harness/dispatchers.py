@@ -161,21 +161,14 @@ def _refuse_signed_generic_client(signed: SignatureRealization, transport: Trans
     )
 
 
-def a2a_transport_result(call: Callable[[], Any]) -> TransportResult:
-    """Return captured A2A evidence; capture only exceptions preceding a result.
-
-    Credential-registration calls return a bare payload and observe no native
-    Task. Skill delivery already returns its complete TransportResult.
-    """
+def a2a_transport_result(call: Callable[[], TransportResult]) -> TransportResult:
+    """Return captured A2A evidence; capture only exceptions preceding a result."""
     from tests.harness.client import unwrap_delivery_error
 
     try:
-        delivered = call()
+        return call()
     except Exception as exc:
         return _carrying_refusal_response(unwrap_delivery_error(exc, Transport.A2A), exc)
-    if isinstance(delivered, TransportResult):
-        return delivered
-    return TransportResult(payload=delivered, envelope={"transport": "a2a"}, has_wire=False)
 
 
 class A2ADispatcher:
@@ -421,8 +414,7 @@ class RestE2EDispatcher:
         from tests.harness.client import _deliver_e2e_rest, unwrap_rest_response
         from tests.harness.transport import NO_IDENTITY_OVERRIDE
 
-        if signed and not env.can_sign:
-            env.signing  # raises, naming enable_request_signing()  # noqa: B018
+        env._refuse_unsignable(signed)
         if not env.e2e_config:
             return TransportResult(
                 error=RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)"), has_wire=False

@@ -161,27 +161,27 @@
             <!-- Action Buttons -->
             <div style="display: flex; gap: 0.5rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #e5e7eb;">
                 {% if creative.status == 'pending_review' %}
-                <button onclick="approveCreative('{{ creative.creative_id }}')" class="btn btn-sm btn-primary">
+                <button onclick="approveCreative({{ creative.creative_id|tojson|forceescape }})" class="btn btn-sm btn-primary">
                     ✅ Approve
                 </button>
-                <button onclick="rejectCreative('{{ creative.creative_id }}')" class="btn btn-sm btn-secondary">
+                <button onclick="rejectCreative({{ creative.creative_id|tojson|forceescape }})" class="btn btn-sm btn-secondary">
                     ❌ Reject
                 </button>
                 {% if has_ai_review %}
-                <button onclick="aiReviewCreative('{{ creative.creative_id }}')" class="btn btn-sm btn-secondary">
+                <button onclick="aiReviewCreative({{ creative.creative_id|tojson|forceescape }})" class="btn btn-sm btn-secondary">
                     🤖 AI Review
                 </button>
                 {% endif %}
                 {% elif creative.status == 'rejected' %}
-                <button onclick="approveCreative('{{ creative.creative_id }}')" class="btn btn-sm btn-primary">
+                <button onclick="approveCreative({{ creative.creative_id|tojson|forceescape }})" class="btn btn-sm btn-primary">
                     ✅ Approve Anyway
                 </button>
                 {% elif creative.status == 'approved' %}
-                <button onclick="rejectCreative('{{ creative.creative_id }}')" class="btn btn-sm btn-secondary">
+                <button onclick="rejectCreative({{ creative.creative_id|tojson|forceescape }})" class="btn btn-sm btn-secondary">
                     ❌ Revoke Approval
                 </button>
                 {% endif %}
-                <button onclick="viewCreativeDetails('{{ creative.creative_id }}')" class="btn btn-sm btn-secondary" data-creative-data="{{ creative.data|tojson|forceescape }}">
+                <button onclick="viewCreativeDetails({{ creative.creative_id|tojson|forceescape }})" class="btn btn-sm btn-secondary" data-creative-data="{{ creative.data|tojson|forceescape }}">
                     👁️ View Preview
                 </button>
             </div>
@@ -286,8 +286,7 @@
 </style>
 
 <script>
-const tenantId = '{{ tenant_id }}';
-const scriptName = '{{ script_name }}';
+const tenantId = {{ tenant_id|tojson }};
 
 // Filter creatives by status
 function filterCreatives(status) {
@@ -312,7 +311,7 @@ function filterCreatives(status) {
 function approveCreative(creativeId) {
     if (!confirm('Are you sure you want to approve this creative?')) return;
 
-    fetch(`${scriptName}/tenant/${tenantId}/creatives/review/${creativeId}/approve`, {
+    fetch(`${scriptRoot}/tenant/${tenantId}/creatives/review/${encodeURIComponent(creativeId)}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
@@ -320,9 +319,9 @@ function approveCreative(creativeId) {
             approved_by: 'admin'
         })
     })
-    .then(response => {
+    .then(async response => {
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            throw new Error(adminErrorText(await response.json()));
         }
         return response.json();
     })
@@ -331,7 +330,7 @@ function approveCreative(creativeId) {
             alert('✅ Creative approved successfully!');
             window.location.reload();
         } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -350,7 +349,7 @@ function rejectCreative(creativeId) {
         return;
     }
 
-    fetch(`${scriptName}/tenant/${tenantId}/creatives/review/${creativeId}/reject`, {
+    fetch(`${scriptRoot}/tenant/${tenantId}/creatives/review/${encodeURIComponent(creativeId)}/reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
@@ -359,9 +358,9 @@ function rejectCreative(creativeId) {
             rejection_reason: reason.trim()
         })
     })
-    .then(response => {
+    .then(async response => {
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            throw new Error(adminErrorText(await response.json()));
         }
         return response.json();
     })
@@ -370,7 +369,7 @@ function rejectCreative(creativeId) {
             alert('❌ Creative rejected.');
             window.location.reload();
         } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
         }
     })
     .catch(error => {
@@ -387,7 +386,7 @@ function aiReviewCreative(creativeId) {
     button.disabled = true;
     button.textContent = '🤖 Reviewing...';
 
-    fetch(`${scriptName}/tenant/${tenantId}/creatives/review/${creativeId}/ai-review`, {
+    fetch(`${scriptRoot}/tenant/${tenantId}/creatives/review/${encodeURIComponent(creativeId)}/ai-review`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
@@ -398,7 +397,7 @@ function aiReviewCreative(creativeId) {
             alert(`AI Review Complete:\n\nStatus: ${data.status}\n\nReason: ${data.reason}\n\nConfidence: ${data.confidence}`);
             window.location.reload();
         } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
+            alert('Error: ' + adminErrorText(data));
             button.disabled = false;
             button.textContent = '🤖 AI Review';
         }
@@ -446,14 +445,15 @@ function viewCreativeDetails(creativeId) {
     }
 
     // Build preview content based on creative data
-    let html = '<div style="padding: 1rem;">';
+    let detailsHtml = '<div style="padding: 1rem;">';
 
-    // If we have a preview_url from creative agent, use it
-    if (previewUrl) {
-        html += `<div style="text-align: center; padding: 2rem; background: #f9fafb; border-radius: 8px;">
-                    <iframe src="${previewUrl}" style="width: 100%; min-height: 600px; border: 1px solid #ddd; border-radius: 4px;" sandbox="allow-scripts allow-same-origin"></iframe>
+    // If we have a preview_url from creative agent, use it: an absolute https URL only (a
+    // relative one would frame an admin page), in a sandbox that keeps it off this origin.
+    if (previewUrl && /^https:\/\//i.test(String(previewUrl).trim())) {
+        detailsHtml += `<div style="text-align: center; padding: 2rem; background: #f9fafb; border-radius: 8px;">
+                    <iframe src="${safeUrl(previewUrl)}" style="width: 100%; min-height: 600px; border: 1px solid #ddd; border-radius: 4px;" sandbox="allow-scripts"></iframe>
                     <p style="margin-top: 1rem; color: #666; font-size: 0.9rem;">
-                        <strong>Preview generated by:</strong> ${creativeData.agent_url || 'Creative Agent'}
+                        <strong>Preview generated by:</strong> ${escapeHtml(creativeData.agent_url || 'Creative Agent')}
                     </p>
                  </div>`;
     }
@@ -464,47 +464,47 @@ function viewCreativeDetails(creativeId) {
 
         // Display ad
         if (format.startsWith('display_') || url.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
-            html += `<div style="text-align: center; padding: 2rem; background: #f9fafb; border-radius: 8px;">
-                        <img src="${url}" alt="Creative" style="max-width: 100%; max-height: 600px; border: 1px solid #ddd; border-radius: 4px;">
+            detailsHtml += `<div style="text-align: center; padding: 2rem; background: #f9fafb; border-radius: 8px;">
+                        <img src="${safeUrl(url)}" alt="Creative" style="max-width: 100%; max-height: 600px; border: 1px solid #ddd; border-radius: 4px;">
                      </div>`;
         }
         // Video ad
         else if (format.startsWith('video_') || url.match(/\.(mp4|webm|mov)$/i)) {
-            html += `<div style="text-align: center; padding: 2rem; background: #000; border-radius: 8px;">
+            detailsHtml += `<div style="text-align: center; padding: 2rem; background: #000; border-radius: 8px;">
                         <video controls style="max-width: 100%; max-height: 600px; border-radius: 4px;">
-                            <source src="${url}" type="video/mp4">
+                            <source src="${safeUrl(url)}" type="video/mp4">
                             Your browser does not support video playback.
                         </video>
                      </div>`;
         }
         // Native ad
         else if (format.startsWith('native_')) {
-            html += `<div style="max-width: 400px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">`;
+            detailsHtml += `<div style="max-width: 400px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">`;
             if (creativeData.image_url) {
-                html += `<img src="${creativeData.image_url}" style="width: 100%; height: auto;">`;
+                detailsHtml += `<img src="${safeUrl(creativeData.image_url)}" style="width: 100%; height: auto;">`;
             }
-            html += `<div style="padding: 1.5rem;">
-                        <h3 style="margin: 0 0 0.5rem 0;">${creativeData.title || 'Native Ad'}</h3>
-                        ${creativeData.body ? `<p style="color: #666; margin: 0 0 1rem 0;">${creativeData.body}</p>` : ''}
-                        ${creativeData.cta_text ? `<button class="btn btn-primary" disabled>${creativeData.cta_text}</button>` : ''}
+            detailsHtml += `<div style="padding: 1.5rem;">
+                        <h3 style="margin: 0 0 0.5rem 0;">${escapeHtml(creativeData.title || 'Native Ad')}</h3>
+                        ${creativeData.body ? `<p style="color: #666; margin: 0 0 1rem 0;">${escapeHtml(creativeData.body)}</p>` : ''}
+                        ${creativeData.cta_text ? `<button class="btn btn-primary" disabled>${escapeHtml(creativeData.cta_text)}</button>` : ''}
                      </div>
                   </div>`;
         }
         // Generic/unknown format
         else {
-            html += `<div style="text-align: center; padding: 2rem;">
-                        <a href="${url}" target="_blank" class="btn btn-primary">Open Creative in New Tab</a>
-                        <p style="margin-top: 1rem; color: #666; font-size: 0.9rem; word-break: break-all;">${url}</p>
+            detailsHtml += `<div style="text-align: center; padding: 2rem;">
+                        <a href="${safeUrl(url)}" target="_blank" class="btn btn-primary">Open Creative in New Tab</a>
+                        <p style="margin-top: 1rem; color: #666; font-size: 0.9rem; word-break: break-all;">${escapeHtml(url)}</p>
                      </div>`;
         }
     } else {
-        html += `<div style="text-align: center; padding: 3rem; color: #999;">
+        detailsHtml += `<div style="text-align: center; padding: 3rem; color: #999;">
                     <div style="font-size: 3rem; margin-bottom: 1rem;">🖼️</div>
                     <h3 style="color: #666; margin-bottom: 0.5rem;">No Preview Available</h3>
                     <p style="color: #999; margin-bottom: 1rem;">This creative doesn't have preview data yet.</p>
                     <details style="text-align: left; max-width: 600px; margin: 0 auto; padding: 1rem; background: #f9fafb; border-radius: 8px;">
                         <summary style="cursor: pointer; font-weight: 600; color: #666;">Show Creative Data</summary>
-                        <pre style="margin-top: 1rem; padding: 1rem; background: white; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; text-align: left;">${JSON.stringify(creativeData || {}, null, 2)}</pre>
+                        <pre style="margin-top: 1rem; padding: 1rem; background: white; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; text-align: left;">${escapeHtml(JSON.stringify(creativeData || {}, null, 2))}</pre>
                     </details>
                  </div>`;
     }
@@ -517,19 +517,19 @@ function viewCreativeDetails(creativeId) {
         const statusIcon = review.decision === 'approved' ? '✅' :
                           review.decision === 'rejected' ? '❌' : '⚠️';
 
-        html += `<div style="margin-top: 1.5rem; padding: 1rem; background: #f9fafb; border-left: 4px solid ${statusColor}; border-radius: 4px;">
+        detailsHtml += `<div style="margin-top: 1.5rem; padding: 1rem; background: #f9fafb; border-left: 4px solid ${escapeHtml(statusColor)}; border-radius: 4px;">
                     <h4 style="margin: 0 0 0.5rem 0; display: flex; align-items: center;">
-                        ${statusIcon} AI Review
+                        ${escapeHtml(statusIcon)} AI Review
                     </h4>
-                    <p style="margin: 0 0 0.5rem 0;"><strong>Decision:</strong> ${review.decision}</p>
-                    <p style="margin: 0 0 0.5rem 0;"><strong>Reason:</strong> ${review.reason}</p>
-                    <p style="margin: 0 0 0.5rem 0;"><strong>Confidence:</strong> ${review.confidence}</p>
-                    ${review.reviewed_at ? `<p style="margin: 0; color: #666; font-size: 0.875rem;">Reviewed: ${new Date(review.reviewed_at).toLocaleString()}</p>` : ''}
+                    <p style="margin: 0 0 0.5rem 0;"><strong>Decision:</strong> ${escapeHtml(review.decision)}</p>
+                    <p style="margin: 0 0 0.5rem 0;"><strong>Reason:</strong> ${escapeHtml(review.reason)}</p>
+                    <p style="margin: 0 0 0.5rem 0;"><strong>Confidence:</strong> ${escapeHtml(review.confidence)}</p>
+                    ${review.reviewed_at ? `<p style="margin: 0; color: #666; font-size: 0.875rem;">Reviewed: ${escapeHtml(new Date(review.reviewed_at).toLocaleString())}</p>` : ''}
                  </div>`;
     }
 
-    html += '</div>';
-    content.innerHTML = html;
+    detailsHtml += '</div>';
+    content.innerHTML = detailsHtml;
     modal.style.display = 'block';
 }
 

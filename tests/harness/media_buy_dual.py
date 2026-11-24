@@ -360,8 +360,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # reaches the verifier's refusal branch at all: security.mdx :1269 makes
         # an unsigned request carrying a valid bearer a spec-correct 200.
         if not self.can_sign:
-            if signed:
-                self.signing  # raises, naming enable_request_signing()  # noqa: B018
+            self._refuse_unsignable(signed)
             return client.put(endpoint, json=body, headers=credential)
         raw, wire_headers = self.wire_request(
             path=endpoint,

@@ -71,9 +71,12 @@ def _assert_error_equivalent(via, client_result, code: str, *, recovery: str) ->
         if envelope["transport"] in (Transport.A2A.value, Transport.E2E_A2A.value) and "jsonrpc_error" not in envelope:
             task = envelope.get("task")
             assert isinstance(task, dict), f"A2A failure lost its native Task: {envelope!r}"
+            assert envelope["a2a_task_id"] == task["id"]
+            assert envelope["a2a_task_state"] == task["status"]["state"]
             for field in ("id", "contextId"):
                 assert isinstance(task.get(field), str) and task[field], f"native Task lost {field}: {task!r}"
                 task[field] = f"per-invocation-{field}"
+            envelope["a2a_task_id"] = task["id"]
     assert envelopes[0] == envelopes[1], (
         f"env.call_via and AdCPTestClient.call disagree on the error envelope: "
         f"{via.envelope!r} vs {client_result.envelope!r}"

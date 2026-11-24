@@ -494,7 +494,15 @@ class TestA2AHttpResultContract:
     """The client reads actual HTTP frames without accepting the old native lifecycle."""
 
     @staticmethod
-    def _dispatch(frame, status=200, entrypoint="client", local_parser=False):
+    def _dispatch(
+        frame,
+        status=200,
+        entrypoint="client",
+        local_parser=False,
+        *,
+        tool="get_products",
+        transport=Transport.E2E_A2A,
+    ):
         from tests.harness.transport import E2EConfig
         from tests.helpers.local_http_origin import run_local_origin
 
@@ -514,7 +522,7 @@ class TestA2AHttpResultContract:
                 return env.call_via(Transport.A2A, credential={})
             if entrypoint != "client":
                 return getattr(env, entrypoint)(credential={})
-            return AdCPTestClient(env).call("get_products", {}, Transport.E2E_A2A, credential={})
+            return AdCPTestClient(env).call(tool, {}, transport, credential={})
 
     @staticmethod
     def _frame(state="TASK_STATE_COMPLETED"):
@@ -530,6 +538,20 @@ class TestA2AHttpResultContract:
             },
         }
 
+    @staticmethod
+    def _read_native(frame, over_http):
+        import httpx
+
+        from tests.harness.client import jsonrpc_http_result, native_task_result
+
+        response = httpx.Response(200, json=frame)
+        result = (
+            jsonrpc_http_result(Transport.A2A, response)
+            if over_http
+            else native_task_result(Transport.A2A, frame["result"]["task"])
+        )
+        return result, response
+
     def test_completed_result_retains_http_response_and_native_frame(self):
         frame = self._frame()
         result = self._dispatch(frame)
@@ -539,6 +561,8 @@ class TestA2AHttpResultContract:
         assert result.raw_response.status_code == 200
         assert result.envelope["task"] == frame["result"]["task"]
         assert result.wire_response == {"products": []}
+        assert result.envelope["a2a_task_id"] == "native-receipt"
+        assert result.envelope["a2a_task_state"] == "TASK_STATE_COMPLETED"
 
     def test_failed_result_retains_http_response_and_native_frame(self):
         frame = self._frame("TASK_STATE_FAILED")
@@ -552,6 +576,58 @@ class TestA2AHttpResultContract:
         assert result.raw_response.status_code == 200
         assert result.envelope["task"] == frame["result"]["task"]
         assert result.error_envelope() == envelope
+
+    @pytest.mark.parametrize("transport", [Transport.A2A, Transport.E2E_A2A])
+    def test_generic_client_uses_requested_tool_model_instead_of_environment_model(self, transport):
+        frame = self._frame()
+        result = self._dispatch(frame, local_parser=True, transport=transport)
+
+        assert result.is_success, result.error
+        assert result.payload.products == []
+        assert result.wire_response == {"products": []}
+        assert result.envelope["task"] == frame["result"]["task"]
+
+    @pytest.mark.parametrize("transport", [Transport.A2A, Transport.E2E_A2A])
+    def test_generic_client_retains_success_without_a_single_pinned_model(self, transport):
+        frame = self._frame()
+        body = {"status": "submitted", "task_id": "business-task"}
+        frame["result"]["task"]["artifacts"][0]["parts"][0]["data"] = body
+
+        result = self._dispatch(frame, tool="create_media_buy", transport=transport)
+
+        assert result.error is None, result.error
+        assert result.payload is None
+        assert result.wire_response == body
+        assert result.envelope["task"] == frame["result"]["task"]
+        assert result.raw_response.status_code == 200
+        assert result.has_wire
+
+    @pytest.mark.parametrize("entrypoint", ["reader", "deliver_a2a"])
+    def test_override_reader_accepts_boundary_owned_context(self, entrypoint):
+        from src.core.schemas import GetProductsResponse
+        from tests.harness.transport import E2EConfig
+        from tests.helpers.local_http_origin import run_local_origin
+
+        frame = self._frame()
+        frame["result"]["task"]["artifacts"][0]["parts"][0]["data"]["context"] = {"trace": "reader-context"}
+        with run_local_origin() as origin:
+            origin.respond_with(200, body=json.dumps(frame).encode())
+            env = BaseTestEnv(e2e_config=E2EConfig(base_url=origin.base_url, postgres_url="postgresql://unused/db"))
+            env.A2A_SKILL = "get_products"
+            env.RESPONSE_MODEL = GetProductsResponse
+            env._signed_dispatch = False
+            env._run_a2a_handler = env._run_a2a_over_http
+            result = (
+                env._run_a2a_over_http("get_products", GetProductsResponse, credential={})
+                if entrypoint == "reader"
+                else env.deliver_a2a(credential={})
+            )
+
+        assert result.is_success, result.error
+        assert type(result.payload) is GetProductsResponse
+        assert result.payload.context == {"trace": "reader-context"}
+        assert result.wire_response["context"] == {"trace": "reader-context"}
+        assert result.has_wire
 
     @classmethod
     def _delivery_failure(cls, kind):
@@ -655,16 +731,12 @@ class TestA2AHttpResultContract:
         ],
     )
     def test_native_and_http_readers_classify_authentic_task_outcomes(self, over_http, state, body, error_kind):
-        import httpx
-
         from tests.harness._base import WireError, WireRefusal
-        from tests.harness.client import jsonrpc_http_result, native_task_result
 
         frame = self._frame(state)
         task = frame["result"]["task"]
         task["artifacts"][0]["parts"][0]["data"] = body
-        response = httpx.Response(200, json=frame)
-        result = jsonrpc_http_result(Transport.A2A, response) if over_http else native_task_result(Transport.A2A, task)
+        result, response = self._read_native(frame, over_http)
         assert result.has_wire is over_http
         assert result.raw_response is (response if over_http else None)
         assert result.envelope["task"] == task
@@ -681,10 +753,7 @@ class TestA2AHttpResultContract:
     @pytest.mark.parametrize("over_http", [False, True])
     @pytest.mark.parametrize("state", ["TASK_STATE_FAILED", "TASK_STATE_COMPLETED"])
     def test_envelope_only_adcp_error_retains_domain_evidence(self, over_http, state):
-        import httpx
-
         from tests.harness._base import WireError
-        from tests.harness.client import jsonrpc_http_result, native_task_result
 
         # AdCP3.2.7 L0 a2a-response-format Error Handling illustrates this
         # shape; L3 error-handling's two-layer model permits a single layer.
@@ -692,8 +761,7 @@ class TestA2AHttpResultContract:
         frame = self._frame(state)
         task = frame["result"]["task"]
         task["artifacts"][0]["parts"][0]["data"] = body
-        response = httpx.Response(200, json=frame)
-        result = jsonrpc_http_result(Transport.A2A, response) if over_http else native_task_result(Transport.A2A, task)
+        result, response = self._read_native(frame, over_http)
 
         assert result.envelope["status"] == "adcp_error"
         assert isinstance(result.error, WireError)
@@ -783,16 +851,12 @@ class TestA2AHttpResultContract:
     )
     @pytest.mark.parametrize("over_http", [False, True])
     def test_malformed_artifact_cardinality_keeps_native_evidence(self, artifacts, over_http):
-        import httpx
-
         from tests.harness._base import WireRefusal
-        from tests.harness.client import jsonrpc_http_result, native_task_result
 
         frame = self._frame()
         task = frame["result"]["task"]
         task["artifacts"] = artifacts
-        response = httpx.Response(200, json=frame)
-        result = jsonrpc_http_result(Transport.A2A, response) if over_http else native_task_result(Transport.A2A, task)
+        result, response = self._read_native(frame, over_http)
         assert isinstance(result.error, WireRefusal)
         assert result.envelope["task"] == task
         assert result.raw_response is (response if over_http else None)
@@ -853,7 +917,7 @@ class TestA2AHttpResultContract:
             origin.respond_with(200, body=json.dumps(self._frame()).encode())
             env = BaseTestEnv(e2e_config=E2EConfig(base_url=origin.base_url, postgres_url="postgresql://unused/db"))
             env._signing = SigningCapability(private_key, jwks, "capability-token", "a2a-reader", origin.base_url)
-            env.post_a2a({"method": "SendMessage"}, credential, signed=signed)
+            env.send_a2a({"method": "SendMessage"}, credential, signed=signed)
             headers = {key.lower(): value for key, value in origin.requests[0].headers.items()}
 
         for header in ("Authorization", "x-adcp-auth"):

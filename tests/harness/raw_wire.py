@@ -146,11 +146,11 @@ def _protocol_refusal(transport: Transport, exc: Exception, **verdict: Any) -> T
 
 def _a2a(env: Any, document: RawDocument, credential: dict[str, str]) -> TransportResult:
     from a2a.types import SendMessageRequest
-    from a2a.utils.errors import JSON_RPC_ERROR_CODE_MAP, A2AError
+    from a2a.utils.errors import A2AError
 
     from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
     from tests.harness._base import _a2a_call_context, _a2a_protobuf_task
-    from tests.harness.client import native_task_result
+    from tests.harness.client import native_task_result, unwrap_delivery_error
 
     env._commit_factory_data()
     context = _a2a_call_context(credential)
@@ -160,9 +160,7 @@ def _a2a(env: Any, document: RawDocument, credential: dict[str, str]) -> Transpo
     try:
         task = asyncio.run(AdCPRequestHandler().on_message_send(request, context))
     except A2AError as exc:
-        # The code the JSON-RPC layer would write for this class, read from the SDK's own
-        # table rather than restated here.
-        return _protocol_refusal(Transport.A2A, exc, jsonrpc_error_code=JSON_RPC_ERROR_CODE_MAP[type(exc)])
+        return unwrap_delivery_error(exc, Transport.A2A)
     return native_task_result(Transport.A2A, _a2a_protobuf_task(task))
 
 
@@ -170,12 +168,11 @@ def _e2e_a2a(env: Any, document: RawDocument, credential: dict[str, str]) -> Tra
     from a2a.types.a2a_pb2 import SendMessageRequest
 
     from tests.harness._base import _a2a_jsonrpc_body
-    from tests.harness.client import jsonrpc_http_result
 
     if not env.e2e_config:
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
     body = _a2a_jsonrpc_body("SendMessage", SendMessageRequest(message=_a2a_message(document)))
-    return jsonrpc_http_result(Transport.E2E_A2A, env.post_a2a(body, credential))
+    return env.send_a2a(body, credential)
 
 
 # ── MCP ──────────────────────────────────────────────────────────────

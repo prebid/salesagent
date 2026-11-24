@@ -45,6 +45,17 @@ When complete, services are running at **http://localhost:8000**:
 | Health Check | http://localhost:8000/health |
 
 **Log in:** with Google, as one of the `SUPER_ADMIN_EMAILS` addresses. There is no password login.
+Before you sign in, with either setup, complete the following steps:
+
+1. In `.env`, set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `SUPER_ADMIN_EMAILS`. The
+   `OAUTH_*` variables configure another OIDC provider instead. After a manual setup, also set
+   `ENCRYPTION_KEY`, which saving a tenant's SSO client secret needs; `make setup` writes it
+   for you.
+2. Run `docker compose up -d` again so that the server reads them.
+3. Register `http://localhost:8000/admin/auth/google/callback` and
+   `http://localhost:8000/auth/google/callback` as redirect URIs with the OAuth client.
+   [Deployment OAuth](../deployment/environment-variables.md#deployment-oauth) explains why
+   it needs both. If you set a different `CONDUCTOR_PORT`, use that port in place of `8000`.
 
 ## Manual Setup
 

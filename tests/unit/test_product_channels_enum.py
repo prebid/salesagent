@@ -5,10 +5,11 @@ is included in serialization output (public field per AdCP spec), and handles
 DB string-to-enum conversion correctly.
 """
 
+import pytest
 from adcp.types._generated import MediaChannel
 
 from src.core.schemas import Product
-from tests.factories.product import ONE_AUTHORIZED_PROPERTY, default_publisher_properties
+from tests.factories.product import ONE_AUTHORIZED_PROPERTY, default_publisher_properties, store_channel_residue
 from tests.helpers.adcp_factories import create_test_product
 
 
@@ -125,10 +126,11 @@ class TestProductChannelsConversion:
         assert product.channels[1] == MediaChannel.olv
 
     def test_invalid_db_channel_handled_gracefully(self):
-        """Invalid channel strings in DB should be skipped, not crash."""
+        """Invalid channel strings in DB should be skipped, not crash: residue the channel repair left."""
         from src.core.product_conversion import convert_product_model_to_schema
 
-        product_model = self._make_db_product(channels=["display", "invalid_channel_xyz", "olv"])
+        product_model = self._make_db_product()
+        store_channel_residue(product_model, ["display", "invalid_channel_xyz", "olv"])
 
         # Should not raise -- invalid channels are skipped
         product = convert_product_model_to_schema(
@@ -149,3 +151,19 @@ class TestProductChannelsConversion:
             product_model, publisher_properties=product_model.resolve_publisher_properties(ONE_AUTHORIZED_PROPERTY)
         )
         assert product.channels is None
+
+    @pytest.mark.parametrize("member", list(MediaChannel), ids=lambda m: m.value)
+    def test_every_picker_value_round_trips_through_conversion(self, member):
+        """Every value the admin picker can emit reaches ``Product.channels`` as its enum member.
+
+        The picker offers exactly the enum (``test_architecture_channel_selector_enum.py``), so
+        every member is what a publisher can tag (GH #1532). Green by construction for the twenty
+        members; it pins that an SDK enum bump the conversion did not follow shows up.
+        """
+        from src.core.product_conversion import convert_product_model_to_schema
+
+        product_model = self._make_db_product(channels=[member.value])
+        product = convert_product_model_to_schema(
+            product_model, publisher_properties=product_model.resolve_publisher_properties(ONE_AUTHORIZED_PROPERTY)
+        )
+        assert product.channels == [member]

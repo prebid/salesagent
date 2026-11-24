@@ -118,16 +118,14 @@ async def review_creative_async(
         creative_data=creative_data,
     )
 
-    try:
-        result = await agent.run(prompt)
-        # pydantic-ai 1.x uses .output for structured data
-        output = result.output
-        logger.info(f"Creative review result: decision={output.decision}, confidence={output.confidence}")
-        return output
+    from src.services.ai.factory import run_agent
 
-    except Exception as e:
-        logger.error(f"Review agent failed: {e}")
-        raise
+    # A provider failure raises AIProviderError; the caller parks the creative for a human.
+    result = await run_agent(agent, prompt)
+    # pydantic-ai 1.x uses .output for structured data
+    output = result.output
+    logger.info(f"Creative review result: decision={output.decision}, confidence={output.confidence}")
+    return output
 
 
 def parse_confidence_score(confidence: str) -> float:

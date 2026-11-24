@@ -33,7 +33,7 @@ from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import as_bool, drop_header_if
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
-from tests.factories.mint import mint
+from tests.factories.mint import mint, mint_id
 from tests.factories.request import OMIT
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 
@@ -3097,7 +3097,7 @@ def given_approval_configuration(ctx: dict, boundary: str) -> None:
 @given("the buyer references a package_id that does not belong to the media buy")
 def given_unknown_package_reference(ctx: dict) -> None:
     """Choose a package_id the seeded buy does not hold."""
-    ctx["unknown_package_id"] = mint(f"pkg_not_on_buy_{uuid.uuid4().hex}")
+    ctx["unknown_package_id"] = mint_id("pkg_not_on_buy")
 
 
 @when("the Buyer Agent sends update_media_buy targeting the unknown package")

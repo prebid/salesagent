@@ -26,8 +26,13 @@ from src.services.setup_checklist_service import (
     get_incomplete_critical_tasks,
     validate_setup_complete,
 )
+from tests.factories import TenantFactory
 from tests.factories.principal import plaintext_token_for
+from tests.harness._base import BareIntegrationEnv
 from tests.helpers.adcp_factories import create_test_db_product
+from tests.helpers.environ import isolated_environ
+from tests.helpers.settings_injection import ADMIN_UI_AI_CONFIG, KEYLESS_AI_CONFIG, PlatformAICredential
+from tests.helpers.setup_checklist import checklist_on_both_paths, checklist_task_on_both_paths
 from tests.helpers.signing import deployment_kek
 
 pytestmark = pytest.mark.requires_db
@@ -263,32 +268,30 @@ class TestSetupChecklistService:
 
     def test_recommended_tasks_tracked(self, integration_db, setup_complete_tenant, test_tenant_id):
         """Test that recommended tasks are properly tracked."""
-        with patch.dict(os.environ, {"GEMINI_API_KEY": "test_key"}):
-            service = SetupChecklistService(test_tenant_id)
-            status = service.get_setup_status()
+        service = SetupChecklistService(test_tenant_id)
+        status = service.get_setup_status()
 
-            # Check recommended tasks exist
-            assert len(status["recommended"]) > 0
-            recommended = {task["key"]: task for task in status["recommended"]}
+        # Check recommended tasks exist
+        assert len(status["recommended"]) > 0
+        recommended = {task["key"]: task for task in status["recommended"]}
 
-            # This tenant has everything configured
-            assert recommended["creative_approval_guidelines"]["is_complete"]
-            assert recommended["naming_conventions"]["is_complete"]
-            assert recommended["budget_controls"]["is_complete"]
-            assert recommended["slack_integration"]["is_complete"]
+        # This tenant has everything configured
+        assert recommended["creative_approval_guidelines"]["is_complete"]
+        assert recommended["naming_conventions"]["is_complete"]
+        assert recommended["budget_controls"]["is_complete"]
+        assert recommended["slack_integration"]["is_complete"]
 
     def test_optional_tasks_tracked(self, integration_db, setup_complete_tenant, test_tenant_id):
         """Test that optional tasks are properly tracked."""
-        with patch.dict(os.environ, {"GEMINI_API_KEY": "test_key"}):
-            service = SetupChecklistService(test_tenant_id)
-            status = service.get_setup_status()
+        service = SetupChecklistService(test_tenant_id)
+        status = service.get_setup_status()
 
-            # Check optional tasks exist
-            assert len(status["optional"]) > 0
-            optional = {task["key"]: task for task in status["optional"]}
+        # Check optional tasks exist
+        assert len(status["optional"]) > 0
+        optional = {task["key"]: task for task in status["optional"]}
 
-            # Complete tenant has AXE signals enabled
-            assert optional["signals_agent"]["is_complete"]
+        # Complete tenant has AXE signals enabled
+        assert optional["signals_agent"]["is_complete"]
 
     def test_progress_calculation(self, integration_db, test_tenant_id):
         """Test progress percentage calculation."""
@@ -322,29 +325,28 @@ class TestSetupChecklistService:
             seed_verified_website(db_session, test_tenant_id, "test.com")
             db_session.commit()
 
-        with patch.dict(os.environ, {"GEMINI_API_KEY": "test_key"}):
-            service = SetupChecklistService(test_tenant_id)
-            status = service.get_setup_status()
+        service = SetupChecklistService(test_tenant_id)
+        status = service.get_setup_status()
 
-            # Should show partial progress
-            assert 0 < status["progress_percent"] < 100
-            assert status["completed_count"] < status["total_count"]
+        # Should show partial progress
+        assert 0 < status["progress_percent"] < 100
+        assert status["completed_count"] < status["total_count"]
 
     def test_action_urls_provided(self, integration_db, setup_minimal_tenant, test_tenant_id):
         """Test that action URLs are provided for incomplete tasks."""
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             service = SetupChecklistService(test_tenant_id)
             status = service.get_setup_status()
 
-            # Check that incomplete tasks have action URLs (except environment variables)
+            # Check that incomplete tasks have action URLs
             for task in status["critical"]:
-                if not task["is_complete"] and task["key"] != "gemini_api_key":
+                if not task["is_complete"]:
                     assert task["action_url"] is not None
                     assert f"/tenant/{test_tenant_id}" in task["action_url"]
 
     def test_get_next_steps(self, integration_db, setup_minimal_tenant, test_tenant_id):
         """Test get_next_steps returns prioritized actions."""
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             service = SetupChecklistService(test_tenant_id)
             next_steps = service.get_next_steps()
 
@@ -576,13 +578,7 @@ class TestSetupChecklistService:
 
     def test_bulk_setup_status_matches_single_query(self, integration_db, setup_complete_tenant, test_tenant_id):
         """Test that bulk query produces same results as single-tenant query."""
-        # Get status via single query
-        single_service = SetupChecklistService(test_tenant_id)
-        single_status = single_service.get_setup_status()
-
-        # Get status via bulk query
-        bulk_statuses = SetupChecklistService.get_bulk_setup_status([test_tenant_id])
-        bulk_status = bulk_statuses[test_tenant_id]
+        single_status, bulk_status = checklist_on_both_paths(test_tenant_id)
 
         # Compare key metrics
         assert single_status["progress_percent"] == bulk_status["progress_percent"]
@@ -601,7 +597,7 @@ class TestSetupValidation:
 
     def test_get_incomplete_critical_tasks(self, integration_db, setup_minimal_tenant, test_tenant_id):
         """Test getting list of incomplete critical tasks."""
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             incomplete = get_incomplete_critical_tasks(test_tenant_id)
 
             # Should have multiple incomplete tasks
@@ -624,44 +620,60 @@ class TestSetupValidation:
         on a buyer-facing error. It also asserted inside an ``except`` block, so it passed
         unchanged when nothing was raised at all.
         """
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             with pytest.raises(AdCPConfigurationError):
                 validate_setup_complete(test_tenant_id)
 
     def test_validate_setup_complete_passes_for_complete(self, integration_db, setup_complete_tenant, test_tenant_id):
         """Test that validation passes for complete setup."""
-        with patch.dict(os.environ, {"GEMINI_API_KEY": "test_key"}):
-            # Should not raise exception
-            validate_setup_complete(test_tenant_id)
+        # Should not raise exception
+        validate_setup_complete(test_tenant_id)
 
 
 class TestTaskDetails:
     """Tests for individual task checking logic."""
 
-    def test_gemini_api_key_detection(self, integration_db, setup_minimal_tenant, test_tenant_id):
-        """Test tenant-specific Gemini API key detection (moved to optional tasks)."""
-        from cryptography.fernet import Fernet
+    @pytest.mark.parametrize(
+        ("tenant_fields", "platform_key", "is_complete"),
+        [
+            ({}, None, False),
+            ({}, "platform-key", False),
+            ({"ai_config": ADMIN_UI_AI_CONFIG}, None, True),
+            ({"ai_config": KEYLESS_AI_CONFIG}, None, False),
+            ({"ai_config": KEYLESS_AI_CONFIG}, "platform-key", False),
+            ({"gemini_api_key": "test_tenant_key"}, None, True),
+        ],
+        ids=[
+            "nothing-configured",
+            "nothing-configured-the-platform-key-is-not-the-sellers",
+            "configured-through-the-admin-ui",
+            "keyless-row",
+            "keyless-row-the-platform-key-is-not-the-sellers",
+            "legacy-gemini-column",
+        ],
+    )
+    def test_ai_provider_key_detection(self, integration_db, tenant_fields, platform_key, is_complete):
+        """The optional AI task is done exactly when the seller's own AI configuration can run.
 
-        from src.core.database.database_session import get_db_session
+        It follows ``tenant_ai_enabled(tenant, platform_fallback=False)``, not the legacy
+        column alone. The Admin UI's AI Services form writes ``tenant.ai_config``, and
+        nothing writes ``tenant.gemini_api_key`` any more, so reading only the legacy
+        column kept the task incomplete for every seller who configured AI the way the UI
+        asks (#2224). The keyless row the form saves when the key field is left blank is
+        not a configuration ("AI features will be disabled", the form says as it saves
+        it), and a platform key is not the seller's. Both enumeration paths, per tenant and
+        the dashboard's bulk one, must grade the task the same way.
+        """
+        with PlatformAICredential(platform_key), BareIntegrationEnv() as env:
+            TenantFactory(tenant_id="chk-ai", **tenant_fields)
+            env._commit_factory_data()
+            task = checklist_task_on_both_paths("chk-ai", "optional", "ai_provider_key")
 
-        # Without key (tenant.gemini_api_key is None)
-        service = SetupChecklistService(test_tenant_id)
-        status = service.get_setup_status()
-        gemini_task = next(t for t in status["optional"] if t["key"] == "gemini_api_key")
-        assert not gemini_task["is_complete"]
-
-        # With tenant-specific key (requires ENCRYPTION_KEY for encrypted storage)
-        test_encryption_key = Fernet.generate_key().decode()
-        with patch.dict(os.environ, {"ENCRYPTION_KEY": test_encryption_key}):
-            with get_db_session() as db_session:
-                tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=test_tenant_id)).first()
-                tenant.gemini_api_key = "test_tenant_key"  # Set tenant-specific key
-                db_session.commit()
-
-            service = SetupChecklistService(test_tenant_id)
-            status = service.get_setup_status()
-            gemini_task = next(t for t in status["optional"] if t["key"] == "gemini_api_key")
-            assert gemini_task["is_complete"]
+        assert task["is_complete"] is is_complete, task["details"]
+        assert task["name"] == "AI Features"
+        assert task["details"] == (
+            "AI features enabled" if is_complete else "Optional: Configure an AI provider API key for AI features"
+        )
 
     def test_currency_count_in_details(self, integration_db, test_tenant_id):
         """Test that currency count is shown in task details."""
@@ -696,12 +708,11 @@ class TestTaskDetails:
                 db_session.add(currency)
             db_session.commit()
 
-        with patch.dict(os.environ, {"GEMINI_API_KEY": "test_key"}):
-            service = SetupChecklistService(test_tenant_id)
-            status = service.get_setup_status()
+        service = SetupChecklistService(test_tenant_id)
+        status = service.get_setup_status()
 
-            currency_task = next(t for t in status["critical"] if t["key"] == "currency_limits")
-            assert "2 currencies" in currency_task["details"]
+        currency_task = next(t for t in status["critical"] if t["key"] == "currency_limits")
+        assert "2 currencies" in currency_task["details"]
 
     def test_tenant_not_found_error(self, integration_db):
         """Test that service raises error for non-existent tenant."""

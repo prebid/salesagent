@@ -33,7 +33,7 @@ class TestTemplateUrlValidation:
         url_for_calls = {}
 
         for template_file in template_dir.rglob("*.html"):
-            with open(template_file) as f:
+            with open(template_file, encoding="utf-8") as f:
                 content = f.read()
 
             # Skip commented out sections
@@ -143,7 +143,7 @@ class TestTemplateUrlValidation:
         form_errors = []
 
         for template_file in template_dir.rglob("*.html"):
-            with open(template_file) as f:
+            with open(template_file, encoding="utf-8") as f:
                 content = f.read()
 
             # Find all form actions with url_for
@@ -178,7 +178,7 @@ class TestTemplateUrlValidation:
             if not template_path.exists():
                 continue
 
-            with open(template_path) as f:
+            with open(template_path, encoding="utf-8") as f:
                 content = f.read()
 
             # Find all href links with url_for
@@ -204,7 +204,7 @@ class TestTemplateUrlValidation:
         ajax_errors = []
 
         for template_file in template_dir.rglob("*.html"):
-            with open(template_file) as f:
+            with open(template_file, encoding="utf-8") as f:
                 content = f.read()
 
             # Find fetch/ajax calls with url_for

@@ -47,7 +47,7 @@ def _record(
             step["skipped"] = True
             step["skip_reason"] = skip_reason
         sc["steps"].append(step)
-    path.write_text(json.dumps({"tracks": list(tracks.values())}))
+    path.write_text(json.dumps({"tracks": list(tracks.values())}), encoding="utf-8")
 
 
 def test_skip_marker_is_not_counted_as_a_pass(tmp_path: Path) -> None:

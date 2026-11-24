@@ -38,7 +38,8 @@ async def get_products(
 ) -> GetProductsResponse:
     """Get products using request object pattern."""
     return _get_products_impl(req, context)
-'''
+''',
+            encoding="utf-8",
         )
 
         validator = ToolSchemaValidator()
@@ -80,7 +81,8 @@ async def get_products(
         filters=filters,
     )
     return req
-'''
+''',
+            encoding="utf-8",
         )
 
         validator = ToolSchemaValidator()
@@ -131,7 +133,8 @@ async def get_products(
         filters=filters,
     )
     return await _get_products_impl(req, context)
-'''
+''',
+            encoding="utf-8",
         )
 
         validator = ToolSchemaValidator()
@@ -162,7 +165,8 @@ async def get_products(
 ) -> GetProductsResponse:
     """Tool using request object - extra params not possible."""
     return _get_products_impl(req, context)
-'''
+''',
+            encoding="utf-8",
         )
 
         validator = ToolSchemaValidator()
@@ -188,7 +192,8 @@ async def get_products(
 ) -> GetProductsResponse:
     """Tool using request object - Pydantic enforces required fields."""
     return _get_products_impl(req, context)
-'''
+''',
+            encoding="utf-8",
         )
 
         validator = ToolSchemaValidator()

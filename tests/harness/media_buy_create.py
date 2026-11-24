@@ -26,7 +26,7 @@ from src.adapters.base import AdapterCreateResult, ResponsePackage
 from src.adapters.mock_ad_server import MockAdServer
 from src.core.schemas import CreateMediaBuyRequest, Principal
 from src.core.schemas._base import CreateMediaBuyResult
-from tests.factories.mint import mint
+from tests.factories.mint import mint, mint_id
 from tests.harness._base import IntegrationEnv, json_safe
 from tests.harness._realize import realize_e2e
 from tests.harness.admin_client import AdminOperatorMixin
@@ -510,7 +510,7 @@ class MediaBuyCreateEnv(
             media_packages = kwargs.get("packages") or (args[1] if len(args) > 1 else None) or []
 
             return AdapterCreateResult(
-                media_buy_id=mint(f"mb_{uuid.uuid4().hex[:8]}"),
+                media_buy_id=mint_id("mb"),
                 packages=[ResponsePackage(package_id=pkg.package_id, paused=pkg.paused) for pkg in media_packages],
                 creative_deadline=self._reported_creative_deadline,
             )

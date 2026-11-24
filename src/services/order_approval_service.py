@@ -15,11 +15,13 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
+from src.core.operator_errors import safe_error_message
 from src.core.security.webhook_egress import deliver_webhook
 from src.core.signing.outbound import delivery_signer_for_tenant
 from src.core.thread_registry import ThreadRegistry
 from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.delivery import WebhookDeliveryOutcome
+from src.services.sync_jobs import record_sync_failure
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +262,8 @@ def _run_approval_thread(
                     return
 
             except Exception as e:
+                # The text is read to classify the failure only: the stored message and the
+                # buyer's webhook carry fixed text and a log reference, never GAM's text.
                 error_str = str(e)
 
                 # Check for non-retryable errors
@@ -267,7 +271,7 @@ def _run_approval_thread(
                     # Non-retryable error
                     _mark_approval_failed(
                         approval_id,
-                        f"Non-retryable error: {error_str}",
+                        safe_error_message(e, "Order approval failed with a non-retryable error"),
                         webhook_url,
                         tenant_id,
                         principal_id,
@@ -283,7 +287,7 @@ def _run_approval_thread(
                     # Max attempts reached
                     _mark_approval_failed(
                         approval_id,
-                        f"Order approval timed out after {max_attempts} attempts: {error_str}",
+                        safe_error_message(e, f"Order approval timed out after {max_attempts} attempts"),
                         webhook_url,
                         tenant_id,
                         principal_id,
@@ -292,8 +296,14 @@ def _run_approval_thread(
                     return
 
     except Exception as e:
-        logger.error(f"[{approval_id}] Approval polling failed: {e}", exc_info=True)
-        _mark_approval_failed(approval_id, str(e), webhook_url, tenant_id, principal_id, media_buy_id)
+        _mark_approval_failed(
+            approval_id,
+            safe_error_message(e, f"Order approval polling failed for {approval_id}"),
+            webhook_url,
+            tenant_id,
+            principal_id,
+            media_buy_id,
+        )
 
     finally:
         # Remove from active approvals
@@ -366,27 +376,13 @@ def _mark_approval_failed(
 ):
     """Mark approval as failed and send webhook notification."""
     try:
-        # Read the progress fields BEFORE the session closes. ``db.commit()``
-        # expires every attribute on ``approval_job``, so touching ``.progress``
-        # after the ``with`` block raises DetachedInstanceError — which the
-        # ``except`` below then swallowed, and the buyer was never told the order
-        # had failed at all (salesagent-98t2, reproduced by
-        # tests/integration/test_order_approval_webhook_signing.py).
-        order_id: str | None = None
-        attempts: int | None = None
-
-        with get_db_session() as db:
-            stmt = select(SyncJob).where(SyncJob.sync_id == approval_id)
-            approval_job = db.scalars(stmt).first()
-            if approval_job:
-                approval_job.status = "failed"
-                approval_job.completed_at = datetime.now(UTC)
-                approval_job.error_message = error_message
-                db.commit()
-
-                progress = approval_job.progress or {}
-                order_id = progress.get("order_id")
-                attempts = progress.get("attempts")
+        # The progress is read inside the unit that records the failure: once it commits,
+        # the row is expired, and reading it after raised DetachedInstanceError, which the
+        # ``except`` below swallowed, so the buyer was never told the order had failed
+        # (salesagent-98t2, reproduced by tests/integration/test_order_approval_webhook_signing.py).
+        progress = record_sync_failure(tenant_id, approval_id, error_message)
+        order_id: str | None = progress.get("order_id")
+        attempts: int | None = progress.get("attempts")
 
         # Send webhook notification
         if webhook_url:

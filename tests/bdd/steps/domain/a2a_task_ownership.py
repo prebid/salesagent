@@ -2,6 +2,7 @@
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._outcome_helpers import wire_field
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
 
@@ -27,28 +28,30 @@ def when_poll_adcp_task(ctx: dict) -> None:
 
 @then(parsers.parse('the native receipt state is "{state}"'))
 def then_task_state(ctx: dict, state: str) -> None:
-    assert ctx["result"].envelope["task"]["status"]["state"] == f"TASK_STATE_{state.upper()}"
+    assert ctx["result"].envelope["a2a_task_state"] == f"TASK_STATE_{state.upper()}"
 
 
 @then(parsers.parse('the receipt contains the AdCP "{status}" result'))
 @then(parsers.parse('the receipt contains the AdCP "{status}" result with error "{code}"'))
 def then_adcp_result(ctx: dict, status: str, code: str = "-") -> None:
-    assert ctx["env"].adcp_result(ctx["result"])["status"] == status
     if code != "-":
         ctx["result"].assert_wire_error(code)
+        assert ctx["result"].error_envelope()["status"] == status
+    else:
+        assert wire_field(ctx, "status") == status
 
 
 @then("the AdCP task handle is distinct from the native receipt")
 def then_distinct_handles(ctx: dict) -> None:
-    task_id = ctx["env"].adcp_result(ctx["result"])["task_id"]
+    task_id = wire_field(ctx, "task_id")
     assert isinstance(task_id, str) and task_id
-    assert task_id != ctx["result"].envelope["task"]["id"]
-    assert ctx["env"].adcp_result(ctx["result"])["context"] == {"trace": "native-receipt"}
+    assert task_id != ctx["result"].envelope["a2a_task_id"]
+    assert wire_field(ctx, "context") == {"trace": "native-receipt"}
 
 
 @then("the durable AdCP task still has the submitted handle")
 def then_durable_handle(ctx: dict) -> None:
-    assert ctx["env"].adcp_result(ctx["result"])["task_id"] == ctx["env"].adcp_task_id
+    assert wire_field(ctx, "task_id") == ctx["env"].adcp_task_id
 
 
 @then("the native refusal identifies the supplied task")

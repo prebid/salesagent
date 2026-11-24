@@ -271,7 +271,7 @@ def scan(field_names: set[str]) -> list[dict[str, object]]:
         for site in find_stringification_sites(tree, field_names=field_names):
             hits.append(
                 {
-                    "file": str(path.relative_to(REPO_ROOT)),
+                    "file": path.relative_to(REPO_ROOT).as_posix(),
                     "line": site.lineno,
                     "attr": site.attr,
                     "form": site.form,

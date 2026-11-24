@@ -16,8 +16,8 @@ from sqlalchemy import delete
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, PersistedMediaBuyStatus, Principal, Tenant
 from tests.factories.principal import plaintext_token_for
-from tests.integration.conftest import cleanup_tenant, make_media_buy, make_package
-from tests.utils.database_helpers import vhost_for
+from tests.integration.conftest import make_media_buy, make_package
+from tests.utils.database_helpers import delete_tenant, vhost_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -44,7 +44,7 @@ def tenant_a(integration_db):
         session.add(tenant)
         session.commit()
     yield tenant_id
-    cleanup_tenant(tenant_id)
+    delete_tenant(tenant_id)
 
 
 @pytest.fixture
@@ -63,7 +63,7 @@ def tenant_b(integration_db):
         session.add(tenant)
         session.commit()
     yield tenant_id
-    cleanup_tenant(tenant_id)
+    delete_tenant(tenant_id)
 
 
 @pytest.fixture
