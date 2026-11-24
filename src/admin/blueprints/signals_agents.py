@@ -11,6 +11,7 @@ from src.admin.utils.secret_fields import KEEP, submitted_secret
 from src.admin.utils.url_policy import json_error_if_url_blocked, redirect_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SignalsAgent, Tenant
+from src.core.database.repositories.agent import SignalsAgentRepository
 from src.core.operator_errors import ConnectionTestFailed
 
 logger = logging.getLogger(__name__)
@@ -224,10 +225,8 @@ def edit_signals_agent(tenant_id, agent_id):
 def delete_signals_agent(tenant_id, agent_id):
     """Delete a signals agent."""
     with get_db_session() as session:
-        stmt = select(SignalsAgent).filter_by(id=agent_id, tenant_id=tenant_id)
-        agent = session.scalars(stmt).first()
-        if not agent:
-            return jsonify({"error": "Signals agent not found"}), 404
+        agents = SignalsAgentRepository(session, tenant_id)
+        agent = agents.require(agents.get, agent_id)
 
         agent_name = agent.name
         session.delete(agent)
