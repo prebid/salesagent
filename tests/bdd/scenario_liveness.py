@@ -67,10 +67,12 @@ from pytest_bdd.scenario import get_step_function
 from scripts.audit import storyboard_spec
 from scripts.ci import shard_split
 from tests._collection_manifest import (
+    IncompleteLivenessRun,
     read_artifacts,
     relative_target,
     required_dir,
     scope_fingerprint,
+    whole_suite_sessions,
     write_artifact,
 )
 from tests.harness.transport import BDD_IN_PROCESS_TRANSPORTS
@@ -106,7 +108,7 @@ class Observation:
 
     transport: str
     nodeid: str
-    outcome: str  # "passed" | "failed" | "xfailed"
+    outcome: str  # "passed" | "failed" | "xfailed" | "skipped"
     reason: str | None
     reason_category: str  # "live" | "no_steps_bound" | "harness_not_wired" | "ledgered"
     #: MEASURED: at least one step body of this (scenario, transport) run began
@@ -400,7 +402,13 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Any:
     # direction that inflates measured coverage.
     typed = _classify_exception(call.excinfo)
     category = typed if typed is not None else _classify_reason(reason)
-    outcome_name = "passed" if report.passed else ("xfailed" if reason is not None else "failed")
+    # A call-phase ``pytest.skip()`` is a skip, not a failure (it used to record "failed").
+    if report.passed:
+        outcome_name = "passed"
+    elif reason is not None:
+        outcome_name = "xfailed"
+    else:
+        outcome_name = "skipped" if report.skipped else "failed"
     record.record_observation(
         Observation(
             transport=_transport_name(item),
@@ -654,16 +662,6 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         write_artifact(Path(sessions) / _session_filename(artifact["run"]), body)
 
 
-class IncompleteLivenessRun(RuntimeError):
-    """The session files on disk do not add up to a measurement of the suite.
-
-    Raised rather than returning what was found. A consumer handed a partial
-    artifact asks its question of a partial population and passes, which is the
-    failure this whole artifact exists to prevent -- and is what the single
-    fixed write path produced for as long as the suite was sharded.
-    """
-
-
 def _project_in_process(record: dict[str, Any]) -> dict[str, Any]:
     """One scenario, as the in-process transports alone measured it.
 
@@ -705,38 +703,13 @@ def load_run(directory: str | Path) -> dict[str, Any]:
 
     Folds the per-session files with the same `_merge_record` the controller
     already uses for workers, then projects each scenario onto the in-process
-    transports.
-
-    A FILTERED session is skipped rather than refused: on the fast path
-    `[testenv:bdd_e2e]` always writes one (`-k e2e_rest`) beside the shards, so
-    refusing on its presence would red every such run. Skipping it and letting
-    the coverage check below decide is the single-valued rule. The exclusion is
-    still load-bearing -- bdd_e2e's TARGET is the whole tree, so a path-only
-    check would accept it, and its in-process projection is empty for every
-    scenario at once.
+    transports. Which sessions count, and when the set is refused as partial, is
+    ``whole_suite_sessions``; a filtered session's in-process projection would be
+    empty for every scenario at once, which is why it is excluded.
     """
     merged: dict[str, dict[str, Any]] = {}
-    covered: set[str] = set()
-    for path, payload in read_artifacts(directory):
-        scope = payload.get("run", {})
-        if scope.get("selection") or scope.get("markers"):
-            continue
-        missing = scope.get("workers_missing") or []
-        if missing:
-            raise IncompleteLivenessRun(
-                f"{path.name} was written by a session whose workers {missing} shut down "
-                "without shipping their records, so the scenarios they ran are absent from "
-                "it. The file is a partial measurement wearing a whole run's target list."
-            )
-        covered.update(scope.get("target", []))
+    for _, payload in whole_suite_sessions(read_artifacts(directory), directory, repo_root=_REPO_ROOT):
         for record in payload.get("scenarios", []):
             existing = merged.get(record["scenario_id"])
             merged[record["scenario_id"]] = record if existing is None else _merge_record(existing, record)
-
-    if not shard_split.targets_cover_suite("bdd", covered, repo_root=_REPO_ROOT):
-        raise IncompleteLivenessRun(
-            f"the liveness sessions in {directory} cover {sorted(covered) or 'nothing'}, "
-            "which does not account for every BDD module. A partial measurement cannot "
-            "be graded as the suite."
-        )
     return {"scenarios": {k: _project_in_process(v) for k, v in merged.items()}}

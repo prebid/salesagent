@@ -70,11 +70,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from functools import cache
 from pathlib import Path
 from typing import Any
 
+from scripts.ci import shard_split
 from tests.helpers.marker_names import derive_marker_names
 
 _OUT_DIR = os.environ.get("PYTEST_COLLECTION_MANIFEST")
@@ -123,6 +124,51 @@ def write_artifact(path: Path, body: str) -> None:
 def read_artifacts(directory: str | Path) -> list[tuple[Path, dict[str, Any]]]:
     """Every per-session file in ``directory``, in a stable order."""
     return [(path, json.loads(path.read_text(encoding="utf-8"))) for path in sorted(Path(directory).glob("*.json"))]
+
+
+class IncompleteLivenessRun(RuntimeError):
+    """The session files on disk do not add up to a measurement of the suite.
+
+    Raised rather than returning what was found. A consumer handed a partial
+    artifact asks its question of a partial population and passes, which is the
+    failure this whole artifact exists to prevent -- and is what the single
+    fixed write path produced for as long as the suite was sharded.
+    """
+
+
+def whole_suite_sessions(
+    sessions: Iterable[tuple[Path, dict[str, Any]]], where: str | Path, repo_root: Path | None = None
+) -> list[tuple[Path, dict[str, Any]]]:
+    """The unfiltered liveness sessions, refused unless together they measured every BDD module.
+
+    A FILTERED session (``-k``/``-m``) is skipped rather than refused: on the fast path
+    ``[testenv:bdd_e2e]`` always writes one (``-k e2e_rest``) beside the shards, so
+    refusing on its presence would red every such run. It is still excluded from the
+    coverage judgement -- bdd_e2e's TARGET is the whole tree, so a path-only check
+    would accept it alone. A session whose xdist workers shipped nothing is refused.
+    """
+    kept: list[tuple[Path, dict[str, Any]]] = []
+    covered: set[str] = set()
+    for path, payload in sessions:
+        scope = payload.get("run", {})
+        if scope.get("selection") or scope.get("markers"):
+            continue
+        missing = scope.get("workers_missing") or []
+        if missing:
+            raise IncompleteLivenessRun(
+                f"{path.name} was written by a session whose workers {missing} shut down "
+                "without shipping their records, so the scenarios they ran are absent from "
+                "it. The file is a partial measurement wearing a whole run's target list."
+            )
+        covered.update(scope.get("target", []))
+        kept.append((path, payload))
+    if not shard_split.targets_cover_suite("bdd", covered, repo_root=repo_root):
+        raise IncompleteLivenessRun(
+            f"the liveness sessions in {where} cover {sorted(covered) or 'nothing'}, "
+            "which does not account for every BDD module. A partial measurement cannot "
+            "be graded as the suite."
+        )
+    return kept
 
 
 def required_dir(variable: str, refusal: type[Exception], consequence: str) -> Path:

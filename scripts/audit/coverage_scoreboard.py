@@ -13,12 +13,13 @@ Statuses (first match wins):
 ``passing``
     Every observation on every transport passed.
 ``partial``
-    Some observations passed, the rest are xfailed (or collected but not run).
+    Some observations passed, the rest are xfailed, skipped, or collected but not run.
 ``xfail``
     Observations exist and none passed; all are xfailed.
 ``skipped``
-    Collected (a selected manifest row carries its tag) but no outcome was
-    recorded: skipped before its body ran, or ``xfail(run=False)``.
+    Collected, but nothing ran to an outcome: every observation is a skip, or a
+    selected manifest row with no outcome (skipped before its body ran, or
+    ``xfail(run=False)``).
 ``not_collected``
     In a feature file, but no test module binds it, so nothing collected it.
 ``untagged``
@@ -48,8 +49,8 @@ Output, under ``--out``:
                       transports: {transport: outcome}, xfail_reason,
                       xfail_category, xfail_strict}]
 
-Per-transport ``outcome`` is ``passed``, ``xfailed``, ``failed``, ``mixed``
-(an outline whose examples disagree) or ``not_run`` (collected, no outcome); a
+Per-transport ``outcome`` is ``passed``, ``xfailed``, ``failed``, ``skipped``,
+``mixed`` (an outline whose examples disagree) or ``not_run`` (collected, no outcome); a
 transport the scenario is not parametrized over is absent. ``xfail_strict`` is
 ``null`` when the artifact predates the field. ``use_case`` is the feature name
 's leading upper-case segments
@@ -59,7 +60,7 @@ transport the scenario is not parametrized over is absent. ``xfail_strict`` is
 
 Usage::
 
-    python3 scripts/audit/coverage_scoreboard.py --artifacts bdd-artifacts \
+    uv run python scripts/audit/coverage_scoreboard.py --artifacts bdd-artifacts \
         --out scoreboard --commit "$SHA" --run-id "$RUN_ID" --repository prebid/salesagent
 """
 
@@ -79,7 +80,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts.audit import storyboard_runner_score, storyboard_spec  # noqa: E402
-from tests._collection_manifest import read_artifacts  # noqa: E402
+from tests._collection_manifest import read_artifacts, whole_suite_sessions  # noqa: E402
 from tests.helpers.bdd_transport import NODEID_TRANSPORTS, transport_of  # noqa: E402
 
 SCHEMA_VERSION = 1
@@ -92,7 +93,7 @@ STATUSES: tuple[tuple[str, str, str], ...] = (
     ("partial", "Partial", "Passed on some transports or examples, xfailed or not run on the rest"),
     ("xfail", "Expected failure", "Runs, but is xfailed everywhere (known gap or unbound steps)"),
     ("failing", "Failing", "Recorded a failure"),
-    ("skipped", "Skipped", "Collected, but no outcome recorded (skipped, or xfail with run=False)"),
+    ("skipped", "Skipped", "Collected, but nothing ran to an outcome (skipped, or xfail with run=False)"),
     ("not_collected", "Not collected", "In a feature file, but no test module binds it"),
     ("untagged", "Untagged", "No @T-* identity tag, so no run can report it"),
 )
@@ -162,12 +163,12 @@ def feature_scenarios(repo: Path) -> list[Scenario]:
     ]
 
 
-def _payloads(artifacts: Path, subdir: str) -> list[dict[str, Any]]:
+def _payloads(artifacts: Path, subdir: str) -> list[tuple[Path, dict[str, Any]]]:
     """Every per-session JSON file in every ``subdir`` under ``artifacts``."""
     return [
-        payload
+        (path, payload)
         for directory in sorted(artifacts.glob(f"**/{subdir}"))
-        for _, payload in read_artifacts(directory)
+        for path, payload in read_artifacts(directory)
         if isinstance(payload, dict)
     ]
 
@@ -179,14 +180,22 @@ class Measurements:
     sessions: int
 
 
-def read_measurements(artifacts: Path) -> Measurements:
-    """Fold every liveness session and collection manifest under ``artifacts``."""
+def read_measurements(artifacts: Path, repo: Path) -> Measurements:
+    """Fold every liveness session and collection manifest under ``artifacts``.
+
+    Refused (``IncompleteLivenessRun``) unless the unfiltered sessions together cover
+    every BDD module of ``repo`` and no session lost a worker: a missing shard would
+    otherwise turn its scenarios into ``not_collected``.
+    """
     observations: dict[str, dict[str, list[dict[str, Any]]]] = collections.defaultdict(
         lambda: collections.defaultdict(list)
     )
     observed_nodeids: set[str] = set()
     sessions = _payloads(artifacts, "liveness-sessions")
-    for session in sessions:
+    if not sessions:
+        raise SystemExit(f"no liveness-sessions/*.json under {artifacts}: nothing was measured")
+    whole_suite_sessions(sessions, artifacts, repo_root=repo)
+    for _, session in sessions:
         for record in session.get("scenarios", []):
             for obs in record.get("observations", []):
                 observations[record["scenario_id"]][obs.get("transport") or "default"].append(obs)
@@ -194,7 +203,7 @@ def read_measurements(artifacts: Path) -> Measurements:
     # A selected row with no outcome is recorded as ``not_run`` beside whatever its
     # siblings on the same transport recorded, so an outline with one example run and
     # one parked cannot read as fully passing.
-    for manifest in _payloads(artifacts, "collection-manifest"):
+    for _, manifest in _payloads(artifacts, "collection-manifest"):
         for row in manifest.get("rows", []):
             nodeid = row.get("nodeid", "")
             if not row.get("selected") or nodeid in observed_nodeids:
@@ -224,7 +233,7 @@ def grade(scenario: Scenario, measured: Measurements) -> None:
     per_transport = measured.observations.get(scenario.tag, {})
     scenario.transports = {t: _transport_outcome(per_transport[t]) for t in sort_transports(per_transport)}
     outcomes = [o.get("outcome") for obs in per_transport.values() for o in obs]
-    ran = [o for o in outcomes if o != NOT_RUN]
+    ran = [o for o in outcomes if o not in (NOT_RUN, "skipped")]
     if "failed" in ran:
         scenario.status = "failing"
     elif ran and len(ran) == len(outcomes) and all(o == "passed" for o in ran):
@@ -271,9 +280,7 @@ def build(
     now: datetime.datetime | None = None,
 ) -> dict[str, Any]:
     """The whole scoreboard as one JSON-serializable dict."""
-    measured = read_measurements(artifacts)
-    if measured.sessions == 0:
-        raise SystemExit(f"no liveness-sessions/*.json under {artifacts}: nothing was measured")
+    measured = read_measurements(artifacts, repo)
     scenarios = feature_scenarios(repo)
     for scenario in scenarios:
         grade(scenario, measured)
@@ -337,11 +344,26 @@ def render_markdown(board: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def newest_run(results: Path) -> Path:
+    """The most recently written run directory under ``results`` that holds liveness sessions.
+
+    One run, never the whole directory: ``test-results/`` retains several, and pooling
+    them would grade a scenario on an older run's failure.
+    """
+    runs = {p.parent for p in results.glob("*/liveness-sessions")}
+    if not runs:
+        raise SystemExit(f"no {results}/<run>/liveness-sessions: pass --artifacts")
+    return max(runs, key=lambda run: run.stat().st_mtime)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument("--repo", type=Path, default=_REPO_ROOT, help="repository checkout (feature files)")
     parser.add_argument(
-        "--artifacts", type=Path, default=Path("test-results"), help="directory holding downloaded BDD artifacts"
+        "--artifacts",
+        type=Path,
+        default=None,
+        help="ONE run's BDD artifacts (default: the newest test-results/<run> holding liveness sessions)",
     )
     parser.add_argument("--out", type=Path, default=Path("test-results") / "coverage-scoreboard")
     parser.add_argument("--commit", help="commit sha the artifacts were produced from")
@@ -350,7 +372,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--markdown", action="store_true", help="also print the markdown table to stdout")
     args = parser.parse_args(argv)
 
-    board = build(args.repo, args.artifacts, commit=args.commit, run_id=args.run_id, repository=args.repository)
+    artifacts = args.artifacts or newest_run(args.repo / "test-results")
+    board = build(args.repo, artifacts, commit=args.commit, run_id=args.run_id, repository=args.repository)
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "scoreboard.json").write_text(json.dumps(board, separators=(",", ":")) + "\n", encoding="utf-8")
     markdown = render_markdown(board)
