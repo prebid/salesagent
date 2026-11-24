@@ -84,7 +84,11 @@ jobs:
           run-id: ${{ steps.run.outputs.id }}
           github-token: ${{ github.token }}
 
-      # stdlib only: the generator and everything it imports need no project venv.
+      # The generator imports scripts/audit/storyboard_spec, which needs the project
+      # dependencies (adcp, pyyaml). `uv run --frozen` installs them from uv.lock.
+      - uses: ./.github/actions/_install-uv
+        if: steps.run.outputs.fresh == 'true'
+
       - name: Generate the scoreboard
         if: steps.run.outputs.fresh == 'true'
         env:
@@ -95,7 +99,7 @@ jobs:
           ARTIFACTS: ${{ runner.temp }}/bdd-artifacts
         run: |
           set -euo pipefail
-          python3 scripts/audit/coverage_scoreboard.py --artifacts "$ARTIFACTS" --out "$OUT" \
+          uv run --frozen python scripts/audit/coverage_scoreboard.py --artifacts "$ARTIFACTS" --out "$OUT" \
             --commit "$SHA" --run-id "$RUN_ID" --repository "$REPO" --markdown | tee -a "$GITHUB_STEP_SUMMARY"
 
       # One commit on an orphan branch, force-pushed: the branch holds the current
