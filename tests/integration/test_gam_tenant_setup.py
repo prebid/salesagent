@@ -14,6 +14,7 @@ This would have caught the regression where network code was required upfront.
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -60,7 +61,7 @@ class TestGAMTenantSetup:
                 "currencyCode": "USD",
                 "timeZone": "America/New_York",
             }
-            mock_user = {"id": 99999, "name": "Test User"}
+            mock_user = SimpleNamespace(id=99999, name="Test User")
 
             mock_network_service = MagicMock()
             mock_network_service.getAllNetworks.return_value = [mock_network]

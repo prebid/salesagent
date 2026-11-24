@@ -10,6 +10,7 @@ system a test cannot call.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -65,7 +66,7 @@ def google(gam_tenant, authenticated_admin_client):
     network_service.getAllNetworks.return_value = [NETWORK]
     network_service.getCurrentNetwork.return_value = NETWORK
     user_service = MagicMock()
-    user_service.getCurrentUser.return_value = {"id": 99999, "name": "Test User"}
+    user_service.getCurrentUser.return_value = SimpleNamespace(id=99999, name="Test User")
     ad_manager_client = MagicMock()
     ad_manager_client.GetService.side_effect = lambda name, **kw: (
         network_service if name == "NetworkService" else user_service

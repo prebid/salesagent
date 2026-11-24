@@ -111,18 +111,6 @@ def validate_gam_network_response(network) -> tuple[bool, str | None]:
     return True, None
 
 
-def validate_gam_user_response(user) -> tuple[bool, str | None]:
-    """Validate GAM user response structure."""
-    if not user:
-        return False, "User response is None"
-
-    # Check required fields
-    if "id" not in user:
-        return False, "Missing required field: id"
-
-    return True, None
-
-
 def validate_gam_config(data: dict) -> None:
     """Refuse GAM configuration data with one :class:`FormIssue` per field that cannot be saved."""
     errors: list[FormIssue] = []
@@ -228,13 +216,7 @@ def detect_gam_network(tenant_id):
         user_service = client.GetService("UserService")
         current_user = user_service.getCurrentUser()
 
-        trafficker_id = None
-        if current_user:
-            is_valid, error_msg = validate_gam_user_response(current_user)
-            if is_valid:
-                trafficker_id = str(current_user["id"])
-            else:
-                logger.warning(f"Invalid user response: {error_msg}")
+        trafficker_id = str(current_user.id) if current_user else None
 
         # Also get network info for currency and timezone
         network_service = client.GetService("NetworkService")
@@ -303,16 +285,8 @@ def detect_gam_network(tenant_id):
             try:
                 # Set the network code in the client so we can get user info
                 client.network_code = str(network["networkCode"])
-                current_user = current_network_user(client)
-
-                if current_user:
-                    # Validate user response
-                    is_valid, error_msg = validate_gam_user_response(current_user)
-                    if is_valid:
-                        trafficker_id = str(current_user["id"])
-                        logger.info(f"Detected current user ID: {trafficker_id}")
-                    else:
-                        logger.warning(f"Invalid user response: {error_msg}")
+                trafficker_id = str(current_network_user(client).id)
+                logger.info(f"Detected current user ID: {trafficker_id}")
             except GAMCallFailed:
                 # The trafficker id is optional here: the operator can enter it. The fault is logged.
                 logger.warning("Could not get the current GAM user; trafficker id left unset")

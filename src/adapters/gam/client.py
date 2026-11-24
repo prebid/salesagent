@@ -100,15 +100,11 @@ def accessible_networks(client: ad_manager.AdManagerClient, auth_method: str) ->
 
 
 class GAMUser(Protocol):
-    """What the admin app reads of the GAM ``User`` googleads answers: a zeep object, read by attribute and by key."""
+    """What the admin app reads of the GAM ``User`` googleads answers: a zeep object, read by attribute."""
 
     id: int
     name: str
     email: str
-
-    def __getitem__(self, key: str) -> object: ...
-
-    def __contains__(self, key: object) -> bool: ...
 
 
 def current_network_user(client: ad_manager.AdManagerClient) -> GAMUser:
