@@ -1,0 +1,28 @@
+# A GAM service call outside the GAM adapter goes through src/adapters/gam/client.py.
+#
+# The client module translates a GAM vendor failure (a SOAP fault, an unreadable reply, a
+# credential refresh that fails, a transport error) into GAMCallFailed, a 502 with the
+# sentence the fault was logged under. A route that holds an AdManagerClient and calls
+# `client.GetService(...)` itself skips that translation, so the same GAM fault reaches the
+# admin error handler as an unexpected 500. The admin app's detect-network route did that for
+# its user and network lookups.
+#
+# WHAT THIS BANS, in src/ outside src/adapters/: any `<x>.GetService(...)` call. Reach the
+# service through a function in src/adapters/gam/client.py (accessible_networks,
+# current_network, current_network_user), adding one there under `_operator_call` when a
+# caller needs a GAM call that has none.
+#
+# Enforced by `ast-grep scan` in `make quality` and the ast-grep-structural-rules pre-commit hook.
+id: gam-calls-through-the-client
+language: Python
+severity: error
+message: >-
+  No GAM service call outside src/adapters. Call the function in src/adapters/gam/client.py
+  that makes this GAM call (accessible_networks, current_network, current_network_user), or
+  add one there under _operator_call, so a GAM fault is answered as GAMCallFailed.
+files:
+  - "src/**/*.py"
+ignores:
+  - "src/adapters/**"
+rule:
+  pattern: $C.GetService($$$)
