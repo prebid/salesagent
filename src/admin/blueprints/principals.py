@@ -14,7 +14,7 @@ from src.admin.services import DashboardService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy, PushNotificationConfig, Tenant
+from src.core.database.models import MediaBuy, PushNotificationConfig, Tenant, UserRole
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.uow import PushNotificationConfigUoW
 from src.core.exceptions import AdCPValidationError
@@ -270,10 +270,8 @@ def edit_principal(tenant_id, principal_id):
 def get_principal(tenant_id, principal_id):
     """Get principal details including platform mappings (API endpoint)."""
     with get_db_session() as db_session:
-        principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
-
-        if not principal:
-            return jsonify({"error": "Principal not found"}), 404
+        principals = PrincipalRepository(db_session, tenant_id)
+        principal = principals.require(principals.get, principal_id)
 
         # Parse platform mappings (handle both string and dict formats)
         if principal.platform_mappings:
@@ -306,7 +304,8 @@ def get_principal(tenant_id, principal_id):
 # wrote an audit row saying this rotation succeeded. Graded by
 # tests/integration/test_audit_decorator_auth_order.py. The other 54 sites carrying the
 # inverted order, and the ast-grep rule that would refuse it, are GH #2110.
-@require_tenant_access()
+# Admin only: the new token is returned in the response, so rotating is acting as the buyer.
+@require_tenant_access(role=UserRole.ADMIN)
 @log_admin_action("rotate_principal_token")
 def rotate_token(tenant_id, principal_id):
     """Replace the principal's API token. The new token is in the response, once.
@@ -566,7 +565,7 @@ def _redirect_to_webhooks(tenant_id, principal_id):
 
 @principals_bp.route("/principals/<principal_id>/webhooks/register", methods=["POST"])
 @log_admin_action("register_webhook")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def register_webhook(tenant_id, principal_id):
     """Register a new webhook for a principal."""
     try:

@@ -20,6 +20,7 @@ This module holds no state and imports nothing from the application, so every on
 callers can import it.
 """
 
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -195,6 +196,67 @@ def canonical_publisher_domain(stored: str) -> str:
     ``publisher_domain`` pattern refuses the colon instead.
     """
     return stored.strip().lower().split("://", 1)[-1].split("/", 1)[0].rstrip(".")
+
+
+# A DNS hostname: 1-253 characters of dot-separated labels, each 1-63 of [a-z0-9-] with no
+# leading or trailing hyphen. No port, no wildcard, no path. ``re.ASCII`` keeps IGNORECASE
+# from folding non-ASCII letters (the Kelvin sign, a dotless i) into ``[a-z]``.
+_HOSTNAME = re.compile(
+    r"(?=.{1,253}\Z)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\Z",
+    re.ASCII | re.IGNORECASE,
+)
+_PORT = re.compile(r"[1-9][0-9]{0,4}\Z", re.ASCII)  # no leading zero; the range is checked too
+
+
+def normalize_hostname(host: str) -> str | None:
+    """``host`` lower-cased with any trailing dot dropped, or None when it is not a DNS hostname.
+
+    Matched BEFORE folding: ``str.lower`` maps the Kelvin sign to ``k``, so folding first would
+    let a non-ASCII name through as an ASCII one.
+    """
+    candidate = host.strip().removesuffix(".")
+    return candidate.lower() if _HOSTNAME.match(candidate) else None
+
+
+def is_publisher_domain(domain: str) -> bool:
+    """Whether *domain*, in :func:`canonical_publisher_domain` form, is a hostname with an optional port (1-65535).
+
+    The write boundary for a stored publisher domain: anything else (markup, quotes, a space)
+    names no host a fetch could reach, and would otherwise be stored and shown as typed.
+    """
+    host, colon, port = domain.partition(":")
+    return normalize_hostname(host) == host and (not colon or (bool(_PORT.match(port)) and int(port) <= 65535))
+
+
+def authorized_domain(value: object) -> str | None:
+    """*value* as a tenant's authorized sign-in domain (a DNS hostname of two or more labels, lower-cased), or None.
+
+    An email address's domain is matched against these exactly, so a value that is not a
+    hostname can never match and would only ever be displayed. The write seams refuse it
+    with ``src.core.operator_errors.InvalidDomainNameError``.
+    """
+    domain = normalize_hostname(value) if isinstance(value, str) else None
+    return domain if domain is not None and "." in domain else None
+
+
+_URL_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+_SAFE_URL_SCHEME = re.compile(r"^(?:https?|mailto):", re.I)
+
+
+def safe_url(value: object) -> str:
+    """*value* as a URL for an ``href`` or ``src``: unchanged if relative or http(s)/mailto, else ``#``.
+
+    The ``safe_url`` template filter of the admin UI and the landing pages, and the Python
+    twin of ``checkedUrl`` in static/js/escape_html.js (one case table grades both, in
+    tests/unit/test_safe_url_filter.py). Autoescape keeps a value inside its attribute but
+    lets ``javascript:alert(1)`` be the whole attribute; the scheme is read after removing
+    the control characters and spaces a browser ignores there.
+    """
+    url = "" if value is None else str(value).strip()
+    probe = re.sub(r"[\x00-\x20\x7f]", "", url)
+    if _URL_SCHEME.match(probe) and not _SAFE_URL_SCHEME.match(probe):
+        return "#"
+    return url
 
 
 def path_from_asgi_scope(scope: Mapping[str, Any]) -> str:

@@ -13,7 +13,6 @@ class TestFaviconUpload:
 
         assert _allowed_favicon_file("icon.ico") is True
         assert _allowed_favicon_file("icon.png") is True
-        assert _allowed_favicon_file("icon.svg") is True
         assert _allowed_favicon_file("icon.jpg") is True
         assert _allowed_favicon_file("icon.jpeg") is True
         assert _allowed_favicon_file("ICON.ICO") is True
@@ -24,11 +23,29 @@ class TestFaviconUpload:
         """Test that invalid favicon extensions are rejected."""
         from src.admin.blueprints.tenants import _allowed_favicon_file
 
+        assert _allowed_favicon_file("icon.svg") is False  # a document that can carry script
         assert _allowed_favicon_file("icon.gif") is False
         assert _allowed_favicon_file("icon.bmp") is False
         assert _allowed_favicon_file("icon.webp") is False
         assert _allowed_favicon_file("icon") is False
         assert _allowed_favicon_file("") is False
+
+    def test_favicon_content_must_match_its_extension(self):
+        """The first bytes decide, not the file name: an SVG renamed .png is refused."""
+        from src.admin.blueprints.tenants import _favicon_content_matches
+
+        png = bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A])
+        ico = bytes([0, 0, 1, 0, 1, 0, 16, 16])
+        jpeg = bytes([0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10]) + b"JF"
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)">'[:8]
+        assert _favicon_content_matches("png", png)
+        assert _favicon_content_matches("ico", ico)
+        assert _favicon_content_matches("jpg", jpeg)
+        assert _favicon_content_matches("jpeg", jpeg)
+        assert not _favicon_content_matches("png", svg)
+        assert not _favicon_content_matches("ico", png)
+        assert not _favicon_content_matches("svg", svg)
+        assert not _favicon_content_matches("png", b"")
 
     def test_favicon_upload_dir_path(self):
         """Test that favicon upload directory path is correctly constructed."""
