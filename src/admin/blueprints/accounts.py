@@ -15,17 +15,11 @@ from src.admin.utils.helpers import require_tenant_access
 from src.core.billing_policy import BILLING_PARTY_VALUES
 from src.core.database.repositories.account import AccountRepository, NaturalKeyConflict
 from src.core.database.repositories.uow import AccountUoW
-from src.core.operator_errors import RecordNotFound, StateConflict
+from src.core.operator_errors import StateConflict
 
 logger = logging.getLogger(__name__)
 
 accounts_bp = Blueprint("accounts", __name__)
-
-
-class AccountNotFound(RecordNotFound):
-    """The account the request names does not exist in the tenant."""
-
-    MESSAGE = "Account not found"
 
 
 class AccountStatusTransitionRefused(StateConflict):
@@ -208,9 +202,8 @@ def change_status(tenant_id, account_id):
     [new_status] = required_values(json_object_body(), "status")
 
     with AccountUoW(tenant_id) as uow:
-        account = uow.accounts.get_by_id(account_id)
-        if account is None:
-            raise AccountNotFound(f"Account {account_id} of tenant {tenant_id}")
+        assert uow.accounts is not None
+        account = uow.accounts.require(uow.accounts.get_by_id, account_id)
 
         allowed = _STATUS_TRANSITIONS.get(account.status, set())
         if new_status not in allowed:

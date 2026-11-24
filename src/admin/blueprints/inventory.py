@@ -12,6 +12,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Tenant
+from src.core.database.repositories.gam_order import GAMOrderRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.services.background_sync_service import start_inventory_sync_background
 
@@ -451,10 +452,8 @@ def get_orders(tenant_id):
 def get_order_details(tenant_id, order_id):
     """Get details for a specific order."""
     with get_db_session() as db_session:
-        order = db_session.scalars(select(GAMOrder).filter_by(tenant_id=tenant_id, order_id=order_id)).first()
-
-        if not order:
-            return jsonify({"error": "Order not found"}), 404
+        orders = GAMOrderRepository(db_session, tenant_id)
+        order = orders.require(orders.get, order_id)
 
         # Get line items count (would need GAMLineItem model)
         # stmt = select(GAMLineItem).filter_by(
