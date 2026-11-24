@@ -1031,7 +1031,15 @@ Feature: BR-UC-003 Update Media Buy
     # Recovery: correctable (verify package_id within the media buy ...)". The member at fault
     # is the entry's package_id (package-update.json:8-11, "Seller's ID of package to
     # update"), so error.field names it (core/error.json:37-39, "Field path associated with
-    # the error in JSONPath-lite format (e.g., 'packages[0].targeting')").
+    # the error in JSONPath-lite format (e.g., 'packages[0].targeting')"). The written spec at
+    # the same tag: update_media_buy.mdx:848 lists PACKAGE_NOT_FOUND, "Package doesn't exist",
+    # resolved by "Verify `package_id`"; compliance-error-codes.mdx:88 gives its recovery as
+    # "correctable"; and update_media_buy.mdx:24-29 makes the request "one atomic mutation"
+    # in which "No package, assignment, library creative, or MediaBuy field from the rejected
+    # update may change", so the refusal writes no assignment row.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx (L848: PACKAGE_NOT_FOUND, Package doesn't exist)
+    # @source repo=adcp ref=v3.2.7 path=docs/snippets/compliance-error-codes.mdx (L88: PACKAGE_NOT_FOUND is correctable)
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx (L24-29: one atomic mutation)
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/PACKAGE_NOT_FOUND
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/package_id
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json pointer=/properties/field
