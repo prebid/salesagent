@@ -102,6 +102,7 @@ STATUS_IDS = tuple(s[0] for s in STATUSES)
 _TRANSPORT_ORDER = ("a2a", "mcp", "rest", "e2e_rest", *NODEID_TRANSPORTS, "default")
 
 _REASON_LIMIT = 400
+NOT_RUN = "not_run"
 
 
 @dataclass
@@ -173,10 +174,8 @@ def _payloads(artifacts: Path, subdir: str) -> list[dict[str, Any]]:
 
 @dataclass
 class Measurements:
-    #: tag -> transport -> [observation]
+    #: tag -> transport -> [observation]; a selected-but-unrun nodeid is ``NOT_RUN``
     observations: dict[str, dict[str, list[dict[str, Any]]]]
-    #: tag -> transports it was collected (and selected) on
-    collected: dict[str, set[str]]
     sessions: int
 
 
@@ -192,24 +191,24 @@ def read_measurements(artifacts: Path) -> Measurements:
             for obs in record.get("observations", []):
                 observations[record["scenario_id"]][obs.get("transport") or "default"].append(obs)
                 observed_nodeids.add(obs.get("nodeid", ""))
-    collected: dict[str, set[str]] = collections.defaultdict(set)
+    # A selected row with no outcome is recorded as ``not_run`` beside whatever its
+    # siblings on the same transport recorded, so an outline with one example run and
+    # one parked cannot read as fully passing.
     for manifest in _payloads(artifacts, "collection-manifest"):
         for row in manifest.get("rows", []):
-            if not row.get("selected"):
+            nodeid = row.get("nodeid", "")
+            if not row.get("selected") or nodeid in observed_nodeids:
                 continue
-            transport = transport_of(row.get("nodeid", "")) or "default"
+            transport = transport_of(nodeid) or "default"
             for marker in row.get("markers", []):
                 if marker.startswith("T-"):
-                    collected[marker].add(transport)
-                    if row.get("nodeid") not in observed_nodeids:
-                        observations[marker].setdefault(transport, [])
-    return Measurements(observations=observations, collected=collected, sessions=len(sessions))
+                    observations[marker][transport].append({"nodeid": nodeid, "outcome": NOT_RUN})
+            observed_nodeids.add(nodeid)
+    return Measurements(observations=observations, sessions=len(sessions))
 
 
 def _transport_outcome(obs: list[dict[str, Any]]) -> str:
     outcomes = {o.get("outcome") for o in obs}
-    if not outcomes:
-        return "not_run"
     if "failed" in outcomes:
         return "failed"
     if len(outcomes) == 1:
@@ -225,15 +224,16 @@ def grade(scenario: Scenario, measured: Measurements) -> None:
     per_transport = measured.observations.get(scenario.tag, {})
     scenario.transports = {t: _transport_outcome(per_transport[t]) for t in sort_transports(per_transport)}
     outcomes = [o.get("outcome") for obs in per_transport.values() for o in obs]
-    if "failed" in outcomes:
+    ran = [o for o in outcomes if o != NOT_RUN]
+    if "failed" in ran:
         scenario.status = "failing"
-    elif outcomes and all(o == "passed" for o in outcomes) and "not_run" not in scenario.transports.values():
+    elif ran and len(ran) == len(outcomes) and all(o == "passed" for o in ran):
         scenario.status = "passing"
-    elif "passed" in outcomes:
+    elif "passed" in ran:
         scenario.status = "partial"
-    elif outcomes:
+    elif ran:
         scenario.status = "xfail"
-    elif scenario.tag in measured.collected or per_transport:
+    elif outcomes:
         scenario.status = "skipped"
     else:
         scenario.status = "not_collected"

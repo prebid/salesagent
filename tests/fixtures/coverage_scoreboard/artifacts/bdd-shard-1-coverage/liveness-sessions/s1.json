@@ -8,6 +8,8 @@
  {"scenario_id": "T-UC-900-gap", "observations": [
   {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_gap[mcp-a]", "outcome": "xfailed", "reason": "production gap", "reason_category": "ledgered", "strict": true},
   {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_gap[mcp-b]", "outcome": "xfailed", "reason": "production gap", "reason_category": "ledgered", "strict": true}]},
+ {"scenario_id": "T-UC-900-parked", "observations": [
+  {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_parked[mcp-a]", "outcome": "passed", "reason": null, "reason_category": "live"}]},
  {"scenario_id": "T-UC-900-red", "observations": [
   {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_red[mcp]", "outcome": "failed", "reason": null, "reason_category": "live"}]}
 ]}

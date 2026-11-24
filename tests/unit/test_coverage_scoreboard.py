@@ -42,6 +42,7 @@ def test_every_status_is_derived_from_the_artifacts(board: dict) -> None:
         "Passes everywhere": "passing",
         "Passes in-process, xfails in-network": "partial",
         "Known gap on every transport": "xfail",
+        "One example runs, one is parked": "partial",
         "Fails": "failing",
         "Collected but never run": "skipped",
         "No module binds it": "not_collected",
@@ -62,6 +63,8 @@ def test_per_transport_outcomes_and_xfail_detail(board: dict) -> None:
     gap = scenarios["Known gap on every transport"]
     assert (gap["tag"], gap["transports"], gap["xfail_strict"]) == ("T-UC-900-gap", {"mcp": "xfailed"}, True)
     assert scenarios["Collected but never run"]["transports"] == {"mcp": "not_run"}
+    # The parked example is not dropped because its sibling on the same transport ran.
+    assert scenarios["One example runs, one is parked"]["transports"] == {"mcp": "mixed"}
     assert scenarios["No module binds it"]["transports"] == {}
 
 
@@ -70,8 +73,8 @@ def test_feature_rollup_and_totals_count_every_scenario_once(board: dict) -> Non
     assert feature["feature"] == "BR-UC-900-demo"
     assert feature["use_case"] == "BR-UC-900"
     assert feature["file"] == "tests/bdd/features/BR-UC-900-demo.feature"
-    assert feature["scenarios"] == 7
-    assert all(feature[status] == 1 for status in sb.STATUS_IDS)
+    assert feature["scenarios"] == 8
+    assert {status: feature[status] for status in sb.STATUS_IDS} == {**dict.fromkeys(sb.STATUS_IDS, 1), "partial": 2}
     assert board["totals"] == {k: v for k, v in feature.items() if k in board["totals"]}
 
 
@@ -104,9 +107,9 @@ def test_cli_writes_json_and_markdown(tmp_path: Path) -> None:
     out = tmp_path / "out"
     assert sb.main(["--repo", str(FIXTURE / "repo"), "--artifacts", str(FIXTURE / "artifacts"), "--out", str(out)]) == 0
     written = json.loads((out / "scoreboard.json").read_text(encoding="utf-8"))
-    assert written["totals"]["scenarios"] == 7
+    assert written["totals"]["scenarios"] == 8
     markdown = (out / "scoreboard.md").read_text(encoding="utf-8")
-    assert "| BR-UC-900-demo | 7 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |" in markdown
+    assert "| BR-UC-900-demo | 8 | 1 | 2 | 1 | 1 | 1 | 1 | 1 |" in markdown
     assert "mcp 55 passed" in markdown
 
 

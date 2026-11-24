@@ -1,5 +1,7 @@
 {"rows": [
  {"nodeid": "tests/bdd/test_demo.py::test_unrun[mcp]", "markers": ["T-UC-900-unrun"], "selected": true},
  {"nodeid": "tests/bdd/test_demo.py::test_green[mcp]", "markers": ["T-UC-900-green"], "selected": true},
+ {"nodeid": "tests/bdd/test_demo.py::test_parked[mcp-a]", "markers": ["T-UC-900-parked"], "selected": true},
+ {"nodeid": "tests/bdd/test_demo.py::test_parked[mcp-b]", "markers": ["T-UC-900-parked"], "selected": true},
  {"nodeid": "tests/bdd/test_demo.py::test_unbound[mcp]", "markers": ["T-UC-900-unbound"], "selected": false}
 ]}
