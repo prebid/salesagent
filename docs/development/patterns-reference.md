@@ -66,7 +66,7 @@ with repo.savepoint():
 
 **Anti-pattern** (exists in codebase, allowlisted under `FIXME(#1119)` in `tests/unit/test_architecture_no_raw_select.py`):
 ```python
-# WRONG: raw select() inside _impl function — src/core/tools/media_buy_create.py:2331
+# WRONG: raw select() inside _impl function — _create_media_buy_impl in src/core/tools/media_buy_create.py
 currency_stmt = select(CurrencyLimit).where(
     CurrencyLimit.tenant_id == tenant.tenant_id,
     CurrencyLimit.currency_code == request_currency,
@@ -442,7 +442,7 @@ that disagrees with the pin.
 raise AdCPNotFoundError(f"Media buy '{media_buy_id}' not found.")
 
 # CORRECT: name the code by its class, supply the FACTS
-# (src/core/database/repositories/media_buy.py:89)
+# (MediaBuyRepository.get_by_id_or_raise in src/core/database/repositories/media_buy.py)
 raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
 ```
 
@@ -458,7 +458,7 @@ sentence to move into.
 raise AdCPValidationError(details={"creative_errors": [f"{r.creative_id}: {err.message}"]})
 
 # CORRECT: the code IS the fact; the sentence is derivable from it
-# (src/core/tools/media_buy_update.py:958)
+# (_update_media_buy_impl in src/core/tools/media_buy_update.py)
 raise AdCPAdapterError(
     details=AdapterFailureDetails(
         problems=[
@@ -483,7 +483,7 @@ except GoogleAdsError as e:
     raise AdCPAdapterError(internal_detail=f"GAM rejected order {order_id}: {e}")
 
 # CORRECT: the exception itself, with the facts on the details class
-# (src/adapters/gam_reporting_service.py:356 is the bare form of this)
+# (GAMReportingService._run_report in src/adapters/gam_reporting_service.py is the bare form of this)
 except GoogleAdsError as e:
     raise AdCPAdapterError(
         details=AdapterFailureDetails(line_item_id=order_id),
@@ -531,12 +531,12 @@ if budget_amount <= 0:
     raise AdCPBudgetTooLowError(field=package_field_path("budget", pkg_index))
 ```
 
-Same check, two implementations. When the rule changes, someone updates one and misses the other — and that has happened here. The update path's positivity check lived on a campaign-level branch that AdCP 3.1.1 does not define. Deleting that branch took the only positivity guard with it, and the surrounding `if pkg_update.budget:` skipped `0.0` as falsy, so a zero budget surfaced later as `INVALID_STATE`. The comment at `media_buy_update.py:760` records it.
+Same check, two implementations. When the rule changes, someone updates one and misses the other — and that has happened here. The update path's positivity check lived on a campaign-level branch that AdCP 3.1.1 does not define. Deleting that branch took the only positivity guard with it, and the surrounding `if pkg_update.budget:` skipped `0.0` as falsy, so a zero budget surfaced later as `INVALID_STATE`. The comment in `_validated_package_budget` (`media_buy_update.py`) records it.
 
 **Canonical file:** [`src/core/tools/financial_validation.py`](../../src/core/tools/financial_validation.py) holds the financial rules both paths apply, and both paths call it:
 
 ```python
-# src/core/tools/media_buy_create.py:2123 and media_buy_update.py:765 — one rule, one expression
+# _create_media_buy_impl (media_buy_create.py) and _validated_package_budget (media_buy_update.py) — one rule, one expression
 budget_err = validate_budget_positive(total_budget, field=PACKAGES_FIELD)
 if budget_err:
     raise AdCPBudgetTooLowError(field=PACKAGES_FIELD)
@@ -605,7 +605,7 @@ These files carry the most remaining debt. **Do not copy their patterns into cod
 | `src/core/tools/media_buy_create.py` | 4079 lines; raw `select()` inside `_create_media_buy_impl` and `execute_approved_media_buy`; the deprecated `uow.session` reached through `assert uow.session is not None` at eight sites; scattered `"USD"` defaults | `FIXME(#1119)`, `test_architecture_no_raw_select.py`'s allowlist (two entries for this file) |
 | `src/core/tools/media_buy_update.py` | Two remaining `uow.session` reads | `FIXME(#1119)` |
 | `src/core/tools/media_buy_delivery.py` | Repositories constructed from `uow.session` rather than reached off the UoW; one `session.add()` for an audit row | `FIXME(#1119)` |
-| `src/admin/blueprints/*` | 189 `get_db_session()` and 43 `session.add()` sites | `.admin-raw-session-baseline` (shrink-only) |
+| `src/admin/blueprints/*` | Raw `get_db_session()` and `session.add()` calls; the baseline file holds the two counts for all of `src/admin` | `.admin-raw-session-baseline` (shrink-only) |
 
 When you work in these files, follow the patterns in this document, not the surrounding code. The fix for one of these reads is a repository method you add, never a second copy of the read.
 

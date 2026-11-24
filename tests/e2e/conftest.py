@@ -29,12 +29,13 @@ from scripts.setup.init_database_ci import CI_TEST_TOKEN
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
 from tests.e2e.stack_readiness import (
     DEFAULT_E2E_COMPOSE_FILES,
+    E2EPorts,
     compose_argv,
     compose_down_argv,
     compose_exec_argv,
     e2e_host,
     e2e_in_network,
-    e2e_ports,
+    e2e_service_url,
     resolve_e2e_db,
     wait_for_e2e_stack,
 )
@@ -275,8 +276,8 @@ def docker_services_e2e(request):
         # clear of the Linux ephemeral range (32768+), which the 20000-30000
         # choice for those two was already picked to avoid.
         tls_port = resolve_env_port("ADCP_TLS_PORT", 15000, 20000)
-        # webhook-capture's plain-HTTP READBACK control-plane (salesagent-amht.3)
-        # — same dynamic-allocation reasoning as tls_port above (a fixed default
+        # webhook-capture's plain-HTTP READBACK control-plane — same
+        # dynamic-allocation reasoning as tls_port above (a fixed default
         # would let two concurrent stacks cross-wire onto the same host port).
         # DELIVERY never uses this port; it goes through tls_port above.
         webhook_capture_port = resolve_env_port("WEBHOOK_CAPTURE_PORT", 30000, 32000)
@@ -349,7 +350,7 @@ def docker_services_e2e(request):
 
     # The reuse and standalone paths converge before any seeding or test runs.
     wait_for_e2e_stack(
-        ports=e2e_ports(mcp=mcp_port, postgres=postgres_port, creative_agent=creative_agent_port),
+        ports=E2EPorts(mcp=mcp_port, postgres=postgres_port, creative_agent=creative_agent_port),
         host=e2e_host(),
         timeout_s=60.0 if use_existing_services else 120.0,
     )
@@ -397,8 +398,9 @@ def docker_services_e2e(request):
     # The MCP server started with an empty database, created connection pool with stale transactions.
     # After init_database_ci.py populates data, we need to flush those connections.
     print("🔄 Resetting MCP server database connection pool...")
+    server_url = e2e_service_url(service="proxy", container_port=8000, host=e2e_host(), published_port=mcp_port)
     try:
-        reset_response = requests.post(f"http://{e2e_host()}:{mcp_port}/_internal/reset-db-pool", timeout=5)
+        reset_response = requests.post(server_url + "/_internal/reset-db-pool", timeout=5)
         if reset_response.status_code == 200:
             print("✓ Database connection pool reset successfully")
             print(f"  Response: {reset_response.json()}")
@@ -412,7 +414,7 @@ def docker_services_e2e(request):
     # Check MCP server's view of database via debug endpoint
     print("🔍 Checking MCP server's database view...")
     try:
-        db_state_response = requests.get(f"http://{e2e_host()}:{mcp_port}/debug/db-state", timeout=5)
+        db_state_response = requests.get(server_url + "/debug/db-state", timeout=5)
         if db_state_response.status_code == 200:
             db_state = db_state_response.json()
             print(f"   MCP server sees: {db_state['total_products']} total products")
@@ -526,9 +528,10 @@ def live_server(docker_services_e2e):
     # The URL and direct-connection parameters share the readiness resolver.
     database = resolve_e2e_db(host=host, published_port=ports["postgres_port"])
     urls = {
-        "mcp": f"http://{host}:{ports['mcp_port']}",
-        "a2a": f"http://{host}:{ports['a2a_port']}",
-        "admin": f"http://{host}:{ports['admin_port']}",
+        **{
+            name: e2e_service_url(service="proxy", container_port=8000, host=host, published_port=ports[f"{name}_port"])
+            for name in ("mcp", "a2a", "admin")
+        },
         "postgres": database.url,
         "postgres_params": {
             "host": database.host,
@@ -689,7 +692,7 @@ def _get_gam_service_account_json():
     # 2. File path from env var
     key_file = os.environ.get("GAM_SERVICE_ACCOUNT_KEY_FILE")
     if key_file and os.path.exists(key_file):
-        with open(key_file) as f:
+        with open(key_file, encoding="utf-8") as f:
             return f.read()
 
     return None

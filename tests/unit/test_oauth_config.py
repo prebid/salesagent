@@ -6,8 +6,9 @@ These tests verify that the OAuth configuration system correctly handles:
 - User info extraction from different providers
 """
 
-import os
-from unittest.mock import patch
+import pytest
+
+from tests.helpers.environ import isolated_environ
 
 
 class TestGetOAuthConfig:
@@ -25,7 +26,7 @@ class TestGetOAuthConfig:
             "GOOGLE_CLIENT_SECRET": "google-client-secret",
         }
 
-        with patch.dict(os.environ, env, clear=True):
+        with isolated_environ(env):
             client_id, client_secret, discovery_url, scopes = get_oauth_config()
 
         assert client_id == "okta-client-id"
@@ -42,7 +43,7 @@ class TestGetOAuthConfig:
             "GOOGLE_CLIENT_SECRET": "google-client-secret",
         }
 
-        with patch.dict(os.environ, env, clear=True):
+        with isolated_environ(env):
             client_id, client_secret, discovery_url, scopes = get_oauth_config()
 
         assert client_id == "google-client-id"
@@ -61,7 +62,7 @@ class TestGetOAuthConfig:
             "OAUTH_SCOPES": "openid email custom_scope",
         }
 
-        with patch.dict(os.environ, env, clear=True):
+        with isolated_environ(env):
             _, _, _, scopes = get_oauth_config()
 
         assert scopes == "openid email custom_scope"
@@ -76,7 +77,7 @@ class TestGetOAuthConfig:
             "OAUTH_CLIENT_SECRET": "generic-client-secret",
         }
 
-        with patch.dict(os.environ, env, clear=True):
+        with isolated_environ(env):
             client_id, client_secret, discovery_url, _ = get_oauth_config()
 
         assert client_id == "generic-client-id"
@@ -92,7 +93,7 @@ class TestGetOAuthConfig:
             "OAUTH_CLIENT_SECRET": "ms-client-secret",
         }
 
-        with patch.dict(os.environ, env, clear=True):
+        with isolated_environ(env):
             _, _, discovery_url, _ = get_oauth_config()
 
         assert "login.microsoftonline.com" in discovery_url
@@ -101,7 +102,7 @@ class TestGetOAuthConfig:
         """Returns None when no OAuth is configured."""
         from src.admin.blueprints.auth import get_oauth_config
 
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             result = get_oauth_config()
 
         assert result == (None, None, None, None)
@@ -117,7 +118,7 @@ class TestGetOAuthConfig:
             "GOOGLE_CLIENT_SECRET": "google-client-secret",
         }
 
-        with patch.dict(os.environ, env, clear=True):
+        with isolated_environ(env):
             client_id, _, discovery_url, _ = get_oauth_config()
 
         # Should fall through to Google
@@ -254,28 +255,35 @@ class TestExtractUserInfo:
 
         assert result["picture"] == "https://avatars.githubusercontent.com/u/12345"
 
-    def test_id_token_fallback(self):
-        """User info extracted from ID token when userinfo not present."""
+    def test_an_unverified_id_token_is_refused(self):
+        """A raw id_token that Authlib did not verify into ``userinfo`` is never decoded.
+
+        Its signature is unchecked, so its email cannot become the session's subject.
+        """
         import jwt
 
         from src.admin.blueprints.auth import extract_user_info
 
-        # Create a simple JWT (unsigned for testing)
-        id_token_payload = {
-            "email": "user@example.com",
-            "name": "ID Token User",
-            "picture": "https://example.com/photo.jpg",
-        }
-        # Signed with a throwaway key (pyjwt >=2.13.0 rejects empty HMAC keys); the
-        # signature is never checked — extract_user_info decodes with verify_signature=False.
-        id_token = jwt.encode(id_token_payload, key="unused-test-key", algorithm="HS256")
+        id_token = jwt.encode({"email": "user@example.com"}, key="attacker-chosen-key", algorithm="HS256")
 
-        token = {"id_token": id_token}
+        assert extract_user_info({"id_token": id_token}) is None
 
-        result = extract_user_info(token)
+    @pytest.mark.parametrize("email_verified", [False, "false", "FALSE"])
+    def test_an_email_the_provider_says_is_unverified_is_refused(self, email_verified):
+        from src.admin.blueprints.auth import extract_user_info
 
-        assert result["email"] == "user@example.com"
-        assert result["name"] == "ID Token User"
+        token = {"userinfo": {"email": "user@example.com", "email_verified": email_verified}}
+
+        assert extract_user_info(token) is None
+
+    @pytest.mark.parametrize("claims", [{"email_verified": True}, {"email_verified": "true"}, {}])
+    def test_a_verified_or_unstated_email_is_accepted(self, claims):
+        """Absent is accepted: Microsoft Entra ID, among others, does not send the claim."""
+        from src.admin.blueprints.auth import extract_user_info
+
+        token = {"userinfo": {"email": "User@Example.com", **claims}}
+
+        assert extract_user_info(token)["email"] == "user@example.com"
 
     def test_no_user_info_returns_none(self):
         """Returns None when no user info available."""
@@ -301,20 +309,25 @@ class TestExtractUserInfo:
 
         assert result is None
 
-    def test_sub_as_email_fallback(self):
-        """Subject claim used as email fallback."""
+    def test_sub_is_never_an_email(self):
+        """``sub`` is an opaque subject id, even when it happens to look like an address."""
         from src.admin.blueprints.auth import extract_user_info
 
-        token = {
-            "userinfo": {
-                "sub": "user@example.com",
-                "name": "Subject User",
-            }
-        }
+        assert extract_user_info({"userinfo": {"sub": "user@example.com", "name": "Subject User"}}) is None
 
-        result = extract_user_info(token)
+    @pytest.mark.parametrize("claim", ["preferred_username", "upn"])
+    @pytest.mark.parametrize("value", ["jdoe", r"DOMAIN\jdoe", "a@b@c.example", "jdoe@localhost"])
+    def test_a_username_claim_that_is_not_an_email_is_not_used(self, claim, value):
+        from src.admin.blueprints.auth import extract_user_info
 
-        assert result["email"] == "user@example.com"
+        assert extract_user_info({"userinfo": {claim: value}}) is None
+
+    def test_a_username_claim_that_is_not_an_email_falls_through_to_one_that_is(self):
+        from src.admin.blueprints.auth import extract_user_info
+
+        token = {"userinfo": {"preferred_username": "jdoe", "upn": "jdoe@company.example"}}
+
+        assert extract_user_info(token)["email"] == "jdoe@company.example"
 
 
 class TestOAuthProviderName:
@@ -324,7 +337,7 @@ class TestOAuthProviderName:
         """Default provider is google when not set."""
         from src.admin.blueprints.auth import get_oauth_provider_name
 
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             provider = get_oauth_provider_name()
 
         assert provider == "google"
@@ -333,7 +346,7 @@ class TestOAuthProviderName:
         """Provider read from environment variable."""
         from src.admin.blueprints.auth import get_oauth_provider_name
 
-        with patch.dict(os.environ, {"OAUTH_PROVIDER": "Okta"}, clear=True):
+        with isolated_environ({"OAUTH_PROVIDER": "Okta"}):
             provider = get_oauth_provider_name()
 
         assert provider == "okta"  # Normalized to lowercase
@@ -357,7 +370,7 @@ class TestInitOAuth:
         app = MagicMock()
         app.config = {}
 
-        with patch.dict(os.environ, env, clear=True):
+        with isolated_environ(env):
             result = init_oauth(app)
 
         assert result is not None
@@ -373,7 +386,7 @@ class TestInitOAuth:
         app = MagicMock()
         app.config = {}
 
-        with patch.dict(os.environ, {}, clear=True):
+        with isolated_environ():
             result = init_oauth(app)
 
         assert result is None

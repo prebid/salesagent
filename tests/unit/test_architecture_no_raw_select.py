@@ -67,17 +67,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/gam/managers/targeting.py", "_load_axe_keys"),
     ("src/adapters/gam/managers/targeting.py", "_load_custom_targeting_key_ids"),
     # sync_custom_targeting_keys removed — uses AdapterConfigRepository
-    ("src/adapters/gam_reporting_api.py", "get_ad_unit_breakdown"),
-    ("src/adapters/gam_reporting_api.py", "get_advertiser_summary"),
-    ("src/adapters/gam_reporting_api.py", "get_country_breakdown"),
-    ("src/adapters/gam_reporting_api.py", "get_gam_reporting"),
-    ("src/adapters/gam_reporting_api.py", "get_principal_reporting"),
-    ("src/adapters/gam_reporting_api.py", "get_principal_summary"),
     ("src/adapters/google_ad_manager.py", "create_media_buy"),
     ("src/adapters/google_ad_manager.py", "get_packages_snapshot"),
-    ("src/adapters/mock_ad_server.py", "mock_product_config"),
-    ("src/adapters/mock_ad_server.py", "register_ui_routes"),
-    ("src/adapters/mock_ad_server.py", "wrapped_view"),
     ("src/adapters/xandr.py", "_create_human_task"),
     # ── Admin app ──
     ("src/admin/app.py", "create_app"),
@@ -85,7 +76,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     # ── Admin blueprints ──
     ("src/admin/blueprints/activity_stream.py", "get_recent_activities"),
     ("src/admin/blueprints/adapters.py", "list_broadstreet_zones"),
-    ("src/admin/blueprints/adapters.py", "mock_config"),
     ("src/admin/blueprints/adapters.py", "save_adapter_config"),
     ("src/admin/blueprints/api.py", "get_tenant_products"),
     ("src/admin/blueprints/auth.py", "gam_authorize"),
@@ -114,7 +104,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/gam.py", "get_gam_custom_targeting_keys"),
     ("src/admin/blueprints/gam.py", "get_gam_line_item_api"),
     ("src/admin/blueprints/gam.py", "get_latest_sync_status"),
-    ("src/admin/blueprints/gam.py", "get_sync_status"),
     ("src/admin/blueprints/gam.py", "reset_stuck_sync"),
     ("src/admin/blueprints/gam.py", "test_gam_connection"),
     ("src/admin/blueprints/gam.py", "view_gam_line_item"),
@@ -124,7 +113,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/inventory.py", "get_inventory_sizes"),
     ("src/admin/blueprints/inventory.py", "_batch_fetch_ancestors"),  # FIXME(#1119): extract to repository
     ("src/admin/blueprints/inventory.py", "get_inventory_tree"),
-    ("src/admin/blueprints/inventory.py", "get_order_details"),
     ("src/admin/blueprints/inventory.py", "get_orders"),
     ("src/admin/blueprints/inventory.py", "get_sync_status"),
     ("src/admin/blueprints/inventory.py", "get_targeting_data"),
@@ -146,7 +134,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/operations.py", "media_buy_detail"),
     ("src/admin/blueprints/operations.py", "reporting"),
     ("src/admin/blueprints/policy.py", "index"),
-    ("src/admin/blueprints/policy.py", "review_task"),
     ("src/admin/blueprints/policy.py", "update"),
     ("src/admin/blueprints/principals.py", "create_principal"),
     # delete_principal removed — the lookup goes through PrincipalRepository.get()
@@ -169,15 +156,12 @@ ALLOWLIST: set[tuple[str, str]] = {
     # landing fixed — it asks core.get_tenant_from_hostname instead of selecting tenants
     ("src/admin/blueprints/public.py", "provision_tenant"),
     ("src/admin/blueprints/public.py", "signup_complete"),
-    ("src/admin/blueprints/settings.py", "get_approximated_token"),
-    ("src/admin/blueprints/settings.py", "register_approximated_domain"),
     ("src/admin/blueprints/settings.py", "test_ai_connection"),
     ("src/admin/blueprints/settings.py", "update_adapter"),
     ("src/admin/blueprints/settings.py", "update_ai"),
     ("src/admin/blueprints/settings.py", "update_business_rules"),
     ("src/admin/blueprints/settings.py", "update_general"),
     ("src/admin/blueprints/signals_agents.py", "add_signals_agent"),
-    ("src/admin/blueprints/signals_agents.py", "delete_signals_agent"),
     ("src/admin/blueprints/signals_agents.py", "edit_signals_agent"),
     ("src/admin/blueprints/signals_agents.py", "list_signals_agents"),
     ("src/admin/blueprints/signals_agents.py", "test_signals_agent"),
@@ -186,7 +170,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/tenants.py", "remove_favicon"),
     ("src/admin/blueprints/tenants.py", "setup_checklist"),
     ("src/admin/blueprints/tenants.py", "tenant_settings"),
-    ("src/admin/blueprints/tenants.py", "test_slack"),
     ("src/admin/blueprints/tenants.py", "update"),
     ("src/admin/blueprints/tenants.py", "update_favicon_url"),
     ("src/admin/blueprints/tenants.py", "upload_favicon"),
@@ -197,8 +180,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/users.py", "disable_setup_mode"),
     ("src/admin/blueprints/users.py", "enable_setup_mode"),
     ("src/admin/blueprints/users.py", "list_users"),
-    ("src/admin/blueprints/users.py", "toggle_user"),
-    ("src/admin/blueprints/users.py", "update_role"),
     ("src/admin/blueprints/workflows.py", "list_workflows"),  # select(Tenant) — no tenant repo yet
     ("src/admin/blueprints/workflows.py", "review_workflow_step"),  # select(Context) — context lookup
     # ── Alias-hidden, now visible (#2128) ──
@@ -228,13 +209,9 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/tenant_management_api.py", "delete_tenant"),
     ("src/admin/tenant_management_api.py", "get_tenant"),
     ("src/admin/tenant_management_api.py", "update_tenant"),
-    ("src/admin/utils/helpers.py", "decorated_function"),
-    ("src/admin/utils/helpers.py", "decorator"),
-    ("src/admin/utils/helpers.py", "get_custom_targeting_mappings"),
+    # is_super_admin and require_tenant_access fixed — the super-admin rows go through
+    # TenantManagementConfigRepository, the caller's User row through TenantConfigRepository
     ("src/admin/utils/helpers.py", "get_tenant_config_from_db"),
-    ("src/admin/utils/helpers.py", "is_super_admin"),
-    ("src/admin/utils/helpers.py", "is_tenant_admin"),
-    ("src/admin/utils/helpers.py", "require_tenant_access"),
     # ── Core ──
     ("src/core/audit_logger.py", "log_operation"),
     ("src/core/audit_logger.py", "log_security_violation"),
@@ -279,7 +256,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/auth_config_service.py", "save_oidc_config"),
     # _run_approval_polling_thread removed — uses AdapterConfigRepository
     ("src/services/background_sync_service.py", "_mark_sync_complete"),
-    ("src/services/background_sync_service.py", "_mark_sync_failed"),
     ("src/services/background_sync_service.py", "_run_sync_thread"),
     ("src/services/background_sync_service.py", "_update_sync_progress"),
     ("src/services/background_sync_service.py", "start_inventory_sync_background"),
@@ -291,14 +267,11 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/format_metrics_service.py", "aggregate_all_tenants"),
     # _update_adapter_config_targeting_keys removed — uses AdapterConfigRepository
     ("src/services/gam_inventory_service.py", "_upsert_inventory_item"),
-    ("src/services/gam_inventory_service.py", "create_inventory_endpoints"),
-    ("src/services/gam_inventory_service.py", "fetch_custom_targeting_values"),
     ("src/services/gam_inventory_service.py", "get_ad_unit_tree"),
     ("src/services/gam_inventory_service.py", "get_all_targeting_data"),
     ("src/services/gam_inventory_service.py", "get_product_inventory"),
     ("src/services/gam_inventory_service.py", "search_inventory"),
     ("src/services/gam_inventory_service.py", "suggest_inventory_for_product"),
-    ("src/services/gam_inventory_service.py", "sync_inventory"),
     ("src/services/gam_inventory_service.py", "update_product_inventory"),
     ("src/services/gam_orders_service.py", "_order_to_dict"),
     ("src/services/gam_orders_service.py", "_upsert_line_item"),
@@ -311,7 +284,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/gcp_service_account_service.py", "get_service_account_email"),
     ("src/services/media_buy_status_scheduler.py", "_are_creatives_approved"),
     ("src/services/order_approval_service.py", "_mark_approval_complete"),
-    ("src/services/order_approval_service.py", "_mark_approval_failed"),
     # _run_approval_thread removed — uses AdapterConfigRepository (salesagent-zj9)
     # _send_approval_webhook removed — auth lookup moved to _build_approval_webhook_headers
     # which routes through PushNotificationConfigRepository (C901 ratchet fix)

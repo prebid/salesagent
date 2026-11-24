@@ -25,15 +25,7 @@ import pytest
 from src.admin.blueprints.creatives import review_creatives
 from src.services.ai.factory import tenant_ai_enabled
 from tests.factories import TenantFactory
-from tests.helpers.settings_injection import PlatformAICredential
-
-# A tenant configured the way the Admin UI writes it: provider, model and key on
-# `ai_config`, nothing in the legacy `gemini_api_key` column.
-_ADMIN_UI_AI_CONFIG = {"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "sk-ant-tenant"}
-
-# What `src/admin/blueprints/settings.py` stores when the seller leaves the key field
-# blank — and tells them "AI features will be disabled" as it does.
-_KEYLESS_AI_CONFIG = {"provider": "google", "model": "gemini-2.0-flash"}
+from tests.helpers.settings_injection import ADMIN_UI_AI_CONFIG, KEYLESS_AI_CONFIG, PlatformAICredential
 
 
 @pytest.fixture(autouse=True)
@@ -80,7 +72,7 @@ class TestPageOffersAIReviewExactlyWhenTheImplWouldRunOne:
     def test_ai_config_only_tenant_is_offered_ai_review(self):
         """The regression: configured through the Admin UI, told it was unavailable."""
         tenant = TenantFactory.build(
-            tenant_id="t-ai-config", ai_config=_ADMIN_UI_AI_CONFIG, creative_review_criteria="no nudity"
+            tenant_id="t-ai-config", ai_config=ADMIN_UI_AI_CONFIG, creative_review_criteria="no nudity"
         )
 
         assert _render_page(tenant)["has_ai_review"] is True
@@ -98,7 +90,7 @@ class TestPageOffersAIReviewExactlyWhenTheImplWouldRunOne:
     def test_key_left_blank_in_settings_is_not_offered_ai_review(self):
         """A provider/model row with no key is not a configuration, so the page says so."""
         tenant = TenantFactory.build(
-            tenant_id="t-keyless", ai_config=_KEYLESS_AI_CONFIG, creative_review_criteria="no nudity"
+            tenant_id="t-keyless", ai_config=KEYLESS_AI_CONFIG, creative_review_criteria="no nudity"
         )
 
         assert _render_page(tenant)["has_ai_review"] is False
@@ -107,7 +99,7 @@ class TestPageOffersAIReviewExactlyWhenTheImplWouldRunOne:
     def test_configured_ai_without_review_criteria_is_not_offered_ai_review(self):
         """The second condition still stands: the impl refuses without criteria."""
         tenant = TenantFactory.build(
-            tenant_id="t-no-criteria", ai_config=_ADMIN_UI_AI_CONFIG, creative_review_criteria=None
+            tenant_id="t-no-criteria", ai_config=ADMIN_UI_AI_CONFIG, creative_review_criteria=None
         )
 
         assert _render_page(tenant)["has_ai_review"] is False

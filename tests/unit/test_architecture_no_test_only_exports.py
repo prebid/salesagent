@@ -33,5 +33,9 @@ def test_no_production_module_imports_the_harness_helper():
     """src/ must never import from tests/ — the direction that would re-couple them."""
     import pathlib
 
-    offenders = [str(p) for p in pathlib.Path("src").rglob("*.py") if "tests.harness.spec_models" in p.read_text()]
+    offenders = [
+        str(p)
+        for p in pathlib.Path("src").rglob("*.py")
+        if "tests.harness.spec_models" in p.read_text(encoding="utf-8")
+    ]
     assert offenders == [], f"production modules importing the harness helper: {offenders}"

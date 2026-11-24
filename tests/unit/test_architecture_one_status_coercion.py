@@ -27,7 +27,7 @@ import re
 
 import pytest
 
-from tests.unit._architecture_helpers import format_failure, parse_module, repo_root
+from tests.unit._architecture_helpers import format_failure, parse_module, rel, repo_root
 
 # No production file is exempt, models.py included. The definition itself does not
 # need an exemption: ``parse_or_none`` coerces via ``cls(...)`` (not the class name)
@@ -95,7 +95,7 @@ def find_hand_rolled_normalization(source: str, relpath: str) -> list[str]:
 def _scan(repo, *, ast_finder=None, text_finder=None) -> list[str]:
     violations: list[str] = []
     for path in sorted((repo / "src").rglob("*.py")):
-        relpath = str(path.relative_to(repo))
+        relpath = rel(path, repo)
         if relpath in ALLOWED_FILES:
             continue
         if ast_finder is not None:

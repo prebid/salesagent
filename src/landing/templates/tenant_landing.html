@@ -246,7 +246,7 @@
             <div class="subtitle">Advertising Context Protocol (AdCP) Sales Agent</div>
             <div class="description">
                 {{ tenant_name }} now supports the
-                <a href="{{ adcp_docs_url }}" style="color: #74b9ff; text-decoration: none;" target="_blank">AdCP protocol</a>
+                <a href="{{ adcp_docs_url|safe_url }}" style="color: #74b9ff; text-decoration: none;" target="_blank">AdCP protocol</a>
                 for agentic buying! Connect your agent via MCP or A2A to browse our inventory and creative formats, execute media buys, and see reporting.
             </div>
         </div>
@@ -273,7 +273,7 @@
             <div class="section">
                 <h2>📋 Agent Card</h2>
                 <p>View the complete agent capabilities and skill definitions:</p>
-                <a href="{{ agent_card_url }}" class="agent-card-link" target="_blank">/.well-known/agent.json</a>
+                <a href="{{ agent_card_url|safe_url }}" class="agent-card-link" target="_blank">/.well-known/agent.json</a>
             </div>
 
             <!-- Action Cards Grid -->
@@ -292,19 +292,19 @@
                 <h2>📚 Resources</h2>
                 <p>Learn more about the AdCP protocol and how to integrate with this sales agent:</p>
                 <ul style="margin-top: 1rem; padding-left: 1.5rem;">
-                    <li><a href="{{ adcp_docs_url }}/docs/" target="_blank">AdCP Protocol Documentation</a></li>
-                    <li><a href="{{ adcp_docs_url }}/docs/media-buy/" target="_blank">Media Buy API Reference</a></li>
-                    <li><a href="{{ adcp_docs_url }}/docs/signals/" target="_blank">Signals API Reference</a></li>
-                    <li><a href="{{ agent_card_url }}" target="_blank">Agent Capabilities (JSON)</a></li>
+                    <li><a href="{{ adcp_docs_url|safe_url }}/docs/" target="_blank">AdCP Protocol Documentation</a></li>
+                    <li><a href="{{ adcp_docs_url|safe_url }}/docs/media-buy/" target="_blank">Media Buy API Reference</a></li>
+                    <li><a href="{{ adcp_docs_url|safe_url }}/docs/signals/" target="_blank">Signals API Reference</a></li>
+                    <li><a href="{{ agent_card_url|safe_url }}" target="_blank">Agent Capabilities (JSON)</a></li>
                 </ul>
             </div>
         </div>
 
         <!-- Footer -->
         <div class="footer">
-            Powered by <a href="{{ adcp_docs_url }}" target="_blank">AdCP Protocol</a>
+            Powered by <a href="{{ adcp_docs_url|safe_url }}" target="_blank">AdCP Protocol</a>
             | <a href="https://agenticadvertising.org" target="_blank">AgenticAdvertising.Org</a>
-            | <a href="{{ admin_url }}" style="color: #6c757d; font-size: 0.85em; text-decoration: none;">Internal Admin</a>
+            | <a href="{{ admin_url|safe_url }}" style="color: #6c757d; font-size: 0.85em; text-decoration: none;">Internal Admin</a>
             | <span style="color: #6c757d; font-size: 0.85em;">Prebid Sales Agent v{{ version }} (AdCP {{ adcp_version }})</span>
         </div>
     </div>

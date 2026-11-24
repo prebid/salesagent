@@ -45,6 +45,7 @@ from src.core.database.models import CreativeAgent, PushNotificationConfig, Sign
 from src.core.errors.codes import CODE_TABLE, Recovery
 from src.core.exceptions import AdCPSalesAgentError
 from tests.factories import PrincipalFactory
+from tests.helpers.admin_session import admin_blueprint_app
 from tests.helpers.webhook_credential_refusal import SHORT_CREDENTIAL, assert_admin_flash_refuses_the_credential
 from tests.integration._egress_ingest_helpers import (
     ADMITTED_URL,
@@ -104,15 +105,10 @@ def management_api_client(seeded_tenant, monkeypatch):
     ``get_api_key_from_config`` prefers the environment variable over the DB
     row, so the key needs no fixture-time write.
     """
-    from flask import Flask
-
     from src.admin.tenant_management_api import tenant_management_api
 
     monkeypatch.setenv("TENANT_MANAGEMENT_API_KEY", API_KEY)
-    app = Flask(__name__)
-    app.config["TESTING"] = True
-    app.register_blueprint(tenant_management_api)
-    return app.test_client()
+    return admin_blueprint_app(tenant_management_api).test_client()
 
 
 def signals_agents_for(env) -> list[SignalsAgent]:

@@ -35,23 +35,17 @@ DEFAULT_E2E_COMPOSE_FILES: Final[tuple[str, ...]] = (
 # Base compose file only (no ports overlay) — teardown / init / down paths.
 BASE_E2E_COMPOSE_FILE: Final[str] = DEFAULT_E2E_COMPOSE_FILES[0]
 
-_CREATIVE_AGENT_IN_NETWORK_HEALTH: Final[str] = "http://creative-agent:8080/api/creative-agent/health"
 _DEFAULT_DB_USER: Final[str] = "adcp_user"
 _DEFAULT_DB_PASSWORD: Final[str] = "secure_password_change_me"
 _DEFAULT_DB_NAME: Final[str] = "adcp"
 
 
-class E2EPorts(TypedDict):
-    """Published ports the ordered hard gate needs — typos fail at the type boundary."""
+class E2EPorts(TypedDict, total=False):
+    """Host-published ports; in-network runners need no published mappings."""
 
     mcp: int
     postgres: int
     creative_agent: int
-
-
-def e2e_ports(*, mcp: int, postgres: int, creative_agent: int) -> E2EPorts:
-    """Build the ports mapping every wait/probe call site must share."""
-    return {"mcp": mcp, "postgres": postgres, "creative_agent": creative_agent}
 
 
 class _Probe(Protocol):
@@ -84,9 +78,28 @@ def e2e_db_url_build(*, host: str = "localhost", port: int = 5432) -> str:
     return f"postgresql://{_DEFAULT_DB_USER}:{_DEFAULT_DB_PASSWORD}@{_http_authority(host, port)}/{_DEFAULT_DB_NAME}"
 
 
-def resolve_e2e_db(*, host: str, published_port: int) -> E2EDatabase:
+def _service_address(*, service: str, container_port: int, host: str, published_port: int | None) -> tuple[str, int]:
+    """Choose a Compose address in-network or the published address on the host."""
+    if e2e_in_network(host):
+        return service, container_port
+    if published_port is None:
+        raise ValueError(f"{service} requires a published port on the host")
+    return host, published_port
+
+
+def e2e_service_url(*, service: str, container_port: int, host: str, published_port: int | None) -> str:
+    """Resolve one HTTP service URL for probes and fixture consumers."""
+    address, port = _service_address(
+        service=service, container_port=container_port, host=host, published_port=published_port
+    )
+    return f"http://{_http_authority(address, port)}"
+
+
+def resolve_e2e_db(*, host: str, published_port: int | None) -> E2EDatabase:
     """Resolve the E2E endpoint, independently of a suite's DATABASE_URL."""
-    fallback_host, fallback_port = ("postgres", 5432) if e2e_in_network(host) else (host, published_port)
+    fallback_host, fallback_port = _service_address(
+        service="postgres", container_port=5432, host=host, published_port=published_port
+    )
     url = os.getenv("E2E_DATABASE_URL") or e2e_db_url_build(host=fallback_host, port=fallback_port)
     parsed = urlparse(url)
     return E2EDatabase(
@@ -223,11 +236,12 @@ def _http_ok(url: str, *, timeout_s: float = 2.0) -> bool:
 def _published_port_ready(
     ports: E2EPorts,
     key: Literal["postgres", "creative_agent", "mcp"],
-    probe: Callable[[int], bool],
+    host: str,
+    probe: Callable[[int | None], bool],
 ) -> bool:
-    """An absent published port fails closed without dialing another endpoint."""
+    """Host probes fail closed on absent ports; Compose addresses need none."""
     port = ports.get(key)
-    return port is not None and probe(int(port))
+    return (e2e_in_network(host) or port is not None) and probe(port)
 
 
 def _probe_postgres(
@@ -235,11 +249,11 @@ def _probe_postgres(
     ports: E2EPorts,
     host: str,
 ) -> bool:
-    def probe(port: int) -> bool:
+    def probe(port: int | None) -> bool:
         connection = resolve_e2e_db(host=host, published_port=port)
         return _tcp_open(connection.host, connection.port)
 
-    return _published_port_ready(ports, "postgres", probe)
+    return _published_port_ready(ports, "postgres", host, probe)
 
 
 def _probe_creative_agent(
@@ -247,13 +261,14 @@ def _probe_creative_agent(
     ports: E2EPorts,
     host: str,
 ) -> bool:
-    if e2e_in_network(host):
-        return _http_ok(_CREATIVE_AGENT_IN_NETWORK_HEALTH)
-
     return _published_port_ready(
         ports,
         "creative_agent",
-        lambda port: _http_ok(f"http://{_http_authority(host, port)}/api/creative-agent/health"),
+        host,
+        lambda port: _http_ok(
+            e2e_service_url(service="creative-agent", container_port=8080, host=host, published_port=port)
+            + "/api/creative-agent/health"
+        ),
     )
 
 
@@ -262,7 +277,14 @@ def _probe_adcp_health(
     ports: E2EPorts,
     host: str,
 ) -> bool:
-    return _published_port_ready(ports, "mcp", lambda port: _http_ok(f"http://{_http_authority(host, port)}/health"))
+    return _published_port_ready(
+        ports,
+        "mcp",
+        host,
+        lambda port: _http_ok(
+            e2e_service_url(service="proxy", container_port=8000, host=host, published_port=port) + "/health"
+        ),
+    )
 
 
 # An ordered tuple binds each name to its implementation; there is no second

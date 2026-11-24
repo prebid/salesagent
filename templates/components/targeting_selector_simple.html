@@ -122,8 +122,8 @@ let availableValues = {};
 // Load custom targeting keys on page load
 document.addEventListener('DOMContentLoaded', async function() {
     try {
-        const tenantId = '{{ tenant_id }}';
-        const response = await fetch(`{{ script_name }}/api/tenant/${tenantId}/targeting/all`, {
+        const tenantId = {{ tenant_id|tojson }};
+        const response = await fetch(`${scriptRoot}/api/tenant/${tenantId}/targeting/all`, {
             credentials: 'same-origin'
         });
         const data = await response.json();
@@ -169,7 +169,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                         };
 
                         // Load values for this key to get display names
-                        const promise = fetch(`{{ script_name }}/api/tenant/${tenantId}/targeting/values/${key.id}`, {
+                        const promise = fetch(`${scriptRoot}/api/tenant/${tenantId}/targeting/values/${key.id}`, {
                             credentials: 'same-origin'
                         })
                         .then(response => response.json())
@@ -228,13 +228,13 @@ async function loadKeyValues(keyId) {
     valuesSelect.innerHTML = '<option disabled>Loading...</option>';
 
     try {
-        const tenantId = '{{ tenant_id }}';
-        const response = await fetch(`{{ script_name }}/api/tenant/${tenantId}/targeting/values/${keyId}`, {
+        const tenantId = {{ tenant_id|tojson }};
+        const response = await fetch(`${scriptRoot}/api/tenant/${tenantId}/targeting/values/${keyId}`, {
             credentials: 'same-origin'
         });
 
         if (!response.ok) {
-            throw new Error(`Failed to load values: ${response.status} ${response.statusText}`);
+            throw new Error(`Failed to load values: ${adminErrorText(await response.json())}`);
         }
 
         const data = await response.json();
@@ -320,7 +320,7 @@ async function loadKeyValues(keyId) {
         });
     } catch (error) {
         console.error('Error loading values:', error);
-        valuesSelect.innerHTML = `<option disabled>Error loading values: ${error.message}</option>`;
+        valuesSelect.innerHTML = `<option disabled>Error loading values: ${escapeHtml(error.message)}</option>`;
 
         // Show error notification to user
         const errorDiv = document.createElement('div');
@@ -387,7 +387,7 @@ function updateDisplay() {
         return;
     }
 
-    let html = '';
+    let selectedHtml = '';
     for (const [key, values] of Object.entries(selectedTargeting)) {
         // Get display name for key (fallback to internal name if not found)
         const keyDisplay = window.targetingDisplayNames?.[key]?.keyDisplay || key;
@@ -413,16 +413,16 @@ function updateDisplay() {
                 valueDisplay = valueInfo || value;
             }
 
-            html += `
+            selectedHtml += `
                 <span class="selected-item">
-                    ${keyDisplay}: ${valueDisplay}
-                    <button type="button" onclick="removeTargeting('${key}', '${value}')">&times;</button>
+                    ${escapeHtml(keyDisplay)}: ${escapeHtml(valueDisplay)}
+                    <button type="button" onclick="removeTargeting(${jsArg(key)}, ${jsArg(value)})">&times;</button>
                 </span>
             `;
         });
     }
 
-    display.innerHTML = html;
+    display.innerHTML = selectedHtml;
 }
 
 // Remove a targeting key-value pair

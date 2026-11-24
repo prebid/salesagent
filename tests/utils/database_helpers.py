@@ -4,19 +4,37 @@ Provides consistent patterns for creating test database objects with proper
 timestamp handling and field validation to prevent common test issues.
 """
 
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session
 
 from src.core.database.models import (
+    AdapterConfig,
+    AuditLog,
+    Base,
+    Context,
+    Creative,
+    CreativeAssignment,
     CurrencyLimit,
+    MediaBuy,
+    MediaPackage,
+    ObjectWorkflowMapping,
     Principal,
     Product,
     PropertyTag,
+    Publisher,
+    PushNotificationConfig,
+    SigningKey,
     Tenant,
+    TenantAuthConfig,
+    User,
+    WebhookDeliveryLog,
+    WorkflowStep,
 )
 from tests.factories.principal import plaintext_token_for
 
@@ -157,6 +175,159 @@ def bind_factories_to_session(session):
     finally:
         for f, prev in zip(ALL_FACTORIES, previous, strict=True):
             f._meta.sqlalchemy_session = prev
+
+
+@contextmanager
+def bound_factory_session() -> Iterator[Session]:
+    """A session on the current engine, bound to every factory for the block, then closed.
+
+    Owns the session as well as the binding: it creates it, binds it through
+    :func:`bind_factories_to_session` (which restores the previous binding rather than
+    nulling it) and closes it, because a caller that only borrowed the binding would
+    still have to manage the session itself, and that is where hand-rolled versions
+    diverge. The ``bound_factory_session`` fixture in tests/integration/conftest.py and
+    the admin harnesses both come through here.
+    """
+    from src.core.database.database_session import get_engine
+
+    session = Session(bind=get_engine())
+    try:
+        with bind_factories_to_session(session):
+            yield session
+    finally:
+        session.close()
+
+
+#: The models :func:`delete_tenant_rows` deletes by ``tenant_id``, children before the rows
+#: they reference and ``Tenant`` last. ONE statement of what a tenant's rows are, so a
+#: teardown and a before/after snapshot cannot disagree. A table that is not listed loses
+#: its rows with the tenant when its foreign key cascades; when it does not, the delete of
+#: ``Tenant`` fails, and the model belongs here.
+TENANT_SCOPED_MODELS = (
+    Context,
+    CreativeAssignment,
+    WebhookDeliveryLog,
+    Creative,
+    PushNotificationConfig,
+    MediaBuy,
+    Product,
+    Principal,
+    PropertyTag,
+    AdapterConfig,
+    SigningKey,
+    Publisher,
+    AuditLog,
+    User,
+    TenantAuthConfig,
+    Tenant,
+)
+
+
+def tenant_row_counts(session: Session, tenant_id: str) -> dict[str, int]:
+    """How many rows of each tenant-scoped table *tenant_id* holds, by table name."""
+    return {
+        model.__tablename__: session.scalar(select(func.count()).select_from(model).filter_by(tenant_id=tenant_id))
+        for model in TENANT_SCOPED_MODELS
+    }
+
+
+def tenant_rows(session: Session, tenant_id: str, models: Iterable[type[Base]]) -> tuple[list[tuple[Any, ...]], ...]:
+    """Every column of each row *tenant_id* holds in *models*, model by model, in a stable order.
+
+    For a before/after comparison of what a request may write. ``updated_at`` is left out:
+    it moves with any write and says nothing a column does not.
+    """
+    return tuple(
+        sorted(
+            (
+                tuple((key, getattr(row, key)) for key in model.__table__.columns.keys() if key != "updated_at")
+                for row in session.scalars(select(model).filter_by(tenant_id=tenant_id))
+            ),
+            key=repr,
+        )
+        for model in models
+    )
+
+
+def delete_tenant(tenant_id: str) -> None:
+    """Delete tenant *tenant_id* and its rows from the database the current engine points at."""
+    from src.core.database.database_session import get_engine
+
+    with Session(bind=get_engine()) as session:
+        delete_tenant_rows(session, tenant_id)
+        session.commit()
+
+
+def delete_tenant_rows(session: Session, tenant_id: str) -> None:
+    """Delete a test tenant and EVERY row that hangs off it. The caller commits.
+
+    Children go first, explicitly: the ORM ``backref`` relationships carry no
+    delete cascade, so an ORM ``session.delete(tenant)`` tries to NULL a child's
+    ``tenant_id`` — which is half of its composite primary key. The FK's
+    ``ON DELETE CASCADE`` only applies to a database-level delete.
+
+    And the deployed schema does not have the cascade the models claim. In a database the
+    migrations built, the ``tenant_id`` FK of ``products``, ``media_buys``, ``creatives``,
+    ``users`` and ``audit_logs`` is ``NO ACTION``, while ``models.py`` declares
+    ``ON DELETE CASCADE`` on each. That model/migration drift is a real, pre-existing bug
+    (out of scope to fix here), and reading the model metadata instead of the migrations
+    is what would make this teardown silently incomplete. ``adapter_config``,
+    ``property_tags``, ``pricing_options`` and ``contexts`` DO carry a real cascade in
+    their creating migrations; they are deleted anyway, because an explicit delete of an
+    already-cascaded row is a harmless no-op and depending on which half of a known
+    drift is true is not.
+
+    ``ObjectWorkflowMapping`` and ``WorkflowStep`` have no ``tenant_id`` at all, so
+    they are reached through ``contexts``.
+    """
+    context_ids = select(Context.context_id).where(Context.tenant_id == tenant_id)
+    step_ids = select(WorkflowStep.step_id).where(WorkflowStep.context_id.in_(context_ids))
+    session.execute(delete(ObjectWorkflowMapping).where(ObjectWorkflowMapping.step_id.in_(step_ids)))
+    session.execute(delete(WorkflowStep).where(WorkflowStep.context_id.in_(context_ids)))
+    # ``media_packages`` has no tenant_id and its FK to media_buys carries no cascade,
+    # so a created media buy is unreachable from the tenant-scoped deletes below.
+    media_buy_ids = select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == tenant_id)
+    session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id.in_(media_buy_ids)))
+    # ``PricingOption`` is deliberately NOT deleted directly: the
+    # ``prevent_empty_pricing_options`` trigger REFUSES to remove a product's last
+    # pricing option while that product still exists, and explicitly allows the same
+    # row to go via the product's cascade. The composite FK's ``ON DELETE CASCADE``
+    # (migration c3b75d304773) is real, so deleting ``Product`` takes it.
+    for model in TENANT_SCOPED_MODELS:
+        session.execute(delete(model).where(model.tenant_id == tenant_id))
+
+
+@contextmanager
+def production_db_pointed_at(url: str) -> Iterator[None]:
+    """Point production's cached DB engine at ``url`` for the block.
+
+    The e2e counterpart of ``integration_db``'s engine repoint: over a live stack the
+    test's factories must write to the SERVER's database, but the process's
+    ``DATABASE_URL`` targets the in-process test base, so any production call made from
+    the test (a Then step's read-back, a harness seeding through ``get_engine()``) would
+    otherwise use a different database than the one the server reads. Repoints
+    ``DATABASE_URL`` and resets the cached engine on entry, restores both on exit
+    (mirrors tests/conftest_db.py). Entered by ``_db_scope_for`` in tests/bdd/conftest.py
+    for every ``e2e_``-prefixed transport, ``e2e_admin`` included.
+    """
+    import os
+
+    import src.core.context_manager as _context_manager_module
+    from src.core.database.database_session import reset_engine
+
+    original_url = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = url
+    reset_engine()
+    _context_manager_module._context_manager_instance = None
+    try:
+        yield
+    finally:
+        if original_url is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = original_url
+        reset_engine()
+        _context_manager_module._context_manager_instance = None
 
 
 def get_utc_now():
@@ -484,31 +655,3 @@ def seed_media_buy_with_package(
             package_config={"product_id": product_id},
         )
     return media_buy_id
-
-
-def cleanup_test_data(session, tenant_id: str, principal_id: str = None):
-    """Clean up test data for a tenant and optionally principal.
-
-    This helper provides a consistent pattern for cleaning up test data
-    in the correct order to avoid foreign key constraint violations.
-
-    Args:
-        session: Database session
-        tenant_id: Tenant ID to clean up
-        principal_id: Optional principal ID to clean up specifically
-
-    Example:
-        cleanup_test_data(session, "test_tenant_001", "test_principal_001")
-    """
-    # Clean up in reverse dependency order
-    if principal_id:
-        session.execute(delete(Product).where(Product.tenant_id == tenant_id))
-        session.execute(
-            delete(Principal).where(Principal.tenant_id == tenant_id, Principal.principal_id == principal_id)
-        )
-    else:
-        session.execute(delete(Product).where(Product.tenant_id == tenant_id))
-        session.execute(delete(Principal).where(Principal.tenant_id == tenant_id))
-
-    session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
-    session.commit()

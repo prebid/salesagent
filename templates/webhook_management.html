@@ -118,7 +118,7 @@
                         <td>{{ webhook.created_at.strftime('%Y-%m-%d %H:%M') if webhook.created_at else 'N/A' }}</td>
                         <td>
                             <button
-                                onclick="toggleWebhook('{{ webhook.id }}')"
+                                onclick="toggleWebhook({{ webhook.id|string|tojson|forceescape }})"
                                 class="btn btn-sm btn-secondary"
                                 id="toggle-btn-{{ webhook.id }}"
                             >
@@ -418,7 +418,7 @@ function toggleAuthFields() {
     const authType = document.getElementById('auth_type').value;
     const hmacFields = document.getElementById('hmac_fields');
 
-    if (authType !== '{{ no_authentication }}') {
+    if (authType !== {{ no_authentication|tojson }}) {
         hmacFields.style.display = 'block';
         document.getElementById('hmac_secret').required = true;
     } else {
@@ -444,7 +444,7 @@ function generateSecret() {
 }
 
 function toggleWebhook(configId) {
-    fetch(`{{ url_for('principals.toggle_webhook', tenant_id=tenant_id, principal_id=principal.principal_id, config_id='CONFIG_ID') }}`.replace('CONFIG_ID', configId), {
+    fetch(`${ {{ url_for('principals.toggle_webhook', tenant_id=tenant_id, principal_id=principal.principal_id, config_id='CONFIG_ID')|tojson }} }`.replace('CONFIG_ID', configId), {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -464,7 +464,7 @@ function toggleWebhook(configId) {
                 btnEl.textContent = 'Enable';
             }
         } else {
-            alert('Error toggling webhook: ' + data.error);
+            alert('Error toggling webhook: ' + adminErrorText(data));
         }
     })
     .catch(error => {

@@ -53,7 +53,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import REPO_ROOT
+from tests.unit._architecture_helpers import REPO_ROOT, rel
 
 _FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "adcp_schemas_pinned"
 _REFRESH_PATH = _FIXTURE_DIR / "_refresh.py"
@@ -127,7 +127,7 @@ def _vendored_files() -> list[Path]:
 
 
 def _relpath(path: Path) -> str:
-    return path.relative_to(_FIXTURE_DIR).as_posix()
+    return rel(path, _FIXTURE_DIR)
 
 
 def _spec_version_of(path: Path) -> str | None:
@@ -136,11 +136,11 @@ def _spec_version_of(path: Path) -> str | None:
     Either from the versioned tree it lives in, or — for the one flat file
     re-vendored from a tag — from ``_TAG_VENDORED_FLAT_FILES``.
     """
-    rel = _relpath(path)
-    head = rel.split("/", 1)[0]
+    rel_path = _relpath(path)
+    head = rel_path.split("/", 1)[0]
     if _VERSION_DIR.match(head):
         return head
-    return _TAG_VENDORED_FLAT_FILES.get(rel)
+    return _TAG_VENDORED_FLAT_FILES.get(rel_path)
 
 
 def _expected_id(path: Path) -> str:
@@ -153,11 +153,11 @@ def _expected_id(path: Path) -> str:
     tree must carry the origin and a file below it must not. Deriving it from the file's
     own ``$id`` would make the assertion vacuous.
     """
-    rel = _relpath(path)
+    rel_path = _relpath(path)
     version = _spec_version_of(path)
-    if version is not None and not rel.startswith(f"{version}/"):
-        rel = f"{version}/{rel}"
-    ref = f"/schemas/{rel}"
+    if version is not None and not rel_path.startswith(f"{version}/"):
+        rel_path = f"{version}/{rel_path}"
+    ref = f"/schemas/{rel_path}"
     return f"{_refresh.ID_ORIGIN}{ref}" if _is_absolute_namespace(version) else ref
 
 
@@ -202,14 +202,14 @@ def test_the_fixture_set_is_not_empty():
     )
 
 
-@pytest.mark.parametrize("path", _vendored_files(), ids=lambda p: str(p.relative_to(_FIXTURE_DIR)))
+@pytest.mark.parametrize("path", _vendored_files(), ids=lambda p: rel(p, _FIXTURE_DIR))
 def test_vendored_id_is_upstreams_own_and_matches_its_path(path: Path):
     """Each vendored file's $id is upstream's own form for its own path."""
-    schema_id = json.loads(path.read_text())["$id"]
+    schema_id = json.loads(path.read_text(encoding="utf-8"))["$id"]
     expected = _expected_id(path)
 
     assert schema_id == expected, (
-        f"{path.relative_to(REPO_ROOT)} has $id {schema_id!r}, expected {expected!r} — vendored "
+        f"{rel(path)} has $id {schema_id!r}, expected {expected!r} — vendored "
         "fixtures keep upstream's own site-rooted $id verbatim, version segment included or "
         "omitted exactly as the revision they were fetched from writes it "
         "(see _refresh.py's '$id convention' section)."
@@ -230,7 +230,7 @@ def test_vendored_id_is_upstreams_own_and_matches_its_path(path: Path):
     )
 
 
-@pytest.mark.parametrize("path", _vendored_files(), ids=lambda p: str(p.relative_to(_FIXTURE_DIR)))
+@pytest.mark.parametrize("path", _vendored_files(), ids=lambda p: rel(p, _FIXTURE_DIR))
 def test_refresh_accepts_every_vendored_file_at_its_own_id(path: Path):
     """Negative control: the guard is not a blanket reject.
 
@@ -238,7 +238,7 @@ def test_refresh_accepts_every_vendored_file_at_its_own_id(path: Path):
     ref its own convention derives — so the guard below rejects divergence, not
     the vendoring itself, for BOTH root sets.
     """
-    _refresh.check_id_convention(_expected_id(path), json.loads(path.read_text()))
+    _refresh.check_id_convention(_expected_id(path), json.loads(path.read_text(encoding="utf-8")))
 
 
 @pytest.mark.parametrize(

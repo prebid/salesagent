@@ -84,5 +84,5 @@ if __name__ == "__main__":
     index = build()
     OUT.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(
-        f"wrote {OUT.relative_to(REPO_ROOT)} — {index['storyboard_count']} storyboards at {index['adcp_spec_version']}"
+        f"wrote {OUT.relative_to(REPO_ROOT).as_posix()} — {index['storyboard_count']} storyboards at {index['adcp_spec_version']}"
     )

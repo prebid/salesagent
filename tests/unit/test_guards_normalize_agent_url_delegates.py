@@ -86,7 +86,7 @@ def function_delegates_to_signing_gate(func: ast.FunctionDef | ast.AsyncFunction
 
 
 def _module_tree() -> ast.Module:
-    return ast.parse(CANONICAL_MODULE.read_text(), filename=str(CANONICAL_MODULE))
+    return ast.parse(CANONICAL_MODULE.read_text(encoding="utf-8"), filename=str(CANONICAL_MODULE))
 
 
 def _find_function(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:

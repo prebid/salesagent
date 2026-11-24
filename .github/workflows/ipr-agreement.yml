@@ -6,15 +6,17 @@ on:
   pull_request_target:
     types: [opened, closed, synchronize]
 
-permissions:
-  actions: write
-  contents: write
-  pull-requests: write
-  statuses: write
+permissions: {}
 
 jobs:
   ipr-check:
     runs-on: ubuntu-latest
+    # Exactly what contributor-assistant/github-action v2.6.1 calls with this
+    # token. It never calls the commit-status API, so no statuses: write.
+    permissions:
+      actions: write  # re-run the PR's IPR check after a signing comment
+      contents: write  # commit signatures to the ipr-signatures branch
+      pull-requests: write  # post and update the IPR comment on the PR
     steps:
       - name: CLA Assistant
         if: (github.event.comment.body == 'I have read the IPR Policy' || github.event_name == 'pull_request_target')

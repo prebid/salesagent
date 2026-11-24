@@ -89,7 +89,7 @@ def _models_constructed_in(relative_path: str) -> set[str]:
     recognised as creating an ``AdapterConfig`` row, and the result is intersected with
     :data:`_ORM_MODELS` so only real mapped classes contribute.
     """
-    tree = ast.parse((_REPO_ROOT / relative_path).read_text(), filename=relative_path)
+    tree = ast.parse((_REPO_ROOT / relative_path).read_text(encoding="utf-8"), filename=relative_path)
     called = called_function_names(tree)
     return {name.removesuffix("Factory") for name in called if name.removesuffix("Factory") in _ORM_MODELS}
 

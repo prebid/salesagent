@@ -176,7 +176,8 @@ class PolicyService:
             try:
                 PolicyService.validate_currency_code(currency.currency_code)
             except ValidationError as e:
-                errors[currency.currency_code] = e.errors.get("currency_code", str(e))
+                # validate_currency_code names the currency_code field in each refusal it raises.
+                errors[currency.currency_code] = e.errors["currency_code"]
                 continue
 
             # Validate numeric values

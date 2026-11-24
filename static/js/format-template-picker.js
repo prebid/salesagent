@@ -15,18 +15,6 @@
  */
 
 /**
- * Escape HTML entities to prevent XSS attacks.
- * @param {string} str - The string to escape
- * @returns {string} - The escaped string safe for HTML interpolation
- */
-function escapeHtml(str) {
-    if (typeof str !== 'string') return String(str);
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
-
-/**
  * Format templates mapped to creative agent format IDs.
  * These IDs must match what the creative agent returns in list_creative_formats.
  *
@@ -119,7 +107,6 @@ class FormatTemplatePicker {
         this.hiddenInputId = options.hiddenInputId;
         this.tenantId = options.tenantId;
         this.adapterType = options.adapterType || 'mock';
-        this.scriptRoot = options.scriptRoot || '';
         this.onSelectionChange = options.onSelectionChange || (() => {});
 
         // State
@@ -202,7 +189,7 @@ class FormatTemplatePicker {
      */
     async _loadAgentFormats() {
         try {
-            const response = await fetch(`${this.scriptRoot}/api/formats/list?tenant_id=${encodeURIComponent(this.tenantId)}`);
+            const response = await fetch(`${scriptRoot}/api/formats/list?tenant_id=${encodeURIComponent(this.tenantId)}`);
             if (!response.ok) {
                 console.warn('[FormatTemplatePicker] HTTP error loading agent formats:', response.status);
                 return;
@@ -210,7 +197,7 @@ class FormatTemplatePicker {
             const data = await response.json();
 
             if (data.error) {
-                console.warn('[FormatTemplatePicker] Error loading agent formats:', data.error);
+                console.warn('[FormatTemplatePicker] Error loading agent formats:', adminErrorText(data));
                 return;
             }
 
@@ -476,7 +463,7 @@ class FormatTemplatePicker {
             !isGAM || t.gamSupported
         );
 
-        let html = `
+        let pickerHtml = `
             <div class="format-template-picker">
                 <!-- Standard Format Templates -->
                 <div class="template-section">
@@ -493,10 +480,10 @@ class FormatTemplatePicker {
             const sizeCount = [...selectedParams].filter(p => !p.startsWith('d:')).length;
             const durationCount = [...selectedParams].filter(p => p.startsWith('d:')).length;
 
-            html += this._renderTemplateCard(template, isSelected, sizeCount, durationCount);
+            pickerHtml += this._renderTemplateCard(template, isSelected, sizeCount, durationCount);
         }
 
-        html += `
+        pickerHtml += `
                     </div>
                 </div>
         `;
@@ -506,31 +493,27 @@ class FormatTemplatePicker {
             const template = FORMAT_TEMPLATES[templateId];
             if (!template) continue;
 
-            html += this._renderSizeConfiguration(template, params);
+            pickerHtml += this._renderSizeConfiguration(template, params);
         }
 
         // Inventory sizes section (if any)
         if (this.inventorySizes.size > 0) {
-            html += this._renderInventorySizesSection();
+            pickerHtml += this._renderInventorySizesSection();
         }
 
         // Custom formats section
-        html += this._renderCustomFormatsSection();
+        pickerHtml += this._renderCustomFormatsSection();
 
         // Selected formats summary
-        html += this._renderSelectedSummary();
+        pickerHtml += this._renderSelectedSummary();
 
-        html += `</div>`;
+        pickerHtml += `</div>`;
 
-        this.container.innerHTML = html;
+        this.container.innerHTML = pickerHtml;
         this._attachEventListeners();
     }
 
     _renderTemplateCard(template, isSelected, sizeCount, durationCount) {
-        const borderColor = isSelected ? '#0066cc' : '#e0e0e0';
-        const bgColor = isSelected ? '#f0f7ff' : '#f9f9f9';
-        const checkIcon = isSelected ? '&#10003; ' : '';
-
         let paramInfo = '';
         if (isSelected) {
             if (sizeCount > 0) paramInfo += `${sizeCount} size${sizeCount > 1 ? 's' : ''}`;
@@ -542,35 +525,35 @@ class FormatTemplatePicker {
 
         return `
             <div class="template-card"
-                 data-template-id="${template.id}"
-                 style="border: 2px solid ${borderColor}; border-radius: 8px; padding: 1rem; background: ${bgColor}; cursor: pointer; transition: all 0.2s;">
+                 data-template-id="${escapeHtml(template.id)}"
+                 style="border: 2px solid ${isSelected ? '#0066cc' : '#e0e0e0'}; border-radius: 8px; padding: 1rem; background: ${isSelected ? '#f0f7ff' : '#f9f9f9'}; cursor: pointer; transition: all 0.2s;">
                 <div style="font-weight: 600; color: #333; margin-bottom: 0.5rem;">
-                    ${checkIcon}${template.name}
+                    ${isSelected ? '&#10003; ' : ''}${escapeHtml(template.name)}
                 </div>
                 <div style="color: #666; font-size: 0.85rem; margin-bottom: 0.5rem;">
-                    ${template.description}
+                    ${escapeHtml(template.description)}
                 </div>
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
                     <span style="background: #e9ecef; padding: 0.2rem 0.5rem; border-radius: 3px; font-size: 0.75rem;">
-                        ${template.type}
+                        ${escapeHtml(template.type)}
                     </span>
-                    ${paramInfo ? `<span style="background: #0066cc; color: white; padding: 0.2rem 0.5rem; border-radius: 3px; font-size: 0.75rem;">${paramInfo}</span>` : ''}
+                    ${paramInfo ? `<span style="background: #0066cc; color: white; padding: 0.2rem 0.5rem; border-radius: 3px; font-size: 0.75rem;">${escapeHtml(paramInfo)}</span>` : ''}
                 </div>
             </div>
         `;
     }
 
     _renderSizeConfiguration(template, selectedParams) {
-        let html = `
-            <div class="size-config" data-template-id="${template.id}" style="margin-bottom: 1.5rem; padding: 1rem; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px;">
+        let sectionHtml = `
+            <div class="size-config" data-template-id="${escapeHtml(template.id)}" style="margin-bottom: 1.5rem; padding: 1rem; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px;">
                 <h5 style="margin: 0 0 1rem 0; color: #333;">
-                    Configure: ${template.name}
+                    Configure: ${escapeHtml(template.name)}
                 </h5>
         `;
 
         // Common sizes (quick-pick buttons)
         if (template.commonSizes && template.commonSizes.length > 0) {
-            html += `
+            sectionHtml += `
                 <div style="margin-bottom: 1rem;">
                     <label style="display: block; font-weight: 600; margin-bottom: 0.5rem; color: #555;">
                         Common Sizes:
@@ -582,29 +565,26 @@ class FormatTemplatePicker {
                 const sizeKey = `${size.width}x${size.height}`;
                 const isSelected = selectedParams.has(sizeKey);
                 const isFromInventory = this.inventorySizes.has(sizeKey);
-                const bgColor = isSelected ? '#0066cc' : '#fff';
-                const textColor = isSelected ? '#fff' : '#333';
-                const border = isFromInventory ? '2px solid #28a745' : '1px solid #ddd';
 
-                html += `
+                sectionHtml += `
                     <button type="button"
                             class="size-btn"
-                            data-template-id="${template.id}"
-                            data-width="${size.width}"
-                            data-height="${size.height}"
-                            style="padding: 0.5rem 0.75rem; border: ${border}; border-radius: 4px; background: ${bgColor}; color: ${textColor}; cursor: pointer; font-size: 0.9rem;">
-                        ${sizeKey}
-                        <span style="font-size: 0.75rem; display: block; color: ${isSelected ? '#ddd' : '#888'};">${size.name}</span>
+                            data-template-id="${escapeHtml(template.id)}"
+                            data-width="${escapeHtml(size.width)}"
+                            data-height="${escapeHtml(size.height)}"
+                            style="padding: 0.5rem 0.75rem; border: ${isFromInventory ? '2px solid #28a745' : '1px solid #ddd'}; border-radius: 4px; background: ${isSelected ? '#0066cc' : '#fff'}; color: ${isSelected ? '#fff' : '#333'}; cursor: pointer; font-size: 0.9rem;">
+                        ${escapeHtml(sizeKey)}
+                        <span style="font-size: 0.75rem; display: block; color: ${isSelected ? '#ddd' : '#888'};">${escapeHtml(size.name)}</span>
                     </button>
                 `;
             }
 
-            html += `</div></div>`;
+            sectionHtml += `</div></div>`;
         }
 
         // Common durations for video/audio
         if (template.commonDurations && template.commonDurations.length > 0) {
-            html += `
+            sectionHtml += `
                 <div style="margin-bottom: 1rem;">
                     <label style="display: block; font-weight: 600; margin-bottom: 0.5rem; color: #555;">
                         Durations:
@@ -615,37 +595,35 @@ class FormatTemplatePicker {
             for (const dur of template.commonDurations) {
                 const durKey = `d:${dur.ms}`;
                 const isSelected = selectedParams.has(durKey);
-                const bgColor = isSelected ? '#0066cc' : '#fff';
-                const textColor = isSelected ? '#fff' : '#333';
 
-                html += `
+                sectionHtml += `
                     <button type="button"
                             class="duration-btn"
-                            data-template-id="${template.id}"
-                            data-duration-ms="${dur.ms}"
-                            style="padding: 0.5rem 0.75rem; border: 1px solid #ddd; border-radius: 4px; background: ${bgColor}; color: ${textColor}; cursor: pointer; font-size: 0.9rem;">
-                        ${dur.name}
+                            data-template-id="${escapeHtml(template.id)}"
+                            data-duration-ms="${escapeHtml(dur.ms)}"
+                            style="padding: 0.5rem 0.75rem; border: 1px solid #ddd; border-radius: 4px; background: ${isSelected ? '#0066cc' : '#fff'}; color: ${isSelected ? '#fff' : '#333'}; cursor: pointer; font-size: 0.9rem;">
+                        ${escapeHtml(dur.name)}
                     </button>
                 `;
             }
 
-            html += `</div></div>`;
+            sectionHtml += `</div></div>`;
         }
 
         // Custom size input
         if (template.parameterType === 'dimensions' || template.parameterType === 'both') {
-            html += `
+            sectionHtml += `
                 <div style="margin-top: 1rem;">
                     <label style="display: block; font-weight: 600; margin-bottom: 0.5rem; color: #555;">
                         Custom Size:
                     </label>
                     <div style="display: flex; gap: 0.5rem; align-items: center;">
-                        <input type="number" class="custom-width" data-template-id="${template.id}"
+                        <input type="number" class="custom-width" data-template-id="${escapeHtml(template.id)}"
                                placeholder="Width" style="width: 80px; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
                         <span>x</span>
-                        <input type="number" class="custom-height" data-template-id="${template.id}"
+                        <input type="number" class="custom-height" data-template-id="${escapeHtml(template.id)}"
                                placeholder="Height" style="width: 80px; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
-                        <button type="button" class="add-custom-size-btn" data-template-id="${template.id}"
+                        <button type="button" class="add-custom-size-btn" data-template-id="${escapeHtml(template.id)}"
                                 style="padding: 0.5rem 1rem; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">
                             Add
                         </button>
@@ -657,7 +635,7 @@ class FormatTemplatePicker {
         // Selected sizes as removable tags
         const selectedSizes = [...selectedParams].filter(p => !p.startsWith('d:'));
         if (selectedSizes.length > 0) {
-            html += `
+            sectionHtml += `
                 <div style="margin-top: 1rem;">
                     <label style="display: block; font-weight: 600; margin-bottom: 0.5rem; color: #555;">
                         Selected Sizes:
@@ -667,22 +645,21 @@ class FormatTemplatePicker {
 
             for (const sizeKey of selectedSizes) {
                 const isFromInventory = this.inventorySizes.has(sizeKey);
-                const escapedSizeKey = escapeHtml(sizeKey);
-                html += `
+                sectionHtml += `
                     <span style="background: #0066cc; color: white; padding: 0.4rem 0.6rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
-                        ${escapedSizeKey}
+                        ${escapeHtml(sizeKey)}
                         ${isFromInventory ? '<span title="From inventory" style="font-size: 0.7rem;">&#x1F4E6;</span>' : ''}
-                        <span class="remove-size" data-template-id="${escapeHtml(template.id)}" data-size="${escapedSizeKey}"
+                        <span class="remove-size" data-template-id="${escapeHtml(template.id)}" data-size="${escapeHtml(sizeKey)}"
                               style="cursor: pointer; font-weight: bold; margin-left: 0.25rem;">&times;</span>
                     </span>
                 `;
             }
 
-            html += `</div></div>`;
+            sectionHtml += `</div></div>`;
         }
 
-        html += `</div>`;
-        return html;
+        sectionHtml += `</div>`;
+        return sectionHtml;
     }
 
     _renderInventorySizesSection() {
@@ -703,16 +680,14 @@ class FormatTemplatePicker {
                     These sizes were automatically added based on your selected inventory. Click × to remove.
                 </p>
                 <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
-                    ${sizes.map(s => {
-                        const escaped = escapeHtml(s);
-                        return `
-                        <span class="inventory-size-chip" data-size="${escaped}"
+                    ${sizes.map(s => `
+                        <span class="inventory-size-chip" data-size="${escapeHtml(s)}"
                               style="background: #4caf50; color: white; padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.3rem; cursor: default;">
-                            ${escaped}
-                            <span class="remove-inventory-size" data-size="${escaped}"
+                            ${escapeHtml(s)}
+                            <span class="remove-inventory-size" data-size="${escapeHtml(s)}"
                                   style="cursor: pointer; font-weight: bold; margin-left: 0.2rem;">&times;</span>
                         </span>
-                    `;}).join('')}
+                    `).join('')}
                 </div>
             </div>
         `;
@@ -722,7 +697,7 @@ class FormatTemplatePicker {
         // Build dropdown options from creative agent formats
         const hasAgentFormats = this.agentsLoaded && Object.keys(this.agentFormats).length > 0;
 
-        let html = `
+        let sectionHtml = `
             <div class="custom-formats-section" style="margin-top: 2rem; padding: 1rem; background: #e3f2fd; border: 1px solid #90caf9; border-radius: 8px;">
                 <h5 style="margin: 0 0 1rem 0; color: #1565c0;">
                     Additional Formats from Creative Agents
@@ -736,26 +711,26 @@ class FormatTemplatePicker {
 
         // Existing custom formats
         if (this.customFormats.length > 0) {
-            html += `<div style="margin-bottom: 1rem;">`;
+            sectionHtml += `<div style="margin-bottom: 1rem;">`;
             for (let i = 0; i < this.customFormats.length; i++) {
                 const fmt = this.customFormats[i];
                 let label = fmt.id;
                 if (fmt.width && fmt.height) label += ` (${fmt.width}x${fmt.height})`;
                 if (fmt.duration_ms) label += ` (${fmt.duration_ms / 1000}s)`;
-                html += `
+                sectionHtml += `
                     <span style="background: #1976d2; color: white; padding: 0.4rem 0.6rem; border-radius: 4px; display: inline-flex; align-items: center; gap: 0.5rem; margin: 0.25rem; font-size: 0.85rem;">
-                        ${label}
-                        <span class="remove-custom" data-index="${i}"
+                        ${escapeHtml(label)}
+                        <span class="remove-custom" data-index="${escapeHtml(i)}"
                               style="cursor: pointer; font-weight: bold;">&times;</span>
                     </span>
                 `;
             }
-            html += `</div>`;
+            sectionHtml += `</div>`;
         }
 
         // Format selection dropdown (only if formats are loaded)
         if (hasAgentFormats) {
-            html += `
+            sectionHtml += `
                 <div style="display: flex; gap: 0.5rem; align-items: end; flex-wrap: wrap;">
                     <div style="flex: 1; min-width: 300px;">
                         <label style="display: block; font-size: 0.85rem; margin-bottom: 0.25rem;">Select Format</label>
@@ -771,7 +746,7 @@ class FormatTemplatePicker {
                     ? 'AdCP Standard'
                     : new URL(agentUrl).hostname;
 
-                html += `<optgroup label="${agentName}">`;
+                sectionHtml += `<optgroup label="${escapeHtml(agentName)}">`;
 
                 for (const fmt of formats) {
                     const formatId = typeof fmt.format_id === 'object' ? fmt.format_id.id : fmt.format_id;
@@ -787,17 +762,17 @@ class FormatTemplatePicker {
                         dimensions: fmt.dimensions
                     });
 
-                    html += `
-                        <option value="${formatId}" data-format='${formatData.replace(/'/g, "&#39;")}'>
-                            ${fmt.name || formatId}${dimsStr}${categoryStr}
+                    sectionHtml += `
+                        <option value="${escapeHtml(formatId)}" data-format="${escapeHtml(formatData)}">
+                            ${escapeHtml(`${fmt.name || formatId}${dimsStr}${categoryStr}`)}
                         </option>
                     `;
                 }
 
-                html += `</optgroup>`;
+                sectionHtml += `</optgroup>`;
             }
 
-            html += `
+            sectionHtml += `
                         </select>
                     </div>
                     <div>
@@ -810,7 +785,7 @@ class FormatTemplatePicker {
             `;
 
             // Show parameter inputs for parameterized formats
-            html += `
+            sectionHtml += `
                 <div id="format-params-section" style="margin-top: 1rem; padding: 0.75rem; background: #f5f5f5; border-radius: 4px; display: none;">
                     <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
                         <div id="dims-params" style="display: none;">
@@ -836,8 +811,8 @@ class FormatTemplatePicker {
             `;
         }
 
-        html += `</div>`;
-        return html;
+        sectionHtml += `</div>`;
+        return sectionHtml;
     }
 
     _renderSelectedSummary() {
@@ -851,10 +826,10 @@ class FormatTemplatePicker {
             `;
         }
 
-        let html = `
+        let sectionHtml = `
             <div style="margin-top: 1.5rem; padding: 1rem; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 8px;">
                 <h5 style="margin: 0 0 0.5rem 0; color: #155724;">
-                    &#10003; ${formats.length} Format${formats.length > 1 ? 's' : ''} Selected
+                    &#10003; ${escapeHtml(formats.length)} Format${formats.length > 1 ? 's' : ''} Selected
                 </h5>
                 <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
         `;
@@ -868,15 +843,15 @@ class FormatTemplatePicker {
                 label += ` (${fmt.duration_ms / 1000}s)`;
             }
 
-            html += `
+            sectionHtml += `
                 <span style="background: #28a745; color: white; padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.85rem;">
-                    ${label}
+                    ${escapeHtml(label)}
                 </span>
             `;
         }
 
-        html += `</div></div>`;
-        return html;
+        sectionHtml += `</div></div>`;
+        return sectionHtml;
     }
 
     /**

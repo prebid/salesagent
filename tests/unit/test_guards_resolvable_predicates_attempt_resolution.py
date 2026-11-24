@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._architecture_helpers import REPO_ROOT
+from tests.unit._architecture_helpers import REPO_ROOT, rel
 
 _SIGNING_DIR = REPO_ROOT / "src" / "core" / "signing"
 _REAL_RESOLVERS = {"resolve_signing_material", "_resolve_signing_provider"}
@@ -44,14 +44,14 @@ def _scan() -> set[str]:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except SyntaxError:
             continue
-        rel = str(path.relative_to(REPO_ROOT))
+        rel_path = rel(path)
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.FunctionDef)
                 and "resolvable" in node.name.lower()
                 and not _calls_a_real_resolver(node)
             ):
-                key = f"{rel}::{node.name}"
+                key = f"{rel_path}::{node.name}"
                 if key not in ALLOWLIST:
                     violations.add(key)
     return violations

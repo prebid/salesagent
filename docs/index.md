@@ -131,9 +131,13 @@ docs/
 
 ## Key components
 
-- **MCP server** (port `8080`) — FastMCP-based tools for AI agents
-- **Admin UI** (port `8001`) — OAuth secured web interface
-- **A2A server** (port `8091`) — agent-to-agent communication
+One application process serves the MCP server, the A2A server, and the Admin UI. In the
+Docker setup, nginx publishes all three on port `8000` and forwards each request to that
+process.
+
+- **MCP server** (`/mcp/`) — FastMCP-based tools for AI agents
+- **Admin UI** (`/admin`) — OAuth secured web interface
+- **A2A server** (`/a2a`) — agent-to-agent communication
 - **Database** — PostgreSQL
 
 ## External links

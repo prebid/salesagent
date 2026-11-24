@@ -78,7 +78,7 @@ def main(argv: list[str]) -> int:
 
     _OUT.write_text(json.dumps(timings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     total = sum(timings.values())
-    print(f"wrote {_OUT.relative_to(_REPO_ROOT)}: {len(timings)} files, {total / 60:.1f} minutes total")
+    print(f"wrote {_OUT.relative_to(_REPO_ROOT).as_posix()}: {len(timings)} files, {total / 60:.1f} minutes total")
     return 0
 
 

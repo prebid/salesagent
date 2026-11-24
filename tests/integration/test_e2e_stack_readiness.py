@@ -62,9 +62,13 @@ def compose(monkeypatch):
     return commands
 
 
-def wait(readiness, origin, tcp_port, creative_agent, **kwargs):
+def wait(readiness, origin, tcp_port, creative_agent, *, ports=None, **kwargs):
     readiness.wait_for_e2e_stack(
-        ports={"mcp": origin.port, "postgres": tcp_port, "creative_agent": creative_agent.port},
+        ports=(
+            readiness.E2EPorts(mcp=origin.port, postgres=tcp_port, creative_agent=creative_agent.port)
+            if ports is None
+            else ports
+        ),
         host=origin.host,
         timeout_s=kwargs.pop("timeout_s", 0.2),
         poll_interval_s=0.02,
@@ -124,11 +128,16 @@ def test_creative_failure_blocks_healthy_server(
     assert capsys.readouterr().out.count("Dumping compose logs") == 1
 
 
-def test_creative_connection_refusal_blocks_server(readiness, local_origin, tcp_port, closed_port, compose):
+def test_creative_connection_refusal_blocks_server(
+    readiness, local_origin, tcp_port, closed_port, creative_agent, compose
+):
     with pytest.raises(pytest.fail.Exception, match="failed probe: creative-agent"):
-        readiness.wait_for_e2e_stack(
-            ports={"mcp": local_origin.port, "postgres": tcp_port, "creative_agent": closed_port},
-            host="127.0.0.1",
+        wait(
+            readiness,
+            local_origin,
+            tcp_port,
+            creative_agent,
+            ports=readiness.E2EPorts(mcp=local_origin.port, postgres=tcp_port, creative_agent=closed_port),
             timeout_s=0.1,
         )
     assert local_origin.hits == 0
@@ -146,10 +155,10 @@ def test_server_is_retried_until_it_answers_healthy(readiness, local_origin, tcp
     "missing, failed", [("postgres", "postgres"), ("creative_agent", "creative-agent"), ("mcp", "adcp_health")]
 )
 def test_missing_port_cannot_report_ready(readiness, local_origin, tcp_port, creative_agent, compose, missing, failed):
-    ports = {"mcp": local_origin.port, "postgres": tcp_port, "creative_agent": creative_agent.port}
+    ports = readiness.E2EPorts(mcp=local_origin.port, postgres=tcp_port, creative_agent=creative_agent.port)
     del ports[missing]
     with pytest.raises(pytest.fail.Exception, match=f"failed probe: {failed}"):
-        readiness.wait_for_e2e_stack(ports=ports, host="127.0.0.1", timeout_s=0.1)
+        wait(readiness, local_origin, tcp_port, creative_agent, ports=ports, timeout_s=0.1)
     assert local_origin.hits == 0
 
 
@@ -234,10 +243,11 @@ def test_env_port_rejects_invalid_configuration(monkeypatch):
         conftest.resolve_env_port("POSTGRES_PORT", 25000, 30000)
 
 
+@pytest.mark.parametrize("published_ports", [False, True])
 @pytest.mark.parametrize("agent_status", [200, 503])
 @pytest.mark.parametrize("override", [False, True])
 def test_in_network_gate_uses_service_addresses(
-    readiness, local_origin, test_database_url, monkeypatch, agent_status, override, closed_port
+    readiness, local_origin, test_database_url, monkeypatch, agent_status, override, closed_port, published_ports
 ):
     """Compose DNS is substituted; both HTTP services and PostgreSQL are real."""
     with psycopg2.connect(test_database_url) as connection, connection.cursor() as cursor:
@@ -268,7 +278,11 @@ def test_in_network_gate_uses_service_addresses(
         # The in-network route must work without a host-published DB port and
         # without reaching for a Docker CLI on the runner.
         monkeypatch.setattr(shutil, "which", lambda name: None)
-        ports = readiness.e2e_ports(mcp=8000, postgres=1, creative_agent=1)
+        ports = (
+            readiness.E2EPorts(mcp=closed_port, postgres=closed_port, creative_agent=closed_port)
+            if published_ports
+            else readiness.E2EPorts()
+        )
         if agent_status == 200:
             readiness.wait_for_e2e_stack(ports=ports, timeout_s=3)
             assert local_origin.paths == ["/health"]
@@ -325,3 +339,15 @@ def test_compose_selection_preserves_exec_and_teardown_flags(readiness, monkeypa
         "x",
     ]
     assert readiness.compose_down_argv() == [*expected, "-f", "docker-compose.e2e.yml", "down", "-v"]
+
+
+@pytest.mark.parametrize("host, expected", [("::1", "http://[::1]:8092"), ("proxy", "http://proxy:8000")])
+def test_live_server_urls_use_the_resolved_service_address(monkeypatch, host, expected):
+    from tests.e2e import conftest
+
+    monkeypatch.setenv("ADCP_TEST_HOST", host)
+    monkeypatch.delenv("E2E_TLS_BASE_URL", raising=False)
+    urls = conftest.live_server.__wrapped__(
+        {"mcp_port": 8092, "a2a_port": 8092, "admin_port": 8092, "postgres_port": 5435}
+    )
+    assert {key: urls[key] for key in ("mcp", "a2a", "admin")} == dict.fromkeys(("mcp", "a2a", "admin"), expected)

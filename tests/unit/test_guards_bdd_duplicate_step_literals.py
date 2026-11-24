@@ -41,7 +41,7 @@ _PLACEHOLDER = re.compile(r"\{[^}]*\}")
 
 def registered_step_modules() -> list[Path]:
     """Step-definition modules listed in the BDD conftest's pytest_plugins."""
-    mods = re.findall(r'"(tests\.bdd\.steps\.[\w.]+)"', CONFTEST.read_text())
+    mods = re.findall(r'"(tests\.bdd\.steps\.[\w.]+)"', CONFTEST.read_text(encoding="utf-8"))
     return [REPO_ROOT / (mod.replace(".", "/") + ".py") for mod in mods]
 
 
@@ -80,7 +80,7 @@ def collect_literal_collisions(paths: list[Path]) -> dict[tuple[str, str], list[
     """Map (kind, literal) -> def sites, keeping only colliding literals."""
     seen: dict[tuple[str, str], list[str]] = {}
     for path in paths:
-        tree = ast.parse(path.read_text(), filename=str(path))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -133,7 +133,7 @@ def test_no_duplicate_step_literals_within_unregistered_modules():
 
 def _collide(snippet: str, tmp_path: Path) -> dict:
     p = tmp_path / "steps_mod.py"
-    p.write_text(snippet)
+    p.write_text(snippet, encoding="utf-8")
     return collect_literal_collisions([p])
 
 

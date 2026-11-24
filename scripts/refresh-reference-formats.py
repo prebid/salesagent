@@ -169,7 +169,7 @@ def main() -> None:
     fixture = _build_fixture(formats, source_url=url)
 
     CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(CACHE_FILE, "w") as f:
+    with open(CACHE_FILE, "w", encoding="utf-8") as f:
         json.dump(fixture, f, indent=2)
         f.write("\n")
 
