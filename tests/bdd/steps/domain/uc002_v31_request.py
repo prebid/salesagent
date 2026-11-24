@@ -19,7 +19,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then
 
-from tests.bdd.steps._outcome_helpers import WIRE_MISSING, wire_absent, wire_field, wire_lookup
+from tests.bdd.steps._outcome_helpers import wire_absent, wire_absent_or_false, wire_field, wire_lookup
 
 # ═══════════════════════════════════════════════════════════════════════
 # Idempotency: prior state under the request's key
@@ -382,10 +382,7 @@ def then_sandbox_absent_or_false(ctx: dict) -> None:
     create-media-buy-response.json describes only ``sandbox: true`` ("this response contains
     simulated data"), so an explicit ``false`` is as conformant as an absent field.
     """
-    sandbox = wire_lookup(ctx, "sandbox")
-    assert sandbox is WIRE_MISSING or sandbox is False, (
-        f"a production account's response must not claim sandbox mode, got sandbox={sandbox!r}"
-    )
+    wire_absent_or_false(ctx, "sandbox")
 
 
 # ═══════════════════════════════════════════════════════════════════════

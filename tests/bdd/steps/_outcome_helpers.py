@@ -358,6 +358,17 @@ def wire_absent(ctx: dict, path: str) -> None:
     assert value is WIRE_MISSING, f"{path!r} unexpectedly present on the wire: {value!r}"
 
 
+def wire_absent_or_false(ctx: dict, path: str) -> None:
+    """Assert the dotted *path* is absent from the success-path wire or is JSON ``false``.
+
+    The tri-state oracle for an optional flag whose only claim is ``true``: absent and
+    ``false`` say the same thing, and anything else (``true``, ``null``, a non-boolean)
+    fails.
+    """
+    value = wire_lookup(ctx, path)
+    assert value is WIRE_MISSING or value is False, f"{path!r} expected absent or false on the wire, got {value!r}"
+
+
 def assert_listed_format_option_ref(entry: dict[str, Any], sent: dict[str, Any]) -> None:
     """Assert a listed creative's ``format_option_ref`` is the document the buyer sent.
 

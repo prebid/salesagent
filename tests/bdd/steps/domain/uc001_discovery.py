@@ -32,7 +32,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import WIRE_MISSING, assert_wire_rejection, wire_lookup, wire_product_ids
+from tests.bdd.steps._outcome_helpers import assert_wire_rejection, wire_absent_or_false, wire_product_ids
 from tests.bdd.steps.domain.uc_get_products_inventory import given_tenant
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import PricingOptionFactory, ProductFactory
@@ -337,5 +337,4 @@ def then_products_unfiltered_by_catalog(ctx: dict) -> None:
 @then(parsers.parse('the response should have "{field}" absent or false'))
 def then_field_absent_or_false(ctx: dict, field: str) -> None:
     """The wire omits ``field`` or carries ``false``; any other value claims what did not happen."""
-    value = wire_lookup(ctx, field)
-    assert value is WIRE_MISSING or value is False, f"Expected {field!r} absent or false on the wire, got {value!r}"
+    wire_absent_or_false(ctx, field)
