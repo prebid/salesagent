@@ -1450,12 +1450,20 @@ Feature: BR-UC-001 Discover Available Inventory
 
   @T-UC-001-nfr-001 @nfr @nfr-001 @analysis-2026-03-09 @schema-v3.1
   Scenario: NFR-001 - Security hardening on product discovery
-    Given the Seller Agent enforces security hardening
-    When the Buyer Agent sends a get_products request
-    Then the request should be validated against schema before processing
-    And authentication should be checked before any data access
-    And no internal system details should leak in error responses
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
+    Given an untyped exception is raised inside the dispatched skill's business logic
+    When the Buyer Agent requests products
+    Then the error is compliant with the AdCP error spec
+    And the response is an error with code "INTERNAL_ERROR" and no raw exception text
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the generated scenario sent a generic
+    # request under "the Seller Agent enforces security hardening" and asserted three Thens
+    # no wire can grade ("validated against schema before processing", "authentication
+    # checked before any data access", "no internal system details should leak"). The one
+    # obligation the pin states is the last: transport-errors.mdx Security Considerations,
+    # "Implementations MUST NOT include: Internal service names, hostnames, or IP addresses;
+    # Database error text ...". It is graded here exactly as BR-SECURITY-001 grades it,
+    # through the same steps: an untyped fault carrying a fake DSN inside get_products
+    # reaches the buyer as INTERNAL_ERROR with none of its text anywhere in the envelope.
+    # @source repo=adcp ref=v3.2.7 path=docs/building/operating/transport-errors.mdx
 
   @T-UC-001-nfr-002 @nfr @nfr-002 @analysis-2026-03-09 @schema-v3.1
   Scenario: NFR-002 - Prompt injection defense for brief and refine.ask
