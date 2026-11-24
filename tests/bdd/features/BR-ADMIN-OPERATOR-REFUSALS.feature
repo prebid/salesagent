@@ -437,6 +437,25 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the JSON response has "success" as false
     And the JSON error is the "TenantNotFound" refusal
 
+  # Each kind of record has one RecordNotFound subclass, named by the repository for that kind
+  # and raised by its require() when the lookup finds no row. Its MESSAGE is the answer.
+  @T-ADMIN-REFUSAL-040 @json @record-not-found
+  Scenario Outline: A request for a <record> that does not exist is refused as not found
+    When a page's script asks for a <record> that does not exist
+    Then the page returns status 404
+    And the JSON response has "success" as false
+    And the JSON error is the "<refusal>" refusal
+
+    Examples:
+      | record        | refusal              |
+      | principal     | PrincipalNotFound    |
+      | product       | ProductNotFound      |
+      | creative      | CreativeNotFound     |
+      | signals agent | SignalsAgentNotFound |
+      | workflow step | WorkflowStepNotFound |
+      | GAM order     | OrderNotFound        |
+      | sync job      | SyncJobNotFound      |
+
   @T-ADMIN-REFUSAL-037 @json @authorized-domains
   Scenario: An authorized domain the tenant already authorizes is refused as a conflict
     Given another tenant of this seller, authorizing the domain "authorized.bdd-refusals.example"

@@ -202,13 +202,33 @@ def when_save_profile_edit_with_raw_format_options(ctx: dict, profile_id: str, r
     ctx["admin_page"] = env.submit_inventory_profile_edit(profile_id, form)
 
 
-#: A row id no profile is stored under: ids come from a sequence that no scenario runs this far.
-_ABSENT_PROFILE_ROW = 2_000_000_000
+#: A row id nothing is stored under: ids come from a sequence that no scenario runs this far.
+_ABSENT_ROW_ID = 2_000_000_000
 
 
 @when("the inventory page deletes a profile that does not exist")
 def when_delete_absent_profile(ctx: dict) -> None:
-    ctx["admin_page"] = _env(ctx).delete_inventory_profile_row(_ABSENT_PROFILE_ROW)
+    ctx["admin_page"] = _env(ctx).delete_inventory_profile_row(_ABSENT_ROW_ID)
+
+
+#: For each kind of record, the request a page's script sends for one, as (method, path, JSON
+#: body), naming a record no scenario stores. ``{tenant}`` is the signed-in tenant.
+_ABSENT_RECORD_REQUESTS: dict[str, tuple[str, str, dict[str, str] | None]] = {
+    "principal": ("get", "/tenant/{tenant}/principal/bdd_absent_principal", None),
+    "product": ("get", "/adapters/mock/config/{tenant}/bdd_absent_product", None),
+    "creative": ("post", "/tenant/{tenant}/creatives/review/bdd_absent_creative/approve", {}),
+    "signals agent": ("delete", f"/tenant/{{tenant}}/signals-agents/{_ABSENT_ROW_ID}/delete", None),
+    "workflow step": ("post", "/tenant/{tenant}/workflows/bdd_absent_context/steps/bdd_absent_step/approve", {}),
+    "GAM order": ("get", "/api/tenant/{tenant}/orders/bdd_absent_order", None),
+    "sync job": ("get", "/tenant/{tenant}/gam/sync-status/bdd_absent_sync", None),
+}
+
+
+@when(parsers.parse("a page's script asks for a {record} that does not exist"))
+def when_script_asks_for_absent_record(ctx: dict, record: str) -> None:
+    env = _env(ctx)
+    method, path, body = _ABSENT_RECORD_REQUESTS[record]
+    ctx["admin_page"] = env.fetch(method, path.format(tenant=env.tenant_id), body)
 
 
 @then("the answer does not carry the JSON parser's text")
