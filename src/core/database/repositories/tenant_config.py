@@ -26,10 +26,11 @@ from sqlalchemy.sql import func
 
 from src.core.database.jsonb_append import jsonb_list
 from src.core.database.models import AdapterConfig, Tenant, User, UserRole
+from src.core.database.repositories.base import Repository
 from src.core.domain_config import get_super_admin_domain
 from src.core.http_utils import authorized_domain
 from src.core.json_validators import checked_authorized_domain
-from src.core.operator_errors import SuperAdminDomainRefused
+from src.core.operator_errors import SuperAdminDomainRefused, TenantNotFound
 
 AuthorizedListColumn = Literal["authorized_domains", "authorized_emails"]
 AddOutcome = Literal["added", "duplicate", "missing_tenant"]
@@ -49,7 +50,7 @@ class UserChange(NamedTuple):
     is_active: bool = False
 
 
-class TenantConfigRepository:
+class TenantConfigRepository(Repository):
     """Tenant-scoped access for configuration models.
 
     All queries filter by tenant_id automatically. Callers cannot bypass
@@ -59,6 +60,8 @@ class TenantConfigRepository:
         session: SQLAlchemy session (caller manages lifecycle).
         tenant_id: Tenant scope for all queries.
     """
+
+    NOT_FOUND = TenantNotFound
 
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session
