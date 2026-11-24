@@ -256,14 +256,18 @@ fi
 # Both clocks agree only in UTC.
 #
 # A FRESH directory, never a reused one. The suites write their reports straight into it
-# (SUITE_REPORT_DIR below), so a directory an earlier run of the same minute left behind
-# would hold that run's report for any suite this run never finished, and it would be
-# graded as this run's. The name has minute resolution and cassini reads it with a
-# fullmatch, so it cannot take a suffix: wait for the next minute instead, which costs at
-# most a minute and only when two runs start in the same one.
+# (SUITE_REPORT_DIR below), so in a directory another run of the same minute also uses,
+# that run's report would stand in for any suite this run never finished, and be graded
+# as this run's. Creating the directory is the reservation: `mkdir` without `-p` fails
+# when the directory exists, so of two runs that start in the same minute exactly one
+# creates it. The name has minute resolution and cassini reads it with a fullmatch, so
+# it cannot take a suffix: the other run waits for the next minute instead, which costs
+# at most a minute and only when two runs start in the same one.
 _name_results_dir() { RESULTS_DIR="test-results/innet_$(date -u +%d%m%y_%H%M)"; }
 _name_results_dir
-while [ -e "$RESULTS_DIR" ]; do
+mkdir -p test-results
+until mkdir "$RESULTS_DIR" 2>/dev/null; do
+    [ -e "$RESULTS_DIR" ] || { echo "cannot create $RESULTS_DIR" >&2; exit 1; }
     echo "$RESULTS_DIR already exists; waiting for the next minute so this run's reports land in a fresh directory" >&2
     sleep 5
     _name_results_dir
@@ -273,7 +277,6 @@ done
 PAYLOAD_SUBDIR="payloads"
 # Kept in step with scripts/audit/run_report.py's STORYBOARD_SUBDIR.
 STORYBOARD_SUBDIR="storyboard"
-mkdir -p "$RESULTS_DIR"
 # The storyboard suite publishes the runner's per-protocol summary to
 # test-results/storyboard_summary_<protocol>.json (tests/storyboard/test_storyboard_conformance.py,
 # _publish_summary) -- ONE path, overwritten by every run. Clear the previous run's copies
