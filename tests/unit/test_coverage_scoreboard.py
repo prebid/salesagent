@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
+import shutil
 from pathlib import Path
 
 import pytest
 
 from scripts.audit import coverage_scoreboard as sb
+from tests._collection_manifest import IncompleteLivenessRun
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "coverage_scoreboard"
 NOW = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
@@ -117,3 +120,45 @@ def test_no_liveness_sessions_is_refused(tmp_path: Path) -> None:
     """An empty artifact directory is a missing measurement, not a scoreboard of zeros."""
     with pytest.raises(SystemExit, match="nothing was measured"):
         sb.build(FIXTURE / "repo", tmp_path)
+
+
+def _copy_artifacts(tmp_path: Path, edit) -> Path:
+    """The fixture artifacts, with the liveness session rewritten by ``edit``."""
+    artifacts = tmp_path / "artifacts"
+    shutil.copytree(FIXTURE / "artifacts", artifacts)
+    session = artifacts / "bdd-shard-1-coverage" / "liveness-sessions" / "s1.json"
+    session.write_text(json.dumps(edit(json.loads(session.read_text(encoding="utf-8")))), encoding="utf-8")
+    return artifacts
+
+
+def test_a_session_that_lost_a_worker_is_refused(tmp_path: Path) -> None:
+    """A partial measurement would turn the lost worker's scenarios into not_collected."""
+
+    def lose_worker(session: dict) -> dict:
+        session["run"]["workers_missing"] = ["gw1"]
+        return session
+
+    with pytest.raises(IncompleteLivenessRun, match="gw1"):
+        sb.build(FIXTURE / "repo", _copy_artifacts(tmp_path, lose_worker))
+
+
+def test_a_call_phase_skip_is_not_a_failure(tmp_path: Path) -> None:
+    def skip_red(session: dict) -> dict:
+        for record in session["scenarios"]:
+            for obs in record["observations"]:
+                if obs["outcome"] == "failed":
+                    obs["outcome"] = "skipped"
+        return session
+
+    board = sb.build(FIXTURE / "repo", _copy_artifacts(tmp_path, skip_red))
+    fails = _by_title(board)["Fails"]
+    assert (fails["status"], fails["transports"]) == ("skipped", {"mcp": "skipped"})
+
+
+def test_default_artifacts_are_the_newest_run_only(tmp_path: Path) -> None:
+    """test-results/ retains several runs; pooling them would grade on an older run's outcome."""
+    older, newer = tmp_path / "older", tmp_path / "newer"
+    for run in (older, newer):
+        (run / "liveness-sessions").mkdir(parents=True)
+    os.utime(older, (1, 1))
+    assert sb.newest_run(tmp_path) == newer

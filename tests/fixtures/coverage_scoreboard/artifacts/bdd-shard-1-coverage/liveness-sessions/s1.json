@@ -1,4 +1,4 @@
-{"run": {}, "scenarios": [
+{"run": {"target": ["tests/bdd"], "selection": "", "markers": "", "workers_missing": []}, "scenarios": [
  {"scenario_id": "T-UC-900-green", "observations": [
   {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_green[mcp]", "outcome": "passed", "reason": null, "reason_category": "live"},
   {"transport": "rest", "nodeid": "tests/bdd/test_demo.py::test_green[rest]", "outcome": "passed", "reason": null, "reason_category": "live"}]},
