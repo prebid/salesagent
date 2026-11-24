@@ -221,6 +221,7 @@ def given_product_declaring_a_channel(ctx: dict, product_id: str, channel: str) 
 
 @when("the system applies AI ranking")
 @when("the Buyer Agent sends a get_products request with a brief")
+@when("the Buyer Agent sends a get_products request with a brief and no buying_mode")
 @when("the Buyer Agent sends a get_products request with a non-compliant brief")
 @when("the Buyer Agent sends a get_products request with any brief content")
 @when("the Buyer Agent sends a get_products request with a compliant brief")

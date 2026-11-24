@@ -73,3 +73,8 @@ def test_buying_mode_outside_enum_refused() -> None:
 @scenario(FEATURE, "Extension *d - buying mode constraint violation - <violation>")
 def test_buying_mode_companion_violations() -> None:
     """Each broken companion rule is refused with INVALID_REQUEST naming the companion."""
+
+
+@scenario(FEATURE, "BR-RULE-079 INV-6 holds - pre-v3 client without buying_mode defaults to brief")
+def test_missing_buying_mode_served_as_brief() -> None:
+    """A request without buying_mode is served as a brief, not refused."""

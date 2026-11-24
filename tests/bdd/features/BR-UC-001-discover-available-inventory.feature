@@ -729,12 +729,15 @@ Feature: BR-UC-001 Discover Available Inventory
 
   @T-UC-001-inv-079 @invariant @BR-RULE-079 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-079 INV-6 holds - pre-v3 client without buying_mode defaults to brief
-    Given a pre-v3 client sends a get_products request without buying_mode
-    And the request includes a brief
-    When the system processes the request
-    Then the system should default buying_mode to "brief"
-    And the request should proceed through the brief-mode pipeline
+    Given the Buyer is authenticated with a valid principal_id
+    When the Buyer Agent sends a get_products request with a brief and no buying_mode
+    Then the request should proceed with full product catalog
     # INV-6 holds: pre-v3 backward compatibility
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the Givens described the request and the
+    # Thens named an internal default and a "brief-mode pipeline" no wire shows. What the
+    # buyer sees of the default is that the request is served as a brief: the products the
+    # brief matches (here the whole catalog), not a refusal for the missing mode.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json pointer=/properties/buying_mode
 
   @T-UC-001-inv-084 @invariant @BR-RULE-084 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-084 INV-1 holds - catalog with brand present
@@ -853,16 +856,20 @@ Feature: BR-UC-001 Discover Available Inventory
     # out and carries, is INVALID_REQUEST naming that companion (get-products-request.json
     # field descriptions, enums/error-code.json); refine=[] breaks refine's minItems.
 
+    # LOCAL CORRECTION (mirror upstream in adcp-req): pre_v3_default is "success" and the
+    # missing_buying_mode row is dropped: a request without buying_mode cannot be told apart from a pre-v3 one (this seller
+    # serves major 3 only, so a client that declares major 2 is refused VERSION_UNSUPPORTED),
+    # and the pin says such a request SHOULD default to 'brief'. This seller does (#2710 D1).
+
     Examples: Valid partitions
       | partition         | outcome                          |
       | brief_mode        | success                          |
       | wholesale_mode    | success                          |
       | refine_mode       | request proceeds to refine pipeline |
-      | pre_v3_default    | request defaults to brief pipeline |
+      | pre_v3_default    | success                          |
 
     Examples: Invalid partitions
       | partition                    | outcome                                       |
-      | missing_buying_mode          | error: buying_mode is required                 |
       # LOCAL CORRECTION (mirror upstream in adcp-req): a mode outside the pinned enum is a
       # schema violation, INVALID_REQUEST naming buying_mode; the row graded message text.
       | unknown_value                | error INVALID_REQUEST on buying_mode with suggestion |
@@ -1201,14 +1208,16 @@ Feature: BR-UC-001 Discover Available Inventory
     # LOCAL CORRECTION (mirror upstream in adcp-req): "valid" / "invalid" named no wire fact.
     # A mode with its companions is "success"; a broken companion rule is INVALID_REQUEST
     # naming the companion (get-products-request.json field descriptions, refine minItems).
+    # The "buying_mode absent, v3 client" row is dropped: a request without buying_mode cannot be told apart from a pre-v3 one (this seller
+    # serves major 3 only, so a client that declares major 2 is refused VERSION_UNSUPPORTED),
+    # and the pin says such a request SHOULD default to 'brief'. This seller does (#2710 D1).
 
     Examples: Boundary values
       | boundary_point                                                            | outcome   |
       | buying_mode='brief' with brief present (valid brief mode)                 | success |
       | buying_mode='wholesale' with no brief, no refine (valid wholesale mode)   | success |
       | buying_mode='refine' with refine=[1 entry] (valid refine mode, minItems boundary) | valid |
-      | buying_mode absent, pre-v3 client (defaulted to brief)                    | valid     |
-      | buying_mode absent, v3 client (required field missing)                    | invalid   |
+      | buying_mode absent, pre-v3 client (defaulted to brief)                    | success   |
       # LOCAL CORRECTION (mirror upstream in adcp-req): "invalid" named no wire fact; a mode
       # outside the pinned enum is INVALID_REQUEST naming buying_mode.
       | buying_mode='auction' (unknown enum value)                                | error INVALID_REQUEST on buying_mode with suggestion |
