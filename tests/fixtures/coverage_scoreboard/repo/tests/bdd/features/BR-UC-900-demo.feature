@@ -22,6 +22,15 @@ Feature: BR-UC-900 Demo
       | a     |
       | b     |
 
+  @T-UC-900-parked
+  Scenario Outline: One example runs, one is parked
+    Then <row> passes
+
+    Examples:
+      | row |
+      | a   |
+      | b   |
+
   @T-UC-900-red
   Scenario: Fails
     Then it fails
