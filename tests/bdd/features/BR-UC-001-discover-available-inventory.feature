@@ -1199,6 +1199,20 @@ Feature: BR-UC-001 Discover Available Inventory
       | buying_mode='refine', refine=[] (minItems:1 boundary violation)           | invalid   |
       | buying_mode='refine', brief present (prohibited companion present)        | invalid   |
 
+  @T-UC-001-buying-mode-enum @invariant @BR-RULE-079 @error
+  Scenario: buying_mode outside the pinned enum is refused
+    Given the Buyer is authenticated with a valid principal_id
+    When the Buyer Agent sends a get_products request with buying_mode=auction, brief present
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the response error field is buying_mode
+    And the error should include "suggestion" field
+    # LOCALLY-ADDED beside the generated buying_mode partition and boundary outlines, which
+    # carry the same case as one row each but cannot be bound until their other rows have
+    # behaviour (#2710). get-products-request.json at v3.2.7 types buying_mode as the enum
+    # brief / wholesale / refine, so any other value "violates schema constraints":
+    # INVALID_REQUEST (enums/error-code.json), naming the field.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json pointer=/properties/buying_mode
+
   @T-UC-001-boundary-brand-policy @boundary @brand_manifest_policy @analysis-2026-03-09 @schema-v3.1
   Scenario Outline: brand_manifest_policy boundary validation - <boundary_point>
     Given the tenant brand_manifest_policy is configured
