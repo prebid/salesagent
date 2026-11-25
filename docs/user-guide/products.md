@@ -124,10 +124,9 @@ publisher's file at once, click **Sync All Publishers** on the **Publishers & Pr
 
 ## Sample products
 
-A tenant starts without products. When the deployment sets `CREATE_SAMPLE_DATA` and the
-`default` tenant has no products, the sales agent adds two sample products to that tenant.
-The products are Premium Display - News and Run of Site Display. See
-[environment variables](../deployment/environment-variables.md).
+A tenant starts without products. The demo tenant that `docker compose --profile demo`
+creates has two sample products: Premium Display - News and Run of Site Display. See
+[local testing with demo data](../deployment/single-tenant.md#local-testing-with-demo-data).
 
 ## Adapter-specific configuration
 

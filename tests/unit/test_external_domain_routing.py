@@ -163,3 +163,54 @@ class TestExternalDomainRouting:
                         # Should show agent landing page (200)
                         assert response.status_code == 200
                         assert b"Agent Landing Page" in response.data
+
+
+class TestSingleTenantAdminEntry:
+    """``/admin/`` in single-tenant mode names the deployment's tenant, whatever its id (#2260).
+
+    Nothing creates a ``default`` tenant any more, so the entry must not assume one: a
+    redirect to ``/tenant/default`` reached a sign-in page that 404s for a missing tenant.
+    """
+
+    def test_the_host_naming_no_tenant_falls_back_to_the_one_active_tenant(self):
+        from src.admin.app import create_app
+        from src.admin.blueprints.core import single_tenant_admin_tenant
+
+        app = create_app()
+
+        with app.test_request_context("/", headers={"Host": "localhost:8000"}):
+            with patch("src.admin.blueprints.core.get_db_session"):
+                with patch("src.admin.blueprints.core.TenantLookupRepository") as mock_repo_cls:
+                    lookup = mock_repo_cls.return_value
+                    lookup.find_active_by_virtual_host.return_value = None
+                    lookup.find_sole_active.return_value = Mock(tenant_id="demo")
+
+                    assert single_tenant_admin_tenant().tenant_id == "demo"
+                    lookup.find_active_by_virtual_host.assert_called_once_with("localhost:8000")
+
+    def test_the_entry_redirects_to_the_resolved_tenant(self):
+        from src.admin.app import create_app
+
+        app = create_app()
+
+        with app.test_client() as client:
+            with patch("src.core.config_loader.is_single_tenant_mode", return_value=True):
+                with patch("src.admin.blueprints.core.single_tenant_admin_tenant", return_value=Mock(tenant_id="demo")):
+                    response = client.get("/admin/")
+
+        assert response.status_code == 302
+        assert response.headers["Location"].endswith("/tenant/demo")
+
+    def test_with_no_tenant_to_name_the_entry_sends_the_visitor_to_sign_in(self):
+        from src.admin.app import create_app
+
+        app = create_app()
+
+        with app.test_client() as client:
+            with patch("src.core.config_loader.is_single_tenant_mode", return_value=True):
+                with patch("src.admin.blueprints.core.single_tenant_admin_tenant", return_value=None):
+                    with patch("src.admin.blueprints.core.get_tenant_from_hostname", return_value=None):
+                        response = client.get("/admin/")
+
+        assert response.status_code == 302
+        assert response.headers["Location"].endswith("/login")

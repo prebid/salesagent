@@ -48,6 +48,8 @@ from src.core.database.repositories.push_notification_config import PushNotifica
 from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.database.repositories.sync_job import SyncJobRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.core.database.repositories.tenant_lookup import TenantLookupRepository
+from src.core.database.repositories.tenant_provisioning import TenantProvisioningRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 
 logger = logging.getLogger(__name__)
@@ -564,3 +566,40 @@ class SyncJobUoW(BaseUoW):
     sync_jobs: SyncJobRepository | None
 
     _REPOSITORIES: ClassVar[Mapping[str, type]] = {"sync_jobs": SyncJobRepository}
+
+
+class TenantProvisioningUoW(BaseUoW):
+    """Unit of Work that creates one tenant: its own rows, first principal, publishers and catalogue.
+
+    ``tenant_id`` is the tenant being created, which does not exist when the unit opens.
+    ``tenants`` is the cross-tenant lookup for the checks that must pass first (no tenant
+    yet, or no tenant holding the new one's keys), so the check and the writes share one
+    transaction (``src/services/tenant_provisioning.py``).
+
+    Args:
+        tenant_id: The tenant to create.
+    """
+
+    tenants: TenantLookupRepository | None
+    provisioning: TenantProvisioningRepository | None
+    principals: PrincipalRepository | None
+    publishers: PublisherRepository | None
+    products: ProductRepository | None
+
+    _SCOPED: ClassVar[Mapping[str, type]] = {
+        "provisioning": TenantProvisioningRepository,
+        "principals": PrincipalRepository,
+        "publishers": PublisherRepository,
+        "products": ProductRepository,
+    }
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.tenants = TenantLookupRepository(self._session)
+        for attribute, repository in self._SCOPED.items():
+            setattr(self, attribute, repository(self._session, self._tenant_id))
+
+    def _clear_repos(self) -> None:
+        self.tenants = None
+        for attribute in self._SCOPED:
+            setattr(self, attribute, None)

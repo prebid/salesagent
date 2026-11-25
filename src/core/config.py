@@ -177,10 +177,9 @@ class TestingSettings(BaseSettings):
     its identity provider, with per-tenant Setup Mode covering the interval before SSO is
     switched on -- so no composition-time credential flag is needed for either.
 
-    Provisioning facts a deployment legitimately sets -- seed a demo tenant, seed sample
-    data, skip migrations -- are NOT here; they are :class:`ProvisioningSettings`. A name
-    implying everything inside is a test artifact would hide which fields are actually
-    defects, and a demo deployment genuinely wants a demo tenant.
+    Provisioning facts a deployment legitimately sets -- skip migrations -- are NOT here;
+    they are :class:`ProvisioningSettings`. A name implying everything inside is a test
+    artifact would hide which fields are actually defects.
     """
 
     model_config = _ENV
@@ -189,18 +188,16 @@ class TestingSettings(BaseSettings):
 
 
 class ProvisioningSettings(BaseSettings):
-    """What an operator asks a fresh deployment to create on first boot.
+    """How a deployment's database is prepared, read by the start script
+    (``scripts/deploy/run_all_services.py``).
 
-    Real deployment inputs, read once at init (``src/core/database/database.py``,
-    ``scripts/setup/init_database.py``): a demo deployment wants a demo tenant, and
-    ``skip_migrations`` is an ops decision about who runs alembic. None of them asks
-    whether a suite is running, which is why they are not :class:`TestingSettings`.
+    ``skip_migrations`` is an ops decision about who runs alembic. Starting the server
+    creates no tenant, credential or sample row whatever the environment says (#2260):
+    those come from ``scripts/setup/setup_tenant.py`` and ``scripts/setup/demo_tenant.py``.
     """
 
     model_config = _ENV
 
-    create_demo_tenant: bool = False
-    create_sample_data: bool = False
     skip_migrations: bool = False
 
 

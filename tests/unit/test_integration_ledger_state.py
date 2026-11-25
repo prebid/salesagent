@@ -34,16 +34,15 @@ LEDGER = Path(__file__).parent.parent / "integration" / "known_failures.txt"
 #: records an agreement instead of a fact. Lowering it as entries graduate is the intended
 #: direction; raising it is the defect the test exists to catch.
 #:
-#: Cluster I graduated and ``salesagent-091d8`` is NOT discharged by that. The two
-#: ``test_template_url_validation.py`` rows were never a testing-layer defect the ledger
-#: could wait out: the module built its admin app from the AMBIENT ENVIRONMENT, so whether
-#: the test-credential login blueprint was composed — and therefore whether
-#: ``url_for('test_auth.test_auth')`` resolved — was an environment fact, and a strict xfail
-#: on an environment fact is red exactly where it is enforced and green everywhere else. The
-#: module now composes that blueprint unconditionally, which is the STRICTER reading: every
-#: template branch is scanned, including the ones that render only under test mode.
-#: ``salesagent-091d8`` asks how a first admin reaches a fresh deployment before SSO exists,
-#: which is a production composition question this scanner never graded.
+#: Cluster I graduated. The two ``test_template_url_validation.py`` rows were never a
+#: testing-layer defect the ledger could wait out: the module built its admin app from the
+#: AMBIENT ENVIRONMENT, so whether the test-credential login blueprint was composed — and
+#: therefore whether ``url_for('test_auth.test_auth')`` resolved — was an environment fact,
+#: and a strict xfail on an environment fact is red exactly where it is enforced and green
+#: everywhere else. The flag, the blueprint and its template branch are deleted, so the
+#: module scans the one app ``create_app()`` composes in every environment. How a first
+#: admin reaches a fresh deployment is answered outside the serving app: the operator's
+#: setup command and SUPER_ADMIN_EMAILS over the deployment's OAuth (GH #2260).
 CEILING = 39
 
 EXPECTED_LEDGER: frozenset[str] = frozenset(

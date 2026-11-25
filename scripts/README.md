@@ -5,9 +5,9 @@ Utility scripts for setup, deployment, and operations.
 ## Directory Structure
 
 ### `/setup/` - Setup and Initialization
-- `init_database.py` - Initialize database with schema
 - `init_database_ci.py` - CI-specific database initialization
-- `setup_tenant.py` - Create new publisher/tenant
+- `setup_tenant.py` - Create new publisher/tenant (the server itself creates none)
+- `demo_tenant.py` - Create a local demo tenant on an empty database (`docker compose --profile demo up`)
 
 ### `/ops/` - Operations
 - `migrate.py` - Run database migrations
@@ -41,11 +41,12 @@ Utility scripts for setup, deployment, and operations.
 # 1. Setup git hooks (from project root)
 pre-commit install
 
-# 2. Initialize database
-uv run python scripts/setup/init_database.py
+# 2. Apply migrations
+uv run python scripts/ops/migrate.py
 
 # 3. Create a tenant
 uv run python -m scripts.setup.setup_tenant "Publisher Name" \
+  --virtual-host sales.publisher.example \
   --adapter google_ad_manager \
   --gam-network-code 123456
 ```

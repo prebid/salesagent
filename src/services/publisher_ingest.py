@@ -276,13 +276,28 @@ def seed_document(
     already holds the publisher. The caller owns the transaction.
     """
     session.flush()  # a tenant the seed has just added is read back below
-    publishers = PublisherRepository(session, tenant_id)
     tenant = TenantConfigRepository(session, tenant_id).get_tenant()
-    if tenant is None or not publishers.add_publisher(domain, display_name):
+    if tenant is None:
+        return False
+    return seed_publisher_document(
+        PublisherRepository(session, tenant_id), domain, document, agent_url=tenant.agent_url, display_name=display_name
+    )
+
+
+def seed_publisher_document(
+    publishers: PublisherRepository,
+    domain: str,
+    document: dict[str, Any],
+    *,
+    agent_url: str,
+    display_name: str | None = None,
+) -> bool:
+    """:func:`seed_document` for a caller that holds the tenant's publisher repository in its unit of work."""
+    if not publishers.add_publisher(domain, display_name):
         return False
     publisher = publishers.get(domain)
     assert publisher is not None
-    apply_document(publishers, publisher, document, agent_url=tenant.agent_url, fetched_at=datetime.now(UTC))
+    apply_document(publishers, publisher, document, agent_url=agent_url, fetched_at=datetime.now(UTC))
     return True
 
 

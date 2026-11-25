@@ -115,16 +115,21 @@ Set `SALES_AGENT_DOMAIN` to the host where you open the Admin UI:
 fly secrets set SALES_AGENT_DOMAIN="your-app-name.fly.dev"
 ```
 
-Fly.io deployments run in production, where the deployment creates its default tenant at that host and creates none without it. A sign-in through the deployment's OAuth client sends `/admin/auth/google/callback` on the host you sign in at, which must equal `SALES_AGENT_DOMAIN`, so register `https://your-app-name.fly.dev/admin/auth/google/callback` with that client. [Deployment OAuth](../environment-variables.md#deployment-oauth) states the rule.
+Fly.io deployments run in production. A sign-in through the deployment's OAuth client sends `/admin/auth/google/callback` on the host you sign in at, which must equal `SALES_AGENT_DOMAIN`, so register `https://your-app-name.fly.dev/admin/auth/google/callback` with that client. [Deployment OAuth](../environment-variables.md#deployment-oauth) states the rule.
 
 ### Initial Setup Flow
 
-1. Deploy the application (Step 6 below)
-2. Access the Admin UI at `https://your-app-name.fly.dev/admin`
-3. Log in with the deployment's own OAuth account (the address you put in
+1. Deploy the application (Step 6 below). The app applies migrations at start and creates no
+   tenant.
+2. Create the first tenant, once:
+   `fly ssh console -C "python -m scripts.setup.setup_tenant 'My Publisher' --virtual-host your-app-name.fly.dev"`.
+   It prints the first advertiser's token once; store it. (A super admin can also create
+   tenants in the Admin UI.)
+3. Access the Admin UI at `https://your-app-name.fly.dev/admin`
+4. Log in with the deployment's own OAuth account (the address you put in
    `SUPER_ADMIN_EMAILS`). Setup Mode, enabled by default for new tenants, lets you verify
    a tenant's OIDC login before you enable it.
-4. Configure the tenant's SSO with the [SSO quick start](../../user-guide/sso-setup.md#quick-start). In its first step, set **Custom Domain** to `your-app-name.fly.dev`. **Users & Access** then shows the **Required Redirect URI** `https://your-app-name.fly.dev/admin/auth/oidc/callback`, which you add to your SSO provider (Google, Microsoft, Okta, Auth0, Keycloak, or any OIDC provider).
+5. Configure the tenant's SSO with the [SSO quick start](../../user-guide/sso-setup.md#quick-start). In its first step, set **Custom Domain** to `your-app-name.fly.dev`. **Users & Access** then shows the **Required Redirect URI** `https://your-app-name.fly.dev/admin/auth/oidc/callback`, which you add to your SSO provider (Google, Microsoft, Okta, Auth0, Keycloak, or any OIDC provider).
 
 See [SSO Setup Guide](../../user-guide/sso-setup.md) for detailed provider-specific instructions.
 

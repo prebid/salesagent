@@ -22,7 +22,7 @@ from sqlalchemy import select
 from werkzeug.wrappers import Response
 
 from src.admin.auth_utils import OAUTH_CALLBACK_ERRORS, extract_user_info
-from src.admin.blueprints.core import get_tenant_from_hostname
+from src.admin.blueprints.core import get_tenant_from_hostname, single_tenant_admin_tenant
 from src.admin.gam_utils import GAMOAuthNotConfigured
 from src.admin.utils import is_super_admin, require_tenant_access
 from src.admin.utils.helpers import clear_session_identity
@@ -219,6 +219,7 @@ def login():
     oidc_configured = False
     tenant_context = None
     tenant_name = None
+    single_tenant_id = None
 
     # Extract tenant from headers FIRST (before any redirects)
     # The admin plane's one host -> tenant lookup. ``requested_host`` is the one place that
@@ -248,18 +249,21 @@ def login():
         if oauth_configured and not test_mode and not just_logged_out:
             return redirect(url_for("auth.tenant_google_auth", tenant_id=tenant_context))
 
-    elif is_single_tenant_mode():
-        # Single-tenant mode: check default tenant's OIDC config
+    elif is_single_tenant_mode() and (single_tenant := single_tenant_admin_tenant()) is not None:
+        # Single-tenant mode, and the host names no tenant: the deployment's one tenant,
+        # whatever its id (#2260 -- nothing creates a ``default`` one any more).
         from src.core.database.models import TenantAuthConfig
 
+        single_tenant_id = single_tenant.tenant_id
+        tenant_name = single_tenant.name
         with get_db_session() as db_session:
-            config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id="default")).first()
+            config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=single_tenant_id)).first()
             if config and config.oidc_client_id:
                 oidc_configured = True
                 oidc_enabled = config.oidc_enabled
 
         if oidc_enabled and not test_mode and not just_logged_out:
-            return redirect(url_for("oidc.login", tenant_id="default"))
+            return redirect(url_for("oidc.login", tenant_id=single_tenant_id))
 
     # Fall back to global OAuth if configured (for admin domain or unknown tenants)
     if oauth_configured and not test_mode and not just_logged_out:
@@ -275,7 +279,7 @@ def login():
         oidc_enabled=oidc_configured,  # Show SSO button if configured (not just enabled)
         tenant_context=tenant_context,
         tenant_name=tenant_name,
-        tenant_id=tenant_context if tenant_context else ("default" if is_single_tenant_mode() else None),
+        tenant_id=tenant_context or single_tenant_id,
         single_tenant_mode=is_single_tenant_mode(),
     )
 

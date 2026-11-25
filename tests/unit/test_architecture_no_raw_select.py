@@ -27,7 +27,6 @@ REPOSITORY_DIR = "src/core/database/repositories"
 
 INFRASTRUCTURE_FILES = {
     "src/core/database/database_session.py",
-    "src/core/database/database.py",
 }
 
 # ── Auto-discover ORM models ───────────────────────────────────────
@@ -92,7 +91,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     # get_tenant_from_hostname fixed — the admin plane's one host -> tenant lookup now goes
     # through TenantLookupRepository.find_active_by_virtual_host, and public.landing and
     # auth.login call it instead of each hand-rolling the same select (#2263)
-    ("src/admin/blueprints/core.py", "index"),
+    # index fixed — single-tenant mode resolves its tenant through single_tenant_admin_tenant
+    # (TenantLookupRepository), not a select of a "default" tenant (#2260)
     ("src/admin/blueprints/core.py", "reactivate_tenant"),
     ("src/admin/blueprints/core.py", "render_super_admin_index"),
     ("src/admin/blueprints/creative_agents.py", "add_creative_agent"),
@@ -215,7 +215,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/audit_logger.py", "log_security_violation"),
     # config_loader's tenant lookups fixed — every lookup it still has delegates to
     # TenantLookupRepository, which owns every cross-tenant query on ``tenants`` (#2263).
-    # ensure_default_tenant_exists still CREATES the row; only its lookup moved.
+    # ensure_default_tenant_exists is deleted: nothing in the serving app creates a tenant (#2260).
     # add_message removed — now sa_update + jsonb_list_append, zero selects.
     # _send_push_notifications removed — its config lookup routes through
     # PushNotificationConfigRepository.

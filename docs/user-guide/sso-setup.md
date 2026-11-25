@@ -25,8 +25,7 @@ This guide describes how to configure SSO for your tenant using OpenID Connect (
 
 New tenants start in **Setup Mode**, which lets you complete an OIDC login for a tenant
 *before* that tenant's SSO is switched on — so you can verify a provider works without
-locking yourself out if it does not. The demo tenant that `CREATE_DEMO_TENANT` creates
-starts with Setup Mode off.
+locking yourself out if it does not.
 
 1. **Configure the deployment's own sign-in** first: set `GOOGLE_CLIENT_ID` /
    `GOOGLE_CLIENT_SECRET` (or the generic `OAUTH_*` variables) and put your address in

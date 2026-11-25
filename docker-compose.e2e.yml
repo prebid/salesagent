@@ -214,7 +214,6 @@ services:
       # origin a reference must be recognized by and rerouted from.
       CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent/mcp
       CREATIVE_AGENT_ORIGIN: https://creative.adcontextprotocol.org
-      CREATE_DEMO_TENANT: "true"
       # The LIVE server needs the same signing KEK the dev stack has (#1291 D1).
       # A scenario's Given mints a tenant signing key through production, which
       # stores the private PEM encrypted under this KEK; the server then has to
@@ -868,7 +867,6 @@ services:
       # runs `uv sync` against real pypi.org during tox provisioning, which
       # needs the public roots this combined file still carries.
       SSL_CERT_FILE: /app/.test-tls/combined-ca.pem
-      CREATE_SAMPLE_DATA: "true"
       DELIVERY_WEBHOOK_INTERVAL: "5"
       # The source is bind-mounted, so the host's in-tree __pycache__ comes with
       # it — and those .pyc embed host absolute paths in co_filename, which makes
