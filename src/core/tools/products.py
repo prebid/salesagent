@@ -58,6 +58,9 @@ from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
 logger = logging.getLogger(__name__)
 
+#: The buying modes this seller serves; ``refine`` is not one of them (#2710 D2).
+_SERVED_BUYING_MODES: frozenset[BuyingMode] = frozenset({BuyingMode.brief, BuyingMode.wholesale})
+
 
 def get_recommended_cpm(product: Product) -> float | None:
     """Extract recommended CPM from product's pricing_options.
@@ -232,11 +235,13 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     # media_buy.buying_modes, so it does not offer refine (refine_products.yaml requires it
     # there), and get_products is deprecated in 3.2 for refine_proposals. Refused rather than
     # answered as a brief, which would drop the refine array and its refinement_applied.
-    if req.buying_mode == BuyingMode.refine:
+    if req.buying_mode is not None and req.buying_mode not in _SERVED_BUYING_MODES:
         raise AdCPCapabilityNotSupportedError(
             field="buying_mode",
             details=CapabilityRefusalDetails(
-                capability="buying_mode", rejected_value="refine", accepted_values=["brief", "wholesale"]
+                capability="buying_mode",
+                rejected_value=req.buying_mode.value,
+                accepted_values=sorted(mode.value for mode in _SERVED_BUYING_MODES),
             ),
         )
 
