@@ -29,6 +29,7 @@ from scripts.setup.init_database_ci import CI_TEST_TOKEN
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
 from tests.e2e.stack_readiness import (
     DEFAULT_E2E_COMPOSE_FILES,
+    SERVER,
     E2EPorts,
     compose_argv,
     compose_down_argv,
@@ -398,7 +399,7 @@ def docker_services_e2e(request):
     # The MCP server started with an empty database, created connection pool with stale transactions.
     # After init_database_ci.py populates data, we need to flush those connections.
     print("🔄 Resetting MCP server database connection pool...")
-    server_url = e2e_service_url(service="proxy", container_port=8000, host=e2e_host(), published_port=mcp_port)
+    server_url = e2e_service_url(SERVER, host=e2e_host(), published_port=mcp_port)
     try:
         reset_response = requests.post(server_url + "/_internal/reset-db-pool", timeout=5)
         if reset_response.status_code == 200:
@@ -527,11 +528,9 @@ def live_server(docker_services_e2e):
     host = e2e_host()
     # The URL and direct-connection parameters share the readiness resolver.
     database = resolve_e2e_db(host=host, published_port=ports["postgres_port"])
+    server_url = e2e_service_url(SERVER, host=host, published_port=ports["mcp_port"])
     urls = {
-        **{
-            name: e2e_service_url(service="proxy", container_port=8000, host=host, published_port=ports[f"{name}_port"])
-            for name in ("mcp", "a2a", "admin")
-        },
+        **dict.fromkeys(("mcp", "a2a", "admin"), server_url),
         "postgres": database.url,
         "postgres_params": {
             "host": database.host,
@@ -669,57 +668,33 @@ async def adcp_validator():
 # GAM E2E Test Fixtures (real GAM API)
 # ============================================================================
 
-GAM_TEST_NETWORK_CODE = "23341594478"
-GAM_TEST_ADVERTISER_ID = "6007567433"
-GAM_TEST_AD_UNIT_IDS = ["23340594484", "23340594268"]
 
+@pytest.fixture(scope="session")
+def gam_suite_network():
+    """The GAM network the environment configures (``ToolingSettings.gam_suite_network``).
 
-def _get_gam_service_account_json():
-    """Get GAM service account JSON from environment variables.
-
-    Checks (in order):
-    1. GAM_SERVICE_ACCOUNT_JSON env var (raw JSON string)
-    2. GAM_SERVICE_ACCOUNT_KEY_FILE env var (path to JSON file)
+    Configuration, never a constant: each contributor names their own network. With no GAM
+    setting at all every test that needs the network is an expected failure, declared
+    ``NO_GAM_NETWORK``, and never a skip; a partial configuration fails every such test,
+    naming each setting that is unset.
     """
-    import json
+    from src.core.config import GamSuiteNetworkUnconfigured, ToolingSettings
+    from tests.harness.gam_network import NO_GAM_NETWORK
 
-    # 1. Raw JSON from env var
-    sa_json = os.environ.get("GAM_SERVICE_ACCOUNT_JSON")
-    if sa_json:
-        json.loads(sa_json)  # Validate it's valid JSON
-        return sa_json
-
-    # 2. File path from env var
-    key_file = os.environ.get("GAM_SERVICE_ACCOUNT_KEY_FILE")
-    if key_file and os.path.exists(key_file):
-        with open(key_file, encoding="utf-8") as f:
-            return f.read()
-
-    return None
+    try:
+        network = ToolingSettings().gam_suite_network()
+    except GamSuiteNetworkUnconfigured as unconfigured:
+        pytest.fail(str(unconfigured), pytrace=False)
+    if network is None:
+        pytest.xfail(NO_GAM_NETWORK)
+    return network
 
 
 @pytest.fixture(scope="session")
-def gam_service_account_json():
-    """Provide GAM service account JSON for real API tests.
+def gam_client_manager(gam_suite_network):
+    """The client manager a seller onboarded to the configured network has, built as the server builds it."""
+    from scripts.gam_prerequisites_check import network_client_manager
 
-    Skips tests if no credentials are available.
-    """
-    sa_json = _get_gam_service_account_json()
-    if sa_json is None:
-        pytest.skip("GAM credentials not available. Set GAM_SERVICE_ACCOUNT_JSON or GAM_SERVICE_ACCOUNT_KEY_FILE")
-    return sa_json
-
-
-@pytest.fixture(scope="session")
-def gam_client_manager(gam_service_account_json):
-    """Provide an initialized GAMClientManager connected to the test network."""
-    from src.adapters.gam.client import GAMClientManager
-
-    config = {"service_account_json": gam_service_account_json}
-    manager = GAMClientManager(config, network_code=GAM_TEST_NETWORK_CODE)
-
-    # Verify connection works
-    client = manager.get_client()
-    assert client is not None, "GAM client failed to initialize"
-
+    manager = network_client_manager(gam_suite_network)
+    assert manager.get_client() is not None, "GAM client failed to initialize"
     return manager

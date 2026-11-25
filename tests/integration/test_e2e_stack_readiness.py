@@ -15,6 +15,7 @@ from collections import Counter
 import psycopg2
 import pytest
 
+from tests.e2e.stack_readiness import CREATIVE_AGENT, POSTGRES, SERVER
 from tests.helpers.local_http_origin import responds, run_local_origin
 
 
@@ -105,6 +106,17 @@ def test_explicit_database_override_is_the_endpoint_that_must_be_ready(
     assert capsys.readouterr().out.count("Dumping compose logs") == 1
 
 
+def test_malformed_database_port_is_not_a_missing_published_port(
+    readiness, local_origin, tcp_port, creative_agent, compose, monkeypatch
+):
+    monkeypatch.setenv("E2E_DATABASE_URL", "postgresql://u:p@127.0.0.1:invalid/adcp")
+    with pytest.raises(ValueError, match="Port could not be cast"):
+        wait(readiness, local_origin, tcp_port, creative_agent)
+    assert creative_agent.hits == 0
+    assert local_origin.hits == 0
+    assert compose == []
+
+
 @pytest.mark.parametrize(
     "host, expected_host, expected_port",
     [("127.0.0.1", "127.0.0.1", 5456), ("::1", "::1", 5456), ("proxy", "postgres", 5432)],
@@ -152,7 +164,7 @@ def test_server_is_retried_until_it_answers_healthy(readiness, local_origin, tcp
 
 
 @pytest.mark.parametrize(
-    "missing, failed", [("postgres", "postgres"), ("creative_agent", "creative-agent"), ("mcp", "adcp_health")]
+    "missing, failed", [(service.port_key, service.probe_name) for service in (POSTGRES, CREATIVE_AGENT, SERVER)]
 )
 def test_missing_port_cannot_report_ready(readiness, local_origin, tcp_port, creative_agent, compose, missing, failed):
     ports = readiness.E2EPorts(mcp=local_origin.port, postgres=tcp_port, creative_agent=creative_agent.port)
@@ -258,9 +270,12 @@ def test_in_network_gate_uses_service_addresses(
         creative_agent.respond_with(agent_status)
         real_lookup = socket.getaddrinfo
         addresses = {
-            ("proxy", 8000): ("127.0.0.1", local_origin.port),
-            ("creative-agent", 8080): ("127.0.0.1", creative_agent.port),
-            ("postgres", 5432): postgres_address,
+            (service.compose_name, service.container_port): target
+            for service, target in (
+                (SERVER, ("127.0.0.1", local_origin.port)),
+                (CREATIVE_AGENT, ("127.0.0.1", creative_agent.port)),
+                (POSTGRES, postgres_address),
+            )
         }
 
         def lookup(host, port, *args, **kwargs):
@@ -270,7 +285,7 @@ def test_in_network_gate_uses_service_addresses(
             return real_lookup(host, port, *args, **kwargs)
 
         monkeypatch.setattr(socket, "getaddrinfo", lookup)
-        monkeypatch.setenv("NO_PROXY", "proxy,creative-agent")
+        monkeypatch.setenv("NO_PROXY", ",".join(service.compose_name for service in (SERVER, CREATIVE_AGENT)))
         if override:
             monkeypatch.setenv("E2E_DATABASE_URL", test_database_url)
         monkeypatch.setenv("DATABASE_URL", f"postgresql://u:p@127.0.0.1:{closed_port}/suite")

@@ -11,7 +11,7 @@ import shutil
 import socket
 import subprocess
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from typing import Final, Literal, NamedTuple, Protocol, TypedDict
 from urllib.parse import urlparse
 
@@ -48,6 +48,27 @@ class E2EPorts(TypedDict, total=False):
     creative_agent: int
 
 
+class E2EService(NamedTuple):
+    """The published-port key, Compose address and readiness identity of a service."""
+
+    probe_name: str
+    port_key: Literal["postgres", "creative_agent", "mcp"]
+    compose_name: str
+    container_port: int
+    health_path: str
+
+
+POSTGRES: Final = E2EService("postgres", "postgres", "postgres", 5432, "")
+CREATIVE_AGENT: Final = E2EService(
+    "creative-agent", "creative_agent", "creative-agent", 8080, "/api/creative-agent/health"
+)
+SERVER: Final = E2EService("adcp_health", "mcp", "proxy", 8000, "/health")
+
+
+class UnpublishedPortError(ValueError):
+    """A host runner has no published address for a required service."""
+
+
 class _Probe(Protocol):
     def __call__(
         self,
@@ -73,33 +94,29 @@ class E2EDatabase(NamedTuple):
     dbname: str
 
 
-def e2e_db_url_build(*, host: str = "localhost", port: int = 5432) -> str:
+def e2e_db_url_build(*, host: str = "localhost", port: int = POSTGRES.container_port) -> str:
     """Build the canonical e2e Postgres URL without reading the environment."""
     return f"postgresql://{_DEFAULT_DB_USER}:{_DEFAULT_DB_PASSWORD}@{_http_authority(host, port)}/{_DEFAULT_DB_NAME}"
 
 
-def _service_address(*, service: str, container_port: int, host: str, published_port: int | None) -> tuple[str, int]:
+def _service_address(service: E2EService, *, host: str, published_port: int | None) -> tuple[str, int]:
     """Choose a Compose address in-network or the published address on the host."""
     if e2e_in_network(host):
-        return service, container_port
+        return service.compose_name, service.container_port
     if published_port is None:
-        raise ValueError(f"{service} requires a published port on the host")
+        raise UnpublishedPortError(f"{service.compose_name} requires a published port on the host")
     return host, published_port
 
 
-def e2e_service_url(*, service: str, container_port: int, host: str, published_port: int | None) -> str:
+def e2e_service_url(service: E2EService, *, host: str, published_port: int | None) -> str:
     """Resolve one HTTP service URL for probes and fixture consumers."""
-    address, port = _service_address(
-        service=service, container_port=container_port, host=host, published_port=published_port
-    )
+    address, port = _service_address(service, host=host, published_port=published_port)
     return f"http://{_http_authority(address, port)}"
 
 
 def resolve_e2e_db(*, host: str, published_port: int | None) -> E2EDatabase:
     """Resolve the E2E endpoint, independently of a suite's DATABASE_URL."""
-    fallback_host, fallback_port = _service_address(
-        service="postgres", container_port=5432, host=host, published_port=published_port
-    )
+    fallback_host, fallback_port = _service_address(POSTGRES, host=host, published_port=published_port)
     url = os.getenv("E2E_DATABASE_URL") or e2e_db_url_build(host=fallback_host, port=fallback_port)
     parsed = urlparse(url)
     return E2EDatabase(
@@ -233,66 +250,31 @@ def _http_ok(url: str, *, timeout_s: float = 2.0) -> bool:
         return False
 
 
-def _published_port_ready(
-    ports: E2EPorts,
-    key: Literal["postgres", "creative_agent", "mcp"],
-    host: str,
-    probe: Callable[[int | None], bool],
-) -> bool:
-    """Host probes fail closed on absent ports; Compose addresses need none."""
-    port = ports.get(key)
-    return (e2e_in_network(host) or port is not None) and probe(port)
-
-
 def _probe_postgres(
     *,
     ports: E2EPorts,
     host: str,
 ) -> bool:
-    def probe(port: int | None) -> bool:
-        connection = resolve_e2e_db(host=host, published_port=port)
-        return _tcp_open(connection.host, connection.port)
-
-    return _published_port_ready(ports, "postgres", host, probe)
+    connection = resolve_e2e_db(host=host, published_port=ports.get(POSTGRES.port_key))
+    return _tcp_open(connection.host, connection.port)
 
 
-def _probe_creative_agent(
-    *,
-    ports: E2EPorts,
-    host: str,
-) -> bool:
-    return _published_port_ready(
-        ports,
-        "creative_agent",
-        host,
-        lambda port: _http_ok(
-            e2e_service_url(service="creative-agent", container_port=8080, host=host, published_port=port)
-            + "/api/creative-agent/health"
-        ),
-    )
+def _http_probe(service: E2EService) -> _Probe:
+    """Bind a service's health endpoint to the shared HTTP probe operation."""
 
+    def probe(*, ports: E2EPorts, host: str) -> bool:
+        return _http_ok(
+            e2e_service_url(service, host=host, published_port=ports.get(service.port_key)) + service.health_path
+        )
 
-def _probe_adcp_health(
-    *,
-    ports: E2EPorts,
-    host: str,
-) -> bool:
-    return _published_port_ready(
-        ports,
-        "mcp",
-        host,
-        lambda port: _http_ok(
-            e2e_service_url(service="proxy", container_port=8000, host=host, published_port=port) + "/health"
-        ),
-    )
+    return probe
 
 
 # An ordered tuple binds each name to its implementation; there is no second
 # key list to drift and no caller-supplied subset of the required checks.
 _PROBES: Final[tuple[tuple[str, _Probe], ...]] = (
-    ("postgres", _probe_postgres),
-    ("creative-agent", _probe_creative_agent),
-    ("adcp_health", _probe_adcp_health),
+    (POSTGRES.probe_name, _probe_postgres),
+    *((service.probe_name, _http_probe(service)) for service in (CREATIVE_AGENT, SERVER)),
 )
 
 
@@ -311,11 +293,15 @@ def wait_for_e2e_stack(
     """
     host = e2e_host() if host is None else host
     deadline = time.monotonic() + timeout_s
-    failed = "postgres"
+    failed = POSTGRES.probe_name
     print(f"Waiting for E2E stack readiness (timeout={timeout_s}s, host={host})...")
     while time.monotonic() < deadline:
         for name, probe in _PROBES:
-            if not probe(ports=ports, host=host):
+            try:
+                ready = probe(ports=ports, host=host)
+            except UnpublishedPortError:
+                ready = False
+            if not ready:
                 failed = name
                 break
         else:

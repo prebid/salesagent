@@ -249,7 +249,7 @@ class TestWorkflowApprovalMovesMediaBuy:
         assert before.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
 
         creative = CreativeFactory(tenant=seeded.tenant, principal=seeded.principal, status="pending")
-        CreativeAssignmentFactory(creative=creative, media_buy=seeded.media_buy, package_id="pkg_wf_1")
+        CreativeAssignmentFactory(creative=creative, media_buy=seeded.media_buy)
 
         with patch(ADAPTER_BOUNDARY) as adapter_boundary:
             response = client.post(
