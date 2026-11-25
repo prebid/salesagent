@@ -22,6 +22,10 @@ Feature: BR-UC-900 Demo
       | a     |
       | b     |
 
+  @T-UC-900-dormant
+  Scenario: Has an unbound step
+    Then nothing is bound
+
   @T-UC-900-parked
   Scenario Outline: One example runs, one is parked
     Then <row> passes

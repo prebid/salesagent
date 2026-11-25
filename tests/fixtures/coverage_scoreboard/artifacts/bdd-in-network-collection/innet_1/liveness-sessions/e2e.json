@@ -1,0 +1,4 @@
+{"run": {"target": ["tests/bdd"], "selection": "e2e_rest or e2e_mcp or e2e_a2a or e2e_admin", "markers": "", "workers_missing": []}, "scenarios": [
+ {"scenario_id": "T-UC-900-split", "steps_bound": true, "harness_wired": true, "ledgered": true, "observations": [
+  {"transport": "e2e_rest", "nodeid": "tests/bdd/test_demo.py::test_split[e2e_rest]", "outcome": "xfailed", "reason": "ledgered in-network", "reason_category": "ledgered", "steps_executed": true, "strict": false}]}
+]}

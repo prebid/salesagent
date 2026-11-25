@@ -248,7 +248,9 @@ def adcp_pin() -> dict:
     }
 
 
-def document(identity: Identity, run: pathlib.Path, adcp: dict | None, host: str, now: str) -> dict:
+def document(
+    identity: Identity, run: pathlib.Path, adcp: dict | None, host: str, now: str, gam_network: str | None = None
+) -> dict:
     """The ``meta.json`` payload."""
     return {
         "schema": SCHEMA,
@@ -262,6 +264,9 @@ def document(identity: Identity, run: pathlib.Path, adcp: dict | None, host: str
         "source": identity.source,
         "unidentified_because": identity.unidentified_because,
         "adcp": adcp,
+        # The GAM network the run books against, as run_all_tests.sh's preflight stated it
+        # ("not configured", "configured, network <code>", ...); null when nobody said.
+        "gam_network": gam_network,
     }
 
 
@@ -291,6 +296,33 @@ def read(run: pathlib.Path) -> Identity | None:
         unidentified_because=raw.get("unidentified_because"),
         adcp=raw.get("adcp"),
     )
+
+
+def _started(run: pathlib.Path) -> datetime.datetime | None:
+    """When ``run`` started, from its ``meta.json`` ``started_utc``; None when it records none."""
+    try:
+        raw = json.loads((run / IDENTITY_FILE).read_text(encoding="utf-8"))
+        return datetime.datetime.fromisoformat(raw["started_utc"])
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def newest_run(results: pathlib.Path, holding: str) -> pathlib.Path | None:
+    """The run under ``results`` that started last, among those holding ``holding``.
+
+    ``holding`` is a glob relative to a run directory (``"liveness-sessions"``,
+    ``"storyboard/summary_*.json"``). Ordered by ``started_utc``, the one chronological
+    field a run carries: run names are day-first (``ddmmyy_HHmm``), and a directory's
+    mtime moves whenever a report is written into an old run. A run with no readable
+    ``started_utc`` cannot be placed in time, so it is never chosen; None when no run
+    qualifies.
+    """
+    dated = [
+        (started, run)
+        for run in (results.iterdir() if results.is_dir() else ())
+        if run.is_dir() and any(run.glob(holding)) and (started := _started(run)) is not None
+    ]
+    return max(dated)[1] if dated else None
 
 
 def describe(identity: Identity | None) -> str:
@@ -492,6 +524,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commit", default="", help="the sha the invoker asserts this run graded")
     parser.add_argument("--branch", default="", help="the branch the invoker asserts")
     parser.add_argument("--tree", default="", help="'clean' or 'dirty', as the invoker found it")
+    parser.add_argument(
+        "--gam-network", default="", help="the GAM network the run books against, as its preflight stated it"
+    )
     args = parser.parse_args(argv)
 
     if args.adcp:
@@ -512,6 +547,7 @@ def main(argv: list[str] | None = None) -> int:
         pin if isinstance(pin, dict) else None,
         socket.gethostname(),
         datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
+        args.gam_network or None,
     )
     args.write.mkdir(parents=True, exist_ok=True)
     (args.write / IDENTITY_FILE).write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")

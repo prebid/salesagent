@@ -183,12 +183,10 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/workflows.py", "list_workflows"),  # select(Tenant) — no tenant repo yet
     ("src/admin/blueprints/workflows.py", "review_workflow_step"),  # select(Context) — context lookup
     # ── Alias-hidden, now visible (#2128) ──
-    # Both wrote `from ...models import X as ModelX` and then `select(ModelX)`, which the
-    # finder judged by the local name and so never counted. One of these had its row
-    # removed as fixed while all four of its raw selects remained. The finder resolves
-    # aliases now, so they are debt that shows rather than debt that hides.
+    # It wrote `from ...models import X as ModelX` and then `select(ModelX)`, which the
+    # finder judged by the local name and so never counted. The finder resolves aliases
+    # now, so it is debt that shows rather than debt that hides.
     ("src/routes/health.py", "debug_db_state"),
-    ("src/core/tools/media_buy_update.py", "_update_media_buy_impl"),
     # ── Admin services / utils ──
     ("src/admin/domain_access.py", "ensure_user_in_tenant"),
     ("src/admin/domain_access.py", "find_tenant_by_authorized_domain"),
