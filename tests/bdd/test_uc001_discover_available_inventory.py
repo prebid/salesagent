@@ -62,8 +62,9 @@ def test_channels_filter_partitions() -> None:
 
 
 # ── NFR-001: no internal detail in an error (#2710) ─────────────────
-# Graded through the BR-SECURITY-001 steps (tests/bdd/steps/domain/security_wire_safety.py):
+# Graded through the wire-safety steps (tests/bdd/steps/domain/security_wire_safety.py):
 # transport-errors.mdx Security Considerations at the pinned 3.2.7; no storyboard grades it.
+# The one carrier of this obligation: it replaced the hand-authored BR-SECURITY-001 feature.
 
 
 @scenario(FEATURE, "NFR-001 - Security hardening on product discovery")

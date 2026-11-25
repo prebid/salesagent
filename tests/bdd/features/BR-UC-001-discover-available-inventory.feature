@@ -1460,9 +1460,16 @@ Feature: BR-UC-001 Discover Available Inventory
     # checked before any data access", "no internal system details should leak"). The one
     # obligation the pin states is the last: transport-errors.mdx Security Considerations,
     # "Implementations MUST NOT include: Internal service names, hostnames, or IP addresses;
-    # Database error text ...". It is graded here exactly as BR-SECURITY-001 grades it,
-    # through the same steps: an untyped fault carrying a fake DSN inside get_products
-    # reaches the buyer as INTERNAL_ERROR with none of its text anywhere in the envelope.
+    # Database error text ...". It is graded through the wire-safety steps
+    # (tests/bdd/steps/domain/security_wire_safety.py): an untyped fault carrying a fake DSN
+    # inside get_products reaches the buyer with none of its text anywhere in the envelope,
+    # the fault pinned by type in the boundary log. This scenario replaces the hand-authored
+    # BR-SECURITY-001 feature, which graded the same fault the same way.
+    # The graded obligation is that no-leak scan, NOT the error code: AdCP 3.2.7 defines no
+    # generic INTERNAL_ERROR ("The catalog has no generic `INTERNAL_ERROR` code by design",
+    # error-handling.mdx). "INTERNAL_ERROR" is this seller's own CODE_TABLE code for an
+    # untyped fault and is EXCLUDED from the upstream mirror: adcp-req should state only that
+    # the error carries none of the fault's internal text.
     # @source repo=adcp ref=v3.2.7 path=docs/building/operating/transport-errors.mdx
 
   @T-UC-001-nfr-002 @nfr @nfr-002 @analysis-2026-03-09 @schema-v3.1

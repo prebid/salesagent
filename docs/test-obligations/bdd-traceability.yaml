@@ -60,13 +60,6 @@ mappings:
       upstream_refs: ["BR-COMPAT-001"]
       business_rules: []
       status: new
-  SECURITY-001:
-    - adcp_scenario_id: "T-SECURITY-001-untyped-exception"
-      adcp_feature: "BR-SECURITY-001-wire-error-safety.feature"
-      obligation_id: null
-      upstream_refs: ["BR-SECURITY-001"]
-      business_rules: []
-      status: new
   UC-001:
     - adcp_scenario_id: "T-UC-001-main"
       adcp_feature: "BR-UC-001-discover-available-inventory.feature"
