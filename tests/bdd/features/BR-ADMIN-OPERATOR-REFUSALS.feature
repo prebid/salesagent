@@ -360,14 +360,17 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the JSON error is the "SlackWebhookNotConfigured" refusal
 
   # A GAM call that fails is GAMCallFailed (src/adapters/gam/client.py): its detail is the
-  # sentence the fault was logged under, never GAM's own text. GAM is the stand-in network
-  # (tests/helpers/gam_client.py), which refuses getCurrentNetwork with an ApiError reason. The
-  # live server has no stand-in network and CI has no GAM network (#2583), so on e2e the Given
-  # declares itself unsupported (AdminAccountEnv.serve_gam_network): graded in-process only.
+  # sentence the fault was logged under, never GAM's own text. The refusal is the one Google
+  # gives a service-account key for a network it cannot reach. In-process, GAM is the stand-in
+  # network (tests/helpers/gam_client.py), which refuses getCurrentNetwork with that ApiError
+  # reason. On e2e the tenant carries the configured network's key
+  # (ToolingSettings.gam_suite_network) and keeps its own network code, so Google itself
+  # refuses (AdminAccountEnv.serve_gam_network); with no GAM network configured, as on CI
+  # (#2583), the Given declares itself unsupported.
   @T-ADMIN-REFUSAL-041 @json @connection-test @gam
   Scenario: A GAM connection test whose network lookup GAM refuses is answered as a failed GAM call
     Given another tenant of this seller, onboarded to Google Ad Manager with a service account key
-    And Google Ad Manager refuses the current network lookup with "QuotaError.EXCEEDED_QUOTA"
+    And Google Ad Manager refuses the current network lookup with "AuthenticationError.NETWORK_NOT_FOUND"
     When the settings page tests that tenant's GAM connection with its service account
     Then the page returns status 502
     And the JSON response has "success" as false

@@ -57,6 +57,10 @@ _NO_STAND_IN_GAM_ON_E2E = e2e_unsupported(
     "to call instead (#2583): a GAM call there would call Google"
 )
 
+#: What Google answers the network lookup of a service-account key for a network that key
+#: cannot reach, as the stand-in network's keywords (``stub_gam_client``).
+_CONFIGURED_GAM_REFUSAL = {"network_fault": "AuthenticationError.NETWORK_NOT_FOUND"}
+
 
 class AdminAccountEnv:
     """Test environment for admin account management BDD scenarios.
@@ -594,6 +598,25 @@ class AdminAccountEnv:
                 config.gam_auth_method = "service_account"
                 config.gam_service_account_json = service_account_json
 
+    def _onboard_gam_with_configured_key(self, *, tenant_id: str) -> None:
+        """The configured network's key, on a tenant that keeps the network code GAM onboarding writes."""
+        from tests.harness.gam_network import configured_network
+
+        self.onboard_gam(tenant_id=tenant_id, service_account_json=configured_network().service_account_json)
+
+    @realize_e2e(_onboard_gam_with_configured_key)
+    def onboard_gam_with_service_account_key(self, *, tenant_id: str) -> None:
+        """:meth:`onboard_gam` for *tenant_id*, authenticating to GAM with a service account key.
+
+        In-process the key is a throwaway one: the stand-in network (:meth:`serve_gam_network`)
+        reads no key. On e2e it is the configured network's key
+        (``ToolingSettings.gam_suite_network``), so the live server calls Google with a key
+        Google accepts, for the tenant's network code, which that key cannot reach.
+        """
+        from tests.helpers.gam_credentials import service_account_json
+
+        self.onboard_gam(tenant_id=tenant_id, service_account_json=service_account_json())
+
     def seed_running_inventory_sync(self, sync_id: str, *, tenant_id: str | None = None) -> None:
         """Store an inventory sync *sync_id* of *tenant_id* (this env's by default), started a moment ago, still running."""
         from tests.factories import SyncJobFactory
@@ -871,7 +894,24 @@ class AdminAccountEnv:
             )
         return self._llm_origin
 
-    @realize_e2e(_NO_STAND_IN_GAM_ON_E2E)
+    def _gam_refusal_of_configured_network(self, **network_answers: Any) -> None:
+        """Google itself gives the one refusal a tenant onboarded with the configured key gets.
+
+        The tenant's network code (``onboard_gam``'s) is no network the configured key can
+        reach, so Google refuses the network lookup with :data:`_CONFIGURED_GAM_REFUSAL`.
+        Any other answer has no realization here.
+        """
+        from tests.harness._realize import E2EUnsupportedSetup
+        from tests.harness.gam_network import configured_network
+
+        configured_network()
+        if network_answers != _CONFIGURED_GAM_REFUSAL:
+            raise E2EUnsupportedSetup(
+                f"the configured GAM network answers only {_CONFIGURED_GAM_REFUSAL!r} for the tenant's "
+                f"network code, not {network_answers!r}"
+            )
+
+    @realize_e2e(_gam_refusal_of_configured_network)
     def serve_gam_network(self, **network_answers: Any) -> None:
         """Every GAM client the admin app builds is one stand-in network, until ``__exit__``.
 

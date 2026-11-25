@@ -22,7 +22,6 @@ from tests.bdd.steps.domain.admin_inventory_profiles import IMAGE_300X250, _moda
 from tests.bdd.steps.domain.admin_unexpected_errors import _other_tenant_id, script_accept
 from tests.harness.admin_client import BROWSER_PAGE_HEADERS
 from tests.helpers.admin_product_form import minimal_product_create_form, minimal_product_edit_form
-from tests.helpers.gam_credentials import service_account_json
 from tests.helpers.operator_refusals import operator_refusal_classes
 
 
@@ -341,7 +340,7 @@ def then_json_details_are(ctx: dict, datatable: list) -> None:
 def given_another_tenant_on_gam_with_service_account_key(ctx: dict) -> None:
     env = _env(ctx)
     ctx["admin_other_tenant_id"] = env.seed_tenant()
-    env.onboard_gam(tenant_id=ctx["admin_other_tenant_id"], service_account_json=service_account_json())
+    env.onboard_gam_with_service_account_key(tenant_id=ctx["admin_other_tenant_id"])
 
 
 #: The stand-in network's keyword (``stub_gam_client``) that makes GAM refuse each lookup.

@@ -50,6 +50,22 @@ logger = logging.getLogger(__name__)
 #: reason, a requires_gam test's xfail reason.
 NO_GAM_NETWORK = "this environment configures no GAM network"
 
+
+def configured_network() -> GamSuiteNetwork:
+    """The GAM network the environment configures, for an e2e Given that needs it.
+
+    No GAM setting at all is :data:`NO_GAM_NETWORK`, declared as an E2EUnsupportedSetup. A
+    partial configuration raises ``GamSuiteNetworkUnconfigured``, naming each unset setting.
+    """
+    from src.core.config import ToolingSettings
+    from tests.harness._realize import E2EUnsupportedSetup
+
+    network = ToolingSettings().gam_suite_network()
+    if network is None:
+        raise E2EUnsupportedSetup(NO_GAM_NETWORK)
+    return network
+
+
 #: This test process's part of every name it gives a GAM object.
 RUN_PREFIX = f"sa-e2e-{uuid.uuid4().hex[:8]}"
 
