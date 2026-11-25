@@ -250,8 +250,18 @@ def test_signals_agent_test_connection_refuses_a_stored_url_without_connecting(
     }
 
 
+@pytest.mark.parametrize(
+    "url, seam_record_matches",
+    [
+        # The metadata reason comes from the SDK's resolver, so only the address is pinned.
+        (METADATA_URL, lambda message: "169.254.169.254" in message),
+        # Fixed text, matched exactly: proves the unparsable input is not echoed (GH #2706).
+        (MALFORMED_URL, lambda message: message == "Outbound request refused: URL is malformed"),
+    ],
+    ids=["metadata", "malformed"],
+)
 def test_signals_agent_add_refusal_reason_reaches_the_logs(
-    authenticated_admin_client, seeded_tenant, monkeypatch, caplog
+    url, seam_record_matches, authenticated_admin_client, seeded_tenant, monkeypatch, caplog
 ):
     """The reason withheld from the operator's screen is present in the operator's logs.
 
@@ -264,17 +274,17 @@ def test_signals_agent_add_refusal_reason_reaches_the_logs(
     set_flags(monkeypatch)
     caplog.set_level(logging.WARNING)
 
-    post_signals_agent(authenticated_admin_client, METADATA_URL)
+    post_signals_agent(authenticated_admin_client, url)
 
     # The refusal-cause log line moved with EgressPolicy.resolve_for_dial into
     # src/core/security/egress/policy.py (salesagent-tbrk.1) -- same seam,
     # different logger name.
-    seam_records = [r for r in caplog.records if r.name == "src.core.security.egress.policy"]
-    assert [r.getMessage() for r in seam_records if "169.254.169.254" in r.getMessage()], (
+    seam_records = [r.getMessage() for r in caplog.records if r.name == "src.core.security.egress.policy"]
+    assert [m for m in seam_records if seam_record_matches(m)], (
         f"the seam did not log the real refusal reason; got {[r.getMessage() for r in caplog.records]}"
     )
     admin_records = [r.getMessage() for r in caplog.records if r.name == "src.admin.utils.url_policy"]
-    assert admin_records == [f"[SECURITY] Rejected Agent URL at ingest: {METADATA_URL!r}"]
+    assert admin_records == [f"[SECURITY] Rejected Agent URL at ingest: {url!r}"]
 
 
 # ---------------------------------------------------------------------------
