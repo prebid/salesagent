@@ -399,6 +399,24 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
       | text              |
       | AI not configured |
 
+  # core/product.json format_options: a product that spans several publishers and omits
+  # placements[] "MUST therefore be the common intersection accepted across every selected
+  # publisher/property scope". The repository and the product and profile forms refuse a
+  # product outside it with one class, whose details name the product and each option scoped
+  # to one publisher.
+  @T-ADMIN-REFUSAL-042 @json @product-form @format-options
+  Scenario: A product edit that scopes a format option to one of the product's two publishers is refused
+    Given another tenant of this seller
+    And that tenant has a product "two_publishers" sold across two publishers
+    When a script saves that product's edit form adding the first publisher's leaderboard option
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "FormatOptionsOutsideCommonIntersection" refusal
+    And the JSON details are:
+      | text                                                               |
+      | Product: two_publishers                                            |
+      | Scoped to one publisher: leaderboard (first-publisher-psatest.com) |
+
   @T-ADMIN-REFUSAL-032 @json @inventory-sync
   Scenario: Resetting a stuck sync when no sync is running is refused
     Given another tenant of this seller
