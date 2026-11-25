@@ -37,6 +37,7 @@ from typing import Any
 
 from src.core.operator_errors import OperatorRefusal
 from src.core.security.outbound_http import OutboundRequestBlocked, validate_url
+from src.core.webhook_validator import webhook_url_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +61,10 @@ def require_allowed_url(url: Any, label: str) -> None:
     Answering both here keeps every call site free of its own shape check.
 
     The WARNING carries what the seam's own refusal cannot say — which form field
-    and which URL — so the two lines together are the whole story. The seam's half
-    is ``AdCPBlockedUrlError.REFUSAL_MESSAGE``, the one buyer-facing sentence, and
-    it names neither.
+    and which URL — so the two lines together are the whole story. The URL goes
+    through ``webhook_url_for_log``, which keeps no userinfo, port, query or
+    fragment. The seam's half is ``AdCPBlockedUrlError.REFUSAL_MESSAGE``, the one
+    buyer-facing sentence, and it names neither.
     """
     if not isinstance(url, str) or not url:
         logger.warning("[SECURITY] Rejected %s at ingest: not a usable URL", label)
@@ -71,5 +73,5 @@ def require_allowed_url(url: Any, label: str) -> None:
             validate_url(url)
             return
         except OutboundRequestBlocked:
-            logger.warning("[SECURITY] Rejected %s at ingest: %r", label, url)
+            logger.warning("[SECURITY] Rejected %s at ingest: %s", label, webhook_url_for_log(url))
     raise EgressUrlRefused(f"{label} refused at ingest", details=(label,))
