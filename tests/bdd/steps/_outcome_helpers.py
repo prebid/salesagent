@@ -12,9 +12,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tests.harness.transport import TransportResult
+
+if TYPE_CHECKING:
+    from src.core.database.models import AuditLog
 
 
 class _WireMissing:
@@ -759,6 +762,27 @@ def assert_audit_logged(ctx: dict, *, operation_substring: str = "create_media_b
     env = ctx["env"]
     logs = env.get_audit_logs(operation_substring)
     assert logs, f"Expected audit_logs entry containing '{operation_substring}' for tenant {env._tenant_id}"
+
+
+def sole_audit_row(ctx: dict, operation: str) -> AuditLog:
+    """The one audit row for the tool *operation* this scenario's request wrote.
+
+    Matches on the bare tool name after the adapter prefix (``AdCP.get_products``),
+    the same ``.endswith`` rule as the helpers below. Exactly one row, so a foreign or
+    ``<operation>_failure`` row cannot satisfy it; it must carry a timestamp and name the
+    principal the env presented on the wire.
+    """
+    env = ctx["env"]
+    rows: list[AuditLog] = [
+        row for row in env.get_audit_logs(operation) if (row.operation or "").endswith(f".{operation}")
+    ]
+    assert len(rows) == 1, f"Expected one .{operation} audit row, got {[(r.operation, r.details) for r in rows]}"
+    row = rows[0]
+    assert row.timestamp is not None, f"{row.operation} audit row has no timestamp"
+    assert row.principal_id == env.principal_id, (
+        f"{row.operation} audit row names principal {row.principal_id!r}, not the caller {env.principal_id!r}"
+    )
+    return row
 
 
 def assert_audit_approval_logged(ctx: dict) -> None:

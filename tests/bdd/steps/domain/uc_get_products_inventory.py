@@ -28,9 +28,6 @@ from tests.factories import (
     TenantFactory,
 )
 
-#: The principal ``given_tenant`` seeds, which is the caller every discovery dispatch presents.
-DISCOVERY_PRINCIPAL_ID = "test_principal"
-
 # ── Helpers ─────────────────────────────────────────────────────────
 
 
@@ -108,8 +105,8 @@ def given_tenant(ctx: dict) -> None:
     get_or_create(
         ctx["env"],
         Principal,
-        {"principal_id": DISCOVERY_PRINCIPAL_ID, "tenant_id": "test_tenant"},
-        lambda: PrincipalFactory(tenant=tenant, principal_id=DISCOVERY_PRINCIPAL_ID),
+        {"principal_id": ctx["env"].principal_id, "tenant_id": "test_tenant"},
+        lambda: PrincipalFactory(tenant=tenant, principal_id=ctx["env"].principal_id),
     )
     ctx["tenant"] = tenant
 
