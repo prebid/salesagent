@@ -297,15 +297,10 @@ class TestPlacementIdsValidation:
             # with a Mock, which is not a state those columns can hold.
             stamp_format_identity(mock_creative, format_id="display_300x250")
             mock_uow.creatives.get_by_ids.return_value = [mock_creative]
-            mock_uow.products.get_by_id.return_value = MagicMock(format_ids=[])
-
-            # Mock product with NO placements (empty list) via session
-            mock_product = MagicMock()
-            mock_product.placements = []
-
-            mock_scalars = MagicMock()
-            mock_scalars.first.side_effect = [mock_product]
-            mock_session.scalars.return_value = mock_scalars
+            # The package's product: no format restriction, and NO placements (empty list)
+            mock_uow.products.get_by_id.return_value = MagicMock(
+                format_ids=[], placements=[], product_id="prod_no_placements"
+            )
 
             req = UpdateMediaBuyRequest(
                 account={"account_id": "acct_test"},
