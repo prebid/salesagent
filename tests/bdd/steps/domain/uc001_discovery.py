@@ -26,7 +26,8 @@ model (``ProductEnv.set_ranking_scores``).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -315,36 +316,68 @@ def then_full_catalog_in_catalog_order(ctx: dict) -> None:
 _CATALOG_REF = {"type": "product", "catalog_id": "gmc-primary"}
 _BRAND_REF = {"domain": "acme.com"}
 
-#: The catalog and brand each row sends, by the wording of its When.
-_CATALOG_BRAND_ROWS: dict[str, dict[str, Any]] = {
-    "with catalog and brand": {"catalog": _CATALOG_REF, "brand": _BRAND_REF},
-    "with catalog but no brand": {"catalog": _CATALOG_REF},
-    "without catalog": {},
-    "with catalog_with_brand field combination": {"catalog": _CATALOG_REF, "brand": _BRAND_REF},
-    "with no_catalog_no_brand field combination": {},
-    "with no_catalog_with_brand field combination": {"brand": _BRAND_REF},
-    "with catalog_without_brand field combination": {"catalog": _CATALOG_REF},
-    "at boundary catalog present + brand present (both provided)": {"catalog": _CATALOG_REF, "brand": _BRAND_REF},
-    "at boundary catalog absent + brand absent (neither provided)": {},
-    "at boundary catalog absent + brand present (brand alone)": {"brand": _BRAND_REF},
-    "at boundary catalog present + brand absent (dependency violation)": {"catalog": _CATALOG_REF},
-    "at boundary catalog present + brand with domain only (minimal brand-ref)": {
-        "catalog": _CATALOG_REF,
-        "brand": _BRAND_REF,
-    },
-    "at boundary catalog present + brand with domain and brand_id (full brand-ref)": {
-        "catalog": _CATALOG_REF,
-        "brand": {**_BRAND_REF, "brand_id": "acme_outdoor"},
-    },
+#: The catalog and brand each partition sends, each payload written once.
+_CATALOG_BRAND_PARTITIONS: dict[str, dict[str, Any]] = {
+    "catalog_with_brand": {"catalog": _CATALOG_REF, "brand": _BRAND_REF},
+    "catalog_with_full_brand_ref": {"catalog": _CATALOG_REF, "brand": {**_BRAND_REF, "brand_id": "acme_outdoor"}},
+    "catalog_without_brand": {"catalog": _CATALOG_REF},
+    "no_catalog_with_brand": {"brand": _BRAND_REF},
+    "no_catalog_no_brand": {},
 }
+
+#: The invariant scenarios' wordings, onto the partition each sends.
+_CATALOG_BRAND_INVARIANTS = {
+    "with catalog and brand": "catalog_with_brand",
+    "with catalog but no brand": "catalog_without_brand",
+    "without catalog": "no_catalog_no_brand",
+}
+
+#: The boundary outline's labels, onto the partition each sends (the pattern of
+#: ``generic/when_request.py``'s boundary steps). The step claims exactly these labels of
+#: the ``at boundary <boundary_point>`` sentence other UC-001 outlines share, so a label
+#: it does not own is reported by pytest-bdd as a missing step, not raised as a KeyError.
+_CATALOG_BRAND_BOUNDARIES = {
+    "catalog present + brand present (both provided)": "catalog_with_brand",
+    "catalog absent + brand absent (neither provided)": "no_catalog_no_brand",
+    "catalog absent + brand present (brand alone)": "no_catalog_with_brand",
+    "catalog present + brand absent (dependency violation)": "catalog_without_brand",
+    "catalog present + brand with domain only (minimal brand-ref)": "catalog_with_brand",
+    "catalog present + brand with domain and brand_id (full brand-ref)": "catalog_with_full_brand_ref",
+}
+
+
+def _one_of(labels: Iterable[str]) -> str:
+    """A regex alternation matching exactly *labels*, generated so it cannot drift from them."""
+    return "|".join(re.escape(label) for label in labels)
+
+
+def _send_catalog_brand(ctx: dict, partition: str) -> None:
+    """Dispatch get_products with a brief and the catalog and brand *partition* names."""
+    dispatch_request(ctx, brief=ctx["env"].scripted_brief(_BRIEF), **_CATALOG_BRAND_PARTITIONS[partition])
+
+
+@when(parsers.re(rf"the Buyer Agent sends a get_products request (?P<wording>{_one_of(_CATALOG_BRAND_INVARIANTS)})"))
+def when_get_products_catalog_brand_invariant(ctx: dict, wording: str) -> None:
+    """The BR-RULE-084 invariant scenarios."""
+    _send_catalog_brand(ctx, _CATALOG_BRAND_INVARIANTS[wording])
 
 
 @when(
     parsers.re(
-        r"the Buyer Agent sends a get_products request (?P<row>with catalog and brand|with catalog but no brand"
-        r"|without catalog|with \w*catalog\w* field combination|at boundary catalog .+)$"
+        rf"the Buyer Agent sends a get_products request with (?P<partition>{_one_of(_CATALOG_BRAND_PARTITIONS)})"
+        r" field combination"
     )
 )
-def when_get_products_catalog_brand(ctx: dict, row: str) -> None:
-    """Dispatch get_products with a brief and the catalog and brand the row names."""
-    dispatch_request(ctx, brief=ctx["env"].scripted_brief(_BRIEF), **_CATALOG_BRAND_ROWS[row])
+def when_get_products_catalog_brand_partition(ctx: dict, partition: str) -> None:
+    """The catalog/brand partition outline: the row names its partition."""
+    _send_catalog_brand(ctx, partition)
+
+
+@when(
+    parsers.re(
+        rf"the Buyer Agent sends a get_products request at boundary (?P<boundary_point>{_one_of(_CATALOG_BRAND_BOUNDARIES)})"
+    )
+)
+def when_get_products_catalog_brand_boundary(ctx: dict, boundary_point: str) -> None:
+    """The catalog/brand boundary outline: each label maps onto a partition."""
+    _send_catalog_brand(ctx, _CATALOG_BRAND_BOUNDARIES[boundary_point])
