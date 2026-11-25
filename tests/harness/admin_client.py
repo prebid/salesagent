@@ -14,6 +14,8 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
+from bs4 import BeautifulSoup
+
 from tests.helpers.admin_session import (
     admin_session_payload,
     admin_test_app,
@@ -33,6 +35,10 @@ BROWSER_PAGE_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Sec-Fetch-Mode": "navigate",
 }
+
+#: What a client that is not a browser sends: no ``Accept``, ``Origin`` or ``Sec-Fetch-*``
+#: header (``requests`` would add ``Accept: */*`` itself). The admin app answers it with JSON.
+NO_BROWSER_HEADERS: dict[str, str | None] = {"Accept": None}
 
 
 class _CaseInsensitiveHeaders(dict):
@@ -83,6 +89,21 @@ class AdminResponse:
         if self._json_data is not None:
             return self._json_data
         return json.loads(self._data)
+
+    def flashes(self) -> list[tuple[str, str]]:
+        """``(category, message)`` per flash ``base.html`` rendered into this page, in order.
+
+        :meth:`AdminClient.submit` follows the redirect, so a flash arrives rendered into the
+        page the browser lands on rather than waiting in the session.
+        """
+        alerts = BeautifulSoup(self._data, "html.parser").select(".flash-messages > .alert")
+        return [
+            (
+                next(css.removeprefix("alert-") for css in alert["class"] if css.startswith("alert-")),
+                alert.find(string=True, recursive=False).strip(),
+            )
+            for alert in alerts
+        ]
 
     @classmethod
     def from_flask(cls, response: Any) -> AdminResponse:
@@ -276,6 +297,13 @@ class AdminOperatorMixin:
         *,
         data: dict[str, str] | None = None,
         json: dict[str, Any] | None = None,
+        headers: dict[str, str | None] | None = None,
     ) -> AdminResponse:
-        """One authenticated request to *tenant_id*'s admin route at *path*, with a form or JSON body."""
-        return self.admin_client(tenant_id).request(method, f"/tenant/{tenant_id}/{path}", data=data, json=json)
+        """One request on the operator's client to *tenant_id*'s admin route at *path*.
+
+        The body and *headers* are as :meth:`AdminClient.request` takes them. The client is the
+        super admin's unless the env stated another caller's session on it.
+        """
+        return self.admin_client(tenant_id).request(
+            method, f"/tenant/{tenant_id}/{path}", data=data, json=json, headers=headers
+        )

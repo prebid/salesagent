@@ -24,8 +24,9 @@ import pytest
 from src.admin.app import create_app
 from src.admin.blueprints import settings as settings_module
 from src.core.database.models import Tenant
-from src.core.operator_errors import logged_failure_pattern
+from src.core.operator_errors import InvalidDomainNameError, logged_failure_pattern
 from tests.factories import TenantFactory
+from tests.harness.admin_client import BROWSER_PAGE_HEADERS
 from tests.helpers import concurrent_commit_in_write_window, operator_answer
 
 app = create_app()
@@ -91,21 +92,34 @@ class TestAuthorizedDomainsAdd:
         refreshed = factory_session.get(Tenant, tenant.tenant_id)
         assert refreshed.authorized_domains == ["example.com"]
 
-    def test_add_domain_rejects_invalid_format(self, client, factory_session):
-        """Missing '.' or containing '@' must be rejected."""
+    @pytest.mark.parametrize(
+        "domain", ["not-a-domain", "user@example.com", "a',alert(document.domain),'.example", "<b>x</b>.example.com"]
+    )
+    def test_add_domain_rejects_invalid_format(self, client, factory_session, domain):
+        """Anything but a domain name (no '.', an '@', a quote, markup) is rejected and not stored.
+
+        Posted the way the settings page's form is, so the admin error handler answers the refusal
+        with a flash on that page rather than a JSON 400.
+        """
         tenant = TenantFactory(authorized_domains=["example.com"])
         factory_session.commit()
         _auth_session(client, tenant.tenant_id)
 
+        settings_page = f"/tenant/{tenant.tenant_id}/settings"
         response = client.post(
             f"/tenant/{tenant.tenant_id}/settings/domains/add",
-            data={"domain": "not-a-domain"},  # no '.'
+            data={"domain": domain},
+            headers={**BROWSER_PAGE_HEADERS, "Referer": f"http://localhost{settings_page}"},
         )
         assert response.status_code == 302
+        assert response.headers["Location"].startswith(settings_page)
+        with client.session_transaction() as sess:
+            flashed = [message for _category, message in sess.get("_flashes", [])]
+        assert InvalidDomainNameError.MESSAGE in flashed
 
         factory_session.expire_all()
         refreshed = factory_session.get(Tenant, tenant.tenant_id)
-        assert "not-a-domain" not in refreshed.authorized_domains
+        assert refreshed.authorized_domains == ["example.com"]
 
     def test_add_domain_is_idempotent(self, client, factory_session):
         """Adding an already-present domain must not duplicate it."""

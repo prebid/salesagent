@@ -31,13 +31,13 @@ from __future__ import annotations
 
 import os
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 from urllib.parse import urlsplit
 
 from adcp.signing.agent_resolver import BrandAgentType
-from pydantic import Field, ValidationInfo, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _ENV = SettingsConfigDict(env_prefix="", case_sensitive=False, extra="ignore", env_ignore_empty=True)
@@ -250,6 +250,20 @@ class AuthSettings(BaseSettings):
     gcp_project_id: str | None = None
     google_application_credentials: str | None = None
     google_application_credentials_json: str | None = None
+
+    @field_validator("super_admin_domains", "tenant_management_domains")
+    @classmethod
+    def _domain_lists_hold_domain_names(cls, v: str | None, info: ValidationInfo) -> str | None:
+        """Start-up fails naming the variable: these lists become tenants' authorized domains."""
+        # Imported here: http_utils reaches src.core.operator_errors, which imports this module.
+        from src.core.http_utils import authorized_domain
+
+        if any(authorized_domain(domain) is None for domain in split_csv(v)):
+            raise ValueError(
+                f"{(info.field_name or '').upper()} holds a value that is not a domain name; "
+                "enter internationalized names in their xn-- form"
+            )
+        return v
 
     @field_validator("gam_oauth_client_id")
     @classmethod
@@ -751,6 +765,78 @@ class ToolingSettings(BaseSettings):
     bdd_liveness_artifact: Path | None = None
     storyboard_ledger_path: Path | None = None
     allow_live_creative_agent: bool = False
+
+    # The Google Ad Manager network the repo's GAM tests run against, and the service account
+    # they call it as. Each contributor configures their own network; nothing compares these
+    # values with anything, and none has a default. ``gam_suite_network`` hands them over, or
+    # fails naming every one that is unset. The server never reads them: it builds its
+    # adapter from the tenant's ``adapter_config`` row, which the tests write from these.
+    gam_service_account_json: SecretStr | None = None
+    gam_service_account_key_file: Path | None = None
+    gam_suite_network_code: str | None = None
+    gam_suite_advertiser_id: str | None = None
+    #: Comma-joined, as ``revoked_keyids`` is: pydantic-settings reads a ``list`` as JSON.
+    gam_suite_ad_unit_ids: str | None = None
+    #: Run the suites without the GAM configuration preflight; the run records the skip.
+    gam_suite_preflight_skip: bool = False
+
+    def gam_suite_network(self) -> GamSuiteNetwork | None:
+        """The GAM network the suite books against: all of its settings, none of them, or a refusal.
+
+        All or nothing, decided here and nowhere else. No GAM setting at all is ``None``: this
+        environment configures no GAM network. Some of them is :class:`GamSuiteNetworkUnconfigured`
+        naming every one that is unset. All of them is the network. The credential is
+        ``GAM_SERVICE_ACCOUNT_JSON``, else the file ``GAM_SERVICE_ACCOUNT_KEY_FILE`` names, read
+        here rather than at import. Nothing compares the values with anything.
+        """
+        ad_unit_ids = tuple(split_csv(self.gam_suite_ad_unit_ids))
+        settings = (
+            (
+                "GAM_SERVICE_ACCOUNT_JSON (or GAM_SERVICE_ACCOUNT_KEY_FILE)",
+                self.gam_service_account_json or self.gam_service_account_key_file,
+            ),
+            ("GAM_SUITE_NETWORK_CODE", self.gam_suite_network_code),
+            ("GAM_SUITE_ADVERTISER_ID", self.gam_suite_advertiser_id),
+            ("GAM_SUITE_AD_UNIT_IDS", ad_unit_ids),
+        )
+        if not any(value for _, value in settings):
+            return None
+        missing = [name for name, value in settings if not value]
+        key_file = self.gam_service_account_key_file
+        if self.gam_service_account_json is None and key_file is not None and not key_file.is_file():
+            missing.append(f"GAM_SERVICE_ACCOUNT_KEY_FILE (names {key_file}, which is not a file)")
+        if missing:
+            raise GamSuiteNetworkUnconfigured(missing)
+        assert self.gam_suite_network_code and self.gam_suite_advertiser_id  # narrowed by `missing`
+        credential = (
+            self.gam_service_account_json.get_secret_value()
+            if self.gam_service_account_json is not None
+            else Path(str(key_file)).read_text(encoding="utf-8")
+        )
+        return GamSuiteNetwork(
+            service_account_json=credential,
+            network_code=self.gam_suite_network_code,
+            advertiser_id=self.gam_suite_advertiser_id,
+            ad_unit_ids=ad_unit_ids,
+        )
+
+
+class GamSuiteNetworkUnconfigured(RuntimeError):
+    """A reader needs the GAM network the suite books against and a setting naming it is unset; ``missing`` names each one."""
+
+    def __init__(self, missing: list[str]) -> None:
+        self.missing = tuple(missing)
+        super().__init__("the GAM network the suite books against is not configured; unset: " + ", ".join(self.missing))
+
+
+@dataclass(frozen=True)
+class GamSuiteNetwork:
+    """The GAM network, advertiser and ad units the GAM tests use, and the key they call it with."""
+
+    service_account_json: str = field(repr=False)
+    network_code: str
+    advertiser_id: str
+    ad_unit_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)

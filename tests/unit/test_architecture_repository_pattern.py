@@ -339,13 +339,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/integration/test_tenant_utils.py
     ("tests/integration/test_tenant_utils.py", "test_serialize_tenant_json_fields_are_deserialized"),
     ("tests/integration/test_tenant_utils.py", "test_serialize_tenant_nullable_fields_have_defaults"),
-    # tests/integration/test_update_media_buy_creative_assignment.py
-    (
-        "tests/integration/test_update_media_buy_creative_assignment.py",
-        "test_update_media_buy_assigns_creatives_to_package",
-    ),
-    ("tests/integration/test_update_media_buy_creative_assignment.py", "test_creative_assignments_with_weights"),
-    ("tests/integration/test_update_media_buy_creative_assignment.py", "test_creative_assignments_replaces_all"),
     # tests/integration/test_update_media_buy_persistence.py
     ("tests/integration/test_update_media_buy_persistence.py", "test_tenant_setup"),
     ("tests/integration/test_update_media_buy_persistence.py", "test_update_media_buy_with_database_persisted_buy"),
@@ -1100,7 +1093,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_setup_checklist_service.py", "setup_minimal_tenant"),
     ("tests/integration/test_setup_checklist_service.py", "test_bulk_setup_status_for_multiple_tenants"),
     ("tests/integration/test_setup_checklist_service.py", "test_currency_count_in_details"),
-    ("tests/integration/test_setup_checklist_service.py", "test_gemini_api_key_detection"),
     ("tests/integration/test_setup_checklist_service.py", "test_progress_calculation"),
     ("tests/integration/test_setup_checklist_service.py", "test_ready_for_orders_without_sso_in_multi_tenant_mode"),
     ("tests/integration/test_setup_checklist_service.py", "test_sso_is_optional_not_critical_in_multi_tenant_mode"),
@@ -1122,12 +1114,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_tenant_settings_comprehensive.py", "test_database_queries"),
     ("tests/integration/test_tenant_utils.py", "test_serialize_tenant_json_fields_are_deserialized"),
     ("tests/integration/test_tenant_utils.py", "test_serialize_tenant_nullable_fields_have_defaults"),
-    ("tests/integration/test_update_media_buy_creative_assignment.py", "test_creative_assignments_replaces_all"),
-    ("tests/integration/test_update_media_buy_creative_assignment.py", "test_creative_assignments_with_weights"),
-    (
-        "tests/integration/test_update_media_buy_creative_assignment.py",
-        "test_update_media_buy_assigns_creatives_to_package",
-    ),
     ("tests/integration/test_update_media_buy_persistence.py", "test_tenant_setup"),
     ("tests/integration/test_update_media_buy_persistence.py", "test_update_media_buy_with_database_persisted_buy"),
     ("tests/integration/test_workflow_approval.py", "test_approve_workflow_step"),

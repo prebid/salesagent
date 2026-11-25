@@ -300,7 +300,9 @@ def _seed_buy_held_on_one_creative(*, starts_in_days: int) -> _HeldBuy:
     Approving that creative is what unblocks the buy, and the unblocking runs the REAL
     ``execute_approved_media_buy`` — so the buy needs everything that callee
     reconstructs from (see ``seed_pending_buy``) and the creative needs assets the
-    pre-upload asset gate can read (see ``uploadable_creative``).
+    pre-upload asset gate can read (see ``uploadable_creative``). The creative is assigned to
+    the buy's own package, as every production writer assigns one: the approval reads each
+    assigned creative for the package it is assigned to.
     """
     from tests.factories import CreativeAssignmentFactory, CreativeFactory
 
@@ -311,7 +313,8 @@ def _seed_buy_held_on_one_creative(*, starts_in_days: int) -> _HeldBuy:
         principal=buy.principal,
         status="pending_review",
     )
-    CreativeAssignmentFactory(creative=creative, media_buy=buy.media_buy, package_id="pkg_unblock")
+    (package,) = buy.media_buy.packages
+    CreativeAssignmentFactory(creative=creative, media_buy=buy.media_buy, package_id=package.package_id)
     return _HeldBuy(buy, creative)
 
 

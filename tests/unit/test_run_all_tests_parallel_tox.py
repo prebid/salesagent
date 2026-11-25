@@ -196,6 +196,12 @@ exit 0
 # without reaching the host's Python toolchain. See _HOST_SCRIPT_STUBS.
 :
 """,
+    # The GAM configuration preflight calls Google Ad Manager under the configured service
+    # account: network reach, and none of it bears on which command the runner hands to tox.
+    # A passing preflight is the faithful simulation. The gate itself is graded in
+    # tests/unit/test_gam_suite_network_preflight.py.
+    "scripts/gam_prerequisites_check.py": """print("GAM: configured, network stand-in")
+""",
 }
 
 
@@ -320,6 +326,22 @@ def _published_run(tmp_path: Path) -> Path:
     runs = list((tmp_path / "workdir" / "test-results").glob("innet_*"))
     assert len(runs) == 1, runs
     return runs[0]
+
+
+@_RUNS_THE_BASH_RUNNER
+@pytest.mark.slow
+def test_the_run_records_the_gam_network_its_preflight_stated(tmp_path):
+    """meta.json and the run's last line carry the preflight's "GAM: ..." statement (here the stand-in's)."""
+    import json
+
+    # A GAM setting hands the decision to the preflight; with none the runner answers itself.
+    proc, _ = _run_with_stubbed_docker(tmp_path, GAM_SUITE_NETWORK_CODE="1")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    meta = json.loads((_published_run(tmp_path) / "meta.json").read_text())
+    assert (meta["gam_network"], proc.stdout.splitlines()[-1]) == (
+        "configured, network stand-in",
+        "GAM network: configured, network stand-in",
+    )
 
 
 @_RUNS_THE_BASH_RUNNER
