@@ -275,8 +275,8 @@ def get_db_session() -> Generator[Session, None, None]:
     Queries exceeding DATABASE_QUERY_TIMEOUT will raise OperationalError.
 
     This is the THREAD'S scoped session. Inside an open unit of work it is the unit's
-    session, and this exit closes it and takes it out of the registry (#1644). A write
-    that must not touch the caller's transaction uses :func:`get_separate_session`.
+    session, and this exit closes it and takes it out of the registry (#1644). A unit of
+    work that must not touch the caller's transaction runs on :func:`get_separate_session`.
     """
     scoped: scoped_session[Session] | None = None
 
@@ -296,14 +296,14 @@ def get_db_session() -> Generator[Session, None, None]:
 
 @contextmanager
 def get_separate_session() -> Generator[Session, None, None]:
-    """A session of its own, outside the thread's scoped registry, for a write that stands alone.
+    """A session of its own, outside the thread's scoped registry, for a unit of work that stands alone.
 
-    For a record that must neither join nor end the caller's transaction: an audit
-    receipt of an ad-server call is written while the request that made the call holds
-    its unit of work open, and must stay recorded if that request is refused. Through
-    :func:`get_db_session` the receipt would be written on the unit's own session, and the
-    exit would close it, releasing the unit's locks and detaching its rows (#1644).
-    Commits are the caller's, as with :func:`get_db_session`.
+    Its one caller is ``AuditUoW``, whose record must neither join nor end the caller's
+    transaction: an audit record of an ad-server call is written while the request that
+    made the call holds its unit of work open, and must stay recorded if that request is
+    refused. Through :func:`get_db_session` the record would be written on the unit's own
+    session, and the exit would close it, releasing the unit's locks and detaching its rows
+    (#1644). Commits are the unit's, as with :func:`get_db_session`.
     """
     with _guarded_session(_new_unscoped_session, Session.close) as session:
         yield session

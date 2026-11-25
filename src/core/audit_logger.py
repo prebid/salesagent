@@ -10,24 +10,19 @@ Implements security-compliant logging with:
 """
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
-
-from sqlalchemy import select
+from typing import TYPE_CHECKING, Any
 
 from src.core.config import RuntimeSettings
-from src.core.database.database_session import _pydantic_json_serializer, get_separate_session
-from src.core.database.models import AuditLog
-
-# Every session this module opens is a SEPARATE one (get_separate_session), never the
-# thread's scoped session. Audit records are written while a tool or an adapter call holds
-# the request's unit of work open, and the first get_db_session() opened inside an open unit
-# closes that unit's session: it released update_media_buy's revision lock and committed
-# whatever the unit had flushed (#1644, #2647). A receipt also has to stay recorded when the
-# request that made the call is refused, so it cannot join the unit either.
+from src.core.database.database_session import _pydantic_json_serializer
+from src.core.database.models import Tenant
 from src.core.logging_config import LineSafeFormatter
+
+if TYPE_CHECKING:
+    from src.core.database.repositories.uow import AuditUoW
 
 # Directory holding the FILE BACKUP of the audit trail. The database is the
 # audit authority (see the module docstring); these files are a secondary sink.
@@ -193,6 +188,30 @@ def _audit_jsonl_line(log_entry: dict[str, Any]) -> str:
     return _pydantic_json_serializer(_normalize_audit_details(log_entry)) + "\n"
 
 
+def _audit_unit(tenant_id: str) -> "AuditUoW":
+    """The unit every read and write here runs in: :class:`AuditUoW`, on a session of its own.
+
+    An audit record is written while a tool or an adapter call holds the request's unit of
+    work open, and it must stay recorded when that request is refused (#2647). Imported here
+    because the repositories package imports the adapters, which import this module.
+    """
+    from src.core.database.repositories.uow import AuditUoW
+
+    return AuditUoW(tenant_id)
+
+
+def _read_tenant[T](tenant_id: str, read: Callable[[Tenant], T]) -> T | None:
+    """*read* applied to the tenant's row while the unit is open, or ``None`` when there is no such tenant.
+
+    No session here sets ``expire_on_commit=False``, so a row handed out of the unit would
+    raise on its first attribute read; *read* takes what the caller needs before the unit closes.
+    """
+    with _audit_unit(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        tenant = uow.tenant_config.get_tenant()
+        return read(tenant) if tenant else None
+
+
 class AuditLogger:
     """Provides security-compliant audit logging for AdCP operations."""
 
@@ -243,26 +262,26 @@ class AuditLogger:
             if error:
                 audit_logger.error(f"  Error: {error}")
 
-        # Write to database
-        try:
-            with get_separate_session() as db_session:
-                audit_log = AuditLog(
-                    tenant_id=tenant_id,
-                    timestamp=datetime.now(UTC),
-                    operation=f"{self.adapter_name}.{operation}",
-                    principal_name=principal_name,
-                    principal_id=principal_id,
-                    adapter_id=adapter_id,
-                    success=success,
-                    error_message=error if not success else None,
-                    # Pass dict directly - JSONType column handles serialization
-                    details=details or {},
-                )
-                db_session.add(audit_log)
-                db_session.commit()
-        except Exception as e:
-            audit_logger.error(f"Failed to write audit log to database: {e}")
-            # Continue with file logging as fallback
+        # Write to database (audit_logs.tenant_id is NOT NULL: a record with no tenant has no row)
+        if not tenant_id:
+            audit_logger.error("Failed to write audit log to database: no tenant_id")
+        else:
+            try:
+                with _audit_unit(tenant_id) as uow:
+                    assert uow.audit_logs is not None
+                    uow.audit_logs.record(
+                        operation=f"{self.adapter_name}.{operation}",
+                        principal_name=principal_name,
+                        principal_id=principal_id,
+                        adapter_id=adapter_id,
+                        success=success,
+                        error_message=error if not success else None,
+                        # Pass dict directly - JSONType column handles serialization
+                        details=details or {},
+                    )
+            except Exception as e:
+                audit_logger.error(f"Failed to write audit log to database: {e}")
+                # Continue with file logging as fallback
 
         # Also write structured JSON log for machine processing (backup)
         self._write_structured_log(
@@ -282,13 +301,7 @@ class AuditLogger:
             tenant_name = None
             if tenant_id:
                 try:
-                    with get_separate_session() as db_session:
-                        from src.core.database.models import Tenant
-
-                        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-                        tenant = db_session.scalars(stmt).first()
-                        if tenant:
-                            tenant_name = tenant.name
+                    tenant_name = _read_tenant(tenant_id, lambda tenant: tenant.name)
                 except Exception:
                     audit_logger.debug("Could not load tenant name for Slack context", exc_info=True)
 
@@ -355,13 +368,7 @@ class AuditLogger:
                 tenant_config = None
                 if tenant_id:
                     try:
-                        with get_separate_session() as db_session:
-                            from src.core.database.models import Tenant
-
-                            stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-                            tenant = db_session.scalars(stmt).first()
-                            if tenant:
-                                tenant_config = serialize_tenant_to_dict(tenant)
+                        tenant_config = _read_tenant(tenant_id, serialize_tenant_to_dict)
                     except Exception:
                         audit_logger.debug("Could not load tenant config for Slack context", exc_info=True)
 
@@ -393,24 +400,22 @@ class AuditLogger:
         )
         audit_logger.error(message)
 
-        # Write to database
-        try:
-            with get_separate_session() as db_session:
-                audit_log = AuditLog(
-                    tenant_id=tenant_id,
-                    timestamp=datetime.now(UTC),
-                    operation=f"SECURITY_VIOLATION:{self.adapter_name}.{operation}",
-                    principal_name=None,  # principal_name not available
-                    principal_id=principal_id,
-                    adapter_id=None,  # adapter_id not applicable
-                    success=False,  # Security violations are failures
-                    error_message=f"Attempted to access resource '{resource_id}' - {reason}",
-                    details={"resource_id": resource_id, "reason": reason},
-                )
-                db_session.add(audit_log)
-                db_session.commit()
-        except Exception as e:
-            audit_logger.error(f"Failed to write security violation to database: {e}")
+        # Write to database (audit_logs.tenant_id is NOT NULL: a record with no tenant has no row)
+        if not tenant_id:
+            audit_logger.error("Failed to write security violation to database: no tenant_id")
+        else:
+            try:
+                with _audit_unit(tenant_id) as uow:
+                    assert uow.audit_logs is not None
+                    uow.audit_logs.record(
+                        operation=f"SECURITY_VIOLATION:{self.adapter_name}.{operation}",
+                        principal_id=principal_id,
+                        success=False,  # Security violations are failures
+                        error_message=f"Attempted to access resource '{resource_id}' - {reason}",
+                        details={"resource_id": resource_id, "reason": reason},
+                    )
+            except Exception as e:
+                audit_logger.error(f"Failed to write security violation to database: {e}")
 
         # Write to security log (backup)
         self._write_security_log(
@@ -427,14 +432,9 @@ class AuditLogger:
             tenant_config = None
             if tenant_id:
                 try:
-                    with get_separate_session() as db_session:
-                        from src.core.database.models import Tenant
-
-                        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-                        tenant = db_session.scalars(stmt).first()
-                        if tenant:
-                            tenant_name = tenant.name
-                            tenant_config = serialize_tenant_to_dict(tenant)
+                    tenant_name, tenant_config = _read_tenant(
+                        tenant_id, lambda tenant: (tenant.name, serialize_tenant_to_dict(tenant))
+                    ) or (None, None)
                 except Exception:
                     audit_logger.debug("Could not load tenant for security violation Slack context", exc_info=True)
 
