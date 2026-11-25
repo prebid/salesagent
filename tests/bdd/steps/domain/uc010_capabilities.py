@@ -29,6 +29,7 @@ from tests.bdd.steps._outcome_helpers import (
     payload_or_none,
     require_payload,
     wire_absent,
+    wire_absent_or_false,
     wire_dict,
     wire_field,
     wire_lookup,
@@ -1034,9 +1035,9 @@ def _expect_flag(ctx: dict, path: str, expected: str) -> None:
     'absent or false' | 'equal to "..." as a URI'."""
     value = wire_lookup(ctx, path)
     if expected == "absent":
-        assert value is WIRE_MISSING, f"{path} unexpectedly present: {value!r}"
+        wire_absent(ctx, path)
     elif expected == "absent or false":
-        assert value is WIRE_MISSING or value is False, f"{path} expected absent-or-false, got {value!r}"
+        wire_absent_or_false(ctx, path)
     elif expected in ("equal to true", "equal to false"):
         assert value is (expected == "equal to true"), f"{path} expected {expected}, got {value!r}"
     else:

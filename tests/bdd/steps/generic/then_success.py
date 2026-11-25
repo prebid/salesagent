@@ -9,7 +9,7 @@ from __future__ import annotations
 from pytest_bdd import parsers, then
 
 from src.core.helpers import enum_value
-from tests.bdd.steps._outcome_helpers import require_payload, wire_field
+from tests.bdd.steps._outcome_helpers import require_payload, wire_absent_or_false, wire_field
 from tests.bdd.steps.generic.then_media_buy import then_no_media_buy_persisted as _then_no_media_buy_persisted
 
 
@@ -104,6 +104,12 @@ def then_response_contains_array(ctx: dict, field: str) -> None:
     value = getattr(resp, field, None)
     assert value is not None, f"Expected '{field}' in response, got attrs: {dir(resp)}"
     assert isinstance(value, list), f"Expected '{field}' to be a list, got {type(value)}"
+
+
+@then(parsers.parse('the response should have "{field}" absent or false'))
+def then_field_absent_or_false(ctx: dict, field: str) -> None:
+    """The wire omits ``field`` or carries ``false``; any other value claims what did not happen."""
+    wire_absent_or_false(ctx, field)
 
 
 # ── Sandbox flag assertions ──────────────────────────────────────────

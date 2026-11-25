@@ -270,11 +270,19 @@ Feature: BR-UC-001 Discover Available Inventory
     | catalog      | {"type": "product", "catalog_id": "gmc-primary"}                               |
     Then the response status should be "completed"
     And the response should contain "products" array
-    And matched products should include "catalog_match" data with matched_count and submitted_count
-    And the response should have "catalog_applied" as true
+    And the products should be the catalog, unfiltered by the buyer's catalog
+    And the response should have "catalog_applied" absent or false
     # POST-S1: Buyer knows matching inventory
     # POST-S5: Status is completed
-    # POST-S8: Buyer knows catalog matching was applied and which items matched
+    # POST-S8: Buyer knows catalog matching was not applied
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the generated Thens required
+    # catalog_match data on matched products and catalog_applied true, i.e. that the seller
+    # implements catalog matching. The pin makes matching optional: catalog_applied is
+    # "Absent or `false` if no catalog was provided or the seller does not support catalog
+    # matching". This seller does not match catalogs (#2710 D3), so the conformant answer
+    # is graded instead: the request is accepted, products[] is not narrowed by the
+    # catalog, and catalog_applied does not claim a match that did not happen.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/get_products.mdx
 
   @T-UC-001-alt-sparse @alternative @alt-sparse @analysis-2026-03-09 @schema-v3.1
   Scenario: Sparse field selection - lightweight discovery with selected fields
