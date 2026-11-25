@@ -15,9 +15,10 @@ from sqlalchemy import delete
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, PersistedMediaBuyStatus, Principal, Tenant
+from tests.factories import CreativeAssignmentFactory
 from tests.factories.principal import plaintext_token_for
 from tests.integration.conftest import make_media_buy, make_package
-from tests.utils.database_helpers import delete_tenant, vhost_for
+from tests.utils.database_helpers import delete_tenant, tenant_row_counts, vhost_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -492,3 +493,15 @@ class TestIdempotencyKeyLookup:
             # account-scoped row (the silent narrowing the threading prevents).
             assert repo.get_by_id_or_idempotency_key(idem_key, principal_id) is None
             assert repo.get_by_id_or_idempotency_key(idem_key, principal_id, account_id="other") is None
+
+
+class TestDeleteTenant:
+    """The teardown helper the fixtures above call."""
+
+    def test_deletes_a_tenant_whose_package_holds_a_creative_assignment(self, bound_factory_session):
+        """An assignment references its package, so the helper deletes it before the package."""
+        tenant_id = CreativeAssignmentFactory().tenant_id
+
+        delete_tenant(tenant_id)
+
+        assert not any(tenant_row_counts(bound_factory_session, tenant_id).values())

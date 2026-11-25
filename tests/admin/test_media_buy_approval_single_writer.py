@@ -149,7 +149,7 @@ class TestCreativeGateIsTenantScoped:
             creative_id=shared_creative_id,
             status="approved",
         )
-        CreativeAssignmentFactory(creative=mine, media_buy=seeded.media_buy, package_id="pkg_gate_1")
+        CreativeAssignmentFactory(creative=mine, media_buy=seeded.media_buy)
 
         # Another tenant's creative, same buyer-supplied id, NOT approved.
         foreign_tenant = TenantFactory(tenant_id=f"t_other_{uuid.uuid4().hex[:8]}")
