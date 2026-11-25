@@ -281,16 +281,20 @@ class GetProductsRequest(SchemaDependencies, BuyerRequest, LibraryGetProductsReq
 
     @model_validator(mode="after")
     def _enforce_mode_companions(self) -> "GetProductsRequest":
-        """Refuse a companion the sent ``buying_mode`` requires and lacks, or rules out and has.
+        """Refuse a companion the ``buying_mode`` requires and lacks, or rules out and has.
 
-        A request without ``buying_mode`` is checked against nothing: the pin says a pre-v3
-        request without it "SHOULD default to 'brief'", and it keeps the brief path (#2710, D1).
+        A request without ``buying_mode`` is judged as brief mode, the pin's default ("SHOULD
+        default to 'brief'"; #2710, D1), so brief's ruled-out ``refine`` is refused there too.
+        The field itself stays unset. Brief's required ``brief`` is not enforced on a mode-less
+        request: one with no brief and no other search criterion is the seller's own refusal
+        (``_get_products_impl``), and a brand- or filters-only request is served as before.
         Each refusal is located on the field, so the boundary answers INVALID_REQUEST naming it.
         """
+        buying_mode = self.buying_mode or BuyingMode.brief
+        required, ruled_out = self._MODE_COMPANIONS[buying_mode]
         if self.buying_mode is None:
-            return self
-        required, ruled_out = self._MODE_COMPANIONS[self.buying_mode]
-        mode = self.buying_mode.value
+            required = None
+        mode = buying_mode.value
         errors = [
             InitErrorDetails(
                 type=PydanticCustomError(

@@ -325,10 +325,12 @@ _BUYING_MODE_ROWS: dict[str, dict[str, Any]] = {
     "buying_mode=refine, no refine array": {"buying_mode": "refine"},
     "buying_mode=refine, brief present, refine present": {"buying_mode": "refine", "brief": _BRIEF, "refine": _REFINE},
     "buying_mode=brief, brief present, refine present": {"buying_mode": "brief", "brief": _BRIEF, "refine": _REFINE},
+    # A request without a mode is judged as brief (#2710 D1), so brief's ruled-out refine is refused.
+    "buying_mode omitted, brief present, refine present": {"brief": _BRIEF, "refine": _REFINE},
 }
 
 
-@when(parsers.re(r"the Buyer Agent sends a get_products request with (?P<row>buying_mode=.+)$"))
+@when(parsers.re(r"the Buyer Agent sends a get_products request with (?P<row>buying_mode[= ].+)$"))
 def when_get_products_buying_mode(ctx: dict, row: str) -> None:
     """Dispatch get_products with a brand and the mode and companions the row names."""
     dispatch_request(ctx, brand={"domain": "acme.com"}, **_BUYING_MODE_ROWS[row])

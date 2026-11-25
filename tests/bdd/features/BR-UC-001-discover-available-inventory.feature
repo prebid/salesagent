@@ -393,6 +393,9 @@ Feature: BR-UC-001 Discover Available Inventory
     # dropped: a request without buying_mode cannot be told apart from a pre-v3 one (this seller
     # serves major 3 only, so a client that declares major 2 is refused VERSION_UNSUPPORTED),
     # and the pin says such a request SHOULD default to 'brief'. This seller does (#2710 D1).
+    # LOCALLY-ADDED row "no mode (brief default) with refine": a request without buying_mode is
+    # judged as brief, so the refine brief mode rules out is refused there too. It is the row
+    # that tells that default apart from "no mode, nothing checked" (inv-079 cannot).
 
     Examples:
       | violation                              | invalid_fields                                                    | field       |
@@ -402,6 +405,7 @@ Feature: BR-UC-001 Discover Available Inventory
       | refine mode without refine array       | buying_mode=refine, no refine array                               | refine      |
       | refine mode with brief                 | buying_mode=refine, brief present, refine present                 | brief       |
       | brief mode with refine                 | buying_mode=brief, brief present, refine present                  | refine      |
+      | no mode (brief default) with refine    | buying_mode omitted, brief present, refine present                | refine      |
 
   @T-UC-001-inv-001 @invariant @BR-RULE-001 @analysis-2026-03-09 @schema-v3.1
   Scenario: BR-RULE-001 INV-1 holds - require_auth policy with authenticated caller
