@@ -1394,6 +1394,7 @@ class TestBddFullAuditMain:
             bdd_audit_common.load_bdd_artifact([one, two])
 
 
+@pytest.mark.posix_only("runs inspect_parallel.sh under /bin/bash")
 class TestInspectParallel:
     """The wrapper must launch every slice. Reading the script cannot see a glued assignment."""
 
