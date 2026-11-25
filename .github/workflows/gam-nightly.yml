@@ -77,6 +77,5 @@ jobs:
           extra_args: -m requires_gam --timeout=300
         env:
           ADCP_TESTING: ""
-          # gam_lifecycle_db connects to the postgres maintenance DB and CREATE DATABASE per test.
           DATABASE_URL: postgresql://adcp_user:secure_password_change_me@127.0.0.1:5435/postgres
           GAM_SERVICE_ACCOUNT_JSON: ${{ secrets.GAM_SERVICE_ACCOUNT_JSON }}
