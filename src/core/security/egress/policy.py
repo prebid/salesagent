@@ -32,7 +32,7 @@ from urllib.parse import ParseResult, urlparse
 
 from adcp.signing import SSRFValidationError, resolve_and_validate_host
 
-from src.core.exceptions import AdCPBlockedUrlError, AdCPSalesAgentError
+from src.core.exceptions import AdCPBlockedUrlError
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +258,20 @@ def _scheme_error(parsed: ParseResult) -> str | None:
     return None
 
 
+def _parse(url: str) -> ParseResult | None:
+    """*url* parsed, or ``None`` when ``urlparse`` cannot parse it.
+
+    The one malformed-URL rule both verdicts share. ``urlsplit`` raises
+    ``ValueError`` for a URL it cannot parse ("Invalid IPv6 URL" for
+    ``"https://[::1"``); each verdict maps ``None`` to its own refusal type,
+    and neither logs the exception's text, which can echo the input (GH #2706).
+    """
+    try:
+        return urlparse(url)
+    except ValueError:
+        return None
+
+
 def _is_rescuable_loopback(url: str) -> bool:
     """True when *url* names ``localhost`` or a literal loopback IP.
 
@@ -273,8 +287,8 @@ def _is_rescuable_loopback(url: str) -> bool:
     scheme hatch entirely, so a plain ``http://`` URL is never rescued
     regardless of ``ADCP_TESTING``.
     """
-    parsed = urlparse(url)
-    if _scheme_error(parsed):
+    parsed = _parse(url)
+    if parsed is None or _scheme_error(parsed):
         return False
     hostname = parsed.hostname
     if hostname is None:
@@ -295,7 +309,9 @@ def _registration_error(url: str) -> str | None:
     see the module docstring's point-6 rationale for why registration may
     name the class of range while dial-time cannot.
     """
-    parsed = urlparse(url)
+    parsed = _parse(url)
+    if parsed is None:
+        return "URL is malformed"
     scheme_err = _scheme_error(parsed)
     if scheme_err:
         return scheme_err
@@ -347,20 +363,7 @@ class EgressPolicy:
 
         Raises :class:`~src.core.exceptions.AdCPBlockedUrlError` on refusal.
         """
-        try:
-            error = _registration_error(url)
-        except AdCPSalesAgentError:
-            raise
-        except ValueError as exc:
-            # ValueError, not Exception, and a FIXED sentence rather than the
-            # exception's text. urlsplit raises ValueError for a malformed URL
-            # ("Invalid IPv6 URL" for "https://[oops/hook"), and interpolating
-            # that put stdlib phrasing this module did not author into a
-            # buyer-facing refusal. Anything that is NOT a ValueError is not a
-            # malformed URL and has no business being reported as one -- it now
-            # escapes loudly instead of being relabelled.
-            logger.warning("Refusing URL at registration: malformed (%r)", exc)
-            raise AdCPBlockedUrlError() from exc
+        error = _registration_error(url)
         if error is None:
             return
         if allow_loopback and _is_rescuable_loopback(url):
@@ -395,23 +398,19 @@ class EgressPolicy:
         name rather than by position; :func:`validate_url` (which sends nothing)
         discards it.
 
-        Raises :class:`OutboundRequestBlocked` — for a URL ``urlparse`` cannot
+        Raises :class:`OutboundRequestBlocked` — for a URL :func:`_parse` cannot
         parse too — and never lets
         ``SSRFValidationError`` out, because its message names the resolved
         IP (spec point 6). Opaque :data:`_BLOCKED_MESSAGE` regardless of
         cause, unlike :meth:`check_registration`, which may name the class of
         range because the caller already supplied that literal information.
         """
-        try:
-            parsed = urlparse(url)
-        except ValueError as exc:
-            # urlsplit raises ValueError for a URL it cannot parse ("Invalid IPv6
-            # URL" for "https://[::1"). That is a refusal like any other, not an
-            # error for the caller to handle: every caller of this verdict catches
-            # OutboundRequestBlocked and nothing else. Fixed log text, as in
-            # check_registration -- the exception's text can echo the input.
+        parsed = _parse(url)
+        if parsed is None:
+            # A refusal like any other: every caller of this verdict catches
+            # OutboundRequestBlocked and nothing else (GH #2706).
             logger.warning("Outbound request refused: URL is malformed")
-            raise OutboundRequestBlocked(field=field) from exc
+            raise OutboundRequestBlocked(field=field)
         if _scheme_error(parsed) is not None:
             logger.warning("Outbound request refused: scheme is not https")
             raise OutboundRequestBlocked(field=field)
