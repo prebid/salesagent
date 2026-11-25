@@ -278,6 +278,8 @@ credential blast radius on fork PRs).
 | Branch | `main` only (`if: github.ref == 'refs/heads/main'`) |
 | Environment | `gam-nightly` — create under **Settings → Environments**, restrict deployment branches to `main` |
 | Secret | `GAM_SERVICE_ACCOUNT_JSON` on the `gam-nightly` environment (not repo-level; unavailable to fork PRs) |
+| Variables | `GAM_SUITE_NETWORK_CODE`, `GAM_SUITE_ADVERTISER_ID`, `GAM_SUITE_AD_UNIT_IDS` on the `gam-nightly` environment: the network the tests book against, an advertiser on it, and comma-separated ACTIVE ad units on it |
+| Preflight | `scripts/gam_prerequisites_check.py --suite-network` before the tests; the job fails if the secret is unset or a check fails |
 | Command | `pytest tests/e2e/ -m requires_gam` (tests that request `docker_services_e2e` still start the e2e stack via conftest) |
 | `DATABASE_URL` | `postgresql://adcp_user:secure_password_change_me@127.0.0.1:5435/postgres` — GHA `services.postgres` on host port 5435 |
 

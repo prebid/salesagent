@@ -31,6 +31,13 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 45
+    # The network the GAM tests book against (ToolingSettings.gam_suite_network), from the
+    # gam-nightly environment's variables. The credential, its secret, reaches only the two
+    # steps that read it.
+    env:
+      GAM_SUITE_NETWORK_CODE: ${{ vars.GAM_SUITE_NETWORK_CODE }}
+      GAM_SUITE_ADVERTISER_ID: ${{ vars.GAM_SUITE_ADVERTISER_ID }}
+      GAM_SUITE_AD_UNIT_IDS: ${{ vars.GAM_SUITE_AD_UNIT_IDS }}
     services:
       postgres:
         image: postgres:17-alpine
@@ -53,22 +60,22 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-      - name: Verify GAM credentials secret
+      - name: Check the GAM suite network
         env:
           GAM_SERVICE_ACCOUNT_JSON: ${{ secrets.GAM_SERVICE_ACCOUNT_JSON }}
         run: |
           set -euo pipefail
+          # With no GAM setting the preflight passes and the GAM tests xfail; the nightly exists to run them.
           if [ -z "${GAM_SERVICE_ACCOUNT_JSON}" ]; then
             echo "::error::GAM_SERVICE_ACCOUNT_JSON is not configured. Add it to the gam-nightly environment (Settings → Environments → gam-nightly → Environment secrets; restrict deployment branches to main)."
             exit 1
           fi
-          uv run python -c 'import json, os; json.loads(os.environ["GAM_SERVICE_ACCOUNT_JSON"])'
+          uv run python scripts/gam_prerequisites_check.py --suite-network
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/e2e/
           extra_args: -m requires_gam --timeout=300
         env:
           ADCP_TESTING: ""
-          # gam_lifecycle_db connects to the postgres maintenance DB and CREATE DATABASE per test.
           DATABASE_URL: postgresql://adcp_user:secure_password_change_me@127.0.0.1:5435/postgres
           GAM_SERVICE_ACCOUNT_JSON: ${{ secrets.GAM_SERVICE_ACCOUNT_JSON }}

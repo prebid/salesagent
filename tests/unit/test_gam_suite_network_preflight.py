@@ -210,10 +210,12 @@ def test_runner_stops_before_docker_when_the_preflight_fails(tmp_path) -> None:
     assert "compose" not in docker_argv, f"Docker started after a failed preflight: {docker_argv}"
 
 
-def test_runner_passes_the_opt_out_flag_to_the_preflight_and_goes_on(tmp_path) -> None:
-    code, output, uv_argv, _ = _run_runner(tmp_path, "--skip-gam-preflight", "bdd_e2e", uv_exit=0, gam_setting=True)
+def test_runner_honours_the_opt_out_flag_without_uv(tmp_path) -> None:
+    """The flag runs no check, so the runner states the preflight's own skip line and needs no uv for it."""
+    code, output, uv_argv, _ = _run_runner(tmp_path, "--skip-gam-preflight", "bdd_e2e", uv_exit=1, gam_setting=True)
     assert code == 0, output
-    assert uv_argv.split().count("--skip") == 1, uv_argv
+    assert uv_argv == ""
+    assert f"GAM network: {SKIPPED.removeprefix('GAM: ')}" in output.splitlines(), output
 
 
 @pytest.mark.parametrize(
