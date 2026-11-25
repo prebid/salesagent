@@ -5,22 +5,116 @@ Handles targeting validation, translation from AdCP targeting to GAM targeting,
 and geo mapping operations for Google Ad Manager campaigns.
 """
 
+import csv
 import json
 import logging
-import os
+from pathlib import Path
 from typing import Any
 
 from adcp.types.domains.enums.metro_system import MetroAreaSystem
+from pydantic import ValidationError
 
+from src.adapters.gam_implementation_config_schema import CustomTargeting
 from src.core.errors.details import CapabilityRefusalDetails
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
     AdCPSalesAgentError,
+    AdCPValidationError,
+)
+from src.services.targeting_capabilities import (
+    extract_simple_values,
+    extract_system_values,
+    geo_inclusion_cut,
+    nielsen_dma_codes,
+    region_country,
 )
 
 logger = logging.getLogger(__name__)
+
+#: GAM numbers its DMA_REGION geo targets 200000 plus the Nielsen DMA code (200501 is
+#: "New York NY"), as ``SELECT Id, Name FROM Geo_Target WHERE Type = 'DMA_REGION'`` shows on
+#: any network. Google's published geo target file carries no DMA rows, so the ids are
+#: computed from the accepted Nielsen codes rather than stored.
+GAM_DMA_ID_OFFSET = 200000
+
+
+def _only(matches: list[dict[str, str]], what: str) -> dict[str, str]:
+    """The one row in *matches*; ``LookupError`` naming *what* when there are none or several."""
+    if len(matches) != 1:
+        raise LookupError(f"{what}: {len(matches)} rows in geo_targets.csv, expected exactly one")
+    return matches[0]
+
+
+def _load_gam_geo_locations() -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    """Derive every accepted geo code's GAM id from ``geo_targets.csv`` and ``geo_codes.json``.
+
+    Returns ``(countries, regions, dmas)``: ISO 3166-1 code, full ISO 3166-2 code and Nielsen
+    DMA code, each mapped to its GAM geo target id. Geo target ids are global, not per network.
+
+    Countries and regions are rows copied from Google's published geo target file; a region
+    is the one row under its country whose name and target type ``geo_codes.json`` states.
+    DMA ids follow GAM's numbering (``GAM_DMA_ID_OFFSET``). Ids stay the strings the file
+    holds. Raises ``OSError`` (a missing file), ``ValueError`` (JSON that does not parse),
+    ``csv.Error``, or ``LookupError`` naming the code or row that cannot be derived.
+    """
+    data_dir = Path(__file__).resolve().parents[1]
+    with (data_dir / "geo_targets.csv").open(encoding="utf-8", newline="") as rows_file:
+        rows = list(csv.DictReader(rows_file))
+    codes = json.loads((data_dir / "geo_codes.json").read_text(encoding="utf-8"))
+
+    country_rows: dict[str, list[dict[str, str]]] = {}
+    for row in rows:
+        if row["Target Type"] == "Country":
+            country_rows.setdefault(row["Country Code"], []).append(row)
+    countries = {code: _only(matches, f"country {code}")["Criteria ID"] for code, matches in country_rows.items()}
+
+    regions: dict[str, str] = {}
+    for code, region in codes["regions"].items():
+        country = region_country(code)
+        if country not in countries:
+            raise LookupError(f"region {code}: no Country row for {country}")
+        matches = [
+            row
+            for row in rows
+            if row["Country Code"] == country
+            and row["Parent ID"] == countries[country]
+            and row["Name"] == region["name"]
+            and row["Target Type"] == region["type"]
+        ]
+        regions[code] = _only(matches, f"region {code} ({region['name']}, {region['type']})")["Criteria ID"]
+
+    dmas = {code: str(GAM_DMA_ID_OFFSET + int(code)) for code in codes["nielsen_dma"]}
+    return countries, regions, dmas
+
+
+def _gam_dma_codes(metros: list | None) -> set[str]:
+    """The Nielsen DMA codes in a ``geo_metros`` field; any other metro system is refused."""
+    by_system = extract_system_values(metros or [])
+    others = sorted(set(by_system) - {MetroAreaSystem.nielsen_dma.value})
+    if others:
+        raise AdCPCapabilityNotSupportedError(
+            details=CapabilityRefusalDetails(
+                capability="geo_system", rejected_value=others, accepted_values=[MetroAreaSystem.nielsen_dma.value]
+            )
+        )
+    return nielsen_dma_codes(metros)
+
+
+def _location_ids(field: str, codes: set[str], ids: dict[str, str]) -> dict[str, str]:
+    """Each code's GAM id; a code with none is refused, naming *field* and every such code."""
+    unmapped = sorted(code for code in codes if code not in ids)
+    if unmapped:
+        raise AdCPCapabilityNotSupportedError(
+            details=CapabilityRefusalDetails(capability=field, rejected_value=unmapped)
+        )
+    return {code: ids[code] for code in codes}
+
+
+def _locations(location_ids: dict[str, str], codes: set[str]) -> list[dict[str, str]]:
+    """GAM ``Location`` objects for *codes*, sorted by code so the payload is deterministic."""
+    return [{"id": location_ids[code]} for code in sorted(codes)]
 
 
 class GAMTargetingManager:
@@ -56,14 +150,13 @@ class GAMTargetingManager:
         """
         self.tenant_id = tenant_id
         self.gam_client = gam_client
-        self.geo_country_map: dict[str, str] = {}
-        self.geo_region_map: dict[str, dict[str, str]] = {}
-        self.geo_metro_map: dict[str, str] = {}
+        # Load and check the geo data now, so a broken data file refuses the adapter at
+        # construction rather than at the first geo overlay.
+        self.geo_country_map, self.geo_region_map, self.geo_metro_map = _load_gam_geo_locations()
         self.axe_include_key: str | None = None
         self.axe_exclude_key: str | None = None
         self.axe_macro_key: str | None = None
         self.custom_targeting_key_ids: dict[str, str] = {}  # Maps key names → GAM key IDs
-        self._load_geo_mappings()
         if targeting_config:
             # Use pre-loaded config (eliminates adapter→DB circular dependency)
             self.axe_include_key = targeting_config.get("axe_include_key")
@@ -82,34 +175,6 @@ class GAMTargetingManager:
             self._load_axe_keys()
             self._load_custom_targeting_key_ids()
 
-    def _load_geo_mappings(self):
-        """Load static geo mappings from JSON file on disk.
-
-        Loads AdCP country codes → GAM geo IDs from gam_geo_mappings.json.
-        This is static data that doesn't change per tenant.
-        """
-        try:
-            # Look for the geo mappings file relative to the adapters directory
-            mapping_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "gam_geo_mappings.json")
-            with open(mapping_file) as f:
-                geo_data = json.load(f)
-
-            self.geo_country_map = geo_data.get("countries", {})
-            self.geo_region_map = geo_data.get("regions", {})
-            self.geo_metro_map = geo_data.get("metros", {}).get("US", {})  # Currently only US metros
-
-            logger.info(
-                f"Loaded GAM geo mappings: {len(self.geo_country_map)} countries, "
-                f"{sum(len(v) for v in self.geo_region_map.values())} regions, "
-                f"{len(self.geo_metro_map)} metros"
-            )
-        except Exception as e:
-            logger.warning(f"Could not load geo mappings file: {e}")
-            logger.warning("Using empty geo mappings - geo targeting will not work properly")
-            self.geo_country_map = {}
-            self.geo_region_map = {}
-            self.geo_metro_map = {}
-
     def _load_axe_keys(self):
         """Load tenant-specific AXE configuration from database.
 
@@ -119,17 +184,6 @@ class GAMTargetingManager:
         - axe_macro_key: For creative macro substitution
 
         These are adapter-agnostic and work with all ad server adapters.
-
-        **Why Standalone Function:**
-        This is separate from _load_geo_mappings() because:
-        1. Different data sources: Database (tenant-specific) vs. File (static)
-        2. Different lifecycles: Per-tenant config vs. one-time initialization
-        3. Different loading patterns: SQL query vs. JSON file read
-        4. Clear separation of concerns: Tenant config vs. static mappings
-
-        While this could be part of a generic "load_tenant_config" function,
-        keeping it separate makes it easier to understand, test, and maintain.
-        Each method has a single, clear responsibility.
         """
         from sqlalchemy import select
 
@@ -337,283 +391,98 @@ class GAMTargetingManager:
             logger.error(f"Failed to get/create custom targeting value '{value_name}': {e}", exc_info=True)
             raise AdCPAdapterError(internal_detail=e) from e
 
-    def _build_custom_targeting_structure(
-        self, custom_targeting_dict: dict[str, Any], logical_operator: str = "AND"
-    ) -> dict[str, Any]:
-        """Convert custom targeting dict to GAM CustomCriteria structure.
+    def _buyer_custom_targeting(self, targeting_overlay) -> CustomTargeting:
+        """The buyer's GAM key-values and AXE segments, as legacy key-values.
 
-        GAM API expects custom targeting in this format:
-        {
-            "logicalOperator": "AND" | "OR",
+        A key-value that is not a GAM key ID and a value name is the buyer's to correct.
+        """
+        key_values: dict[str, Any] = {}
+
+        # Platform-specific custom targeting
+        if targeting_overlay.custom and "gam" in targeting_overlay.custom:
+            key_values.update(targeting_overlay.custom["gam"].get("key_values", {}))
+
+        # AXE segment targeting (AdCP pre-3.0 axe_include_segment/axe_exclude_segment;
+        # deprecated in 3.0.x in favor of TMP provider fields)
+        # Per AdCP spec, three separate keys are required for include, exclude, and macro segments
+        if targeting_overlay.axe_include_segment:
+            if not self.axe_include_key:
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(capability="axe_include_segment")
+                )
+            # Resolve key name to GAM key ID
+            try:
+                key_id = self.resolve_custom_targeting_key_id(self.axe_include_key)
+                key_values[key_id] = targeting_overlay.axe_include_segment
+                logger.info(
+                    f"Adding AXE include segment targeting: {self.axe_include_key} (ID: {key_id})={targeting_overlay.axe_include_segment}"
+                )
+            except AdCPConfigurationError:
+                logger.error(f"Failed to resolve AXE include key '{self.axe_include_key}'")
+                raise
+
+        if targeting_overlay.axe_exclude_segment:
+            if not self.axe_exclude_key:
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(capability="axe_exclude_segment")
+                )
+            # Resolve key name to GAM key ID
+            try:
+                key_id = self.resolve_custom_targeting_key_id(self.axe_exclude_key)
+                # GAM supports negative targeting via NOT_ prefix on the KEY ID
+                exclude_key_id = f"NOT_{key_id}"
+                key_values[exclude_key_id] = targeting_overlay.axe_exclude_segment
+                logger.info(
+                    f"Adding AXE exclude segment targeting: {self.axe_exclude_key} (ID: {key_id}, negated)={targeting_overlay.axe_exclude_segment}"
+                )
+            except AdCPConfigurationError:
+                logger.error(f"Failed to resolve AXE exclude key '{self.axe_exclude_key}'")
+                raise
+
+        try:
+            return CustomTargeting.from_key_values(key_values)
+        except ValidationError as exc:
+            raise AdCPValidationError(internal_detail=exc) from exc
+
+    def _custom_targeting_entry(self, custom_targeting: CustomTargeting) -> dict[str, Any]:
+        """``{"customTargeting": <GAM tree>}``, or nothing when there is no custom targeting."""
+        if not custom_targeting.branches:
+            return {}
+        return {"customTargeting": self._render_custom_targeting(custom_targeting)}
+
+    def _render_custom_targeting(self, custom_targeting: CustomTargeting) -> dict[str, Any]:
+        """The GAM tree for ``custom_targeting``: an OR set of AND sets of ``CustomCriteria``.
+
+        The one place a value name becomes a GAM value ID. A name and the ID it resolves to
+        can both be listed for one key, so each ID is sent once.
+        """
+        return {
+            "xsi_type": "CustomCriteriaSet",  # Explicit types for zeep SOAP serialization
+            "logicalOperator": "OR",
             "children": [
                 {
-                    "xsi_type": "CustomCriteria",
-                    "keyId": "123456",
-                    "operator": "IS" | "IS_NOT",
-                    "valueIds": [value_id1, value_id2]
+                    "xsi_type": "CustomCriteriaSet",
+                    "logicalOperator": "AND",
+                    "children": [
+                        {
+                            "xsi_type": "CustomCriteria",
+                            "keyId": criterion.key_id,
+                            "operator": "IS_NOT" if criterion.exclude else "IS",
+                            "valueIds": list(
+                                dict.fromkeys(
+                                    value
+                                    if isinstance(value, int)
+                                    else self._get_or_create_custom_targeting_value(str(criterion.key_id), value)
+                                    for value in criterion.values
+                                )
+                            ),
+                        }
+                        for criterion in branch
+                    ],
                 }
-            ]
+                for branch in custom_targeting.branches
+            ],
         }
-
-        Supports three input formats:
-
-        Legacy format (dict[str, str]):
-            {'key_id': 'value_name', 'NOT_key_id': 'value_name'}
-
-        Enhanced format (dict with include/exclude):
-            {
-                'include': {'key_id': ['value1', 'value2']},
-                'exclude': {'key_id': ['value3']},
-                'operator': 'AND' | 'OR'
-            }
-
-        Groups format (GAM-style nested groups):
-            {
-                'groups': [
-                    {
-                        'criteria': [
-                            {'keyId': '123', 'values': ['v1', 'v2']},
-                            {'keyId': '456', 'values': ['v3'], 'exclude': True}
-                        ]
-                    }
-                ]
-            }
-            Groups are OR'd together; criteria within groups are AND'd.
-
-        Args:
-            custom_targeting_dict: Custom targeting configuration in any format
-            logical_operator: Default operator for combining criteria (AND/OR)
-
-        Returns:
-            GAM CustomCriteria structure
-        """
-        children = []
-
-        # Check if this is the groups format (GAM-style nested)
-        if "groups" in custom_targeting_dict:
-            return self._build_groups_custom_targeting_structure(custom_targeting_dict)
-
-        # Check if this is the enhanced format with include/exclude
-        if "include" in custom_targeting_dict or "exclude" in custom_targeting_dict:
-            return self._build_enhanced_custom_targeting_structure(custom_targeting_dict)
-
-        # Legacy format: {'key_id': 'value_name', 'NOT_key_id': 'value_name'}
-        for key, value_name in custom_targeting_dict.items():
-            # Check for negative targeting (NOT_ prefix)
-            is_negative = key.startswith("NOT_")
-            key_id = key[4:] if is_negative else key  # Remove NOT_ prefix
-
-            # Build custom criteria object
-            # For custom targeting values, GAM requires value IDs (not names)
-            # We need to create or lookup the value ID for the value name
-            value_id = self._get_or_create_custom_targeting_value(key_id, value_name)
-
-            criteria = {
-                "xsi_type": "CustomCriteria",  # Explicit type for zeep SOAP serialization
-                "keyId": int(key_id),  # GAM expects integer key ID
-                "operator": "IS_NOT" if is_negative else "IS",
-                "valueIds": [value_id],  # Custom targeting value ID
-            }
-            children.append(criteria)
-
-        return {
-            "xsi_type": "CustomCriteriaSet",  # Explicit type for zeep
-            "logicalOperator": logical_operator,
-            "children": children,
-        }
-
-    def _build_enhanced_custom_targeting_structure(self, targeting_config: dict[str, Any]) -> dict[str, Any]:
-        """Build GAM targeting structure from enhanced format with include/exclude.
-
-        Enhanced format:
-            {
-                'include': {'key_id': ['value1', 'value2']},  # Multiple values = OR within key
-                'exclude': {'key_id': ['value3']},
-                'operator': 'AND' | 'OR'  # How to combine different keys
-            }
-
-        Values can be either:
-        - Numeric GAM value IDs (e.g., "451005167391") - used directly
-        - Value names (e.g., "sports") - looked up via _get_or_create_custom_targeting_value
-
-        Args:
-            targeting_config: Enhanced targeting configuration
-
-        Returns:
-            GAM CustomCriteria structure with proper nesting for OR/AND logic
-        """
-        include_dict = targeting_config.get("include", {})
-        exclude_dict = targeting_config.get("exclude", {})
-        operator = targeting_config.get("operator", "AND")
-
-        children = []
-
-        # Process include criteria
-        for key_id, values in include_dict.items():
-            if not values:
-                continue
-
-            # Multiple values for same key are OR'd together (IS operator with multiple valueIds)
-            value_ids = []
-            for value in values:
-                # Check if value is already a numeric GAM ID
-                if str(value).isdigit():
-                    value_ids.append(int(value))
-                else:
-                    # Value is a name, need to look up or create
-                    value_id = self._get_or_create_custom_targeting_value(key_id, value)
-                    value_ids.append(value_id)
-
-            criteria = {
-                "xsi_type": "CustomCriteria",
-                "keyId": int(key_id),
-                "operator": "IS",
-                "valueIds": value_ids,  # Multiple values = OR logic in GAM
-            }
-            children.append(criteria)
-
-        # Process exclude criteria
-        for key_id, values in exclude_dict.items():
-            if not values:
-                continue
-
-            # For exclusions, each value gets IS_NOT
-            # Multiple excluded values for same key means "NOT value1 AND NOT value2"
-            value_ids = []
-            for value in values:
-                # Check if value is already a numeric GAM ID
-                if str(value).isdigit():
-                    value_ids.append(int(value))
-                else:
-                    # Value is a name, need to look up or create
-                    value_id = self._get_or_create_custom_targeting_value(key_id, value)
-                    value_ids.append(value_id)
-
-            criteria = {
-                "xsi_type": "CustomCriteria",
-                "keyId": int(key_id),
-                "operator": "IS_NOT",
-                "valueIds": value_ids,
-            }
-            children.append(criteria)
-
-        if not children:
-            return {}
-
-        return {
-            "xsi_type": "CustomCriteriaSet",
-            "logicalOperator": operator,
-            "children": children,
-        }
-
-    def _build_groups_custom_targeting_structure(self, targeting_config: dict[str, Any]) -> dict[str, Any]:
-        """Build GAM targeting structure from groups format (GAM-style nested).
-
-        Groups format supports nested targeting with OR between groups and AND within groups:
-            {
-                'groups': [
-                    {
-                        'criteria': [
-                            {'keyId': '123', 'values': ['v1', 'v2']},
-                            {'keyId': '456', 'values': ['v3'], 'exclude': True}
-                        ]
-                    },
-                    {
-                        'criteria': [
-                            {'keyId': '789', 'values': ['v4']}
-                        ]
-                    }
-                ]
-            }
-
-        This translates to: (key123 IS v1|v2 AND key456 IS_NOT v3) OR (key789 IS v4)
-
-        Values can be either:
-        - Numeric GAM value IDs (e.g., "451005167391") - used directly
-        - Value names (e.g., "sports") - looked up via _get_or_create_custom_targeting_value
-
-        Args:
-            targeting_config: Groups targeting configuration
-
-        Returns:
-            GAM CustomCriteria structure with nested CustomCriteriaSets
-        """
-        groups = targeting_config.get("groups", [])
-        group_children = []
-
-        for group in groups:
-            criteria_list = group.get("criteria", [])
-            criteria_children = []
-
-            for criterion in criteria_list:
-                key_id = criterion.get("keyId")
-                values = criterion.get("values", [])
-                is_exclude = criterion.get("exclude", False)
-
-                if not key_id or not values:
-                    logger.warning(f"Skipping malformed criterion in groups targeting: keyId={key_id}, values={values}")
-                    continue
-
-                # Resolve values to GAM value IDs
-                value_ids = []
-                for value in values:
-                    if str(value).isdigit():
-                        value_ids.append(int(value))
-                    else:
-                        value_id = self._get_or_create_custom_targeting_value(key_id, value)
-                        value_ids.append(value_id)
-
-                if not value_ids:
-                    continue
-
-                criteria_children.append(
-                    {
-                        "xsi_type": "CustomCriteria",
-                        "keyId": int(key_id),
-                        "operator": "IS_NOT" if is_exclude else "IS",
-                        "valueIds": value_ids,
-                    }
-                )
-
-            # Only add groups that have criteria
-            if criteria_children:
-                group_children.append(
-                    {
-                        "xsi_type": "CustomCriteriaSet",
-                        "logicalOperator": "AND",  # Criteria within group are AND'd
-                        "children": criteria_children,
-                    }
-                )
-
-        if not group_children:
-            return {}
-
-        return {
-            "xsi_type": "CustomCriteriaSet",
-            "logicalOperator": "OR",  # Groups are OR'd together
-            "children": group_children,
-        }
-
-    def _lookup_region_id(self, region_code: str) -> str | None:
-        """Look up region ID, accepting ISO 3166-2 format ("US-CA") or bare codes.
-
-        Args:
-            region_code: Region code in ISO 3166-2 ("US-CA") or bare ("CA") format
-
-        Returns:
-            GAM region ID if found, None otherwise
-        """
-        # ISO 3166-2 format: use country prefix for direct lookup
-        if "-" in region_code:
-            country, region = region_code.split("-", 1)
-            country_regions = self.geo_region_map.get(country, {})
-            return country_regions.get(region)
-
-        # Bare code: search across all countries (backward compat)
-        for _country, regions in self.geo_region_map.items():
-            if region_code in regions:
-                return regions[region_code]
-        return None
 
     def validate_targeting(self, targeting_overlay) -> list[str]:
         """Validate targeting and return unsupported features.
@@ -628,6 +497,9 @@ class GAMTargetingManager:
 
         if not targeting_overlay:
             return unsupported
+
+        # Geo codes and systems GAM cannot place are refused here, before any order exists.
+        self._translate_geo(targeting_overlay)
 
         # Check device types
         if targeting_overlay.device_form_factors:
@@ -653,11 +525,67 @@ class GAMTargetingManager:
 
         return unsupported
 
-    def build_targeting(self, targeting_overlay) -> dict[str, Any]:
+    def _translate_geo(self, targeting_overlay) -> dict[str, Any]:
+        """GAM ``geoTargeting`` for the overlay's geo fields: every code placed or refused.
+
+        Every code of all six fields is mapped first, so a code GAM has no location for is
+        refused even where the AND would drop it. Inclusion fields AND
+        (docs/reference/migration/geo-targeting.mdx at v3.2.7) and GAM ORs one location
+        list, so ``targetedLocations`` is the finest inclusion field present, cut to the
+        listed countries by the core ``geo_inclusion_cut``. Exclusions AND NOT, which is
+        what GAM's ``excludedLocations`` does with any listed location.
+        """
+        countries = _location_ids(
+            "geo_countries", extract_simple_values(targeting_overlay.geo_countries or []), self.geo_country_map
+        )
+        regions = _location_ids(
+            "geo_regions", extract_simple_values(targeting_overlay.geo_regions or []), self.geo_region_map
+        )
+        dmas = _location_ids("geo_metros", _gam_dma_codes(targeting_overlay.geo_metros), self.geo_metro_map)
+        excluded = [
+            _location_ids(
+                "geo_countries_exclude",
+                extract_simple_values(targeting_overlay.geo_countries_exclude or []),
+                self.geo_country_map,
+            ),
+            _location_ids(
+                "geo_regions_exclude",
+                extract_simple_values(targeting_overlay.geo_regions_exclude or []),
+                self.geo_region_map,
+            ),
+            _location_ids(
+                "geo_metros_exclude", _gam_dma_codes(targeting_overlay.geo_metros_exclude), self.geo_metro_map
+            ),
+        ]
+
+        # A state and a DMA overlap only in part, and GAM's OR list cannot express that part.
+        if regions and dmas:
+            raise AdCPCapabilityNotSupportedError(
+                details=CapabilityRefusalDetails(capability="geo_metros", rejected_value=sorted(dmas))
+            )
+
+        geo_targeting: dict[str, Any] = {}
+        regions_kept, dmas_kept = geo_inclusion_cut(targeting_overlay)
+        if regions:
+            geo_targeting["targetedLocations"] = _locations(regions, regions_kept)
+        elif dmas:
+            geo_targeting["targetedLocations"] = _locations(dmas, dmas_kept)
+        elif countries:
+            geo_targeting["targetedLocations"] = _locations(countries, set(countries))
+        excluded_locations = [location for ids in excluded for location in _locations(ids, set(ids))]
+        if excluded_locations:
+            geo_targeting["excludedLocations"] = excluded_locations
+        return geo_targeting
+
+    def build_targeting(
+        self, targeting_overlay, product_custom_targeting: CustomTargeting | None = None
+    ) -> dict[str, Any]:
         """Build GAM targeting criteria from AdCP targeting.
 
         Args:
             targeting_overlay: AdCP targeting overlay object
+            product_custom_targeting: the product's own custom targeting, which a line item
+                has to match as well as the buyer's
 
         Returns:
             Dictionary containing GAM targeting configuration
@@ -665,13 +593,11 @@ class GAMTargetingManager:
         Raises:
             ValueError: If unsupported targeting is requested (no quiet failures)
         """
+        product_custom_targeting = product_custom_targeting or CustomTargeting()
         if not targeting_overlay:
-            return {}
+            return self._custom_targeting_entry(product_custom_targeting)
 
         gam_targeting: dict[str, Any] = {}
-
-        # Geographic targeting
-        geo_targeting: dict[str, Any] = {}
 
         # Postal code targeting not implemented in static mapping - fail loudly.
         # The capability NAME travels as structured detail; the buyer-facing sentence is
@@ -683,92 +609,7 @@ class GAMTargetingManager:
                 details=CapabilityRefusalDetails(capability="geo_postal_areas_exclude")
             )
 
-        # Build targeted locations
-        if any(
-            [
-                targeting_overlay.geo_countries,
-                targeting_overlay.geo_regions,
-                targeting_overlay.geo_metros,
-            ]
-        ):
-            geo_targeting["targetedLocations"] = []
-
-            # Map countries (GeoCountry → plain string via .root)
-            if targeting_overlay.geo_countries:
-                for country in targeting_overlay.geo_countries:
-                    code = country.root
-                    if code in self.geo_country_map:
-                        geo_targeting["targetedLocations"].append({"id": self.geo_country_map[code]})
-                    else:
-                        logger.warning(f"Country code '{code}' not in GAM mapping")
-
-            # Map regions (GeoRegion → ISO 3166-2 string via .root)
-            if targeting_overlay.geo_regions:
-                for region in targeting_overlay.geo_regions:
-                    code = region.root
-                    region_id = self._lookup_region_id(code)
-                    if region_id:
-                        geo_targeting["targetedLocations"].append({"id": region_id})
-                    else:
-                        logger.warning(f"Region code '{code}' not in GAM mapping")
-
-            # Map metros (GeoMetro: validate system, extract values)
-            if targeting_overlay.geo_metros:
-                for metro in targeting_overlay.geo_metros:
-                    if metro.system != MetroAreaSystem.nielsen_dma:
-                        raise AdCPCapabilityNotSupportedError(
-                            details=CapabilityRefusalDetails(
-                                capability="geo_system",
-                                rejected_value=metro.system.value,
-                                accepted_values=["nielsen_dma"],
-                            )
-                        )
-                    for dma_code in metro.values:
-                        if dma_code in self.geo_metro_map:
-                            geo_targeting["targetedLocations"].append({"id": self.geo_metro_map[dma_code]})
-                        else:
-                            logger.warning(f"Metro code '{dma_code}' not in GAM mapping")
-
-        # Build excluded locations
-        if any(
-            [
-                targeting_overlay.geo_countries_exclude,
-                targeting_overlay.geo_regions_exclude,
-                targeting_overlay.geo_metros_exclude,
-            ]
-        ):
-            geo_targeting["excludedLocations"] = []
-
-            # Map excluded countries
-            if targeting_overlay.geo_countries_exclude:
-                for country in targeting_overlay.geo_countries_exclude:
-                    code = country.root
-                    if code in self.geo_country_map:
-                        geo_targeting["excludedLocations"].append({"id": self.geo_country_map[code]})
-
-            # Map excluded regions
-            if targeting_overlay.geo_regions_exclude:
-                for region in targeting_overlay.geo_regions_exclude:
-                    code = region.root
-                    region_id = self._lookup_region_id(code)
-                    if region_id:
-                        geo_targeting["excludedLocations"].append({"id": region_id})
-
-            # Map excluded metros
-            if targeting_overlay.geo_metros_exclude:
-                for metro in targeting_overlay.geo_metros_exclude:
-                    if metro.system != MetroAreaSystem.nielsen_dma:
-                        raise AdCPCapabilityNotSupportedError(
-                            details=CapabilityRefusalDetails(
-                                capability="geo_system",
-                                rejected_value=metro.system.value,
-                                accepted_values=["nielsen_dma"],
-                            )
-                        )
-                    for dma_code in metro.values:
-                        if dma_code in self.geo_metro_map:
-                            geo_targeting["excludedLocations"].append({"id": self.geo_metro_map[dma_code]})
-
+        geo_targeting = self._translate_geo(targeting_overlay)
         if geo_targeting:
             gam_targeting["geoTargeting"] = geo_targeting
 
@@ -809,55 +650,9 @@ class GAMTargetingManager:
                 )
             )
 
-        # Custom key-value targeting
-        custom_targeting = {}
-
-        # Platform-specific custom targeting
-        if targeting_overlay.custom and "gam" in targeting_overlay.custom:
-            custom_targeting.update(targeting_overlay.custom["gam"].get("key_values", {}))
-
-        # AXE segment targeting (AdCP pre-3.0 axe_include_segment/axe_exclude_segment;
-        # deprecated in 3.0.x in favor of TMP provider fields)
-        # Per AdCP spec, three separate keys are required for include, exclude, and macro segments
-        if targeting_overlay.axe_include_segment:
-            if not self.axe_include_key:
-                raise AdCPCapabilityNotSupportedError(
-                    details=CapabilityRefusalDetails(capability="axe_include_segment")
-                )
-            # Resolve key name to GAM key ID
-            try:
-                key_id = self.resolve_custom_targeting_key_id(self.axe_include_key)
-                custom_targeting[key_id] = targeting_overlay.axe_include_segment
-                logger.info(
-                    f"Adding AXE include segment targeting: {self.axe_include_key} (ID: {key_id})={targeting_overlay.axe_include_segment}"
-                )
-            except AdCPConfigurationError:
-                logger.error(f"Failed to resolve AXE include key '{self.axe_include_key}'")
-                raise
-
-        if targeting_overlay.axe_exclude_segment:
-            if not self.axe_exclude_key:
-                raise AdCPCapabilityNotSupportedError(
-                    details=CapabilityRefusalDetails(capability="axe_exclude_segment")
-                )
-            # Resolve key name to GAM key ID
-            try:
-                key_id = self.resolve_custom_targeting_key_id(self.axe_exclude_key)
-                # GAM supports negative targeting via NOT_ prefix on the KEY ID
-                exclude_key_id = f"NOT_{key_id}"
-                custom_targeting[exclude_key_id] = targeting_overlay.axe_exclude_segment
-                logger.info(
-                    f"Adding AXE exclude segment targeting: {self.axe_exclude_key} (ID: {key_id}, negated)={targeting_overlay.axe_exclude_segment}"
-                )
-            except AdCPConfigurationError:
-                logger.error(f"Failed to resolve AXE exclude key '{self.axe_exclude_key}'")
-                raise
-
-        if custom_targeting:
-            # Convert simple dict to GAM CustomCriteria structure
-            # GAM expects: {logicalOperator, children: [{keyId, operator, valueIds, valueNames}]}
-            # Our dict: {'key_id': 'value_name', 'NOT_key_id': 'value_name'}
-            gam_targeting["customTargeting"] = self._build_custom_targeting_structure(custom_targeting)
+        gam_targeting.update(
+            self._custom_targeting_entry(self._buyer_custom_targeting(targeting_overlay) & product_custom_targeting)
+        )
 
         # Audience segment targeting
         # Map AdCP audiences_any_of and signals to GAM audience segment IDs
@@ -945,22 +740,5 @@ class GAMTargetingManager:
 
         if inventory_targeting:
             targeting["inventoryTargeting"] = inventory_targeting
-
-        return targeting
-
-    def add_custom_targeting(self, targeting: dict[str, Any], custom_keys: dict[str, Any]) -> dict[str, Any]:
-        """Add custom targeting keys to GAM targeting configuration.
-
-        Args:
-            targeting: Existing GAM targeting configuration
-            custom_keys: Dictionary of custom targeting key-value pairs
-
-        Returns:
-            Updated targeting configuration with custom targeting
-        """
-        if custom_keys:
-            if "customTargeting" not in targeting:
-                targeting["customTargeting"] = {}
-            targeting["customTargeting"].update(custom_keys)
 
         return targeting

@@ -28,7 +28,7 @@ from collections import Counter, defaultdict
 
 def load(path: str) -> dict[str, str]:
     """Return {nodeid: outcome} for every test in a bdd.json report."""
-    data = json.load(open(path))
+    data = json.load(open(path, encoding="utf-8"))
     return {t["nodeid"]: t["outcome"] for t in data["tests"]}
 
 
@@ -105,7 +105,7 @@ def main() -> None:
         print(f"  {uc:<8}{r['join']:>6}{r['pp']:>10}{r['px']:>9}{r['xp']:>9}{r['xx']:>7}{r['other']:>7}")
 
     if regressions:
-        with open("test-results/bdd-regressions.txt", "w") as f:
+        with open("test-results/bdd-regressions.txt", "w", encoding="utf-8") as f:
             f.write("\n".join(f"{new[n]}\t{n}" for n in regressions))
         print("\nFull regression nodeid list -> test-results/bdd-regressions.txt")
 

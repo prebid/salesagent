@@ -159,13 +159,12 @@ Then call: window.inventoryProfileEditor.open(profileData)
     'use strict';
 
     const config = {
-        tenantId: '{{ editor_config.tenant_id if editor_config else tenant_id }}',
-        virtualHost: '{{ editor_config.tenant_virtual_host if editor_config else tenant.virtual_host if tenant else "" }}',
-        mode: '{{ editor_config.mode if editor_config else "create" }}'
+        tenantId: {{ (editor_config.tenant_id if editor_config else tenant_id)|tojson }},
+        virtualHost: {{ (editor_config.tenant_virtual_host if editor_config else tenant.virtual_host if tenant else "")|tojson }},
+        mode: {{ (editor_config.mode if editor_config else "create")|tojson }}
     };
 
     // Script root for URL construction (handles /admin prefix in production)
-    const scriptRoot = '{{ request.script_root }}' || '';
 
     // State
     let currentProfile = null;
@@ -250,7 +249,7 @@ Then call: window.inventoryProfileEditor.open(profileData)
             const adUnitDisplay = document.getElementById('profileSelectedAdUnits');
             if (adUnitDisplay) {
                 adUnitDisplay.innerHTML = inventoryConfig.ad_units.map(id =>
-                    `<span class="badge bg-primary me-1 mb-1">${id}</span>`
+                    `<span class="badge bg-primary me-1 mb-1">${escapeHtml(id)}</span>`
                 ).join('');
             }
         }
@@ -261,7 +260,7 @@ Then call: window.inventoryProfileEditor.open(profileData)
             const placementDisplay = document.getElementById('profileSelectedPlacements');
             if (placementDisplay) {
                 placementDisplay.innerHTML = inventoryConfig.placements.map(id =>
-                    `<span class="badge bg-success me-1 mb-1">${id}</span>`
+                    `<span class="badge bg-success me-1 mb-1">${escapeHtml(id)}</span>`
                 ).join('');
             }
         }
@@ -377,8 +376,7 @@ Then call: window.inventoryProfileEditor.open(profileData)
                 const contentType = response.headers.get('content-type') || '';
                 try {
                     if (contentType.includes('application/json')) {
-                        const error = await response.json();
-                        message = error.error || error.message || message;
+                        message = adminErrorText(await response.json());
                     } else {
                         const text = await response.text();
                         if (text) {
@@ -469,14 +467,14 @@ Then call: window.inventoryProfileEditor.open(profileData)
                 <label class="d-flex align-items-start p-2 mb-2 border rounded" style="cursor: pointer; background: ${isChecked ? '#f0f7ff' : 'white'};">
                     <input type="checkbox"
                            class="form-check-input me-2 mt-1"
-                           value="${propKey}"
+                           value="${escapeHtml(propKey)}"
                            ${isChecked ? 'checked' : ''}
-                           onchange="window.inventoryProfileEditor.toggleProperty('${propKey}')">
+                           onchange="window.inventoryProfileEditor.toggleProperty(${jsArg(propKey)})">
                     <div style="flex: 1;">
-                        <div style="font-weight: 600;">${mainLabel}${typeDisplay}</div>
-                        ${secondaryLabel ? `<div class="text-muted small">${secondaryLabel}</div>` : ''}
-                        ${prop.property_ids && prop.property_ids.length > 0 ? `<div class="text-muted small">Property IDs: ${prop.property_ids.join(', ')}</div>` : ''}
-                        ${prop.property_tags && prop.property_tags.length > 0 ? `<div class="text-muted small">Tags: ${prop.property_tags.join(', ')}</div>` : ''}
+                        <div style="font-weight: 600;">${escapeHtml(mainLabel)}${escapeHtml(typeDisplay)}</div>
+                        ${secondaryLabel ? `<div class="text-muted small">${escapeHtml(secondaryLabel)}</div>` : ''}
+                        ${prop.property_ids && prop.property_ids.length > 0 ? `<div class="text-muted small">Property IDs: ${escapeHtml(prop.property_ids.join(', '))}</div>` : ''}
+                        ${prop.property_tags && prop.property_tags.length > 0 ? `<div class="text-muted small">Tags: ${escapeHtml(prop.property_tags.join(', '))}</div>` : ''}
                     </div>
                 </label>
             `;
@@ -583,7 +581,7 @@ Then call: window.inventoryProfileEditor.open(profileData)
 
             sizesList.innerHTML = sortedSizes.map(sizeKey => {
                 const count = sizeUnitCounts.get(sizeKey) || 0;
-                return `<span class="badge bg-info me-1 mb-1">${sizeKey} (${count} unit${count > 1 ? 's' : ''})</span>`;
+                return `<span class="badge bg-info me-1 mb-1">${escapeHtml(sizeKey)} (${escapeHtml(count)} unit${count > 1 ? 's' : ''})</span>`;
             }).join('');
 
             sizesBox.style.display = 'block';

@@ -7,14 +7,17 @@ to catch bugs like the session variable issue found in production.
 import pytest
 from sqlalchemy import select
 
+from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     CurrencyLimit,
     InventoryProfile,
+    InventoryProfilePublisherSelection,
     Product,
     PropertyTag,
     Tenant,
 )
+from tests.factories.publisher import held_selections
 from tests.utils.database_helpers import seed_tenant_with_product_prerequisites, vhost_for
 
 
@@ -46,12 +49,17 @@ def test_create_product_with_inventory_profile(integration_db):
                 "include_descendants": False,
             },
             format_ids=[{"id": "display_300x250", "agent_url": "https://creative.adcontextprotocol.org"}],
-            publisher_properties=[
-                {
-                    "publisher_domain": "example.com",
-                    "property_ids": ["prop_1"],
-                }
-            ],
+            publisher_selections=held_selections(
+                session,
+                InventoryProfilePublisherSelection,
+                tenant_id,
+                [
+                    {
+                        "publisher_domain": "psatest.com",
+                        "property_ids": ["prop_1"],
+                    }
+                ],
+            ),
         )
         session.add(inventory_profile)
         session.flush()  # Get the profile.id
@@ -69,7 +77,7 @@ def test_create_product_with_inventory_profile(integration_db):
             delivery_type="guaranteed",
             targeting_template={},
             implementation_config={},
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, tenant_id),
         )
         session.add(product)
         session.commit()
@@ -143,12 +151,17 @@ def test_product_creation_validates_profile_belongs_to_tenant(integration_db):
                 "include_descendants": False,
             },
             format_ids=[{"id": "display_300x250", "agent_url": "https://test.com"}],
-            publisher_properties=[
-                {
-                    "publisher_domain": "tenant1.com",
-                    "property_ids": ["prop_1"],
-                }
-            ],
+            publisher_selections=held_selections(
+                session,
+                InventoryProfilePublisherSelection,
+                tenant1_id,
+                [
+                    {
+                        "publisher_domain": "tenant1.com",
+                        "property_ids": ["prop_1"],
+                    }
+                ],
+            ),
         )
         session.add(profile)
         session.flush()

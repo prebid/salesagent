@@ -236,7 +236,7 @@ def audit(repo: Path, adcp: Path) -> dict[str, Any]:
                 continue
 
             target = dist / rel
-            source["resolved"] = str(target.relative_to(adcp)) if target.exists() else ""
+            source["resolved"] = target.relative_to(adcp).as_posix() if target.exists() else ""
             if not target.exists():
                 binding.findings.append(f"cited path does not exist at {version}: {rel}")
                 binding.flag(BUCKET_WRONG_SOURCE)

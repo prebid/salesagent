@@ -55,6 +55,7 @@ from tests.factories.creative_asset import (
     url_spec,
 )
 from tests.factories.malformed import malformed
+from tests.factories.mint import mint_id
 from tests.factories.principal import PrincipalFactory
 from tests.factories.request import OMIT, CreativeAssetRequestFactory
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
@@ -249,20 +250,6 @@ def _scenario_format_id(ctx: dict, env: object) -> str:
         return recorded
     format_id, _agent_url, _assets = _format_payload(ctx, env)
     return format_id
-
-
-def _e2e_unique_id(prefix: str) -> str:
-    """Generate a UUID-based unique ID for e2e tests.
-
-    Factory sequences produce predictable IDs (mb_0000, pkg_0000) that collide
-    with rows persisted in Docker's Postgres from prior runs. Use this for any
-    factory object created for e2e_rest.
-    """
-    import uuid
-
-    from tests.factories.mint import mint
-
-    return mint(f"{prefix}_{uuid.uuid4().hex[:8]}")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -813,7 +800,7 @@ def _readback(ctx: dict) -> Iterator[Session]:
     under test actually writes: the per-test base in process, and the live
     server's own base over e2e_rest (the env's factories write there, and
     ``_db_scope_for`` points production's cached engine at the same URL for the
-    scenario duration — ``_production_db_pointed_at``, tests/bdd/conftest.py).
+    scenario duration — ``production_db_pointed_at``, tests/utils/database_helpers.py).
     A read-back therefore needs no transport branch, which is why the skip this
     replaced was never the right primitive.
 
@@ -1170,8 +1157,8 @@ def given_assignment_to_existing_package(ctx: dict) -> None:
     mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "active"}
     prod_kwargs: dict = {"tenant": tenant, "format_ids": [_product_format_entry(ctx, env)]}
     if is_e2e(ctx):
-        mb_kwargs["media_buy_id"] = _e2e_unique_id("mb")
-        prod_kwargs["product_id"] = _e2e_unique_id("prod")
+        mb_kwargs["media_buy_id"] = mint_id("mb")
+        prod_kwargs["product_id"] = mint_id("prod")
 
     media_buy = MediaBuyFactory(**mb_kwargs)
     # Product accepts the default known format so the format check passes.
@@ -1181,7 +1168,7 @@ def given_assignment_to_existing_package(ctx: dict) -> None:
         "package_config": {"product_id": product.product_id, "budget": 1000.0},
     }
     if is_e2e(ctx):
-        pkg_kwargs["package_id"] = _e2e_unique_id("pkg")
+        pkg_kwargs["package_id"] = mint_id("pkg")
     package = MediaPackageFactory(**pkg_kwargs)
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
@@ -1267,8 +1254,14 @@ def _wire_creatives_entry(ctx: dict, creative_id: str) -> dict:
 @then(parsers.parse('the creatives entry for "{creative_id}" is assigned to the package'))
 def then_creatives_entry_assigned_to_package(ctx: dict, creative_id: str) -> None:
     """The wire entry selected by creative_id names the scenario's package in ``assigned_to``."""
+    then_creative_assigned_to_package(ctx, creative_id, ctx["package"].package_id)
+
+
+@then(parsers.re(r'creative "(?P<creative_id>[^"]+)" is assigned to packages? "(?P<package_ids>[^"]+)"$'))
+def then_creative_assigned_to_package(ctx: dict, creative_id: str, package_ids: str) -> None:
+    """The wire entry selected by creative_id lists exactly those packages, in that order, in ``assigned_to``."""
     entry = _wire_creatives_entry(ctx, creative_id)
-    expected = [ctx["package"].package_id]
+    expected = [package_id.strip() for package_id in package_ids.split(",")]
     assert entry.get("assigned_to") == expected, (
         f"expected the entry for {creative_id!r} to carry assigned_to={expected}, got {entry.get('assigned_to')!r}"
     )
@@ -1276,7 +1269,15 @@ def then_creatives_entry_assigned_to_package(ctx: dict, creative_id: str) -> Non
 
 @then(parsers.parse('the creatives entry for "{creative_id}" reports the package as an assignment error'))
 def then_creatives_entry_reports_package_assignment_error(ctx: dict, creative_id: str) -> None:
-    """The entry names the scenario's package in ``assignment_errors`` and assigns nothing.
+    """The entry names the scenario's package in ``assignment_errors`` and assigns nothing."""
+    then_creative_package_in_assignment_errors(ctx, creative_id, ctx["package"].package_id)
+
+
+@then(
+    parsers.parse('creative "{creative_id}" reports package "{package_id}" in assignment_errors and not in assigned_to')
+)
+def then_creative_package_in_assignment_errors(ctx: dict, creative_id: str, package_id: str) -> None:
+    """The entry names the package in ``assignment_errors`` and assigns nothing.
 
     Both halves matter: ``assignment_errors`` keyed by the package is the report the
     response schema defines for a skipped assignment, and an empty ``assigned_to`` is
@@ -1284,7 +1285,6 @@ def then_creatives_entry_reports_package_assignment_error(ctx: dict, creative_id
     violation surfacing as a 500).
     """
     entry = _wire_creatives_entry(ctx, creative_id)
-    package_id = ctx["package"].package_id
     assignment_errors = entry.get("assignment_errors") or {}
     assert package_id in assignment_errors, (
         f"expected assignment_errors on the entry for {creative_id!r} to name {package_id!r}, got {assignment_errors!r}"
@@ -1350,6 +1350,72 @@ _SCOPE_SETUPS: dict[str, dict[str, Any]] = {
     "a creative_ids filter and no delete_missing flag": {"delete_missing": None, "filtered": True},
     "delete_missing true together with a creative_ids filter": {"delete_missing": True, "filtered": True},
 }
+
+
+@given("a sync request that replaces the whole library")
+def given_sync_request_replaces_library(ctx: dict) -> None:
+    """One request creative and ``delete_missing``: every library creative the request does not name is archived."""
+    given_creative_with_format(ctx)
+    ctx["delete_missing"] = True
+
+
+@given(
+    parsers.re(
+        r'the library creative "(?P<creative_id>[^"]+)", absent from the request, is assigned to a package '
+        r'of a buy in status "(?P<status>[^"]+)" whose package is (?P<paused>paused|not paused)$'
+    )
+)
+def given_library_creative_on_buy(ctx: dict, creative_id: str, status: str, paused: str) -> None:
+    """A library creative the request does not name, assigned to a package whose buy is in *status*.
+
+    The buy's flight began in 2025 and runs to 2099, so a buy in a serving status is delivering.
+    """
+    from datetime import UTC, date, datetime
+
+    from tests.factories import CreativeAssignmentFactory, MediaBuyFactory, MediaPackageFactory, ProductFactory
+
+    env = ctx["env"]
+    ensure_tenant_principal(ctx, env)
+    fmt = ctx["creatives"][-1]["format_id"]
+    product = ProductFactory(tenant=ctx["tenant"], **({"product_id": mint_id("prod")} if is_e2e(ctx) else {}))
+    media_buy = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        status=status,
+        start_date=date(2025, 1, 1),
+        end_date=date(2099, 12, 31),
+        start_time=datetime(2025, 1, 1, tzinfo=UTC),
+        end_time=datetime(2099, 12, 31, 23, 59, 59, tzinfo=UTC),
+        **({"media_buy_id": mint_id("mb")} if is_e2e(ctx) else {}),
+    )
+    package = MediaPackageFactory(
+        media_buy=media_buy,
+        package_config={"product_id": product.product_id, "budget": 1000.0, "paused": paused == "paused"},
+        **({"package_id": mint_id("pkg")} if is_e2e(ctx) else {}),
+    )
+    creative = CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        creative_id=creative_id,
+        name="Assigned Library Creative",
+        status="approved",
+        **seeded_format_columns(env, fmt),
+    )
+    CreativeAssignmentFactory(creative=creative, media_buy=media_buy, package_id=package.package_id)
+    env._commit_factory_data()
+    ctx["absent_creative_id"] = creative_id
+
+
+@then(parsers.parse('the library creative "{creative_id}" is {state}'))
+def then_library_creative_state(ctx: dict, creative_id: str, state: str) -> None:
+    """The stored creative is ``archived``, or kept in any other status ("not archived")."""
+    from src.core.database.models import Creative
+
+    env = ctx["env"]
+    env.get_session().expire_all()  # the row this test seeded is re-read, not served from the session
+    (row,) = env.query(Creative, creative_id=creative_id, tenant_id=ctx["tenant"].tenant_id)
+    archived = row.status == "archived"
+    assert archived == (state == "archived"), f"expected the creative to be {state}; its status is {row.status!r}"
 
 
 @given(parsers.parse("a sync request whose scope is {scope_setup}"))
@@ -1432,11 +1498,13 @@ def given_assignment_already_exists(ctx: dict) -> None:
     fmt_entry = _product_format_entry(ctx, env)
 
     # Use UUID-based IDs for e2e_rest to avoid collisions with Docker's persistent DB.
-    mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "active"}
+    # Not delivering: the seeded row's content differs from the payload, and a content change to
+    # a creative on an active package is refused (sync_creatives.mdx v3.2.7, best practice 6).
+    mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "pending_start"}
     prod_kwargs: dict = {"tenant": tenant, "format_ids": [fmt_entry]}
     if is_e2e(ctx):
-        mb_kwargs["media_buy_id"] = _e2e_unique_id("mb")
-        prod_kwargs["product_id"] = _e2e_unique_id("prod")
+        mb_kwargs["media_buy_id"] = mint_id("mb")
+        prod_kwargs["product_id"] = mint_id("prod")
 
     media_buy = MediaBuyFactory(**mb_kwargs)
     product = ProductFactory(**prod_kwargs)
@@ -1445,7 +1513,7 @@ def given_assignment_already_exists(ctx: dict) -> None:
         "package_config": {"product_id": product.product_id, "budget": 1000.0},
     }
     if is_e2e(ctx):
-        pkg_kwargs["package_id"] = _e2e_unique_id("pkg")
+        pkg_kwargs["package_id"] = mint_id("pkg")
     package = MediaPackageFactory(**pkg_kwargs)
     # Use same creative_id as the payload so the pre-existing row matches.
     creative_payload = ctx["creatives"][-1]
@@ -1514,7 +1582,9 @@ def given_creative_already_assigned_to_package(ctx: dict) -> None:
     if not ctx.get("creatives"):
         given_creative_with_format(ctx)
 
-    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
+    # Not delivering: the seeded row's content differs from the payload, and a content change to
+    # a creative on an active package is refused (sync_creatives.mdx v3.2.7, best practice 6).
+    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="pending_start")
     product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package = MediaPackageFactory(
         media_buy=media_buy,
@@ -1665,7 +1735,7 @@ def given_assignment_entry_missing_creative_id(ctx: dict) -> None:
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    package = MediaPackageFactory(media_buy=media_buy, package_id=_e2e_unique_id("pkg"))
+    package = MediaPackageFactory(media_buy=media_buy, package_id=mint_id("pkg"))
     env._commit_factory_data()
     ctx["assignment_entries"] = [{"package_id": package.package_id}]
 
@@ -1747,8 +1817,8 @@ def _setup_assignment_package(
     mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "active"}
     prod_kwargs: dict = {"tenant": tenant, "format_ids": [_product_format_entry(ctx, env)]}
     if is_e2e(ctx):
-        mb_kwargs["media_buy_id"] = _e2e_unique_id("mb")
-        prod_kwargs["product_id"] = _e2e_unique_id("prod")
+        mb_kwargs["media_buy_id"] = mint_id("mb")
+        prod_kwargs["product_id"] = mint_id("prod")
 
     media_buy = MediaBuyFactory(**mb_kwargs)
     product = ProductFactory(**prod_kwargs)
@@ -1759,7 +1829,7 @@ def _setup_assignment_package(
     if package_id is not None:
         pkg_kwargs["package_id"] = package_id
     elif is_e2e(ctx):
-        pkg_kwargs["package_id"] = _e2e_unique_id("pkg")
+        pkg_kwargs["package_id"] = mint_id("pkg")
     package = MediaPackageFactory(**pkg_kwargs)
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
@@ -3190,6 +3260,8 @@ def when_sync_creative_with_assignments(ctx: dict) -> None:
         kwargs["assignments"] = ctx["assignment_entries"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
+    if "dry_run" in ctx:
+        kwargs["dry_run"] = ctx["dry_run"]
     dispatch_request(ctx, **kwargs)
 
 
@@ -3811,9 +3883,9 @@ def _setup_assignment_package_for_format(
     extra_pkg: dict = {}
     extra_prod: dict = {}
     if is_e2e(ctx):
-        extra_mb["media_buy_id"] = _e2e_unique_id("mb")
-        extra_pkg["package_id"] = _e2e_unique_id("pkg")
-        extra_prod["product_id"] = _e2e_unique_id("prod")
+        extra_mb["media_buy_id"] = mint_id("mb")
+        extra_pkg["package_id"] = mint_id("pkg")
+        extra_prod["product_id"] = mint_id("prod")
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active", **extra_mb)
     package_config: dict = {"budget": 1000.0}
@@ -5769,11 +5841,11 @@ def given_assignments_two_packages_format_compat(ctx: dict) -> None:
     # assignment lookup then resolved both entries to whichever row won, and the
     # "compatible" assignment was graded against the incompatible product. There is no
     # reason to mint ids only for e2e_rest -- a fresh id is right everywhere.
-    extra_mb: dict = {"media_buy_id": _e2e_unique_id("mb")}
-    extra_pkg_compat: dict = {"package_id": _e2e_unique_id("pkg")}
-    extra_pkg_incompat: dict = {"package_id": _e2e_unique_id("pkg")}
-    extra_prod_compat: dict = {"product_id": _e2e_unique_id("prod")}
-    extra_prod_incompat: dict = {"product_id": _e2e_unique_id("prod")}
+    extra_mb: dict = {"media_buy_id": mint_id("mb")}
+    extra_pkg_compat: dict = {"package_id": mint_id("pkg")}
+    extra_pkg_incompat: dict = {"package_id": mint_id("pkg")}
+    extra_prod_compat: dict = {"product_id": mint_id("prod")}
+    extra_prod_incompat: dict = {"product_id": mint_id("prod")}
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active", **extra_mb)
 
@@ -6226,7 +6298,9 @@ def given_creative_already_assigned_to_package_partition(ctx: dict) -> None:
     tenant = ctx["tenant"]
     principal = ctx["principal"]
 
-    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
+    # Not delivering: the seeded row's content differs from the payload, and a content change to
+    # a creative on an active package is refused (sync_creatives.mdx v3.2.7, best practice 6).
+    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="pending_start")
     product = ProductFactory(
         tenant=tenant,
         format_ids=[_scenario_format_entry(ctx, env)],
@@ -6284,12 +6358,12 @@ def given_assignments_three_packages_mixed(ctx: dict) -> None:
     # rows built from it collapsed into one assignment.
     valid_pkg_1 = MediaPackageFactory(
         media_buy=media_buy,
-        package_id=_e2e_unique_id("pkg"),
+        package_id=mint_id("pkg"),
         package_config={"product_id": product.product_id, "budget": 1000.0},
     )
     valid_pkg_2 = MediaPackageFactory(
         media_buy=media_buy,
-        package_id=_e2e_unique_id("pkg"),
+        package_id=mint_id("pkg"),
         package_config={"product_id": product.product_id, "budget": 1000.0},
     )
     env._commit_factory_data()

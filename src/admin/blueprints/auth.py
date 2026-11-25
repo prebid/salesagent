@@ -19,18 +19,23 @@ from urllib.parse import unquote, urlsplit
 from authlib.integrations.flask_client import OAuth
 from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, session, url_for
 from sqlalchemy import select
+from werkzeug.wrappers import Response
 
-from src.admin.auth_utils import extract_user_info
+from src.admin.auth_utils import OAUTH_CALLBACK_ERRORS, extract_user_info
 from src.admin.blueprints.core import get_tenant_from_hostname
+from src.admin.gam_utils import GAMOAuthNotConfigured
 from src.admin.utils import is_super_admin, require_tenant_access
+from src.admin.utils.helpers import clear_session_identity
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant
+from src.core.database.models import Tenant, UserRole
 from src.core.domain_config import (
     get_oauth_redirect_uri,
     get_sales_agent_url,
     get_super_admin_domain,
 )
+from src.core.logging_config import log_safe
+from src.core.operator_errors import safe_error_message
 from src.core.security.outbound_http import OutboundError
 from src.services.google_oauth_client import exchange_authorization_code
 
@@ -138,7 +143,8 @@ def get_oauth_config():
                             OIDC_PROVIDERS["google"],
                             "openid email profile",
                         )
-            except Exception as e:
+            except (OSError, json.JSONDecodeError, KeyError, TypeError) as e:
+                # Unreadable file, bad JSON, or a "web" entry without the two keys.
                 logger.error(f"Failed to load OAuth credentials from {filepath}: {e}")
 
     return None, None, None, None
@@ -451,10 +457,24 @@ def tenant_google_auth(tenant_id):
     return response
 
 
+def _back_to_login(message: str, tenant_context: str | None) -> Response:
+    """Flash *message* and return to the login page the Google flow started from.
+
+    A flow started from a tenant's login goes back to that tenant's login, so the operator
+    does not bounce through the global one; ``logged_out=1`` stops the page from sending
+    them straight back to the provider.
+    """
+    flash(message, "error")
+    if tenant_context:
+        return redirect(url_for("auth.tenant_login", tenant_id=tenant_context, logged_out=1))
+    return redirect(url_for("auth.login", logged_out=1))
+
+
 @auth_bp.route("/auth/google/callback")
 def google_callback():
     """Handle Google OAuth callback - simplified version."""
-    logger.debug("google_callback hit, args=%s", dict(request.args))
+    # Argument names only: the values include the authorization code and state.
+    logger.debug("google_callback hit, args=%s", sorted(request.args))
 
     oauth = current_app.oauth if hasattr(current_app, "oauth") else None
     if not oauth:
@@ -465,189 +485,169 @@ def google_callback():
     # Get tenant context from session (stored during OAuth initiation)
     tenant_context = session.get("oauth_tenant_context")
 
+    logger.info("Attempting OAuth token exchange...")
     try:
-        logger.info("Attempting OAuth token exchange...")
-        try:
-            token = oauth.google.authorize_access_token()
-            logger.info(f"Token exchange result: {token is not None}")
-        except Exception as auth_error:
-            logger.error(
-                f"Authlib error during token exchange: {type(auth_error).__name__}: {auth_error}", exc_info=True
-            )
-            flash(f"Authentication error: {str(auth_error)}", "error")
-            # Preserve tenant context on error - redirect to tenant login to avoid redirect loop
-            if tenant_context:
-                return redirect(url_for("auth.tenant_login", tenant_id=tenant_context, logged_out=1))
-            return redirect(url_for("auth.login", logged_out=1))
+        token = oauth.google.authorize_access_token()
+        logger.info(f"Token exchange result: {token is not None}")
+    except OAUTH_CALLBACK_ERRORS as auth_error:
+        return _back_to_login(safe_error_message(auth_error, "Authentication error"), tenant_context)
 
-        if not token:
-            logger.error("OAuth token exchange failed - authorize_access_token() returned None")
-            flash("Authentication failed. Please try again.", "error")
-            # Preserve tenant context on error
-            if tenant_context:
-                return redirect(url_for("auth.tenant_login", tenant_id=tenant_context, logged_out=1))
-            return redirect(url_for("auth.login", logged_out=1))
+    if not token:
+        logger.error("OAuth token exchange failed - authorize_access_token() returned None")
+        return _back_to_login("Authentication failed. Please try again.", tenant_context)
 
-        # Extract user info using provider-agnostic helper
-        user = extract_user_info(token)
+    # Extract user info using provider-agnostic helper
+    user = extract_user_info(token)
 
-        if not user or not user.get("email"):
-            flash("Could not retrieve user information from OAuth provider", "error")
-            # Preserve tenant context on error
-            if tenant_context:
-                return redirect(url_for("auth.tenant_login", tenant_id=tenant_context, logged_out=1))
-            return redirect(url_for("auth.login", logged_out=1))
+    if not user or not user.get("email"):
+        return _back_to_login("Could not retrieve user information from OAuth provider", tenant_context)
 
-        email = user["email"]
-        session["user"] = email
-        session["user_name"] = user.get("name", email)
-        session["user_picture"] = user.get("picture", "")
+    email = user["email"]
+    # A deployment sign-in replaces whatever identity this browser held, including a
+    # tenant SSO session's binding to its tenant.
+    clear_session_identity()
+    session["user"] = email
+    session["user_name"] = user.get("name", email)
+    session["user_picture"] = user.get("picture", "")
 
-        # Mark session as modified to ensure it's saved
+    # Mark session as modified to ensure it's saved
+    session.modified = True
+    logger.info("User authenticated: %s", email)
+
+    # Check if user is super admin FIRST (before signup flow check)
+    # Super admins should never be redirected to signup/onboarding
+    email_domain = email.split("@")[1] if "@" in email else ""
+    super_admin_domain = get_super_admin_domain()
+    if email_domain == super_admin_domain or is_super_admin(email):
+        session["is_super_admin"] = True
+        session["role"] = "super_admin"
+        # Clear any signup flow state for super admins
+        session.pop("signup_flow", None)
+        session.pop("signup_step", None)
+        flash(f"Welcome {user.get('name', email)}! (Super Admin)", "success")
         session.modified = True
-        logger.info("User authenticated: %s", email)
+        logger.warning(
+            f"========== SUPER ADMIN detected, redirecting to core.index. "
+            f"Session keys: {list(session.keys())} =========="
+        )
+        # Check for saved redirect URL
+        next_url = _safe_redirect(session.pop("login_next_url", None), fallback=url_for("core.index"))
+        return redirect(next_url)
 
-        # Check if user is super admin FIRST (before signup flow check)
-        # Super admins should never be redirected to signup/onboarding
-        email_domain = email.split("@")[1] if "@" in email else ""
-        super_admin_domain = get_super_admin_domain()
-        if email_domain == super_admin_domain or is_super_admin(email):
-            session["is_super_admin"] = True
-            session["role"] = "super_admin"
-            # Clear any signup flow state for super admins
-            session.pop("signup_flow", None)
-            session.pop("signup_step", None)
-            flash(f"Welcome {user.get('name', email)}! (Super Admin)", "success")
-            session.modified = True
-            logger.warning(
-                f"========== SUPER ADMIN detected, redirecting to core.index. "
-                f"Session keys: {list(session.keys())} =========="
-            )
-            # Check for saved redirect URL
-            next_url = _safe_redirect(session.pop("login_next_url", None), fallback=url_for("core.index"))
-            return redirect(next_url)
-
-        # Check if this is a signup flow (only for non-super-admin users)
-        if session.get("signup_flow"):
-            # Redirect to onboarding wizard for new tenant signup
-            flash(f"Welcome {user.get('name', email)}!", "success")
-            return redirect(url_for("public.signup_onboarding"))
-
-        # Unified flow: Always show tenant selector (with option to create new tenant)
-        # No distinction between signup and login - keeps UX simple and consistent
-        from src.admin.domain_access import get_user_tenant_access
-
-        # Get all accessible tenants
-        tenant_access = get_user_tenant_access(email)
-
-        # Build tenant list for selector (empty list is fine - user can create new tenant)
-        # Use a dict to track tenants by tenant_id to avoid duplicates
-        tenant_dict = {}
-
-        # Process user_tenants first (primary authorization method via User records)
-        for tenant in tenant_access.get("user_tenants", []):
-            with get_db_session() as db_session:
-                from sqlalchemy import select
-
-                from src.core.database.models import User
-
-                stmt = select(User).filter_by(email=email, tenant_id=tenant.tenant_id)
-                existing_user = db_session.scalars(stmt).first()
-                is_admin = existing_user.role == "admin" if existing_user else False
-
-            tenant_dict[tenant.tenant_id] = {
-                "tenant_id": tenant.tenant_id,
-                "name": tenant.name,
-                "subdomain": tenant.subdomain,
-                "is_admin": is_admin,
-            }
-
-        # Process domain_tenant (bulk org access)
-        if tenant_access["domain_tenant"]:
-            domain_tenant = tenant_access["domain_tenant"]
-            if domain_tenant.tenant_id not in tenant_dict:
-                tenant_dict[domain_tenant.tenant_id] = {
-                    "tenant_id": domain_tenant.tenant_id,
-                    "name": domain_tenant.name,
-                    "subdomain": domain_tenant.subdomain,
-                    "is_admin": True,  # Domain users get admin access
-                }
-
-        # Process email_tenants (legacy backwards compatibility)
-        for tenant in tenant_access["email_tenants"]:
-            # Skip if already added via user record or domain access
-            if tenant.tenant_id in tenant_dict:
-                continue
-
-            # Check existing user record for role, default to admin
-            with get_db_session() as db_session:
-                from sqlalchemy import select
-
-                from src.core.database.models import User
-
-                stmt = select(User).filter_by(email=email, tenant_id=tenant.tenant_id)
-                existing_user = db_session.scalars(stmt).first()
-                is_admin = existing_user.role == "admin" if existing_user else True
-
-            tenant_dict[tenant.tenant_id] = {
-                "tenant_id": tenant.tenant_id,
-                "name": tenant.name,
-                "subdomain": tenant.subdomain,
-                "is_admin": is_admin,
-            }
-
-        # Convert dict to list for session
-        session["available_tenants"] = list(tenant_dict.values())
-
-        # In single-tenant mode, auto-select the tenant (skip selection screen)
-        from src.core.config_loader import is_single_tenant_mode
-
-        if is_single_tenant_mode() and len(session["available_tenants"]) == 1:
-            # Auto-select the only tenant
-            membership = session["available_tenants"][0]
-            tenant_id = membership["tenant_id"]
-
-            # Ensure User record exists
-            from src.admin.domain_access import ensure_user_in_tenant
-
-            user_name = session.get("user_name", email.split("@")[0].title())
-            role = "admin" if membership.get("is_admin") else "viewer"
-
-            try:
-                ensure_user_in_tenant(email, tenant_id, role=role, name=user_name)
-            except Exception as e:
-                logger.error(f"Failed to create User record for {email} in tenant {tenant_id}: {e}")
-
-            session["tenant_id"] = tenant_id
-            session["is_tenant_admin"] = membership.get("is_admin", True)
-            session.pop("available_tenants", None)
-            flash(f"Welcome {user.get('name', email)}!", "success")
-            # Check for saved redirect URL
-            next_url = _safe_redirect(
-                session.pop("login_next_url", None),
-                fallback=url_for("tenants.dashboard", tenant_id=tenant_id),
-            )
-            return redirect(next_url)
-
-        # Multi-tenant mode or multiple tenants: show tenant selector
+    # Check if this is a signup flow (only for non-super-admin users)
+    if session.get("signup_flow"):
+        # Redirect to onboarding wizard for new tenant signup
         flash(f"Welcome {user.get('name', email)}!", "success")
-        logger.debug("redirecting to select_tenant, tenants=%d", len(session.get("available_tenants", [])))
-        session.modified = True
+        return redirect(url_for("public.signup_onboarding"))
 
-        # Create response and explicitly save session to ensure cookie is set
-        from flask import make_response
+    # Unified flow: Always show tenant selector (with option to create new tenant)
+    # No distinction between signup and login - keeps UX simple and consistent
+    from src.admin.domain_access import get_user_tenant_access
 
-        response = make_response(redirect(url_for("auth.select_tenant")))
+    # Get all accessible tenants
+    tenant_access = get_user_tenant_access(email)
 
-        return response
+    # Build tenant list for selector (empty list is fine - user can create new tenant)
+    # Use a dict to track tenants by tenant_id to avoid duplicates
+    tenant_dict = {}
 
-    except Exception as e:
-        logger.error("OAuth callback error: %s: %s", type(e).__name__, e, exc_info=True)
-        flash("Authentication failed. Please try again.", "error")
-        # Preserve tenant context on error to avoid redirect loop
-        if tenant_context:
-            return redirect(url_for("auth.tenant_login", tenant_id=tenant_context, logged_out=1))
-        return redirect(url_for("auth.login", logged_out=1))
+    # Process user_tenants first (primary authorization method via User records)
+    for tenant in tenant_access.get("user_tenants", []):
+        with get_db_session() as db_session:
+            from sqlalchemy import select
+
+            from src.core.database.models import User
+
+            stmt = select(User).filter_by(email=email, tenant_id=tenant.tenant_id)
+            existing_user = db_session.scalars(stmt).first()
+            is_admin = existing_user.role == UserRole.ADMIN if existing_user else False
+
+        tenant_dict[tenant.tenant_id] = {
+            "tenant_id": tenant.tenant_id,
+            "name": tenant.name,
+            "subdomain": tenant.subdomain,
+            "is_admin": is_admin,
+        }
+
+    # Process domain_tenant (bulk org access)
+    if tenant_access["domain_tenant"]:
+        domain_tenant = tenant_access["domain_tenant"]
+        if domain_tenant.tenant_id not in tenant_dict:
+            tenant_dict[domain_tenant.tenant_id] = {
+                "tenant_id": domain_tenant.tenant_id,
+                "name": domain_tenant.name,
+                "subdomain": domain_tenant.subdomain,
+                "is_admin": True,  # Domain users get admin access
+            }
+
+    # Process email_tenants (legacy backwards compatibility)
+    for tenant in tenant_access["email_tenants"]:
+        # Skip if already added via user record or domain access
+        if tenant.tenant_id in tenant_dict:
+            continue
+
+        # Check existing user record for role, default to admin
+        with get_db_session() as db_session:
+            from sqlalchemy import select
+
+            from src.core.database.models import User
+
+            stmt = select(User).filter_by(email=email, tenant_id=tenant.tenant_id)
+            existing_user = db_session.scalars(stmt).first()
+            is_admin = existing_user.role == UserRole.ADMIN if existing_user else True
+
+        tenant_dict[tenant.tenant_id] = {
+            "tenant_id": tenant.tenant_id,
+            "name": tenant.name,
+            "subdomain": tenant.subdomain,
+            "is_admin": is_admin,
+        }
+
+    # Convert dict to list for session
+    session["available_tenants"] = list(tenant_dict.values())
+
+    # In single-tenant mode, auto-select the tenant (skip selection screen)
+    from src.core.config_loader import is_single_tenant_mode
+
+    if is_single_tenant_mode() and len(session["available_tenants"]) == 1:
+        # Auto-select the only tenant
+        return _enter_tenant(session["available_tenants"][0], f"Welcome {user.get('name', email)}!")
+
+    # Multi-tenant mode or multiple tenants: show tenant selector
+    flash(f"Welcome {user.get('name', email)}!", "success")
+    logger.debug("redirecting to select_tenant, tenants=%d", len(session.get("available_tenants", [])))
+    session.modified = True
+
+    # Create response and explicitly save session to ensure cookie is set
+    from flask import make_response
+
+    response = make_response(redirect(url_for("auth.select_tenant")))
+
+    return response
+
+
+def _enter_tenant(membership: dict, welcome: str) -> Response:
+    """Sign the session's user into the tenant of one ``available_tenants`` entry and send them on.
+
+    The User row is written first: ``require_tenant_access`` reads it on the next page.
+    """
+    from src.admin.domain_access import ensure_user_in_tenant
+
+    email = session["user"]
+    tenant_id = membership["tenant_id"]
+    role = UserRole.ADMIN if membership["is_admin"] else UserRole.VIEWER
+    ensure_user_in_tenant(email, tenant_id, role=role, name=session.get("user_name", email.split("@")[0].title()))
+    logger.info(f"Ensured User record exists for {email} in tenant {tenant_id}")
+
+    session["tenant_id"] = tenant_id
+    session["is_tenant_admin"] = membership["is_admin"]
+    session.pop("available_tenants", None)
+    flash(welcome, "success")
+    next_url = _safe_redirect(
+        session.pop("login_next_url", None),
+        fallback=url_for("tenants.dashboard", tenant_id=tenant_id),
+    )
+    return redirect(next_url)
 
 
 @auth_bp.route("/auth/select-tenant", methods=["GET", "POST"])
@@ -665,32 +665,7 @@ def select_tenant():
         # Verify user has access to selected tenant
         for membership in session["available_tenants"]:
             if membership["tenant_id"] == tenant_id:
-                # Ensure User record exists in the database
-                # This is critical for require_tenant_access decorator to work
-                from src.admin.domain_access import ensure_user_in_tenant
-
-                email = session["user"]
-                user_name = session.get("user_name", email.split("@")[0].title())
-                role = "admin" if membership["is_admin"] else "viewer"
-
-                try:
-                    ensure_user_in_tenant(email, tenant_id, role=role, name=user_name)
-                    logger.info(f"Ensured User record exists for {email} in tenant {tenant_id}")
-                except Exception as e:
-                    logger.error(f"Failed to create User record for {email} in tenant {tenant_id}: {e}")
-                    flash("Error setting up user access. Please contact support.", "error")
-                    return redirect(url_for("auth.select_tenant"))
-
-                session["tenant_id"] = tenant_id
-                session["is_tenant_admin"] = membership["is_admin"]
-                session.pop("available_tenants", None)  # Clean up
-                flash(f"Welcome to {membership['name']}!", "success")
-                # Check for saved redirect URL
-                next_url = _safe_redirect(
-                    session.pop("login_next_url", None),
-                    fallback=url_for("tenants.dashboard", tenant_id=tenant_id),
-                )
-                return redirect(next_url)
+                return _enter_tenant(membership, f"Welcome to {membership['name']}!")
 
         flash("Invalid tenant selection", "error")
         return redirect(url_for("auth.select_tenant"))
@@ -734,7 +709,7 @@ def logout():
 
 # GAM OAuth Flow endpoints
 @auth_bp.route("/auth/gam/authorize/<tenant_id>")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def gam_authorize(tenant_id):
     """Initiate GAM OAuth flow for tenant.
 
@@ -753,202 +728,184 @@ def gam_authorize(tenant_id):
     oauth = current_app.oauth if hasattr(current_app, "oauth") else None
     if not oauth:
         flash("OAuth not configured. Please contact your administrator.", "error")
-        return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
-    try:
-        # Get GAM OAuth configuration
-        try:
-            gam_auth = get_settings().auth
-            if not gam_auth.gam_oauth_configured:
-                raise ValueError("GAM OAuth credentials not configured")
-        except Exception as config_error:
-            logger.error(f"GAM OAuth configuration error: {config_error}")
-            flash(f"GAM OAuth not properly configured: {str(config_error)}", "error")
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+    # Get GAM OAuth configuration
+    gam_auth = get_settings().auth
+    if not gam_auth.gam_oauth_configured:
+        raise GAMOAuthNotConfigured(f"GAM OAuth authorization for tenant {tenant_id}")
 
-        # Store tenant context for callback. The Host is the operator's own domain, so it
-        # is what the callback sends them back to.
-        #
-        # NO gam_oauth_external_domain alongside it. That key held the Approximated vendor
-        # header because, behind that proxy, the Host named this BACKEND (adcp-sales-agent
-        # .fly.dev, the same for every publisher) and redirecting an operator there would
-        # have bounced them off their own domain mid-OAuth. The edge now folds the vendor
-        # header into Host and drops it (config/nginx/nginx-multi-tenant.conf), so this
-        # single value carries the operator's domain on both the proxied and the direct
-        # path, and the callback's two-branch redirect collapses to one.
-        #
-        # ``gam_oauth_state`` is an unguessable value the callback compares against
-        # before it trusts anything else (#2205).
-        state = secrets.token_urlsafe(32)
-        session["gam_oauth_state"] = state
-        session["gam_oauth_tenant_id"] = tenant_id
-        session["gam_oauth_originating_host"] = request.headers.get("Host", "")
+    # Store tenant context for callback. The Host is the operator's own domain, so it
+    # is what the callback sends them back to.
+    #
+    # NO gam_oauth_external_domain alongside it. That key held the Approximated vendor
+    # header because, behind that proxy, the Host named this BACKEND (adcp-sales-agent
+    # .fly.dev, the same for every publisher) and redirecting an operator there would
+    # have bounced them off their own domain mid-OAuth. The edge now folds the vendor
+    # header into Host and drops it (config/nginx/nginx-multi-tenant.conf), so this
+    # single value carries the operator's domain on both the proxied and the direct
+    # path, and the callback's two-branch redirect collapses to one.
+    #
+    # ``gam_oauth_state`` is an unguessable value the callback compares against
+    # before it trusts anything else (#2205).
+    state = secrets.token_urlsafe(32)
+    session["gam_oauth_state"] = state
+    session["gam_oauth_tenant_id"] = tenant_id
+    session["gam_oauth_originating_host"] = request.headers.get("Host", "")
 
-        # Determine callback URI
-        if get_settings().runtime.is_production:
-            callback_uri = f"{get_sales_agent_url()}/admin/auth/gam/callback"
-        else:
-            callback_uri = url_for("auth.gam_callback", _external=True)
+    # Determine callback URI
+    if get_settings().runtime.is_production:
+        callback_uri = f"{get_sales_agent_url()}/admin/auth/gam/callback"
+    else:
+        callback_uri = url_for("auth.gam_callback", _external=True)
 
-        # Log the callback URI for debugging
-        logger.info(f"Initiating GAM OAuth flow for tenant {tenant_id} with callback_uri: {callback_uri}")
+    # Log the callback URI for debugging
+    logger.info(f"Initiating GAM OAuth flow for tenant {tenant_id} with callback_uri: {callback_uri}")
 
-        # Build authorization URL with GAM-specific scope
-        auth_url = (
-            "https://accounts.google.com/o/oauth2/v2/auth?"
-            f"client_id={gam_auth.gam_oauth_client_id}&"
-            f"redirect_uri={callback_uri}&"
-            "scope=https://www.googleapis.com/auth/dfp&"
-            "response_type=code&"
-            "access_type=offline&"
-            "prompt=consent&"  # Force consent to get refresh token
-            f"state={state}"
-        )
+    # Build authorization URL with GAM-specific scope
+    auth_url = (
+        "https://accounts.google.com/o/oauth2/v2/auth?"
+        f"client_id={gam_auth.gam_oauth_client_id}&"
+        f"redirect_uri={callback_uri}&"
+        "scope=https://www.googleapis.com/auth/dfp&"
+        "response_type=code&"
+        "access_type=offline&"
+        "prompt=consent&"  # Force consent to get refresh token
+        f"state={state}"
+    )
 
-        logger.debug(f"GAM OAuth authorization URL (redacted): {auth_url.split('client_id=')[0]}client_id=REDACTED...")
-        return redirect(auth_url)
-
-    except Exception as e:
-        logger.error(f"Error initiating GAM OAuth for tenant {tenant_id}: {e}")
-        flash(f"Error starting OAuth flow: {str(e)}", "error")
-        return redirect(url_for("tenants.settings", tenant_id=tenant_id))
+    logger.debug(f"GAM OAuth authorization URL (redacted): {auth_url.split('client_id=')[0]}client_id=REDACTED...")
+    return redirect(auth_url)
 
 
 @auth_bp.route("/auth/gam/callback")
 def gam_callback():
     """Handle GAM OAuth callback and store refresh token."""
+    # Get authorization code and state
+    code = request.args.get("code")
+    state = request.args.get("state")
+    error = request.args.get("error")
+
+    # Log all callback parameters for debugging
+    # Never the code or state values: the code is a credential until redeemed.
+    logger.info(
+        "GAM OAuth callback received - code present: %s, state present: %s, error: %s",
+        bool(code),
+        bool(state),
+        log_safe(error),
+    )
+    logger.debug("GAM OAuth callback arg names: %s", sorted(request.args))
+
+    # The flow's context lives only in the session that started it. Popped
+    # first so a nonce is consumed whatever the outcome of this callback.
+    tenant_id = session.pop("gam_oauth_tenant_id", None)
+    issued_state = session.pop("gam_oauth_state", None)
+    originating_host = session.pop("gam_oauth_originating_host", None)
+
+    if error:
+        error_description = request.args.get("error_description", "No description provided")
+        logger.error(f"GAM OAuth error: {error} - {error_description}")
+        flash(f"OAuth authorization failed: {error_description}", "error")
+        return redirect(url_for("auth.login"))
+
+    if not code:
+        flash("No authorization code received", "error")
+        return redirect(url_for("auth.login"))
+
+    # ``state`` is compared with the value this session was issued; it is never
+    # a source for the tenant. No session, no issued state, or a mismatch all
+    # mean this callback did not come from a flow the caller started (#2205).
+    if not tenant_id or not issued_state or not state or not secrets.compare_digest(issued_state, state):
+        logger.warning("GAM OAuth callback rejected: state does not match a flow started in this session")
+        flash("Invalid OAuth state - no tenant context", "error")
+        return redirect(url_for("auth.login"))
+
+    # Get GAM OAuth configuration
+    gam_auth = get_settings().auth
+
+    # Determine callback URI (must match the one used in authorization)
+    if get_settings().runtime.is_production:
+        callback_uri = f"{get_sales_agent_url()}/admin/auth/gam/callback"
+    else:
+        callback_uri = url_for("auth.gam_callback", _external=True)
+
+    # Exchange authorization code for tokens
+
+    logger.info(f"Exchanging authorization code for tokens - tenant: {tenant_id}, callback_uri: {callback_uri}")
+    logger.debug(f"Token exchange request - client_id: {gam_auth.gam_oauth_client_id[:20]}...")
+
     try:
-        # Get authorization code and state
-        code = request.args.get("code")
-        state = request.args.get("state")
-        error = request.args.get("error")
+        token_response = exchange_authorization_code(
+            code,
+            client_id=gam_auth.gam_oauth_client_id,
+            client_secret=gam_auth.gam_oauth_client_secret,
+            redirect_uri=callback_uri,
+        )
+    except OutboundError as exc:
+        # The seam RAISES on a non-2xx rather than returning one, so a failed exchange
+        # arrives here rather than as a falsy response. Google's error body is not
+        # readable here by design — the seam discards a failed response — so the
+        # specific-cause messages below key off the status.
+        status = exc.http_status
+        logger.error("Token exchange failed: status=%s, error=%s", status, exc)
 
-        # Log all callback parameters for debugging
-        logger.info(f"GAM OAuth callback received - code present: {bool(code)}, state: {state}, error: {error}")
-        logger.debug(f"GAM OAuth callback full args: {dict(request.args)}")
-
-        # The flow's context lives only in the session that started it. Popped
-        # first so a nonce is consumed whatever the outcome of this callback.
-        tenant_id = session.pop("gam_oauth_tenant_id", None)
-        issued_state = session.pop("gam_oauth_state", None)
-        originating_host = session.pop("gam_oauth_originating_host", None)
-
-        if error:
-            error_description = request.args.get("error_description", "No description provided")
-            logger.error(f"GAM OAuth error: {error} - {error_description}")
-            flash(f"OAuth authorization failed: {error_description}", "error")
-            return redirect(url_for("auth.login"))
-
-        if not code:
-            flash("No authorization code received", "error")
-            return redirect(url_for("auth.login"))
-
-        # ``state`` is compared with the value this session was issued; it is never
-        # a source for the tenant. No session, no issued state, or a mismatch all
-        # mean this callback did not come from a flow the caller started (#2205).
-        if not tenant_id or not issued_state or not state or not secrets.compare_digest(issued_state, state):
-            logger.warning("GAM OAuth callback rejected: state does not match a flow started in this session")
-            flash("Invalid OAuth state - no tenant context", "error")
-            return redirect(url_for("auth.login"))
-
-        # Get GAM OAuth configuration
-        gam_auth = get_settings().auth
-
-        # Determine callback URI (must match the one used in authorization)
-        if get_settings().runtime.is_production:
-            callback_uri = f"{get_sales_agent_url()}/admin/auth/gam/callback"
-        else:
-            callback_uri = url_for("auth.gam_callback", _external=True)
-
-        # Exchange authorization code for tokens
-
-        logger.info(f"Exchanging authorization code for tokens - tenant: {tenant_id}, callback_uri: {callback_uri}")
-        logger.debug(f"Token exchange request - client_id: {gam_auth.gam_oauth_client_id[:20]}...")
-
-        try:
-            token_response = exchange_authorization_code(
-                code,
-                client_id=gam_auth.gam_oauth_client_id,
-                client_secret=gam_auth.gam_oauth_client_secret,
-                redirect_uri=callback_uri,
+        # A 400 from this endpoint is one of redirect_uri_mismatch / invalid_grant
+        # / invalid_client, and the three-way message that distinguished them read
+        # Google's body. That body is gone, so the operator gets the actionable
+        # superset rather than a guess at which of the three it was.
+        if status == 400:
+            flash(
+                "Google rejected the authorization code. This is usually an expired code, a "
+                "redirect-URI mismatch, or invalid OAuth credentials — try again, and contact "
+                "your administrator if it persists.",
+                "error",
             )
-        except OutboundError as exc:
-            # The seam RAISES on a non-2xx rather than returning one, so a failed exchange
-            # arrives here rather than as a falsy response. Google's error body is not
-            # readable here by design — the seam discards a failed response — so the
-            # specific-cause messages below key off the status.
-            status = exc.http_status
-            logger.error("Token exchange failed: status=%s, error=%s", status, exc)
+        else:
+            flash("Failed to exchange authorization code for tokens.", "error")
 
-            # A 400 from this endpoint is one of redirect_uri_mismatch / invalid_grant
-            # / invalid_client, and the three-way message that distinguished them read
-            # Google's body. That body is gone, so the operator gets the actionable
-            # superset rather than a guess at which of the three it was.
-            if status == 400:
-                flash(
-                    "Google rejected the authorization code. This is usually an expired code, a "
-                    "redirect-URI mismatch, or invalid OAuth credentials — try again, and contact "
-                    "your administrator if it persists.",
-                    "error",
-                )
-            else:
-                flash("Failed to exchange authorization code for tokens.", "error")
-
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
-
-        refresh_token = token_response.refresh_token
-
-        if not refresh_token:
-            logger.error("No refresh token in OAuth response")
-            flash("No refresh token received. Please try again or contact support.", "error")
-            return redirect(url_for("tenants.settings", tenant_id=tenant_id))
-
-        # Store refresh token in tenant's adapter config
-        with get_db_session() as db_session:
-            from src.core.database.models import AdapterConfig
-
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("auth.login"))
-
-            # Get or create adapter config
-            adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
-            if not adapter_config:
-                adapter_config = AdapterConfig(tenant_id=tenant_id, adapter_type="google_ad_manager")
-                db_session.add(adapter_config)
-
-            # Store the refresh token
-            adapter_config.gam_refresh_token = refresh_token
-
-            # Also update tenant's ad_server field
-            tenant.ad_server = "google_ad_manager"
-
-            db_session.commit()
-
-        logger.info(f"GAM OAuth completed successfully for tenant {tenant_id}")
-        flash("Google Ad Manager OAuth setup completed successfully! Your refresh token has been saved.", "success")
-
-        # Try to auto-detect network information
-        try:
-            # Import the detect network logic from GAM blueprint
-
-            # Note: We can't directly call detect_gam_network here as it expects a POST request
-            # The user will need to use the "Auto-detect Network" button in the UI
-            flash("Next step: Use the 'Auto-detect Network' button to complete your GAM configuration.", "info")
-        except Exception as detect_error:
-            logger.warning(f"Could not suggest auto-detect: {detect_error}")
-
-        # Redirect back to tenant settings
-        # Back to the domain the operator started on. This was two branches — the vendor
-        # header's value, then the Host — which since the edge normalization carried the
-        # same string on the proxied path and only the Host on the direct one.
-        is_production = get_settings().runtime.is_production
-        if originating_host and is_production:
-            return redirect(f"https://{originating_host}/admin/tenant/{tenant_id}/settings")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
-    except Exception as e:
-        logger.error(f"Error in GAM OAuth callback: {e}", exc_info=True)
-        flash("OAuth callback failed. Please try again.", "error")
-        return redirect(url_for("auth.login"))
+    refresh_token = token_response.refresh_token
+
+    if not refresh_token:
+        logger.error("No refresh token in OAuth response")
+        flash("No refresh token received. Please try again or contact support.", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+
+    # Store refresh token in tenant's adapter config
+    with get_db_session() as db_session:
+        from src.core.database.models import AdapterConfig
+
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not tenant:
+            flash("Tenant not found", "error")
+            return redirect(url_for("auth.login"))
+
+        # Get or create adapter config
+        adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
+        if not adapter_config:
+            adapter_config = AdapterConfig(tenant_id=tenant_id, adapter_type="google_ad_manager")
+            db_session.add(adapter_config)
+
+        # Store the refresh token
+        adapter_config.gam_refresh_token = refresh_token
+
+        # Also update tenant's ad_server field
+        tenant.ad_server = "google_ad_manager"
+
+        db_session.commit()
+
+    logger.info(f"GAM OAuth completed successfully for tenant {tenant_id}")
+    flash("Google Ad Manager OAuth setup completed successfully! Your refresh token has been saved.", "success")
+
+    # detect_gam_network expects a POST, so the operator runs it from the settings page.
+    flash("Next step: Use the 'Auto-detect Network' button to complete your GAM configuration.", "info")
+
+    # Redirect back to tenant settings
+    # Back to the domain the operator started on. This was two branches — the vendor
+    # header's value, then the Host — which since the edge normalization carried the
+    # same string on the proxied path and only the Host on the direct one.
+    is_production = get_settings().runtime.is_production
+    if originating_host and is_production:
+        return redirect(f"https://{originating_host}/admin/tenant/{tenant_id}/settings")
+    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))

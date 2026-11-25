@@ -51,7 +51,7 @@ def test_no_invalid_brand_manifest_policy_in_test_fixtures():
         if not test_dir.exists():
             continue
         for py_file in sorted(test_dir.rglob("*.py")):
-            source = py_file.read_text()
+            source = py_file.read_text(encoding="utf-8")
             if "brand_manifest_policy" not in source:
                 continue
             tree = ast.parse(source, filename=str(py_file))

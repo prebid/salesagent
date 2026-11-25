@@ -31,19 +31,20 @@ from __future__ import annotations
 
 import os
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 from urllib.parse import urlsplit
 
 from adcp.signing.agent_resolver import BrandAgentType
-from pydantic import Field, ValidationInfo, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _ENV = SettingsConfigDict(env_prefix="", case_sensitive=False, extra="ignore", env_ignore_empty=True)
 
 
-def _csv(value: str | None) -> list[str]:
+def split_csv(value: str | None) -> list[str]:
+    """The non-empty, stripped items of a comma-separated *value*."""
     return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
@@ -64,6 +65,9 @@ class RuntimeSettings(BaseSettings):
     sales_agent_domain: str | None = None
     admin_domain: str | None = None
     super_admin_domain: str | None = None
+    # Mounts GET /tls/ask, the on-demand TLS gate a proxy such as Caddy asks before issuing a
+    # certificate. Off by default: it tells any caller whether a host is served here.
+    tls_ask_enabled: bool = False
     support_email: str = "support@example.com"
     adcp_agent_url: str | None = None
     adcp_multi_tenant: bool = False
@@ -80,16 +84,6 @@ class RuntimeSettings(BaseSettings):
             "leave it at. It exists because 'serve a newer buyer forward-compatibly' and 'this "
             "is a production deployment' are two facts that were spelled with one variable, and "
             "a grading deployment needs the first without claiming the second"
-        ),
-    )
-    publisher_auto_verify: bool | None = Field(
-        default=None,
-        description=(
-            "Whether a publisher partner is verified without reading its adagents.json, "
-            "stated explicitly. Unset (the normal case) it is DERIVED from is_production: a "
-            "local server is in nobody's file, so anywhere but production skips the check. "
-            "It exists so a non-production deployment can run the check without claiming "
-            "production"
         ),
     )
 
@@ -109,7 +103,7 @@ class RuntimeSettings(BaseSettings):
 
     @property
     def allowed_origin_list(self) -> list[str]:
-        return _csv(self.allowed_origins)
+        return split_csv(self.allowed_origins)
 
     @property
     def admin_domain_or_derived(self) -> str | None:
@@ -154,18 +148,6 @@ class RuntimeSettings(BaseSettings):
         favour of whichever was checked last.
         """
         return self.adcp_pydantic_extra_mode or ("ignore" if self.is_production else "forbid")
-
-    @property
-    def publisher_auto_verify_allowed(self) -> bool:
-        """A publisher partner is verified without an adagents.json check: a local server
-        is in nobody's file. Anywhere that is not production.
-
-        ``PUBLISHER_AUTO_VERIFY`` states it outright and wins, so a test deployment can
-        grade the check without claiming production.
-        """
-        if self.publisher_auto_verify is not None:
-            return self.publisher_auto_verify
-        return not self.is_production
 
 
 class TestingSettings(BaseSettings):
@@ -269,6 +251,20 @@ class AuthSettings(BaseSettings):
     google_application_credentials: str | None = None
     google_application_credentials_json: str | None = None
 
+    @field_validator("super_admin_domains", "tenant_management_domains")
+    @classmethod
+    def _domain_lists_hold_domain_names(cls, v: str | None, info: ValidationInfo) -> str | None:
+        """Start-up fails naming the variable: these lists become tenants' authorized domains."""
+        # Imported here: http_utils reaches src.core.operator_errors, which imports this module.
+        from src.core.http_utils import authorized_domain
+
+        if any(authorized_domain(domain) is None for domain in split_csv(v)):
+            raise ValueError(
+                f"{(info.field_name or '').upper()} holds a value that is not a domain name; "
+                "enter internationalized names in their xn-- form"
+            )
+        return v
+
     @field_validator("gam_oauth_client_id")
     @classmethod
     def _gam_client_id_shape(cls, v: str) -> str:
@@ -285,11 +281,11 @@ class AuthSettings(BaseSettings):
 
     @property
     def super_admin_email_list(self) -> list[str]:
-        return [e.lower() for e in _csv(self.super_admin_emails)]
+        return [e.lower() for e in split_csv(self.super_admin_emails)]
 
     @property
     def super_admin_domain_list(self) -> list[str]:
-        return [d.lower() for d in _csv(self.super_admin_domains)]
+        return [d.lower() for d in split_csv(self.super_admin_domains)]
 
     @property
     def gam_oauth_configured(self) -> bool:
@@ -770,6 +766,78 @@ class ToolingSettings(BaseSettings):
     storyboard_ledger_path: Path | None = None
     allow_live_creative_agent: bool = False
 
+    # The Google Ad Manager network the repo's GAM tests run against, and the service account
+    # they call it as. Each contributor configures their own network; nothing compares these
+    # values with anything, and none has a default. ``gam_suite_network`` hands them over, or
+    # fails naming every one that is unset. The server never reads them: it builds its
+    # adapter from the tenant's ``adapter_config`` row, which the tests write from these.
+    gam_service_account_json: SecretStr | None = None
+    gam_service_account_key_file: Path | None = None
+    gam_suite_network_code: str | None = None
+    gam_suite_advertiser_id: str | None = None
+    #: Comma-joined, as ``revoked_keyids`` is: pydantic-settings reads a ``list`` as JSON.
+    gam_suite_ad_unit_ids: str | None = None
+    #: Run the suites without the GAM configuration preflight; the run records the skip.
+    gam_suite_preflight_skip: bool = False
+
+    def gam_suite_network(self) -> GamSuiteNetwork | None:
+        """The GAM network the suite books against: all of its settings, none of them, or a refusal.
+
+        All or nothing, decided here and nowhere else. No GAM setting at all is ``None``: this
+        environment configures no GAM network. Some of them is :class:`GamSuiteNetworkUnconfigured`
+        naming every one that is unset. All of them is the network. The credential is
+        ``GAM_SERVICE_ACCOUNT_JSON``, else the file ``GAM_SERVICE_ACCOUNT_KEY_FILE`` names, read
+        here rather than at import. Nothing compares the values with anything.
+        """
+        ad_unit_ids = tuple(split_csv(self.gam_suite_ad_unit_ids))
+        settings = (
+            (
+                "GAM_SERVICE_ACCOUNT_JSON (or GAM_SERVICE_ACCOUNT_KEY_FILE)",
+                self.gam_service_account_json or self.gam_service_account_key_file,
+            ),
+            ("GAM_SUITE_NETWORK_CODE", self.gam_suite_network_code),
+            ("GAM_SUITE_ADVERTISER_ID", self.gam_suite_advertiser_id),
+            ("GAM_SUITE_AD_UNIT_IDS", ad_unit_ids),
+        )
+        if not any(value for _, value in settings):
+            return None
+        missing = [name for name, value in settings if not value]
+        key_file = self.gam_service_account_key_file
+        if self.gam_service_account_json is None and key_file is not None and not key_file.is_file():
+            missing.append(f"GAM_SERVICE_ACCOUNT_KEY_FILE (names {key_file}, which is not a file)")
+        if missing:
+            raise GamSuiteNetworkUnconfigured(missing)
+        assert self.gam_suite_network_code and self.gam_suite_advertiser_id  # narrowed by `missing`
+        credential = (
+            self.gam_service_account_json.get_secret_value()
+            if self.gam_service_account_json is not None
+            else Path(str(key_file)).read_text(encoding="utf-8")
+        )
+        return GamSuiteNetwork(
+            service_account_json=credential,
+            network_code=self.gam_suite_network_code,
+            advertiser_id=self.gam_suite_advertiser_id,
+            ad_unit_ids=ad_unit_ids,
+        )
+
+
+class GamSuiteNetworkUnconfigured(RuntimeError):
+    """A reader needs the GAM network the suite books against and a setting naming it is unset; ``missing`` names each one."""
+
+    def __init__(self, missing: list[str]) -> None:
+        self.missing = tuple(missing)
+        super().__init__("the GAM network the suite books against is not configured; unset: " + ", ".join(self.missing))
+
+
+@dataclass(frozen=True)
+class GamSuiteNetwork:
+    """The GAM network, advertiser and ad units the GAM tests use, and the key they call it with."""
+
+    service_account_json: str = field(repr=False)
+    network_code: str
+    advertiser_id: str
+    ad_unit_ids: tuple[str, ...]
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -841,10 +909,6 @@ class Settings:
         return self.testing.adcp_testing and not self.database.database_url
 
     # --- production-derived selections ------------------------------------------------
-
-    @property
-    def publisher_auto_verify_allowed(self) -> bool:
-        return self.runtime.publisher_auto_verify_allowed
 
     @property
     def structured_logging(self) -> bool:

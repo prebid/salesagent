@@ -187,9 +187,11 @@ A tenant is a seller: one sales agent, served at one URL. The URL's host is the 
 
 A tenant is not a publisher. One tenant sells for many publisher sites, hundreds in
 production. Each site authorizes the tenant by serving `/.well-known/adagents.json` on its
-own domain, with an `authorized_agents` entry whose `url` is the tenant's URL. The tenant
-holds the site as an authorized property (Admin UI, **Authorized Properties**) and verifies
-it against that file.
+own domain, with an `authorized_agents` entry whose `url` is the tenant's URL. The operator
+adds the site as a publisher (Admin UI, **Inventory → Publishers**); the tenant fetches and
+stores that file, and the properties it authorizes the tenant for are read from it. The
+tenant refreshes every publisher's file every six hours, and a stored file counts for 24
+hours after its last successful fetch.
 
 The recommended tenant host is on the seller's own domain, for example `sales.acme.com`. A
 subdomain of `<domain>`, such as `acme.<domain>`, also works.
@@ -237,13 +239,13 @@ seeding helper to make the check meaningful:
 from decimal import Decimal
 from scripts.setup.seed_products import seed_product
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AuthorizedProperty, PropertyTag
+from scripts.setup.seed_products import seed_verified_website
+from src.core.database.models import PropertyTag
 T = "t1"
 with get_db_session() as s:
     s.add(PropertyTag(tag_id="all_inventory", tenant_id=T, name="All inventory", description="Every property"))
-    s.add(AuthorizedProperty(property_id="example_com", tenant_id=T, property_type="website", name="example.com",
-        identifiers=[{"type": "domain", "value": "example.com"}], tags=["all_inventory"],
-        publisher_domain="example.com", verification_status="verified"))
+    # A stored adagents.json for example.com authorizing the tenant, as a seed stores it (no fetch).
+    seed_verified_website(s, T, "example.com")
     seed_product(s, T, {"product_id": "t1_display_ros", "name": "Run of site display",
         "description": "Display on every page of example.com",
         "formats": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}],
@@ -303,6 +305,10 @@ app_secrets = {
   OAUTH_CLIENT_SECRET = "..."
 }
 ```
+
+Register the `GOOGLE_OAUTH_REDIRECT_URI` value with the provider as a redirect URI, and run
+`terraform apply`. Then open `https://admin.<domain>/` and sign in with an address in
+`super_admin_emails`.
 
 `app_secrets` go into the app secret in Secrets Manager; any other secret variable
 (`GEMINI_API_KEY`, `GAM_OAUTH_CLIENT_SECRET`, ...) goes there the same way. The verified run
@@ -406,7 +412,7 @@ Each of these came up in the verified run.
 - **Memory**: the app used about 1.25 GB of its 2 GB at idle; a 1 GB task is too small. The
   creative agent used about 600 MB of 1 GB.
 - **MCP streaming** holds responses open; the ALB idle timeout is 300 seconds instead of 60.
-- **The ALB's HTTP-to-HTTPS redirect** includes `:443` in the `Location` header. Harmless.
+- **The ALB's HTTP-to-HTTPS redirect** includes port 443 in the `Location` header. Harmless.
 - **Wildcard DNS sends every name under the domain to the app.** A name that is no
   tenant's `virtual_host` gets an error response from the app, not a tenant.
 

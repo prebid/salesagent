@@ -300,8 +300,8 @@ def corrected_compliance_tree(source: Path, dest: Path) -> Path:
         (vectors / f"{document}.json", vector_id) for document, vector_id in profile_document_vector_ids().items()
     ]
     for path, vector_id in targets:
-        source_text = path.read_text()
+        source_text = path.read_text(encoding="utf-8")
         corrected = correct_vector_text(vector_id, source_text)
         if corrected != source_text:
-            path.write_text(corrected)
+            path.write_text(corrected, encoding="utf-8")
     return dest

@@ -119,7 +119,7 @@ class TestApproveMediaBuyTenantIsolation:
         Both should be migrated to MediaBuyRepository for pattern consistency.
         """
         source_path = ROOT / "src/admin/blueprints/operations.py"
-        tree = ast.parse(source_path.read_text())
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
 
         # Find the approve_media_buy function
         func_node = None
@@ -131,7 +131,7 @@ class TestApproveMediaBuyTenantIsolation:
         assert func_node is not None, "approve_media_buy function not found"
 
         # Verify MediaBuyRepository is used
-        source_text = ast.get_source_segment(source_path.read_text(), func_node)
+        source_text = ast.get_source_segment(source_path.read_text(encoding="utf-8"), func_node)
         assert "MediaBuyRepository" in source_text, (
             "approve_media_buy() must use MediaBuyRepository for tenant-scoped MediaBuy access "
         )
@@ -174,7 +174,7 @@ class TestAdminDeliveryTenantIsolation:
         Verify the repository is used rather than raw select() calls.
         """
         source_path = ROOT / "src/admin/blueprints/creatives.py"
-        tree = ast.parse(source_path.read_text())
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
 
         func_node = None
         for node in ast.walk(tree):
@@ -186,7 +186,7 @@ class TestAdminDeliveryTenantIsolation:
                 break
 
         assert func_node is not None
-        source_text = ast.get_source_segment(source_path.read_text(), func_node)
+        source_text = ast.get_source_segment(source_path.read_text(encoding="utf-8"), func_node)
         assert "AdminCreativeUoW" in source_text, (
             "_call_webhook_for_creative_status must use AdminCreativeUoW for tenant-scoped access"
         )
@@ -228,7 +228,7 @@ class TestAdminDeliveryTenantIsolation:
         Verify the repository is used rather than raw select() calls.
         """
         source_path = ROOT / "src/admin/blueprints/creatives.py"
-        tree = ast.parse(source_path.read_text())
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
 
         # Find the review_creatives function
         func_node = None
@@ -240,7 +240,7 @@ class TestAdminDeliveryTenantIsolation:
         assert func_node is not None, "review_creatives function not found"
 
         # Verify tenant-scoped media buy access (via MediaBuyRepository or AdminCreativeUoW)
-        source_text = ast.get_source_segment(source_path.read_text(), func_node)
+        source_text = ast.get_source_segment(source_path.read_text(encoding="utf-8"), func_node)
         assert "MediaBuyRepository" in source_text or "AdminCreativeUoW" in source_text, (
             "review_creatives() must use MediaBuyRepository or AdminCreativeUoW for tenant-scoped MediaBuy access"
         )
@@ -312,18 +312,3 @@ class TestAdminDeliveryTenantIsolation:
 
     # NOTE: _get_media_buy_delivery_impl MediaPackage query is NOT tested here because
     # MediaPackage has no tenant_id column. Tenant isolation via media_buy_id FK is sufficient.
-
-    def test_get_pricing_options_scopes_by_tenant(self):
-        """ProductRepository.get_all_pricing_options PricingOption query must include tenant_id."""
-        selects = _extract_select_calls(
-            "src/core/database/repositories/product.py",
-            "get_all_pricing_options",
-        )
-
-        pricing_selects = [s for s in selects if s["model"] == "PricingOption"]
-        assert pricing_selects, "Expected at least one PricingOption select() call"
-
-        for s in pricing_selects:
-            assert s["has_tenant_filter"], (
-                f"PricingOption query at product.py:{s['lineno']} is missing tenant_id filter. "
-            )

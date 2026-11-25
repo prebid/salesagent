@@ -19,13 +19,12 @@ from tests.factories.account import (
 )
 from tests.factories.core import (
     AdapterConfigFactory,
-    AuthorizedPropertyFactory,
     CreativeAgentFactory,
     CurrencyLimitFactory,
     GAMInventoryFactory,
     PropertyTagFactory,
-    PublisherPartnerFactory,
     SignalsAgentFactory,
+    SyncJobFactory,
     TenantFactory,
 )
 from tests.factories.creative import (
@@ -47,6 +46,7 @@ from tests.factories.product import (
     ProductFactory,
     StoredPlacementFactory,
 )
+from tests.factories.publisher import PublisherFactory
 from tests.factories.request import (
     OMIT,
     CreateMediaBuyRequestFactory,
@@ -64,8 +64,8 @@ from tests.factories.targeting import (
     PropertyListReferenceFactory,
     TargetingFactory,
 )
-from tests.factories.user import TenantAuthConfigFactory, UserFactory
-from tests.factories.webhook import PushNotificationConfigFactory, WebhookTaskContextFactory
+from tests.factories.user import TenantAuthConfigFactory, TenantManagementConfigFactory, UserFactory
+from tests.factories.webhook import PushNotificationConfigFactory, WebhookDeliveryLogFactory, WebhookTaskContextFactory
 from tests.factories.workflow import ContextFactory, WorkflowStepFactory
 
 # Only SQLAlchemyModelFactory subclasses belong here: the harness rebinds
@@ -82,10 +82,10 @@ ALL_FACTORIES = [
     CurrencyLimitFactory,
     GAMInventoryFactory,
     PropertyTagFactory,
-    PublisherPartnerFactory,
-    AuthorizedPropertyFactory,
+    PublisherFactory,
     CreativeAgentFactory,
     SignalsAgentFactory,
+    SyncJobFactory,
     PrincipalFactory,
     InventoryProfileFactory,
     ProductFactory,
@@ -93,12 +93,14 @@ ALL_FACTORIES = [
     MediaBuyFactory,
     MediaPackageFactory,
     PushNotificationConfigFactory,
+    WebhookDeliveryLogFactory,
     DeliverySimulationConfigFactory,
     CreativeFactory,
     CreativeAssignmentFactory,
     FormatPerformanceMetricsFactory,
     UserFactory,
     TenantAuthConfigFactory,
+    TenantManagementConfigFactory,
     SigningKeyFactory,
     ContextFactory,
     WorkflowStepFactory,
@@ -109,7 +111,6 @@ __all__ = [
     "OMIT",
     "AccountFactory",
     "AdapterConfigFactory",
-    "AuthorizedPropertyFactory",
     "AgentAccountAccessFactory",
     "BusinessEntityFactory",
     "CollectionListReferenceFactory",
@@ -142,16 +143,19 @@ __all__ = [
     "StoredPlacementFactory",
     "PropertyListReferenceFactory",
     "PropertyTagFactory",
-    "PublisherPartnerFactory",
+    "PublisherFactory",
     "PushNotificationConfigFactory",
     "SignalsAgentFactory",
     "SigningKeyFactory",
     "SyncAccountsRequestFactory",
     "SyncCreativesRequestFactory",
+    "SyncJobFactory",
     "TargetingFactory",
     "TenantAuthConfigFactory",
+    "TenantManagementConfigFactory",
     "TenantFactory",
     "UserFactory",
+    "WebhookDeliveryLogFactory",
     "WebhookTaskContextFactory",
     "ContextFactory",
     "WorkflowStepFactory",

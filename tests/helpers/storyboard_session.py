@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.audit import ledger
+from tests._collection_manifest import unpublished_env
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -197,7 +198,7 @@ def run_conformance_session(
     module's subject historically confused with "missing" — so callers that need
     a variable ABSENT pass it through :func:`without`.
     """
-    session_env = _apply(env)
+    session_env = unpublished_env(_apply(env))
     session_env["PYTHONPATH"] = os.pathsep.join(
         [str(tmp_path), str(REPO_ROOT), session_env.get("PYTHONPATH", "")],
     )

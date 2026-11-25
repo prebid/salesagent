@@ -21,6 +21,7 @@ from typing import Any
 
 from flask import jsonify, request
 
+from src.admin.csrf import csrf_exempt
 from src.core.config import get_settings
 from src.core.credentials import hash_token, mint_api_key, token_prefix
 from src.core.database.database_session import get_db_session
@@ -123,6 +124,8 @@ def require_api_key_auth(*, setting: str, config_key: str, header: str) -> Any:
 
             return f(*args, **kwargs)
 
-        return decorated_function
+        # Authenticated by the header alone, never the session cookie, so a cross-site
+        # form (which cannot set the header) is no threat to it.
+        return csrf_exempt(decorated_function)
 
     return decorator

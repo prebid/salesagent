@@ -21,7 +21,7 @@ The example files are in [`deploy/vm/`](../../deploy/vm/):
 > - #2315: a creative agent configured by its base URL answers in under a second instead of
 >   hanging or retrying.
 > - #2305: pins the reference creative agent to AdCP v3.1.25.
-> - #2311 and #2312 fix the sample format ids and the Admin UI "Verify all" button.
+> - #2311 fixes the sample format ids.
 
 ## Contents
 
@@ -180,10 +180,11 @@ configured ad server. It is not for a deployment buyers use.
 
 ## Step 6: Build the reference creative agent
 
-Products name creative formats, and the app lists them by asking a creative agent. The public agent
-at `https://creative.adcontextprotocol.org` serves AdCP 3.2, whose catalog this release's AdCP 3.1.1
-parser rejects (#2274), so `list_creative_formats` comes back empty. Run the reference agent at the
-version the repository pins:
+Products name creative formats, and the app lists them by asking a creative agent. With
+`CREATIVE_AGENT_URL` unset, it asks the public agent at `https://creative.adcontextprotocol.org`,
+whose catalog changes without notice, and leaves out every format that does not validate against
+the AdCP version this release pins. Run the reference agent at the version the repository pins,
+which serves the catalog of the AdCP release that matches that version:
 
 ```bash
 cd /opt/salesagent
@@ -238,8 +239,8 @@ host, which the Admin UI calls **Custom Domain** and the setup script takes as `
 
 A tenant is not a publisher. One tenant sells for many publisher sites, hundreds in production.
 Each site authorizes the tenant by serving `/.well-known/adagents.json` on its own domain, with an
-entry that names the tenant's URL (step 11). The tenant holds the site as an authorized property
-and verifies it against that file.
+entry that names the tenant's URL (step 11). The operator adds the site as a publisher, and the
+tenant fetches and stores that file; the properties it authorizes the tenant for are read from it.
 
 Put the tenant's host on the seller's own domain, for example `sales.acme.com`. A host under the
 apex, such as `acme.<apex>`, also works.
@@ -277,7 +278,8 @@ docker compose exec app python scripts/ops/provision_signing_key.py --tenant-id 
 ```
 
 Then finish the tenant in the Admin UI: the setup checklist on its dashboard lists what is missing
-(currencies, the `all_inventory` property tag, products, authorized properties, an ad server).
+(currencies, the `all_inventory` property tag, products, a publisher whose file authorizes the
+tenant, an ad server).
 The mock adapter is for trying the agent out: with `ADCP_TESTING` unset it does not count as a
 configured ad server, so the tenant does not accept media buys. A real tenant connects Google Ad
 Manager (see [GAM service account setup](../adapters/gam/service-account-setup.md)).
@@ -346,9 +348,18 @@ which is its origin (`https://sales.acme.com`), and the properties it sells:
 To pin the tenant's webhook signing key as well, add a `signing_keys` array to the entry holding
 the keys from `https://sales.acme.com/.well-known/jwks.json`, and update it after every key rotation.
 
-Then, in the Admin UI, add the publisher's properties (**Authorized Properties**) and verify them.
-Verification fetches the publisher's `adagents.json` and looks for the tenant's agent URL. Repeat
-both for every publisher site the tenant sells.
+Then, in the Admin UI, add the publisher (**Inventory → Publishers**, by its domain). Adding it
+fetches the publisher's `adagents.json` and stores it, and the properties whose entry names the
+tenant's agent URL become the tenant's authorized properties; **Authorized Properties** lists them.
+Repeat for every publisher site the tenant sells. **Sync All** fetches every publisher's file again,
+and the scheduled refresh does the same every six hours. A stored file counts for 24 hours after
+its last successful fetch: a publisher whose file cannot be fetched for longer stops authorizing
+the tenant until a fetch succeeds.
+
+A product selecting `all_inventory` announces each publisher with `selection_type: "all"`, which
+claims every property the publisher lists. If the publisher authorizes this agent for a tag or for
+property IDs and lists properties outside that scope, sell those products by a narrower tag or by
+property IDs instead, because a buyer may refuse a claim wider than the authorization.
 
 ## Backups
 
@@ -371,7 +382,9 @@ docker compose start app
 
 ## Upgrades and rollback
 
-Migrations run when the app starts, so an upgrade is: back up, build, switch.
+Migrations run when the app starts, so an upgrade is: back up, build, switch. First run the
+read-only [checks before an upgrade](single-tenant.md#checks-before-an-upgrade) for the migrations
+the new version carries.
 
 ```bash
 cd /opt/salesagent
@@ -407,10 +420,10 @@ schema in a way the old version cannot read; check `docker compose logs app` fir
 |---|---|
 | TLS handshake fails (`tlsv1 alert internal error`) for a host | Caddy asked `/tls/ask` and got 403: the host is not an active tenant's host. The refusal is in the app's log, not Caddy's: `docker compose logs app \| grep tls/ask`. Ask it yourself: `docker compose exec app curl -s -o /dev/null -w '%{http_code}\n' 'http://localhost:8000/tls/ask?domain=<host>'` must print 200. A 404 for every host means the route is not mounted: the `app` service is missing `TLS_ASK_ENABLED=true` (`docker compose exec app printenv TLS_ASK_ENABLED`). If it prints 200 and the handshake still fails, the host's DNS does not point at the VM yet, so Let's Encrypt cannot validate it (`docker compose logs caddy`). |
 | `app` is healthy but every request returns 502 | The image's nginx did not start. You built an image without #2310; rebuild from a ref that has it. |
-| `list_creative_formats` returns no formats | The app cannot read the creative agent's catalog. With `CREATIVE_AGENT_URL` unset it asks the public agent, whose AdCP 3.2 catalog is rejected (#2274); run the reference agent (step 6). With it set, check `curl https://<apex>/api/creative-agent/health` from the VM, which also proves the VM reaches its own public address. |
-| Admin login fails after the provider redirects back | The redirect URI registered with the provider differs from `GOOGLE_OAUTH_REDIRECT_URI` in `.env`, or the ID token has no `email`. |
-| A tenant answers `CONFIGURATION_ERROR` | The `Host` the request named is not a tenant's host. Check the tenant's **Custom Domain** in the Admin UI. |
-| "Verify all" in Authorized Properties verifies only the first property | Fixed by #2312. Until then, verify each property on its own. |
+| `list_creative_formats` returns no formats | The app cannot read the creative agent's catalog. With `CREATIVE_AGENT_URL` unset it asks the public agent, and the response's `errors` name the cause: `AGENT_UNREACHABLE` when the agent did not answer, `AGENT_FORMATS_DISCARDED` when its formats do not validate against the pinned AdCP version. Run the reference agent (step 6). With it set, check `curl https://<apex>/api/creative-agent/health` from the VM, which also proves the VM reaches its own public address. |
+| Admin login fails at the provider or after it redirects back | The redirect URI registered with the provider differs from `GOOGLE_OAUTH_REDIRECT_URI` in `.env`, or the ID token has no `email`. |
+| A request answers `TENANT_UNDEFINED` (HTTP 421, "No seller is served at the address this request named") | The request's `Host` is not a tenant's host, and the request sends no `x-adcp-tenant` header that names a tenant. Check the tenant's **Custom Domain** in the Admin UI. |
+| A publisher authorizes nothing although its file names the tenant | Open the publisher under **Inventory → Publishers**: its last fetch status says whether the file was not found, unreachable or invalid. A file is fetched at `https://<publisher>/.well-known/adagents.json`, and its entry `url` must name the tenant's agent URL. Fix the file, then **Sync All**. |
 | Seeded sample products show formats no buyer can build | Fixed by #2311 (the seed scripts used format ids the creative agent does not publish). |
 
 See also the [environment variables reference](environment-variables.md), the

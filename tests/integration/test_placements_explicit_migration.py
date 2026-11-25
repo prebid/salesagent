@@ -13,14 +13,19 @@ revision ever runs.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from tests.integration.migration_helpers import reset_to_revision, run_alembic_downgrade, run_alembic_upgrade
+from tests.integration.migration_helpers import (
+    reset_to_revision,
+    run_alembic_downgrade,
+    run_alembic_upgrade,
+    seed_product,
+    stored_column,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -37,23 +42,13 @@ def _at(migration_db, revision: str):
 
 
 def _insert_product(engine, product_id: str, placements: Any) -> None:
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO products (tenant_id, product_id, name, description, delivery_type, "
-                "format_ids, targeting_template, property_tags, placements) "
-                "VALUES (:tid, :pid, :pid, 'test', 'guaranteed', '[]'::jsonb, '{}'::jsonb, "
-                "'[\"all_inventory\"]'::jsonb, CAST(:placements AS jsonb))"
-            ),
-            {"tid": _TENANT, "pid": product_id, "placements": None if placements is None else json.dumps(placements)},
-        )
+    seed_product(
+        engine, tenant_id=_TENANT, product_id=product_id, property_tags=["all_inventory"], placements=placements
+    )
 
 
 def _placements(engine, product_id: str) -> Any:
-    with engine.begin() as conn:
-        return conn.execute(
-            text("SELECT placements FROM products WHERE product_id = :pid"), {"pid": product_id}
-        ).scalar_one()
+    return stored_column(engine, "products", "placements", product_id=product_id)
 
 
 def _has_check(engine) -> bool:
@@ -85,13 +80,13 @@ _BACKFILL = {
         [{"kind": "seller_inline", "mode": "included", "placement_id": "hero", "name": "Hero"}],
     ),
     "publisher_ref_without_mode": (
-        [{"kind": "publisher_ref", "placement_id": "pub", "publisher_domain": "publisher.example"}],
+        [{"kind": "publisher_ref", "placement_id": "pub", "publisher_domain": "publisher-psatest.com"}],
         [
             {
                 "kind": "publisher_ref",
                 "mode": "targetable",
                 "placement_id": "pub",
-                "publisher_domain": "publisher.example",
+                "publisher_domain": "publisher-psatest.com",
             }
         ],
     ),
@@ -160,7 +155,10 @@ def test_the_upgrade_refuses_and_names_a_row_it_cannot_state(migration_db, place
     ("placement", "refused"),
     [
         ({"kind": "seller_inline", "placement_id": "p", "name": "P", "mode": "targetable"}, False),
-        ({"kind": "publisher_ref", "placement_id": "p", "publisher_domain": "pub.example", "mode": "included"}, False),
+        (
+            {"kind": "publisher_ref", "placement_id": "p", "publisher_domain": "pub-psatest.com", "mode": "included"},
+            False,
+        ),
         ({"placement_id": "p", "name": "P", "mode": "targetable"}, True),
         ({"kind": "seller_inline", "placement_id": "p", "name": "P"}, True),
         ({"kind": "seller_inline", "name": "P", "mode": "targetable"}, True),

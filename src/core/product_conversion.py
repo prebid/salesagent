@@ -359,17 +359,22 @@ def default_reporting_capabilities() -> LibraryReportingCapabilities:
 def convert_product_model_to_schema(
     product_model,
     adapter_type: str | None = None,
+    *,
+    publisher_properties: list[dict],
 ) -> Product:
-    """Convert database Product model to Product schema.
+    """Convert an offered database Product model to the Product schema.
 
     Args:
         product_model: Product database model
         adapter_type: Adapter type for the tenant (e.g., "google_ad_manager", "mock").
             Used to determine the default delivery_measurement when the product
             does not have one configured. If None, falls back to generic "publisher".
+        publisher_properties: The selectors the product names, resolved once by the read that
+            decided it is offered (``OfferedProduct.publisher_properties``, from
+            ``offered_products``); a product resolving to none is never converted.
 
     Returns:
-        Product schema object
+        Product schema object.
 
     Raises:
         ValueError: In non-production environments, if delivery_measurement is missing
@@ -414,14 +419,8 @@ def convert_product_model_to_schema(
             f"canonical format_options on the product or its inventory profile."
         )
 
-    # publisher_properties: Use effective_properties which returns discriminated union format
-    effective_props = product_model.effective_properties
-    if not effective_props:
-        raise ValueError(
-            f"Product {product_model.product_id} has no publisher_properties. "
-            "All products must have at least one property per AdCP spec."
-        )
-    product_data["publisher_properties"] = effective_props
+    # publisher_properties: one selector per publisher, never the seller's own host (#1845)
+    product_data["publisher_properties"] = publisher_properties
 
     # delivery_measurement: REQUIRED per AdCP spec.
     # Use the product's configured value, or fall back to adapter-specific default.

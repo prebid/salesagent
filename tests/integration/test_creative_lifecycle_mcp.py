@@ -291,9 +291,14 @@ class TestCreativeLifecycleMCP:
             session.add(package_2)
             session.add(package_buyer_ref)
 
-            # Create test product for create_media_buy tests
-            # (create_media_buy queries DB directly, not get_product_catalog)
-            # Include all formats from sample_creatives fixture
+            # Create test product for create_media_buy tests, offered because the publisher it
+            # names authorizes the seller in its stored adagents.json (create_media_buy reads
+            # offered products only, #1845). Include all formats from sample_creatives fixture.
+            from scripts.setup.seed_products import seed_verified_website
+            from src.core.database.models import ProductPublisherSelection
+
+            session.flush()
+            seed_verified_website(session, "creative_test", "test.com")
             test_product = DBProduct(
                 tenant_id="creative_test",
                 product_id="prod_1",
@@ -306,7 +311,9 @@ class TestCreativeLifecycleMCP:
                 ],
                 targeting_template={},
                 delivery_type="non_guaranteed",
-                properties=[{"publisher_domain": "test.com", "selection_type": "all"}],
+                publisher_selections=ProductPublisherSelection.from_selectors(
+                    "creative_test", [{"publisher_domain": "test.com", "selection_type": "all"}]
+                ),
             )
             session.add(test_product)
 
@@ -828,7 +835,7 @@ class TestCreativeLifecycleMCP:
                 assignment_id=str(uuid.uuid4()),
                 creative_id="assignment_test_1",
                 media_buy_id=self.test_media_buy_id,
-                package_id="test_package",
+                package_id="package_1",  # a package the buy holds (setup_test_data)
                 weight=100,
             )
             session.add(assignment)
@@ -948,10 +955,12 @@ class TestCreativeLifecycleMCP:
                 stmt = select(Creative).where(Creative.creative_id == creative_data["creative_id"])
                 creative = session.scalars(stmt).first()
                 if creative:
-                    # Set platform_creative_id in data JSON to skip upload
+                    # The ad server holds the creative, so it is not created again. Its asset
+                    # is still built to place it, from the dimensions on the record.
                     if not creative.data:
                         creative.data = {}
-                    creative.data["platform_creative_id"] = f"gam_creative_{idx + 1}"
+                    creative.data["ad_server_creative_id"] = f"gam_creative_{idx + 1}"
+                    creative.data["width"], creative.data["height"] = 300, 250
                     from sqlalchemy.orm import attributes
 
                     attributes.flag_modified(creative, "data")

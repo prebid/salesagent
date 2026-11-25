@@ -40,7 +40,7 @@ from pathlib import Path
 def load_fixture_data(filename: str) -> dict:
     """Load JSON fixture data from the data directory."""
     fixture_path = Path(__file__).parent / "data" / filename
-    with open(fixture_path) as f:
+    with open(fixture_path, encoding="utf-8") as f:
         return json.load(f)
 
 

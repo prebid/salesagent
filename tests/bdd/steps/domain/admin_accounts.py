@@ -8,7 +8,10 @@ in tests/bdd/conftest.py.
 
 from __future__ import annotations
 
+import json
 import re
+from html import unescape
+from html.parser import HTMLParser
 from typing import TYPE_CHECKING
 
 from pytest_bdd import given, parsers, then, when
@@ -57,6 +60,16 @@ def _require_admin_page(ctx: dict) -> object:
     indistinguishable from a protocol payload to anything that read it.
     """
     return _require(ctx, "admin_page", hint="The admin page request may have errored instead.")
+
+
+def _answer_text(ctx: dict) -> str:
+    """The body of the last admin answer as the operator reads it, with HTML entities decoded."""
+    return unescape(_require_admin_page(ctx).data.decode())
+
+
+def _json_error(ctx: dict) -> object:
+    """The ``error`` of the last admin answer's JSON body."""
+    return _require_admin_page(ctx).get_json().get("error")
 
 
 @given(parsers.parse('an admin user is authenticated for tenant "{tenant_id}"'))
@@ -108,6 +121,7 @@ def given_tenant_has_keyed_account(ctx: dict, name: str, domain: str, operator: 
 
 
 @given("the admin user is not authenticated")
+@given("the caller is not authenticated")
 def given_admin_not_authenticated(ctx: dict) -> None:
     """Clear any existing authentication."""
     env = _env(ctx)
@@ -209,6 +223,21 @@ def then_page_contains(ctx: dict, text: str) -> None:
     assert text in html, f"Page does not contain '{text}'"
 
 
+#: What only that form's page holds, by the name a scenario gives the form.
+_FORM_MARKERS = {
+    "create account": 'name="brand_domain"',
+    "create tenant": 'name="virtual_host"',
+    "add product": "Add New Product",
+    "edit product": "<h2>Edit Product</h2>",
+}
+
+
+@then(parsers.parse("the page is the {form} form"))
+def then_page_is_form(ctx: dict, form: str) -> None:
+    marker = _FORM_MARKERS[form]
+    assert marker in _answer_text(ctx), f"The page lacks {marker!r}, so it is not the {form} form"
+
+
 @then(parsers.parse("the page shows {count:d} accounts"))
 def then_page_shows_n_accounts(ctx: dict, count: int) -> None:
     """Assert the number of account rows shown on the list page."""
@@ -251,34 +280,72 @@ def then_page_shows_status(ctx: dict, status: str) -> None:
     assert badge_class in html, f"Status badge '{badge_class}' not found"
 
 
+class _StatusButtons(HTMLParser):
+    """The page's status action buttons: each element whose ``onclick`` calls ``changeStatus``.
+
+    Read as a browser reads them: the parser decodes the attribute's character references,
+    and the call's argument is the JavaScript string literal the template wrote, so how
+    the template quotes or escapes it does not matter.
+    """
+
+    _CALL = re.compile(r"\s*changeStatus\((.*)\)\s*;?\s*\Z", re.DOTALL)
+
+    def __init__(self, html: str) -> None:
+        super().__init__()
+        #: Each button's label, as shown, and the status it posts.
+        self.posts: dict[str, str] = {}
+        self._open: tuple[str, str] | None = None  # (tag, status) of the button being read
+        self._label: list[str] = []
+        self.feed(html)
+        self.close()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if (call := self._CALL.match(dict(attrs).get("onclick") or "")) is not None:
+            self._open, self._label = (tag, json.loads(call.group(1))), []
+
+    def handle_data(self, data: str) -> None:
+        if self._open is not None:
+            self._label.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._open is not None and tag == self._open[0]:
+            self.posts[" ".join("".join(self._label).split())] = self._open[1]
+            self._open = None
+
+
+def _status_buttons(ctx: dict) -> dict[str, str]:
+    """The last page's status action buttons, label to the status each posts."""
+    return _StatusButtons(_require_admin_page(ctx).data.decode()).posts
+
+
+def _status_labelled(label: str) -> str:
+    """The account status a button labelled *label* stands for: ``Pending Approval`` is ``pending_approval``."""
+    return label.lower().replace(" ", "_")
+
+
 @then(parsers.parse('the page shows action buttons for "{buttons_str}"'))
 def then_page_shows_action_buttons(ctx: dict, buttons_str: str) -> None:
-    """Assert action buttons are present on the detail page."""
-    html = _require_admin_page(ctx).data.decode()
-    buttons = [b.strip().strip('"') for b in buttons_str.split(" and ")]
-    for button_text in buttons:
-        assert f"onclick=\"changeStatus('{button_text.lower()}')" in html, (
-            f"Action button for '{button_text}' not found"
-        )
+    """Each named button is on the page, and posts the status its label names."""
+    labels = [b.strip().strip('"') for b in buttons_str.split(" and ")]
+    shown = _status_buttons(ctx)
+    assert {label: shown.get(label) for label in labels} == {label: _status_labelled(label) for label in labels}, (
+        f"The page's status buttons are {shown}"
+    )
 
 
 @then(parsers.parse('the page does not show action button for "{button_text}"'))
 def then_page_no_action_button(ctx: dict, button_text: str) -> None:
-    """Assert an action button is NOT present."""
-    html = _require_admin_page(ctx).data.decode()
-    assert f"onclick=\"changeStatus('{button_text.lower()}')" not in html, (
-        f"Action button for '{button_text}' should not be present"
-    )
+    """No button carries the label, and none posts the status it names."""
+    shown = _status_buttons(ctx)
+    assert button_text not in shown, f"The page shows a {button_text!r} button: {shown}"
+    assert _status_labelled(button_text) not in shown.values(), f"A button posts {button_text!r}: {shown}"
 
 
 @then("the page does not show any status action buttons")
 def then_page_no_action_buttons(ctx: dict) -> None:
-    """Assert no status action buttons are shown (terminal state).
-
-    Checks for onclick="changeStatus(...)" on buttons, not the JS function definition.
-    """
-    html = _require_admin_page(ctx).data.decode()
-    assert 'onclick="changeStatus(' not in html, "Found action buttons on a terminal-state account"
+    """No element on the page calls ``changeStatus`` (terminal state); the script that defines it does not count."""
+    shown = _status_buttons(ctx)
+    assert shown == {}, f"Found action buttons on a terminal-state account: {shown}"
 
 
 @then("the admin is redirected to the accounts list")
@@ -417,11 +484,11 @@ def then_json_key_value(ctx: dict, key: str, value: str) -> None:
     assert data[key] == value, f"Expected {key}='{value}', got '{data.get(key)}'"
 
 
-@then(parsers.parse('the JSON response has "{key}" containing "{substring}"'))
-def then_json_key_contains(ctx: dict, key: str, substring: str) -> None:
-    """Assert JSON response key contains a substring."""
+@then(parsers.parse('the JSON response is the refusal "{error}"'))
+def then_json_refusal(ctx: dict, error: str) -> None:
+    """The whole body is the admin app's one JSON failure (``json_failure``) with *error*, and nothing else."""
     data = _require_admin_page(ctx).get_json()
-    assert substring in str(data.get(key, "")), f"Expected {key} to contain '{substring}', got '{data.get(key)}'"
+    assert data == {"success": False, "error": error}, f"Expected the refusal {error!r}, got {data!r}"
 
 
 @then(parsers.parse('the "{field}" control is not editable'))

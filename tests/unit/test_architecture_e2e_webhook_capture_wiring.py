@@ -14,7 +14,10 @@ The four sites, per OWNER DECISION 4 (2026-08-06):
    ``webhooks.adcp-e2e.dev``; ``*.adcp.test`` does not.
 2. the compose network alias on the EXISTING ``tls-proxy`` service.
 3. the nginx SNI map key in ``config/nginx/nginx-tls-test.conf.template``,
-   extending the EXISTING front — never a second ``listen ... ssl`` server.
+   extending the EXISTING front — one terminator, one certificate. (The
+   front listens on 443 as well as 8443, for the test publishers' domains,
+   which carry no port; a second listener on the same server is not a second
+   front, so the guard holds the certificate to one.)
 4. a NON-PRIVATE, PER-STACK-ALLOCATED subnet for the compose network, so the
    resolved address genuinely satisfies production's SSRF gate rather than
    being exempted from it.
@@ -28,7 +31,7 @@ Site 4's two halves are both load-bearing and pull in opposite directions:
   --subnet 223.255.255.0/24`` succeeds once and the SECOND stack fails with
   "Pool overlaps with other one on this address space" — even for a /28 inside
   the held /24. This repo runs concurrent stacks BY DESIGN
-  (``scripts/test-stack.sh`` sets ``COMPOSE_PROJECT_NAME="adcp-test-$$"``), so
+  (``scripts/test-stack.sh`` sets a per-run ``COMPOSE_PROJECT_NAME="adcp-test-<random>"``), so
   a hardcoded CIDR in the BASE compose file — the file the in-network runner
   uses alone — means the second stack on the box never comes up.
 
@@ -44,7 +47,9 @@ reason its own ticket does not own is a guard people learn to ignore.
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
+import subprocess
 
 import pytest
 
@@ -83,8 +88,8 @@ _GEN_TLS_SCRIPT = _REPO_ROOT / "scripts" / "dev" / "gen_test_tls.py"
 #: ``${NAME}`` or ``${NAME:-default}`` — compose's own interpolation syntax.
 _COMPOSE_VAR_RE = re.compile(r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::-(?P<default>[^}]*))?\}")
 
-#: A TLS ``listen`` directive — one per terminating front.
-_TLS_LISTEN_RE = re.compile(r"^\s*listen\s+[^;]*\bssl\b[^;]*;", re.MULTILINE)
+#: An ``ssl_certificate`` directive (not ``ssl_certificate_key``) and the path it names.
+_TLS_CERTIFICATE_RE = re.compile(r"^\s*ssl_certificate\s+(?P<path>[^;\s]+)\s*;", re.MULTILINE)
 
 
 # ---------------------------------------------------------------------------
@@ -96,9 +101,9 @@ _TLS_LISTEN_RE = re.compile(r"^\s*listen\s+[^;]*\bssl\b[^;]*;", re.MULTILINE)
 # ---------------------------------------------------------------------------
 
 
-def count_tls_fronts(template: str) -> int:
-    """How many TLS-terminating ``listen`` directives the template declares."""
-    return len(_TLS_LISTEN_RE.findall(template))
+def tls_certificates(template: str) -> set[str]:
+    """Every certificate the template's TLS servers present."""
+    return {match.group("path") for match in _TLS_CERTIFICATE_RE.finditer(template)}
 
 
 def declared_network_subnets(compose: dict) -> list[tuple[str, str]]:
@@ -237,14 +242,14 @@ def test_nginx_sni_map_routes_the_webhook_capture_hostname() -> None:
 
 
 @pytest.mark.arch_guard
-def test_tls_template_declares_exactly_one_terminating_front() -> None:
-    """One terminator, one certificate. A second ``listen ... ssl`` is the regression."""
-    fronts = count_tls_fronts(_NGINX_TLS_TEMPLATE.read_text(encoding="utf-8"))
+def test_tls_template_presents_exactly_one_certificate() -> None:
+    """One terminator, one certificate. A second certificate is the regression: two places to keep SANs in step."""
+    certificates = tls_certificates(_NGINX_TLS_TEMPLATE.read_text(encoding="utf-8"))
 
-    assert fronts == 1, format_failure(
-        summary="config/nginx/nginx-tls-test.conf.template declares more than one TLS front",
-        violations=[f"{fronts} `listen ... ssl` directives found"],
-        fix_hint="Route new origins through the existing front's SNI map, never a second server block.",
+    assert len(certificates) == 1, format_failure(
+        summary="config/nginx/nginx-tls-test.conf.template presents more than one certificate",
+        violations=[f"ssl_certificate paths: {sorted(certificates)}"],
+        fix_hint="Serve every TLS name from the shared leaf (scripts/dev/gen_test_tls.py), adding a SAN if needed.",
     )
 
 
@@ -298,7 +303,7 @@ def test_base_compose_never_hardcodes_the_network_subnet() -> None:
     the second stack fails with "Pool overlaps with other one on this address
     space", and even a /28 inside the held /24 is refused. The base file is the
     one the in-network runner uses alone, and this repo runs stacks concurrently
-    by design (``COMPOSE_PROJECT_NAME="adcp-test-$$"``).
+    by design (a per-run ``COMPOSE_PROJECT_NAME="adcp-test-<random>"``).
     """
     violations = find_hardcoded_subnets(load_yaml(_BASE_COMPOSE))
 
@@ -355,10 +360,13 @@ def test_sni_map_detector_reads_keys_and_ignores_the_default_row() -> None:
     assert sni_map_hostnames(synthetic) == ["proxy.adcp.test", "webhooks.adcp-e2e.dev"]
 
 
-def test_front_counter_reports_a_second_terminator() -> None:
-    synthetic = "server {\n    listen 8443 ssl;\n}\nserver {\n    listen 9443 ssl http2;\n}\n"
+def test_certificate_reader_reports_a_second_certificate() -> None:
+    synthetic = (
+        "server {\n    ssl_certificate /a/server.pem;\n    ssl_certificate_key /a/server.key;\n}\n"
+        "server {\n    ssl_certificate   /b/other.pem;\n}\n"
+    )
 
-    assert count_tls_fronts(synthetic) == 2
+    assert tls_certificates(synthetic) == {"/a/server.pem", "/b/other.pem"}
 
 
 def test_hardcoded_subnet_detector_reports_a_literal_and_accepts_a_template() -> None:
@@ -404,6 +412,15 @@ _STACK_ENTRY_POINTS = ("run_all_tests.sh", "scripts/test-stack.sh")
 _SUBNET_ALLOCATOR = "scripts/dev/alloc-e2e-subnet.sh"
 
 
+def _file_mode(relative: str) -> int:
+    """The mode the entry points see. NTFS has no execute bit, so on Windows read the
+    mode git records for the file (``100755`` or ``100644``) instead."""
+    if os.name == "nt":
+        staged = subprocess.check_output(["git", "ls-files", "--stage", "--", relative], cwd=repo_root(), text=True)
+        return int(staged.split()[0], 8) if staged else 0
+    return (repo_root() / relative).stat().st_mode
+
+
 @pytest.mark.arch_guard
 def test_a_subnet_allocator_exists_and_is_executable() -> None:
     """Templating the subnet without shipping an allocator just moves the collision.
@@ -424,9 +441,10 @@ def test_a_subnet_allocator_exists_and_is_executable() -> None:
             "back to the shared compose default."
         ),
     )
-    assert allocator.stat().st_mode & 0o111, format_failure(
+    mode = _file_mode(_SUBNET_ALLOCATOR)
+    assert mode & 0o111, format_failure(
         summary=f"{_SUBNET_ALLOCATOR} is not executable",
-        violations=[f"{_SUBNET_ALLOCATOR}: mode {allocator.stat().st_mode & 0o777:o}"],
+        violations=[f"{_SUBNET_ALLOCATOR}: mode {mode & 0o777:o}"],
         fix_hint="chmod +x it — the entry points invoke it directly.",
     )
 

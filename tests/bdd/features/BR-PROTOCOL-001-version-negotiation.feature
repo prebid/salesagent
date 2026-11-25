@@ -54,7 +54,8 @@ Feature: Inbound AdCP version negotiation applies to every tool
   # scenarios would be satisfied by a response that never reached the tool.
   Background:
     Given a tenant is configured for product discovery
-    And an inventory profile with only domain "example.com"
+    And the seller is authorized for property "homepage" of publisher "psatest.com" tagged "premium"
+    And an inventory profile with only domain "psatest.com"
     And a product linked to that inventory profile with pricing
 
   # Storyboard: error_compliance::unsupported_major_version. adcp_major_version 99 is the

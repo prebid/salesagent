@@ -329,7 +329,7 @@ def _iter_sites(paths: list[str]):
         for path in sorted(glob.glob(pattern, recursive=True)):
             if "__pycache__" in path:
                 continue
-            text = pathlib.Path(path).read_text()
+            text = pathlib.Path(path).read_text(encoding="utf-8")
             try:
                 tree = ast.parse(text)
             except SyntaxError:

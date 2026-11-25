@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import select
 
+from scripts.setup.seed_products import whole_publisher_selections
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as PrincipalModel
 from src.core.database.models import Product as ProductModel
@@ -21,6 +22,7 @@ from src.core.schemas import Product as ProductSchema
 from src.core.tools.products import get_product_catalog
 from tests.factories import PricingOptionFactory
 from tests.factories.principal import plaintext_token_for
+from tests.factories.product import default_publisher_selections
 
 
 @pytest.mark.requires_db
@@ -67,7 +69,9 @@ def test_get_product_catalog_loads_pricing_options(integration_db):
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             targeting_template={},
             delivery_type="guaranteed",
-            property_tags=["all_inventory"],
+            # Names its publisher, whose stored adagents.json authorizes the seller: a product
+            # no authorized property backs is not offered (#1845), and this test grades pricing.
+            publisher_selections=default_publisher_selections(session, tenant.tenant_id),
             delivery_measurement={"provider": "publisher", "notes": "Test measurement"},
         )
         session.add(product)
@@ -130,7 +134,7 @@ def test_product_query_with_eager_loading(integration_db):
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             targeting_template={},
             delivery_type="guaranteed",
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, tenant.tenant_id),
             delivery_measurement={"provider": "publisher", "notes": "Test measurement"},
         )
         session.add(product)
@@ -207,7 +211,7 @@ def test_product_without_eager_loading_fails_validation(integration_db):
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             targeting_template={},
             delivery_type="guaranteed",
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, tenant.tenant_id),
             delivery_measurement={"provider": "publisher", "notes": "Test measurement"},
         )
         session.add(product)
@@ -247,7 +251,7 @@ def test_product_without_eager_loading_fails_validation(integration_db):
             "delivery_measurement": {"provider": "publisher", "notes": "Test measurement"},
             "publisher_properties": [
                 {
-                    "publisher_domain": f"test-{unique_id}.example.com",
+                    "publisher_domain": f"test-{unique_id}.psatest.com",
                     "property_tags": ["all_inventory"],
                     "selection_type": "by_tag",
                 }
@@ -363,7 +367,7 @@ def test_create_media_buy_loads_pricing_options(integration_db):
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             targeting_template={},
             delivery_type="guaranteed",
-            property_tags=["all_inventory"],
+            publisher_selections=whole_publisher_selections(session, tenant.tenant_id),
             delivery_measurement={"provider": "publisher", "notes": "Test measurement"},
         )
         session.add(product)

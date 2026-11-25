@@ -7,13 +7,17 @@ Requires PostgreSQL (integration_db fixture).
 import json
 
 import pytest
+from bs4 import BeautifulSoup
 from sqlalchemy import delete, select
 
 from src.admin.app import create_app
 from src.admin.blueprints import inventory_profiles as inventory_profiles_module
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Tenant
+from src.core.operator_errors import InvalidFormInput
 from tests.factories import InventoryProfileFactory, TenantFactory
+from tests.factories.publisher import authorize_publishers
+from tests.harness.admin_client import BROWSER_PAGE_HEADERS
 from tests.helpers import concurrent_commit_in_write_window, operator_answer
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -56,10 +60,7 @@ def test_tenant(integration_db):
             tenant_id=_TENANT_ID,
             name="Inventory Profile Test Tenant",
             subdomain="inv-prof-test",
-            # The host this tenant is served at. `Tenant.primary_domain` projects it and
-            # fabricates nothing (#1845), so the inventory-profile create and edit routes
-            # refuse a tenant that declares no host. A tenant that sells inventory states
-            # the host it sells from.
+            # The host this tenant is served at; mandatory on every tenant.
             virtual_host="inv-prof-test.real-configured-domain.test",
             ad_server="mock",
             is_active=True,
@@ -68,6 +69,17 @@ def test_tenant(integration_db):
         session.commit()
 
     return _TENANT_ID
+
+
+_ADD_PATH = f"/tenant/{_TENANT_ID}/inventory-profiles/add"
+
+
+def _browser_post_from(path: str) -> dict[str, str]:
+    """The headers a browser sends posting the form on *path*: it asks for a page, and the refusal goes back there."""
+    return {**BROWSER_PAGE_HEADERS, "Referer": f"http://localhost{path}"}
+
+
+_FROM_THE_ADD_PAGE = _browser_post_from(_ADD_PATH)
 
 
 def _auth_session(client, tenant_id):
@@ -95,13 +107,6 @@ def _create_sample_profile(tenant_id: str, name: str = "Sample Profile", profile
             description="A sample profile for testing",
             inventory_config={"ad_units": [], "placements": [], "include_descendants": False},
             format_ids=[{"agent_url": "https://formats.example.com", "id": "display_300x250_image"}],
-            publisher_properties=[
-                {
-                    "publisher_domain": f"{tenant_id}.example.com",
-                    "property_tags": ["all_inventory"],
-                    "selection_type": "by_tag",
-                }
-            ],
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
@@ -146,8 +151,10 @@ class TestInventoryProfileCreate:
         response = client.get(f"/tenant/{test_tenant}/inventory-profiles/add")
         assert response.status_code == 200
 
-    def test_create_profile_with_tags_saves_to_db(self, client, test_tenant):
+    def test_create_profile_with_tags_saves_to_db(self, client, test_tenant, factory_session):
         """POST with valid tag-based config creates a profile."""
+        # The tag names the publishers of the tenant's authorized properties (#1845).
+        authorize_publishers(factory_session.get(Tenant, test_tenant), "tagged-publisher.psatest.com")
         _auth_session(client, test_tenant)
         response = client.post(
             f"/tenant/{test_tenant}/inventory-profiles/add",
@@ -179,10 +186,11 @@ class TestInventoryProfileCreate:
         assert profile.format_ids is None, f"the form authored a legacy arm: {profile.format_ids!r}"
 
     def test_create_profile_missing_name_redirects_without_creation(self, client, test_tenant):
-        """POST without a name redirects back without creating a profile."""
+        """POST without a name, from the add page, goes back to it with the refusal and creates no profile."""
         _auth_session(client, test_tenant)
         response = client.post(
             f"/tenant/{test_tenant}/inventory-profiles/add",
+            headers=_FROM_THE_ADD_PAGE,
             data={
                 "format_options": json.dumps([IMAGE_DECLARATION]),
                 "property_mode": "tags",
@@ -190,7 +198,12 @@ class TestInventoryProfileCreate:
             },
             follow_redirects=False,
         )
-        assert response.status_code in (302, 303)
+        # The refusal's text, not the status alone: an unexpected failure goes back too.
+        assert operator_answer(client, response) == (
+            302,
+            _ADD_PATH,
+            [("error", InvalidFormInput.MESSAGE), ("error", "Profile name is required")],
+        )
 
         with get_db_session() as session:
             count = len(
@@ -212,10 +225,11 @@ class TestInventoryProfileCreate:
         ids=["no-declarations", "legacy-formats-only"],
     )
     def test_create_profile_without_declarations_redirects_without_creation(self, client, test_tenant, format_fields):
-        """POST without canonical declarations redirects back without creating a profile."""
+        """POST without canonical declarations, from the add page, goes back to it with the refusal."""
         _auth_session(client, test_tenant)
         response = client.post(
             f"/tenant/{test_tenant}/inventory-profiles/add",
+            headers=_FROM_THE_ADD_PAGE,
             data={
                 "name": "No Formats Profile",
                 "property_mode": "tags",
@@ -224,7 +238,14 @@ class TestInventoryProfileCreate:
             },
             follow_redirects=False,
         )
-        assert response.status_code in (302, 303)
+        assert operator_answer(client, response) == (
+            302,
+            _ADD_PATH,
+            [
+                ("error", InvalidFormInput.MESSAGE),
+                ("error", "At least one canonical format declaration (format_options) is required"),
+            ],
+        )
 
         listing = client.get(f"/tenant/{test_tenant}/inventory-profiles/")
         assert listing.status_code == 200
@@ -234,12 +255,15 @@ class TestInventoryProfileCreate:
 class TestInventoryProfileEditFormats:
     """Authoring declarations on an existing legacy-only profile."""
 
-    def test_authoring_declarations_on_a_legacy_profile_is_saved(self, client, test_tenant):
+    def test_authoring_declarations_on_a_legacy_profile_is_saved(self, client, test_tenant, factory_session):
         """The edit form saves the declarations and reads them back.
 
         What a linked product is then announced from is graded on the wire by
         @T-UC-GET-PRODUCTS-format-options-profile-canonical.
         """
+        # The "all_inventory" tag selection names the publishers of the tenant's authorized
+        # properties; with none, the save is refused before anything is stored.
+        authorize_publishers(factory_session.get(Tenant, test_tenant), "tagged-publisher.psatest.com")
         profile_pk = _create_sample_profile(test_tenant)
         _auth_session(client, test_tenant)
         response = client.post(
@@ -254,12 +278,18 @@ class TestInventoryProfileEditFormats:
             },
             follow_redirects=False,
         )
-        assert response.status_code in (302, 303)
+        assert response.status_code in (302, 303), response.data[:2000]
+        factory_session.expire_all()  # the route saved in its own session
+        assert factory_session.get(InventoryProfile, profile_pk).format_options == [IMAGE_DECLARATION]
 
-        # The edit form reads the declarations back into the canonical editor.
+        # The edit form reads the declarations back into the canonical editor: its content,
+        # not its placeholder, which is an image declaration too.
         page = client.get(f"/tenant/{test_tenant}/inventory-profiles/{profile_pk}/edit")
         assert page.status_code == 200
-        assert b'"format_kind": "image"' in page.data, "the edit form does not show the stored declaration"
+        editor = BeautifulSoup(page.data, "html.parser").find("textarea", attrs={"name": "format_options"})
+        assert editor is not None and json.loads(editor.get_text()) == [IMAGE_DECLARATION], (
+            "the edit form does not show the stored declaration"
+        )
 
 
 class TestInventoryProfileDelete:
@@ -313,19 +343,20 @@ class TestAddInventoryProfileDuplicateId:
         }
 
     def test_winner_and_loser_get_the_same_answer(self, client, factory_session):
-        # A real virtual_host is required to reach the write window at all:
-        # Tenant.primary_domain no longer fabricates a placeholder domain, and the
-        # add route refuses to proceed without one BEFORE it ever gets to the
-        # uq_inventory_profile write this test grades. Same reseeding the
-        # test_tenant fixture above needed.
+        # A publisher authorizing a property is required to reach the write window at all: the
+        # "tags" selection names the publishers whose properties carry the tag, and the
+        # add route refuses a selection naming none BEFORE it ever gets to the
+        # uq_inventory_profile write this test grades.
         tenant = TenantFactory(virtual_host="contested-profile.real-configured-domain.test")
+        authorize_publishers(tenant, "tagged-publisher.psatest.com")
         _auth_session(client, tenant.tenant_id)
 
+        add_path = f"/tenant/{tenant.tenant_id}/inventory-profiles/add"
+
         def post_add():
+            # From the add page, as a browser posts it: the refusal goes back there.
             return client.post(
-                f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
-                data=self._form(),
-                follow_redirects=False,
+                add_path, data=self._form(), headers=_browser_post_from(add_path), follow_redirects=False
             )
 
         def commit_conflicting_row():
@@ -338,7 +369,10 @@ class TestAddInventoryProfileDuplicateId:
 
         assert winner == (
             302,
-            f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
-            [("error", f"Inventory profile with ID '{self.PROFILE_ID}' already exists")],
+            add_path,
+            [
+                ("error", InvalidFormInput.MESSAGE),
+                ("error", f"Inventory profile with ID '{self.PROFILE_ID}' already exists"),
+            ],
         )
         assert loser == winner

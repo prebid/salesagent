@@ -31,9 +31,9 @@ def check_no_skip_tests(files: list[Path]) -> list[str]:
     """
     out: list[str] = []
     for filepath in files:
-        if "tests/" not in str(filepath) or not filepath.name.startswith("test_"):
+        if "tests/" not in filepath.as_posix() or not filepath.name.startswith("test_"):
             continue
-        for lineno, line in enumerate(filepath.read_text().splitlines(), 1):
+        for lineno, line in enumerate(filepath.read_text(encoding="utf-8").splitlines(), 1):
             if is_forbidden_skip_line(line):
                 out.append(f"{filepath}:{lineno}: @pytest.mark.skip forbidden (use skip_ci with justification)")
     return out
@@ -48,7 +48,7 @@ def check_no_fn_calls(files: list[Path]) -> list[str]:
             continue
         if "tests" in parts:
             continue
-        for lineno, line in enumerate(filepath.read_text().splitlines(), 1):
+        for lineno, line in enumerate(filepath.read_text(encoding="utf-8").splitlines(), 1):
             if ".fn(" in line:
                 out.append(f"{filepath}:{lineno}: .fn() calls forbidden — use direct function calls")
     return out
@@ -77,7 +77,7 @@ def check_no_unresolvable_citations(files: list[Path]) -> list[str]:
         parts = filepath.parts
         if "src" not in parts and "tests" not in parts:
             continue
-        for lineno, line in enumerate(filepath.read_text().splitlines(), 1):
+        for lineno, line in enumerate(filepath.read_text(encoding="utf-8").splitlines(), 1):
             if _UNRESOLVABLE_CITATION_RE.search(line):
                 out.append(
                     f"{filepath}:{lineno}: cite something a contributor can open "

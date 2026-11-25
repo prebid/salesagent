@@ -119,7 +119,7 @@
             <div class="form-group">
                 <label for="property_tags">Property Tags *</label>
                 <input type="text" id="property_tags" name="property_tags" placeholder="e.g., all_inventory, premium, sports">
-                <small style="color: #666;">Comma-separated list of tags. Example: all_inventory, premium, homepage</small>
+                <small style="color: #666;">Comma-separated list of tags. Example: all_inventory, premium, homepage. Each publisher whose authorized properties carry one of the tags is selected under its own domain.</small>
             </div>
         </div>
 
@@ -149,9 +149,9 @@
                 </div>
                 {% else %}
                 <div class="alert" style="background: #fff3cd; border: 1px solid #ffc107; padding: 1rem; border-radius: 4px;">
-                    <strong>⚠️ No publisher properties found</strong><br>
+                    <strong>⚠️ No authorized publisher properties found</strong><br>
                     <small style="display: block; margin-top: 0.5rem;">
-                        You need to add publisher partnerships first.
+                        Add a publisher under Publishers first; its adagents.json supplies the properties it authorizes.
                         <a href="{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}#publishers-tab" style="color: #856404; text-decoration: underline;">Go to Inventory → Publishers & Properties →</a>
                     </small>
                 </div>
@@ -176,12 +176,6 @@
                         <li><code>property_ids</code> (array) OR <code>property_tags</code> (array): Specific properties or tags</li>
                     </ul>
                 </small>
-
-                {% if tenant and tenant.primary_domain %}
-                <button type="button" class="btn btn-sm btn-secondary mt-2" onclick="setDefaultProperties()">
-                    Use Default ({{ tenant.primary_domain }})
-                </button>
-                {% endif %}
             </div>
         </div>
 
@@ -226,17 +220,6 @@ function togglePropertyMode() {
     } else if (mode === 'full') {
         fullSection.style.display = 'block';
     }
-}
-
-// Set default properties
-function setDefaultProperties() {
-    const defaultProps = [
-        {
-            "publisher_domain": "{{ tenant.primary_domain if tenant and tenant.primary_domain else 'example.com' }}",
-            "property_tags": ["all_inventory"]
-        }
-    ];
-    document.getElementById('publisher_properties').value = JSON.stringify(defaultProps, null, 2);
 }
 
 // Inventory picker functions (reuse from product form)

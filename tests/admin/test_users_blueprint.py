@@ -174,6 +174,18 @@ class TestAuthorizedDomains:
         refreshed = factory_session.get(Tenant, tenant.tenant_id)
         assert "new-domain.com" in refreshed.authorized_domains
 
+    @pytest.mark.parametrize("domain", ["a',alert(document.domain),'.example", "<b>x</b>.example.com", "localhost"])
+    def test_add_domain_refuses_a_value_that_is_not_a_domain_name(self, client, factory_session, domain):
+        tenant = TenantFactory(authorized_domains=["example.com"])
+        _auth_session(client, tenant.tenant_id)
+
+        response = client.post(f"/tenant/{tenant.tenant_id}/users/domains", json={"domain": domain})
+
+        assert response.status_code == 400
+        factory_session.expire_all()
+        refreshed = factory_session.get(Tenant, tenant.tenant_id)
+        assert refreshed.authorized_domains == ["example.com"]
+
     def test_add_domain_rejects_duplicate(self, client, factory_session):
         tenant = TenantFactory(authorized_domains=["example.com"])
         _auth_session(client, tenant.tenant_id)
@@ -182,8 +194,8 @@ class TestAuthorizedDomains:
             f"/tenant/{tenant.tenant_id}/users/domains",
             json={"domain": "example.com"},
         )
-        assert response.status_code == 400
-        assert "already exists" in response.get_json()["error"].lower()
+        assert response.status_code == 409
+        assert response.get_json() == {"success": False, "error": "Domain already exists"}
 
     def test_concurrent_adds_do_not_lose_a_domain(self, client, factory_session):
         """A concurrent add landing inside the handler's window must not be
@@ -253,23 +265,23 @@ class TestDisableSetupModeAuth:
     """
 
     def test_blocks_when_not_sso_authenticated(self, client, factory_session):
-        """403 when session lacks auth_method=oidc."""
+        """409 when session lacks auth_method=oidc: the session's sign-in conflicts with the change."""
         tenant = TenantFactory(auth_setup_mode=True)
         _auth_session(client, tenant.tenant_id)  # no auth_method set
 
         response = client.post(f"/tenant/{tenant.tenant_id}/users/disable-setup-mode")
-        assert response.status_code == 403
+        assert response.status_code == 409
         body = response.get_json()
         assert body["success"] is False
         assert "sso" in body["error"].lower()
 
     def test_rejects_when_sso_not_configured(self, client, factory_session):
-        """400 when caller is SSO-authenticated but tenant has no oidc_enabled config."""
+        """409 when caller is SSO-authenticated but tenant has no oidc_enabled config."""
         tenant = TenantFactory(auth_setup_mode=True)
         _auth_session(client, tenant.tenant_id, auth_method="oidc")
 
         response = client.post(f"/tenant/{tenant.tenant_id}/users/disable-setup-mode")
-        assert response.status_code == 400
+        assert response.status_code == 409
         body = response.get_json()
         assert body["success"] is False
         assert "sso" in body["error"].lower()

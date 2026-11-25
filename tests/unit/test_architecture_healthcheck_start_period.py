@@ -59,7 +59,7 @@ _NEEDS_DOCKER_RESOLUTION = re.compile(r"\$\{|^<<$|^\*")
 
 
 def _resolved_healthcheck(compose_file: str, service: str) -> dict:
-    doc = yaml.safe_load((repo_root() / compose_file).read_text())
+    doc = yaml.safe_load((repo_root() / compose_file).read_text(encoding="utf-8"))
     hc = doc["services"][service].get("healthcheck") or {}
     unresolved = [
         f"{k}: {v!r}"

@@ -480,7 +480,8 @@ class TestGuardMechanics:
             "  @T-UC-999-graduated-but-uncommented\n"
             "  Scenario: fake graduated scenario\n"
             "    Given a thing\n"
-            "    # XFAIL-EXPECTED: production gap — #1592 (stale, tag was removed on graduation)\n"
+            "    # XFAIL-EXPECTED: production gap — #1592 (stale, tag was removed on graduation)\n",
+            encoding="utf-8",
         )
         monkeypatch.setattr("tests.unit.test_architecture_bdd_no_stale_xfail_citations._FEATURES_DIR", tmp_path)
         violations = _find_stale_citations()

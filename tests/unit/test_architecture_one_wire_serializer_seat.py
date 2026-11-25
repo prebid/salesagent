@@ -28,7 +28,7 @@ import ast
 
 import pytest
 
-from tests.unit._architecture_helpers import format_failure, parse_module, repo_root
+from tests.unit._architecture_helpers import format_failure, parse_module, rel, repo_root
 
 # The seat itself, and this guard's own prose/snippets.
 ALLOWED_FILES = {
@@ -165,7 +165,7 @@ def find_reinsert_violations(tree: ast.Module, relpath: str) -> list[str]:
 def _scan(repo, finder) -> list[str]:
     violations: list[str] = []
     for path in sorted((repo / "src").rglob("*.py")):
-        relpath = str(path.relative_to(repo))
+        relpath = rel(path, repo)
         if relpath in ALLOWED_FILES:
             continue
         tree = parse_module(path)
