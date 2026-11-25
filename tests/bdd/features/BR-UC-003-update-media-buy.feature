@@ -1281,7 +1281,7 @@ Feature: BR-UC-003 Update Media Buy
     Then the buyer is refused VALIDATION_ERROR naming the package member "catalogs"
     And the ad server received no update call
 
-  @T-UC-003-duplicate-catalogs-atomic
+  @T-UC-003-duplicate-catalogs-atomic-single
   Scenario: A budget beside one catalog reaches the ad server
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -3275,7 +3275,7 @@ Feature: BR-UC-003 Update Media Buy
     Then the read media buy's name on the wire is "Summer flight - Q3 / North"
 
   # An update that sends no name returns the stored one, so the field is never silently dropped.
-  @T-UC-003-media-buy-name @extension
+  @T-UC-003-media-buy-name-absent @extension
   Scenario: An update that sends no name returns the stored one
     Given the tenant is configured for auto-approval
     And the media buy "mb_existing" is named "Spring flight - Q2"
@@ -3356,7 +3356,7 @@ Feature: BR-UC-003 Update Media Buy
       | completed | INVALID_STATE   |
       | rejected  | INVALID_STATE   |
 
-  @T-UC-003-cancel-refused
+  @T-UC-003-cancel-refused-package
   Scenario: A cancel of one package is refused NOT_CANCELLABLE and changes nothing
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
