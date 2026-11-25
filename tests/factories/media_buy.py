@@ -142,6 +142,18 @@ def package_rows_for(media_buy_id: str, packages: Iterable[dict[str, Any]]) -> l
     ]
 
 
+def bare_package_row(media_buy_id: str, package_id: str) -> MediaPackage:
+    """The unpersisted row of a package that carries only its id, for a buy built outside ``MediaBuyFactory``.
+
+    For the fixtures that build a buy row by hand and name a package its request carries
+    with no pricing option, which ``package_rows_for`` refuses. Appended to the buy's
+    ``packages``, it is persisted with the buy, so an assignment can name it.
+    """
+    return MediaPackageFactory.build(
+        media_buy=None, media_buy_id=media_buy_id, package_id=package_id, package_config={"package_id": package_id}
+    )
+
+
 class MediaBuyFactory(factory.alchemy.SQLAlchemyModelFactory):
     class Meta:
         model = MediaBuy
