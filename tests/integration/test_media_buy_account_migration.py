@@ -24,7 +24,7 @@ from tests.integration.migration_helpers import (
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 _REVISION = "5b0563cb0ac6"
-_PREVIOUS = "b9b8e637b56c"
+_PREVIOUS = "502abb701275"
 _TENANT = "account_migration"
 _PRINCIPAL = "buyer"
 
@@ -256,7 +256,7 @@ def test_unproven_ownership_or_mode_refuses_without_guessing(legacy, payload, re
         )
     with pytest.raises(RuntimeError, match=reason) as failure:
         run_alembic_upgrade(url, _REVISION)
-    assert all(value in str(failure.value) for value in (_TENANT, _PRINCIPAL, "buy"))
+    assert f"tenant={_TENANT!r} principal={_PRINCIPAL!r} media_buy='buy': {reason}" in str(failure.value).splitlines()
     assert _accounts(engine) == {"buy": None}
 
 
@@ -293,15 +293,18 @@ def test_unrelated_cache_cannot_supply_ownership(legacy, change):
     [
         ("account", "account_evidence_conflict"),
         ("mode", "mode_evidence_conflict"),
-        ("missing_account", "account_missing"),
-        ("natural_key", "natural_key_mismatch:acc_sandbox"),
-        ("brand", "natural_key_mismatch:acc_sandbox"),
-        ("brand_id", "natural_key_mismatch:acc_branded"),
+        ("missing_account", "account_missing:missing"),
+        ("natural_key", "natural_key_mismatch:acc_sandbox:operator"),
+        ("brand", "natural_key_mismatch:acc_sandbox:domain"),
+        ("countries", "natural_key_mismatch:acc_sandbox:countries"),
+        ("brand_id", "natural_key_mismatch:acc_branded:brand_id"),
         ("account_mode", "account_mode_changed:acc_live"),
         ("account_age", "account_newer_than_buy:acc_sandbox"),
         ("payload_hash", "conflicting_payload_hash"),
         ("idempotency_key", "conflicting_idempotency_key"),
-        ("unsupported_identity", "unsupported_natural_key_identity"),
+        ("unsupported_identity", "unsupported_natural_key_identity:operator_unit"),
+        ("currency", "unsupported_natural_key_identity:currency"),
+        ("timezone", "unsupported_natural_key_identity:timezone"),
         ("malformed_reference", "malformed_account_reference"),
         ("malformed_id_reference", "malformed_account_reference"),
         ("completed_response_mode", "conflicting_create_response"),
@@ -322,10 +325,13 @@ def test_conflicting_evidence_aborts_entire_upgrade(legacy, kind, reason):
         "mode",
         "natural_key",
         "brand",
+        "countries",
         "brand_id",
         "completed_response_mode",
         "account_mode",
         "unsupported_identity",
+        "currency",
+        "timezone",
         "malformed_natural_key",
         "malformed_brand",
     }:
@@ -336,8 +342,11 @@ def test_conflicting_evidence_aborts_entire_upgrade(legacy, kind, reason):
             request["account"]["brand"]["domain"] = "wrong.example"
         elif kind == "brand_id":
             request["account"]["brand"]["brand_id"] = "b2"
-        elif kind == "unsupported_identity":
-            request["account"]["operator_unit"] = {"id": "seat"}
+        elif kind == "countries":
+            request["account"]["brand"]["countries"] = ["NL"]
+        elif kind in {"unsupported_identity", "currency", "timezone"}:
+            key = "operator_unit" if kind == "unsupported_identity" else kind
+            request["account"][key] = {"operator_unit": {"id": "seat"}, "currency": "USD", "timezone": "UTC"}[key]
         elif kind == "malformed_natural_key":
             request["account"].pop("operator")
         elif kind == "malformed_brand":
@@ -369,7 +378,9 @@ def test_conflicting_evidence_aborts_entire_upgrade(legacy, kind, reason):
     )
     with pytest.raises(RuntimeError, match=reason) as failure:
         run_alembic_upgrade(url, _REVISION)
-    assert all(value in str(failure.value) for value in (_TENANT, _PRINCIPAL, "unsafe"))
+    assert (
+        f"tenant={_TENANT!r} principal={_PRINCIPAL!r} media_buy='unsafe': {reason}" in str(failure.value).splitlines()
+    )
     assert _accounts(engine) == {"safe": None, "unsafe": None}
     with engine.connect() as conn:
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == _PREVIOUS
@@ -384,7 +395,10 @@ def test_projected_idempotency_collision_names_both_buys_and_rolls_back(legacy):
         RuntimeError, match="Account recovery would collide with idx_media_buys_idempotency_key"
     ) as failure:
         run_alembic_upgrade(url, _REVISION)
-    assert all(value in str(failure.value) for value in ("idx_media_buys_idempotency_key", "old", "recover"))
+    assert (
+        f"tenant={_TENANT!r} principal={_PRINCIPAL!r} account='acc_sandbox' media_buys=['old', 'recover']"
+        in str(failure.value).splitlines()
+    )
     assert _accounts(engine) == {"old": "acc_sandbox", "recover": None}
 
 
@@ -401,6 +415,14 @@ def test_constraint_and_downgrade_preserve_recovered_account(legacy):
         conn.execute(text("DELETE FROM accounts WHERE account_id='acc_sandbox'"))
     assert failure.value.orig.pgcode == "23503"
     run_alembic_downgrade(url, _PREVIOUS)
+    assignment_fk = next(
+        fk
+        for fk in inspect(engine).get_foreign_keys("creative_assignments")
+        if fk["name"] == "fk_creative_assignments_package_composite"
+    )
+    assert assignment_fk["referred_table"] == "media_packages"
+    assert assignment_fk["constrained_columns"] == ["media_buy_id", "package_id"]
+    assert assignment_fk["referred_columns"] == ["media_buy_id", "package_id"]
     assert _accounts(engine) == {"buy": "acc_sandbox"}
     columns = {column["name"]: column for column in inspect(engine).get_columns("media_buys")}
     assert columns["account_id"]["nullable"] is True
@@ -576,7 +598,10 @@ def test_missing_historical_timestamp_reports_the_buy_and_preserves_all_rows(leg
     with pytest.raises(RuntimeError) as failure:
         run_alembic_upgrade(url, _REVISION)
 
-    assert all(value in str(failure.value) for value in (_TENANT, _PRINCIPAL, "buy", "missing_historical_timestamp"))
+    assert (
+        f"tenant={_TENANT!r} principal={_PRINCIPAL!r} media_buy='buy': missing_historical_timestamp"
+        in str(failure.value).splitlines()
+    )
     assert _accounts(engine) == {"buy": None, "safe": None}
     with engine.connect() as conn:
         assert conn.execute(text("SELECT created_at FROM media_buys WHERE media_buy_id='buy'")).scalar_one() is None

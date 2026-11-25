@@ -10,9 +10,10 @@ from sqlalchemy import delete
 
 from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Creative, CreativeAssignment, MediaBuy, Principal, Tenant
+from src.core.database.models import Creative, CreativeAssignment, MediaBuy, MediaPackage, Principal, Tenant
 from tests.factories import stamp_format_identity
 from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
+from tests.factories.media_buy import bare_package_row
 from tests.factories.principal import plaintext_token_for
 from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
 
@@ -213,6 +214,8 @@ class TestMediaBuyReadinessService:
                 raw_request={"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]},
             )
             session.add(media_buy)
+            # An assignment's package is a foreign key to the buy's own package rows.
+            media_buy.packages.append(bare_package_row(media_buy_id, "pkg_1"))
             session.flush()  # Ensure media buy exists before creating creative assignment
 
             # Create approved creative
@@ -250,6 +253,7 @@ class TestMediaBuyReadinessService:
         with get_db_session() as session:
             session.execute(delete(CreativeAssignment).where(CreativeAssignment.media_buy_id == media_buy_id))
             session.execute(delete(Creative).where(Creative.creative_id == creative_id))
+            session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id == media_buy_id))
             session.execute(delete(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id))
             session.commit()
 
@@ -277,6 +281,8 @@ class TestMediaBuyReadinessService:
                 raw_request={"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]},
             )
             session.add(media_buy)
+            # An assignment's package is a foreign key to the buy's own package rows.
+            media_buy.packages.append(bare_package_row(media_buy_id, "pkg_1"))
             session.flush()  # Ensure media buy exists before creating creative assignment
 
             # Create approved creative
@@ -312,6 +318,7 @@ class TestMediaBuyReadinessService:
         with get_db_session() as session:
             session.execute(delete(CreativeAssignment).where(CreativeAssignment.media_buy_id == media_buy_id))
             session.execute(delete(Creative).where(Creative.creative_id == creative_id))
+            session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id == media_buy_id))
             session.execute(delete(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id))
             session.commit()
 

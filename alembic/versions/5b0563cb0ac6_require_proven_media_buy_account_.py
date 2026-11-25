@@ -1,7 +1,7 @@
 """Require proven media-buy account ownership.
 
 Revision ID: 5b0563cb0ac6
-Revises: b9b8e637b56c
+Revises: 502abb701275
 
 Only the original create request, its scoped creation workflow, or a cached
 create response naming this exact buy can identify its account. Current grants
@@ -26,7 +26,7 @@ from alembic import op
 from src.core.database.migration_guards import abort_if_rows
 
 revision = "5b0563cb0ac6"
-down_revision = "b9b8e637b56c"
+down_revision = "502abb701275"
 branch_labels = None
 depends_on = None
 
@@ -112,8 +112,9 @@ def _recover(bind: sa.Connection, buy: Mapping[str, Any]) -> tuple[str | None, s
             if type(sandbox) is not bool:
                 return None, "historical_mode_unproven"
             # The account table has no identity columns for these newer selectors.
-            if any(ref.get(key) is not None for key in ("operator_unit", "currency", "timezone")):
-                return None, "unsupported_natural_key_identity"
+            for key in ("operator_unit", "currency", "timezone"):
+                if ref.get(key) is not None:
+                    return None, f"unsupported_natural_key_identity:{key}"
             modes.add(sandbox)
             natural_refs.append(ref)
 
@@ -172,12 +173,12 @@ def _recover(bind: sa.Connection, buy: Mapping[str, Any]) -> tuple[str | None, s
     for ref in natural_refs:
         # Match historical AccountRepository._scope_natural_key: an omitted
         # brand_id does not narrow the account lookup.
-        if (
-            ref["operator"] != account["operator"]
-            or any(ref["brand"].get(key) != brand.get(key) for key in ("domain", "countries"))
-            or (ref["brand"].get("brand_id") is not None and ref["brand"]["brand_id"] != brand.get("brand_id"))
+        for key, requested, stored in (
+            ("operator", ref["operator"], account["operator"]),
+            *((key, ref["brand"].get(key), brand.get(key)) for key in ("domain", "countries", "brand_id")),
         ):
-            return None, f"natural_key_mismatch:{account_id}"
+            if (key != "brand_id" or requested is not None) and requested != stored:
+                return None, f"natural_key_mismatch:{account_id}:{key}"
     return account_id, None
 
 
