@@ -43,6 +43,7 @@ async def test_public_policy_allows_no_brand_manifest():
     mock_request = MagicMock()
     mock_request.brand = None
     mock_request.brief = "Athletic footwear"
+    mock_request.buying_mode = None
     mock_request.filters = None
     mock_request.context = None
 
@@ -90,6 +91,7 @@ async def test_require_brand_policy_rejects_no_brand_manifest():
     mock_request = MagicMock()
     mock_request.brand = None
     mock_request.brief = "Athletic footwear"
+    mock_request.buying_mode = None
     mock_request.filters = None
     mock_request.context = None
 
@@ -115,6 +117,7 @@ async def test_require_brand_policy_accepts_with_brand_manifest():
     # adcp 3.6.0: brand replaces brand_manifest; use BrandReference model
     mock_request.brand = BrandReference(domain="nike.com")
     mock_request.brief = "Athletic footwear"
+    mock_request.buying_mode = None
     mock_request.filters = None
     mock_request.context = None
 
@@ -174,6 +177,7 @@ async def test_require_auth_policy_accepts_with_auth():
     mock_request = MagicMock()
     mock_request.brand = None
     mock_request.brief = "Athletic footwear"
+    mock_request.buying_mode = None
     mock_request.filters = None
     mock_request.context = None
 
