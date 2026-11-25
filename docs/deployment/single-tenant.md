@@ -153,6 +153,32 @@ docker compose exec adcp-server python scripts/ops/migrate.py
 docker compose exec adcp-server alembic revision -m "description"
 ```
 
+### Checks before an upgrade
+
+Some migrations add a constraint that the existing data must already meet, and the upgrade stops
+on the first row that doesn't. Each query below only reads. Run it against the deployment's
+database before you upgrade; when it returns no rows, the migration it names will apply.
+
+**`502abb701275` creative assignment names a package its buy holds.** The migration adds a foreign
+key from `creative_assignments (media_buy_id, package_id)` to `media_packages`. It fails on an
+assignment that names a package its media buy doesn't hold. This query lists those assignments:
+
+```sql
+SELECT ca.tenant_id, ca.media_buy_id, ca.package_id, ca.creative_id, ca.assignment_id,
+       jsonb_path_exists(mb.raw_request, '$.packages[*] ? (@.package_id == $p)',
+                         jsonb_build_object('p', ca.package_id)) AS named_in_request
+FROM creative_assignments ca
+JOIN media_buys mb ON mb.media_buy_id = ca.media_buy_id
+LEFT JOIN media_packages mp
+  ON mp.media_buy_id = ca.media_buy_id AND mp.package_id = ca.package_id
+WHERE mp.package_id IS NULL
+ORDER BY ca.tenant_id, ca.media_buy_id, ca.package_id;
+```
+
+`named_in_request` is true when the buy's stored request names the package, so the buy carried it
+without a `media_packages` row. Decide each listed row before you upgrade: delete the assignment,
+or add the missing `media_packages` row for a package the buy does hold.
+
 ## First-time setup
 
 Starting the server applies migrations and nothing else: it creates no tenant, credential or
