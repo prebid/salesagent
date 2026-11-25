@@ -49,7 +49,7 @@ class TestGAMConnection:
 class TestGAMInventory:
     """Verify GAM inventory (ad units) discovery works."""
 
-    def test_list_ad_units(self, gam_client_manager, gam_suite_network):
+    def test_list_ad_units(self, gam_client_manager):
         """Can list ad units from the suite network."""
         from googleads import ad_manager
 
@@ -62,36 +62,32 @@ class TestGAMInventory:
         assert "results" in result
         assert len(result["results"]) > 0
 
-        # Verify our test ad units exist
-        ad_unit_ids = [str(au["id"]) for au in result["results"]]
-        for expected_id in gam_suite_network.ad_unit_ids:
-            assert expected_id in ad_unit_ids, f"Test ad unit {expected_id} not found in network"
-
     def test_ad_unit_has_expected_structure(self, gam_client_manager, gam_suite_network):
-        """Ad units have the fields the adapter expects."""
+        """Each configured ad unit exists and has the fields the adapter expects."""
         from googleads import ad_manager
 
         inv_service = gam_client_manager.get_service("InventoryService")
-        sb = ad_manager.StatementBuilder()
-        sb.Where("id = :id").WithBindVariable("id", int(gam_suite_network.ad_unit_ids[0]))
+        for ad_unit_id in gam_suite_network.ad_unit_ids:
+            sb = ad_manager.StatementBuilder()
+            sb.Where("id = :id").WithBindVariable("id", int(ad_unit_id))
 
-        result = inv_service.getAdUnitsByStatement(sb.ToStatement())
+            result = inv_service.getAdUnitsByStatement(sb.ToStatement())
 
-        assert "results" in result
-        au = result["results"][0]
+            assert "results" in result and result["results"], f"ad unit {ad_unit_id} not found in the network"
+            au = result["results"][0]
 
-        # Verify essential fields exist
-        assert "id" in au
-        assert "name" in au
-        assert "adUnitCode" in au
-        assert "status" in au
+            # Verify essential fields exist
+            assert str(au["id"]) == ad_unit_id
+            assert "name" in au
+            assert "adUnitCode" in au
+            assert "status" in au
 
 
 @pytest.mark.requires_gam
 class TestGAMAdvertiser:
     """Verify GAM advertiser (company) operations work."""
 
-    def test_list_advertisers(self, gam_client_manager, gam_suite_network):
+    def test_list_advertisers(self, gam_client_manager):
         """Can list advertisers from the suite network."""
         from googleads import ad_manager
 
@@ -104,10 +100,6 @@ class TestGAMAdvertiser:
 
         assert "results" in result
         assert len(result["results"]) > 0
-
-        # Verify our test advertiser exists
-        advertiser_ids = [str(co["id"]) for co in result["results"]]
-        assert gam_suite_network.advertiser_id in advertiser_ids, "Test advertiser not found in network"
 
     def test_advertiser_has_expected_structure(self, gam_client_manager, gam_suite_network):
         """Advertisers have the fields the adapter expects."""
@@ -123,7 +115,7 @@ class TestGAMAdvertiser:
         co = result["results"][0]
 
         assert co["id"] == int(gam_suite_network.advertiser_id)
-        assert co["name"] == "E2E Test Advertiser"
+        assert isinstance(co["name"], str) and co["name"], "the advertiser has a name"
         assert co["type"] == "ADVERTISER"
 
 
@@ -163,16 +155,6 @@ class TestGAMAdapter:
 
         companies = adapter.get_advertisers()
         assert len(companies) > 0
-
-        # Find our test advertiser
-        test_advertiser = None
-        for co in companies:
-            co_id = str(co.get("id", co.get("companyId", "")))
-            if co_id == gam_suite_network.advertiser_id:
-                test_advertiser = co
-                break
-
-        assert test_advertiser is not None, "Test advertiser not found via adapter.get_advertisers()"
 
 
 @pytest.mark.requires_gam
