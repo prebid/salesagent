@@ -37,6 +37,7 @@ from src.core.credentials import hash_token
 from src.core.database.models import AdapterConfig, CurrencyLimit, PricingOption, Product, Tenant, User
 from src.core.database.repositories.principal_lookup import find_principal_by_token_hash
 from tests.factories import TenantFactory
+from tests.harness.admin_client import BROWSER_PAGE_HEADERS
 from tests.helpers.credentials import credential_headers
 from tests.helpers.envelope_assertions import assert_envelope_shape
 
@@ -210,9 +211,10 @@ def test_the_single_tenant_admin_entry_reaches_the_tenant_setup_created(bound_fa
     assert entry.status_code == 302, entry.text
     assert entry.headers["Location"].endswith("/tenant/acme"), entry.headers["Location"]
 
-    dashboard = single_tenant_admin.get("/tenant/acme")
+    # As a browser: a caller that reads JSON is refused with a 401 instead of redirected.
+    dashboard = single_tenant_admin.get("/tenant/acme", headers=BROWSER_PAGE_HEADERS)
     assert dashboard.status_code == 302, "an unauthenticated visitor is sent to sign in"
-    sign_in = single_tenant_admin.get(dashboard.headers["Location"])
+    sign_in = single_tenant_admin.get(dashboard.headers["Location"], headers=BROWSER_PAGE_HEADERS)
     assert sign_in.status_code in (200, 302), f"the tenant's sign-in answered {sign_in.status_code}"
 
 
