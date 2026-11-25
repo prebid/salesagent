@@ -213,13 +213,13 @@ def detect_gam_network(tenant_id):
     # get trafficker ID and network currency for that network
     if network_code_provided:
         client.network_code = network_code_provided
-        trafficker_id = str(current_network_user(client).id)
+        user = current_network_user(client)
         network = current_network(client)
         return jsonify(
             {
                 "success": True,
                 "network_code": network_code_provided,
-                "trafficker_id": trafficker_id,
+                "trafficker_id": str(user.id),
                 "currency_code": network["currencyCode"],
                 "secondary_currencies": network["secondaryCurrencyCodes"],
                 "timezone": network["timeZone"],
