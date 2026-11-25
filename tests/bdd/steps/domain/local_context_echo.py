@@ -116,8 +116,8 @@ def given_no_search_criterion(ctx: dict) -> None:
     overrides = ctx.setdefault(_OVERRIDES, {})
     overrides.update(buying_mode=OMIT, brief=OMIT, brand=OMIT, filters=OMIT)
     payload = GetProductsRequestFactory.payload(**overrides)
-    assert not any(k in payload for k in ("brief", "brand", "filters")), (
-        f"the scenario claims no search criterion, but the request still carries one: {payload!r}"
+    assert not any(k in payload for k in ("buying_mode", "brief", "brand", "filters")), (
+        f"the scenario claims no search criterion and no mode, but the request still carries one: {payload!r}"
     )
 
 

@@ -222,6 +222,8 @@ class TestSchemaMatchesLibrary:
             ({"buying_mode": "wholesale", "refine": [_REFINE_ENTRY]}, "refine"),
             ({"buying_mode": "refine"}, "refine"),
             ({"buying_mode": "refine", "brief": "video ads", "refine": [_REFINE_ENTRY]}, "brief"),
+            ({"brief": "video ads", "refine": [_REFINE_ENTRY]}, "refine"),
+            ({"refine": [_REFINE_ENTRY]}, "refine"),
         ],
         ids=[
             "brief-without-brief",
@@ -230,6 +232,8 @@ class TestSchemaMatchesLibrary:
             "wholesale-with-refine",
             "refine-without-refine",
             "refine-with-brief",
+            "absent-with-brief-and-refine",
+            "absent-with-refine",
         ],
     )
     def test_get_products_request_refuses_a_companion_the_mode_rules_out(self, request_fields, field):
@@ -238,8 +242,8 @@ class TestSchemaMatchesLibrary:
         get-products-request.json writes them in descriptions only: ``brief`` is "Required when
         buying_mode is 'brief'. Must not be provided when buying_mode is 'wholesale' or
         'refine'", and ``refine`` is "Only valid when buying_mode is 'refine'" (required there
-        by get_products.mdx). They apply to a mode the buyer SENT; a request without one keeps
-        the pre-v3 default (#2710, D1).
+        by get_products.mdx). A request without a mode is judged as brief, the pin's pre-v3
+        default (#2710, D1), so ``refine`` is ruled out there too.
         """
         from pydantic import ValidationError
 

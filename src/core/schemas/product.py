@@ -221,10 +221,9 @@ class ProductMediaBuySupportRequirements(SchemaDependencies, LibraryProductMedia
 
 
 class GetProductsRequest(SchemaDependencies, BuyerRequest, LibraryGetProductsRequest):
-    """Extends library GetProductsWholesaleRequest (the pinned SDK: GetProductsRequest is a union alias).
+    """Extends the pinned library ``GetProductsRequest``.
 
-    Base class: GetProductsWholesaleRequest (brief optional, buying_mode='wholesale').
-    We widen buying_mode to str|None so callers aren't forced into a single mode.
+    ``buying_mode`` is the pinned enum made optional (#2710, D1).
 
     Library provides: account, brand, brief, buyer_campaign_ref, catalog,
     context, ext, fields, filters, pagination, property_list, refine.
@@ -261,9 +260,10 @@ class GetProductsRequest(SchemaDependencies, BuyerRequest, LibraryGetProductsReq
     # Optional, where the pin requires it: get-products-request.json says sellers receiving a
     # pre-v3 request without buying_mode "SHOULD default to 'brief'", and a missing mode takes
     # the brief path (#2710, D1). A mode that IS sent must be one the pinned enum lists (#2117).
-    buying_mode: BuyingMode | None = Field(  # type: ignore[assignment]
-        None,
-        description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
+    # ``narrowed_from`` keeps the pin's own declaration, description included; only the default
+    # (and so ``required``) differs.
+    buying_mode: BuyingMode | None = narrowed_from(  # type: ignore[assignment]
+        LibraryGetProductsRequest, "buying_mode", default=None
     )
 
     # media-buy/get-products-request.json's own ``dependencies``.
@@ -281,16 +281,20 @@ class GetProductsRequest(SchemaDependencies, BuyerRequest, LibraryGetProductsReq
 
     @model_validator(mode="after")
     def _enforce_mode_companions(self) -> "GetProductsRequest":
-        """Refuse a companion the sent ``buying_mode`` requires and lacks, or rules out and has.
+        """Refuse a companion the ``buying_mode`` requires and lacks, or rules out and has.
 
-        A request without ``buying_mode`` is checked against nothing: the pin says a pre-v3
-        request without it "SHOULD default to 'brief'", and it keeps the brief path (#2710, D1).
+        A request without ``buying_mode`` is judged as brief mode, the pin's default ("SHOULD
+        default to 'brief'"; #2710, D1), so brief's ruled-out ``refine`` is refused there too.
+        The field itself stays unset. Brief's required ``brief`` is not enforced on a mode-less
+        request: one with no brief and no other search criterion is the seller's own refusal
+        (``_get_products_impl``), and a brand- or filters-only request is served as before.
         Each refusal is located on the field, so the boundary answers INVALID_REQUEST naming it.
         """
+        buying_mode = self.buying_mode or BuyingMode.brief
+        required, ruled_out = self._MODE_COMPANIONS[buying_mode]
         if self.buying_mode is None:
-            return self
-        required, ruled_out = self._MODE_COMPANIONS[self.buying_mode]
-        mode = self.buying_mode.value
+            required = None
+        mode = buying_mode.value
         errors = [
             InitErrorDetails(
                 type=PydanticCustomError(
