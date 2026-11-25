@@ -1,185 +1,95 @@
 """Integration tests for update_media_buy creative assignment functionality."""
 
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
+from typing import Any
 
 import pytest
-from sqlalchemy import select
 
-from scripts.setup.seed_products import whole_publisher_selections
-from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
-from src.core.tools.media_buy_update import _update_media_buy_impl
-from tests.factories import stamp_format_identity
-from tests.factories.principal import PrincipalFactory, plaintext_token_for
+from tests.harness.media_buy_dual import MediaBuyDualEnv
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
     read_media_buy_state,
 )
 
-#: The format the seeded creatives carry. Pure scenery for these tests -- they grade which
-#: ASSIGNMENT rows an update writes, and never read the format -- but it still has to be a
-#: reference the seller can resolve: ``stamp_format_identity`` derives the stored columns
-#: through the production projection, which refuses a reference with no canonical kind.
-#: ``display`` stood here and is matched by no registry glob and served by no catalog, so
-#: all four tests died in their own setup. ``display_300x250`` is the registry's own glob
-#: and projects to ``image`` with no catalog at all.
-_ASSIGNABLE_FORMAT_ID = "display_300x250"
+#: The one package the creative-assignment tests update.
+PACKAGE_ID = "pkg_default"
+
+
+def _seed_buy_with_creatives(
+    env: MediaBuyDualEnv, *, media_buy_id: str, package_id: str, creative_ids: list[str], **buy: Any
+) -> tuple[Any, dict[str, Any]]:
+    """A buy with one package whose product accepts the seeded creatives' format, and those creatives.
+
+    The package's product is what ``_validate_creatives_for_assignment`` grades each creative's
+    format against, so it is the harness's own product chain, and each creative is the
+    factory's approved default in the format that product accepts. *buy* sets the buy's own
+    columns (a status, an approval stamp). Returns the buy and the creative rows by id.
+    """
+    from tests.factories import CreativeFactory, MediaBuyFactory, MediaPackageFactory
+
+    tenant, principal = env.setup_default_data(human_review_required=False)
+    product, _ = env.setup_product_chain(tenant)
+    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id=media_buy_id, **buy)
+    MediaPackageFactory(
+        media_buy=media_buy,
+        package_id=package_id,
+        package_config={"package_id": package_id, "product_id": product.product_id},
+    )
+    return media_buy, {
+        creative_id: CreativeFactory(tenant=tenant, principal=principal, creative_id=creative_id, approved=True)
+        for creative_id in creative_ids
+    }
+
+
+def _stored_assignments(env: MediaBuyDualEnv, media_buy_id: str) -> list[tuple[str, int]]:
+    """The package's stored assignments as sorted ``(creative_id, weight)`` pairs, one per row.
+
+    The test's session is expired first, so a row the update rewrote is read as stored.
+    """
+    env.get_session().expire_all()
+    rows = env.query(DBAssignment, tenant_id=env.identity.tenant_id, media_buy_id=media_buy_id, package_id=PACKAGE_ID)
+    return sorted((row.creative_id, row.weight) for row in rows)
+
+
+def _update_package(env: MediaBuyDualEnv, media_buy_id: str, package_id: str, **package_update: Any) -> Any:
+    """Send update_media_buy carrying *package_update* on *package_id*."""
+    return env.call_impl(
+        req=UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
+            media_buy_id=media_buy_id,
+            packages=[{"package_id": package_id, **package_update}],
+        )
+    )
 
 
 @pytest.mark.requires_db
 def test_update_media_buy_assigns_creatives_to_package(integration_db):
     """Test that update_media_buy can assign creatives to a package."""
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
-
-    with get_db_session() as session:
-        # Create tenant
-        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
-        tenant = Tenant(
-            tenant_id="test_tenant",
-            name="Test Org",
-            subdomain="test",
-            virtual_host="test-tenant.adcp.test",
+    with MediaBuyDualEnv() as env:
+        _seed_buy_with_creatives(
+            env, media_buy_id="test_buy_123", package_id=PACKAGE_ID, creative_ids=["creative_1", "creative_2"]
         )
-        session.add(tenant)
 
-        # Create property tag (required for products)
-        property_tag = PropertyTag(
-            tenant_id="test_tenant",
-            tag_id="all_inventory",
-            name="All Inventory",
-            description="All available inventory",
-        )
-        session.add(property_tag)
+        response = _update_package(env, "test_buy_123", PACKAGE_ID, creative_ids=["creative_1", "creative_2"])
 
-        # Create principal (MUST be flushed before creatives due to FK constraint)
-        principal = Principal.with_token(
-            plaintext_token_for("test_principal"),
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            name="Test Advertiser",
-            platform_mappings={"mock": {"id": "test_advertiser"}},
-        )
-        session.add(principal)
-        session.flush()  # Ensure principal exists before creating creatives
+        assert isinstance(response, UpdateMediaBuyResult)
+        assert isinstance(response, UpdateMediaBuyResponse)
+        assert response.media_buy_id == "test_buy_123"
+        assert response.affected_packages is not None
+        assert len(response.affected_packages) == 1
 
-        # Create product
-        product = Product(
-            product_id="test_product",
-            tenant_id="test_tenant",
-            name="Test Product",
-            description="Test product for creative assignment",
-            format_ids=["display_300x250"],
-            targeting_template={},
-            delivery_type="guaranteed",
-            publisher_selections=whole_publisher_selections(session, "test_tenant"),
-        )
-        session.add(product)
+        # The affected package names the package by its PINNED field. The assertions that
+        # stood here read ``buyer_package_ref`` and ``changes_applied``, two non-spec fields
+        # deleted under salesagent-gweku -- the first was write-only and the second duplicated
+        # the ``_PackageChanges`` record that already carries it. What this test is for is the
+        # DATABASE effect, asserted below, which is where the creative ids actually land.
+        assert response.affected_packages[0].package_id == PACKAGE_ID
 
-        # Create media buy
-        media_buy = MediaBuy(
-            media_buy_id="test_buy_123",
-            tenant_id="test_tenant",
-            principal_id="test_principal",
-            order_name="Test Order",
-            advertiser_name="Test Advertiser",
-            start_date="2025-11-01",
-            end_date="2025-11-30",
-            start_time="2025-11-01T00:00:00Z",
-            end_time="2025-11-30T23:59:59Z",
-            raw_request={
-                "packages": [{"package_id": "pkg_default", "impressions": 100000, "products": ["test_product"]}]
-            },
-        )
-        session.add(media_buy)
-
-        # Create creatives (FK to principal now satisfied)
-        creative1 = DBCreative(
-            creative_id="creative_1",
-            tenant_id="test_tenant",
-            principal_id="test_principal",
-            name="Creative 1",
-            status="ready",
-            data={"platform_creative_id": "gam_123"},
-        )
-        creative2 = DBCreative(
-            creative_id="creative_2",
-            tenant_id="test_tenant",
-            principal_id="test_principal",
-            name="Creative 2",
-            status="ready",
-            data={"platform_creative_id": "gam_456"},
-        )
-        for creative in (creative1, creative2):
-            stamp_format_identity(creative, format_id=_ASSIGNABLE_FORMAT_ID)
-        session.add_all([creative1, creative2])
-        session.commit()
-
-    # Create identity for the new _update_media_buy_impl signature
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_principal",
-        tenant_id="test_tenant",
-        tenant={"tenant_id": "test_tenant"},
-    )
-
-    with (
-        patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
-        patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
-    ):
-        # Mock adapter
-        mock_adapter = MagicMock()
-        mock_adapter.manual_approval_required = False
-        mock_get_adapter.return_value = mock_adapter
-
-        # Mock context manager
-        mock_ctx_manager_inst = MagicMock()
-        mock_ctx_manager_inst.get_or_create_context.return_value = MagicMock(context_id="ctx_123")
-        mock_ctx_manager_inst.create_workflow_step.return_value = MagicMock(step_id="step_123")
-        mock_ctx_mgr.return_value = mock_ctx_manager_inst
-
-        # Call update_media_buy with creative assignment
-        req = UpdateMediaBuyRequest(
-            account={"account_id": "acct_test"},
-            idempotency_key="test-idem-key-0001",
-            media_buy_id="test_buy_123",
-            packages=[
-                {
-                    "package_id": "pkg_default",
-                    "creative_ids": ["creative_1", "creative_2"],
-                }
-            ],
-        )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-    # Verify response
-    assert isinstance(result, UpdateMediaBuyResult)
-    response = result  # _impl returns UpdateMediaBuyResult; domain response is on .response
-    assert isinstance(response, UpdateMediaBuyResponse)
-    assert response.media_buy_id == "test_buy_123"
-    assert response.affected_packages is not None
-    assert len(response.affected_packages) == 1
-
-    # The affected package names the package by its PINNED field. The assertions that
-    # stood here read ``buyer_package_ref`` and ``changes_applied``, two non-spec fields
-    # deleted under salesagent-gweku -- the first was write-only and the second duplicated
-    # the ``_PackageChanges`` record that already carries it. What this test is for is the
-    # DATABASE effect, asserted below, which is where the creative ids actually land.
-    affected = response.affected_packages[0]
-    assert affected.package_id == "pkg_default"
-
-    # Verify assignments were created in database
-    with get_db_session() as session:
-        assignment_stmt = select(DBAssignment).where(
-            DBAssignment.tenant_id == "test_tenant",
-            DBAssignment.media_buy_id == "test_buy_123",
-            DBAssignment.package_id == "pkg_default",
-        )
-        assignments = session.scalars(assignment_stmt).all()
-        assert len(assignments) == 2
-        assigned_creative_ids = {a.creative_id for a in assignments}
-        assert assigned_creative_ids == {"creative_1", "creative_2"}
+        # Each creative assigned exactly once.
+        assert [cid for cid, _ in _stored_assignments(env, "test_buy_123")] == ["creative_1", "creative_2"]
 
 
 @pytest.mark.requires_db
@@ -189,155 +99,22 @@ def test_creative_assignments_with_weights(integration_db):
     Tests that update_media_buy handles the creative_assignments field
     (as opposed to creative_ids) with weight values per AdCP spec.
     """
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
+    with MediaBuyDualEnv() as env:
+        _seed_buy_with_creatives(env, media_buy_id="test_buy_weights", package_id=PACKAGE_ID, creative_ids=["c1", "c2"])
 
-    with get_db_session() as session:
-        # Create tenant
-        tenant = Tenant(
-            tenant_id="test_tenant",
-            name="Test Org",
-            subdomain="test",
-            virtual_host="test-tenant.adcp.test",
+        response = _update_package(
+            env,
+            "test_buy_weights",
+            PACKAGE_ID,
+            creative_assignments=[{"creative_id": "c1", "weight": 70}, {"creative_id": "c2", "weight": 30}],
         )
-        session.add(tenant)
 
-        # Create property tag (required for products)
-        property_tag = PropertyTag(
-            tenant_id="test_tenant",
-            tag_id="all_inventory",
-            name="All Inventory",
-            description="All available inventory",
-        )
-        session.add(property_tag)
+        assert isinstance(response, UpdateMediaBuyResult)
+        assert isinstance(response, UpdateMediaBuyResponse)
+        # adcp_error is the error channel UpdateMediaBuyResult declares (salesagent-jnqab).
+        assert response.adcp_error is None, f"update_media_buy failed: {response.adcp_error}"
 
-        # Create principal (MUST be flushed before creatives due to FK constraint)
-        principal = Principal.with_token(
-            plaintext_token_for("test_principal"),
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            name="Test Advertiser",
-            platform_mappings={"mock": {"id": "test_advertiser"}},
-        )
-        session.add(principal)
-        session.flush()
-
-        # Create product
-        product = Product(
-            product_id="test_product",
-            tenant_id="test_tenant",
-            name="Test Product",
-            description="Test product for creative assignment weights",
-            format_ids=["display_300x250"],
-            targeting_template={},
-            delivery_type="guaranteed",
-            publisher_selections=whole_publisher_selections(session, "test_tenant"),
-        )
-        session.add(product)
-
-        # Create media buy
-        media_buy = MediaBuy(
-            media_buy_id="test_buy_weights",
-            tenant_id="test_tenant",
-            principal_id="test_principal",
-            order_name="Test Order",
-            advertiser_name="Test Advertiser",
-            start_date="2025-11-01",
-            end_date="2025-11-30",
-            start_time="2025-11-01T00:00:00Z",
-            end_time="2025-11-30T23:59:59Z",
-            raw_request={
-                "packages": [{"package_id": "pkg_default", "impressions": 100000, "products": ["test_product"]}]
-            },
-        )
-        session.add(media_buy)
-
-        # Create creatives (FK to principal now satisfied)
-        creative1 = DBCreative(
-            creative_id="c1",
-            tenant_id="test_tenant",
-            principal_id="test_principal",
-            name="Creative 1",
-            status="ready",
-            data={},
-        )
-        creative2 = DBCreative(
-            creative_id="c2",
-            tenant_id="test_tenant",
-            principal_id="test_principal",
-            name="Creative 2",
-            status="ready",
-            data={},
-        )
-        for creative in (creative1, creative2):
-            stamp_format_identity(creative, format_id=_ASSIGNABLE_FORMAT_ID)
-        session.add_all([creative1, creative2])
-        session.commit()
-
-    # Create ResolvedIdentity for transport-agnostic _impl call
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_principal",
-        tenant_id="test_tenant",
-        tenant={"tenant_id": "test_tenant"},
-    )
-
-    with (
-        patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
-        patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
-    ):
-        # Mock adapter
-        mock_adapter = MagicMock()
-        mock_adapter.manual_approval_required = False
-        mock_get_adapter.return_value = mock_adapter
-
-        # Mock context manager
-        mock_ctx_manager_inst = MagicMock()
-        mock_ctx_manager_inst.get_or_create_context.return_value = MagicMock(context_id="ctx_weights")
-        mock_ctx_manager_inst.create_workflow_step.return_value = MagicMock(step_id="step_weights")
-        mock_ctx_mgr.return_value = mock_ctx_manager_inst
-
-        # Call update_media_buy with creative_assignments (not creative_ids)
-        req = UpdateMediaBuyRequest(
-            account={"account_id": "acct_test"},
-            idempotency_key="test-idem-key-0001",
-            media_buy_id="test_buy_weights",
-            packages=[
-                {
-                    "package_id": "pkg_default",
-                    "creative_assignments": [
-                        {"creative_id": "c1", "weight": 70},
-                        {"creative_id": "c2", "weight": 30},
-                    ],
-                }
-            ],
-        )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-    # Verify response is successful (not an error)
-    assert isinstance(result, UpdateMediaBuyResult)
-    response = result
-    assert isinstance(response, UpdateMediaBuyResponse)
-    # `not hasattr(response, "errors")` stood here and was True by construction:
-    # UpdateMediaBuyResult declares no `errors` field, so it held for any object.
-    # adcp_error is the error channel that exists (salesagent-jnqab, same shape as the
-    # create_media_buy sites). The comment above it claimed "domain response is on
-    # .response", which stopped being true when 1210 removed the envelope wrapper.
-    assert response.adcp_error is None, f"update_media_buy failed: {response.adcp_error}"
-
-    # Verify assignments were created in database with correct weights
-    with get_db_session() as session:
-        assignment_stmt = select(DBAssignment).where(
-            DBAssignment.tenant_id == "test_tenant",
-            DBAssignment.media_buy_id == "test_buy_weights",
-            DBAssignment.package_id == "pkg_default",
-        )
-        assignments = session.scalars(assignment_stmt).all()
-        assert len(assignments) == 2
-
-        # Build a map of creative_id -> weight
-        weight_map = {a.creative_id: a.weight for a in assignments}
-        assert weight_map["c1"] == 70
-        assert weight_map["c2"] == 30
+        assert _stored_assignments(env, "test_buy_weights") == [("c1", 70), ("c2", 30)]
 
 
 @pytest.mark.requires_db
@@ -348,168 +125,33 @@ def test_creative_assignments_replaces_all(integration_db):
     assignments for that package, not just add/update. If c1 and c2 are assigned
     and we send creative_assignments=[c2, c3], the result should be only c2 and c3.
     """
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
+    from tests.factories import CreativeAssignmentFactory
 
-    with get_db_session() as session:
-        tenant = Tenant(
-            tenant_id="test_tenant",
-            name="Test Org",
-            subdomain="test",
-            virtual_host="test-tenant.adcp.test",
+    with MediaBuyDualEnv() as env:
+        media_buy, creatives = _seed_buy_with_creatives(
+            env, media_buy_id="test_buy_replace", package_id=PACKAGE_ID, creative_ids=["c1", "c2", "c3"]
         )
-        session.add(tenant)
-
-        property_tag = PropertyTag(
-            tenant_id="test_tenant",
-            tag_id="all_inventory",
-            name="All Inventory",
-            description="All available inventory",
-        )
-        session.add(property_tag)
-
-        principal = Principal.with_token(
-            plaintext_token_for("test_principal"),
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            name="Test Advertiser",
-            platform_mappings={"mock": {"id": "test_advertiser"}},
-        )
-        session.add(principal)
-        session.flush()
-
-        product = Product(
-            product_id="test_product",
-            tenant_id="test_tenant",
-            name="Test Product",
-            description="Test product",
-            format_ids=["display_300x250"],
-            targeting_template={},
-            delivery_type="guaranteed",
-            publisher_selections=whole_publisher_selections(session, "test_tenant"),
-        )
-        session.add(product)
-
-        media_buy = MediaBuy(
-            media_buy_id="test_buy_replace",
-            tenant_id="test_tenant",
-            principal_id="test_principal",
-            order_name="Test Order",
-            advertiser_name="Test Advertiser",
-            start_date="2025-11-01",
-            end_date="2025-11-30",
-            start_time="2025-11-01T00:00:00Z",
-            end_time="2025-11-30T23:59:59Z",
-            raw_request={
-                "packages": [{"package_id": "pkg_default", "impressions": 100000, "products": ["test_product"]}]
-            },
-        )
-        session.add(media_buy)
-
-        # Create three creatives
-        for cid in ["c1", "c2", "c3"]:
-            creative = DBCreative(
-                creative_id=cid,
-                tenant_id="test_tenant",
-                principal_id="test_principal",
-                name=f"Creative {cid}",
-                status="ready",
-                data={},
-            )
-            stamp_format_identity(creative, format_id=_ASSIGNABLE_FORMAT_ID)
-            session.add(creative)
-        session.flush()
-
         # Pre-existing assignments: c1 (weight 50) and c2 (weight 50)
-        session.add(
-            DBAssignment(
-                assignment_id="assign_c1",
-                tenant_id="test_tenant",
-                principal_id="test_principal",
-                media_buy_id="test_buy_replace",
-                package_id="pkg_default",
-                creative_id="c1",
-                weight=50,
+        for creative_id in ("c1", "c2"):
+            CreativeAssignmentFactory(
+                creative=creatives[creative_id], media_buy=media_buy, package_id=PACKAGE_ID, weight=50
             )
-        )
-        session.add(
-            DBAssignment(
-                assignment_id="assign_c2",
-                tenant_id="test_tenant",
-                principal_id="test_principal",
-                media_buy_id="test_buy_replace",
-                package_id="pkg_default",
-                creative_id="c2",
-                weight=50,
-            )
-        )
-        session.commit()
-
-    # Create ResolvedIdentity for transport-agnostic _impl call
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_principal",
-        tenant_id="test_tenant",
-        tenant={"tenant_id": "test_tenant"},
-    )
-
-    with (
-        patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
-        patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
-    ):
-        mock_adapter = MagicMock()
-        mock_adapter.manual_approval_required = False
-        mock_get_adapter.return_value = mock_adapter
-
-        mock_ctx_manager_inst = MagicMock()
-        mock_ctx_manager_inst.get_or_create_context.return_value = MagicMock(context_id="ctx_replace")
-        mock_ctx_manager_inst.create_workflow_step.return_value = MagicMock(step_id="step_replace")
-        mock_ctx_mgr.return_value = mock_ctx_manager_inst
 
         # Send creative_assignments with ONLY c2 and c3 — c1 should be REMOVED
-        req = UpdateMediaBuyRequest(
-            account={"account_id": "acct_test"},
-            idempotency_key="test-idem-key-0001",
-            media_buy_id="test_buy_replace",
-            packages=[
-                {
-                    "package_id": "pkg_default",
-                    "creative_assignments": [
-                        {"creative_id": "c2", "weight": 70},
-                        {"creative_id": "c3", "weight": 30},
-                    ],
-                }
-            ],
+        response = _update_package(
+            env,
+            "test_buy_replace",
+            PACKAGE_ID,
+            creative_assignments=[{"creative_id": "c2", "weight": 70}, {"creative_id": "c3", "weight": 30}],
         )
-        result = _update_media_buy_impl(req=req, identity=identity)
 
-    # Verify response is successful
-    assert isinstance(result, UpdateMediaBuyResult)
-    response = result
-    assert isinstance(response, UpdateMediaBuyResponse)
-    # `not hasattr(response, "errors")` stood here and was True by construction:
-    # UpdateMediaBuyResult declares no `errors` field, so it held for any object.
-    # adcp_error is the error channel that exists (salesagent-jnqab, same shape as the
-    # create_media_buy sites). The comment above it claimed "domain response is on
-    # .response", which stopped being true when 1210 removed the envelope wrapper.
-    assert response.adcp_error is None, f"update_media_buy failed: {response.adcp_error}"
-
-    # Verify database: ONLY c2 and c3 remain (c1 was replaced/removed)
-    with get_db_session() as session:
-        assignment_stmt = select(DBAssignment).where(
-            DBAssignment.tenant_id == "test_tenant",
-            DBAssignment.media_buy_id == "test_buy_replace",
-            DBAssignment.package_id == "pkg_default",
-        )
-        assignments = session.scalars(assignment_stmt).all()
-        assigned_ids = {a.creative_id for a in assignments}
+        assert isinstance(response, UpdateMediaBuyResult)
+        assert isinstance(response, UpdateMediaBuyResponse)
+        # adcp_error is the error channel UpdateMediaBuyResult declares (salesagent-jnqab).
+        assert response.adcp_error is None, f"update_media_buy failed: {response.adcp_error}"
 
         # BR-RULE-024 INV-2: creative_assignments REPLACES ALL
-        assert assigned_ids == {"c2", "c3"}, f"Expected only c2, c3 but got {assigned_ids} — c1 was not removed"
-
-        # Verify weights are correct
-        weight_map = {a.creative_id: a.weight for a in assignments}
-        assert weight_map["c2"] == 70
-        assert weight_map["c3"] == 30
+        assert _stored_assignments(env, "test_buy_replace") == [("c2", 70), ("c3", 30)], "c1 was not removed"
 
 
 # =============================================================================
@@ -528,34 +170,6 @@ def test_creative_assignments_replaces_all(integration_db):
 # not a seller commitment. A direct attribute assignment moves the
 # buy with neither, which is invisible if the test only checks the status string.
 # =============================================================================
-
-
-def _seed_approved_draft_buy(env, *, media_buy_id: str, package_id: str, creative_id: str) -> None:
-    """Seed the narrow precondition both transitions guard on.
-
-    A buy that is BOTH status "draft" AND has ``approved_at`` set — i.e. the
-    seller approved it before any creative was attached — plus one package whose
-    product accepts the seeded creative's format (otherwise the shared
-    ``_validate_creatives_for_assignment`` gate rejects the update before either
-    transition site is reached).
-    """
-    from tests.factories import CreativeFactory, MediaBuyFactory, MediaPackageFactory
-
-    tenant, principal = env.setup_default_data(human_review_required=False)
-    product, _ = env.setup_product_chain(tenant)
-    buy = MediaBuyFactory(
-        tenant=tenant,
-        principal=principal,
-        media_buy_id=media_buy_id,
-        status="draft",
-        approved_at=datetime.now(UTC),
-    )
-    MediaPackageFactory(
-        media_buy=buy,
-        package_id=package_id,
-        package_config={"package_id": package_id, "product_id": product.product_id},
-    )
-    CreativeFactory(tenant=tenant, principal=principal, creative_id=creative_id, approved=True)
 
 
 @pytest.mark.requires_db
@@ -581,27 +195,28 @@ def test_approved_draft_transitions_to_pending_creatives(integration_db, creativ
     :1185): each drives only its own branch, because each site is guarded on the
     field its case sends and the other field is absent from the request.
     """
-    from src.core.schemas import UpdateMediaBuyRequest
-    from tests.harness.media_buy_dual import MediaBuyDualEnv
-
     media_buy_id = f"mb_draft_{creative_field}"
     package_id = "pkg_draft"
 
     with MediaBuyDualEnv() as env:
-        _seed_approved_draft_buy(env, media_buy_id=media_buy_id, package_id=package_id, creative_id="cr_draft")
+        # The narrow precondition both transitions guard on: a buy that is BOTH status
+        # "draft" AND has ``approved_at`` set -- the seller approved it before any creative
+        # was attached -- and a package whose product accepts the creative's format, or the
+        # shared gate refuses the update before either transition site is reached.
+        _seed_buy_with_creatives(
+            env,
+            media_buy_id=media_buy_id,
+            package_id=package_id,
+            creative_ids=["cr_draft"],
+            status="draft",
+            approved_at=datetime.now(UTC),
+        )
 
         before = read_media_buy_state(env.identity.tenant_id, media_buy_id, session=env.get_session())
         assert before.status == "draft", "fixture must start in the approved-but-creative-less draft state"
         assert before.confirmed_at is None, "draft is not a seller-confirmed status, so it starts unstamped"
 
-        result = env.call_impl(
-            req=UpdateMediaBuyRequest(
-                account={"account_id": "acct_test"},
-                idempotency_key="test-idem-key-0001",
-                media_buy_id=media_buy_id,
-                packages=[{"package_id": package_id, **package_update}],
-            )
-        )
+        result = _update_package(env, media_buy_id, package_id, **package_update)
 
         assert isinstance(result, UpdateMediaBuyResult), f"update failed: {result!r}"
 

@@ -17,7 +17,7 @@ BDD scenario cross-references:
 from datetime import UTC, datetime
 from decimal import Decimal
 from itertools import repeat
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types.domains.creative.sync_creatives_request import Assignment
@@ -1278,23 +1278,13 @@ class TestUC003UpdateCreativeAssignments:
             mock_pkg = stub_package_row(package_config={"product_id": "prod_1"})
             env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
 
-            # Product with placements
-            mock_product = MagicMock()
+            # The package's product, read through the products repository, with placements
+            mock_product = env.mock["uow"].return_value.products.get_by_id.return_value
             mock_product.placements = [
                 {"placement_id": "P1"},
                 {"placement_id": "P2"},
                 {"placement_id": "P3"},
             ]
-
-            # Existing assignments and new assignments
-            scalars_calls = iter(
-                [
-                    MagicMock(first=Mock(return_value=mock_product)),  # product lookup
-                    MagicMock(all=Mock(return_value=[])),  # existing assignments
-                    MagicMock(first=Mock(return_value=None)),  # find assignment for C1
-                ]
-            )
-            mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
@@ -1330,13 +1320,9 @@ class TestUC003UpdateCreativeAssignments:
             env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
 
             # Product WITHOUT placements
-            mock_product = MagicMock()
+            mock_product = env.mock["uow"].return_value.products.get_by_id.return_value
             mock_product.placements = []
             mock_product.product_id = "prod_1"
-
-            mock_scalars = MagicMock()
-            mock_scalars.first.return_value = mock_product
-            mock_session.scalars.return_value = mock_scalars
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
@@ -2376,13 +2362,9 @@ class TestUC003ExtM:
             mock_pkg = stub_package_row(package_config={"product_id": "prod_1"})
             env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
 
-            mock_product = MagicMock()
+            mock_product = env.mock["uow"].return_value.products.get_by_id.return_value
             mock_product.placements = []  # No placements
             mock_product.product_id = "prod_1"
-
-            mock_scalars = MagicMock()
-            mock_scalars.first.return_value = mock_product
-            mock_session.scalars.return_value = mock_scalars
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
