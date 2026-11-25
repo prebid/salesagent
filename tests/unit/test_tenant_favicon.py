@@ -56,22 +56,24 @@ class TestFaviconUpload:
         assert os.path.isabs(upload_dir)
 
     def test_safe_favicon_path_valid(self):
-        """Test that valid tenant IDs pass path traversal check."""
-        from src.admin.blueprints.tenants import _get_favicon_upload_dir, _is_safe_favicon_path
+        """Valid tenant IDs resolve to a directory directly under the upload dir."""
+        from src.admin.blueprints.tenants import _get_favicon_upload_dir, _tenant_favicon_dir
 
         base_dir = _get_favicon_upload_dir()
-        assert _is_safe_favicon_path(base_dir, "tenant_123") is True
-        assert _is_safe_favicon_path(base_dir, "my-tenant") is True
-        assert _is_safe_favicon_path(base_dir, "default") is True
+        resolved_base = os.path.realpath(base_dir)
+        for tenant_id in ("tenant_123", "my-tenant", "default"):
+            assert _tenant_favicon_dir(base_dir, tenant_id) == os.path.join(resolved_base, tenant_id)
 
     def test_safe_favicon_path_traversal_blocked(self):
         """Test that path traversal attempts are blocked."""
-        from src.admin.blueprints.tenants import _get_favicon_upload_dir, _is_safe_favicon_path
+        from src.admin.blueprints.tenants import _get_favicon_upload_dir, _tenant_favicon_dir
 
         base_dir = _get_favicon_upload_dir()
-        assert _is_safe_favicon_path(base_dir, "../etc") is False
-        assert _is_safe_favicon_path(base_dir, "../../passwd") is False
-        assert _is_safe_favicon_path(base_dir, "tenant/../../../etc") is False
+        assert _tenant_favicon_dir(base_dir, "../etc") is None
+        assert _tenant_favicon_dir(base_dir, "../../passwd") is None
+        assert _tenant_favicon_dir(base_dir, "tenant/../../../etc") is None
+        assert _tenant_favicon_dir(base_dir, "..") is None
+        assert _tenant_favicon_dir(base_dir, ".") is None
 
     def test_valid_favicon_url_http(self):
         """Test that HTTP/HTTPS URLs are valid."""

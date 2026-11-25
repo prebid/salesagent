@@ -698,6 +698,78 @@ class TestWireEntry:
             wire_entry(_ctx(_ACCOUNTS_WIRE), "creatives", index=0)
 
 
+class TestWireAdvisory:
+    @pytest.mark.parametrize("details", [None, [], {}])
+    def test_locator_ignores_an_unrelated_advisory_without_an_identity(self, details):
+        from tests.bdd.steps._outcome_helpers import wire_advisory
+
+        entries = [
+            {"code": "OTHER", "details": details},
+            {"code": "X_PREBID_PERSISTED_VALUE_UNRENDERABLE", "details": {"creative_id": "creative-bad"}},
+        ]
+        actual = wire_advisory(entries, **{"details.creative_id": "creative-bad"})
+        assert actual["code"] == "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
+
+    def test_locator_requires_the_field_and_both_entity_ids(self):
+        from tests.bdd.steps._outcome_helpers import wire_advisory
+
+        target = {
+            "field": "media_buys[1].packages[2].targeting_overlay",
+            "details": {"media_buy_id": "buy-bad", "package_id": "pkg-bad"},
+            "message": "operator-facing evidence",
+        }
+        entries = [
+            {**target, "field": "media_buys[0].packages[2].targeting_overlay"},
+            {**target, "details": {"media_buy_id": "buy-good", "package_id": "pkg-bad"}},
+            {**target, "details": {"media_buy_id": "buy-bad", "package_id": "pkg-good"}},
+            target,
+        ]
+        actual = wire_advisory(
+            entries,
+            field="media_buys[1].packages[2].targeting_overlay",
+            **{"details.media_buy_id": "buy-bad", "details.package_id": "pkg-bad"},
+        )
+        assert actual is target
+        assert actual["message"] == "operator-facing evidence"
+
+    @pytest.mark.parametrize("count", [0, 2])
+    def test_locator_refuses_missing_and_duplicate_matches(self, count):
+        from tests.bdd.steps._outcome_helpers import wire_advisory
+
+        entries = [{"details": {"creative_id": "creative-other"}}] + [
+            {"details": {"creative_id": "creative-bad"}} for _ in range(count)
+        ]
+        with pytest.raises(AssertionError, match="creative-other" if count == 0 else "expected exactly one"):
+            wire_advisory(entries, **{"details.creative_id": "creative-bad"})
+
+    def test_absent_nested_identity_is_distinct_from_an_explicit_null(self):
+        from tests.bdd.steps._outcome_helpers import wire_matching_entries
+
+        explicit_null = {"details": {"media_buy_id": None}}
+        entries = [{}, {"details": None}, {"details": []}, explicit_null]
+        assert wire_matching_entries(entries, **{"details.media_buy_id": None}) == [explicit_null]
+
+    def test_negative_delivery_step_rejects_only_the_named_buy(self):
+        from tests.bdd.steps.domain.uc004_delivery import then_no_error_for_mb
+
+        wire = {"errors": [{"details": None}, {"details": {"media_buy_id": "buy-other"}}]}
+        then_no_error_for_mb(_ctx(wire), "buy-delivered")
+
+        wire["errors"].append({"details": {"media_buy_id": "buy-delivered"}})
+        with pytest.raises(AssertionError, match="buy-delivered"):
+            then_no_error_for_mb(_ctx(wire), "buy-delivered")
+
+    def test_bdd_reader_strips_message_before_matching_without_mutating_the_wire(self):
+        from tests.bdd.steps._outcome_helpers import wire_advisory, wire_advisory_errors
+
+        original = {"details": {"creative_id": "creative-bad"}, "message": "buyer prose"}
+        advisory = wire_advisory(
+            wire_advisory_errors(_ctx({"errors": [original]})), **{"details.creative_id": "creative-bad"}
+        )
+        assert advisory == {"details": {"creative_id": "creative-bad"}}
+        assert original["message"] == "buyer prose"
+
+
 class TestWireEntryErrors:
     def test_returns_the_entry_error_array(self):
         from tests.bdd.steps._outcome_helpers import wire_entry_errors

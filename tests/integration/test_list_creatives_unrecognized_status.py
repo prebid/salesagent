@@ -55,6 +55,7 @@ import pytest
 from adcp.types import CreativeStatus
 
 from src.core.database.repositories.uow import CreativeUoW
+from tests.bdd.steps._outcome_helpers import wire_advisory
 from tests.factories import seeded_format_identity
 from tests.harness import CreativeListEnv
 from tests.harness.transport import Transport
@@ -192,12 +193,7 @@ class TestUnrecognizedStoredStatus:
             record = result.wire_response["creatives"][0]
             assert record["creative_id"] == creative_id
             assert record["status"] == "processing"
-            errors = result.wire_response["errors"]
-            advisories = [entry for entry in errors if entry.get("details", {}).get("creative_id") == creative_id]
-            assert len(advisories) == 1, (
-                f"{transport}: expected exactly one advisory naming creative {creative_id}; got {errors!r}"
-            )
-            advisory = advisories[0]
+            advisory = wire_advisory(result.wire_response["errors"], **{"details.creative_id": creative_id})
             assert advisory["code"] == "X_PREBID_PERSISTED_VALUE_UNRENDERABLE"
             assert advisory["details"] == {"creative_id": creative_id}
             assert stored_status not in advisory["message"]

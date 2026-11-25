@@ -21,6 +21,7 @@ from tests.bdd.steps._outcome_helpers import (
     parked_media_buy,
     payload_or_none,
     require_payload,
+    wire_advisory,
     wire_advisory_errors,
     wire_dict,
     wire_field,
@@ -3405,18 +3406,10 @@ def _wire_advisory(ctx: dict, field: str | None, *, mb_id: str | None = None, pk
             field_path += f"[{_wire_media_buy_position(ctx, mb_id)}]"
     if field is not None:
         field_path += f".{field}"
-    matching = [
-        advisory
-        for advisory in wire_advisory_errors(ctx)
-        if advisory.get("field") == field_path
-        and (advisory.get("details") or {}).get("media_buy_id") == real_id
-        and (pkg_id is None or (advisory.get("details") or {}).get("package_id") == pkg_id)
-    ]
-    assert len(matching) == 1, (
-        f"expected exactly one advisory for {field_path!r} on media buy {real_id!r}, "
-        f"package {pkg_id!r}; got {matching!r}"
-    )
-    return matching[0]
+    match = {"field": field_path, "details.media_buy_id": real_id}
+    if pkg_id is not None:
+        match["details.package_id"] = pkg_id
+    return wire_advisory(wire_advisory_errors(ctx), **match)
 
 
 @then(
