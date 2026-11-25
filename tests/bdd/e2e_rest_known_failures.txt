@@ -413,3 +413,13 @@ tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_
 # it here. Production stores asset-level provenance, as salesagent-gxudh already records
 # (provenance is one of the three pinned fields that DO reach the row).
 # salesagent-3cs7o.54
+
+# FIXME(#2645, #2646): approving a held media buy books its GAM line items in database order,
+# not package order. execute_approved_media_buy reads the buy's packages with no ORDER BY
+# (src/core/tools/media_buy_create.py), so the order the configured network reads back varies.
+# The scenario's Given doesn't control that database order (#2646), so the row is intermittent:
+# failed in f18f96f3, passed in 025d613f, f1df24a0 and b35df2ae. It is non-strict, the
+# ledger's own marker, until #2646 makes the scenario deterministic; a strict marker would
+# XPASS(strict) at random. In process it passed every time and is not routed. It graduates
+# when #2645 lands.
+tests/bdd/test_local_gam_line_item_goal.py::test_a_buy_the_seller_approves_books_each_packages_budget_at_the_price_of_the_option_it_selected[e2e_rest]

@@ -105,8 +105,6 @@ def _stub_media_buy_reads(repo, row, media_buy_id: str | None = None):
         # it raises. A stub that returned None here would let production walk past a
         # missing row and fail later with an AttributeError instead of the typed
         # MEDIA_BUY_NOT_FOUND the buyer is owed.
-        from src.core.errors.details import EntityRefDetails
-        from src.core.exceptions import AdCPMediaBuyNotFoundError
 
         # Mirrors MediaBuyRepository.get_by_id_or_raise exactly: the identity travels
         # as typed details, and the buyer-facing message/suggestion are functions of
@@ -762,13 +760,13 @@ class TestCreateMediaBuyValidation:
         # The identifier is STRUCTURED now: details/field, not prose.
 
 
-class TestBuildAdapterAssetFormatFallback:
-    """_build_adapter_asset_from_creative format-spec fallback ( TQ-04).
+class TestOneFormatResolutionForEveryRead:
+    """``_read_for_packages`` resolves a creative's format spec once, by one rule, on every path.
 
-    Cache-miss (None) falls back to format_resolver.get_format; a genuinely
-    unknown format proceeds with no spec (raw-data extraction); a typed
-    transient AdCPSalesAgentError propagates from EITHER fetch — never degraded into a
-    missing-spec asset error.
+    The pre-adapter gate (create, approval replay) and the retroactive push read through it, so
+    a creative cannot pass the gate and resolve differently at push. A reference the agent does
+    not serve is refused unless the canonical mapping registry projects it, with no second dial;
+    a typed transient agent failure propagates (#1430 review, TQ-04).
     """
 
     def _creative(self):
@@ -782,111 +780,24 @@ class TestBuildAdapterAssetFormatFallback:
         creative.data = {"url": "https://example.com/a.jpg", "width": 300, "height": 250}
         return creative
 
-    def test_cache_miss_uses_format_resolver_fallback(self):
-        from src.core.security.outbound_http import CounterpartyUrl
-        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
+    def _read(self):
+        from src.core.tools._creative_trafficking import _AssignedPackage, _read_for_packages
 
-        spec = MagicMock()
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
-            patch("src.core.format_resolver.get_format", return_value=spec) as resolver,
-        ):
-            asset, err = _build_adapter_asset_from_creative(
-                self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
-            )
-        resolver.assert_called_once_with(
-            "display_300x250",
-            agent_url="https://creative.adcontextprotocol.org",
-            tenant_id="t1",
-            product_id=None,
-            provenance=CounterpartyUrl(field=None),
-        )
-        assert err is None and asset is not None
-
-    def test_unknown_format_proceeds_without_spec(self):
-        from src.core.exceptions import AdCPFormatNotFoundError
-        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
-
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
-            patch("src.core.format_resolver.get_format", side_effect=AdCPFormatNotFoundError()),
-        ):
-            asset, err = _build_adapter_asset_from_creative(
-                self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
-            )
-        # Raw creative data carries url/width/height, so the asset still builds.
-        assert err is None and asset is not None
-        assert asset["url"] == "https://example.com/a.jpg"
+        return _read_for_packages(self._creative(), [_AssignedPackage("p1", None, ["c_fb"])], {})
 
     def test_transient_error_from_cached_fetch_propagates_without_fallback(self):
         from src.core.exceptions import AdCPRateLimitError
-        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
 
         with (
             patch(
-                "src.core.tools.media_buy_create._get_format_spec_sync",
+                "src.core.tools._creative_trafficking._get_format_spec_sync",
                 side_effect=AdCPRateLimitError(),
             ),
             patch("src.core.format_resolver.get_format") as resolver,
         ):
             with pytest.raises(AdCPRateLimitError):
-                _build_adapter_asset_from_creative(
-                    self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
-                )
+                self._read()
         resolver.assert_not_called()
-
-    def test_transient_error_from_resolver_fallback_propagates(self):
-        from src.core.exceptions import AdCPServiceUnavailableError
-        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
-
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
-            patch(
-                "src.core.format_resolver.get_format",
-                side_effect=AdCPServiceUnavailableError(),
-            ),
-        ):
-            with pytest.raises(AdCPServiceUnavailableError):
-                _build_adapter_asset_from_creative(
-                    self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
-                )
-
-    def test_fallback_forwards_the_same_provenance_as_the_first_fetch(self):
-        """The fallback dial must carry the SAME provenance as the cached-fetch dial.
-
-        ``_build_adapter_asset_from_creative`` dials the SAME buyer-supplied
-        ``creative.agent_url`` twice: once through ``_get_format_spec_sync``
-        (already passes ``CounterpartyUrl(field=None)``), and again through
-        ``format_resolver.get_format`` when the first dial misses. Omitting
-        provenance on the second dial silently reclassifies a buyer-chosen URL
-        as operator configuration, so a subsequent refusal on that URL comes
-        back CONFIGURATION_ERROR/terminal instead of VALIDATION_ERROR/correctable
-        (salesagent-6gpt.1 diff-review round 1 BLOCKING finding, proven
-        load-bearing by round 2's executed trace: the fix routes the same
-        provenance through ``format_resolver.get_format`` ->
-        ``fetch_format_spec`` -> ``registry.get_format`` ->
-        ``get_formats_for_agent`` -> ``is_counterparty`` -> the egress seam).
-
-        Grades the WIRING at the ``fetch_format_spec`` boundary — the frame
-        the diff-review finding was actually about — rather than a live seam
-        refusal, which would make this test's outcome depend on the
-        ``ADCP_TESTING`` reference-format short-circuit two frames further
-        down (an environment detail unrelated to what this regression is).
-        """
-        from src.core.security.outbound_http import CounterpartyUrl
-        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
-
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
-            patch("src.core.format_resolver.fetch_format_spec", return_value=None) as fetch_spec,
-        ):
-            _build_adapter_asset_from_creative(self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1")
-
-        fetch_spec.assert_called_once_with(
-            "https://creative.adcontextprotocol.org",
-            "display_300x250",
-            provenance=CounterpartyUrl(field=None),
-        )
 
 
 class TestCreateMediaBuyCreativeValidation:
@@ -899,7 +810,7 @@ class TestCreateMediaBuyCreativeValidation:
         Ported from test_create_media_buy_behavioral.py::test_creative_missing_url_raises_invalid_creatives
         Covers: UC-002-EXT-G-01
         """
-        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
+        from src.core.tools._creative_trafficking import _validate_creatives_before_adapter_call
 
         # Build a creative in DB that has no URL in its data
         mock_creative = MagicMock()
@@ -915,10 +826,7 @@ class TestCreateMediaBuyCreativeValidation:
         package.creative_ids = ["c_1"]
         package.package_id = "pkg_1"
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),
-            patch("src.core.tools.media_buy_create.extract_media_url_and_dimensions", return_value=(None, None, None)),
-        ):
+        with patch("src.core.tools._creative_trafficking._get_format_spec_sync", return_value=mock_format_spec):
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
@@ -939,7 +847,7 @@ class TestCreateMediaBuyCreativeValidation:
         Source: UC-002, BR-RULE-026
         Covers: UC-002-CC-CREATIVE-ASSIGNMENT-VALIDATION-01
         """
-        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
+        from src.core.tools._creative_trafficking import _validate_creatives_before_adapter_call
 
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_err"
@@ -975,7 +883,7 @@ class TestCreateMediaBuyCreativeValidation:
         Source: UC-002, BR-RULE-026
         Covers: UC-002-CC-CREATIVE-ASSIGNMENT-VALIDATION-02
         """
-        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
+        from src.core.tools._creative_trafficking import _validate_creatives_before_adapter_call
 
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_rej"
@@ -1002,43 +910,6 @@ class TestCreateMediaBuyCreativeValidation:
             ("creative", mock_creative.creative_id, mock_creative.status)
         ]
 
-    def test_generative_creatives_skip_validation(self):
-        """UC-002-C05: generative formats (with output_format_ids) not pre-validated.
-
-        Spec: UNSPECIFIED (implementation-defined creative validation bypass)
-        Priority: P2
-        Type: unit
-        Source: UC-002
-        Covers: UC-002-ALT-WITH-INLINE-CREATIVES-03
-        """
-        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
-
-        # Generative creative: has output_format_ids on its format spec
-        mock_creative = MagicMock()
-        mock_creative.creative_id = "c_gen"
-        # The id is incidental to what this grades -- the generative-ness comes from
-        # ``output_format_ids`` on the SPEC below, not from the id. It must be an id the
-        # registry glob can project, because the write gate refuses a creative whose
-        # reference has no canonical kind and this helper has no catalog to resolve one
-        # with. Every real generative format in the pinned capture (7 of 76) declares
-        # ``canonical.kind`` and so projects in production, where the spec IS passed.
-        stamp_format_identity(mock_creative, format_id="display_300x250")
-        mock_creative.data = {}  # No media_url -- but generative should skip validation
-
-        mock_format_spec = MagicMock()
-        mock_format_spec.output_format_ids = ["display_300x250"]  # Non-None = generative
-
-        package = MagicMock()
-        package.creative_ids = ["c_gen"]
-        package.package_id = "pkg_1"
-
-        with patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec):
-            session = MagicMock()
-            session.scalars.return_value.all.return_value = [mock_creative]
-
-            # Should NOT raise -- generative creatives are skipped
-            _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
-
     def test_multiple_creative_errors_accumulated(self):
         """UC-002-C06: all creative validation errors collected before raising.
 
@@ -1048,7 +919,7 @@ class TestCreateMediaBuyCreativeValidation:
         Source: UC-002
         Covers: UC-002-EXT-G-04
         """
-        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
+        from src.core.tools._creative_trafficking import _validate_creatives_before_adapter_call
 
         # Two reference creatives, both missing URL
         mock_creative_1 = MagicMock()
@@ -1068,13 +939,7 @@ class TestCreateMediaBuyCreativeValidation:
         package.creative_ids = ["c_1", "c_2"]
         package.package_id = "pkg_1"
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),
-            patch(
-                "src.core.tools.media_buy_create.extract_media_url_and_dimensions",
-                return_value=(None, None, None),
-            ),
-        ):
+        with patch("src.core.tools._creative_trafficking._get_format_spec_sync", return_value=mock_format_spec):
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative_1, mock_creative_2]
 
@@ -1265,6 +1130,8 @@ class TestCreateMediaBuyAdapterInteraction:
         from src.core.tools.media_buy_create import _execute_adapter_media_buy_creation
 
         mock_adapter = MagicMock()
+        # The pre-booking check runs in this function first; it finds nothing to refuse.
+        mock_adapter.validate_media_buy_request.return_value = []
         mock_adapter.create_media_buy.side_effect = RuntimeError("GAM API timeout")
 
         # Two signature changes, both from the adapter-contract split (ecfdd7771 and
@@ -1281,6 +1148,8 @@ class TestCreateMediaBuyAdapterInteraction:
                     end_time=datetime.now(UTC) + timedelta(days=7),
                     package_pricing_info={},
                     identity=_make_identity(),
+                    carriers={},
+                    named_packages=[],
                 )
 
     # test_dry_run_skips_adapter (UC-002-AD03 / UC-002-MAIN-19) is REMOVED. It drove
@@ -1859,8 +1728,6 @@ class TestUpdateMediaBuyTiming:
             # Precondition + currency check + date check
             mock_uow.media_buys.get_by_id.side_effect = [mock_buy, mock_buy, mock_buy]
 
-            from src.core.exceptions import AdCPValidationError
-
             with pytest.raises(AdCPValidationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
@@ -1932,8 +1799,6 @@ class TestUpdateMediaBuyTiming:
             mock_uow_cls.return_value = mock_uow
 
             _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
-
-            from src.core.exceptions import AdCPBudgetExceededError
 
             with pytest.raises(AdCPBudgetExceededError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)

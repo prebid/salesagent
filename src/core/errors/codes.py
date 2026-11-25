@@ -357,6 +357,19 @@ _AUTHORED_SPEC_MESSAGES: Final[Mapping[ErrorCode, str]] = MappingProxyType(
 _UNCLASSIFIED_STATUS: Final = 500
 
 
+#: The published codes whose "Wire placement" rule ties them to a failed task
+#: (``enums/error-code.json``, ``enumDescriptions``, AdCP 3.2.7). CONFIGURATION_ERROR: "The
+#: deployment cannot produce a success artifact, so sellers MUST flip transport-level failure
+#: markers (HTTP 5xx, MCP `isError: true`, A2A `failed`)". CREDENTIAL_IN_ARGS: "Sellers MUST
+#: flip transport-level failure markers (HTTP 4xx, MCP `isError: true`, A2A `failed`)".
+#: GOVERNANCE_UNAVAILABLE: "Always populate both layers", the shape the two-layer model gives
+#: a failed task. The other codes with such a rule leave success open (GOVERNANCE_DENIED on a
+#: rejection arm, STALE_RESPONSE always), so they are not here.
+_ENVELOPE_ONLY: Final = frozenset(
+    {ErrorCode.CONFIGURATION_ERROR, ErrorCode.CREDENTIAL_IN_ARGS, ErrorCode.GOVERNANCE_UNAVAILABLE}
+)
+
+
 #: The HTTP status each published code is signalled with.
 #:
 #: Keyed by CODE, which is the whole point. These 31 numbers were, until
@@ -487,6 +500,7 @@ def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
             suggestion=spec.suggestion,
             message=(_AUTHORED_SPEC_MESSAGES.get(code) or _message_from_prose(spec.description)),
             status=_HTTP_STATUS.get(code, _UNCLASSIFIED_STATUS),
+            envelope_only=code in _ENVELOPE_ONLY,
         )
     for signature_code in SignatureErrorCode:
         spec = published[signature_code.value]

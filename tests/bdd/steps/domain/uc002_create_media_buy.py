@@ -2387,7 +2387,10 @@ def then_ad_server_receives_media_url(ctx: dict) -> None:
         "ad-server call, which is the refusal this scenario exists to grade the absence of"
     )
     asset = uploaded[-1]
-    assert asset.get("url"), f"the ad server received the creative with no media URL: {asset!r}"
+    representation = (asset.get("creative") or {}).get("representation") or {}
+    assert representation.get("type") == "media" and representation.get("url"), (
+        f"the ad server received the creative with no media file under its typed creative: {asset!r}"
+    )
 
 
 @then(parsers.parse('the ad server receives the inline creative "{creative_id}"'))

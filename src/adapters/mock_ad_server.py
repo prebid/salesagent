@@ -26,7 +26,6 @@ from src.core.errors.details import (
     EntityRefDetails,
     ErrorProblem,
     RejectionReasonDetails,
-    ValidationDetails,
 )
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -50,6 +49,7 @@ from src.core.schemas import (
     Snapshot,
 )
 from src.core.security.webhook_egress import deliver_webhook
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 from src.core.validation_helpers import package_field_path
 from src.services.ai.config import SellerAIConfig
 
@@ -217,6 +217,8 @@ class MockAdServer(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage,
     ) -> list[ErrorProblem]:
         """Validate media buy request with GAM-like validation rules.
 
@@ -226,7 +228,9 @@ class MockAdServer(AdServerAdapter):
         (salesagent-rys3u.4): the same facts, in fields a machine can read, with the
         sentence coming from CODE_TABLE.
         """
-        problems = super().validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
+        problems = super().validate_media_buy_request(
+            request, packages, start_time, end_time, package_pricing_info, creatives_by_package=creatives_by_package
+        )
 
         # Date validation (like GAM)
         if start_time >= end_time:
@@ -386,7 +390,6 @@ class MockAdServer(AdServerAdapter):
             AdCPAdapterError,
             AdCPConfigurationError,
             AdCPRateLimitError,
-            AdCPValidationError,
         )
 
         # A throttled ad server is its own fault, not a recovery class: RATE_LIMITED shares
@@ -641,6 +644,8 @@ class MockAdServer(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Simulates the creation of a media buy using GAM-like templates.
 
@@ -770,13 +775,6 @@ class MockAdServer(AdServerAdapter):
                             capability="keywords_any_of", rejected_value=targeting.keywords_any_of
                         )
                     )
-
-        # GAM-like validation (based on real GAM behavior)
-        validation_errors = self.validate_media_buy_request(
-            request, packages, start_time, end_time, package_pricing_info
-        )
-        if validation_errors:
-            raise AdCPValidationError(details=ValidationDetails(reasons=validation_errors))
 
         # If no AI scenario or scenario accepts, proceed with normal flow
         # HITL Mode Processing
@@ -972,7 +970,7 @@ class MockAdServer(AdServerAdapter):
         return self._build_create_success(media_buy_id, packages)
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Simulates adding creatives with HITL support."""
 
@@ -991,7 +989,7 @@ class MockAdServer(AdServerAdapter):
         return self._add_creative_assets_immediate(media_buy_id, assets, today)
 
     def _add_creative_assets_async(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets in async HITL mode."""
         self.log("🤖 Processing add_creative_assets in ASYNC mode")
@@ -1042,7 +1040,7 @@ class MockAdServer(AdServerAdapter):
         return results
 
     def _add_creative_assets_sync_with_delay(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets in sync HITL mode with configurable delay."""
         self.log(f"🤖 Processing add_creative_assets in SYNC mode ({self.sync_delay_ms}ms delay)")
@@ -1093,7 +1091,7 @@ class MockAdServer(AdServerAdapter):
         return self._add_creative_assets_immediate(media_buy_id, approved_assets, today)
 
     def _add_creative_assets_immediate(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets immediately (original behavior)."""
         from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario

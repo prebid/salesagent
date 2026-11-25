@@ -12,17 +12,15 @@ import logging
 import secrets
 import time
 import uuid
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 if TYPE_CHECKING:
-    from sqlalchemy.orm import Session
-
     from src.core.database.models import CreativeAssignment
     from src.core.database.models import MediaPackage as DBMediaPackage
     from src.core.database.repositories.media_buy import MediaBuyRepository
@@ -49,8 +47,10 @@ from src.core.exceptions import (
     AdCPGoneError,
     AdCPIdempotencyExpiredError,
     AdCPIdempotencyInFlightError,
+    AdCPInternalError,
     AdCPInvalidPricingOptionError,
     AdCPInvalidRequestError,
+    AdCPMediaBuyNotFoundError,
     AdCPPersistedStateError,
     AdCPProductNotFoundError,
     AdCPProposalNotFoundError,
@@ -64,27 +64,47 @@ from src.core.helpers.brand_key import brand_key_parts
 from src.core.idempotency_canonical import canonical_request_hash
 from src.core.idempotency_policy import DEFAULT_REPLAY_TTL
 from src.core.idempotency_replay import raise_on_payload_conflict
-
-
-class PackageAssignmentDict(TypedDict):
-    """Internal dict format for passing package assignments to adapters."""
-
-    package_id: str
-    weight: int
-    # The package's line item in the ad server (package_config["platform_line_item_id"]),
-    # None for a package that has none.
-    platform_line_item_id: str | None
+from src.core.tools._creative_trafficking import (
+    CarrierKey,
+    _adapter_refusal,
+    _assigned_packages,
+    _AssignedPackage,
+    _carriers_by_package_id,
+    _get_creative_ids,
+    _named_creative_ids,
+    _pre_validate_package_creatives,
+    _read_for_push,
+    _validate_creatives_before_adapter_call,
+)
+from src.core.traffic_carrier import (
+    AdapterCreativeAsset,
+    CreativeToTraffic,
+    PackageAssignmentDict,
+)
 
 
 def _package_assignments_by_creative(
-    assignments: Sequence["CreativeAssignment"], packages: Sequence["DBMediaPackage"]
+    assignments: Sequence["CreativeAssignment"],
+    packages: Sequence["DBMediaPackage"],
+    carriers: Mapping[CarrierKey, CreativeToTraffic],
 ) -> dict[str, list[PackageAssignmentDict]]:
-    """Each creative's package assignments on a buy, with the line item each package's row stores."""
+    """Each creative's package assignments on a buy: the line item each package's row stores, and its carrier.
+
+    *carriers* are the creatives as :func:`_read_for_packages` read them for each package, so
+    each assignment hands the adapter the creative its own package's product resolved to.
+    Create, approval and push all group through here, so each creative reaches the adapter in
+    one asset carrying all its packages, whichever path pushes it.
+    """
     line_items = {p.package_id: stored_line_item_id(p) for p in packages}
     by_creative: dict[str, list[PackageAssignmentDict]] = {}
     for a in assignments:
         by_creative.setdefault(a.creative_id, []).append(
-            {"package_id": a.package_id, "weight": a.weight, "platform_line_item_id": line_items.get(a.package_id)}
+            {
+                "package_id": a.package_id,
+                "weight": a.weight,
+                "platform_line_item_id": line_items[a.package_id],
+                "creative": carriers[(a.package_id, a.creative_id)],
+            }
         )
     return by_creative
 
@@ -108,13 +128,7 @@ from src.core.database.models import Product as ModelProduct
 from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
-    extract_click_url,
-    extract_html_markup,
-    extract_impression_tracker_url,
-    extract_media_url_and_dimensions,
-    media_asset_requires_dimensions,
     process_and_upload_package_creatives,
-    unidentified_url_asset_reason,
 )
 from src.core.helpers.pricing_helpers import package_volume, pricing_info_for
 from src.core.logging_config import log_safe
@@ -126,7 +140,6 @@ from src.core.schemas import (
     CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     CreativeApprovalStatus,
-    CreativeFormatIdentity,
     FormatId,
     FormatKey,
     MediaPackage,
@@ -135,7 +148,6 @@ from src.core.schemas import (
     Product,
     Targeting,
 )
-from src.core.security.outbound_http import CounterpartyUrl, UrlProvenance
 from src.core.tools._media_buy_status import seller_valid_actions
 from src.core.tools._media_buy_transitions import resolve_flight_window_status
 from src.core.tools.creatives._assignments import assignments_by_package
@@ -254,29 +266,6 @@ def _refuse_committed_metrics_beyond_product(index: int, package: PackageRequest
             ),
             field=package_field_path(f"committed_metrics[{position}]", index),
         )
-
-
-def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package | MediaPackage) -> list[str] | None:
-    """Safely get creative_ids from a package (backward compatibility).
-
-    The creative_ids field is a local extension added to PackageRequest for
-    backward compatibility. It may not exist on library types, so we use
-    getattr to safely access it.
-
-    Args:
-        package: Package or PackageRequest object
-
-    Returns:
-        List of creative IDs if present, None otherwise
-    """
-    return getattr(package, "creative_ids", None)
-
-
-def _named_creative_ids(
-    packages: Iterable[AdcpPackageRequest | PackageRequest | Package | MediaPackage],
-) -> list[str]:
-    """Every creative id the packages name, in request order (duplicates kept)."""
-    return [cid for package in packages for cid in _get_creative_ids(package) or []]
 
 
 def _inline_creative_ids(package: AdcpPackageRequest | PackageRequest) -> set[str]:
@@ -507,407 +496,6 @@ def _determine_media_buy_status(
     return PersistedMediaBuyStatus.ACTIVE
 
 
-def _get_format_spec_sync(agent_url: str, format_id: str, *, provenance: UrlProvenance | None = None) -> Any | None:
-    """Get format specification synchronously from the async registry.
-
-    Thin delegate kept for its patch surface (tests/harness envs patch this
-    name). The behavior — typed AdCPSalesAgentError propagates (transient agent failures
-    keep their recovery semantics, #1430: transient-error taxonomy fix), untyped errors log and
-    become None (unknown-format) — lives in the SINGLE shared fetch path,
-    format_resolver.fetch_format_spec (#1430 review).
-
-    ``provenance`` carries BUYER provenance for a stored creative's ``agent_url``
-    (it came out of the buyer's own prior sync_creatives call, not this
-    deployment's configuration) — a ``CounterpartyUrl`` routes a refusal through
-    the seam's counterparty-aware path (VALIDATION_ERROR/correctable) instead of
-    the operator path (CONFIGURATION_ERROR/terminal), UNLESS the url happens to
-    also be a real tenant-registered operator agent, which stays terminal
-    regardless (salesagent-ypgd).
-    """
-    from src.core.format_resolver import fetch_format_spec
-
-    return fetch_format_spec(agent_url, format_id, provenance=provenance)
-
-
-def _resolved_format_verdicts(
-    session: "Session",
-    tenant_id: str,
-    packages: "Sequence[MediaPackage] | Sequence[AdcpPackageRequest]",
-    creatives_list: "Sequence[Any]",
-) -> list[tuple[str, str, Any]]:
-    """``(product_id, creative_id, verdict)`` for every creative-in-a-package pair.
-
-    Each verdict is a ``FormatSatisfaction``, and it carries two things this function's
-    callers need separately: whether the product ACCEPTS the creative's format, and the
-    product declaration the route RESOLVED TO. The second is what names the creative's asset
-    ids, because ``core/product-format-declaration.json`` lets a product replace the kind's
-    slot list outright.
-
-    Extracted so there is ONE resolution. It used to sit inline in the gate, below the asset
-    loop, which is why the asset reader could only ask the KIND what a creative's assets are
-    called -- the product's answer had not been computed yet. Returned as an ordered list of
-    pairs rather than a map keyed by creative, because a creative may appear in several
-    packages against different products and each pairing gets its own verdict; collapsing
-    them would silently pick one product's answer for another product's package.
-
-    Both arms of the claim travel, and a canonical creative's manifest with them.
-    ``creative_satisfies`` decides which lane applies from what the PRODUCT declares, so
-    keeping only the legacy arm -- as this once did -- cannot see a canonical product at all.
-    """
-    return _format_verdicts(_package_creatives(session, tenant_id, packages, creatives_list))
-
-
-def _package_creatives(
-    session: "Session",
-    tenant_id: str,
-    packages: "Sequence[MediaPackage] | Sequence[AdcpPackageRequest]",
-    creatives_list: "Sequence[Any]",
-) -> list[tuple[int, Any, list[Any]]]:
-    """``(package index, product row, creative rows)`` for every package naming creatives and a stored product.
-
-    The pairing both creative questions on the create path are asked over: whether each
-    creative satisfies its package's product (:func:`_format_verdicts`), and whether the
-    package's creatives together cover every included placement of that product
-    (``format_satisfaction.require_covered``). Read once, so the two cannot pair a creative
-    with different products. A requested id with no row is left out; the existence gate
-    refuses it before either question is asked.
-    """
-    product_ids_needed = {
-        package.product_id for package in packages if _get_creative_ids(package) and package.product_id
-    }
-    if not product_ids_needed:
-        return []
-
-    from src.core.database.repositories.product import ProductRepository
-
-    products_by_id = {
-        product.product_id: product
-        for product in ProductRepository(session, tenant_id).list_by_ids(list(product_ids_needed))
-    }
-    creatives_by_id = {creative.creative_id: creative for creative in creatives_list}
-
-    pairings: list[tuple[int, Any, list[Any]]] = []
-    # Indexed rather than ``enumerate``d: enumerate over a union of two sequence types joins
-    # their element types to a base that has no ``product_id``.
-    for index in range(len(packages)):
-        package = packages[index]
-        pkg_creative_ids = _get_creative_ids(package)
-        product = products_by_id.get(package.product_id) if package.product_id else None
-        if not pkg_creative_ids or product is None:
-            continue
-        pairings.append((index, product, [creatives_by_id[cid] for cid in pkg_creative_ids if cid in creatives_by_id]))
-    return pairings
-
-
-def _format_verdicts(pairings: "Sequence[tuple[int, Any, list[Any]]]") -> list[tuple[str, str, Any]]:
-    """``(product_id, creative_id, verdict)`` for every creative of every pairing, in order."""
-    from src.core.format_satisfaction import creative_satisfies
-
-    return [
-        (product.product_id, creative.creative_id, creative_satisfies(creative, product.format_contract))
-        for _index, product, creatives in pairings
-        for creative in creatives
-    ]
-
-
-def _validate_creatives_before_adapter_call(
-    packages: "Sequence[MediaPackage] | Sequence[AdcpPackageRequest]",
-    tenant_id: str,
-    principal_id: str,
-    session: "Session | None" = None,
-) -> None:
-    """Validate all creatives have required fields BEFORE calling adapter.
-
-    This prevents GAM order creation when creatives are invalid, enabling
-    true all-or-nothing behavior without rollback complexity.
-
-    Fetches format specifications to determine correct asset structure per format.
-
-    Args:
-        packages: List of Package objects with creative_ids
-        tenant_id: Tenant ID for database lookup
-        principal_id: Owning principal — the creatives PK is composite
-            (creative_id, tenant_id, principal_id), so the existence gate must
-            match the full key: another principal's creative resolves to
-            "not found" (uniform, no field leak) instead of passing the gate
-            on their row and violating the composite FK on assignment insert.
-        session: SQLAlchemy session (from UoW).
-
-    Raises:
-        AdCPCreativeRejectedError: If any creative is missing required fields (URL,
-            dimensions), is in a terminal state, or has an incompatible format.
-    """
-    if session is None:
-        raise ValueError("session is required for _validate_creatives_before_adapter_call")
-
-    from src.core.format_resolver import is_dialled_agent_url, registry_projects
-
-    all_creative_ids = set(_named_creative_ids(packages))
-
-    if not all_creative_ids:
-        # No creatives to validate
-        return
-
-    # Fetch all creatives in one principal-scoped query
-    creatives_list = CreativeRepository(session, tenant_id).get_by_ids(list(all_creative_ids), principal_id)
-
-    # Referenced creative_ids that don't exist are rejected up front so BOTH
-    # approval paths fail identically before anything is persisted (the pending
-    # path previously skipped missing ids and returned a pending success).
-    found_creative_ids = {str(c.creative_id) for c in creatives_list}
-    missing_ids = all_creative_ids - found_creative_ids
-    if missing_ids:
-        error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
-        logger.error(log_safe(error_msg))
-        # 3.1.1 enums/error-code.json: "Sellers MUST return this code uniformly for any
-        # creative_id not owned by the calling account." The deferral that stood here
-        # cited the BR-UC-003 ext-i cell as grading CREATIVE_REJECTED; that cell asks for
-        # CREATIVE_NOT_FOUND, so the FIXME was resolved against a reading of the grader
-        # that the grader did not support.
-        raise AdCPCreativeNotFoundError(
-            details=CreativeRefDetails(missing_creative_ids=sorted(missing_ids)),
-            field=PACKAGES_FIELD,
-        )
-
-    # --- Format satisfaction, RESOLVED FIRST because the asset loop needs its answer ---
-    #
-    # ``satisfies`` returns the declaration the route RESOLVED TO, and that declaration is
-    # what names the creative's asset ids: ``core/product-format-declaration.json`` lets a
-    # product REPLACE the kind's slot list outright, so a product that renames a media slot
-    # names an id the kind's vocabulary does not contain and the asset reader below cannot
-    # find the media at all without it.
-    #
-    # COMPUTED HERE AND ACTED ON LATER, in two halves on purpose. The verdicts are needed
-    # before the asset loop; the REFUSALS they imply must still fire after it, because the
-    # order in which this function raises is itself graded -- a terminal-state creative
-    # answers GONE ahead of any format refusal, and that precedence would invert if the
-    # refusals moved up with the computation. One computation, consumed twice.
-    package_creatives = _package_creatives(session, tenant_id, packages, creatives_list)
-    creative_verdicts = _format_verdicts(package_creatives)
-    declarations_by_creative: dict[str, tuple[Any, ...]] = {}
-    for _product_id, cid, verdict in creative_verdicts:
-        if verdict.declaration is not None:
-            declarations_by_creative[cid] = (*declarations_by_creative.get(cid, ()), verdict.declaration)
-
-    # Validate each creative has required fields
-    validation_errors = []
-    # Terminal-state creatives are collected separately: the pinned enum codes
-    # "operation is not permitted for the resource's current status" as INVALID_STATE,
-    # a different condition from the field/format failures below, and update_media_buy
-    # already splits them the same way (_validate_creatives_for_assignment).
-    bad_state: list[Any] = []
-    for creative in creatives_list:
-        creative_data = creative.data or {}
-
-        # BR-RULE-026: Reject creatives in terminal error states
-        if hasattr(creative, "status") and creative.status in ("error", "rejected"):
-            bad_state.append(creative)
-            continue
-
-        # Get format specification from creative agent (uses in-memory cache with 30min TTL).
-        # Skip the fetch entirely for an adapter-provided pseudo-URL (e.g.
-        # broadstreet://<tenant_id>): those formats are served by the adapter
-        # in-process, so no dialled agent could ever resolve them, and the
-        # unconditional fetch below would reject a format the seller itself
-        # advertised (salesagent-ypgd). CounterpartyUrl marks BUYER provenance for
-        # a genuinely-dialled url — see _get_format_spec_sync's docstring. No
-        # field: create-media-buy-request.json defines no creative:{id} path, so
-        # there is no canonical request-document locator to name (a fabricated
-        # one is not honest — CounterpartyUrl(field=None) states that plainly).
-        # The stored identity, through the ONE row reader. The retained legacy assertion is
-        # what names a format an AGENT serves; a creative identified by its canonical kind
-        # asserts no reference, so there is no agent to dial and nothing here to check.
-        identity = CreativeFormatIdentity.from_row(creative)
-        assertion = identity.assertion
-        format_spec = None
-        if assertion is not None and is_dialled_agent_url(assertion.agent_url):
-            format_spec = _get_format_spec_sync(
-                assertion.agent_url,
-                assertion.id,
-                provenance=CounterpartyUrl(field=None),
-            )
-
-            # Fail validation if format spec not found (no skipping!) — only
-            # meaningful once we know the agent SHOULD have it (a dialled url). A
-            # reference the canonical mapping registry projects is a real format whether
-            # or not the agent's deprecated catalogue lists it (template-format-ids.mdx
-            # § Compatibility, v3.2.7), the rule sync_creatives applies on the way in.
-            if not format_spec and not registry_projects(assertion):
-                validation_errors.append(
-                    f"Creative {creative.creative_id} has unknown format '{assertion.id}' "
-                    f"from agent {assertion.agent_url}. Format must be registered with the creative agent."
-                )
-                continue
-
-        # Skip validation for generative formats - they need conversion first
-        # Generative formats have output_format_ids (they generate reference formats)
-        if format_spec and format_spec.output_format_ids:
-            logger.info(
-                log_safe(
-                    f"Skipping validation for generative creative {creative.creative_id} "
-                    f"(format={identity.label}) - will be converted to reference format"
-                )
-            )
-            continue
-
-        # Only validate reference creatives (formats we can directly use)
-        # Extract URL and dimensions using shared helper
-        declarations = declarations_by_creative.get(str(creative.creative_id), ())
-        url, width, height = extract_media_url_and_dimensions(creative_data, format_spec, identity.kind, declarations)
-
-        if not url:
-            validation_errors.append(
-                f"Reference creative {creative.creative_id} (format={identity.label}) "
-                f"missing required URL field in assets"
-            )
-        # Dimensions are owed only by a creative whose media slot CARRIES them. An audio
-        # asset has no width or height -- formats/canonical/audio_hosted.json declares
-        # audio_main as asset_type "audio" -- so demanding them of every creative refuses a
-        # canonical audio buy however correctly its manifest is authored. The declaration
-        # says which slots are sized; the gate asks it rather than re-deriving the rule.
-        if media_asset_requires_dimensions(creative_data, format_spec, identity.kind, declarations) and (
-            not width or not height
-        ):
-            validation_errors.append(
-                f"Reference creative {creative.creative_id} missing dimensions (width={width}, height={height})"
-            )
-
-        # A url asset this seller cannot identify is NOT a refusal. core/assets/url-asset.json
-        # at the governing version ends "receivers MUST NOT silently pick a mechanism." and
-        # stops there; the "they SHOULD reject the manifest" clause that followed it at 3.1.1
-        # was REMOVED by 3.2.3. A version that drops a remedy is declining to require it, so
-        # refusing here would make this seller stricter than the spec on a buyer-facing path,
-        # and the costs are not symmetric: reject the manifest and the buyer loses the buy,
-        # return no clickthrough and they lose a clickthrough.
-        #
-        # LOGGED, NOT CARRIED, and that is a gap rather than a choice. The advisory lane
-        # (docs/design/error-architecture.md) rides a response's declared ``errors[]``, and
-        # create-media-buy-response.json declares that array on its Error and Submitted arms
-        # only -- CreateMediaBuySuccess has none, so the lane does not reach here. Its
-        # ``warnings[]`` array IS the right carrier by its own words ("non-blocking
-        # observations accompanying this successful creation ... Buyers SHOULD surface
-        # recognized codes operationally"), but enums/warning-code.json is closed at three
-        # members and none of them means "a url asset I could not identify" -- emitting one
-        # would misfile the fact under a code that means something else. So the sentence goes
-        # to the log until that code exists upstream; the wiring is filed.
-        unidentified = unidentified_url_asset_reason(creative_data, format_spec, creative.creative_id)
-        if unidentified:
-            logger.warning(log_safe(f"[ASSET] {unidentified}"))
-
-    if bad_state:
-        # The STATE per creative, not a joined sentence naming the ids: per-creative
-        # outcomes are per-ENTITY problems. Same shape and same code as the
-        # update_media_buy gate, so one condition reads identically on both tools.
-        raise AdCPGoneError(
-            details=InvalidStateDetails(
-                problems=[
-                    ErrorProblem(subject_type="creative", subject_id=c.creative_id, rejected_value=c.status)
-                    for c in bad_state
-                ]
-            ),
-            field=PACKAGES_FIELD,
-        )
-
-    # The refusals those verdicts imply, acted on HERE rather than where they were computed.
-    #
-    # DO NOT MOVE THIS UP TO JOIN ITS COMPUTATION. The ``bad_state`` raise above answers a
-    # terminal-state creative GONE, and it sits between the computation and this block.
-    # Hoisting these refusals would let a creative that is BOTH terminal-state and
-    # format-refused answer UNSUPPORTED_FEATURE instead — the wrong answer, because what a
-    # buyer can act on for a creative in ``error``/``rejected`` is its STATE, not the
-    # product's format set.
-    #
-    # AND NOTHING GRADES THAT ORDER, which is why this comment is here rather than a test
-    # being here. Measured, not assumed: hoisting this block above the ``bad_state`` raise
-    # and running tests/bdd/test_uc002_create_media_buy.py plus tests/unit/test_media_buy.py
-    # reddens NOTHING (3 failed / 350 passed, and the 3 are a pre-existing account-sandbox
-    # family that fails at the baseline too). So the inversion is silent today. The missing
-    # scenario — one creative that is both terminal-state and outside its product's set — is
-    # filed; until it exists, this paragraph is the only thing standing in the way.
-    from src.core.format_satisfaction import creative_refusal
-
-    for product_id, cid, verdict in creative_verdicts:
-        if verdict:
-            continue
-        if not verdict.creative_coded:
-            # A legacy format the product does not take at all: collected with the other
-            # per-creative business-rule problems and answered VALIDATION_ERROR below,
-            # which is what @T-UC-002-ext-p grades.
-            validation_errors.append(f"Creative {cid}: {verdict.summary} (product {product_id})")
-            continue
-        # A CANONICAL refusal is not a business-rule problem to collect -- the
-        # product published a closed set and this creative is outside it, which the
-        # pin codes UNSUPPORTED_FEATURE, or its manifest (or its legacy reference's
-        # parameters) fails what it selects, which the pin codes CREATIVE_SIZE_MISMATCH
-        # or CREATIVE_VALIDATION_FAILED_GENERIC. Raised rather than appended because the
-        # code differs: folding it into ``reasons`` would answer the buyer
-        # VALIDATION_ERROR for a condition with its own recovery.
-        raise creative_refusal(verdict, field=PACKAGES_FIELD, creative_id=cid, product_id=product_id)
-
-    if validation_errors:
-        error_msg = (
-            "Cannot create media buy with invalid creatives. "
-            "The following creatives have validation errors:\n" + "\n".join(f"  • {err}" for err in validation_errors)
-        )
-        logger.error(f"[PRE-VALIDATION] {error_msg}")
-        # A stored creative missing its required assets, or carrying a format the
-        # product does not accept, "violates business rules beyond schema validation"
-        # (3.1.1 enums/error-code.json) -- VALIDATION_ERROR. Not CREATIVE_REJECTED,
-        # which that enum defines as a content-policy review failure and shapes as
-        # {policy_id, policy_url, reasons}; no policy review runs on this path.
-        raise AdCPValidationError(
-            details=ValidationDetails(reasons=validation_errors),
-            field=PACKAGES_FIELD,
-        )
-
-    # core/product.json format_options: "the selected creative set MUST cover every included
-    # placement; uncovered inventory MUST be rejected or refined, never silently omitted".
-    # Asked LAST, once every creative has passed on its own, because coverage is a property
-    # of the package's set: a creative the product refuses outright is that creative's
-    # failure, reported above with its own code. A creative named on a create package carries
-    # no placement_ids, so each is "eligible for all placements" (sync-creatives-request.json).
-    from src.core.format_satisfaction import require_covered
-
-    for index, product, creatives in package_creatives:
-        require_covered(
-            [(creative, None) for creative in creatives],
-            product,
-            field=PACKAGES_FIELD,
-            product_id=product.product_id,
-            package_index=index,
-        )
-
-
-def _pre_validate_package_creatives(
-    packages: "Sequence[MediaPackage] | Sequence[AdcpPackageRequest]",
-    tenant_id: str,
-    principal_id: str,
-    ctx_manager: Any,
-    step: Any,
-) -> None:
-    """Run pre-adapter creative validation inside its own UoW.
-
-    Shared by the auto-approval and manual-approval create paths so the same
-    buyer input is rejected identically (CREATIVE_REJECTED) regardless of the
-    tenant's approval mode, BEFORE any media-buy state is persisted (POST-F1).
-    Marks the workflow step failed on rejection. Duck-typed over packages:
-    only ``_get_creative_ids(package)`` and ``package.product_id`` are used.
-    """
-    from src.core.database.repositories import MediaBuyUoW
-
-    try:
-        with MediaBuyUoW(tenant_id) as pre_validate_uow:
-            # FIXME(#1119): creative validation should use a repository
-            assert pre_validate_uow.session is not None
-            _validate_creatives_before_adapter_call(packages, tenant_id, principal_id, session=pre_validate_uow.session)
-    except AdCPSalesAgentError:
-        # Validation failed - creative validation errors already logged
-        # Update workflow step as failed and re-raise
-        if step:
-            ctx_manager.update_workflow_step(step.step_id, status="failed", error_message="Creative validation failed")
-        raise
-
-
 def _resolve_package_selectors(
     req: CreateMediaBuyRequest,
     declared_format_arms: dict[str, tuple[list[Any], list[Any]]],
@@ -1022,6 +610,9 @@ def _execute_adapter_media_buy_creation(
     end_time: datetime,
     package_pricing_info: dict[str, dict[str, Any]],
     identity: ResolvedIdentity,
+    carriers: Mapping[CarrierKey, CreativeToTraffic],
+    named_packages: Sequence[MediaPackage],
+    on_refused_before_booking: Callable[[], None] | None = None,
 ) -> AdapterCreateResult:
     """Execute adapter's create_media_buy call.
 
@@ -1038,6 +629,15 @@ def _execute_adapter_media_buy_creation(
         end_time: Resolved campaign end datetime
         package_pricing_info: Pricing model info per package
         identity: The caller the adapter acts for (from a request or from stored ids)
+        carriers: Each creative as the pre-adapter gate read it for each package naming it.
+            The adapter's pre-booking check is handed them per package, and refuses a
+            creative it cannot traffic on its package; its booking is handed the same value.
+        named_packages: The packages as the gate was handed them, naming each one's
+            creatives in the order the request (or the stored buy) did: where a refusal
+            points.
+        on_refused_before_booking: Called when the adapter's pre-booking check refuses, by
+            returning problems or raising a typed error, before the refusal is raised: nothing
+            was booked. Any other raise may follow a booking.
 
     Returns:
         AdapterCreateResult from the adapter
@@ -1048,9 +648,35 @@ def _execute_adapter_media_buy_creation(
     principal = identity.principal
     adapter = get_adapter(identity)
 
+    # Both order-writing paths, the direct create and the manual approval, come through here,
+    # so this is the one place an adapter checks a buy before its ad server is written: the
+    # pricing models it sells, its own limits, and every creative on its package. It answers
+    # problems; the error is built here, once.
+    creatives_by_package = _carriers_by_package_id(packages, carriers)
+    # The check writes nothing, so a typed error it raises is a refusal before booking too,
+    # exactly as the problems it returns are.
+    try:
+        problems = adapter.validate_media_buy_request(
+            request,
+            packages,
+            start_time,
+            end_time,
+            package_pricing_info,
+            creatives_by_package=creatives_by_package,
+        )
+        if problems:
+            logger.error(f"[PRE-VALIDATE] Adapter validation failed: {problems}")
+            raise _adapter_refusal(problems, named_packages)
+    except AdCPSalesAgentError:
+        if on_refused_before_booking is not None:
+            on_refused_before_booking()
+        raise
+
     # Call adapter with detailed error logging
     try:
-        response = adapter.create_media_buy(request, packages, start_time, end_time, package_pricing_info)
+        response = adapter.create_media_buy(
+            request, packages, start_time, end_time, package_pricing_info, creatives_by_package=creatives_by_package
+        )
         logger.info(
             f"[ADAPTER] create_media_buy succeeded: {response.media_buy_id} with {len(response.packages)} packages"
         )
@@ -1128,136 +754,34 @@ def _stored_order_id(packages: Sequence["DBMediaPackage"]) -> str | None:
 
 
 def _build_adapter_asset_from_creative(
-    creative: Any,
-    package_assignments: list[PackageAssignmentDict],
-    *,
-    tenant_id: str,
-    declarations: "Sequence[Any]" = (),
-) -> tuple[dict[str, Any] | None, str | None]:
-    """Build the asset dict for adapter.creatives_manager.add_creative_assets.
+    creative: Any, package_assignments: list[PackageAssignmentDict]
+) -> AdapterCreativeAsset:
+    """The asset an adapter's ``add_creative_assets`` is handed for one creative.
 
-    Returns (asset, None) on success, (None, error_message) when url/width/height
-    cannot be extracted. Shared by execute_approved_media_buy and push_creative_to_existing_buy.
+    Shared by the create path, execute_approved_media_buy and push_creative_to_existing_buy.
+    It reads nothing: each of *package_assignments* carries the creative as
+    :func:`_read_for_packages` read it for that package, and the adapter traffics each
+    package's carrier on that package's line item.
 
-    ``declarations`` are the product declarations this creative's format RESOLVED TO, and
-    they are what name its asset ids when a product replaced the kind's slot list (see
-    :func:`_resolved_format_verdicts`). Defaulted to empty because two of the three callers
-    do not have them: the approval replay and the retroactive push reach this builder from
-    a creative and a media buy rather than from a request's packages, so finding the product
-    there is a different lookup. Those two keep the kind-only reading, and that remaining
-    gap is filed rather than left unsaid.
+    ``asset["creative"]`` is the first assignment's carrier. An adapter derives what it serves
+    from the carrier; nothing here projects it onto a ``url`` or a ``snippet``.
     """
     creative_data = creative.data or {}
-    format_spec = None
-    # Prefer cached spec (same as auto-approval path); fall back to the resolver
-    # (product overrides + agent search) on an UNKNOWN-format miss (None). A
-    # typed transient AdCPSalesAgentError from either fetch PROPAGATES — a rate-limited
-    # agent must not be degraded into a missing-spec asset error, and the
-    # fallback must not mask it by re-fetching from the same throttled agent
-    # (#1430 review). AdCPFormatNotFoundError from the resolver = genuinely
-    # unknown -> proceed without a spec (extraction falls back to raw data).
-    #
-    # Skip BOTH the fetch and the fallback for an adapter-provided pseudo-URL
-    # (e.g. broadstreet://<tenant_id>) — served in-process, so no dialled agent
-    # could ever resolve it (salesagent-ypgd). Extraction below already falls
-    # back to the creative's raw data fields when format_spec stays None.
-    from src.core.format_resolver import is_dialled_agent_url
-
-    # The stored identity through the ONE row reader. Only a retained legacy assertion names
-    # a format an agent hosts, so its presence plus a dialled URL is the whole precondition
-    # for both fetches.
-    #
-    # The predicate is called INLINE in both conditionals rather than hoisted into a local.
-    # test_architecture_format_spec_dial_guard.py reads the enclosing `if` test for a call to
-    # `is_dialled_agent_url`, so a hoisted boolean reads to it as an unguarded dial —
-    # the guard grades this spelling, and conforming to it is cheaper than teaching it to
-    # resolve local bindings, which is machinery with its own holes.
-    identity = CreativeFormatIdentity.from_row(creative)
-    assertion = identity.assertion
-
-    if assertion is not None and is_dialled_agent_url(assertion.agent_url):
-        format_spec = _get_format_spec_sync(
-            assertion.agent_url,
-            assertion.id,
-            provenance=CounterpartyUrl(field=None),
-        )
-    if format_spec is None and assertion is not None and is_dialled_agent_url(assertion.agent_url):
-        from src.core.exceptions import AdCPFormatNotFoundError
-        from src.core.format_resolver import get_format
-
-        try:
-            format_spec = get_format(
-                assertion.id,
-                agent_url=assertion.agent_url,
-                tenant_id=tenant_id,
-                product_id=None,
-                # Same buyer-supplied URL as the first fetch above — omitting
-                # provenance here would silently reclassify it as operator
-                # configuration and route it off the egress seam (salesagent-6gpt.1
-                # diff-review finding).
-                provenance=CounterpartyUrl(field=None),
-            )
-        except AdCPFormatNotFoundError as e:
-            # Genuinely unknown format — proceed without a spec (extraction
-            # falls back to the creative's raw data fields).
-            logger.warning(log_safe(f"[ASSET] Could not load format spec for {creative.creative_id}: {e}"))
-        except AdCPSalesAgentError:
-            # Transient/typed agent failure — propagate with its recovery
-            # semantics rather than degrading to a missing-spec asset error.
-            raise
-        except Exception as e:
-            # Resolver internals (e.g. the product-override DB read) — keep the
-            # historical resilience: log and build from raw creative data.
-            logger.warning(log_safe(f"[ASSET] Could not load format spec for {creative.creative_id}: {e}"))
-
-    url, width, height = extract_media_url_and_dimensions(creative_data, format_spec, identity.kind, declarations)
-    markup = extract_html_markup(creative_data)
-    click_url = extract_click_url(creative_data, format_spec)
-    impression_tracker_url = extract_impression_tracker_url(creative_data, format_spec)
-
-    # Same rule as the pre-adapter gate, for the callers it does not run ahead of: an
-    # unsized media slot (audio) owes no dimensions, and refusing it here would refuse a
-    # canonical audio creative on the approval replay and the retroactive push.
-    needs_dimensions = media_asset_requires_dimensions(creative_data, format_spec, identity.kind, declarations)
-    if not url or (needs_dimensions and (not width or not height)):
-        return None, (
-            f"Creative {creative.creative_id} missing url/width/height "
-            f"(width={width}, height={height}, url={'set' if url else 'missing'}, format={identity.label})"
-        )
-
-    # The same observation the pre-adapter gate makes, for the callers that gate does not
-    # run ahead of: the approval replay and the retroactive push both reach this builder
-    # directly. One producer of the sentence, said at every site that resolves a creative's
-    # URLs -- so a creative whose destination this seller could not identify is never pushed
-    # without that being written down somewhere. Why it is a log and not a refusal, and not
-    # yet a wire field either, is at the pre-adapter gate's own call.
-    unidentified = unidentified_url_asset_reason(creative_data, format_spec, creative.creative_id)
-    if unidentified:
-        logger.warning(log_safe(f"[ASSET] {unidentified}"))
-
-    asset: dict[str, Any] = {
+    carrier = package_assignments[0]["creative"]
+    asset: AdapterCreativeAsset = {
         "creative_id": creative.creative_id,
+        "creative": carrier,
         # A creative the ad server already holds is placed on the line items, not created again
         "platform_creative_id": creative_data.get("ad_server_creative_id"),
         # ...unless its content changed since: the ad server's copy is updated, keeping its id
         "platform_creative_outdated": bool(creative_data.get("ad_server_creative_outdated")),
         "package_assignments": package_assignments,
-        "width": width,
-        "height": height,
-        "click_url": click_url,
-        "asset_type": creative_data.get("asset_type", "image"),
+        "click_url": carrier.clickthrough_url,
         "name": creative.name or f"Creative {creative.creative_id}",
     }
-    if markup:
-        # An html asset is delivered as its markup (AdCP 3.2.7 core/assets/html-asset.json,
-        # ``content``), never as the URL of a page that renders it.
-        asset.update(snippet=markup, snippet_type="html")
-    else:
-        asset["url"] = url
-    if impression_tracker_url:
-        asset["delivery_settings"] = {"tracking_urls": {"impression": [impression_tracker_url]}}
-
-    return asset, None
+    if carrier.impression_tracker_urls:
+        asset["delivery_settings"] = {"tracking_urls": {"impression": list(carrier.impression_tracker_urls)}}
+    return asset
 
 
 class ApprovalOutcome(StrEnum):
@@ -1281,13 +805,19 @@ class ApprovalResult:
 
     ``confirmed_at`` and ``revision`` are carried because the webhook envelope
     publishes both.
+
+    ``error`` is the typed error the approval stopped on, the one carrier for what went
+    wrong: a refusal before booking is the same object a create answers the buyer with, so
+    the seller reads its code, ``field`` and ``details.problems`` as the buyer would. A held
+    buy carries the INVALID_STATE naming each creative holding it. Its cause, when one was
+    caught, is ``error.internal_detail``.
     """
 
     outcome: ApprovalOutcome
     status: PersistedMediaBuyStatus | None = None
     revision: int | None = None
     confirmed_at: datetime | None = None
-    error_msg: str | None = None
+    error: AdCPSalesAgentError[Any] | None = None
 
     @property
     def ok(self) -> bool:
@@ -1295,14 +825,19 @@ class ApprovalResult:
         return self.outcome is ApprovalOutcome.EXECUTED
 
     @classmethod
-    def failed(cls, error_msg: str) -> "ApprovalResult":
-        return cls(outcome=ApprovalOutcome.FAILED, error_msg=error_msg)
+    def failed(cls, error: AdCPSalesAgentError[Any]) -> "ApprovalResult":
+        return cls(outcome=ApprovalOutcome.FAILED, error=error)
+
+
+def _approval_error(exc: Exception) -> AdCPSalesAgentError[Any]:
+    """*exc* as an approval's error: a typed one as itself, anything else as the ad-server failure, carrying it."""
+    return exc if isinstance(exc, AdCPSalesAgentError) else AdCPAdapterError(internal_detail=exc)
 
 
 def _mark_approval_failed(
     tenant_id: str,
     media_buy_id: str,
-    error_msg: str,
+    error: AdCPSalesAgentError[Any],
     *,
     uow: "_MediaBuyUoWType | None" = None,
 ) -> ApprovalResult:
@@ -1340,7 +875,21 @@ def _mark_approval_failed(
         # else is a defect in this function that must not be disguised as one in
         # the adapter.
         logger.exception(log_safe(f"[APPROVAL] could not record FAILED for {media_buy_id}"))
-    return ApprovalResult.failed(error_msg)
+    return ApprovalResult.failed(error)
+
+
+def _stored_error(field: str | None, cause: BaseException | None = None, **entity: str) -> AdCPPersistedStateError:
+    """A stored buy or package the approval cannot replay: which one (*entity*), the stored *field* at fault, the *cause*.
+
+    CONFIGURATION_ERROR, a seller-side store defect the buyer can neither supply nor correct:
+    the shape ``media_buy_delivery`` refuses a package's missing pricing terms with.
+    """
+    return AdCPPersistedStateError(details=ConfigurationDetails(**entity), field=field, internal_detail=cause)
+
+
+def _media_buy_not_found(media_buy_id: str) -> AdCPMediaBuyNotFoundError:
+    """The approval's buy has no row."""
+    return AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
 
 
 def execute_approved_media_buy(
@@ -1365,9 +914,8 @@ def execute_approved_media_buy(
         tenant_id: The tenant ID for context
 
     Returns:
-        Tuple of (success: bool, error_message: str | None)
+        The ``ApprovalResult``: what the approval did, and the typed error it stopped on.
     """
-    from sqlalchemy import select
 
     from src.core.database.models import MediaPackage as DBMediaPackage
     from src.core.database.repositories import MediaBuyUoW
@@ -1386,18 +934,16 @@ def execute_approved_media_buy(
             tenant_obj = session.scalars(stmt_tenant).first()
 
             if not tenant_obj:
-                error_msg = f"Tenant {tenant_id} not found"
-                logger.error(f"[APPROVAL] {error_msg}")
-                return ApprovalResult.failed(error_msg)
+                logger.error(f"[APPROVAL] Tenant {tenant_id} not found")
+                return ApprovalResult.failed(AdCPInternalError(details=EntityRefDetails(tenant_id=tenant_id)))
 
             # Load media buy
             stmt = select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
             media_buy = session.scalars(stmt).first()
 
             if not media_buy:
-                error_msg = f"Media buy {media_buy_id} not found"
-                logger.error(f"[APPROVAL] {error_msg}")
-                return ApprovalResult.failed(error_msg)
+                logger.error(f"[APPROVAL] Media buy {media_buy_id} not found")
+                return ApprovalResult.failed(_media_buy_not_found(media_buy_id))
 
             # THE creative gate. One gate, before the adapter runs, tenant-scoped by
             # the repository's own tenant_id rather than by whatever predicate the
@@ -1424,7 +970,14 @@ def execute_approved_media_buy(
                     status=PersistedMediaBuyStatus.PENDING_CREATIVES,
                     revision=held.revision if held else None,
                     confirmed_at=held.confirmed_at if held else None,
-                    error_msg=f"{len(unapproved)} creative(s) not approved: {unapproved}",
+                    # INVALID_STATE, "Operation is not permitted for the resource's current
+                    # status": each creative holding the buy, in the shape the create gate
+                    # names a creative in a terminal state with.
+                    error=AdCPGoneError(
+                        details=InvalidStateDetails(
+                            problems=[ErrorProblem(subject_type="creative", subject_id=cid) for cid in unapproved]
+                        )
+                    ),
                 )
 
             # The buy's account, read off the row while the session is open (the row
@@ -1439,7 +992,7 @@ def execute_approved_media_buy(
             if buy_account_id is None:
                 # The buy's id is a fact, so it rides the declared details class;
                 # nothing here was caught, so there is no cause to chain.
-                raise AdCPPersistedStateError(details=ConfigurationDetails(media_buy_id=media_buy_id))
+                raise _stored_error(None, media_buy_id=media_buy_id)
 
             # What the adapter reads, built from the ROW through the carrier's own
             # persisted-request constructor. This replay is not a request: it reruns a
@@ -1472,9 +1025,8 @@ def execute_approved_media_buy(
             db_packages = session.scalars(stmt_packages).all()
 
             if not db_packages:
-                error_msg = f"No packages found for media buy {media_buy_id}"
-                logger.error(f"[APPROVAL] {error_msg}")
-                return ApprovalResult.failed(error_msg)
+                logger.error(f"[APPROVAL] No packages found for media buy {media_buy_id}")
+                return ApprovalResult.failed(_stored_error(media_buy_id=media_buy_id, field="packages"))
 
             # The order the ad server already holds for this buy, when create booked it before
             # the buy was held for its creatives (#1690). Booking again would create a second order.
@@ -1495,18 +1047,20 @@ def execute_approved_media_buy(
                     product_id = package_config.get("product_id")
 
                     if not product_id:
-                        error_msg = f"Package {package_id} missing product_id"
-                        logger.error(f"[APPROVAL] {error_msg}")
-                        return ApprovalResult.failed(error_msg)
+                        logger.error(f"[APPROVAL] Package {package_id} missing product_id")
+                        return ApprovalResult.failed(_stored_error(package_id=package_id, field="product_id"))
 
                     # Load product to get name, delivery_type, format_ids
                     stmt_product = select(ProductModel).filter_by(tenant_id=tenant_id, product_id=product_id)
                     product = session.scalars(stmt_product).first()
 
                     if not product:
-                        error_msg = f"Product {product_id} not found for package {package_id}"
-                        logger.error(f"[APPROVAL] {error_msg}")
-                        return ApprovalResult.failed(error_msg)
+                        logger.error(f"[APPROVAL] Product {product_id} not found for package {package_id}")
+                        return ApprovalResult.failed(
+                            AdCPProductNotFoundError(
+                                details=ProductRefDetails(product_id=product_id, package_id=package_id)
+                            )
+                        )
 
                     # The package's own budget (the typed column both package writers fill)
                     # at the unit price of the pricing option it selected (the pricing_info
@@ -1520,15 +1074,13 @@ def execute_approved_media_buy(
                     cpm, impressions = 0.0, 0
                     if not stored_order_id:
                         if budget is None:
-                            error_msg = f"Package {package_id} missing budget"
-                            logger.error(f"[APPROVAL] {error_msg}")
-                            return ApprovalResult.failed(error_msg)
+                            logger.error(f"[APPROVAL] Package {package_id} missing budget")
+                            return ApprovalResult.failed(_stored_error(package_id=package_id, field="budget"))
 
                         pricing_info = package_config.get("pricing_info")
                         if not pricing_info:
-                            error_msg = f"Package {package_id} missing pricing_info"
-                            logger.error(f"[APPROVAL] {error_msg}")
-                            return ApprovalResult.failed(error_msg)
+                            logger.error(f"[APPROVAL] Package {package_id} missing pricing_info")
+                            return ApprovalResult.failed(_stored_error(package_id=package_id, field="pricing_info"))
                         cpm, impressions = package_volume(budget, pricing_info)
                         package_pricing_info[package_id] = pricing_info
 
@@ -1548,19 +1100,20 @@ def execute_approved_media_buy(
                         try:
                             targeting_overlay = Targeting(**targeting_raw)
                         except (TypeError, ValidationError) as exc:
-                            error_msg = (
-                                f"Failed to reconstruct package {package_id}: "
-                                f"targeting_overlay corrupt in package_config: {exc}"
+                            logger.error(
+                                f"[APPROVAL] Failed to reconstruct package {package_id}: "
+                                f"targeting_overlay corrupt in package_config: {exc}",
+                                exc_info=True,
                             )
-                            logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
-                            return ApprovalResult.failed(error_msg)
+                            return ApprovalResult.failed(
+                                _stored_error(package_id=package_id, field="targeting_overlay", cause=exc)
+                            )
 
                     # Create MediaPackage object (what adapters expect)
                     # Note: Product model has 'formats' not 'format_ids'
                     if not package_id:
-                        error_msg = f"Package ID missing for package in media buy {media_buy_id}"
-                        logger.error(f"[APPROVAL] {error_msg}")
-                        return ApprovalResult.failed(error_msg)
+                        logger.error(f"[APPROVAL] Package ID missing for package in media buy {media_buy_id}")
+                        return ApprovalResult.failed(_stored_error(media_buy_id=media_buy_id, field="package_id"))
 
                     delivery_type_str = enum_value(product.delivery_type)
 
@@ -1634,12 +1187,13 @@ def execute_approved_media_buy(
                                 raise ValueError(f"agent_url must be HTTP(S), got: {url_str}")
                             format_ids_list.append(validated)
                         except (ValueError, ValidationError) as e:
-                            error_msg = (
-                                f"Failed to reconstruct package {package_id}: "
+                            logger.error(
+                                f"[APPROVAL] Failed to reconstruct package {package_id}: "
                                 f"Format validation failed at index {idx}: {e}"
                             )
-                            logger.error(f"[APPROVAL] {error_msg}")
-                            return ApprovalResult.failed(error_msg)
+                            return ApprovalResult.failed(
+                                _stored_error(package_id=package_id, field=f"format_ids[{idx}]", cause=e)
+                            )
 
                     # A PACKAGE WITH NO FORMAT CONTRACT ON EITHER ARM cannot be placed, and
                     # that is the condition -- not "no legacy references". A canonical-only
@@ -1648,13 +1202,17 @@ def execute_approved_media_buy(
                     # whole contract; failing on the legacy arm alone would refuse at approval
                     # time exactly the shape ``core/product.json`` tells new products to
                     # author ("New products MUST author canonical format_options[]").
-                    if not format_ids_list and not recorded:
-                        error_msg = (
-                            f"Failed to reconstruct package {package_id}: "
+                    #
+                    # Nor is a package that recorded no snapshot on a product that declares
+                    # canonical options: its request named no selector, so create recorded
+                    # none (``_package_format_snapshots``) and placed it on the product's
+                    # declarations with no legacy projection. The approval places it the same.
+                    if not format_ids_list and not recorded and not product.format_contract.format_options:
+                        logger.error(
+                            f"[APPROVAL] Failed to reconstruct package {package_id}: "
                             f"Product {product_id} has no valid formats - cannot create media buy"
                         )
-                        logger.error(f"[APPROVAL] {error_msg}")
-                        return ApprovalResult.failed(error_msg)
+                        return ApprovalResult.failed(_stored_error(package_id=package_id, field="format_ids"))
 
                     # Log conversion results
                     logger.info(
@@ -1689,13 +1247,13 @@ def execute_approved_media_buy(
                     )
 
                 except ValidationError as ve:
-                    error_msg = f"Failed to reconstruct package {db_pkg.package_id}: {format_validation_error(ve)}"
-                    logger.error(f"[APPROVAL] {error_msg}")
-                    return ApprovalResult.failed(error_msg)
+                    logger.error(
+                        f"[APPROVAL] Failed to reconstruct package {db_pkg.package_id}: {format_validation_error(ve)}"
+                    )
+                    return ApprovalResult.failed(_stored_error(package_id=db_pkg.package_id, field=None, cause=ve))
                 except Exception as e:
-                    error_msg = f"Failed to reconstruct package {db_pkg.package_id}: {str(e)}"
-                    logger.error(f"[APPROVAL] {error_msg}")
-                    return ApprovalResult.failed(error_msg)
+                    logger.error(f"[APPROVAL] Failed to reconstruct package {db_pkg.package_id}: {e}")
+                    return ApprovalResult.failed(_stored_error(package_id=db_pkg.package_id, field=None, cause=e))
 
             # Use start_time/end_time from media_buy (already resolved)
             start_time = media_buy.start_time
@@ -1703,9 +1261,10 @@ def execute_approved_media_buy(
 
             # Validate required datetime fields
             if not start_time or not end_time:
-                error_msg = f"Media buy {media_buy_id} missing required start_time or end_time"
-                logger.error(f"[APPROVAL] {error_msg}")
-                return ApprovalResult.failed(error_msg)
+                logger.error(f"[APPROVAL] Media buy {media_buy_id} missing required start_time or end_time")
+                return ApprovalResult.failed(
+                    _stored_error(media_buy_id=media_buy_id, field="start_time" if not start_time else "end_time")
+                )
 
             # Captured while the session is open, because media_buy detaches when this
             # block commits. The RESOLUTION happens after the block closes — see below.
@@ -1716,9 +1275,24 @@ def execute_approved_media_buy(
                 f"{len(packages)} packages, start={start_time}, end={end_time}"
             )
 
-            # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
-            # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
-            _validate_creatives_before_adapter_call(packages, tenant_id, buy_principal_id, session=session)
+            # PRE-VALIDATE: the creatives assigned to the buy, through the gate the create path
+            # runs, BEFORE the adapter is called -- so an approval books no order for a buy
+            # holding a creative that cannot be trafficked, as a create books none. The
+            # packages are reconstructed without creatives, so the gate is handed copies naming
+            # each package's assigned ones; the adapter keeps the packages as they were.
+            assert uow.assignments is not None
+            assigned_ids: dict[str, list[str]] = {}
+            for assignment in uow.assignments.get_by_media_buy(media_buy_id):
+                assigned_ids.setdefault(assignment.package_id, []).append(assignment.creative_id)
+            gate_packages = [
+                package.model_copy(update={"creative_ids": assigned_ids.get(package.package_id)})
+                for package in packages
+            ]
+            # The creatives as the gate read them, per package: the adapter's check below is
+            # handed them, and so is its upload after booking. Nothing reads the rows again.
+            carriers = _validate_creatives_before_adapter_call(
+                gate_packages, tenant_id, buy_principal_id, session=session
+            )
 
         # Resolution from stored ids: this job acts as the buy's owner, on the buy's
         # account (refused above if the row has none). Resolved HERE, after the unit above
@@ -1741,9 +1315,15 @@ def execute_approved_media_buy(
             # Execute adapter creation (outside session to avoid conflicts)
             # Set BEFORE the call, not after: the condition is whether the ad server was
             # ASKED, not whether it answered. A raising adapter may still have created a
-            # partial order, so that buy has failed — where a buy that never reached the
-            # boundary was simply never attempted.
+            # partial order, so that buy has failed. The one exception is the adapter's own
+            # pre-booking check, which runs first and writes nothing: its refusal leaves the buy
+            # pending_approval, as the gate's refusal above does, because nothing was booked.
             adapter_ran = True
+
+            def _nothing_booked() -> None:
+                nonlocal adapter_ran
+                adapter_ran = False
+
             response = _execute_adapter_media_buy_creation(
                 request,
                 packages,
@@ -1751,6 +1331,9 @@ def execute_approved_media_buy(
                 end_time,
                 package_pricing_info,
                 identity,
+                carriers,
+                gate_packages,
+                on_refused_before_booking=_nothing_booked,
             )
             order_id = response.media_buy_id
             creative_deadline = response.creative_deadline
@@ -1773,9 +1356,6 @@ def execute_approved_media_buy(
                     )
             else:
                 logger.info("[APPROVAL] Adapter returned no media_buy_id — skipping ID persistence")
-
-        # Import adapter helper here (used for both creative upload and order approval)
-        from src.core.helpers.adapter_helpers import get_adapter
 
         # Resolved before the unit opens: get_adapter reads the adapter config in a session of
         # its own, which would close the unit's session and lose the enrichment written below.
@@ -1800,9 +1380,8 @@ def execute_approved_media_buy(
                 # This ensures each creative is uploaded ONCE with ALL its package assignments
                 # Each assignment includes weight for proper rotation in adapters
                 assert uow2.media_buys is not None
-                packages_by_creative = _package_assignments_by_creative(
-                    assignments, uow2.media_buys.get_packages(media_buy_id)
-                )
+                buy_packages = uow2.media_buys.get_packages(media_buy_id)
+                packages_by_creative = _package_assignments_by_creative(assignments, buy_packages, carriers)
 
                 # Load all creatives scoped to the buy's principal: the composite PK
                 # (creative_id, tenant_id, principal_id) allows the same creative_id
@@ -1814,9 +1393,10 @@ def execute_approved_media_buy(
                 # Create creative map
                 creative_map = {c.creative_id: c for c in creatives}
 
-                # Build assets list for adapter and collect all validation errors
+                # Each creative once, with every package it is assigned to and that package's
+                # carrier. A creative the gate could not read refused the approval above,
+                # before booking, so every creative here has one carrier per package.
                 assets = []
-                all_validation_errors = []
                 for creative_id, package_assignment_list in packages_by_creative.items():
                     creative = creative_map.get(creative_id)
                     if not creative:
@@ -1832,26 +1412,7 @@ def execute_approved_media_buy(
                         )
                         continue
 
-                    asset, err = _build_adapter_asset_from_creative(
-                        creative, package_assignment_list, tenant_id=tenant_id
-                    )
-                    if err:
-                        all_validation_errors.append(err)
-                        logger.error(f"[APPROVAL] {err}")
-                        continue
-                    assert asset is not None
-
-                    assets.append(asset)
-
-                # If we found validation errors, fail with complete error list
-                if all_validation_errors:
-                    error_msg = (
-                        f"Cannot approve media buy: {len(all_validation_errors)} creatives have validation errors:\n"
-                        + "\n".join(f"  • {err}" for err in all_validation_errors)
-                        + "\n\nAll creatives must have dimensions (width/height) and a content URL."
-                    )
-                    logger.error(f"[APPROVAL] {error_msg}")
-                    return _mark_approval_failed(tenant_id, media_buy_id, error_msg, uow=uow2)
+                    assets.append(_build_adapter_asset_from_creative(creative, package_assignment_list))
 
                 if assets:
                     logger.info(f"[APPROVAL] Uploading {len(assets)} creatives to adapter")
@@ -1891,9 +1452,10 @@ def execute_approved_media_buy(
                             logger.warning("[APPROVAL] Adapter does not support creative upload, skipping")
                     except Exception as creative_error:
                         # Creative upload failed - this is critical for GAM orders
-                        error_msg = f"Failed to upload creatives to adapter: {str(creative_error)}"
-                        logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
-                        return _mark_approval_failed(tenant_id, media_buy_id, error_msg, uow=uow2)
+                        logger.error(
+                            f"[APPROVAL] Failed to upload creatives to adapter: {creative_error}", exc_info=True
+                        )
+                        return _mark_approval_failed(tenant_id, media_buy_id, _approval_error(creative_error), uow=uow2)
             else:
                 logger.info(
                     log_safe(f"[APPROVAL] No creative assignments found for {media_buy_id}, skipping creative upload")
@@ -1912,20 +1474,22 @@ def execute_approved_media_buy(
                     logger.info(log_safe(f"[APPROVAL] Successfully approved GAM order {order_id}"))
                 else:
                     # GAM approval failed - return failure so status can be updated
-                    error_msg = (
-                        f"Failed to approve order {order_id}, "
+                    logger.warning(
+                        f"[APPROVAL] Failed to approve order {order_id}, "
                         f"it will remain in DRAFT status. This may be due to missing creatives or "
                         f"GAM still processing inventory forecasts."
                     )
-                    logger.warning(f"[APPROVAL] {error_msg}")
-                    return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
+                    return _mark_approval_failed(
+                        tenant_id,
+                        media_buy_id,
+                        AdCPAdapterError(details=AdapterFailureDetails(media_buy_id=media_buy_id)),
+                    )
             else:
                 logger.info("[APPROVAL] Adapter does not support order approval, skipping")
         except Exception as approval_error:
             # Approval exception - return failure
-            error_msg = f"Failed to approve order {order_id}: {str(approval_error)}"
-            logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
-            return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
+            logger.error(f"[APPROVAL] Failed to approve order {order_id}: {approval_error}", exc_info=True)
+            return _mark_approval_failed(tenant_id, media_buy_id, _approval_error(approval_error))
 
         # THE post-adapter write. One writer, one write, one revision bump.
         #
@@ -1939,7 +1503,8 @@ def execute_approved_media_buy(
             assert uow3.media_buys is not None
             fresh = uow3.media_buys.get_by_id(media_buy_id)
             if fresh is None:
-                return ApprovalResult.failed(f"media buy {media_buy_id!r} vanished during approval")
+                logger.error(log_safe(f"[APPROVAL] media buy {media_buy_id!r} vanished during approval"))
+                return ApprovalResult.failed(_media_buy_not_found(media_buy_id))
             resolved = resolve_flight_window_status(
                 fresh,
                 now=datetime.now(UTC),
@@ -1976,22 +1541,20 @@ def execute_approved_media_buy(
         # The persisted row refused reconstruction (a NULL account_id, above); no adapter
         # ran, so this is a store defect and not an adapter failure. The buy stays
         # pending_approval so an operator who repairs the row can retry.
-        error_msg = f"Persisted media buy {media_buy_id} cannot be acted on: {e}"
-        logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
-        return ApprovalResult.failed(error_msg)
+        logger.error(f"[APPROVAL] Persisted media buy {media_buy_id} cannot be acted on: {e}", exc_info=True)
+        return ApprovalResult.failed(e)
     except Exception as e:
         import traceback
 
         error_traceback = traceback.format_exc()
-        error_msg = f"Adapter creation failed: {str(e)}"
-        logger.error(f"[APPROVAL] {error_msg}\n{error_traceback}")
+        logger.error(f"[APPROVAL] Adapter creation failed: {e}\n{error_traceback}")
         if not adapter_ran:
             # The adapter never ran, so nothing was created and the buy has not failed —
             # it was never attempted. Persisting FAILED here would be a dead end: all
             # three approval routes gate on status == "pending_approval", so an operator
             # who fixed the underlying row could never retry.
-            return ApprovalResult.failed(error_msg)
-        return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
+            return ApprovalResult.failed(_approval_error(e))
+        return _mark_approval_failed(tenant_id, media_buy_id, _approval_error(e))
 
 
 @dataclass(frozen=True)
@@ -2097,11 +1660,16 @@ def push_creative_to_existing_buy(
                     f"Media buy {media_buy_id} has no platform_order_id — buy may not be live yet"
                 )
 
-            package_assignments = _package_assignments_by_creative(matching, packages)[creative_id]
-            asset, build_err = _build_adapter_asset_from_creative(creative, package_assignments, tenant_id=tenant_id)
-            if build_err:
-                return CreativePushFailure(build_err)
-            assert asset is not None
+            # This creative alone is withheld when its product refuses it (a size its option
+            # does not accept, say): the push is per creative, so the others are pushed.
+            assert uow.products is not None
+            try:
+                carriers = _read_for_push(uow.products, creative, _assigned_packages(packages, matching))
+            except AdCPSalesAgentError as refusal:
+                return CreativePushFailure(f"Creative {creative_id} is not trafficked: {refusal}", refusal)
+            asset = _build_adapter_asset_from_creative(
+                creative, _package_assignments_by_creative(matching, packages, carriers)[creative_id]
+            )
 
             try:
                 asset_statuses = adapter.creatives_manager.add_creative_assets(
@@ -2334,7 +1902,6 @@ def _validate_pricing_model_selection(
     Raises:
         ToolError: If pricing_model validation fails
     """
-    from decimal import Decimal
 
     # Log pricing validation details at debug level
     logger.debug(
@@ -2477,6 +2044,7 @@ def _validate_pricing_model_selection(
 
 
 from src.core.errors.details import (
+    AdapterFailureDetails,
     CapabilityRefusalDetails,
     ConfigurationDetails,
     CreativeRefDetails,
@@ -3429,14 +2997,37 @@ async def _create_media_buy_impl(
         product_auto_create = True  # Will be set correctly when we get products later
 
         if manual_approval_required and "create_media_buy" in manual_approval_operations:
+            # req.packages validated earlier in _create_media_buy_impl
+            assert req.packages is not None, "packages required - validated earlier"
+            # Generate permanent package IDs (not dependent on media buy ID)
+            # These IDs will be used whether the media buy is pending or approved.
+            #
+            # An ID is ALL this branch carries forward. It answers with
+            # `_submitted_approval_result` — a CreateMediaBuySubmitted whose only members
+            # are task_id and a message — so no package of this branch's making reaches a
+            # buyer, and everything else about a package is read off `req.packages` where
+            # the buyer wrote it. Minted ahead of the gate, which keys what it reads by
+            # package id.
+            # Format: pkg_{product_id}_{random part}_{1-based index}
+            minted_package_ids = [
+                f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx + 1}" for idx, pkg in enumerate(req.packages)
+            ]
             # PRE-VALIDATE: same creative validation the auto path runs, BEFORE any
             # media-buy state is persisted. Missing creative_ids, format-vs-product
             # mismatches, terminal states, and malformed reference creatives fail
             # CREATIVE_REJECTED here identically to auto-approval — the pending
             # path previously skipped missing ids (pending success) and emitted
             # VALIDATION_ERROR for format mismatch.
-            if req.packages:
-                _pre_validate_package_creatives(req.packages, tenant.tenant_id, principal_id, ctx_manager, step)
+            _pre_validate_package_creatives(
+                [
+                    _AssignedPackage(package_id, pkg.product_id, _get_creative_ids(pkg) or [])
+                    for package_id, pkg in zip(minted_package_ids, req.packages, strict=True)
+                ],
+                tenant.tenant_id,
+                principal_id,
+                ctx_manager,
+                step,
+            )
             # Update existing workflow step to require approval
             ctx_manager.update_workflow_step(
                 step.step_id,
@@ -3492,20 +3083,6 @@ async def _create_media_buy_impl(
             except Exception as e:
                 logger.warning(f"⚠️ Failed to send manual approval Slack notification: {e}")
 
-            # Generate permanent package IDs (not dependent on media buy ID)
-            # These IDs will be used whether the media buy is pending or approved.
-            #
-            # An ID is ALL this branch carries forward. It answers with
-            # `_submitted_approval_result` — a CreateMediaBuySubmitted whose only members
-            # are task_id and a message — so no package of this branch's making reaches a
-            # buyer, and everything else about a package is read off `req.packages` where
-            # the buyer wrote it.
-            # req.packages validated earlier in _create_media_buy_impl
-            assert req.packages is not None, "packages required - validated earlier"
-            # Format: pkg_{product_id}_{random part}_{1-based index}
-            minted_package_ids = [
-                f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx + 1}" for idx, pkg in enumerate(req.packages)
-            ]
             for pkg_idx in range(len(req.packages)):
                 if pkg_idx not in package_pricing_info_by_index:
                     logger.warning(f"No pricing info found for package index {pkg_idx}")
@@ -4043,7 +3620,7 @@ async def _create_media_buy_impl(
 
         # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
         # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
-        _pre_validate_package_creatives(packages, tenant.tenant_id, principal_id, ctx_manager, step)
+        carriers = _pre_validate_package_creatives(packages, tenant.tenant_id, principal_id, ctx_manager, step)
 
         # What the adapters read, projected off the buyer's request ONCE and handed to
         # both the pre-validation and the creation call — the same type the approval
@@ -4051,29 +3628,29 @@ async def _create_media_buy_impl(
         # material.
         adapter_request = AdapterCreateRequest.from_buyer_request(req)
 
-        # Pre-validate adapter-specific constraints (pricing models, budget limits)
-        # This runs regardless of dry_run so adapter restrictions are always enforced.
-        pre_creation_problems: list[ErrorProblem] = adapter.validate_media_buy_request(
-            adapter_request, packages, start_time, end_time, package_pricing_info
-        )
-        if pre_creation_problems:
-            logger.error(f"[PRE-VALIDATE] Adapter validation failed: {pre_creation_problems}")
-            if step:
-                ctx_manager.update_workflow_step(
-                    step.step_id, status="failed", error_message="Adapter validation failed"
-                )
-            # Forwarded unchanged into `problems`, not `reasons` (salesagent-rys3u.4).
-            # The adapter now returns classified facts rather than sentences, and
-            # ValidationDetails.problems is already typed list[ErrorProblem] -- so the
-            # type system, not a review, is what stops a string arriving here.
-            raise AdCPValidationError(details=ValidationDetails(problems=pre_creation_problems))
-
-        # Call adapter using shared creation logic
+        # Call adapter using shared creation logic, which runs the adapter's pre-booking check
+        # (pricing models, its limits, the creatives) before anything is booked.
         # Note: start_time variable already resolved from 'asap' to actual datetime if needed
         # This uses the same function as manual approval to ensure consistency across adapters
         try:
             response = _execute_adapter_media_buy_creation(
-                adapter_request, packages, start_time, end_time, package_pricing_info, identity
+                adapter_request,
+                packages,
+                start_time,
+                end_time,
+                package_pricing_info,
+                identity,
+                carriers,
+                packages,
+                on_refused_before_booking=(
+                    (
+                        lambda: ctx_manager.update_workflow_step(
+                            step.step_id, status="failed", error_message="Adapter validation failed"
+                        )
+                    )
+                    if step
+                    else None
+                ),
             )
         except Exception:
             raise
@@ -4190,6 +3767,7 @@ async def _create_media_buy_impl(
             )
 
         # Handle creative_ids in packages if provided (immediate association)
+        assets: list[AdapterCreativeAsset] = []
         if req.packages:
             with MediaBuyUoW(tenant.tenant_id) as creative_uow:
                 assert creative_uow.session is not None
@@ -4223,81 +3801,8 @@ async def _create_media_buy_impl(
                             field=PACKAGES_FIELD,
                         )
 
-                    # Validate creative formats against product formats BEFORE creating assignments
-                    # This ensures creatives match the product's supported formats
-                    # Validation happens at assignment time (not sync time) because:
-                    # - Creatives may be synced before being assigned to products
-                    # - A creative may be valid for product A but not product B
-                    # - Same creative can be reused across packages if formats align
-                    #
-                    # The SAME function the pre-adapter gate above asks, and the same one
-                    # update_media_buy and the assignment path ask. It used to be
-                    # ``validate_creative_format_against_product``, a second implementation
-                    # typed to take a legacy ``FormatId`` -- so this site had to skip a
-                    # creative with no retained assertion, while the update and assignment
-                    # sites refused one. One function, one answer.
-                    from src.core.format_satisfaction import creative_refusal, creative_satisfies
-
-                    for package in req.packages:
-                        pkg_cids = _get_creative_ids(package)
-                        if pkg_cids and package.product_id:
-                            # Load product to check supported formats
-                            product_format_check_stmt = select(ModelProduct).where(
-                                ModelProduct.tenant_id == tenant.tenant_id,
-                                ModelProduct.product_id == package.product_id,
-                            )
-                            product_format_check: ModelProduct | None = session.scalars(
-                                product_format_check_stmt
-                            ).first()
-
-                            if product_format_check:
-                                # Validate each creative against this product
-                                for creative_id in pkg_cids:
-                                    creative = creatives_by_id.get(creative_id)
-                                    if creative:
-                                        verdict = creative_satisfies(creative, product_format_check.format_contract)
-
-                                        if not verdict:
-                                            logger.warning(
-                                                "Creative format validation failure",
-                                                extra={
-                                                    "creative_id": creative_id,
-                                                    "product_id": package.product_id,
-                                                    "creative_format": CreativeFormatIdentity.from_row(creative).label,
-                                                    "validation_error": verdict.summary,
-                                                },
-                                            )
-                                            ctx_manager.update_workflow_step(
-                                                step.step_id, status="failed", error_message=verdict.summary
-                                            )
-                                            if verdict.creative_coded:
-                                                raise creative_refusal(
-                                                    verdict,
-                                                    field=PACKAGES_FIELD,
-                                                    creative_id=creative_id,
-                                                    product_id=package.product_id,
-                                                )
-                                            # A format outside the product's declared LEGACY set is a
-                                            # BUSINESS-RULE violation: the pinned SDK's error-code enum
-                                            # codes that VALIDATION_ERROR, and reserves
-                                            # CREATIVE_REJECTED for "Creative failed content policy
-                                            # review". The creative is fine; the ASSIGNMENT is what
-                                            # this product does not permit. Converged with the
-                                            # sync_creatives and update paths, which raise the same
-                                            # class for the identical condition.
-                                            raise AdCPValidationError(
-                                                details=ValidationDetails(
-                                                    creative_id=creative_id, product_id=package.product_id
-                                                ),
-                                            )
-
-                                        logger.info(
-                                            log_safe(
-                                                f"Creative {creative_id} format validated "
-                                                f"against product {package.product_id}"
-                                            )
-                                        )
-
+                # The assignments of the creatives cleared to serve, pushed once all are written
+                pushed: list[CreativeAssignment] = []
                 for i, package in enumerate(req.packages):
                     pkg_cids = _get_creative_ids(package)
                     if pkg_cids:
@@ -4315,8 +3820,6 @@ async def _create_media_buy_impl(
                             logger.error(error_msg)
                             raise AdCPAdapterError()
 
-                        # The package's line item, as the adapter mapped it
-                        platform_line_item_id = (response.platform_line_item_ids or {}).get(response_package_id)
                         inline_ids = _inline_creative_ids(package)
 
                         for creative_id in pkg_cids:
@@ -4330,82 +3833,66 @@ async def _create_media_buy_impl(
                                 )
                                 continue
 
-                            if creative.status == "pending_review":
-                                # Hold back until the creative is approved; the DB assignment below
-                                # ensures approve_creative can find it for retroactive push
-                                logger.info(
-                                    log_safe(f"[AUTO-APPROVAL] Holding back creative {creative_id} (pending_review)")
-                                )
-                            else:
-                                # Upload to GAM via shared asset helper
-                                try:
-                                    pkg_assignments: list[PackageAssignmentDict] = [
-                                        {
-                                            "package_id": response_package_id,
-                                            "weight": 100,
-                                            "platform_line_item_id": platform_line_item_id,
-                                        }
-                                    ]
-                                    # The declarations this creative resolved to against THIS
-                                    # package's product, through the same resolver the
-                                    # pre-adapter gate uses -- so a product that renamed its
-                                    # media slot is read the same way on both paths.
-                                    asset, build_err = _build_adapter_asset_from_creative(
-                                        creative,
-                                        pkg_assignments,
-                                        tenant_id=tenant.tenant_id,
-                                        declarations=[
-                                            verdict.declaration
-                                            for _pid, _cid, verdict in _resolved_format_verdicts(
-                                                session, tenant.tenant_id, [package], [creative]
-                                            )
-                                            if verdict.declaration is not None
-                                        ],
-                                    )
-                                    if build_err:
-                                        raise AdCPValidationError(
-                                            details=ValidationDetails(reasons=[build_err]),
-                                        )
-                                    assert asset is not None
-
-                                    upload_result = adapter.add_creative_assets(
-                                        response.media_buy_id if response.media_buy_id else "",
-                                        [asset],
-                                        datetime.now(UTC),
-                                    )
-                                    logger.info(
-                                        log_safe(
-                                            f"Successfully uploaded creative {creative_id} to GAM: {upload_result}"
-                                        )
-                                    )
-
-                                    # FIXME(#1566): the status is not read, so a creative the ad server
-                                    # reports failed is dropped and the response carries no signal.
-                                    if upload_result and len(upload_result) > 0:
-                                        uploaded_status = upload_result[0]
-                                        merged_data = _apply_creative_enrichment(creative, uploaded_status)
-                                        if merged_data is not None:
-                                            CreativeRepository(session, tenant.tenant_id).update_data(
-                                                creative, merged_data
-                                            )
-                                except AdCPSalesAgentError:
-                                    raise
-                                except Exception as upload_error:
-                                    logger.error(
-                                        log_safe(f"Failed to upload creative {creative_id} to GAM: {upload_error}")
-                                    )
-                                    raise AdCPAdapterError() from upload_error
-
-                            # Create database assignment
-                            creative_uow.assignments.create(
+                            assignment = creative_uow.assignments.create(
                                 media_buy_id=response.media_buy_id,
                                 package_id=response_package_id,
                                 creative_id=creative_id,
                                 principal_id=principal_id,
                                 inline=creative_id in inline_ids,
                             )
+                            if creative.status == "pending_review":
+                                # Hold back until the creative is approved; the assignment row
+                                # ensures approve_creative can find it for retroactive push
+                                logger.info(
+                                    log_safe(f"[AUTO-APPROVAL] Holding back creative {creative_id} (pending_review)")
+                                )
+                            else:
+                                pushed.append(assignment)
 
                         session.flush()
+
+                # Each creative once, with every package it is assigned to and the carrier the
+                # pre-adapter gate read for that package's product, as approval and push hand it:
+                # a creative on two packages is created once and each line item states its own sizes.
+                if pushed:
+                    assert creative_uow.media_buys is not None
+                    buy_packages = creative_uow.media_buys.get_packages(response.media_buy_id or "")
+                    assets = [
+                        _build_adapter_asset_from_creative(creatives_by_id[creative_id], package_assignments)
+                        for creative_id, package_assignments in _package_assignments_by_creative(
+                            pushed, buy_packages, carriers
+                        ).items()
+                    ]
+
+            # Pushed once the assignment rows are committed, with no unit open. An adapter reads
+            # its own rows through get_db_session(), and that exit closes the thread-scoped session
+            # an open unit holds, discarding the unit's uncommitted rows (as GH #1644 describes for
+            # the push path). The enrichment is written by a unit of its own for the same reason.
+            if assets:
+                try:
+                    upload_result = adapter.add_creative_assets(
+                        response.media_buy_id if response.media_buy_id else "", assets, datetime.now(UTC)
+                    )
+                    logger.info(log_safe(f"Uploaded {len(assets)} creatives to the ad server: {upload_result}"))
+
+                    # FIXME(#1566): the status is not read, so a creative the ad server
+                    # reports failed is dropped and the response carries no signal.
+                    with MediaBuyUoW(tenant.tenant_id) as enrichment_uow:
+                        assert enrichment_uow.creatives is not None
+                        for uploaded_status in upload_result or []:
+                            creative = enrichment_uow.creatives.get_by_id(
+                                uploaded_status.creative_id or "", principal_id
+                            )
+                            if creative is None:
+                                continue
+                            merged_data = _apply_creative_enrichment(creative, uploaded_status)
+                            if merged_data is not None:
+                                enrichment_uow.creatives.update_data(creative, merged_data)
+                except AdCPSalesAgentError:
+                    raise
+                except Exception as upload_error:
+                    logger.error(log_safe(f"Failed to upload creatives to the ad server: {upload_error}"))
+                    raise AdCPAdapterError() from upload_error
 
         # Per (media-buy/package-request.json) creatives live on each PackageRequest, not at
         # request level. Inline creative submission to the adapter happens via the

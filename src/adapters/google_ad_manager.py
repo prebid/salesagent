@@ -33,6 +33,7 @@ from src.adapters.base import (
 
 # Import modular components
 from src.adapters.gam.client import GAMClientManager, current_network_time_zone
+from src.adapters.gam.creative_plan import plan_or_refuse
 from src.adapters.gam.managers import (
     GAMCreativesManager,
     GAMInventoryManager,
@@ -84,6 +85,7 @@ from src.core.schemas import (
     MediaPackage,
     ReportingPeriod,
 )
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 from src.services.ai.config import SellerAIConfig
 
 # Set up logger
@@ -210,7 +212,7 @@ class GoogleAdManager(AdServerAdapter):
         # Only initialize creative manager if we have advertiser_id (required for creative operations)
         # Note: trafficker_id is NOT required for creative operations - only for order creation
         if self.advertiser_id:
-            self.creatives_manager = GAMCreativesManager(self.client_manager, self.advertiser_id, self.log, self)
+            self.creatives_manager = GAMCreativesManager(self.client_manager, self.advertiser_id)
         else:
             self.creatives_manager = None  # type: ignore[assignment]
 
@@ -222,11 +224,6 @@ class GoogleAdManager(AdServerAdapter):
             self.client_manager, self.inventory_manager, self.orders_manager, self.tenant_id
         )
         self.workflow_manager = GAMWorkflowManager(self.tenant_id, principal, audit_logger, self.log)
-
-        # Initialize legacy validator for backward compatibility
-        from .gam.utils.validation import GAMValidator
-
-        self.validator = GAMValidator()
 
     # Legacy methods for backward compatibility - delegated to managers
     def _init_client(self):
@@ -285,18 +282,6 @@ class GoogleAdManager(AdServerAdapter):
             raise AdCPConfigurationError(field="orders_manager")
         return manager
 
-    def _validate_creative_for_gam(self, asset):
-        """Validate creative asset for GAM requirements (delegated to creatives manager)."""
-        return self._require_creatives_manager()._validate_creative_for_gam(asset)
-
-    def _get_creative_type(self, asset):
-        """Determine creative type from asset (delegated to creatives manager)."""
-        return self._require_creatives_manager()._get_creative_type(asset)
-
-    def _create_gam_creative(self, asset, creative_type, asset_placeholders):
-        """Create a GAM creative (delegated to creatives manager)."""
-        return self._require_creatives_manager()._create_gam_creative(asset, creative_type, asset_placeholders)
-
     def _check_order_has_guaranteed_items(self, order_id):
         """Check if order has guaranteed line items (delegated to orders manager)."""
         return self._require_orders_manager().check_order_has_guaranteed_items(order_id)
@@ -354,6 +339,59 @@ class GoogleAdManager(AdServerAdapter):
     def SUPPORTED_MEDIA_TYPES(self):
         return self.targeting_manager.SUPPORTED_MEDIA_TYPES
 
+    def validate_media_buy_request(
+        self,
+        request: AdapterCreateRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage,
+    ) -> list[ErrorProblem]:
+        """The base checks, plus each creative GAM has no creative for on its package's line item.
+
+        Interim; RFC #2529 folds it into plan(buy).
+
+        Each creative is planned (``plan_or_refuse``, the call the creatives manager makes at
+        upload) against the placeholders the package's line item will be created with
+        (``GAMOrdersManager.line_item_placeholders``, the computation ``create_line_items``
+        writes, from the same carriers), so a size or kind refused here is one the upload
+        would refuse after the order and line items were written. Every creative refusal is a
+        problem naming its creative and package; core raises the error. What the placeholder
+        computation itself refuses (a format family the product excludes, audio, a format
+        lookup that fails) it raises, and core treats that raise as a refusal before booking.
+        """
+        problems = super().validate_media_buy_request(
+            request,
+            packages,
+            start_time,
+            end_time,
+            package_pricing_info,
+            creatives_by_package=creatives_by_package,
+        )
+        planned = [package for package in packages if creatives_by_package.get(package.package_id)]
+        if not planned:
+            return problems
+        from src.core.database.repositories.uow import ProductUoW
+
+        # Read and closed before the placeholders are computed: the computation opens a
+        # session of its own, which would close one still open here.
+        with ProductUoW(self.tenant_id) as uow:
+            assert uow.products is not None
+            impl_configs = {}
+            for package in planned:
+                product = uow.products.get_by_id(package.product_id) if package.product_id else None
+                impl_configs[package.package_id] = dict((product.implementation_config if product else None) or {})
+        for package in planned:
+            creatives = creatives_by_package[package.package_id]
+            placeholders = self.orders_manager.line_item_placeholders(
+                package, impl_configs[package.package_id], creatives, tenant_id=self.tenant_id, log=self.log
+            )
+            plans = [plan_or_refuse(creative, placeholders, package.package_id) for creative in creatives]
+            problems.extend(plan for plan in plans if isinstance(plan, ErrorProblem))
+        return problems
+
     def create_media_buy(
         self,
         request: AdapterCreateRequest,
@@ -361,6 +399,8 @@ class GoogleAdManager(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Create a new media buy (order) in GAM - main orchestration method.
 
@@ -371,6 +411,8 @@ class GoogleAdManager(AdServerAdapter):
             end_time: Campaign end time
             package_pricing_info: Optional validated pricing info (AdCP PR #88)
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
+            creatives_by_package: The carriers ``validate_media_buy_request`` planned, which
+                narrow each line item's placeholders as they did there.
 
         Returns:
             AdapterCreateResult with GAM order details
@@ -683,6 +725,7 @@ class GoogleAdManager(AdServerAdapter):
                 package_pricing_info=package_pricing_info,
                 package_targeting=package_targeting,
                 line_item_name_template=self._line_item_name_template,
+                creatives_by_package=creatives_by_package,
             )
             self.log(f"✓ Created {len(line_item_ids)} line items")
 
@@ -799,7 +842,7 @@ class GoogleAdManager(AdServerAdapter):
         return self.orders_manager.get_advertisers(search_query=search_query, limit=limit, fetch_all=fetch_all)
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Create and associate creatives with line items (delegated to creatives manager)."""
 
@@ -1123,7 +1166,7 @@ class GoogleAdManager(AdServerAdapter):
         Uses stats stored in the GAMLineItem table (synced every ~15 minutes by the
         background sync job). The staleness is derived from the last_synced timestamp.
         """
-        from datetime import UTC, datetime
+        from datetime import UTC
 
         from sqlalchemy import select
 

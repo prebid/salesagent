@@ -42,7 +42,7 @@ def discover_creative_formats_from_url(url):
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
 from src.admin.form_validation import json_object_body
-from src.admin.utils import require_tenant_access
+from src.admin.utils import describe_approval_error, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
 from src.core.operator_errors import StateConflict, best_effort, safe_error_message
@@ -592,8 +592,10 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
         # Check if this creative approval unblocks any media buys
         assignments = uow.assignments.get_by_creative(creative_id)
-        # Snapshot IDs as plain strings — ORM objects expire on session close (#1038)
-        assignment_buy_ids = [a.media_buy_id for a in assignments]
+        # Snapshot IDs as plain strings — ORM objects expire on session close (#1038).
+        # Each buy once: a creative assigned to two packages of a buy has two assignments,
+        # and the buy is executed, or the creative pushed to it, once with both packages.
+        assignment_buy_ids = list(dict.fromkeys(a.media_buy_id for a in assignments))
 
         logger.info(
             f"[CREATIVE APPROVAL] Creative {creative_id} approved, checking {len(assignments)} media buy assignments"
@@ -601,8 +603,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
         # Snapshot buy statuses here to avoid a second UoW after commit
         assignment_buy_statuses: dict[str, str] = {}
-        for assignment in assignments:
-            media_buy_id = assignment.media_buy_id
+        for media_buy_id in assignment_buy_ids:
             media_buy = uow.media_buys.get_by_id(media_buy_id)
 
             if not media_buy:
@@ -662,7 +663,8 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             )
         else:
             logger.error(
-                f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: {approval.error_msg}"
+                f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: "
+                f"{describe_approval_error(approval.error)}"
             )
 
     # Retroactive push for already-live buys (#1038):
@@ -686,7 +688,15 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 f"[CREATIVE APPROVAL] Retroactive push failed for creative {creative_id} → buy {buy_id}: "
                 f"{push_failure.reason}"
             )
-            push_warnings.append(f"Creative push to buy {buy_id} failed — see server logs for details")
+            # The seller's one answer for a push it triggered: which creative was not
+            # pushed, and the code of the typed refusal when there is one (a size its
+            # product's option does not accept, say). The reason text stays in the log.
+            if push_failure.error is not None:
+                push_warnings.append(
+                    f"Creative {creative_id} was not pushed to buy {buy_id}: {push_failure.error.error_code}"
+                )
+            else:
+                push_warnings.append(f"Creative push to buy {buy_id} failed — see server logs for details")
 
     response_body: dict[str, Any] = {"success": True, "status": "approved"}
     if push_warnings:
@@ -1075,7 +1085,6 @@ def _ai_review_creative_impl_inner(
     When db_session is provided, uses it directly (caller owns lifecycle).
     When db_session is None, creates an AdminCreativeUoW and uses its session.
     """
-    from src.core.database.repositories.creative import CreativeRepository
     from src.core.database.repositories.media_buy import MediaBuyRepository
     from src.core.database.repositories.product import ProductRepository
     from src.core.database.repositories.tenant_config import TenantConfigRepository

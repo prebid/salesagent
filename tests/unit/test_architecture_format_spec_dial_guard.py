@@ -1,4 +1,4 @@
-"""Guard: ``_get_format_spec_sync`` calls in ``media_buy_create.py`` must be
+"""Guard: ``_get_format_spec_sync`` calls in ``_creative_trafficking.py`` must be
 guarded by ``is_dialled_agent_url``.
 
 ``_get_format_spec_sync`` (and the ``fetch_format_spec``/registry chain behind
@@ -11,14 +11,15 @@ unconditional call rejects a format the seller itself advertises
 ``if creative.agent_url and is_dialled_agent_url(creative.agent_url): ...`` —
 this guard pins that every call stays inside such a conditional.
 
-Scope: this checks ``src/core/tools/media_buy_create.py`` specifically — the
-two call sites codebase-scan (salesagent-w517.13) named. It does not attempt
+Scope: this checks ``src/core/tools/_creative_trafficking.py`` specifically, where
+the creative gate's reader moved from ``media_buy_create.py`` with the call sites
+codebase-scan (salesagent-w517.13) named. It does not attempt
 to check ``src/core/tools/creatives/_validation.py`` (the reference
 implementation the guard above copies, already correct) or
 ``src/core/format_resolver.py`` (the DEFERRED single-choke-point candidate,
 salesagent-0tw6) — neither wraps the call in a local ``if`` the same way, so a
 generic scan would need a different shape per file. If a THIRD unguarded call
-site is added to media_buy_create.py, this guard fails it too — the check is
+site is added to that file, this guard fails it too — the check is
 "is `_get_format_spec_sync` ever called without an enclosing
 `is_dialled_agent_url` conditional ANYWHERE in this file", not merely "are
 exactly two guarded".
@@ -37,7 +38,7 @@ from tests.unit._architecture_helpers import (
     repo_root,
 )
 
-TARGET_FILE = "src/core/tools/media_buy_create.py"
+TARGET_FILE = "src/core/tools/_creative_trafficking.py"
 DIAL_FUNCTION = "_get_format_spec_sync"
 GUARD_FUNCTION = "is_dialled_agent_url"
 
@@ -45,13 +46,13 @@ GUARD_FUNCTION = "is_dialled_agent_url"
 def test_the_dial_and_guard_functions_this_module_names_still_exist() -> None:
     """Both subjects resolved by import, so a rename fails here rather than going quiet.
 
-    ``media_buy_create`` is heavy -- importing it at module scope would abort the
+    ``_creative_trafficking`` is heavy -- importing it at module scope would abort the
     whole unit run at collection and mask every other result -- so it is imported
     inside the test. A rename still reddens ``make quality``, as a failure rather
     than a collection error.
     """
     assert_guard_subject_resolves(
-        "src.core.tools.media_buy_create",
+        "src.core.tools._creative_trafficking",
         DIAL_FUNCTION,
         why=f"This guard scans {TARGET_FILE} for it by name, so its absence makes every assertion here vacuous.",
     )
@@ -124,7 +125,7 @@ def find_unguarded_dial_violations(tree: ast.Module) -> list[int]:
 
 
 class TestFormatSpecDialIsGuarded:
-    """Every ``_get_format_spec_sync`` call in media_buy_create.py must sit
+    """Every ``_get_format_spec_sync`` call in _creative_trafficking.py must sit
     inside an ``is_dialled_agent_url`` conditional. No allowlist."""
 
     @pytest.mark.arch_guard
@@ -212,7 +213,7 @@ class TestFormatSpecDialGuardDetector:
         assert find_unguarded_dial_violations(ast.parse(source)) == [], f"false positive on {label}"
 
     @pytest.mark.arch_guard
-    def test_media_buy_create_is_scanned_and_clean(self):
+    def test_creative_trafficking_is_scanned_and_clean(self):
         """The fixed module IS subject to this scan, and is clean post-fix."""
         tree = parse_module(repo_root() / TARGET_FILE)
         assert find_unguarded_dial_violations(tree) == []

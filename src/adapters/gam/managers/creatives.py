@@ -5,24 +5,39 @@ Handles creative validation, creation, upload, and association with line items
 for Google Ad Manager campaigns.
 """
 
-import base64
 import logging
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
-from urllib.parse import urlparse
 
-from src.core.errors.details import CreativeRejectionDetails
-from src.core.exceptions import AdCPCreativeRejectedError, AdCPInternalError, AdCPSalesAgentError
+from src.core.errors.details import ErrorProblem
+from src.core.exceptions import AdCPSalesAgentError, problems_refusal
 from src.core.schemas import AssetStatus
+from src.core.traffic_carrier import AdapterCreativeAsset, PackageAssignmentDict
 
+from ..creative_plan import (
+    GamCreativePlan,
+    GamCreativeRefusal,
+    GamRefusalReason,
+    plan_or_refuse,
+)
 from ..utils.error_handler import map_gam_exception
-from ..utils.validation import GAMValidator
 
 logger = logging.getLogger(__name__)
 
 
-def _line_item_weights(package_assignments: list[dict[str, Any]]) -> list[tuple[str, int]]:
-    """(GAM line item id, weight) for each of an asset's package assignments.
+def _line_item_weights(package_assignments: Sequence[PackageAssignmentDict]) -> list[tuple[str, int]]:
+    """(GAM line item id, weight) for each of an asset's package assignments that has a line item."""
+    return [
+        (line_item_id, assignment.get("weight", 100))
+        for line_item_id, assignment in _assigned_line_items(package_assignments)
+    ]
+
+
+def _assigned_line_items(
+    package_assignments: Sequence[PackageAssignmentDict],
+) -> list[tuple[str, PackageAssignmentDict]]:
+    """(GAM line item id, assignment) for each of an asset's package assignments.
 
     The line item id is the seller's own package -> line item mapping: the adapter
     returns it from create_media_buy (``AdapterCreateResult.platform_line_item_ids``)
@@ -36,34 +51,48 @@ def _line_item_weights(package_assignments: list[dict[str, Any]]) -> list[tuple[
     for assignment in package_assignments:
         line_item_id = assignment.get("platform_line_item_id")
         if line_item_id:
-            result.append((str(line_item_id), assignment.get("weight", 100)))
+            result.append((str(line_item_id), assignment))
         else:
             logger.warning(f"Package {assignment.get('package_id')} has no GAM line item; assignment skipped")
     return result
 
 
+def _placement_targeting_name(
+    asset: Mapping[str, Any], placement_targeting_map: dict[str, str] | None
+) -> tuple[str | None, str | None]:
+    """(targetingName, the placement id it is for) of an asset's creative-level placement targeting (adcp#208)."""
+    assignment_placement_ids = asset.get("placement_ids", [])
+    if not (assignment_placement_ids and placement_targeting_map):
+        return None, None
+    # Use first placement_id - GAM LICA only supports one targetingName per association
+    first_placement_id = assignment_placement_ids[0]
+    if first_placement_id not in placement_targeting_map:
+        return None, first_placement_id
+    if len(assignment_placement_ids) > 1:
+        logger.warning(
+            f"Creative has {len(assignment_placement_ids)} placement_ids but GAM LICA "
+            f"only supports one targetingName. Using first: {first_placement_id}"
+        )
+    return placement_targeting_map[first_placement_id], first_placement_id
+
+
 class GAMCreativesManager:
     """Manages creative operations for Google Ad Manager."""
 
-    def __init__(self, client_manager, advertiser_id: str, log_func=None, adapter=None):
+    def __init__(self, client_manager, advertiser_id: str):
         """Initialize creatives manager.
 
         Args:
             client_manager: GAMClientManager instance
             advertiser_id: GAM advertiser ID
-            log_func: Optional logging function from adapter
-            adapter: Optional reference to the main adapter for delegation
         """
         self.client_manager = client_manager
         self.advertiser_id = advertiser_id
-        self.validator = GAMValidator()
-        self.log_func = log_func
-        self.adapter = adapter
 
     def add_creative_assets(
         self,
         media_buy_id: str,
-        assets: list[dict[str, Any]],
+        assets: list[AdapterCreativeAsset],
         today: datetime,
         placement_targeting_map: dict[str, str] | None = None,
     ) -> list[AssetStatus]:
@@ -123,78 +152,23 @@ class GAMCreativesManager:
         self._update_line_items_for_weighted_creatives(assets, line_item_service)
 
         for asset in assets:
-            logger.info(
-                f"[DEBUG] Processing asset {asset.get('creative_id')} with package_assignments: {asset.get('package_assignments', [])}"
-            )
-            # Validate creative asset against GAM requirements
-            # Use adapter's method if available for test compatibility, otherwise use our own
-            if self.adapter and hasattr(self.adapter, "_validate_creative_for_gam"):
-                validation_issues = self.adapter._validate_creative_for_gam(asset)
-            else:
-                validation_issues = self._validate_creative_for_gam(asset)
-
-            # Add creative size validation against placeholders
-            size_validation_issues = self._validate_creative_size_against_placeholders(asset, creative_placeholders)
-            validation_issues.extend(size_validation_issues)
-
-            if validation_issues:
-                # Use adapter log function if available, otherwise use logger
-                if self.log_func:
-                    self.log_func(f"[red]Creative {asset['creative_id']} failed GAM validation:[/red]")
-                    for issue in validation_issues:
-                        self.log_func(f"[red]  - {issue}[/red]")
-                else:
-                    # Fallback to logger if no log function provided
-                    logger.error(f"Creative {asset['creative_id']} failed GAM validation:")
-                    for issue in validation_issues:
-                        logger.error(f"  - {issue}")
-                created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
-                continue
-
-            # Determine creative type using AdCP v1.3+ logic
-            # Use adapter's method if available for test compatibility, otherwise use our own
-            if self.adapter and hasattr(self.adapter, "_get_creative_type"):
-                creative_type = self.adapter._get_creative_type(asset)
-            else:
-                creative_type = self._get_creative_type(asset)
-
-            if creative_type == "vast":
-                # VAST is handled at line item level, not creative level
-                logger.info(f"VAST creative {asset['creative_id']} - configuring at line item level")
-                self._configure_vast_for_line_items(media_buy_id, asset)
-                created_asset_statuses.append(_approved(asset["creative_id"]))
-                continue
-
-            # Get placeholders for this asset's package assignments
-            asset_placeholders = []
-            for line_item_id, _ in _line_item_weights(asset.get("package_assignments", [])):
-                asset_placeholders.extend(creative_placeholders.get(line_item_id, []))
-
-            # Create GAM creative object
             try:
                 # A creative GAM already holds is placed on the line items, not created again. If
                 # its content changed since, GAM's copy is updated first, keeping its id and its
                 # associations. Nobody has tried updateCreatives against real GAM. Creative.size
                 # is read-only after creation, so a changed size is not expected to take effect.
+                # Each package's carrier on its own line item, so a creative on two packages
+                # serves on each at the sizes that package's product accepts, never their union.
+                plans = self._plans_by_line_item(asset, creative_placeholders)
+                plan = next(iter(plans.values()))
                 gam_creative_id = asset.get("platform_creative_id")
                 if not gam_creative_id or asset.get("platform_creative_outdated"):
-                    creative = self._create_gam_creative(asset, creative_type, asset_placeholders)
-                    if not creative:
-                        logger.warning(
-                            f"Skipping unsupported creative {asset['creative_id']} with type: {creative_type}"
-                        )
-                        created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
-                        continue
-
+                    creative = self._planned_creative(asset, plan)
                     if gam_creative_id:
                         creative_service.updateCreatives([{**creative, "id": int(gam_creative_id)}])
                         logger.info(f"✓ Updated GAM Creative ID: {gam_creative_id}")
                     else:
-                        # Create the creative in GAM
-                        # DEBUG: Log the exact creative being sent to GAM
-                        logger.info(f"[DEBUG] Creating creative with fields: {list(creative.keys())}")
-                        logger.info(f"[DEBUG] Creative type: {creative.get('xsi_type')}")
-                        logger.info(f"[DEBUG] Creative data: {creative}")
+                        logger.info(f"Creating {creative.get('xsi_type')} for creative {asset['creative_id']}")
                         created_creatives = creative_service.createCreatives([creative])
                         if not created_creatives:
                             logger.error(f"Failed to create creative {asset['creative_id']} - no creatives returned")
@@ -212,6 +186,11 @@ class GAMCreativesManager:
                     asset,
                     lica_service,
                     placement_targeting_map,
+                    # A creative GAM held before this push may have been created at another
+                    # package's size, so every association states its own.
+                    lica_sizes=self._lica_sizes_by_line_item(
+                        plans, None if asset.get("platform_creative_id") else plan.creative["size"]
+                    ),
                 )
                 # Content that changed was held from serving while it was under review
                 # (``set_creative_serving``); its approval is what this push carries.
@@ -255,6 +234,58 @@ class GAMCreativesManager:
 
         return created_asset_statuses
 
+    @staticmethod
+    def _plans_by_line_item(
+        asset: AdapterCreativeAsset, creative_placeholders: Mapping[str, list]
+    ) -> dict[str, GamCreativePlan]:
+        """Per line item *asset* is assigned to, its package's carrier planned on that line item; raises the refusal.
+
+        Each line item's own placeholders, and the carrier core read for that package's
+        product, so nothing is planned against another package's sizes. The planning call is
+        the pre-booking check's (``plan_or_refuse``); every line item's refusal rides one
+        error, which core builds (``problems_refusal``): this manager picks no error class.
+        """
+        plans = {
+            line_item_id: plan_or_refuse(
+                assignment["creative"], creative_placeholders.get(line_item_id, []), assignment["package_id"]
+            )
+            for line_item_id, assignment in _assigned_line_items(asset["package_assignments"])
+        }
+        if not plans:
+            # No assigned package has a line item, so no line item states a size.
+            raise problems_refusal(
+                [GamCreativeRefusal(asset["creative_id"], GamRefusalReason.NO_PLACEHOLDER).problem()]
+            )
+        refused = [plan for plan in plans.values() if isinstance(plan, ErrorProblem)]
+        if refused:
+            raise problems_refusal(refused)
+        return {line_item_id: plan for line_item_id, plan in plans.items() if isinstance(plan, GamCreativePlan)}
+
+    def _planned_creative(self, asset: AdapterCreativeAsset, plan: GamCreativePlan) -> dict[str, Any]:
+        """The planned GAM creative, with the advertiser and name this manager owns."""
+        return {
+            **plan.creative,
+            "advertiserId": self.advertiser_id,
+            "name": asset.get("name", f"AdCP Creative {asset['creative_id']}"),
+        }
+
+    @staticmethod
+    def _lica_sizes_by_line_item(
+        plans: Mapping[str, GamCreativePlan], creative_size: dict[str, int] | None
+    ) -> dict[str, list[dict[str, int]]]:
+        """Per line item, the sizes its own plan serves the creative at.
+
+        A line item left with only the creative's own size states none, as the plan does for a
+        creative with one candidate size. *creative_size* ``None`` is a size this push does not
+        know, so every line item states its sizes: they "override the value set for
+        Creative.size" (Ad Manager API v202602), whatever size GAM created the creative at.
+        """
+        by_line_item = {}
+        for line_item_id, plan in plans.items():
+            sizes = list(plan.lica_sizes) or [plan.creative["size"]]
+            by_line_item[line_item_id] = [] if sizes == [creative_size] else sizes
+        return by_line_item
+
     def set_creative_serving(self, gam_creative_id: str, *, serving: bool) -> None:
         """Activate or deactivate every line item creative association of a GAM creative.
 
@@ -296,7 +327,9 @@ class GAMCreativesManager:
         line_items = getattr(response, "results", [])
         return {str(item["id"]): getattr(item, "creativePlaceholders", []) for item in line_items}
 
-    def _update_line_items_for_weighted_creatives(self, assets: list[dict[str, Any]], line_item_service) -> None:
+    def _update_line_items_for_weighted_creatives(
+        self, assets: Sequence[AdapterCreativeAsset], line_item_service
+    ) -> None:
         """Update line items to use MANUAL rotation if creatives have non-default weights.
 
         The spec supports creative rotation weights. When weights differ from the default (100),
@@ -363,534 +396,13 @@ class GAMCreativesManager:
                 # Weights will still be set on LICAs even if rotation type update fails
                 logger.error(f"Failed to update rotation type for line item {line_item_id}: {e}", exc_info=True)
 
-    def _get_creative_type(self, asset: dict[str, Any]) -> str:
-        """Determine the creative type based on AdCP v1.3+ fields.
-
-        Args:
-            asset: Creative asset dictionary
-
-        Returns:
-            Creative type string
-        """
-        # Check AdCP v1.3+ fields first
-        if asset.get("snippet") and asset.get("snippet_type"):
-            if asset["snippet_type"] in ["vast_xml", "vast_url"]:
-                return "vast"
-            else:
-                return "third_party_tag"
-        elif asset.get("template_variables"):
-            return "native"
-        elif asset.get("media_url") or asset.get("media_data"):
-            # Check if HTML5 based on file extension or format
-            media_url = asset.get("media_url", "")
-            format_str = asset.get("format", "")
-            if (
-                media_url.lower().endswith((".html", ".htm", ".html5", ".zip"))
-                or "html5" in format_str.lower()
-                or "rich_media" in format_str.lower()
-            ):
-                return "html5"
-            else:
-                return "hosted_asset"
-        else:
-            # Auto-detect from legacy patterns for backward compatibility
-            url = asset.get("url", "")
-            format_str = asset.get("format", "")
-
-            if self._is_html_snippet(url):
-                return "third_party_tag"
-            elif "native" in format_str:
-                return "native"
-            elif url and (".xml" in url.lower() or "vast" in url.lower()):
-                return "vast"
-            elif (
-                url.lower().endswith((".html", ".htm", ".html5", ".zip"))
-                or "html5" in format_str.lower()
-                or "rich_media" in format_str.lower()
-            ):
-                return "html5"
-            else:
-                return "hosted_asset"  # Default
-
-    def _validate_creative_for_gam(self, asset: dict[str, Any]) -> list[str]:
-        """Validate creative asset against GAM requirements before API submission.
-
-        Args:
-            asset: Creative asset dictionary
-
-        Returns:
-            List of validation error messages (empty if valid)
-        """
-        return self.validator.validate_creative_asset(asset)
-
-    def _validate_creative_size_against_placeholders(
-        self, asset: dict[str, Any], creative_placeholders: dict[str, list]
-    ) -> list[str]:
-        """Validate that creative format and asset requirements match available LineItem placeholders.
-
-        Args:
-            asset: Creative asset dictionary
-            creative_placeholders: Line item id -> that line item's creative placeholders
-
-        Returns:
-            List of validation error messages
-        """
-        validation_errors = []
-
-        # Helper function to safely get attribute from dict or object
-        def _get_attr(obj, name, default=None):
-            """Get attribute from dict or object."""
-            if isinstance(obj, dict):
-                return obj.get(name, default)
-            return getattr(obj, name, default)
-
-        # Get asset dimensions
-        try:
-            asset_width, asset_height = self._get_creative_dimensions(asset, None)
-        except Exception as e:
-            validation_errors.append(f"Could not determine creative dimensions: {str(e)}")
-            return validation_errors
-
-        # Check if asset dimensions match any placeholder of its assigned packages' line items
-        line_item_ids = [line_item_id for line_item_id, _ in _line_item_weights(asset.get("package_assignments", []))]
-        if not line_item_ids:
-            if asset.get("package_assignments"):
-                validation_errors.append("None of the creative's assigned packages has a GAM line item")
-            else:
-                logger.warning(f"Creative {asset.get('creative_id', 'unknown')} has no package assignments")
-            return validation_errors
-
-        placeholders = [p for line_item_id in line_item_ids for p in creative_placeholders.get(line_item_id, [])]
-        matching_placeholders_found = False
-        for placeholder in placeholders:
-            # Placeholder can be a Zeep object or dict (in tests)
-            placeholder_size = _get_attr(placeholder, "size", None)
-            if not placeholder_size:
-                continue
-            placeholder_width = _get_attr(placeholder_size, "width", 0)
-            placeholder_height = _get_attr(placeholder_size, "height", 0)
-
-            # 1x1 placeholders are wildcards in GAM (native templates or programmatic)
-            # They accept creatives of any size
-            if placeholder_width == 1 and placeholder_height == 1:
-                matching_placeholders_found = True
-                template_id = _get_attr(placeholder, "creativeTemplateId", None)
-                if template_id:
-                    logger.info(
-                        f"Creative {asset_width}x{asset_height} matches 1x1 placeholder "
-                        f"with GAM native template {template_id}"
-                    )
-                else:
-                    logger.info(
-                        f"Creative {asset_width}x{asset_height} matches 1x1 wildcard placeholder "
-                        f"(programmatic/third-party)"
-                    )
-                break
-
-            # Standard placeholders require exact dimension match
-            if asset_width == placeholder_width and asset_height == placeholder_height:
-                matching_placeholders_found = True
-                break
-
-        if not matching_placeholders_found:
-            available_sizes = []
-            for placeholder in placeholders:
-                size = _get_attr(placeholder, "size", None)
-                if size:
-                    available_sizes.append(f"{_get_attr(size, 'width', 0)}x{_get_attr(size, 'height', 0)}")
-
-            validation_errors.append(
-                f"Creative size {asset_width}x{asset_height} does not match any LineItem placeholders. "
-                f"Available sizes in assigned packages: {', '.join(set(available_sizes))}"
-            )
-
-        return validation_errors
-
-    def _create_gam_creative(
-        self, asset: dict[str, Any], creative_type: str, placeholders: list[dict] = None
-    ) -> dict[str, Any] | None:
-        """Create a GAM creative object based on the asset type.
-
-        Args:
-            asset: Creative asset dictionary
-            creative_type: Type of creative to create
-            placeholders: List of creative placeholders for validation
-
-        Returns:
-            GAM creative dictionary or None if unsupported
-        """
-        if creative_type == "third_party_tag":
-            return self._create_third_party_creative(asset)
-        elif creative_type == "native":
-            return self._create_native_creative(asset)
-        elif creative_type == "html5":
-            return self._create_html5_creative(asset)
-        elif creative_type == "hosted_asset":
-            return self._create_hosted_asset_creative(asset)
-        else:
-            logger.warning(f"Unsupported creative type: {creative_type}")
-            return None
-
-    def _create_third_party_creative(self, asset: dict[str, Any]) -> dict[str, Any]:
-        """Create a third-party creative for GAM."""
-        width, height = self._get_creative_dimensions(asset)
-
-        # Use snippet if available (AdCP v1.3+), otherwise fall back to URL
-        snippet = asset.get("snippet")
-        if not snippet:
-            snippet = asset.get("url", "")
-
-        creative = {
-            "xsi_type": "ThirdPartyCreative",
-            "name": asset.get("name", f"AdCP Creative {asset.get('creative_id', 'unknown')}"),
-            "advertiserId": self.advertiser_id,
-            "size": {"width": width, "height": height},
-            "snippet": snippet,
-        }
-
-        self._add_tracking_urls_to_creative(creative, asset)
-        return creative
-
-    def _create_native_creative(self, asset: dict[str, Any]) -> dict[str, Any]:
-        """Create a native creative for GAM."""
-        template_id = self._get_native_template_id(asset)
-        template_variables = self._build_native_template_variables(asset)
-
-        creative = {
-            "xsi_type": "TemplateCreative",
-            "name": asset.get("name", f"AdCP Native Creative {asset.get('creative_id', 'unknown')}"),
-            "advertiserId": self.advertiser_id,
-            "creativeTemplateId": template_id,
-            "creativeTemplateVariableValues": template_variables,
-        }
-
-        self._add_tracking_urls_to_creative(creative, asset)
-        return creative
-
-    def _create_html5_creative(self, asset: dict[str, Any]) -> dict[str, Any]:
-        """Create an HTML5 creative for GAM."""
-        width, height = self._get_creative_dimensions(asset)
-        html_source = self._get_html5_source(asset)
-
-        creative = {
-            "xsi_type": "CustomCreative",
-            "name": asset.get("name", f"AdCP HTML5 Creative {asset.get('creative_id', 'unknown')}"),
-            "advertiserId": self.advertiser_id,
-            "size": {"width": width, "height": height},
-            "htmlSnippet": html_source,
-        }
-
-        self._add_tracking_urls_to_creative(creative, asset)
-        return creative
-
-    def _create_hosted_asset_creative(self, asset: dict[str, Any]) -> dict[str, Any]:
-        """Create a hosted asset (image/video) creative for GAM."""
-        width, height = self._get_creative_dimensions(asset)
-
-        # Get the creative URL
-        url = asset.get("url")
-        if not url:
-            raise AdCPCreativeRejectedError(
-                field="url",
-                details=CreativeRejectionDetails(creative_id=asset.get("creative_id"), missing_field="url"),
-            )
-
-        # Determine asset type
-        asset_type = self._determine_asset_type(asset)
-
-        # Get click-through URL (required by GAM for redirect creatives)
-        # TODO: Implement proper click-through URL handling per AdCP spec
-        # For now, use the asset URL as fallback if no explicit click_url is provided
-        click_url = asset.get("clickthrough_url") or asset.get("landing_url") or asset.get("click_url") or url
-
-        if asset_type == "image":
-            # ImageRedirectCreative requires both image URL and click-through URL
-            # Using asset URL as fallback for click_url (see TODO above)
-            if not click_url:
-                raise AdCPCreativeRejectedError(
-                    field="click_url",
-                    details=CreativeRejectionDetails(creative_id=asset.get("creative_id"), missing_field="click_url"),
-                )
-
-            # Validate that image URL is an actual URL, not binary data
-            if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
-                raise AdCPCreativeRejectedError(
-                    field="url",
-                    details=CreativeRejectionDetails(creative_id=asset.get("creative_id"), invalid_field="url"),
-                )
-
-            creative = {
-                "xsi_type": "ImageRedirectCreative",
-                "name": asset.get("name", f"AdCP Image Creative {asset.get('creative_id', 'unknown')}"),
-                "advertiserId": self.advertiser_id,
-                "size": {"width": width, "height": height},
-                "imageUrl": url,
-                "destinationUrl": click_url,
-            }
-        elif asset_type == "video":
-            # For video, we can use VideoRedirectCreative
-            # Per AdCP spec, video assets have required duration field
-            # https://adcontextprotocol.org/schemas/v1/core/assets/video-asset.json
-            duration = asset.get("duration")
-            if not duration:
-                raise AdCPCreativeRejectedError(
-                    field="duration",
-                    details=CreativeRejectionDetails(creative_id=asset.get("creative_id"), missing_field="duration"),
-                )
-
-            creative = {
-                "xsi_type": "VideoRedirectCreative",
-                "name": asset.get("name", f"AdCP Video Creative {asset.get('creative_id', 'unknown')}"),
-                "advertiserId": self.advertiser_id,
-                "size": {"width": width, "height": height},
-                "videoSourceUrl": url,
-                "destinationUrl": click_url,
-                "duration": int(duration * 1000),  # GAM expects milliseconds, AdCP provides seconds
-            }
-        else:
-            # Internal invariant, not buyer input: _determine_asset_type only
-            # returns "image" or "video", so reaching here is OUR bug. It was
-            # briefly UNSUPPORTED_FEATURE, which is buyer-correctable ("remove the
-            # unsupported field") -- but there is no field for the buyer to remove.
-            raise AdCPInternalError()
-
-        self._add_tracking_urls_to_creative(creative, asset)
-        return creative
-
-    def _get_creative_dimensions(self, asset: dict[str, Any], placeholders: list[dict] = None) -> tuple[int, int]:
-        """Get creative dimensions from asset or format.
-
-        Args:
-            asset: Creative asset dictionary
-            placeholders: Optional list of placeholders for validation
-
-        Returns:
-            Tuple of (width, height)
-        """
-        # Try explicit width/height first
-        if asset.get("width") and asset.get("height"):
-            return int(asset["width"]), int(asset["height"])
-
-        # Try to parse from format string
-        format_str = asset.get("format", "")
-        if format_str:
-            # Extract dimensions from format like "display_300x250"
-            parts = format_str.lower().split("_")
-            for part in parts:
-                if "x" in part:
-                    try:
-                        width_str, height_str = part.split("x")
-                        return int(width_str), int(height_str)
-                    except (ValueError, IndexError):
-                        continue
-
-        # Default fallback
-        logger.warning(
-            f"Could not determine dimensions for creative {asset.get('creative_id', 'unknown')}, using 300x250 default"
-        )
-        return 300, 250
-
-    def _is_html_snippet(self, content: str) -> bool:
-        """Check if content appears to be an HTML snippet."""
-        if not content:
-            return False
-        content_lower = content.lower().strip()
-        return any(
-            [
-                content_lower.startswith("<script"),
-                content_lower.startswith("<div"),
-                content_lower.startswith("<iframe"),
-                content_lower.startswith("<!doctype"),
-                content_lower.startswith("<html"),
-            ]
-        )
-
-    def _get_html5_source(self, asset: dict[str, Any]) -> str:
-        """Get HTML5 source content for the creative."""
-        # Try media_data first (direct HTML content)
-        if asset.get("media_data"):
-            try:
-                # Decode base64 if needed
-                content = asset["media_data"]
-                if content.startswith("data:"):
-                    # Extract base64 part after comma
-                    content = content.split(",", 1)[1]
-                    content = base64.b64decode(content).decode("utf-8")
-                return content
-            except Exception as e:
-                logger.warning(f"Failed to decode media_data: {e}")
-
-        # Fall back to media_url
-        if asset.get("media_url"):
-            return f'<iframe src="{asset["media_url"]}" width="100%" height="100%" frameborder="0"></iframe>'
-
-        # Last resort: use URL field
-        url = asset.get("url", "")
-        if url:
-            return f'<iframe src="{url}" width="100%" height="100%" frameborder="0"></iframe>'
-
-        raise AdCPCreativeRejectedError()
-
-    def _upload_binary_asset(self, asset: dict[str, Any]) -> dict[str, Any] | None:
-        """Upload binary asset to GAM and return asset info."""
-        # Implementation would handle actual upload to GAM
-        # This is a simplified version
-        logger.warning("Binary asset upload not fully implemented")
-        return None
-
-    def _get_content_type(self, asset: dict[str, Any]) -> str:
-        """Determine content type from asset."""
-        # Check explicit mime type
-        if asset.get("mime_type"):
-            return asset["mime_type"]
-
-        # Guess from URL extension
-        url = asset.get("media_url") or asset.get("url", "")
-        if url:
-            parsed = urlparse(url)
-            path = parsed.path.lower()
-            if path.endswith((".jpg", ".jpeg")):
-                return "image/jpeg"
-            elif path.endswith(".png"):
-                return "image/png"
-            elif path.endswith(".gif"):
-                return "image/gif"
-            elif path.endswith((".mp4", ".mov")):
-                return "video/mp4"
-
-        # Default
-        return "image/jpeg"
-
-    def _determine_asset_type(self, asset: dict[str, Any]) -> str:
-        """Determine if asset is image or video."""
-        content_type = self._get_content_type(asset)
-        if content_type.startswith("video/"):
-            return "video"
-        else:
-            return "image"
-
-    def _get_native_template_id(self, asset: dict[str, Any]) -> str:
-        """Get the GAM native template ID for the asset."""
-        # This would need to be configured per network
-        return "123456"  # Placeholder
-
-    def _build_native_template_variables(self, asset: dict[str, Any]) -> list[dict[str, Any]]:
-        """Build native template variables from asset."""
-        variables = []
-        template_vars = asset.get("template_variables", {})
-
-        for key, value in template_vars.items():
-            variables.append(
-                {
-                    "uniqueName": key,
-                    "value": {
-                        "xsi_type": "StringCreativeTemplateVariableValue",
-                        "value": str(value),
-                    },
-                }
-            )
-
-        return variables
-
-    def _add_tracking_urls_to_creative(self, creative: dict[str, Any], asset: dict[str, Any]) -> None:
-        """Add tracking URLs to the creative with AdCP-to-GAM macro substitution.
-
-        Extracts impression tracking URLs from asset's delivery_settings.tracking_urls
-        and applies AdCP->GAM macro substitution before adding to the GAM creative.
-
-        GAM creative types use different fields for impression tracking:
-        - ThirdPartyCreative, ImageRedirectCreative, CustomCreative:
-          Use thirdPartyImpressionTrackingUrls (array of strings)
-        - VideoRedirectCreative:
-          Use trackingUrls with ConversionEvent_TrackingUrlsMapEntry format
-        """
-        from ..utils.macros import substitute_tracking_urls
-
-        # Extract tracking URLs from delivery_settings
-        delivery_settings = asset.get("delivery_settings", {})
-        tracking_urls = delivery_settings.get("tracking_urls", {})
-        impression_urls = tracking_urls.get("impression", [])
-
-        if impression_urls:
-            # Apply AdCP->GAM macro substitution
-            processed_urls = substitute_tracking_urls(impression_urls)
-            creative_type = creative.get("xsi_type", "")
-
-            # Creative types that use thirdPartyImpressionTrackingUrls (string[])
-            if creative_type in ["ThirdPartyCreative", "ImageRedirectCreative", "CustomCreative", "TemplateCreative"]:
-                existing_urls = creative.get("thirdPartyImpressionTrackingUrls", [])
-                creative["thirdPartyImpressionTrackingUrls"] = existing_urls + [
-                    url for url in processed_urls if url not in existing_urls
-                ]
-            elif creative_type == "VideoRedirectCreative":
-                # VideoRedirectCreative uses trackingUrls with ConversionEvent_TrackingUrlsMapEntry format
-                # CREATIVE_VIEW is the standard event for impression tracking in video
-                existing_tracking = creative.get("trackingUrls", [])
-
-                # Check if CREATIVE_VIEW entry already exists
-                creative_view_entry = None
-                for entry in existing_tracking:
-                    if entry.get("key") == "CREATIVE_VIEW":
-                        creative_view_entry = entry
-                        break
-
-                if creative_view_entry:
-                    # Add to existing CREATIVE_VIEW entry
-                    existing_entry_urls = creative_view_entry.get("value", {}).get("urls", [])
-                    creative_view_entry["value"]["urls"] = existing_entry_urls + [
-                        url for url in processed_urls if url not in existing_entry_urls
-                    ]
-                else:
-                    # Create new CREATIVE_VIEW entry
-                    existing_tracking.append({"key": "CREATIVE_VIEW", "value": {"urls": processed_urls}})
-                    creative["trackingUrls"] = existing_tracking
-
-        click_urls = tracking_urls.get("click", [])
-        if click_urls:
-            from urllib.parse import quote
-
-            if len(click_urls) > 1:
-                logger.warning("Multiple click trackers provided, only first will be used")
-
-            original_destination = creative.get("destinationUrl", "")
-            click_url = click_urls[0]
-
-            if "{REDIRECT_URL}" in click_url:
-                if original_destination:
-                    # Replace {REDIRECT_URL} with URL-encoded landing page
-                    click_url = click_url.replace("{REDIRECT_URL}", quote(original_destination, safe=""))
-                    processed_click_urls = substitute_tracking_urls([click_url])
-                    if processed_click_urls:
-                        creative["destinationUrl"] = processed_click_urls[0]
-                else:
-                    # No landing page to embed - ignore click tracker to avoid broken redirect
-                    logger.warning(
-                        "Click tracker has {REDIRECT_URL} macro but no landing page provided. Click tracker ignored."
-                    )
-            elif original_destination:
-                # Click tracker missing {REDIRECT_URL} - would lose landing page
-                logger.warning(
-                    f"Click tracker missing {{REDIRECT_URL}} macro. "
-                    f"Landing page '{original_destination}' would be lost. Click tracker ignored."
-                )
-                # Keep original destinationUrl (landing page) instead of overwriting with tracker
-            else:
-                # No landing page and no {REDIRECT_URL} - just use click tracker as-is
-                processed_click_urls = substitute_tracking_urls([click_url])
-                if processed_click_urls:
-                    creative["destinationUrl"] = processed_click_urls[0]
-
-    def _configure_vast_for_line_items(self, media_buy_id: str, asset: dict[str, Any]) -> None:
-        """Configure VAST creative at line item level."""
-        # VAST configuration would be implemented here
-        logger.info(f"Configuring VAST creative {asset['creative_id']} for line items")
-
     def _associate_creative_with_line_items(
         self,
         gam_creative_id: str,
-        asset: dict[str, Any],
+        asset: AdapterCreativeAsset,
         lica_service,
         placement_targeting_map: dict[str, str] | None = None,
+        lica_sizes: dict[str, list[dict[str, int]]] | None = None,
     ) -> None:
         """Associate creative with those of its assigned line items it is not on yet.
 
@@ -907,6 +419,9 @@ class GAMCreativesManager:
             lica_service: GAM LICA service
             placement_targeting_map: Optional map of placement_id → targeting_name for
                 creative-level targeting. Built from product impl_config.placement_targeting.
+            lica_sizes: Optional line item id → the association's ``sizes``, which
+                "Overrides the value set for Creative.size" (Ad Manager API v202602). A line
+                item with none states none.
         """
         # A creative GAM held before this call may already be on some of these line items:
         # GAM is asked, and only the missing associations are created. The statement names
@@ -930,26 +445,15 @@ class GAMCreativesManager:
                 logger.info(f"Creative {gam_creative_id} is already on line item {line_item_id}")
                 continue
 
-            # Determine targetingName for creative-level placement targeting (adcp#208)
-            targeting_name = None
-            first_placement_id = None
-            assignment_placement_ids = asset.get("placement_ids", [])
-            if assignment_placement_ids and placement_targeting_map:
-                # Use first placement_id - GAM LICA only supports one targetingName per association
-                first_placement_id = assignment_placement_ids[0]
-                if first_placement_id in placement_targeting_map:
-                    targeting_name = placement_targeting_map[first_placement_id]
-                    if len(assignment_placement_ids) > 1:
-                        logger.warning(
-                            f"Creative has {len(assignment_placement_ids)} placement_ids but GAM LICA "
-                            f"only supports one targetingName. Using first: {first_placement_id}"
-                        )
+            targeting_name, first_placement_id = _placement_targeting_name(asset, placement_targeting_map)
 
             # Create Line Item Creative Association (weight support + adcp#208 placement targeting)
-            association: dict[str, str | int] = {
+            association: dict[str, Any] = {
                 "creativeId": gam_creative_id,
                 "lineItemId": line_item_id,
             }
+            if sizes := (lica_sizes or {}).get(line_item_id):
+                association["sizes"] = sizes
 
             # Add weight for manual rotation if not default
             # GAM uses manualCreativeRotationWeight for MANUAL rotation type

@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import ErrorCodeT
@@ -131,6 +131,11 @@ class ErrorProblem(BaseModel):
     description): "sellers SHOULD use the canonical key ``accepted_values``
     rather than seller-specific variants observed in the wild". Using them lets
     a buyer's error classifier read this without per-seller pattern matching.
+
+    ``package_id`` is the package an adapter refused its subject on, for core to point
+    ``error.field`` at ``packages[i].creative_ids[j]`` where the request named it. It is
+    ``Field(exclude=True)``: off the wire, where that pointer already names the package by
+    position, and the adapter never builds the pointer itself.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -139,8 +144,11 @@ class ErrorProblem(BaseModel):
     subject_type: Literal["creative", "product", "package", "account"] | None = None
     subject_id: str | None = None
     field: str | None = None
-    rejected_value: str | None = None
+    # A list for a list-valued offending value, for ValueRejectionDetails' reason: the sizes a
+    # creative states ARE the list, and a joined string is one a machine has to split.
+    rejected_value: str | list[str] | None = None
     accepted_values: list[str] | None = None
+    package_id: str | None = Field(default=None, exclude=True)
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +499,7 @@ class ValueRejectionDetails(ErrorDetails):
     received_type: str | None = None
 
 
-class CapabilityRefusalDetails(EntityRefDetails, ValueRejectionDetails):
+class CapabilityRefusalDetails(EntityRefDetails, ValueRejectionDetails, ProblemsDetails):
     """A capability the buyer asked for that this seller does not support.
 
     One shape for 28 sites that previously used 18 different key names, because
@@ -500,6 +508,10 @@ class CapabilityRefusalDetails(EntityRefDetails, ValueRejectionDetails):
     A buyer had to know every key name in advance to find out which capability
     was refused. Naming it in ``capability`` makes one read work for all of them,
     and the requested/supported pair uses the pin's canonical keys.
+
+    ``problems`` carries one entry per refused subject when the refusal is built from a
+    problem set (``problems_refusal``): an ad server that cannot traffic two creatives names
+    both, as every other refusal built that way does.
     """
 
     capability: str | None = None

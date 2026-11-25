@@ -1,8 +1,8 @@
 """The asset dict production builds is the asset dict an adapter reads.
 
-WHY THIS EXISTS. ``AdServerAdapter.add_creative_assets`` declares
+WHY THIS EXISTS. ``AdServerAdapter.add_creative_assets`` declared
 ``assets: list[dict[str, Any]]`` (``src/adapters/base.py``), so the producer of that dict
-and its consumers cannot disagree at the type level — and they disagreed for a year. The
+and its consumers could not disagree at the type level — and they disagreed for a year. The
 one producer, ``_build_adapter_asset_from_creative``, writes ``creative_id``; GAM's
 creatives manager reads ``creative_id``; the mock ad server read ``id``, a key no producer
 writes. Every create_media_buy that uploaded a creative through the real mock adapter
@@ -29,7 +29,9 @@ import pytest
 
 from src.adapters.base import AdapterCreateRequest
 from src.adapters.mock_ad_server import MockAdServer
+from src.core.database.repositories.product import ProductRepository
 from src.core.schemas import FormatId, MediaPackage, Principal
+from src.core.tools._creative_trafficking import _AssignedPackage, _read_for_push
 from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
 from tests.helpers.media_buy_approval import uploadable_creative
 
@@ -77,13 +79,24 @@ def test_the_adapter_names_the_creative_the_builder_named(bound_factory_session)
     creative = uploadable_creative(CreativeFactory, tenant=tenant, principal=principal_row, approved=True)
     bound_factory_session.commit()
 
-    asset, build_err = _build_adapter_asset_from_creative(
+    # Read as the retroactive push reads it. A legacy creative on a package with no stored
+    # product: its format spec states its size, and no product declaration narrows it.
+    carriers = _read_for_push(
+        ProductRepository(bound_factory_session, tenant.tenant_id),
         creative,
-        [{"package_id": PACKAGE_ID, "weight": 100}],
-        tenant_id=tenant.tenant_id,
+        [_AssignedPackage(PACKAGE_ID, None, [creative.creative_id])],
     )
-    assert build_err is None, build_err
-    assert asset is not None
+    asset = _build_adapter_asset_from_creative(
+        creative,
+        [
+            {
+                "package_id": PACKAGE_ID,
+                "weight": 100,
+                "platform_line_item_id": None,
+                "creative": carriers[(PACKAGE_ID, creative.creative_id)],
+            }
+        ],
+    )
 
     adapter = MockAdServer(
         config={},

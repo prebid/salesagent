@@ -1266,7 +1266,20 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Given the seller declares a canonical format option "fixed_300x250"
     And the buyer assigns a creative identified by canonical kind "video_hosted" with its media asset keyed "image_main"
     When the Buyer Agent sends the create_media_buy request
-    Then the buyer is refused UNSUPPORTED_FEATURE naming the packages field
+    Then the creative is refused UNSUPPORTED_FEATURE naming the creative at "packages[0].creative_ids[0]"
+
+    # ONE POINTER RULE for every creative refusal on the create path, the gate's and the ad
+    # server's pre-booking check's alike: error.field names the creative where the request
+    # named it. core/error.json `field`: "Field path associated with the error"; the path
+    # associated with a refused creative is its position in the package's creative_ids.
+    # enums/error-code.json asks for that pointer on the creative codes that say anything
+    # about it -- CREATIVE_SIZE_MISMATCH "Sellers SHOULD identify the offending creative in
+    # error.field", CREATIVE_MISSING_CLICK_URL "Sellers SHOULD identify the missing
+    # buyer-visible field in error.field" -- and states no other pointer for UNSUPPORTED_FEATURE
+    # or CREATIVE_VALIDATION_FAILED_GENERIC. The gate used to keep `packages` for every code
+    # but CREATIVE_SIZE_MISMATCH.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json pointer=/properties/field
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
 
     # The pair is what makes either one informative. Both creatives are seeded the same way
     # and differ ONLY in the canonical kind they carry, against the SAME image-only product
@@ -1306,7 +1319,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Given the seller declares a canonical format option "fixed_300x250"
     And the buyer assigns a creative identified by canonical kind "image" with its media asset keyed "banner"
     When the Buyer Agent sends the create_media_buy request
-    Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC naming the packages field
+    Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC naming the creative at "packages[0].creative_ids[0]"
     And the refusal names "assets.image_main" missing where "image" is accepted
 
     # THE CODE MOVED, from VALIDATION_ERROR to CREATIVE_VALIDATION_FAILED_GENERIC, and the
@@ -2430,7 +2443,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Given the seller declares a canonical format option "fixed_300x250"
     And the buyer assigns a canonical "image" creative carrying the "image_728x90" manifest
     When the Buyer Agent sends the create_media_buy request
-    Then the creative is refused CREATIVE_SIZE_MISMATCH naming the packages field
+    Then the creative is refused CREATIVE_SIZE_MISMATCH naming the creative at "packages[0].creative_ids[0]"
     And the refusal names "assets.image_main.width" stating "728" where "300" is accepted
     And the refusal names "assets.image_main.height" stating "90" where "250" is accepted
 

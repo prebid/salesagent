@@ -34,12 +34,13 @@ from typing import Any
 
 import pytest
 
+from src.core.creative_to_traffic import TrafficRefusal, read_creative_to_traffic
 from src.core.helpers.creative_helpers import (
     declared_slots,
     extract_click_url,
     extract_impression_tracker_url,
-    extract_media_url_and_dimensions,
 )
+from src.core.traffic_carrier import MediaRepresentation, TrafficSize
 from tests.factories.format import _ASSET_CLASS_MAP, FormatFactory, make_asset
 
 #: Deliberately named by nothing but the format under test: no entry or alias of
@@ -190,15 +191,25 @@ class TestMediaFromTheDeclaration:
         ``video_file``, ``video`` or ``main``. :data:`DECLARED_ONLY` is in none of them.
         """
         spec = _spec(make_asset(asset_type, DECLARED_ONLY))
-        creative = {"assets": {DECLARED_ONLY: {"asset_type": asset_type, "url": VIDEO_URL}}}
+        asset = {"asset_type": asset_type, "url": VIDEO_URL, "width": 640, "height": 360}
+        kind = {"video": "video_hosted", "audio": "audio_hosted"}[asset_type]
 
-        url, _width, _height = extract_media_url_and_dimensions(creative, spec, None)
+        read = read_creative_to_traffic(
+            "cr", {"assets": {DECLARED_ONLY: asset}}, kind, format_spec=spec, declarations=()
+        )
 
-        assert url == VIDEO_URL
+        assert not isinstance(read, TrafficRefusal), read
+        assert read.representation == MediaRepresentation(asset_type=asset_type, url=VIDEO_URL)
 
     def test_an_image_slot_still_contributes_its_dimensions(self) -> None:
         """The case the old guard did serve, kept green: sized types carry width/height."""
         spec = _spec(make_asset("image", DECLARED_ONLY))
         creative = {"assets": {DECLARED_ONLY: {"asset_type": "image", "url": CLICK_URL, "width": 300, "height": 250}}}
 
-        assert extract_media_url_and_dimensions(creative, spec, None) == (CLICK_URL, 300, 250)
+        read = read_creative_to_traffic("cr", creative, "image", format_spec=spec, declarations=())
+
+        assert not isinstance(read, TrafficRefusal), read
+        assert (read.representation, read.sizes) == (
+            MediaRepresentation(asset_type="image", url=CLICK_URL),
+            (TrafficSize(width=300, height=250),),
+        )

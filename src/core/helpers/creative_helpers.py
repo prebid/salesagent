@@ -197,7 +197,6 @@ def process_and_upload_package_creatives(
         >>> # updated_pkgs[0].creative_ids contains uploaded IDs
         >>> assert uploaded_ids["p1"] == ["c1", "c2"]
     """
-    import logging
 
     # Lazy import to avoid circular dependency
     from src.core.exceptions import AdCPAdapterError, AdCPCreativeRejectedError, AdCPSalesAgentError
@@ -863,98 +862,32 @@ def _media_asset_candidates(
     return candidates
 
 
-def extract_html_markup(creative_data: dict[str, Any]) -> str | None:
-    """The ``content`` of the creative's ``html`` asset, or ``None`` when it has none.
-
-    AdCP 3.2.7 core/assets/html-asset.json: an html asset is discriminated by
-    ``asset_type: "html"`` and carries its markup in ``content``.
-    """
-    for asset in (creative_data.get("assets") or {}).values():
-        if isinstance(asset, dict) and asset.get("asset_type") == "html" and asset.get("content"):
-            return str(asset["content"])
-    return None
-
-
-def extract_media_url_and_dimensions(
-    creative_data: dict[str, Any],
-    format_spec: Any | None,
-    kind: str | None = None,
-    declarations: "Sequence[Any]" = (),
-) -> tuple[str | None, int | None, int | None]:
-    """Extract media URL and dimensions from creative data.
-
-    All production creatives now use AdCP v2.4+ format with data.assets[asset_id]
-    containing typed asset objects per the creative format specification.
-
-    Which asset ids are looked at, and in what order, is :func:`_media_asset_candidates`.
-    Whatever those name, the first candidate present in the creative's assets fills each of
-    the three fields, and the root-level fallback below fills whatever is still missing.
-
-    Args:
-        creative_data: Creative data dict from database
-        format_spec: Format specification with assets, when a legacy reference resolved one
-        kind: The creative's canonical ``format_kind``, whose declaration names its slots.
-            ``None`` for a creative carrying a legacy reference nothing projects -- the one
-            row for which the fallback allowlist is still the only path.
-
-    Returns:
-        Tuple of (url, width, height). Values are None if not found.
-
-    Note:
-        - Media URL extracted from asset types: image, video, audio
-        - Dimensions extracted from asset types: image, video
-        - Type validation: width/height must be int or coercible to int
-        - Uses adcp.utils.get_individual_assets() for backward compatibility with assets_required
-    """
-    url, width, height, _sized = _read_media_assets(creative_data, format_spec, kind, declarations)
-    return url, width, height
-
-
-def media_asset_requires_dimensions(
-    creative_data: dict[str, Any],
-    format_spec: Any | None,
-    kind: str | None = None,
-    declarations: "Sequence[Any]" = (),
-) -> bool:
-    """Does this creative owe the ad server a width and a height?
-
-    The answer is a property of the slot its media URL came FROM, read off the declaration:
-    an ``image`` or ``video`` slot carries dimensions and an ``audio`` one does not
-    (:data:`SIZED_ASSET_TYPES`, and ``formats/canonical/audio_hosted.json`` declares
-    ``audio_main`` as ``asset_type: "audio"``). So a canonical ``audio_hosted``,
-    ``audio_vast`` or ``audio_daast`` creative resolves a URL and correctly no dimensions,
-    and demanding them of it refuses a buy whose manifest is perfectly authored.
-
-    NOT a property of the KIND. ``canonical_slot_asset_ids("audio_hosted",
-    SIZED_ASSET_TYPES)`` answers ``{"companion_image"}`` -- that kind DOES declare a sized
-    slot -- so a kind-level predicate would still demand dimensions of an audio-only
-    manifest. It is the slot that was actually read that decides.
-
-    True when nothing resolved, so a creative with no media asset at all keeps failing on
-    the caller's URL check rather than slipping past it.
-
-    A SECOND CALL of the same pure read, deliberately. Folding this into
-    :func:`extract_media_url_and_dimensions`'s return would be tidier and would break six
-    test patch sites that stub that name with a 3-tuple -- three of them in
-    tests/integration/test_create_media_buy_behavioral.py -- and a production path that
-    stopped calling the stubbed name would leave those tests silently unmocked. The shared
-    implementation is :func:`_read_media_assets`; there is one rule, not two.
-    """
-    _url, _width, _height, sized = _read_media_assets(creative_data, format_spec, kind, declarations)
-    return sized
-
-
 def _read_media_assets(
     creative_data: dict[str, Any], format_spec: Any | None, kind: str | None, declarations: "Sequence[Any]"
-) -> tuple[str | None, int | None, int | None, bool]:
-    """``(url, width, height, the url's slot carries dimensions)`` — the one media read.
+) -> tuple[str | None, int | None, int | None, bool, str | None]:
+    """``(url, width, height, the url's slot carries dimensions, the url's asset type)`` — the one media read.
+
+    Its one consumer is ``read_creative_to_traffic`` (src/core/creative_to_traffic.py), the
+    only reader of a stored creative for trafficking; nothing else asks a row for its media.
+
+    Whether dimensions are OWED is a property of the slot the URL came from, not of the
+    kind: an ``image`` or ``video`` slot carries them and an ``audio`` one does not
+    (:data:`SIZED_ASSET_TYPES`). ``canonical_slot_asset_ids("audio_hosted",
+    SIZED_ASSET_TYPES)`` answers ``{"companion_image"}``, so a kind-level predicate would
+    demand dimensions of an audio-only manifest. The fourth value is True when nothing
+    resolved, so a creative with no media keeps failing on its URL instead of slipping past.
 
     Dimensions may come from a DIFFERENT slot than the URL: an ``audio_hosted`` manifest
     carrying both ``audio_main`` and ``companion_image`` takes the URL from the first and
     the dimensions from the second. The fourth value therefore reports the slot that
     supplied the URL, which is what decides whether dimensions are OWED.
+
+    The fifth value is the ``asset_type`` of the asset that supplied the URL, so the file is
+    typed by the asset it is, never by another media asset the manifest also carries. It is
+    None for a root-level url, which names no asset.
     """
     url = None
+    url_asset_type = None
     width = None
     height = None
     url_slot_is_sized = True
@@ -967,6 +900,7 @@ def _read_media_assets(
                 continue
             if not url and asset_obj.get("url"):
                 url = asset_obj["url"]
+                url_asset_type = asset_obj.get("asset_type")
                 url_slot_is_sized = carries_dimensions
                 logger.debug("Extracted media URL from creative asset %r", asset_id)
             if carries_dimensions:
@@ -988,7 +922,7 @@ def _read_media_assets(
     width = width or _coerce_dimension(creative_data.get("width"), "width")
     height = height or _coerce_dimension(creative_data.get("height"), "height")
 
-    return url, width, height, url_slot_is_sized
+    return url, width, height, url_slot_is_sized, url_asset_type
 
 
 def extract_click_url(

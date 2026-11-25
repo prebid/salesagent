@@ -33,6 +33,7 @@ import json
 import re
 from collections.abc import Callable
 from contextlib import contextmanager
+from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import SplitResult, urlsplit
 
@@ -43,9 +44,11 @@ from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, require_payload, wire_field
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import comma_list
 from tests.factories import CreativeFactory
 from tests.factories.core import set_adapter_type
 from tests.factories.creative_asset import (
+    CLICKTHROUGH_URL,
     assert_assets,
     asset_spec,
     build_assets,
@@ -65,6 +68,20 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from sqlalchemy.orm import Session
+
+
+def _not_yet_started() -> dict[str, Any]:
+    """A buy waiting to start, whose flight has not begun, so it STAYS waiting.
+
+    ``pending_start`` with the factory's default flight (starting 2025-01-01) is a state the
+    server's own status scheduler moves to ``active`` on its next tick
+    (``resolve_flight_window_status``). Over e2e_rest that tick can land between the Given and
+    the sync, and a content change on an active package is then refused, so the scenario
+    raced the clock. A flight that starts in the future is the state the Given means.
+    """
+    today = date.today()
+    return {"status": "pending_start", "start_date": today + timedelta(days=30), "end_date": today + timedelta(days=90)}
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # E2E format helpers — real creative agent data for Docker transport
@@ -143,7 +160,7 @@ def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
         env.catalog_agent_url(_CATALOG_FORMAT_ID),
         build_assets(
             image_spec("banner_image", url="https://example.com/banner.png"),
-            url_spec("click_url", url="https://example.com/landing"),
+            url_spec("click_url", url=CLICKTHROUGH_URL),
         ),
     )
 
@@ -1146,57 +1163,45 @@ def given_assignment_operation(ctx: dict, operation: str) -> None:
 @given("an assignment to a package that exists in the tenant")
 def given_assignment_to_existing_package(ctx: dict) -> None:
     """Create an existing package in the tenant and assign the creative to it."""
-    from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
-
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
-
-    # Use UUID-based IDs for e2e_rest to avoid collisions with Docker's persistent DB.
-    mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "active"}
-    prod_kwargs: dict = {"tenant": tenant, "format_ids": [_product_format_entry(ctx, env)]}
-    if is_e2e(ctx):
-        mb_kwargs["media_buy_id"] = mint_id("mb")
-        prod_kwargs["product_id"] = mint_id("prod")
-
-    media_buy = MediaBuyFactory(**mb_kwargs)
-    # Product accepts the default known format so the format check passes.
-    product = ProductFactory(**prod_kwargs)
-    pkg_kwargs: dict = {
-        "media_buy": media_buy,
-        "package_config": {"product_id": product.product_id, "budget": 1000.0},
-    }
-    if is_e2e(ctx):
-        pkg_kwargs["package_id"] = mint_id("pkg")
-    package = MediaPackageFactory(**pkg_kwargs)
-    env._commit_factory_data()
-    ctx["media_buy"] = media_buy
-    ctx["package"] = package
-    creative_id = latest_creative_id(ctx)
-    ctx["assignments"] = {creative_id: [package.package_id]}
+    _media_buy, package = _setup_assignment_package(ctx)
+    ctx["assignments"] = {latest_creative_id(ctx): [package.package_id]}
 
 
-def _seed_library_creative(ctx: dict, creative_id: str) -> None:
-    """Seed *creative_id* in the caller's own library, on the request creative's format.
+def _seed_library_creative(
+    ctx: dict,
+    creative_id: str,
+    name: str = "Library Creative",
+    *,
+    fmt: dict[str, str] | None = None,
+    principal: Any = None,
+    **row: Any,
+) -> Any:
+    """Seed *creative_id*, called *name*, in a library of the tenant; return the row.
 
-    An assignment-only reference: the request must still carry a creative
-    (sync-creatives-request.json: ``creatives`` minItems 1), so the scenario's anchor
-    creative stays in ``ctx["creatives"]`` and this row is the one the assignment names.
+    The row an assignment-only reference names, the one a delete_missing scope archives
+    (the request must still carry a creative, sync-creatives-request.json: ``creatives``
+    minItems 1, so the scenario's anchor creative stays in ``ctx["creatives"]``), or the
+    request's own creative already stored, which sends the sync down its update branch.
+    It names *fmt* (``{id, agent_url}``), the request creative's format unless given. The
+    caller's own library unless *principal* names another (in ``ctx["tenant"]``, which the
+    caller has seeded); *row* sets any other column (a review status, a stored record).
     """
-    from tests.factories import CreativeFactory
 
     env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    fmt = ctx["creatives"][-1]["format_id"]
-    CreativeFactory(
+    if principal is None:
+        ensure_tenant_principal(ctx, env)
+    creative = CreativeFactory(
         tenant=ctx["tenant"],
-        principal=ctx["principal"],
+        principal=principal or ctx["principal"],
         creative_id=creative_id,
-        name="Library Creative",
-        **seeded_format_columns(env, fmt),
+        name=name,
+        # The declaration a sync of this payload resolves against, which is a format THIS
+        # ENV was told to serve when a Given configured one (``published_format_spec``).
+        **seeded_format_columns(env, fmt or ctx["creatives"][-1]["format_id"]),
+        **row,
     )
     env._commit_factory_data()
+    return creative
 
 
 @given(
@@ -1261,7 +1266,7 @@ def then_creatives_entry_assigned_to_package(ctx: dict, creative_id: str) -> Non
 def then_creative_assigned_to_package(ctx: dict, creative_id: str, package_ids: str) -> None:
     """The wire entry selected by creative_id lists exactly those packages, in that order, in ``assigned_to``."""
     entry = _wire_creatives_entry(ctx, creative_id)
-    expected = [package_id.strip() for package_id in package_ids.split(",")]
+    expected = comma_list(package_ids)
     assert entry.get("assigned_to") == expected, (
         f"expected the entry for {creative_id!r} to carry assigned_to={expected}, got {entry.get('assigned_to')!r}"
     )
@@ -1294,28 +1299,6 @@ def then_creative_package_in_assignment_errors(ctx: dict, creative_id: str, pack
     )
 
 
-def _seed_absent_library_creative(ctx: dict) -> str:
-    """A creative already in the library that the request will NOT mention.
-
-    It is the observable subject of delete_missing: a full-library replace archives
-    it and reports ``deleted``; every other scope leaves it out of the response.
-    """
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    fmt = ctx["creatives"][-1]["format_id"]
-    absent_id = "creative-absent-from-request-001"
-    CreativeFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        creative_id=absent_id,
-        name="Absent From Request",
-        **seeded_format_columns(env, fmt),
-    )
-    env._commit_factory_data()
-    ctx["absent_creative_id"] = absent_id
-    return absent_id
-
-
 def _scope_request(ctx: dict, *, delete_missing: bool | None, filtered: bool) -> None:
     """One request creative plus an absent library creative, then the scope flags.
 
@@ -1323,10 +1306,13 @@ def _scope_request(ctx: dict, *, delete_missing: bool | None, filtered: bool) ->
     this sync ("Invalid when creative_ids is provided"); ``creative_ids`` limits the
     sync to those ids, minItems 1. The filtered scope names the request's own creative
     and a second one that is deliberately NOT in the filter, so "scoped to the subset"
-    has something to leave out.
+    has something to leave out. The absent library creative is the observable subject of
+    delete_missing: a full-library replace archives it and reports ``deleted``; every other
+    scope leaves it out of the response.
     """
     given_creative_with_format(ctx)
-    _seed_absent_library_creative(ctx)
+    ctx["absent_creative_id"] = "creative-absent-from-request-001"
+    _seed_library_creative(ctx, ctx["absent_creative_id"], name="Absent From Request")
     if filtered:
         env = ctx["env"]
         format_id, agent_url, assets = _format_payload(ctx, env)
@@ -1370,13 +1356,12 @@ def given_library_creative_on_buy(ctx: dict, creative_id: str, status: str, paus
 
     The buy's flight began in 2025 and runs to 2099, so a buy in a serving status is delivering.
     """
-    from datetime import UTC, date, datetime
+    from datetime import UTC, datetime
 
     from tests.factories import CreativeAssignmentFactory, MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = ctx["creatives"][-1]["format_id"]
     product = ProductFactory(tenant=ctx["tenant"], **({"product_id": mint_id("prod")} if is_e2e(ctx) else {}))
     media_buy = MediaBuyFactory(
         tenant=ctx["tenant"],
@@ -1393,14 +1378,7 @@ def given_library_creative_on_buy(ctx: dict, creative_id: str, status: str, paus
         package_config={"product_id": product.product_id, "budget": 1000.0, "paused": paused == "paused"},
         **({"package_id": mint_id("pkg")} if is_e2e(ctx) else {}),
     )
-    creative = CreativeFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        creative_id=creative_id,
-        name="Assigned Library Creative",
-        status="approved",
-        **seeded_format_columns(env, fmt),
-    )
+    creative = _seed_library_creative(ctx, creative_id, "Assigned Library Creative", status="approved")
     CreativeAssignmentFactory(creative=creative, media_buy=media_buy, package_id=package.package_id)
     env._commit_factory_data()
     ctx["absent_creative_id"] = creative_id
@@ -1480,52 +1458,34 @@ def then_processing_continues(ctx: dict) -> None:
     )
 
 
-@given("an assignment that already exists for this creative")
-def given_assignment_already_exists(ctx: dict) -> None:
-    """Seed a pre-existing CreativeAssignment row so the sync acts as idempotent upsert."""
-    from tests.factories import (
-        CreativeAssignmentFactory,
-        CreativeFactory,
-        MediaBuyFactory,
-        MediaPackageFactory,
-        ProductFactory,
-    )
+def _seed_existing_assignment(
+    ctx: dict,
+    *,
+    product_format: Callable[[dict, Any], dict[str, str]],
+    creative_format: Callable[[dict, Any], dict[str, str]],
+) -> None:
+    """The request's creative already in the library, assigned to a package, so the sync upserts.
+
+    Creates a media buy, product, package, the Creative row and its CreativeAssignment row. The
+    creative_id matches the payload in ctx["creatives"] (built if the scenario has none yet), so
+    sync_creatives treats this as an update of an existing creative and assignment. The product
+    declares *product_format* and the row names *creative_format*, each read for this scenario
+    after the payload exists. The assignment's id and weight are kept for the Then steps, and the
+    package's id as the one the sync's assignments name.
+    """
+    from tests.factories import CreativeAssignmentFactory
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
-    fmt_entry = _product_format_entry(ctx, env)
-
-    # Use UUID-based IDs for e2e_rest to avoid collisions with Docker's persistent DB.
+    if not ctx.get("creatives"):
+        given_creative_with_format(ctx)
     # Not delivering: the seeded row's content differs from the payload, and a content change to
     # a creative on an active package is refused (sync_creatives.mdx v3.2.7, best practice 6).
-    mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "pending_start"}
-    prod_kwargs: dict = {"tenant": tenant, "format_ids": [fmt_entry]}
-    if is_e2e(ctx):
-        mb_kwargs["media_buy_id"] = mint_id("mb")
-        prod_kwargs["product_id"] = mint_id("prod")
-
-    media_buy = MediaBuyFactory(**mb_kwargs)
-    product = ProductFactory(**prod_kwargs)
-    pkg_kwargs: dict = {
-        "media_buy": media_buy,
-        "package_config": {"product_id": product.product_id, "budget": 1000.0},
-    }
-    if is_e2e(ctx):
-        pkg_kwargs["package_id"] = mint_id("pkg")
-    package = MediaPackageFactory(**pkg_kwargs)
-    # Use same creative_id as the payload so the pre-existing row matches.
+    media_buy, package = _setup_assignment_package(ctx, product_format=product_format, **_not_yet_started())
     creative_payload = ctx["creatives"][-1]
     creative_id = creative_payload["creative_id"]
-    # Pre-seed the Creative row and the assignment (what sync will see as "already exists").
-    creative = CreativeFactory(
-        tenant=tenant,
-        principal=principal,
-        creative_id=creative_id,
-        name=creative_payload["name"],
-        **seeded_format_columns(env, fmt_entry),
-    )
+    # The row names the agent the synced creative names, or the sync re-points it.
+    creative = _seed_library_creative(ctx, creative_id, creative_payload["name"], fmt=creative_format(ctx, env))
     existing_assignment = CreativeAssignmentFactory(
         creative=creative,
         media_buy=media_buy,
@@ -1533,11 +1493,16 @@ def given_assignment_already_exists(ctx: dict) -> None:
         weight=50,  # non-default so the upsert sets weight=100 proving update ran
     )
     env._commit_factory_data()
-    ctx["media_buy"] = media_buy
-    ctx["package"] = package
     ctx["existing_assignment_id"] = existing_assignment.assignment_id
     ctx["existing_assignment_weight_before"] = 50
+    ctx["idempotent_package_id"] = package.package_id
     ctx["assignments"] = {creative_id: [package.package_id]}
+
+
+@given("an assignment that already exists for this creative")
+def given_assignment_already_exists(ctx: dict) -> None:
+    """Seed a pre-existing CreativeAssignment row so the sync acts as idempotent upsert."""
+    _seed_existing_assignment(ctx, product_format=_product_format_entry, creative_format=_product_format_entry)
 
 
 @given("an assignment to a package that does not exist")
@@ -1564,55 +1529,7 @@ def given_creative_already_assigned_to_package(ctx: dict) -> None:
     treats this as an update (existing creative + existing assignment).
     Stores the assignment_id and weight for verification in the Then step.
     """
-    from tests.factories import (
-        CreativeAssignmentFactory,
-        CreativeFactory,
-        MediaBuyFactory,
-        MediaPackageFactory,
-        ProductFactory,
-    )
-
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
-
-    # Ensure a creative payload exists
-    if not ctx.get("creatives"):
-        given_creative_with_format(ctx)
-
-    # Not delivering: the seeded row's content differs from the payload, and a content change to
-    # a creative on an active package is refused (sync_creatives.mdx v3.2.7, best practice 6).
-    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="pending_start")
-    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
-    package = MediaPackageFactory(
-        media_buy=media_buy,
-        package_config={"product_id": product.product_id, "budget": 1000.0},
-    )
-
-    creative_payload = ctx["creatives"][-1]
-    creative_id = creative_payload["creative_id"]
-    creative = CreativeFactory(
-        tenant=tenant,
-        principal=principal,
-        creative_id=creative_id,
-        name=creative_payload["name"],
-        **seeded_format_columns(env, _scenario_format_entry(ctx, env)),
-    )
-    existing_assignment = CreativeAssignmentFactory(
-        creative=creative,
-        media_buy=media_buy,
-        package_id=package.package_id,
-        weight=50,  # non-default so the upsert sets weight=100 proving update ran
-    )
-    env._commit_factory_data()
-    ctx["media_buy"] = media_buy
-    ctx["package"] = package
-    ctx["existing_assignment_id"] = existing_assignment.assignment_id
-    ctx["existing_assignment_weight_before"] = 50
-    ctx["idempotent_package_id"] = package.package_id
-    ctx["assignments"] = {creative_id: [package.package_id]}
+    _seed_existing_assignment(ctx, product_format=_product_format_entry, creative_format=_scenario_format_entry)
 
 
 @given("assignments referencing the same package_id")
@@ -1799,12 +1716,15 @@ def _setup_assignment_package(
     ctx: dict,
     *,
     package_id: str | None = None,
-) -> tuple[object, object]:
+    product_format: Callable[[dict, Any], dict[str, str]] = _product_format_entry,
+    **buy: Any,
+) -> tuple[Any, Any]:
     """Create media_buy + product + package for assignment Given steps.
 
     Returns (media_buy, package). Stores them in ctx["media_buy"] and
     ctx["package"] as well.  Avoids the repeated 10-line setup block in
-    every assignment Given step (DRY invariant).
+    every assignment Given step (DRY invariant). The product declares
+    *product_format*, and *buy* overrides the buy's columns, which default to an active buy.
     """
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
@@ -1814,8 +1734,8 @@ def _setup_assignment_package(
     principal = ctx["principal"]
 
     # Use UUID-based IDs for e2e_rest to avoid collisions with Docker's persistent DB.
-    mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "active"}
-    prod_kwargs: dict = {"tenant": tenant, "format_ids": [_product_format_entry(ctx, env)]}
+    mb_kwargs: dict = {"tenant": tenant, "principal": principal, "status": "active", **buy}
+    prod_kwargs: dict = {"tenant": tenant, "format_ids": [product_format(ctx, env)]}
     if is_e2e(ctx):
         mb_kwargs["media_buy_id"] = mint_id("mb")
         prod_kwargs["product_id"] = mint_id("prod")
@@ -2621,25 +2541,12 @@ def given_creative_already_exists(ctx: dict, stored_name: str | None = None) -> 
     these scenarios passed on it -- which is exactly the vacuous pass salesagent-jnp2s
     uncovered, not a behavior to preserve.
     """
-    from tests.factories import CreativeFactory
-
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
     creative_payload = ctx["creatives"][-1]
-    creative_id = creative_payload["creative_id"]
-    fmt_id = creative_payload["format_id"]
-    CreativeFactory(
-        tenant=tenant,
-        principal=principal,
-        creative_id=creative_id,
+    _seed_library_creative(
+        ctx,
+        creative_payload["creative_id"],
         name=stored_name if stored_name is not None else creative_payload["name"],
-        # The declaration a sync of this payload resolves against, which is a format THIS
-        # ENV was told to serve when a Given configured one (``published_format_spec``).
-        **seeded_format_columns(env, fmt_id),
     )
-    env._commit_factory_data()
 
 
 @given("the creative already exists with identical data")
@@ -3179,18 +3086,11 @@ def given_existing_assignment_in_media_buy(ctx: dict) -> None:
     so that the sync sees it as a pre-existing assignment (for upsert).
     The media buy must already be created by a preceding Given step.
     """
-    from tests.factories import (
-        CreativeAssignmentFactory,
-        CreativeFactory,
-        MediaPackageFactory,
-        ProductFactory,
-    )
+    from tests.factories import CreativeAssignmentFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
-    principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
     media_buy = ctx["media_buy"]
 
     if not ctx.get("creatives"):
@@ -3204,13 +3104,7 @@ def given_existing_assignment_in_media_buy(ctx: dict) -> None:
 
     creative_payload = ctx["creatives"][-1]
     creative_id = creative_payload["creative_id"]
-    creative = CreativeFactory(
-        tenant=tenant,
-        principal=principal,
-        creative_id=creative_id,
-        name=creative_payload["name"],
-        **seeded_format_columns(env, _scenario_format_entry(ctx, env)),
-    )
+    creative = _seed_library_creative(ctx, creative_id, creative_payload["name"], fmt=_scenario_format_entry(ctx, env))
     CreativeAssignmentFactory(
         creative=creative,
         media_buy=media_buy,
@@ -3594,14 +3488,18 @@ def given_creative_reaching_the_agent(ctx: dict, creative_state: str, format_kin
     dimensions is the only shape that reaches every site. ``static`` here means
     agent-served but non-generative -- ``output_format_ids`` empty is precisely
     what sends production down the preview branch instead of the build branch.
+    ``text-only`` is static too, on the format whose only required asset is text, so
+    the creative carries no media url and no size of its own.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
 
-    generative = format_kind == "generative"
-    fmt = env.configure_agent_served_creative(
-        generative=generative, format_id=_CATALOG_GENERATIVE_FORMAT_ID if generative else _CATALOG_FORMAT_ID
-    )
+    format_id = {
+        "generative": _CATALOG_GENERATIVE_FORMAT_ID,
+        "static": _CATALOG_FORMAT_ID,
+        "text-only": _CATALOG_TEXT_ONLY_FORMAT_ID,
+    }[format_kind]
+    fmt = env.configure_agent_served_creative(generative=format_kind == "generative", format_id=format_id)
 
     creative_id = f"creative-{creative_state}-{format_kind}-001"
     ctx.setdefault("creatives", []).append(
@@ -4287,36 +4185,48 @@ def given_creative_exists_for_principal(ctx: dict, creative_id: str, principal_i
     principal may differ from the authenticated one (INV-2 seeds the OTHER
     principal's creative), so it gets its own get-or-create row.
     """
-    from src.core.database.models import Principal, Tenant
-    from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
+    from src.core.database.models import Tenant
+    from tests.factories import TenantFactory
     from tests.factories.core import get_or_create
 
     env = ctx["env"]
-    tenant = ctx.get("tenant")
-    if tenant is None:
-        tenant = get_or_create(
+    if ctx.get("tenant") is None:
+        ctx["tenant"] = get_or_create(
             env,
             Tenant,
             {"tenant_id": env._tenant_id},
             lambda: TenantFactory(tenant_id=env._tenant_id),
         )
-        ctx["tenant"] = tenant
-    principal = get_or_create(
+    ctx.setdefault("principal", _preseed_creative_for_principal(ctx, creative_id, principal_id))
+
+
+def _preseed_creative_for_principal(ctx: dict, creative_id: str, principal_id: str) -> Any:
+    """Store *creative_id* in the tenant's library under *principal_id*; return that principal.
+
+    Keyed by (tenant_id, principal_id, creative_id), so the sync finds it (update) or does not
+    (create for a different principal). The owner may differ from the authenticated principal
+    (cross-principal isolation), so it gets its own get-or-create row in ``ctx["tenant"]``.
+    """
+    from src.core.database.models import Principal
+    from tests.factories.core import get_or_create
+
+    env = ctx["env"]
+    tenant = ctx["tenant"]
+    owner = get_or_create(
         env,
         Principal,
         {"principal_id": principal_id, "tenant_id": tenant.tenant_id},
         lambda: PrincipalFactory(tenant=tenant, principal_id=principal_id),
     )
-    ctx.setdefault("principal", principal)
-    creative = CreativeFactory(
-        tenant=tenant,
-        principal=principal,
-        creative_id=creative_id,
-        name=f"Pre-existing creative {creative_id}",
-        **seeded_format_columns(env, _scenario_format_entry(ctx, env)),
+    _seed_library_creative(
+        ctx,
+        creative_id,
+        f"Pre-existing creative {creative_id}",
+        fmt=_scenario_format_entry(ctx, env),
+        principal=owner,
     )
-    env._commit_factory_data()
     ctx["pre_existing_creative_id"] = creative_id
+    return owner
 
 
 @when(parsers.parse('the Buyer Agent syncs creative "{creative_id}"'))
@@ -4754,7 +4664,6 @@ def given_idempotency_key(ctx: dict, key_value: str | None, empty: str | None) -
 
 def _expand_length_notation(value: str) -> str:
     """Expand ]xN notation: 'a]x254' -> 'a' repeated to 254 chars."""
-    import re
 
     match = re.match(r"^(.)]x(\d+)$", value)
     if match:
@@ -4970,6 +4879,45 @@ def then_creative_created_with_trackers_stored(ctx: dict) -> None:
     # The row is the only observable: sync-creatives-response.json's per-creative
     # entry carries no assets, so "stored as sent" is a persistence obligation.
     assert_assets(_stored_assets_for_last_creative(ctx), *ctx["tracker_specs"])
+
+
+@given(
+    parsers.parse('the creative agent previews every creative as its page "{preview_url}", sized {width:d}x{height:d}')
+)
+def given_agent_previews_as_page(ctx: dict, preview_url: str, width: int, height: int) -> None:
+    """The creative agent answers every preview with one render of *preview_url*, sized *width* by *height*.
+
+    The pinned single preview (``single_preview_document``) naming that page and size: what a
+    seller that copied a preview onto the creative would copy. After the Given that configures
+    the served format, whose default answer this replaces, on every transport.
+    """
+    from tests.e2e.webhook_capture_service import PEER_PREVIEW_TOOL
+    from tests.helpers.peer_creative_agent import single_preview_document
+
+    ctx["env"].answer_creative_agent(
+        PEER_PREVIEW_TOOL, single_preview_document("agent-served", preview_url=preview_url, dimensions=(width, height))
+    )
+    ctx["agent_preview"] = (preview_url, width, height)
+
+
+@then("the stored creative keeps the preview and carries neither its page nor its size")
+def then_preview_kept_out_of_creative(ctx: dict) -> None:
+    """The row keeps the agent's answer under ``preview_response`` and nowhere else.
+
+    The row is the only observable: sync-creatives-response.json's per-creative entry
+    carries no url or size. The answer kept under ``preview_response`` naming the page is
+    the control: a seller that never received the preview would also store none of it.
+    """
+    page, width, height = ctx["agent_preview"]
+    data = _stored_data_for_last_creative(ctx)
+    preview = data.pop("preview_response", None)
+    assert page in json.dumps(preview, default=str), f"the stored creative kept no preview naming {page!r}: {preview!r}"
+    assert page not in json.dumps(data, default=str), (
+        f"the preview page {page!r} was written into the creative: {data!r}"
+    )
+    assert data.get("width") != width and data.get("height") != height, (
+        f"the preview's size {width}x{height} was written into the creative: {data!r}"
+    )
 
 
 @given("a creative with a known format_id whose agent returns no preview and that carries no media url")
@@ -5497,12 +5445,9 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
     generative_status, and generative_context_id in its data field.
     The update step will then modify this creative without a prompt.
     """
-    from tests.factories import CreativeFactory
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
     fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
 
     creative_id = "creative-gen-inv5-001"
@@ -5519,18 +5464,10 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
         "generative_context_id": "ctx-existing-001",
         "output_format": {"url": "https://generated.example.com/existing.html"},
     }
-    CreativeFactory(
-        tenant=tenant,
-        principal=principal,
-        creative_id=creative_id,
-        name="Existing Generative Creative",
-        # The format the update names (``fmt``), so the row and the resync carry one
-        # identity on every transport. setup_generative_build already refused a format
-        # the capture does not serve as generative.
-        **seeded_format_columns(env, fmt),
-        data=existing_data,
-    )
-    env._commit_factory_data()
+    # The format the update names (``fmt``), so the row and the resync carry one identity on
+    # every transport. setup_generative_build already refused a format the capture does not
+    # serve as generative.
+    _seed_library_creative(ctx, creative_id, "Existing Generative Creative", fmt=fmt, data=existing_data)
 
     # Prepare the update payload (no prompt assets or inputs yet — added by next step).
     # assets=OMIT states the absence; "the update has no prompt assets or inputs"
@@ -5735,8 +5672,8 @@ def then_existing_data_preserved(ctx: dict) -> None:
             )
 
 
-def _stored_assets_for_last_creative(ctx: dict) -> dict:
-    """Fetch the last synced creative's stored ``data['assets']`` from the DB."""
+def _stored_data_for_last_creative(ctx: dict) -> dict:
+    """Fetch the last synced creative's stored ``data`` from the DB."""
     from sqlalchemy import select
 
     from src.core.database.models import Creative as CreativeModel
@@ -5748,7 +5685,12 @@ def _stored_assets_for_last_creative(ctx: dict) -> dict:
             select(CreativeModel).filter_by(creative_id=creative_id, tenant_id=env._tenant_id)
         ).first()
         assert db_creative is not None, f"Creative {creative_id} not found in DB"
-        return (db_creative.data or {}).get("assets", {})
+        return dict(db_creative.data or {})
+
+
+def _stored_assets_for_last_creative(ctx: dict) -> dict:
+    """Fetch the last synced creative's stored ``data['assets']`` from the DB."""
+    return _stored_data_for_last_creative(ctx).get("assets", {})
 
 
 @then("the user-provided assets should be preserved")
@@ -6285,54 +6227,7 @@ def given_creative_already_assigned_to_package_partition(ctx: dict) -> None:
     Used by the assignment_format partition scenario. Creates a Creative ORM row,
     a package, and a CreativeAssignment row. The sync should update (not duplicate).
     """
-    from tests.factories import (
-        CreativeAssignmentFactory,
-        CreativeFactory,
-        MediaBuyFactory,
-        MediaPackageFactory,
-        ProductFactory,
-    )
-
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
-
-    # Not delivering: the seeded row's content differs from the payload, and a content change to
-    # a creative on an active package is refused (sync_creatives.mdx v3.2.7, best practice 6).
-    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="pending_start")
-    product = ProductFactory(
-        tenant=tenant,
-        format_ids=[_scenario_format_entry(ctx, env)],
-    )
-    package = MediaPackageFactory(
-        media_buy=media_buy,
-        package_config={"product_id": product.product_id, "budget": 1000.0},
-    )
-
-    creative_payload = ctx["creatives"][-1]
-    creative_id = creative_payload["creative_id"]
-    creative = CreativeFactory(
-        tenant=tenant,
-        principal=principal,
-        creative_id=creative_id,
-        name=creative_payload["name"],
-        # The row names the agent the synced creative names, or the sync re-points it.
-        **seeded_format_columns(env, _scenario_format_entry(ctx, env)),
-    )
-    existing_assignment = CreativeAssignmentFactory(
-        creative=creative,
-        media_buy=media_buy,
-        package_id=package.package_id,
-        weight=50,
-    )
-    env._commit_factory_data()
-    ctx["media_buy"] = media_buy
-    ctx["package"] = package
-    ctx["existing_assignment_id"] = existing_assignment.assignment_id
-    ctx["existing_assignment_weight_before"] = 50
-    ctx["idempotent_package_id"] = package.package_id
-    ctx["assignments"] = {creative_id: [package.package_id]}
+    _seed_existing_assignment(ctx, product_format=_scenario_format_entry, creative_format=_scenario_format_entry)
 
 
 @given("assignments to three packages: two valid, one non-existent")
@@ -6797,50 +6692,6 @@ def _build_creative_scope_payload(ctx: dict, creative_id: str) -> dict:
     return creative_payload
 
 
-def _preseed_creative_for_principal(ctx: dict, creative_id: str, principal_id: str) -> None:
-    """Pre-seed a creative in the DB for a given principal, then build the sync payload.
-
-    Shared helper for "exists for principal" Given steps. The creative is created
-    in the DB under (tenant_id, principal_id, creative_id) so that the sync
-    operation can find it (update) or not (create for a different principal).
-    """
-    from sqlalchemy import select
-
-    from src.core.database.models import Principal, Tenant
-    from tests.factories import CreativeFactory
-
-    env = ctx["env"]
-    _ensure_tenant_principal_from_db(ctx, env)
-
-    # Retrieve tenant from DB (created by auth step)
-    with db_session(ctx) as session:
-        tenant = session.scalars(select(Tenant).filter_by(tenant_id=env._tenant_id)).first()
-        assert tenant is not None, f"Tenant {env._tenant_id!r} not found — auth step should have created it"
-
-        # The principal owning the pre-existing creative may differ from the
-        # authenticated principal (cross-principal isolation tests).
-        owner_principal = session.scalars(
-            select(Principal).filter_by(principal_id=principal_id, tenant_id=env._tenant_id)
-        ).first()
-
-    if owner_principal is None:
-        owner_principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
-        env._commit_factory_data()
-
-    CreativeFactory(
-        tenant=tenant,
-        principal=owner_principal,
-        creative_id=creative_id,
-        name=f"Pre-existing creative {creative_id}",
-        **seeded_format_columns(env, _scenario_format_entry(ctx, env)),
-    )
-    env._commit_factory_data()
-    ctx["pre_existing_creative_id"] = creative_id
-
-    # Build the creative payload for the sync request
-    _build_creative_scope_payload(ctx, creative_id)
-
-
 @given(parsers.parse('creative "{creative_id}" does not exist for this principal'))
 def given_creative_does_not_exist_for_principal(ctx: dict, creative_id: str) -> None:
     """Set up a creative payload for a creative_id with no pre-existing DB row.
@@ -6867,7 +6718,9 @@ def given_creative_exists_for_principal_scope(ctx: dict, creative_id: str, princ
     If the authenticated principal matches principal_id, sync should update
     the creative. If different, sync creates a new one (cross-principal isolation).
     """
+    _ensure_tenant_principal_from_db(ctx, ctx["env"])
     _preseed_creative_for_principal(ctx, creative_id, principal_id)
+    _build_creative_scope_payload(ctx, creative_id)
 
 
 # ═══════════════════════════════════════════════════════════════════════

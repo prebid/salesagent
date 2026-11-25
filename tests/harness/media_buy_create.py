@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock
@@ -208,7 +208,7 @@ class MediaBuyCreateEnv(
         "adapter": "src.core.tools.media_buy_create.get_adapter",
         "slack": "src.core.tools.media_buy_create.get_slack_notifier",
         "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
-        "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
+        "format_spec": "src.core.tools._creative_trafficking._get_format_spec_sync",
         **GAM_CLIENT_PATCH,
     }
     REST_ENDPOINT = "/api/v1/media-buys"
@@ -535,9 +535,23 @@ class MediaBuyCreateEnv(
             tenant_ai_config=None,
         ).validate_media_buy_request
         mock_adapter.add_creative_assets.return_value = None
+
+        # The approval replay and the retroactive push upload through the creatives manager
+        # and read its answer: a creative it reports no status for is a failed push, which
+        # the seller is told about. A real manager answers one status per asset, "approved"
+        # when it took it (GAMCreativesManager.add_creative_assets), so this one does too.
+        def _creatives_manager_statuses(media_buy_id: str, assets: list[dict[str, Any]], today: Any) -> list[Any]:
+            from src.core.schemas import AssetStatus
+
+            return [AssetStatus(creative_id=asset["creative_id"], status="approved") for asset in assets]
+
+        mock_adapter.creatives_manager.add_creative_assets.side_effect = _creatives_manager_statuses
         mock_adapter.associate_creatives.return_value = None
         mock_adapter.manual_approval_required = False
         mock_adapter.manual_approval_operations = []
+        # What the mock ad server declares, not a MagicMock answering truthy for every flag:
+        # core reads the adapter's capabilities to decide what it does before booking.
+        mock_adapter.capabilities = MockAdServer.capabilities
         self.mock["adapter"].return_value = mock_adapter
 
         # The audit logger is NOT patched: it is our own code, and the audit trail it writes
@@ -644,11 +658,46 @@ class MediaBuyCreateEnv(
         whenever they happened. A Then reading ``[-1]`` gets the newest update upload in a
         scenario that updates, and the newest create upload in one that only creates.
         """
+        return self._assets_handed_to(lambda adapter: adapter.add_creative_assets)
+
+    def creative_manager_assets(self) -> list[dict[str, Any]]:
+        """The asset dicts the approval replay and the retroactive push handed the ad server.
+
+        Both reach it through ``adapter.creatives_manager.add_creative_assets``
+        (``execute_approved_media_buy`` and ``push_creative_to_existing_buy``), not the
+        ``adapter.add_creative_assets`` the synchronous create path calls, so this is a seam
+        of its own rather than a widened :meth:`uploaded_adapter_assets`: which path ran is
+        what a scenario reading it asserts.
+
+        NO SEPARATE e2e REALIZATION, because none is needed and none exists. Both paths are
+        operator actions, and the steps that take them run them IN THIS PROCESS on every
+        transport: the seller's approval of a buy is ``run_approval`` and the seller's
+        approval of a creative is the Admin UI route through the in-process
+        :class:`AdminClient` (``approve_creative_as_seller``), each with this env's adapter
+        patch in force and production's engine pointed at the live server's database. So the
+        call lands on this mock over e2e_rest too. The server leaves no trace to read
+        instead: ``MockAdServer`` has no ``creatives_manager``, so a server-side approval
+        replay skips the upload ("Adapter does not support creative upload") and a
+        server-side push returns that refusal, writing nothing.
+        """
+        return self._assets_handed_to(lambda adapter: adapter.creatives_manager.add_creative_assets)
+
+    def _assets_handed_to(self, upload: Callable[[MagicMock], MagicMock]) -> list[dict[str, Any]]:
+        """Every asset dict passed to *upload* on each adapter of :meth:`adapter_mocks`, in call order.
+
+        Each asset as the persistence edge projects it (``pydantic_core.to_jsonable_python``
+        with the ``fallback=str`` of ``database_session._pydantic_json_serializer``), so a
+        typed value an asset carries reads here exactly as the e2e branch reads it back off
+        the audit row's JSONType column, and one assertion grades both. The projection is the
+        harness's: production hands the adapter the typed value and never dumps it.
+        """
+        from pydantic_core import to_jsonable_python
+
         uploaded: list[dict[str, Any]] = []
         for adapter in self.adapter_mocks():
-            for call in adapter.add_creative_assets.call_args_list:
+            for call in upload(adapter).call_args_list:
                 assets = call.args[1] if len(call.args) > 1 else call.kwargs.get("assets")
-                uploaded.extend(assets or [])
+                uploaded.extend(to_jsonable_python(asset, fallback=str) for asset in assets or [])
         return uploaded
 
     def adapter_mocks(self) -> list[MagicMock]:

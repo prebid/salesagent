@@ -29,13 +29,13 @@ from tests.bdd.steps._outcome_helpers import (
     wire_lookup,
 )
 from tests.bdd.steps.domain.uc002_create_media_buy import _first_package, given_request_with_account_id
+from tests.bdd.steps.generic._creative_seeding import store_package_creative
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.given_media_buy import (
-    _add_creative_ids_to_package,
-    _create_approved_creative,
     _ensure_request_defaults,
     given_creative_format_mismatch,
 )
+from tests.factories.creative_asset import LIBRARY_IMAGE_FORMAT, library_image_assets
 
 #: How far a resolved ASAP start may sit from the moment the seller recorded the buy.
 _ASAP_TOLERANCE_SECONDS = 120
@@ -218,26 +218,19 @@ def given_request_carries_dry_run_header(ctx: dict) -> None:
 @given("a referenced creative is missing its required assets")
 def given_creative_missing_assets(ctx: dict) -> None:
     """A stored creative on a served format with no assets at all, referenced by the package."""
-    creative = _create_approved_creative(ctx, "cr-inv020-no-assets")
-    creative.data = {}
-    ctx["env"]._commit_factory_data()
-    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    store_package_creative(ctx, "cr-inv020-no-assets", None, fmt=LIBRARY_IMAGE_FORMAT)
 
 
 @given("all referenced creatives exist in valid state with compatible formats")
 def given_valid_compatible_creatives(ctx: dict) -> None:
     """An approved creative on the format the default product accepts, referenced by the package."""
-    creative = _create_approved_creative(ctx, "cr-inv026-valid")
-    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    store_package_creative(ctx, "cr-inv026-valid", library_image_assets(), fmt=LIBRARY_IMAGE_FORMAT)
 
 
 @given(parsers.parse('a referenced creative is in "{state}" state'))
 def given_creative_in_state(ctx: dict, state: str) -> None:
     """A creative otherwise valid, in *state*, referenced by the package."""
-    creative = _create_approved_creative(ctx, f"cr-inv026-{state}")
-    creative.status = state
-    ctx["env"]._commit_factory_data()
-    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    store_package_creative(ctx, f"cr-inv026-{state}", library_image_assets(), fmt=LIBRARY_IMAGE_FORMAT, status=state)
 
 
 @given("a creative format is incompatible with the product's supported formats")

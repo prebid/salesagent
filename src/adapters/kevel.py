@@ -1,5 +1,6 @@
 import logging
 import uuid
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -22,6 +23,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas import *
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError
+from src.core.traffic_carrier import CreativesByPackage
 from src.core.utils.frequency_cap import suppress_cooldown_minutes
 
 
@@ -195,6 +197,8 @@ class Kevel(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict[str, Any]] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Creates a new Campaign and associated Flights in Kevel."""
         # Log operation
@@ -300,7 +304,7 @@ class Kevel(AdServerAdapter):
         return self._build_create_success(media_buy_id, packages)
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: Sequence[Mapping[str, Any]], today: datetime
     ) -> list[AssetStatus]:
         """Creates new Creatives in Kevel and associates them with Flights."""
         self.log(f"Kevel.add_creative_assets for media buy '{media_buy_id}'")
