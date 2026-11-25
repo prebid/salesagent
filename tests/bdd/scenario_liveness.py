@@ -68,11 +68,12 @@ from scripts.audit import storyboard_spec
 from scripts.ci import shard_split
 from tests._collection_manifest import (
     IncompleteLivenessRun,
+    merge_record,
+    merged_records,
     read_artifacts,
     relative_target,
     required_dir,
     scope_fingerprint,
-    whole_suite_sessions,
     write_artifact,
 )
 from tests.harness.transport import BDD_IN_PROCESS_TRANSPORTS
@@ -444,52 +445,12 @@ def _is_xdist_worker(config: pytest.Config) -> bool:
     return hasattr(config, "workeroutput")
 
 
-def _merge_record(into: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
-    """Merge one scenario's shard into another. The rule is stated, not implied.
-
-    ``record_observation``'s precedence is NOT associative across shards, so each
-    field's combine is named explicitly:
-
-    * ``observations``  — concatenated; every transport a shard saw is real.
-    * ``steps_bound``   — AND. One shard finding an unbound step is decisive.
-    * ``unbound_steps`` — union, order-stable.
-    * ``ledgered``      — OR. Ledgered anywhere is ledgered.
-    * ``harness_wired`` — tri-state with False DOMINANT: an observed
-      not-wired beats a live/ledgered observation elsewhere, and ``None``
-      (unknown) survives only if no shard ever resolved it.
-    * ``tags`` / ``marker_names`` — union; they are properties of the scenario,
-      identical on every shard that saw it.
-
-    Shards cross the process boundary as DICTS (decision 4): execnet ships basic
-    types only, so dataclasses cannot travel and must not be reconstructed here.
-    """
-    merged = dict(into)
-    merged["observations"] = list(into.get("observations", [])) + list(other.get("observations", []))
-    merged["steps_bound"] = bool(into.get("steps_bound", True)) and bool(other.get("steps_bound", True))
-    seen_steps = list(into.get("unbound_steps", []))
-    for step in other.get("unbound_steps", []):
-        if step not in seen_steps:
-            seen_steps.append(step)
-    merged["unbound_steps"] = seen_steps
-    merged["ledgered"] = bool(into.get("ledgered", False)) or bool(other.get("ledgered", False))
-    wired_values = [into.get("harness_wired"), other.get("harness_wired")]
-    if False in wired_values:
-        merged["harness_wired"] = False
-    elif True in wired_values:
-        merged["harness_wired"] = True
-    else:
-        merged["harness_wired"] = None
-    for key in ("tags", "marker_names"):
-        merged[key] = sorted(set(into.get(key, [])) | set(other.get(key, [])))
-    return merged
-
-
 def _merge_shard(shard: list[dict[str, Any]]) -> None:
     """Fold one worker's records into the controller's ``_SHARDS``."""
     for record in shard:
         scenario_id = record["scenario_id"]
         existing = _SHARDS.get(scenario_id)
-        _SHARDS[scenario_id] = record if existing is None else _merge_record(existing, record)
+        _SHARDS[scenario_id] = record if existing is None else merge_record(existing, record)
 
 
 def pytest_testnodedown(node: Any, error: Any) -> None:
@@ -701,15 +662,11 @@ def _project_in_process(record: dict[str, Any]) -> dict[str, Any]:
 def load_run(directory: str | Path) -> dict[str, Any]:
     """Every scenario the real run measured, merged across sessions.
 
-    Folds the per-session files with the same `_merge_record` the controller
-    already uses for workers, then projects each scenario onto the in-process
-    transports. Which sessions count, and when the set is refused as partial, is
-    ``whole_suite_sessions``; a filtered session's in-process projection would be
-    empty for every scenario at once, which is why it is excluded.
+    Which sessions are admitted, the refusal of a partial set, and the fold are
+    ``tests._collection_manifest.merged_records`` -- the one owner, shared with the
+    coverage scoreboard. This projects each merged scenario onto the in-process
+    transports: the in-network observations it admits from the filtered ``bdd_e2e``
+    session are dropped here, and the record-level fields re-derived without them.
     """
-    merged: dict[str, dict[str, Any]] = {}
-    for _, payload in whole_suite_sessions(read_artifacts(directory), directory, repo_root=_REPO_ROOT):
-        for record in payload.get("scenarios", []):
-            existing = merged.get(record["scenario_id"])
-            merged[record["scenario_id"]] = record if existing is None else _merge_record(existing, record)
+    merged = merged_records(read_artifacts(directory), directory, repo_root=_REPO_ROOT)
     return {"scenarios": {k: _project_in_process(v) for k, v in merged.items()}}

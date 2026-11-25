@@ -298,6 +298,33 @@ def read(run: pathlib.Path) -> Identity | None:
     )
 
 
+def _started(run: pathlib.Path) -> datetime.datetime | None:
+    """When ``run`` started, from its ``meta.json`` ``started_utc``; None when it records none."""
+    try:
+        raw = json.loads((run / IDENTITY_FILE).read_text(encoding="utf-8"))
+        return datetime.datetime.fromisoformat(raw["started_utc"])
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def newest_run(results: pathlib.Path, holding: str) -> pathlib.Path | None:
+    """The run under ``results`` that started last, among those holding ``holding``.
+
+    ``holding`` is a glob relative to a run directory (``"liveness-sessions"``,
+    ``"storyboard/summary_*.json"``). Ordered by ``started_utc``, the one chronological
+    field a run carries: run names are day-first (``ddmmyy_HHmm``), and a directory's
+    mtime moves whenever a report is written into an old run. A run with no readable
+    ``started_utc`` cannot be placed in time, so it is never chosen; None when no run
+    qualifies.
+    """
+    dated = [
+        (started, run)
+        for run in (results.iterdir() if results.is_dir() else ())
+        if run.is_dir() and any(run.glob(holding)) and (started := _started(run)) is not None
+    ]
+    return max(dated)[1] if dated else None
+
+
 def describe(identity: Identity | None) -> str:
     """One line naming the tree, for a header. Never a claim the record cannot support."""
     if identity is None or not identity.identified:
