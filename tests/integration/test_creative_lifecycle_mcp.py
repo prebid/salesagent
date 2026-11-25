@@ -835,7 +835,7 @@ class TestCreativeLifecycleMCP:
                 assignment_id=str(uuid.uuid4()),
                 creative_id="assignment_test_1",
                 media_buy_id=self.test_media_buy_id,
-                package_id="test_package",
+                package_id="package_1",  # a package the buy holds (setup_test_data)
                 weight=100,
             )
             session.add(assignment)
