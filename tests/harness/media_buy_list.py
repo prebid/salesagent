@@ -24,7 +24,7 @@ from src.core.schemas._base import GetMediaBuysRequest, GetMediaBuysResponse
 from tests.harness._base import IntegrationEnv, rest_body_from_kwargs
 from tests.harness._realize import realize_e2e
 from tests.harness.database_faults import DatabaseFaultMixin
-from tests.harness.transport import DeliverResult, TransportResult
+from tests.harness.transport import DeliverResult
 from tests.helpers.scheduler_isolation import run_status_tick
 
 
@@ -82,17 +82,6 @@ class MediaBuyListDispatchMixin:
 
         return _get_media_buys_impl(req=req, identity=identity)
 
-    def _deliver_list_a2a(self, **kwargs: Any) -> TransportResult:
-        """Dispatch get_media_buys through the REAL A2A pipeline (on_message_send).
-
-        The production A2A path is ``_handle_get_media_buys_skill`` —
-        ``get_media_buys_raw`` has ZERO production callers, so dispatching to it
-        here gave false confidence (#1417): a boundary fix on the raw
-        wrapper made 'A2A' tests green while the real skill handler still
-        leaked bare ValidationErrors.
-        """
-        return self._run_a2a_handler("get_media_buys", GetMediaBuysResponse, **kwargs)
-
     def _deliver_list_mcp(self, **kwargs: Any) -> DeliverResult:
         """Dispatch get_media_buys through the REAL FastMCP ``Client`` pipeline.
 
@@ -124,10 +113,6 @@ class MediaBuyListDispatchMixin:
         into the two-layer error — so grading it is the point.
         """
         return self._run_mcp_client("get_media_buys", GetMediaBuysResponse, **kwargs)
-
-    def _call_list_a2a(self, **kwargs: Any) -> Any:
-        """The parsed A2A payload for get_media_buys."""
-        return self._deliver_list_a2a(**kwargs).payload
 
     def _call_list_mcp(self, **kwargs: Any) -> Any:
         """The parsed MCP payload for get_media_buys."""
@@ -204,7 +189,7 @@ class MediaBuyListEnv(DatabaseFaultMixin, MediaBuyListDispatchMixin, Integration
     # `confirmed_at: null`, which the pin declares as type ["string","null"]. The reason
     # was stale, so the overrides and their two _KNOWN_DELIVER_OVERRIDES rows are gone.
     #
-    # RESPONSE_MODEL stays: the core dispatches, and _deliver_via_client re-parses with
+    # RESPONSE_MODEL stays: the core dispatches and parses once with
     # this env's own parser, so callers still receive the LOCAL GetMediaBuysResponse.
     MCP_TOOL = "get_media_buys"
     A2A_SKILL = "get_media_buys"

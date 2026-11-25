@@ -27,7 +27,7 @@ from tests.harness.media_buy_create import (
     MediaBuyCreateEnv,
     _adapter_operation_receipts,
 )
-from tests.harness.transport import DeliverResult, TransportResult
+from tests.harness.transport import DeliverResult
 
 if TYPE_CHECKING:
     from tests.helpers.signing import SignatureRealization
@@ -126,21 +126,20 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
             return self._call_update_impl(**kwargs)
         return super().call_impl(**kwargs)
 
-    def deliver_a2a(self, **kwargs: Any) -> TransportResult:
-        # JUSTIFIED OVERRIDE: this env selects BOTH the tool and the parser from
-        # request CONTENT, so it can declare no single A2A_SKILL.
-        if _is_update_request(kwargs):
-            # Returned AS IS: _call_update_a2a drives _run_a2a_handler, which
-            # already yields a DeliverResult carrying the REAL artifact wire.
-            # Re-wrapping it would both double-nest the payload and throw that
-            # wire away.
-            return self._call_update_a2a(**kwargs)
-        return super().deliver_a2a(**kwargs)
+    def address_tool(self, tool: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        if _is_update_request(payload):
+            return "update_media_buy", self._flatten_update_request(payload)
+        return super().address_tool(tool, payload)
+
+    def response_parser(self, tool: str) -> Any:
+        if tool == "update_media_buy":
+            return lambda **data: self._parse_update_rest_response(data)
+        return super().response_parser(tool)
 
     def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
-        # JUSTIFIED OVERRIDE: see deliver_a2a above.
+        # Legacy MCP content routing; A2A uses address_tool above.
         if _is_update_request(kwargs):
-            # As in deliver_a2a: _call_update_mcp already returns a DeliverResult
+            # _call_update_mcp already returns a DeliverResult
             # carrying the real structured_content wire.
             return self._call_update_mcp(**kwargs)
         return super().deliver_mcp(**kwargs)
@@ -276,21 +275,6 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         req = kwargs.get("req")
         return getattr(req, "media_buy_id", None) or kwargs.get("media_buy_id") or self._seeded_media_buy_id
 
-    def _call_update_a2a(self, **kwargs: Any) -> TransportResult:
-        # Drive the REAL on_message_send → _dispatch_skill → to_wire → Task/Artifact
-        # pipeline (mirrors MediaBuyCreateEnv.call_a2a), so _run_a2a_handler stashes
-        # the true artifact DataPart as the wire_response. A prior version synthesized
-        # the wire via update_media_buy_raw(...).model_dump(), which tracked the return
-        # model rather than the assembled envelope — an update-envelope regression
-        # would not be caught. Submitted AdCP work also travels in an artifact,
-        # on a completed native Task; _parse_update_rest_response recovers the
-        # submitted union member from that payload's own status.
-        return self._run_a2a_handler(
-            "update_media_buy",
-            lambda **data: self._parse_update_rest_response(data),
-            **self._flatten_update_request(kwargs),
-        )
-
     def _call_update_mcp(self, **kwargs: Any) -> DeliverResult:
         # Drive the REAL FastMCP Client pipeline (mirrors MediaBuyCreateEnv.call_mcp) so the
         # structured_content — the real MCP wire body — is stashed as wire_response and the
@@ -329,47 +313,12 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         return body
 
     def _run_update_rest_request(self, *, signed: SignatureRealization = False, **kwargs: Any) -> Any:
-        # ``signed`` is DECLARED here for the same reason ``_run_rest_request`` above
-        # declares it: this arm never reaches the base, so an undeclared keyword would
-        # ride the kwargs into ``_build_update_rest_body`` and become a body FIELD.
-        #
-        # The credential rides the request headers, so a no-auth update scenario is
-        # refused by the real resolver rather than let through by a test-mode override.
         credential = self._pop_credential(kwargs)
         self._commit_factory_data()
-        client = self.get_rest_client()
-
         endpoint = f"/api/v1/media-buys/{self._requested_update_target(kwargs)}"
-        body = self._build_update_rest_body(**kwargs)
-        # Same signed/unsigned fork as the base POST dispatch, with the update's
-        # PUT verb: an env that cannot sign must REFUSE a signed dispatch (a
-        # silent unsigned send would let a signing scenario pass with no
-        # signature), and once it can sign, ``wire_request`` OWNS the request —
-        # it serializes once so the bytes signed are the bytes sent, and it emits
-        # the single ``Authorization`` identity plus this env's tenant hint
-        # itself. That is why ``credential`` is deliberately NOT merged into the
-        # signed leg: a second bearer would win the precedence race in
-        # ``resolved_identity._extract_auth_token`` and swap the acting
-        # principal, so signed and unsigned would differ by more than the
-        # signature.
-        #
-        # ``credentialed`` is read off the credential HEADERS because that is
-        # what "presented nothing" is under #1721 — ``credential={}`` and
-        # ``credential(token=None)`` both omit ``Authorization``
-        # (tests/helpers/credentials.py). It is the only way an in-process leg
-        # reaches the verifier's refusal branch at all: security.mdx :1269 makes
-        # an unsigned request carrying a valid bearer a spec-correct 200.
-        if not self.can_sign:
-            self._refuse_unsignable(signed)
-            return client.put(endpoint, json=body, headers=credential)
-        raw, wire_headers = self.wire_request(
-            path=endpoint,
-            body=body,
-            signed=signed,
-            credentialed="Authorization" in credential,
-            method="PUT",
+        return self._http_request(
+            "PUT", endpoint, body=self._build_update_rest_body(**kwargs), credential=credential, signed=signed
         )
-        return client.put(endpoint, content=raw, headers=wire_headers)
 
     def _parse_update_rest_response(self, data: dict[str, Any]) -> Any:
         """Rebuild an update_media_buy wire body as the branch the buyer received.

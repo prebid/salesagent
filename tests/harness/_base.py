@@ -58,6 +58,10 @@ from pydantic import BaseModel  # noqa: E402
 
 from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID  # noqa: E402  (re-export)
 from tests.harness.transport import DeliverResult  # noqa: E402
+from tests.harness.transport import WireError as WireError  # noqa: E402
+from tests.harness.transport import WireRefusal as WireRefusal
+from tests.harness.transport import _jsonrpc_body as _jsonrpc_body
+from tests.harness.transport import _wire_envelope as _wire_envelope  # noqa: E402
 from tests.helpers.credentials import credential_headers  # noqa: E402
 
 #: The token the harness presents when a scenario wants a credential that is presented and
@@ -150,37 +154,6 @@ def _presents_a_credential(credential: Any) -> bool:
     return any(str(name).lower() == "authorization" for name in credential)
 
 
-class WireError(Exception):
-    """A transport failure carrying the envelope the buyer received, VERBATIM.
-
-    Deliberately NOT an ``AdCPSalesAgentError`` subclass. The harness used to rebuild the
-    matching production exception from wire bytes so a test could write
-    ``pytest.raises(AdCPNotFoundError)`` through a transport; that map covered 20 of
-    43 classes, was silent about the other 23, and its own docstring conceded the
-    reconstruction was lossy. Grading OUR class hierarchy through a lossy copy of
-    production's constructor is not the same as grading the buyer's contract.
-
-    This type carries no code-to-class knowledge at all. It exists so a failed wire
-    dispatch can still raise -- callers up the stack expect an exception -- while the
-    thing being asserted stays the envelope, reachable as ``.envelope`` and published
-    by the dispatchers as ``TransportResult.wire_error_envelope``.
-
-    *response* is the raw HTTP response this envelope arrived on, when it arrived on
-    one. An envelope is not always the whole refusal: ``WWW-Authenticate: Signature
-    error="<code>"`` lives in the HEADERS, so a leg that raised the envelope alone
-    left ``assert_signature_challenge`` with nothing to read and it refused to grade
-    (correctly -- tests/CLAUDE.md, assert on the wire, never on a reconstruction).
-    ``None`` on the in-process legs, which have no response to carry.
-    """
-
-    def __init__(self, envelope: dict, response: Any = None) -> None:
-        self.envelope = envelope
-        self.response = response
-        errors = envelope.get("errors") or [{}]
-        code = errors[0].get("code") if isinstance(errors[0], dict) else None
-        super().__init__(f"wire error {code or '(no code)'}")
-
-
 def _mcp_wire_envelope(exc: Exception) -> dict | None:
     """The two-layer envelope inside a FastMCP ``ToolError``, or ``None``.
 
@@ -251,26 +224,6 @@ def _mcp_wire_error(exc: Exception, response: Any = None) -> Exception:
     """
     envelope = _mcp_wire_envelope(exc)
     return WireError(envelope, response) if envelope is not None else exc
-
-
-def _wire_envelope(envelope: dict) -> dict | None:
-    """The captured error body if it IS the two-layer envelope, else ``None``.
-
-    Returns what production sent, unchanged, or nothing. It reshapes no body and fills no
-    layer: ``AdcpErrorResponse.of`` (``src/core/schemas/_base.py``) "Carries the SAME error
-    object at both levels the wire expects -- ``adcp_error`` on the envelope and
-    ``errors[0]``", so a real failure response always arrives with both, and a body missing
-    one did not come from the boundary and is reported as no envelope.
-
-    Arming a fault needs a real typed exception; the adapter genuinely raises one. ASSERTING
-    an outcome never does: the envelope IS what the buyer received, so nothing here
-    reconstructs an exception from it.
-    """
-    if not isinstance(envelope, dict):
-        return None
-    if isinstance(envelope.get("errors"), list) and envelope["errors"]:
-        return envelope
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -408,15 +361,6 @@ def _a2a_message_send_body(skill_name: str, parameters: dict[str, Any]) -> dict[
     return _a2a_jsonrpc_body("SendMessage", request)
 
 
-def _a2a_protobuf_task(task: Any) -> dict[str, Any]:
-    """Match the HTTP route's integer restoration at the protobuf conversion edge."""
-    from google.protobuf import json_format
-
-    from src.a2a_server.adcp_a2a_server import restore_a2a_integer_types
-
-    return restore_a2a_integer_types(json_format.MessageToDict(task))
-
-
 def _mcp_jsonrpc_request(request_id: int, method: str, params: dict[str, Any]) -> dict[str, Any]:
     """One MCP JSON-RPC request frame, built from the mcp SDK's own models.
 
@@ -445,81 +389,6 @@ def _mcp_error_to_exception(payload: dict[str, Any]) -> Exception:
         if isinstance(item, dict) and isinstance(item.get("text"), str):
             return ToolError(item["text"])
     return ToolError(str(payload.get("message") or payload))
-
-
-class WireRefusal(AssertionError):
-    """An HTTP refusal that arrived with NO body to read an envelope out of.
-
-    Carries the response, because the evidence of WHICH refusal happened can live
-    outside the body: a signature refusal's sole extra signal is
-    ``WWW-Authenticate: Signature error="<code>"``. Raising a bare
-    ``AssertionError`` here discarded that header, so an unsigned refusal on the
-    ``/a2a`` and ``/mcp`` legs could be observed only as "some 4xx" — the exact
-    status-shaped vacuity ``assert_signature_challenge`` exists to remove
-    (salesagent-n78j0.1.2), and the reason the REST leg already had
-    ``_non_json_error_result``.
-
-    A 4XX IS NOT ITSELF A REASON TO RAISE THIS, and used to be: ``_jsonrpc_body``
-    raised on ``status_code >= 400`` outright, on the rationale that a signature
-    refusal is bodyless. That was true of #1291's ASGI verifier, which sent its own
-    401 from above the application. It is false on #1721's design, where the refusal
-    is raised inside the resolver and rendered by ``AuthChallengeResponder``, which
-    DERIVES the 401 by reading an AdCP code out of a finished JSON body — so the
-    body always exists, and discarding it left the ``code``, the ``message`` and
-    above all the ``recovery`` of the whole 28-code request-signature family
-    ungraded on both JSON-RPC legs (salesagent-hmq0l).
-    """
-
-    def __init__(self, message: str, response: Any) -> None:
-        super().__init__(message)
-        self.response = response
-
-
-def _jsonrpc_body(response: Any, *, surface: str) -> dict[str, Any]:
-    """One JSON-RPC envelope out of an HTTP response, SSE-framed or not.
-
-    MCP's streamable HTTP answers a POST with ``text/event-stream`` (FastMCP's
-    ``http_app`` does not enable JSON responses), so the envelope arrives as an
-    SSE ``data:`` line; ``/a2a`` answers with plain JSON. One reader for both,
-    because the CALLER only ever wants the envelope and a per-leg copy of this
-    framing would be two ways to mis-read the same wire.
-
-    THE STATUS IS NOT CONSULTED. A refused request answers with an envelope like any
-    other outcome — that is what ``AuthChallengeResponder`` reads to decide the 401 in
-    the first place — so reading the body is what the status says to do, not something
-    the status can forbid. Only an EMPTY body is a refusal this function cannot parse,
-    and that is the one case it raises on. The same order REST has had all along
-    (``unwrap_rest_response`` parses, then classifies) and the one the E2E A2A leg was
-    corrected to (``tests/harness/test_client.py`` §
-    ``test_http_error_status_still_surfaces_the_wire_error_envelope``): parse first,
-    classify second. Classifying first throws away the only evidence of what was
-    classified.
-
-    A body that is not JSON at all is still a ``WireRefusal`` — a Starlette 404 page
-    or a proxy's error HTML carries no envelope to read, and letting a decode error
-    escape would report a real refusal as a harness crash.
-    """
-    import json as _json
-
-    if not response.content:
-        raise WireRefusal(f"{surface} returned HTTP {response.status_code} with no body", response)
-
-    if "text/event-stream" not in response.headers.get("content-type", ""):
-        try:
-            return response.json()
-        except ValueError as exc:
-            raise WireRefusal(
-                f"{surface} returned HTTP {response.status_code} with a non-JSON body: {response.text[:800]!r}",
-                response,
-            ) from exc
-
-    for line in response.text.splitlines():
-        if not line.startswith("data:"):
-            continue
-        envelope = _json.loads(line[len("data:") :].strip())
-        if isinstance(envelope, dict) and ("result" in envelope or "error" in envelope):
-            return envelope
-    raise AssertionError(f"{surface} SSE response carried no JSON-RPC envelope: {response.text[:800]!r}")
 
 
 def _a2a_task_push_notification_config(spec: Any, *, task_id: str = "") -> Any:
@@ -1701,32 +1570,23 @@ class BaseTestEnv:
             )
         return model
 
-    def deliver_a2a(self, **kwargs: Any) -> TransportResult:
-        """Dispatch through the real A2A pipeline, returning payload AND wire.
+    @property
+    def dispatch_env(self) -> BaseTestEnv:
+        return self
 
-        THE override point for A2A. The dispatchers call this and read both
-        fields off the return value, so an env that needs custom routing,
-        kwargs shaping or parser selection overrides HERE — at the frame that
-        already owns those concerns — rather than re-implementing dispatch.
-        """
-        if not self.A2A_SKILL:
-            raise NotImplementedError(
-                f"{type(self).__name__} declares no A2A_SKILL and does not override deliver_a2a(). "
-                "Set A2A_SKILL to enable Transport.A2A dispatch."
-            )
-        from tests.harness.client import _response_reader
+    def address_tool(self, tool: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Resolve the request's tool and document together before transport wrapping."""
+        return tool, payload
+
+    def deliver_a2a(self, **kwargs: Any) -> TransportResult:
+        """Dispatch through the shared owner-aware core, retaining native evidence."""
         from tests.harness.transport import Transport
 
-        return self._dispatch_via_client(
-            Transport.A2A,
-            self.A2A_SKILL,
-            kwargs,
-            response_reader=lambda body: _response_reader(self.response_parser(self.A2A_SKILL))(body),
-        )
+        return self._dispatch_via_client(Transport.A2A, self.A2A_SKILL, kwargs)
 
     def call_a2a(self, **kwargs: Any) -> Any:
         """The parsed A2A payload. Defined ONCE; never override — override
-        :meth:`deliver_a2a` instead, so the wire survives the call."""
+        :meth:`address_tool` or :meth:`response_parser` instead."""
         result = self.deliver_a2a(**kwargs)
         if result.error is not None:
             raise result.error
@@ -1735,7 +1595,7 @@ class BaseTestEnv:
     def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
         """Dispatch through the real FastMCP Client pipeline, returning payload AND wire.
 
-        THE override point for MCP — see :meth:`deliver_a2a`.
+        Legacy MCP overrides may shape requests; new envs use address_tool/response_parser.
 
         Note on enum coercion: FastMCP auto-coerces string values to enums when
         calling tools through the MCP protocol, so envs dispatching here need no
@@ -1750,146 +1610,47 @@ class BaseTestEnv:
 
         return self._deliver_via_client(Transport.MCP, self.MCP_TOOL, kwargs)
 
-    def _dispatch_via_client(
-        self,
-        transport: Any,
-        tool: str,
-        kwargs: dict[str, Any],
-        *,
-        response_reader: Callable[[dict[str, Any]], Any] | None = None,
-    ) -> TransportResult:
-        """Present one credential and payload to the shared dispatch core."""
+    def _dispatch_via_client(self, transport: Any, tool: str, kwargs: dict[str, Any]) -> TransportResult:
+        """Present this environment's request and credential to the shared core."""
         from tests.harness.client import _dispatch_core
         from tests.harness.transport import NO_IDENTITY_OVERRIDE
 
         payload = dict(kwargs)
         credential = payload.pop("credential", NO_IDENTITY_OVERRIDE)
-        return _dispatch_core(self, transport, tool, payload, credential, response_reader=response_reader)
+        return _dispatch_core(self, transport, tool, payload, credential)
 
     def _deliver_via_client(self, transport: Any, tool: str, kwargs: dict[str, Any]) -> DeliverResult:
-        """Dispatch through THE one client core, then parse with this env's parser.
-
-        This is The harness's single-dispatch invariant, made literal: ``AdCPTestClient`` is the
-        implementation the env dispatch methods DELEGATE TO, not a peer beside
-        them. Routing here means address resolution, request wrapping, delivery
-        and error unwrapping have exactly one implementation for both the client
-        and every env.
-
-        The payload is re-parsed with this env's own ``response_parser`` rather
-        than kept as the core's pinned-model parse: envs return their LOCAL
-        response subclass, and ~34 call sites outside tests/harness depend on
-        that type. The core still owns the DISPATCH; the env owns only how its
-        own wire is typed.
-
-        A2A uses _dispatch_via_client directly to retain its native evidence.
-        """
-        from tests.harness.client import _response_reader
-
+        """Adapt the core's already-typed result to the legacy MCP return contract."""
         result = self._dispatch_via_client(transport, tool, kwargs)
         if result.error is not None:
             raise result.error
-        wire = result.wire_response
-        if wire is None:
-            return DeliverResult(payload=result.payload, wire_response=None)
-        # The captured wire is deliberately UNSTRIPPED so envelope assertions can
-        # see message/success; the response model has not declared them, so they
-        # come off before validation.
-        #
-        # Through ``revive`` when the parser is a response model, because a SERVED document
-        # carries the context the boundary stamped and the constructor refuses that field --
-        # ``SalesAgentAdcpResponse`` makes ``_boundary._served`` the only thing that can put one on a
-        # response, so ``parser(**wire)`` raised a ValidationError in the TEST process and the
-        # scenario reported "no response arrived" for a request the seller answered fine.
-        # ``revive`` is the reader-side door: it takes the field off the document, validates
-        # the rest through the same refusing constructor, and re-attaches the value.
-        return DeliverResult(payload=_response_reader(self.response_parser(tool))(wire), wire_response=wire)
+        return DeliverResult(payload=result.payload, wire_response=result.wire_response)
 
     def call_mcp(self, **kwargs: Any) -> Any:
         """The parsed MCP payload. Defined ONCE; never override — override
         :meth:`deliver_mcp` instead, so the wire survives the call."""
         return self.deliver_mcp(**kwargs).payload
 
-    def _run_a2a_handler(
-        self,
-        skill_name: str,
-        response_cls: type,
-        **kwargs: Any,
-    ) -> TransportResult:
-        """A2A dispatch via real AdCPRequestHandler — exercises full A2A pipeline.
-
-        Dispatches through the real AdCPRequestHandler.on_message_send(), which
-        exercises: message parsing → skill routing → ``serve`` → ``to_wire`` →
-        Task/Artifact framing.
-
-        The credential is presented where this transport reads headers: on the call
-        context, the way the SDK's own context builder places the request headers. The
-        handler reads only that; the real resolver answers.
-
-        Once the env CAN sign, this defers to ``_run_a2a_over_http``: an
-        ``on_message_send`` call puts no bytes on a wire, so ``SignedExchangeCapture``
-        records no exchange for it and the verifier is handed ``exchange=None`` --
-        a signature would be unobservable. See ``can_sign`` for why the fork is on the
-        capability and not on ``signed``.
-
-        Args:
-            skill_name: A2A skill name (e.g., "get_products").
-            response_cls: Pydantic model class to parse artifact data into.
-            **kwargs: Skill parameters. ``credential`` is popped and presented on the
-                call context; ``a2a_push_notification_config`` is popped and sent as
-                the protocol-level ``SendMessageConfiguration`` (see
-                :func:`_a2a_send_message_configuration`) rather than as a skill
-                parameter; remaining kwargs become skill parameters.
-        """
+    def _run_a2a_handler(self, skill_name: str, **kwargs: Any) -> TransportResult:
+        """Send an untyped request through the real native handler or signing route."""
         if self.can_sign:
-            return self._run_a2a_over_http(skill_name, response_cls, **kwargs)
+            return self._run_a2a_over_http(skill_name, **kwargs)
 
-        import asyncio
+        from a2a.types import SendMessageRequest
 
-        from a2a.types import SendMessageRequest, Task
-
-        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from tests.harness.transport import NO_IDENTITY_OVERRIDE
+        from tests.harness.a2a_wire import send_inprocess_a2a
         from tests.utils.a2a_helpers import create_a2a_message_with_skill
 
         self._commit_factory_data()
-
-        credential = kwargs.pop("credential", NO_IDENTITY_OVERRIDE)
-        if credential is NO_IDENTITY_OVERRIDE:
-            credential = self.credential()
-        # Pop the protocol-level push config — it belongs on SendMessageRequest.
-        # configuration, one level above the skill parameters (see
-        # _a2a_send_message_configuration).
+        credential = self._pop_credential(kwargs)
         protocol_push_config = kwargs.pop("a2a_push_notification_config", None)
-        server_context = _a2a_call_context(credential)
+        context = _a2a_call_context(credential)
         self._seed_ambient_tenant(credential)
-
-        parameters = self._a2a_skill_parameters(kwargs)
-
-        handler = AdCPRequestHandler()
-
-        message = create_a2a_message_with_skill(skill_name=skill_name, parameters=parameters)
-        if protocol_push_config is None:
-            params = SendMessageRequest(message=message)
-        else:
-            params = SendMessageRequest(
-                message=message,
-                configuration=_a2a_send_message_configuration(protocol_push_config),
-            )
-
-        async def _call():
-            return await handler.on_message_send(params, server_context)
-
-        from tests.harness.client import _response_reader, native_task_result, parse_a2a_result, unwrap_delivery_error
-        from tests.harness.transport import Transport
-
-        try:
-            task_result = asyncio.run(_call())
-            if not isinstance(task_result, Task):
-                raise TypeError(f"Expected Task, got {type(task_result).__name__}: {task_result}")
-            result = native_task_result(Transport.A2A, _a2a_protobuf_task(task_result))
-        except Exception as exc:
-            return unwrap_delivery_error(exc, Transport.A2A)
-        return result if response_cls is dict else parse_a2a_result(result, _response_reader(response_cls))
+        message = create_a2a_message_with_skill(skill_name=skill_name, parameters=self._a2a_skill_parameters(kwargs))
+        request = SendMessageRequest(message=message)
+        if protocol_push_config is not None:
+            request.configuration.CopyFrom(_a2a_send_message_configuration(protocol_push_config))
+        return send_inprocess_a2a(request, context)
 
     @staticmethod
     def _a2a_skill_parameters(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -1910,47 +1671,57 @@ class BaseTestEnv:
         if signed and not self.can_sign:
             _ = self.signing
 
+    def _http_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: Any,
+        credential: dict[str, str],
+        signed: SignatureRealization = False,
+        extra: dict[str, str] | None = None,
+    ) -> Any:
+        """Send exactly the bytes signed, using one identity policy for HTTP legs.
+
+        A signing capability owns bearer and tenant; caller headers indicate only
+        whether a credential was presented. Framing headers never replace identity.
+        Without that capability the caller's headers are sent verbatim.
+        """
+        self._refuse_unsignable(signed)
+        if self.can_sign:
+            raw, headers = self.wire_request(
+                method=method,
+                path=path,
+                body=body,
+                signed=signed,
+                credentialed=_presents_a_credential(credential),
+                extra=extra,
+                origin=self.e2e_config.base_url if self.is_e2e else None,
+            )
+        else:
+            raw = b"" if body is None else json.dumps(body).encode()
+            headers = {"Content-Type": "application/json", **(extra or {}), **credential}
+        return self._send_http(method, path, content=raw, headers=headers)
+
     def send_a2a(
         self, body: dict[str, Any], credential: dict[str, str], *, signed: SignatureRealization = False
     ) -> TransportResult:
         """Send and read one native frame through the shared HTTP/signing route."""
-        from urllib.parse import urlsplit
-
-        from tests.harness.client import jsonrpc_http_result
+        from tests.harness.a2a_wire import jsonrpc_http_result
         from tests.harness.transport import Transport
 
-        self._refuse_unsignable(signed)
-        origin = self.e2e_config.base_url if self.is_e2e else None
-        if self.can_sign:
-            from tests.helpers.signing import WIRE_ORIGIN
+        response = self._http_request(
+            "POST", _A2A_PATH, body=body, credential=credential, signed=signed, extra=_A2A_VERSION_HEADER
+        )
+        return jsonrpc_http_result(Transport.E2E_A2A if self.is_e2e else Transport.A2A, response)
 
-            host = next((value for name, value in credential.items() if name.lower() == "host"), None)
-            signing_origin = f"{urlsplit(origin or WIRE_ORIGIN).scheme}://{host}" if host else origin
-            raw, headers = self.wire_request(
-                path=_A2A_PATH,
-                body=body,
-                extra={**_A2A_VERSION_HEADER, **credential},
-                signed=signed,
-                credentialed=False,
-                origin=signing_origin,
-            )
-        else:
-            raw = json.dumps(body).encode()
-            headers = {"Content-Type": "application/json", **_A2A_VERSION_HEADER, **credential}
-        response = self._send_http("POST", _A2A_PATH, content=raw, headers=headers)
-        transport = Transport.E2E_A2A if self.is_e2e else Transport.A2A
-        return jsonrpc_http_result(transport, response)
-
-    def _run_a2a_over_http(self, skill_name: str, response_cls: type, **kwargs: Any) -> TransportResult:
-        """Dispatch through the real A2A HTTP route and retain its native receipt."""
-        from tests.harness.client import _response_reader, parse_a2a_result
-
+    def _run_a2a_over_http(self, skill_name: str, **kwargs: Any) -> TransportResult:
+        """Send an untyped A2A request, retaining its native receipt and HTTP response."""
         credential = self._pop_credential(kwargs)
         self._commit_factory_data()
         self._seed_ambient_tenant(credential)
         body = _a2a_message_send_body(skill_name, self._a2a_skill_parameters(kwargs))
-        result = self.send_a2a(body, credential, signed=self._signed_dispatch)
-        return result if response_cls is dict else parse_a2a_result(result, _response_reader(response_cls))
+        return self.send_a2a(body, credential, signed=self._signed_dispatch)
 
     def _run_mcp_client(
         self,
@@ -2303,56 +2074,12 @@ class BaseTestEnv:
         return self.credential() if credential is NO_IDENTITY_OVERRIDE else dict(credential)
 
     def _run_rest_request(self, endpoint: str, *, signed: SignatureRealization = False, **kwargs: Any) -> Any:
-        """Shared REST dispatch: pop the credential -> commit -> build body -> POST.
-
-        Symmetric with ``_run_mcp_client``. The credential rides the request as HTTP
-        headers, where the production middleware reads it, so in-process REST runs the
-        same chain as A2A, MCP and e2e_rest. There is no dependency override: a REST route
-        has no identity dependency, so nothing can express an identity the wire never
-        carried (GH #1886 was that seam disagreeing with the wire).
-
-        Envs whose route is not a body-carrying POST override this method and reuse
-        ``_pop_credential`` / ``get_rest_client``.
-        """
+        """Build this environment's REST body and send it through the shared HTTP route."""
         credential = self._pop_credential(kwargs)
         self._commit_factory_data()
-        client = self.get_rest_client()
-        body = self.build_rest_body(**kwargs)
-
-        if not self.can_sign:
-            self._refuse_unsignable(signed)
-            # The credential travels as HEADERS even on the unsigned leg, and that is
-            # ``credential()``'s whole job: the bearer AND ``x-adcp-tenant``, on every
-            # leg. The dependency-override era posted bare here and had to bolt the
-            # tenant hint back on: a bare post reached the resolver anonymous, no tenant
-            # resolved, the posture fell back to the agent-level default, and a request
-            # carrying ``push_notification_config.authentication`` was refused with a
-            # bodyless 401 before the ingest gate ran. The in-process MCP and A2A legs put
-            # no bytes on a wire and carry their credential another way, so they did not
-            # see it — the four legs were not running the same scenario.
-            #
-            # The tenant hint is the load-bearing header there, not the bearer:
-            # ``resolved_identity._detect_tenant`` resolves a tenant from ``Host`` matched
-            # against ``tenants.virtual_host``, or from ``x-adcp-tenant`` as a literal
-            # tenant id, and from nothing else — never from the auth token. The in-process
-            # ``TestClient`` sends ``Host: testserver``, which matches no tenant, so a
-            # request that states neither is refused CONFIGURATION_ERROR before any
-            # credential is examined. The bearer rides along because production sends it and the SIGNED
-            # branch below already does (security.mdx :1269 — an unsigned request carrying
-            # a valid bearer is a spec-correct 200).
-            return client.post(endpoint, json=body, headers=credential)
-
-        # ``credential={}`` already means "send without a credential" everywhere else in
-        # the harness (``_pop_credential`` returns it verbatim, and ``RestE2EDispatcher``
-        # reads it the same way) — so it decides ``credentialed`` here too, rather than
-        # the signed path quietly attaching the capability's bearer to a call the caller
-        # asked to make anonymous. It is the ONLY way an in-process leg reaches the
-        # verifier's refusal branch at all: security.mdx :1269 makes an unsigned request
-        # carrying a valid bearer a spec-correct 200.
-        raw, headers = self.wire_request(
-            path=endpoint, body=body, signed=signed, credentialed=_presents_a_credential(credential)
+        return self._http_request(
+            "POST", endpoint, body=self.build_rest_body(**kwargs), credential=credential, signed=signed
         )
-        return client.post(endpoint, content=raw, headers=headers)
 
     @property
     def can_sign(self) -> bool:
@@ -2589,7 +2316,7 @@ class BaseTestEnv:
         correct for it. Refusing instead cost 97 UC-010 failures in one run: measured as
         NEW between two remote runs, every one of them this frame raising
         NotImplementedError. The client-side twin (tests/harness/client.py
-        ``_parse_pinned_response``) already had this fallback; the two now agree.
+        shared response reader) has the same fallback.
         """
         model = self.RESPONSE_MODEL
         if model is None:
@@ -2597,8 +2324,9 @@ class BaseTestEnv:
                 f"{type(self).__name__} declares no RESPONSE_MODEL and does not override "
                 "parse_rest_response(). Do one or the other to enable Transport.REST."
             )
-        revive = getattr(model, "revive", None)
-        return cast("BaseModel", revive(data) if revive is not None else model(**data))
+        from tests.harness.a2a_wire import _response_reader
+
+        return cast("BaseModel", _response_reader(model)(data))
 
     def parse_rest_error_envelope(self, status_code: int, data: dict[str, Any]) -> dict[str, Any] | None:
         """The two-layer envelope from a REST error body, or ``None``.

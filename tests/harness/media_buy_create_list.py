@@ -48,7 +48,7 @@ from typing import Any, Literal
 from tests.harness.delivery_poll import DeliveryDispatchMixin
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.media_buy_list import MediaBuyListDispatchMixin
-from tests.harness.transport import DeliverResult, TransportResult
+from tests.harness.transport import DeliverResult
 
 # The verb discriminators are the mixins' own ``is_delivery_request`` and
 # ``is_list_request``, inherited rather than restated here: a local copy is a second
@@ -87,26 +87,23 @@ class MediaBuyCreateListEnv(DeliveryDispatchMixin, MediaBuyListDispatchMixin, Me
             return self._call_list_impl(**kwargs)
         return super().call_impl(**kwargs)
 
-    def deliver_a2a(self, **kwargs: Any) -> TransportResult:
-        """Route by request CONTENT: delivery and list requests to their mixins, else create.
-
-        JUSTIFIED OVERRIDE (``_KNOWN_DELIVER_OVERRIDES``): this env selects the
-        tool AND the parser from request content, so it can declare no single
-        ``A2A_SKILL`` for the base to dispatch on.
-
-        The ``DeliverResult`` is returned AS IS — the mixins drive ``_run_a2a_handler``,
-        which already yields one carrying the REAL artifact wire. Re-wrapping it would
-        double-nest the payload and discard that wire.
-        """
-        verb = self._verb_of(kwargs)
+    def address_tool(self, tool: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        verb = self._verb_of(payload)
         if verb == "delivery":
-            return self._deliver_delivery_a2a(**kwargs)
+            return "get_media_buy_delivery", payload
         if verb == "list":
-            return self._deliver_list_a2a(**kwargs)
-        return super().deliver_a2a(**kwargs)
+            return "get_media_buys", payload
+        return super().address_tool(tool, payload)
+
+    def response_parser(self, tool: str) -> Any:
+        if tool == "get_media_buy_delivery":
+            return lambda **data: self._parse_delivery_rest_response(data)
+        if tool == "get_media_buys":
+            return lambda **data: self._parse_list_rest_response(data)
+        return super().response_parser(tool)
 
     def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
-        """Content router; see :meth:`deliver_a2a`.
+        """Legacy MCP content router; A2A uses :meth:`address_tool`.
 
         The mixins return the ``DeliverResult`` whose ``wire_response`` is the real
         ``structured_content`` — the MCP bytes the envelope ``status`` assertions (#1941)

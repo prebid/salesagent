@@ -146,22 +146,14 @@ def _protocol_refusal(transport: Transport, exc: Exception, **verdict: Any) -> T
 
 def _a2a(env: Any, document: RawDocument, credential: dict[str, str]) -> TransportResult:
     from a2a.types import SendMessageRequest
-    from a2a.utils.errors import A2AError
 
-    from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-    from tests.harness._base import _a2a_call_context, _a2a_protobuf_task
-    from tests.harness.client import native_task_result, unwrap_delivery_error
+    from tests.harness._base import _a2a_call_context
+    from tests.harness.a2a_wire import send_inprocess_a2a
 
     env._commit_factory_data()
     context = _a2a_call_context(credential)
     env._seed_ambient_tenant(credential)
-
-    request = SendMessageRequest(message=_a2a_message(document))
-    try:
-        task = asyncio.run(AdCPRequestHandler().on_message_send(request, context))
-    except A2AError as exc:
-        return unwrap_delivery_error(exc, Transport.A2A)
-    return native_task_result(Transport.A2A, _a2a_protobuf_task(task))
+    return send_inprocess_a2a(SendMessageRequest(message=_a2a_message(document)), context)
 
 
 def _e2e_a2a(env: Any, document: RawDocument, credential: dict[str, str]) -> TransportResult:

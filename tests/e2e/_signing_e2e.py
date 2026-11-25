@@ -581,7 +581,7 @@ async def post_a2a(client: httpx.AsyncClient, message: dict[str, Any], *, leg: s
         response = await client.post("/a2a", json=message, headers=buyer_headers(token))
     except httpx.TimeoutException as exc:
         raise AssertionError(f"the A2A {leg} request timed out against the live stack: {exc!r}") from exc
-    from tests.harness.client import jsonrpc_http_result
+    from tests.harness.a2a_wire import jsonrpc_http_result
     from tests.harness.transport import Transport
 
     return jsonrpc_http_result(Transport.E2E_A2A, response)

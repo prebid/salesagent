@@ -38,7 +38,7 @@ from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.harness._base import IntegrationEnv, rest_body_from_kwargs
 from tests.harness._mixins import DeliveryPollMixin
 from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
-from tests.harness.transport import DeliverResult, TransportResult
+from tests.harness.transport import DeliverResult
 from tests.helpers.gam_client import gam_delivery_row
 
 #: The request fields the delivery route's body accepts, for a dispatch in the flat form.
@@ -100,18 +100,11 @@ class DeliveryDispatchMixin:
             raise TypeError(f"dispatch carries both req= and request fields {sorted(kwargs)}; send one request")
         return _get_media_buy_delivery_impl(req, identity)
 
-    # FIXME(#2012): parsed with the LOCAL model, not through the client core. The core's
-    # UNWRAP parses into the PINNED GetMediaBuyDeliveryResponse, whose by_package items
-    # REQUIRE pricing_model, rate and currency; production omitted all three, so every
-    # response failed that parse. The env binding these keeps its `_KNOWN_DELIVER_OVERRIDES`
-    # entries until #2012 lands.
+    # FIXME(#2012): preserve the local model while production omits pinned-required
+    # by_package fields. A2A selects its local reader inside the shared core.
     def _deliver_delivery_mcp(self, **kwargs: Any) -> DeliverResult:
         """Dispatch get_media_buy_delivery via the real FastMCP Client pipeline."""
         return self._run_mcp_client("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)  # type: ignore[attr-defined]
-
-    def _deliver_delivery_a2a(self, **kwargs: Any) -> TransportResult:
-        """Dispatch get_media_buy_delivery via the real A2A handler pipeline."""
-        return self._run_a2a_handler("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)  # type: ignore[attr-defined]
 
     def _build_delivery_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """The ``GetMediaBuyDeliveryBody`` for either call shape (``rest_body_from_kwargs``)."""
@@ -138,17 +131,12 @@ class DeliveryPollEnv(GamSellerMixin, DeliveryDispatchMixin, DeliveryPollMixin, 
 
     RESPONSE_MODEL = GetMediaBuyDeliveryResponse
 
-    # FIXME(#2012): JUSTIFIED OVERRIDE — deliberately does NOT declare
-    # MCP_TOOL/A2A_SKILL, so it does not take the base's client-core delegation.
-    # See DeliveryDispatchMixin; delete both overrides and their
-    # `_KNOWN_DELIVER_OVERRIDES` entries when #2012 lands.
+    # FIXME(#2012): retain the existing MCP route and its local response model.
     def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
         """Dispatch get_media_buy_delivery via the real FastMCP Client pipeline."""
         return self._deliver_delivery_mcp(**kwargs)
 
-    def deliver_a2a(self, **kwargs: Any) -> TransportResult:
-        """Dispatch get_media_buy_delivery via the real A2A handler pipeline."""
-        return self._deliver_delivery_a2a(**kwargs)
+    A2A_SKILL = "get_media_buy_delivery"
 
     EXTERNAL_PATCHES = {
         "adapter": "src.core.tools.media_buy_delivery.get_adapter",

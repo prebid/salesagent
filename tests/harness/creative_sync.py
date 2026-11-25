@@ -91,7 +91,7 @@ from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 from tests.harness.peer_agent import PeerCreativeAgentMixin
-from tests.harness.transport import DeliverResult, TransportResult
+from tests.harness.transport import DeliverResult
 from tests.helpers.creative_test_helpers import creative_payload
 from tests.helpers.peer_creative_agent import single_preview_document
 
@@ -1486,46 +1486,14 @@ class CreativeSyncEnv(GamSellerMixin, PeerCreativeAgentMixin, IntegrationEnv):
         )
         return _sync_creatives_impl(req=req, identity=identity)
 
-    def deliver_a2a(self, **kwargs: Any) -> TransportResult:
-        """Dispatch sync_creatives through the REAL A2A ``on_message_send`` pipeline.
+    A2A_SKILL = "sync_creatives"
 
-        This used to call ``sync_creatives_raw`` directly, routing AROUND
-        ``on_message_send``. The consequence (per tests/CLAUDE.md's own table:
-        A2A ``wire_response`` is populated ONLY when the env routes through
-        ``_run_a2a_handler``) was that the A2A leg produced no wire at all — so
-        every storyboard Then on this transport had nothing transport-observable
-        to assert and fell back to reading an in-memory object. Delegating to the
-        base ``_run_a2a_handler`` (message parse → skill routing →
-        ``serve`` → ``to_wire`` →
-        Task/Artifact DataPart) makes the a2a seat grade the real handler,
-        per-item failures included, instead of standing in for it.
+    def address_tool(self, tool: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        payload = self._with_required_request_fields(payload)
+        return tool, {k: v if k in _A2A_RESERVED_KWARGS else self._wire_value(v) for k, v in payload.items()}
 
-        Outbound kwargs are JSON-normalized through :meth:`_wire_value` — the
-        SAME normalizer the REST leg's ``build_rest_body`` uses, not a second
-        hand-rolled one — because they now travel via
-        ``create_a2a_message_with_skill`` -> ``_dict_to_value`` (protobuf),
-        which cannot carry the Pydantic models the raw wrapper accepted as live
-        Python objects (account, push_notification_config) and would otherwise
-        turn them into repr strings instead of a document a buyer could send.
-        Normalization is applied per-kwarg rather than by calling
-        ``build_rest_body``, because that helper SELECTS the REST body's keys:
-        routing through it would silently drop the three kwargs
-        ``_run_a2a_handler`` consumes itself (see ``_A2A_RESERVED_KWARGS``),
-        which must reach it untouched.
-
-        The spec-required fields (creatives, idempotency_key, account) are filled by
-        :meth:`_with_required_request_fields` BEFORE normalization, not by a local
-        ``creatives=[]`` default: the pin makes all three required on
-        sync-creatives-request, and the account it injects is a typed
-        ``AccountReference`` that only survives the protobuf hop once ``_wire_value``
-        has turned it into a dict.
-        """
-        kwargs = self._with_required_request_fields(kwargs)
-        return self._run_a2a_handler(
-            "sync_creatives",
-            SyncCreativesResponse,
-            **{k: v if k in _A2A_RESERVED_KWARGS else self._wire_value(v) for k, v in kwargs.items()},
-        )
+    def response_parser(self, tool: str) -> Any:
+        return SyncCreativesResponse
 
     def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
         """Call sync_creatives via Client(mcp) — full pipeline dispatch.

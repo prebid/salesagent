@@ -221,7 +221,8 @@ _RAW_WIRE_PY = _HARNESS_DIR / "raw_wire.py"
 #: sender for a document the client cannot shape (a body that is not JSON, a name
 #: the registry lacks). Every construction in all three is graded per-site by
 #: ``EXPECTED_SITES``.
-_SEAM_MODULES = (_DISPATCHERS_PY, _CLIENT_PY, _RAW_WIRE_PY)
+_A2A_WIRE_PY = _CLIENT_PY.with_name("a2a_wire.py")
+_SEAM_MODULES = (_DISPATCHERS_PY, _CLIENT_PY, _RAW_WIRE_PY, _A2A_WIRE_PY)
 _STEPS_DIR = pathlib.Path(__file__).resolve().parents[1] / "bdd" / "steps"
 _OUTCOME_HELPERS_PY = _STEPS_DIR / "_outcome_helpers.py"
 
@@ -283,7 +284,7 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
     above already carry the ``has_wire=False`` decision on their own merits, so the
     predicate never depended on there being a no-wire transport to point at.
 
-    The seam spans TWO modules (``_SEAM_MODULES``). #1858 moved the
+    The seam spans the dispatch modules and their A2A leaf (``_SEAM_MODULES``). #1858 moved the
     transport-generic UNWRAP bodies — the four ``unwrap_rest_response`` branches,
     the shared ``_unwrap_tool_success``, and the three catch-all error unwraps —
     out of ``dispatchers.py`` into ``tests/harness/client.py`` (where the two
@@ -335,7 +336,7 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
             "catch-all wrapping the whole MCP delivery — can fire before any bytes move (the STRADDLE case: "
             "it still hands back the REAL envelope it recovered)",
         ),
-        ("client.py", "unwrap_delivery_error", 0): (
+        ("a2a_wire.py", "unwrap_delivery_error", 0): (
             False,
             "catch-all wrapping the whole A2A delivery — can fire before any bytes move (STRADDLE, as above)",
         ),
@@ -344,7 +345,7 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
             "REST DELIVER exception — no HTTP body existed at all, so nothing crossed the wire",
         ),
         # ── tests/harness/raw_wire.py — a document sent as written (REST goes through client.py) ──
-        ("client.py", "jsonrpc_http_result", 0): (
+        ("a2a_wire.py", "jsonrpc_http_result", 0): (
             True,
             "A2A HTTP response received — success, AdCP refusal, protocol refusal or malformed body",
         ),
@@ -353,7 +354,7 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
             "the transport's own refusal (JSON-RPC error, MCP ToolError with no envelope) — no AdCP body "
             "came back, and on the in-process legs the refusal fires before any bytes move",
         ),
-        ("client.py", "native_task_result", 0): (
+        ("a2a_wire.py", "native_task_result", 0): (
             False,
             "direct native receipt — authentic Task evidence without HTTP; HTTP callers explicitly replace the declaration",
         ),

@@ -33,7 +33,7 @@ from tests.harness.admin_client import AdminOperatorMixin
 from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.peer_agent import PeerCreativeAgentMixin
 from tests.harness.publisher_authorization import PublisherAdagentsMixin
-from tests.harness.transport import DeliverResult, TransportResult
+from tests.harness.transport import DeliverResult
 
 if TYPE_CHECKING:
     from src.core.tools.media_buy_create import ApprovalResult
@@ -830,19 +830,13 @@ class MediaBuyCreateEnv(
         flat.update(kwargs)
         return flat
 
-    def deliver_a2a(self, **kwargs: Any) -> TransportResult:
-        """Dispatch create_media_buy through the real A2A ``on_message_send`` pipeline.
+    A2A_SKILL = "create_media_buy"
 
-        Delegates to the base ``_run_a2a_handler`` (drives ``on_message_send`` →
-        skill routing → ``serve`` → ``to_wire`` → Task/Artifact DataPart, strips
-        the A2A-envelope protocol fields, unwraps A2AError), reconstructing the
-        ``CreateMediaBuyResult`` via ``parse_rest_response`` — the
-        success|error union needs the ``media_buy_id`` discriminator plus the
-        top-level ``status``, which a plain Pydantic class can't recover.
-        """
-        return self._run_a2a_handler(
-            "create_media_buy", lambda **data: self.parse_rest_response(data), **self._flatten_request(kwargs)
-        )
+    def address_tool(self, tool: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        return tool, self._flatten_request(payload)
+
+    def response_parser(self, tool: str) -> Any:
+        return CreateMediaBuyResult
 
     def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
         """Dispatch create_media_buy through the real FastMCP ``Client`` pipeline.

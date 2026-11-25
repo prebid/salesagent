@@ -619,6 +619,23 @@ def given_package_exists(ctx: dict, package_id: str) -> None:
     _register_package(ctx, package_id, new_pkg)
 
 
+@given(parsers.parse('another media buy of the Buyer holds package "{label}"'))
+def given_other_buy_holds_package(ctx: dict, label: str) -> None:
+    """A second buy of the same buyer and tenant holds a package *label* names.
+
+    The update's own buy stays the target: only the label is registered. The package id
+    is unique in the tenant, so a lookup by id alone finds this buy's package and nothing
+    else.
+    """
+    from tests.factories import MediaBuyFactory, MediaPackageFactory
+
+    other_buy = MediaBuyFactory(tenant=ctx["tenant"], principal=ctx["principal"])
+    package = MediaPackageFactory(media_buy=other_buy, package_id=f"{label}_{other_buy.media_buy_id}")
+    ctx["env"]._commit_factory_data()
+    assert other_buy.media_buy_id != ctx["existing_media_buy"].media_buy_id, "the other buy is the update's own buy"
+    _register_package(ctx, label, package)
+
+
 @given(parsers.parse('the package "{package_id}" has stored targeting_overlay {overlay}'))
 def given_package_stored_overlay(ctx: dict, package_id: str, overlay: str) -> None:
     """Persist *overlay* (JSON) as the package's current targeting, then prove it took.

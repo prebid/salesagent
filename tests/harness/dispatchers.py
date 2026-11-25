@@ -163,7 +163,7 @@ def _refuse_signed_generic_client(signed: SignatureRealization, transport: Trans
 
 def a2a_transport_result(call: Callable[[], TransportResult]) -> TransportResult:
     """Return captured A2A evidence; capture only exceptions preceding a result."""
-    from tests.harness.client import unwrap_delivery_error
+    from tests.harness.a2a_wire import unwrap_delivery_error
 
     try:
         return call()
@@ -476,7 +476,7 @@ class McpE2EDispatcher:
     """
 
     def dispatch(self, env: BaseTestEnv, *, signed: SignatureRealization = False, **kwargs: Any) -> TransportResult:
-        from tests.harness.client import _dispatch_core, flatten_payload
+        from tests.harness.client import _dispatch_core
         from tests.harness.transport import NO_IDENTITY_OVERRIDE, MissingToolNameError, Transport
 
         if signed:
@@ -492,65 +492,27 @@ class McpE2EDispatcher:
             )
 
         credential = kwargs.pop("credential", NO_IDENTITY_OVERRIDE)
-        req = kwargs.pop("req", None)
-        payload = flatten_payload(req, **kwargs)
-
-        return _dispatch_core(env, Transport.E2E_MCP, tool_name, payload, credential)
+        return _dispatch_core(env, Transport.E2E_MCP, tool_name, kwargs, credential)
 
 
 class A2AE2EDispatcher:
-    """Dispatch via a real JSON-RPC ``message/send`` HTTP request to the live A2A endpoint.
+    """Send an environment-owned request over the real A2A HTTP endpoint.
 
-    Unlike ``RestE2EDispatcher`` (which reuses each env's hand-written
-    ``REST_ENDPOINT``/``build_rest_body``/``parse_rest_response`` overrides),
-    this delegates entirely to ``AdCPTestClient``/``_deliver_e2e_a2a``
-    (``tests/harness/client.py``, the wire-grading work) — the address,
-    JSON-RPC envelope construction, and Task-state handling all live there,
-    derived from the live ``create_agent_card()`` registration
-    (``tests/harness/address_table.py``), not re-implemented per-env.
-
-    Tool-name threading: unlike ``AdCPTestClient.call(tool, payload,
-    transport)`` (which takes the tool name explicitly), the legacy
-    ``env.call_via(transport, **kwargs)`` entry point this dispatcher is
-    reached through carries no tool-name parameter — every OTHER dispatcher
-    sidesteps this because the env subclass's own ``deliver_a2a``/``deliver_mcp``
-    override already has the tool name hard-coded in its body (e.g.
-    ``self._run_a2a_handler("get_products", ...)``). Since this
-    dispatcher must call the generic client instead of an env override, the
-    caller supplies the tool name explicitly via a ``tool_name=`` kwarg (or
-    an ``env.A2A_SKILL`` class attribute, for envs that want to declare it
-    once) — same open question the wire-grading work's ``McpE2EDispatcher`` faces for
-    ``Transport.E2E_MCP``, resolved independently here since neither
-    dispatcher's fix depends on the other's.
-
-    ``signed`` is consumed and REFUSED, for the reason given on
-    ``McpE2EDispatcher``. The in-process ``Transport.A2A`` leg signs; this one
-    cannot, and running it unsigned would grade a signing scenario green having
-    signed nothing.
+    The shared core resolves request-dependent addressing before selecting the
+    environment's local response reader. Generic callers use AdCPTestClient.
+    Explicit signed dispatch remains refused on this legacy E2E entry point.
     """
 
     def dispatch(self, env: BaseTestEnv, *, signed: SignatureRealization = False, **kwargs: Any) -> TransportResult:
-        from tests.harness.client import _dispatch_core, flatten_payload
-        from tests.harness.transport import NO_IDENTITY_OVERRIDE, MissingToolNameError, Transport
+        from tests.harness.client import _dispatch_core
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
 
         if signed:
             _refuse_signed_generic_client(signed, Transport.E2E_A2A)
 
         credential = kwargs.pop("credential", NO_IDENTITY_OVERRIDE)
         tool_name = kwargs.pop("tool_name", None) or getattr(env, "A2A_SKILL", None)
-        if not tool_name:
-            raise MissingToolNameError(
-                "A2AE2EDispatcher.dispatch() needs a tool/skill name to resolve an address via "
-                "AdCPTestClient — pass tool_name=... to env.call_via(Transport.E2E_A2A, ...) (or "
-                "declare env.A2A_SKILL), or call AdCPTestClient(env).call(tool, payload, "
-                "Transport.E2E_A2A) directly instead — the primary path this design promotes "
-                "(see tests/harness/client.py — rewriting per-env shaping is a non-goal)."
-            )
-
-        req = kwargs.pop("req", None)
-        payload = flatten_payload(req, **kwargs)
-
-        return _dispatch_core(env, Transport.E2E_A2A, tool_name, payload, credential)
+        return _dispatch_core(env, Transport.E2E_A2A, tool_name, kwargs, credential)
 
 
 DISPATCHERS: dict[

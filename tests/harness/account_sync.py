@@ -32,7 +32,6 @@ from src.core.schemas.account import ListAccountsResponse, SyncAccountsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import AccountListDispatchMixin
 from tests.harness._realize import e2e_unsupported, realize_e2e
-from tests.harness.transport import DeliverResult
 
 
 class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
@@ -70,7 +69,7 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
 
     #: The SECOND verb. It cannot be a class attribute like the pair above,
     #: because which verb is in flight is a property of the REQUEST, not of the
-    #: env — so it is applied in _deliver_via_client() below, at the one frame
+    #: env — so it is applied in address_tool() below, at the one frame
     #: that has both the request and the tool name in hand.
     LIST_TOOL = "list_accounts"
 
@@ -383,31 +382,9 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
             return self._call_list_impl(**kwargs)
         return asyncio.run(self.call_impl_async(**kwargs))
 
-    def _deliver_via_client(self, transport: Any, tool: str, kwargs: dict[str, Any]) -> DeliverResult:
-        """Re-address a list request onto the list verb, then DELEGATE dispatch.
-
-        The one place this dual-verb env diverges from a single-verb one. It is
-        not a second dispatch implementation: ADDRESS, WRAP, DELIVER and UNWRAP
-        all still happen exactly once, inside ``BaseTestEnv._deliver_via_client``
-        -> ``_dispatch_core`` -> the one ``AdCPTestClient`` core, for BOTH verbs.
-        All this override changes is WHICH tool name the core is asked to
-        address — the request-content discriminator the class attributes above
-        structurally cannot carry, expressed at the one frame that holds the
-        request and the tool name together.
-
-        This is why ``deliver_mcp``/``deliver_a2a`` are gone (they were
-        allowlisted at ``test_architecture_harness_single_dispatch``): each
-        re-implemented the list leg on ``_run_mcp_client``/``_run_a2a_handler``
-        directly, SKIPPING the core's address resolution and shared unwrap, so
-        the two verbs were graded through two different dispatch paths. Now they
-        are graded through one — and per-transport genuineness is unchanged,
-        because the core's own MCP/A2A DELIVER calls those very same env
-        primitives (``tests/harness/client.py``: ``_deliver_mcp`` /
-        ``_deliver_a2a``).
-        """
-        if self.is_list_request(kwargs):
-            tool = self.LIST_TOOL
-        return super()._deliver_via_client(transport, tool, kwargs)
+    def address_tool(self, tool: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Preserve the list request discriminator before flattening on every leg."""
+        return (self.LIST_TOOL if self.is_list_request(payload) else tool), payload
 
     def response_parser(self, tool: str) -> Any:
         """Type each verb's wire into its OWN response model.

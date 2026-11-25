@@ -85,23 +85,13 @@ _KNOWN_DELIVER_OVERRIDES: set[tuple[str, str, str]] = {
     # Selects the transport target from request CONTENT (_is_list_request), so
     # it can declare no single MCP_TOOL/A2A_SKILL.
     ("tests/harness/media_buy_create_list.py", "MediaBuyCreateListEnv", "deliver_mcp"),
-    ("tests/harness/media_buy_create_list.py", "MediaBuyCreateListEnv", "deliver_a2a"),
     ("tests/harness/media_buy_dual.py", "MediaBuyDualEnv", "deliver_mcp"),
-    ("tests/harness/media_buy_dual.py", "MediaBuyDualEnv", "deliver_a2a"),
     # Reshapes kwargs (_flatten_request) and parses the success|error union via
     # parse_rest_response, which needs the media_buy_id discriminator.
     ("tests/harness/media_buy_create.py", "MediaBuyCreateEnv", "deliver_mcp"),
-    ("tests/harness/media_buy_create.py", "MediaBuyCreateEnv", "deliver_a2a"),
     # Supplies a required kwargs default (creatives=[]) before dispatch.
     ("tests/harness/creative_sync.py", "CreativeSyncEnv", "deliver_mcp"),
-    # Commits factory data, defaults creatives=[], and JSON-normalizes kwargs
-    # through build_rest_body before dispatch, so it cannot delegate to the base.
-    # (The previous reason — "deliberate raw-wrapper bypass ... LANE C owns
-    # replacing the bypass" — is stale: it WAS replaced in dc280c5ee, and
-    # deliver_a2a now calls the real _run_a2a_handler. The entry stays because of
-    # the setup above, not because of a bypass that no longer exists; an allowlist
-    # whose recorded reasons drift false cannot be audited.)
-    ("tests/harness/creative_sync.py", "CreativeSyncEnv", "deliver_a2a"),
+    # A2A routing/shaping/parser overrides now belong to the shared core hooks.
     # `MediaBuyListEnv`'s deliver_mcp and deliver_a2a were removed here. Their two
     # recorded reasons were a stale one ("uses the legacy _run_mcp_wrapper", untrue since
     # GH #1900) and FIXME(#1928) ("the wire omits the pinned-required confirmed_at +
@@ -112,14 +102,11 @@ _KNOWN_DELIVER_OVERRIDES: set[tuple[str, str, str]] = {
     # claim behind it was checked.
     # FIXME(#2012): by_package entries omit the pinned-required
     # pricing_model/rate/currency, so the core's pinned parse fails on every
-    # delivery response. Both entries are removed when #2012 lands.
+    # delivery response. The legacy MCP entry remains until its separate migration.
     ("tests/harness/delivery_poll.py", "DeliveryPollEnv", "deliver_mcp"),
-    ("tests/harness/delivery_poll.py", "DeliveryPollEnv", "deliver_a2a"),
-    # Their real wire does not satisfy the tool's PINNED response model, which
-    # the client core parses into — so joining the core would turn a live
-    # conformance gap into a dispatch error (list_creative_formats assets).
+    # Preserve the legacy MCP local-model override while the pinned-schema
+    # conformance gap is tracked separately (list_creative_formats assets).
     ("tests/harness/creative_formats.py", "CreativeFormatsEnv", "deliver_mcp"),
-    ("tests/harness/creative_formats.py", "CreativeFormatsEnv", "deliver_a2a"),
     # `TaskManagementEnv.deliver_mcp` was removed here. Its FIXME(#2201) reason -- the
     # list_tasks wire omitting the pinned-required query_summary and pagination -- stopped
     # being true when #2201 landed and the response started extending the pinned

@@ -23,9 +23,18 @@ class A2ATaskOwnershipEnv(BareIntegrationEnv):
     def response_parser(self, tool: str) -> Any:
         return lambda **data: RootModel(data)
 
-    def _run_a2a_handler(self, skill_name: str, response_cls: type, **kwargs: Any) -> TransportResult:
+    def address_tool(self, tool: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Address each invocation or durable poll without mutating the declaration."""
+        action = payload.pop("action")
+        if action == "invoke":
+            return self.skill, dict(self.parameters)
+        if action == "poll":
+            return "get_task_status", {"task_id": self.adcp_task_id}
+        raise ValueError(f"Unknown invocation action {action}")
+
+    def _run_a2a_handler(self, skill_name: str, **kwargs: Any) -> TransportResult:
         """Invoke on the same HTTP handler that receives subsequent native lookups."""
-        return self._run_a2a_over_http(skill_name, response_cls, **kwargs)
+        return self._run_a2a_over_http(skill_name, **kwargs)
 
     def prepare_task(self, state: str) -> None:
         tenant, principal = self.setup_default_data()
@@ -75,10 +84,8 @@ class A2ATaskOwnershipEnv(BareIntegrationEnv):
         action = kwargs.get("action")
         credential = self._caller(kwargs["caller"])
         if action in ("invoke", "poll"):
-            self.A2A_SKILL = self.skill if action == "invoke" else "get_task_status"
-            parameters = self.parameters if action == "invoke" else {"task_id": self.adcp_task_id}
             result = super().call_via(
-                transport, credential=credential, signed=kwargs.get("signed", False), **parameters
+                transport, credential=credential, signed=kwargs.get("signed", False), action=action
             )
         else:
             task_id = self.task_id if kwargs.get("target", "existing") == "existing" else "missing-task"
