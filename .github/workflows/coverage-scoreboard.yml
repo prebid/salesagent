@@ -25,15 +25,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Publish coverage scoreboard
+  # Decides whether there is anything to publish. Holds read access only, so a poll that
+  # finds the newest run already published never runs with contents: write.
+  pick:
+    name: Pick the CI run
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     permissions:
-      actions: read  # find the CI run and download its BDD artifacts
-      contents: write  # push the coverage-scoreboard branch, and nothing else
-    env:
-      BRANCH: coverage-scoreboard
+      actions: read  # find the CI run
+      contents: read  # read the published scoreboard.json
+    outputs:
+      id: ${{ steps.run.outputs.id }}
+      sha: ${{ steps.run.outputs.sha }}
+      fresh: ${{ steps.run.outputs.fresh }}
     steps:
       - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
@@ -46,6 +50,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           REQUESTED: ${{ inputs.run-id }}
+          BRANCH: coverage-scoreboard
         run: |
           set -euo pipefail
           run_id="$REQUESTED"
@@ -69,52 +74,60 @@ jobs:
             echo "fresh=true" >> "$GITHUB_OUTPUT"
           fi
 
+  publish:
+    name: Publish coverage scoreboard
+    needs: pick
+    if: needs.pick.outputs.fresh == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read  # download the CI run's BDD artifacts
+      contents: write  # push the coverage-scoreboard branch, and nothing else
+    env:
+      BRANCH: coverage-scoreboard
+      RUN_ID: ${{ needs.pick.outputs.id }}
+      SHA: ${{ needs.pick.outputs.sha }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
+
       # The feature files the artifacts were measured against: the run's own commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: steps.run.outputs.fresh == 'true'
         with:
-          ref: ${{ steps.run.outputs.sha }}
+          ref: ${{ needs.pick.outputs.sha }}
           persist-credentials: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: steps.run.outputs.fresh == 'true'
         with:
           pattern: bdd-*
           path: ${{ runner.temp }}/bdd-artifacts
-          run-id: ${{ steps.run.outputs.id }}
+          run-id: ${{ needs.pick.outputs.id }}
           github-token: ${{ github.token }}
 
       # The generator imports scripts/audit/storyboard_spec, which needs the project
-      # dependencies (adcp, pyyaml). `uv run --frozen` installs them from uv.lock.
-      - uses: ./.github/actions/_install-uv
-        if: steps.run.outputs.fresh == 'true'
+      # dependencies (adcp, pyyaml): set up the way every other job that imports
+      # project code does.
+      - uses: ./.github/actions/_setup-env
 
       - name: Generate the scoreboard
-        if: steps.run.outputs.fresh == 'true'
         env:
-          RUN_ID: ${{ steps.run.outputs.id }}
-          SHA: ${{ steps.run.outputs.sha }}
-          REPO: ${{ github.repository }}
-          OUT: ${{ runner.temp }}/scoreboard
           ARTIFACTS: ${{ runner.temp }}/bdd-artifacts
         run: |
           set -euo pipefail
-          uv run --frozen python scripts/audit/coverage_scoreboard.py --artifacts "$ARTIFACTS" --out "$OUT" \
+          uv run python scripts/audit/coverage_scoreboard.py --artifacts "$ARTIFACTS" --out "$RUNNER_TEMP/scoreboard" \
             --commit "$SHA" --run-id "$RUN_ID" --repository "$REPO" --markdown | tee -a "$GITHUB_STEP_SUMMARY"
 
       # One commit on an orphan branch, force-pushed: the branch holds the current
       # scoreboard only, so its history never grows. No other ref is touched.
       - name: Push to the coverage-scoreboard branch
-        if: steps.run.outputs.fresh == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ steps.run.outputs.id }}
-          SHA: ${{ steps.run.outputs.sha }}
-          OUT: ${{ runner.temp }}/scoreboard
         run: |
           set -euo pipefail
-          cd "$OUT"
+          cd "$RUNNER_TEMP/scoreboard"
           git init -q -b "$BRANCH"
           git add scoreboard.json scoreboard.md
           git -c user.name='github-actions[bot]' \
