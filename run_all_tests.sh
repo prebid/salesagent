@@ -180,8 +180,8 @@ ALL_SUITES="unit,integration,bdd,admin,e2e,ui,quality,storyboard,collection"
 DELEGATE=0
 # --skip-gam-preflight, first if given: run the suites without the GAM configuration
 # preflight below. GAM_SUITE_PREFLIGHT_SKIP=1 says the same as a standing setting.
-_gam_preflight_skip=""
-if [ "${1:-}" = "--skip-gam-preflight" ]; then _gam_preflight_skip="--skip"; shift; fi
+_gam_preflight_skip=0
+if [ "${1:-}" = "--skip-gam-preflight" ]; then _gam_preflight_skip=1; shift; fi
 case "${1:-ci}" in
     quick) DELEGATE=1 ;;
     ci) if [ -n "${2:-}" ]; then DELEGATE=1; else SUITES="$ALL_SUITES"; fi ;;
@@ -275,21 +275,27 @@ STORYBOARD_SUBDIR="storyboard"
 # empty value counting as unset, so it could answer nothing else. Any non-empty GAM_* variable
 # hands the decision to the preflight, which needs uv.
 # A partial or broken configuration fails here, with every failing check named, instead of an
-# hour later as GAM failures. Read-only: it creates nothing in GAM. --skip-gam-preflight (or GAM_SUITE_PREFLIGHT_SKIP=1) runs the
-# suites anyway; the skip is printed and kept in the run's gam_preflight.log, and the GAM
-# tests then fail where they fail. RUN_ALL_TESTS_STOP_AFTER_GAM_PREFLIGHT exits 0 right
-# after this stage: the seam that proves the gate without starting a stack.
+# hour later as GAM failures. Read-only: it creates nothing in GAM. --skip-gam-preflight (or
+# GAM_SUITE_PREFLIGHT_SKIP=1) runs the suites anyway; the skip is printed and kept in the run's
+# gam_preflight.log, and the GAM tests then fail where they fail. The flag runs no check, so
+# the runner states the skip itself and needs no uv. The setting is a value, which only
+# ToolingSettings reads, so it goes through the preflight like every other GAM_* setting.
+# RUN_ALL_TESTS_STOP_AFTER_GAM_PREFLIGHT exits 0 right after this stage: the seam that proves
+# the gate without starting a stack.
 _gam_preflight_log="$(mktemp)"
 case ",$SUITES," in
     *,e2e,*|*,bdd,*|*,bdd_e2e,*)
+        if [ "$_gam_preflight_skip" = 1 ]; then
+            # scripts/gam_prerequisites_check.py's SKIPPED, verbatim.
+            echo "GAM: preflight skipped (--skip or GAM_SUITE_PREFLIGHT_SKIP), no check ran" | tee "$_gam_preflight_log"
         # A count, so no value is captured; -c reads all of env, so pipefail sees no SIGPIPE.
-        if [ "$(env | grep -ci '^GAM_[^=]*=.' || true)" = 0 ]; then
+        elif [ "$(env | grep -ci '^GAM_[^=]*=.' || true)" = 0 ]; then
             # scripts/gam_prerequisites_check.py's NOT_CONFIGURED, verbatim.
             echo "GAM: not configured" | tee "$_gam_preflight_log"
         elif ! command -v uv >/dev/null 2>&1; then
-            echo "GAM preflight FAILED: uv is not on PATH, and the GAM_* settings in this environment need it to be checked (install uv)" | tee "$_gam_preflight_log"
+            echo "GAM preflight FAILED: uv is not on PATH, and the GAM_* settings in this environment need it to be checked (install uv, or pass --skip-gam-preflight to run the suites without the check)" | tee "$_gam_preflight_log"
             exit 1
-        elif ! UV_FROZEN=1 uv run --quiet python scripts/gam_prerequisites_check.py --suite-network ${_gam_preflight_skip:+"$_gam_preflight_skip"} \
+        elif ! UV_FROZEN=1 uv run --quiet python scripts/gam_prerequisites_check.py --suite-network \
             2>&1 | tee "$_gam_preflight_log"; then
             echo "GAM preflight FAILED: configure the settings named above, or pass --skip-gam-preflight (GAM_SUITE_PREFLIGHT_SKIP=1) to run the suites anyway"
             exit 1

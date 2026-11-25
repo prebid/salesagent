@@ -62,7 +62,7 @@ class GAMHealthChecker:
 
     def __init__(self, config: dict[str, Any]):
         self.config = config
-        self.client = None
+        self.client: ad_manager.AdManagerClient | None = None
         self.last_check_time: datetime | None = None
         self.last_results: list[HealthCheckResult] = []
 
