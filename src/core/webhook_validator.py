@@ -131,9 +131,9 @@ def sanitize_webhook_url_for_log(url: str | None) -> str | None:
     return url_for_record(url, keep_path=True)
 
 
-def webhook_url_for_log(url: str | None) -> str:
+def webhook_url_for_log(url: str | None, *, keep_path: bool = True) -> str:
     """Total log helper: sanitized URL or the unparseable placeholder (never raw)."""
-    return sanitize_webhook_url_for_log(url) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG
+    return url_for_record(url, keep_path=keep_path) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG
 
 
 def reject_unsafe_webhook_registration_url(

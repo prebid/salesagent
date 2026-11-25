@@ -287,24 +287,25 @@ def test_signals_agent_add_refusal_reason_reaches_the_logs(
         f"the seam did not log the real refusal reason; got {[r.getMessage() for r in caplog.records]}"
     )
     admin_records = [r.getMessage() for r in caplog.records if r.name == "src.admin.utils.url_policy"]
-    assert admin_records == [f"[SECURITY] Rejected Agent URL at ingest: {METADATA_URL}"]
+    assert admin_records == ["[SECURITY] Rejected Agent URL at ingest: https://169.254.169.254/..."]
 
 
-def test_a_refused_url_is_logged_without_its_credentials_or_query(
+def test_a_refused_url_is_logged_with_its_scheme_and_host_only(
     authenticated_admin_client, seeded_tenant, monkeypatch, caplog
 ):
-    """The operator's log names the refused URL through ``webhook_url_for_log``, never raw.
+    """The operator's log names a refused URL by scheme and host, never its credentials.
 
-    A URL can carry a credential in its userinfo or its query; the log keeps the scheme,
-    host and path, which is what an operator needs to act on the refusal.
+    A URL carries a credential in its userinfo, its query, or (a Slack webhook) its path.
     """
     set_flags(monkeypatch)
     caplog.set_level(logging.WARNING)
 
-    post_signals_agent(authenticated_admin_client, "https://user:s3cret@169.254.169.254/agent?token=s3cret")
+    post_signals_agent(
+        authenticated_admin_client, "https://user:s3cret@169.254.169.254/services/T000/B000/s3cret?token=s3cret"
+    )
 
     admin_records = [r.getMessage() for r in caplog.records if r.name == "src.admin.utils.url_policy"]
-    assert admin_records == ["[SECURITY] Rejected Agent URL at ingest: https://169.254.169.254/agent"]
+    assert admin_records == ["[SECURITY] Rejected Agent URL at ingest: https://169.254.169.254/..."]
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +349,7 @@ def test_create_tenant_refuses_blocked_webhook_url(field, label, management_api_
     assert response.status_code == 400
     assert response.get_json() == refused(label)
     assert [r.getMessage() for r in caplog.records if r.name == "src.admin.utils.url_policy"] == [
-        f"[SECURITY] Rejected {label} at ingest: {METADATA_URL}"
+        f"[SECURITY] Rejected {label} at ingest: https://169.254.169.254/..."
     ]
 
 
