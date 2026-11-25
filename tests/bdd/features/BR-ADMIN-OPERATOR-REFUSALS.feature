@@ -548,12 +548,13 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
   @T-ADMIN-REFUSAL-058 @json
   Scenario: An API caller is told which webhook URL the egress policy refused
     When the tenant management API is asked to create a tenant with:
-      | field             | value                        |
-      | name              | Refused Egress Seller        |
-      | subdomain         | refused_egress_seller        |
-      | ad_server         | mock                         |
-      | virtual_host      | refused-egress.example.com   |
-      | slack_webhook_url | https://169.254.169.254/hook |
+      | field             | value                               |
+      | name              | Refused Egress Seller               |
+      | subdomain         | refused_egress_seller               |
+      | ad_server         | mock                                |
+      | virtual_host      | refused-egress.example.com          |
+      | creator_email     | operator@refused-egress.example.com |
+      | slack_webhook_url | https://169.254.169.254/hook        |
     Then the page returns status 400
     And the JSON response has "success" as false
     And the JSON error is the "EgressUrlRefused" refusal
