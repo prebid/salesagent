@@ -221,7 +221,6 @@ def given_product_declaring_a_channel(ctx: dict, product_id: str, channel: str) 
 
 @when("the system applies AI ranking")
 @when("the Buyer Agent sends a get_products request with a brief")
-@when("the Buyer Agent sends a get_products request with a brief and no buying_mode")
 @when("the Buyer Agent sends a get_products request with a non-compliant brief")
 @when("the Buyer Agent sends a get_products request with any brief content")
 @when("the Buyer Agent sends a get_products request with a compliant brief")
@@ -233,6 +232,18 @@ def when_get_products_with_brief(ctx: dict) -> None:
     env's nonce (``scripted_brief``), which is what the scripted verdict answers to over e2e.
     """
     dispatch_request(ctx, brief=ctx["env"].scripted_brief(_BRIEF))
+
+
+@when("the Buyer Agent sends a get_products request with a brief and no buying_mode")
+def when_get_products_with_brief_and_no_mode(ctx: dict) -> None:
+    """Dispatch get_products with a brief and, as the wording claims, no ``buying_mode``.
+
+    Checks the absence on the request it sends: the factory baseline defaults ``buying_mode`` to
+    "brief", and a request built from it would grade brief mode under this title.
+    """
+    request = {"brief": ctx["env"].scripted_brief(_BRIEF)}
+    assert "buying_mode" not in request, f"the scenario claims no buying_mode, but the request sends one: {request!r}"
+    dispatch_request(ctx, **request)
 
 
 @when(parsers.parse("the Buyer Agent sends a get_products request with channels filter {partition}"))
