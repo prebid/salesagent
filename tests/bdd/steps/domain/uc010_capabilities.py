@@ -1035,7 +1035,7 @@ def _expect_flag(ctx: dict, path: str, expected: str) -> None:
     'absent or false' | 'equal to "..." as a URI'."""
     value = wire_lookup(ctx, path)
     if expected == "absent":
-        assert value is WIRE_MISSING, f"{path} unexpectedly present: {value!r}"
+        wire_absent(ctx, path)
     elif expected == "absent or false":
         wire_absent_or_false(ctx, path)
     elif expected in ("equal to true", "equal to false"):

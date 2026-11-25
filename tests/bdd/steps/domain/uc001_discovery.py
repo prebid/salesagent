@@ -26,15 +26,16 @@ model (``ProductEnv.set_ranking_scores``).
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import assert_wire_rejection, wire_absent_or_false, wire_product_ids
+from tests.bdd.steps._outcome_helpers import assert_wire_rejection, wire_product_ids
 from tests.bdd.steps.domain.uc_get_products_inventory import given_tenant
+from tests.bdd.steps.generic._brand_param import parse_brand_gherkin_param
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import rows
 from tests.factories import PricingOptionFactory, ProductFactory
 from tests.helpers.pinned_schema import recovery_by_code
 from tests.helpers.settings_injection import KEYLESS_AI_CONFIG
@@ -299,6 +300,7 @@ def then_products_sorted_by_score(ctx: dict) -> None:
 @then("the request should proceed to product discovery without policy check")
 @then("the request should proceed (fail-open behavior)")
 @then("the request should proceed with full product catalog")
+@then("the products should be the catalog, unfiltered by the buyer's catalog")
 def then_full_catalog_in_catalog_order(ctx: dict) -> None:
     """products[] is the whole catalog, in catalog order: nothing ranked, filtered or blocked."""
     expected = ctx["catalog"]
@@ -313,28 +315,13 @@ def then_full_catalog_in_catalog_order(ctx: dict) -> None:
 # seller does not support catalog matching". Ungraded by any storyboard.
 
 
-def _table_value(value: str) -> Any:
-    """A data-table cell: JSON when it is an object or array, the text otherwise."""
-    return json.loads(value) if value.startswith(("{", "[")) else value
-
-
 @when("the Buyer Agent sends a get_products request with:")
 def when_get_products_with_table(ctx: dict, datatable: list) -> None:
-    """Dispatch get_products with the field/value rows of the step's data table."""
-    header, *rows = datatable
-    assert header == ["field", "value"], f"expected a field/value table, got header {header}"
-    dispatch_request(ctx, **{row[0].strip(): _table_value(row[1].strip()) for row in rows})
+    """Dispatch get_products with the field/value rows of the step's data table.
 
-
-@then("the products should be the catalog, unfiltered by the buyer's catalog")
-def then_products_unfiltered_by_catalog(ctx: dict) -> None:
-    """products[] is every seeded product: a seller that does not match catalogs narrows nothing."""
-    expected = ctx["catalog"]
-    actual = wire_product_ids(ctx)
-    assert sorted(actual) == sorted(expected), f"Expected the whole catalog {expected}, got {actual}"
-
-
-@then(parsers.parse('the response should have "{field}" absent or false'))
-def then_field_absent_or_false(ctx: dict, field: str) -> None:
-    """The wire omits ``field`` or carries ``false``; any other value claims what did not happen."""
-    wire_absent_or_false(ctx, field)
+    Rows go through the shared table parser (``strict=True``, so a malformed row fails)
+    and each value through the shared cell parser: JSON when it parses, the text otherwise.
+    """
+    table = rows(datatable)
+    assert table and set(table[0]) == {"field", "value"}, f"expected a field/value table, got {datatable[0]}"
+    dispatch_request(ctx, **{row["field"].strip(): parse_brand_gherkin_param(row["value"].strip()) for row in table})
