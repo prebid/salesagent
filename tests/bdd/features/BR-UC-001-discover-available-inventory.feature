@@ -855,7 +855,9 @@ Feature: BR-UC-001 Discover Available Inventory
     Examples: Invalid partitions
       | partition                    | outcome                                       |
       | missing_buying_mode          | error: buying_mode is required                 |
-      | unknown_value                | error: buying_mode must be one of enum values  |
+      # LOCAL CORRECTION (mirror upstream in adcp-req): a mode outside the pinned enum is a
+      # schema violation, INVALID_REQUEST naming buying_mode; the row graded message text.
+      | unknown_value                | error INVALID_REQUEST on buying_mode with suggestion |
       | brief_mode_missing_brief     | error: brief required for brief mode           |
       | brief_mode_with_refine       | error: refine prohibited for brief mode        |
       | wholesale_with_brief         | error: brief prohibited for wholesale mode     |
@@ -1195,7 +1197,9 @@ Feature: BR-UC-001 Discover Available Inventory
       | buying_mode='refine' with refine=[1 entry] (valid refine mode, minItems boundary) | valid |
       | buying_mode absent, pre-v3 client (defaulted to brief)                    | valid     |
       | buying_mode absent, v3 client (required field missing)                    | invalid   |
-      | buying_mode='auction' (unknown enum value)                                | invalid   |
+      # LOCAL CORRECTION (mirror upstream in adcp-req): "invalid" named no wire fact; a mode
+      # outside the pinned enum is INVALID_REQUEST naming buying_mode.
+      | buying_mode='auction' (unknown enum value)                                | error INVALID_REQUEST on buying_mode with suggestion |
       | buying_mode='brief', brief absent (required companion missing)            | invalid   |
       | buying_mode='brief', refine present (prohibited companion present)        | invalid   |
       | buying_mode='wholesale', brief present (prohibited companion present)     | invalid   |
@@ -1203,6 +1207,20 @@ Feature: BR-UC-001 Discover Available Inventory
       | buying_mode='refine', refine absent (required companion missing)          | invalid   |
       | buying_mode='refine', refine=[] (minItems:1 boundary violation)           | invalid   |
       | buying_mode='refine', brief present (prohibited companion present)        | invalid   |
+
+  @T-UC-001-buying-mode-enum @invariant @BR-RULE-079 @error
+  Scenario: buying_mode outside the pinned enum is refused
+    Given the Buyer is authenticated with a valid principal_id
+    When the Buyer Agent sends a get_products request with buying_mode=auction, brief present
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the response error field is buying_mode
+    And the error should include "suggestion" field
+    # LOCALLY-ADDED beside the generated buying_mode partition and boundary outlines, which
+    # carry the same case as one row each but cannot be bound until their other rows have
+    # behaviour (#2710). get-products-request.json at v3.2.7 types buying_mode as the enum
+    # brief / wholesale / refine, so any other value "violates schema constraints":
+    # INVALID_REQUEST (enums/error-code.json), naming the field.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json pointer=/properties/buying_mode
 
   @T-UC-001-boundary-brand-policy @boundary @brand_manifest_policy @analysis-2026-03-09 @schema-v3.1
   Scenario Outline: brand_manifest_policy boundary validation - <boundary_point>
