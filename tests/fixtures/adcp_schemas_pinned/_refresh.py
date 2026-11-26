@@ -314,7 +314,7 @@ def vendor(roots: list[str], *, rev: str, src_prefix: str, id_version: str = "")
         # rewrote the SHA-256-pinned ``enums/error-code.json`` with identical content and
         # different bytes, tripping test_guards_error_code_fixture_pin for no upstream
         # change at all. A frozen artifact has to round-trip byte-for-byte.
-        out.write_text(json.dumps(schema, indent=2, ensure_ascii=False) + "\n")
+        out.write_text(json.dumps(schema, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         written += 1
         stack.extend(re.findall(r'"\$ref"\s*:\s*"([^"]+)"', body))
     print(f"vendored {written} schema files from {REPO}@{rev[:9]} into {FIXTURE_DIR}")
@@ -374,14 +374,14 @@ def vendor_signing_vectors() -> int:
                 f"No local adcp clone at {LOCAL_CLONE} and no committed "
                 f"{prior} to enumerate from — clone adcontextprotocol/adcp first."
             )
-        paths = [f"{VECTORS_SRC}/{rel}" for rel in json.loads(prior.read_text())["files"]]
+        paths = [f"{VECTORS_SRC}/{rel}" for rel in json.loads(prior.read_text(encoding="utf-8"))["files"]]
     manifest: dict[str, str] = {}
     for path in sorted(paths):
         rel = path[len(VECTORS_SRC) + 1 :]
         body = _read_local_path(VECTORS_REV, path) or _read_github_path(VECTORS_REV, path)
         out = VECTORS_DIR / rel
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(body)
+        out.write_text(body, encoding="utf-8")
         manifest[rel] = hashlib.sha256(body.encode()).hexdigest()
     (VECTORS_DIR / "MANIFEST.json").write_text(
         json.dumps(
@@ -394,7 +394,8 @@ def vendor_signing_vectors() -> int:
             indent=2,
             sort_keys=True,
         )
-        + "\n"
+        + "\n",
+        encoding="utf-8",
     )
     print(f"vendored {len(manifest)} conformance-vector files from {REPO}@{VECTORS_REV} into {VECTORS_DIR}")
     return len(manifest)

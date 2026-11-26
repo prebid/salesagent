@@ -29,6 +29,8 @@ from pathlib import Path
 
 import yaml
 
+from tests.unit._architecture_helpers import rel
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _COMPOSE_FILE = _REPO_ROOT / "docker-compose.e2e.yml"
 _TLS_TEMPLATE_MOUNT = "config/nginx/nginx-tls-test.conf.template"
@@ -143,38 +145,38 @@ def find_resurrected_allow_insecure_in_src(src_root: Path) -> list[str]:
     """
     violations: list[str] = []
     for path in sorted(src_root.rglob("*.py")):
-        if "ADCP_OUTBOUND_ALLOW_INSECURE" in path.read_text():
-            violations.append(f"{path.relative_to(src_root.parent)} references ADCP_OUTBOUND_ALLOW_INSECURE")
+        if "ADCP_OUTBOUND_ALLOW_INSECURE" in path.read_text(encoding="utf-8"):
+            violations.append(f"{rel(path, src_root.parent)} references ADCP_OUTBOUND_ALLOW_INSECURE")
     return violations
 
 
 def test_e2e_compose_exactly_one_tls_terminator() -> None:
     """The real docker-compose.e2e.yml has exactly one TLS-terminating service."""
-    compose = yaml.safe_load(_COMPOSE_FILE.read_text())
+    compose = yaml.safe_load(_COMPOSE_FILE.read_text(encoding="utf-8"))
     assert find_multiple_tls_terminators(compose) == []
 
 
 def test_e2e_compose_adcp_test_origins_stay_https_8443() -> None:
     """No service in the real docker-compose.e2e.yml dials a .adcp.test origin over plain http or a stray port."""
-    compose = yaml.safe_load(_COMPOSE_FILE.read_text())
+    compose = yaml.safe_load(_COMPOSE_FILE.read_text(encoding="utf-8"))
     assert find_non_https_adcp_test_origins(compose) == []
 
 
 def test_e2e_compose_never_resurrects_adcp_webhook_host() -> None:
     """The real docker-compose.e2e.yml never re-adds ADCP_WEBHOOK_HOST to any service."""
-    compose = yaml.safe_load(_COMPOSE_FILE.read_text())
+    compose = yaml.safe_load(_COMPOSE_FILE.read_text(encoding="utf-8"))
     assert find_dead_webhook_env_var(compose) == []
 
 
 def test_e2e_compose_tls_material_stays_under_test_tls() -> None:
     """No service in the real docker-compose.e2e.yml names cert material outside .test-tls/."""
-    compose = yaml.safe_load(_COMPOSE_FILE.read_text())
+    compose = yaml.safe_load(_COMPOSE_FILE.read_text(encoding="utf-8"))
     assert find_tls_material_outside_test_tls(compose) == []
 
 
 def test_e2e_compose_never_resurrects_allow_insecure() -> None:
     """The real docker-compose.e2e.yml never re-adds ADCP_OUTBOUND_ALLOW_INSECURE to any service."""
-    compose = yaml.safe_load(_COMPOSE_FILE.read_text())
+    compose = yaml.safe_load(_COMPOSE_FILE.read_text(encoding="utf-8"))
     assert find_resurrected_allow_insecure_in_compose(compose) == []
 
 
@@ -267,7 +269,7 @@ def test_detector_catches_a_resurrected_allow_insecure_in_compose() -> None:
 def test_detector_catches_a_resurrected_allow_insecure_in_src(tmp_path) -> None:
     """The live detector reports a synthetic src/ file referencing ADCP_OUTBOUND_ALLOW_INSECURE."""
     offender = tmp_path / "outbound_http.py"
-    offender.write_text('ALLOW_INSECURE = os.getenv("ADCP_OUTBOUND_ALLOW_INSECURE")\n')
+    offender.write_text('ALLOW_INSECURE = os.getenv("ADCP_OUTBOUND_ALLOW_INSECURE")\n', encoding="utf-8")
     assert find_resurrected_allow_insecure_in_src(tmp_path) == [
         f"{tmp_path.name}/outbound_http.py references ADCP_OUTBOUND_ALLOW_INSECURE"
     ]

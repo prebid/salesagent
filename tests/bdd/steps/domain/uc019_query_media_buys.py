@@ -18,15 +18,16 @@ from pytest_bdd import given, parsers, then, when
 from src.core.schemas._base import GetMediaBuysRequest
 from tests.bdd.steps._outcome_helpers import (
     WIRE_MISSING,
+    capture_created_media_buy,
     parked_media_buy,
     payload_or_none,
     require_payload,
     wire_dict,
-    wire_field,
     wire_lookup,
 )
 from tests.bdd.steps.generic._create_request import build_create_request_kwargs
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import bracket_list
 from tests.bdd.steps.generic.then_error import _wire_code, _wire_error_object, _wire_suggestion
 from tests.factories import (
     CreativeAssignmentFactory,
@@ -372,6 +373,28 @@ def given_owns_media_buy_with_status(ctx: dict, principal_id: str, mb_id: str, s
     (mid-flight) window: "active" stays active; terminal states pass through.
     """
     _seed_simple_media_buy(ctx, principal_id, mb_id, status)
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with returned wire status "{status}"'))
+def given_owns_media_buy_with_returned_wire_status(ctx: dict, principal_id: str, mb_id: str, status: str) -> None:
+    """Seed a buy that get_media_buys reports with wire status *status* (BR-RULE-290).
+
+    Not stacked on ``with status``: that seed uses the factory's past-start window, and
+    on e2e_rest the live status scheduler promotes a past-start ``pending_start`` buy
+    with no creatives to ``active`` within a minute. Every status except the
+    date-refined serving state keeps the far-future pre-flight window; ``active`` gets
+    a window around the real today, so all transports judge it the same.
+    """
+    from src.core.database.models import PersistedMediaBuyStatus
+    from src.core.tools._media_buy_status import CANONICAL_SERVING, PERSISTED_STATUS_TO_CANONICAL
+
+    assert PERSISTED_STATUS_TO_CANONICAL[PersistedMediaBuyStatus(status)] == status, (
+        f"persisted status {status!r} is not returned as itself on the wire"
+    )
+    if status == CANONICAL_SERVING:
+        _seed_relative_media_buy(ctx, principal_id, mb_id, "30 days ago", "in 30 days")
+    else:
+        _seed_media_buy_with_persisted_status(ctx, principal_id, mb_id, status)
 
 
 @given(
@@ -2952,7 +2975,7 @@ def then_confirmed_at_at_moment_equals(ctx: dict, moment: str, timestamp: str) -
 def given_captured_media_buy_id_from_create(ctx: dict) -> None:
     """Perform a REAL create_media_buy through the scenario's transport and capture its id.
 
-    The id comes from ``wire_field`` — the buyer captures what the RESPONSE
+    The id comes from the wire (``capture_created_media_buy``) — the buyer captures what the RESPONSE
     carried, so reading the reconstructed typed payload would grade the
     reconstruction instead. wire_field also raises on a wire transport that
     stashed no wire, which is what keeps this from degrading into a silent
@@ -2962,18 +2985,53 @@ def given_captured_media_buy_id_from_create(ctx: dict) -> None:
     the create response in ctx, the When's query would early-return, and the Then
     steps would grade the WRONG document.
     """
-    _dispatch_create(ctx, po_number="PO-UC019-POST-CREATE-POLL")
-    ctx["created_media_buy_id"] = wire_field(ctx, "media_buy_id")
+    _capture_created_media_buy_id(ctx, build_create_request_kwargs(ctx, po_number="PO-UC019-POST-CREATE-POLL"))
 
 
-def _dispatch_create(ctx: dict, *, po_number: str) -> None:
-    """Send a REAL create_media_buy through the scenario's transport and require it accepted.
+@given(
+    parsers.parse(
+        "the buyer captured a media_buy_id from a successful create_media_buy response "
+        'for one package spending {budget:d} targeting country "{country}"'
+    )
+)
+def given_captured_media_buy_id_with_package_terms(ctx: dict, budget: int, country: str) -> None:
+    """The create above, with the one package's budget and a country targeting overlay stated.
 
-    The one create dispatch for the @post-create-poll scenarios, which differ only in what
-    they read off the accepted create. The assertion is not optional: without it a refused
-    create leaves its envelope in ctx and the later get_media_buys grades the wrong document.
+    The request is kept on ``ctx["created_request_package"]`` so the Then compares the
+    polled package with what the buyer sent, not with what a seed wrote.
     """
-    kwargs = build_create_request_kwargs(ctx, po_number=po_number)
+    kwargs = build_create_request_kwargs(ctx, po_number="PO-UC019-PACKAGE-RECORD", budget=float(budget))
+    (package,) = kwargs["packages"]
+    package["targeting_overlay"] = {"geo_countries": [country]}
+    ctx["created_request_package"] = package
+    _capture_created_media_buy_id(ctx, kwargs)
+
+
+def _capture_created_media_buy_id(ctx: dict, kwargs: dict[str, Any]) -> None:
+    """Dispatch *kwargs* as create_media_buy and keep the media_buy_id the response carried."""
+    _dispatch_create(ctx, kwargs)
+    capture_created_media_buy(ctx)
+
+
+@when("the Buyer Agent calls get_media_buys for the media buy it just created")
+def when_query_media_buy_just_created(ctx: dict) -> None:
+    """Capture the id the scenario's create response carried, and poll get_media_buys for it.
+
+    The create ran in an earlier When on the same env, transport and identity; the id is
+    read off its wire, as a buyer captures it.
+    """
+    capture_created_media_buy(ctx)
+    when_query_captured_media_buy_id(ctx)
+
+
+def _dispatch_create(ctx: dict, kwargs: dict[str, Any]) -> None:
+    """Send *kwargs* as a REAL create_media_buy through the scenario's transport and require it accepted.
+
+    The one create dispatch for the @post-create-poll scenarios, which differ only in the
+    request they send and what they read off the accepted create. The assertion is not
+    optional: without it a refused create leaves its envelope in ctx and the later
+    get_media_buys grades the wrong document.
+    """
     dispatch_request(ctx, **kwargs)
     assert ctx.get("error") is None, f"create_media_buy was refused, so nothing was created: {ctx.get('error')!r}"
 
@@ -3024,22 +3082,40 @@ def then_included_entry_exposes_id_and_status(ctx: dict, expected_status: str) -
     Membership in the pinned ten-member enums/media-buy-status.json enum was the
     previous assertion and could not do this job: ``completed`` and ``failed`` are
     both members, so a freshly-created buy reported as terminal passed. The literal
-    is the state this flow actually starts in — the request assigns no creatives,
-    and media_buy_create._resolve_status returns ``pending_creatives`` for a buy
-    with no assigned/approved creatives (priority 2, ahead of the future start_time
-    that would otherwise make it pending_start).
+    is the state the scenario's create starts the buy in: the UC-019 poll assigns no
+    creatives, so ``pending_creatives``; a create carrying approved creatives starts
+    in its flight state (local-uc002-initial-status.feature).
     """
-    media_buy_id = ctx["created_media_buy_id"]
-    document = wire_dict(ctx)
-    matching = [buy for buy in document.get("media_buys", []) if buy.get("media_buy_id") == media_buy_id]
-    assert len(matching) == 1, (
-        f"expected exactly one entry for the freshly-created buy {media_buy_id!r}, "
-        f"got {len(matching)} in {[b.get('media_buy_id') for b in document.get('media_buys', [])]!r}"
-    )
-
-    status = matching[0].get("status")
+    status = _wire_media_buy(ctx, ctx["created_media_buy_id"]).get("status")
     assert status == expected_status, (
         f"post-create poll: expected media_buys[0].status {expected_status!r} for a freshly-created buy, got {status!r}"
+    )
+
+
+@then(
+    parsers.parse(
+        "the freshly-created buy's package reports the requested product_id, budget {budget:d} "
+        'and targeting_overlay geo_countries "{country}"'
+    )
+)
+def then_created_package_reports_request(ctx: dict, budget: int, country: str) -> None:
+    """The polled buy's one package carries the product, budget and countries the buyer booked.
+
+    get-media-buys-response.json (adcp v3.2.7): packages[].product_id MUST echo the request
+    package's product_id; packages[].targeting_overlay SHOULD echo persisted targeting.
+    The product id is compared with the request the Given sent, the budget and country with
+    the scenario's literals.
+    """
+    packages = _wire_media_buy(ctx, ctx["created_media_buy_id"]).get("packages") or []
+    assert len(packages) == 1, f"expected the buy's one package, got {packages!r}"
+    reported = (
+        packages[0].get("product_id"),
+        packages[0].get("budget"),
+        (packages[0].get("targeting_overlay") or {}).get("geo_countries"),
+    )
+    expected = (ctx["created_request_package"]["product_id"], float(budget), [country])
+    assert reported == expected, (
+        f"expected the package to report (product_id, budget, geo_countries) {expected!r}; it reported {reported!r}"
     )
 
 
@@ -3266,6 +3342,15 @@ def then_raw_request_advisory_code_and_recovery(ctx: dict, mb_id: str, field: st
         f"expected advisory recovery {recovery!r} — the code alone leaves the buyer "
         f"inferring retry semantics; got {advisory.get('recovery')!r}"
     )
+
+
+@then(parsers.parse('the media buy "{mb_id}" valid_actions set should equal {expected_actions}'))
+def then_media_buy_valid_actions_set_equal(ctx: dict, mb_id: str, expected_actions: str) -> None:
+    """Compare the buyer-visible valid_actions set with the scenario's expected values."""
+    expected = bracket_list(expected_actions)
+    actual = _wire_media_buy(ctx, mb_id).get("valid_actions")
+    assert isinstance(actual, list), f"Expected valid_actions array on the wire, got {actual!r}"
+    assert sorted(actual) == sorted(expected), f"valid_actions for {mb_id!r}: {actual!r} != {expected!r}"
 
 
 def _wire_media_buy(ctx: dict, mb_id: str) -> dict:
@@ -3569,7 +3654,7 @@ def given_create_parked_for_approval(ctx: dict) -> None:
     """
     from tests.bdd.steps.domain.uc_format_satisfaction import then_buy_is_parked
 
-    _dispatch_create(ctx, po_number="PO-UC019-MANUAL-APPROVAL")
+    _dispatch_create(ctx, build_create_request_kwargs(ctx, po_number="PO-UC019-MANUAL-APPROVAL"))
     then_buy_is_parked(ctx)
 
 

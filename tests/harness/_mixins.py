@@ -13,7 +13,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
@@ -27,13 +27,10 @@ from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AdapterPackageDelivery,
     DeliveryTotals,
-    GetMediaBuyDeliveryRequest,
-    GetMediaBuyDeliveryResponse,
     GetProductsResponse,
     ReportingPeriod,
 )
 from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
-from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.core.tools.products import _get_products_impl
 from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
 from src.services.webhook_delivery_service import (
@@ -965,39 +962,6 @@ class DeliveryPollMixin:
     def set_adapter_error(self, exception: Exception) -> None:
         """Make the adapter raise the given exception on get_media_buy_delivery."""
         self.mock["adapter"].return_value.get_media_buy_delivery.side_effect = exception  # type: ignore[attr-defined]
-
-    def call_impl(
-        self,
-        media_buy_ids: list[str] | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        status_filter: list[str] | None = None,
-        **extra: Any,
-    ) -> GetMediaBuyDeliveryResponse:
-        """Call _get_media_buy_delivery_impl with the given parameters."""
-        self._commit_factory_data()  # type: ignore[attr-defined]
-
-        # Pop identity — it's injected by call_via for transport dispatch
-        # but is not a GetMediaBuyDeliveryRequest field.
-        # Sentinel distinguishes "not provided" from "explicitly None".
-        from tests.harness.transport import NO_IDENTITY_OVERRIDE
-
-        raw_identity = extra.pop("identity", NO_IDENTITY_OVERRIDE)
-        identity = self.identity if raw_identity is NO_IDENTITY_OVERRIDE else raw_identity  # type: ignore[attr-defined]
-
-        kwargs: dict[str, Any] = {}
-        if media_buy_ids is not None:
-            kwargs["media_buy_ids"] = media_buy_ids
-        if start_date is not None:
-            kwargs["start_date"] = start_date
-        if end_date is not None:
-            kwargs["end_date"] = end_date
-        if status_filter is not None:
-            kwargs["status_filter"] = status_filter
-        kwargs.update(extra)
-
-        req = GetMediaBuyDeliveryRequest(**kwargs)
-        return _get_media_buy_delivery_impl(req, identity)
 
     @staticmethod
     def _make_default_adapter_response() -> AdapterGetMediaBuyDeliveryResponse:
@@ -1933,23 +1897,29 @@ def _e2e_set_policy_blocked(env: Any, reason: str = "Policy violation") -> None:
     _e2e_script_policy(env, {"output": {"status": "blocked", "reason": reason}})
 
 
-def _e2e_script_policy(env: Any, entry: dict[str, Any]) -> None:
+def _e2e_script_policy(env: Any, entry: dict[str, Any], require_text: Sequence[str] = ()) -> None:
     """Script the policy verdict for the seller's key, and for the platform's if the env declared one.
 
     The platform's key answers the same verdict, so a check that ran on it instead of the
     seller's credential shows on the wire (a BLOCKED brief is refused). Every entry answers
     only a prompt carrying this env's nonce, which the brief carries (``scripted_brief``),
-    so a verdict another scenario scripted for the shared platform key never answers this one.
+    so a verdict another scenario scripted for the shared platform key never answers this
+    one, and every text of ``require_text`` besides.
     """
     from tests.e2e._scripted_llm import install_script
 
     for api_key in env.scripted_api_keys():
-        install_script(api_key, policy={**entry, "require_text": env.scripted_nonce})
+        install_script(api_key, policy={**entry, "require_text": [env.scripted_nonce, *require_text]})
 
 
 def _e2e_set_policy_approved(env: Any) -> None:
     """E2E realization of :meth:`ProductMixin.set_policy_approved`: an ALLOWED verdict, scripted."""
     _e2e_script_policy(env, {"output": {"status": "allowed"}})
+
+
+def _e2e_set_policy_blocked_if_prompt_names(env: Any, texts: Sequence[str], reason: str = "Policy violation") -> None:
+    """E2E realization of :meth:`ProductMixin.set_policy_blocked_if_prompt_names`: the origin grades the prompt."""
+    _e2e_script_policy(env, {"output": {"status": "blocked", "reason": reason}}, require_text=texts)
 
 
 def _e2e_set_policy_unavailable(env: Any) -> None:
@@ -2025,6 +1995,24 @@ class ProductMixin:
         # The real service on a model that fails: production's run_agent classifies the
         # failure and get_products fails open on it, the path the e2e leg takes too.
         self.mock["policy_service"].return_value = PolicyCheckService(model=MODEL_UNAVAILABLE.model())  # type: ignore[attr-defined]
+
+    @realize_e2e(_e2e_set_policy_blocked_if_prompt_names)
+    def set_policy_blocked_if_prompt_names(self, texts: Sequence[str], reason: str = "Policy violation") -> None:
+        """The policy model blocks the brief only when the prompt it receives names every text.
+
+        Graded INSIDE the model, because the prompt has no wire surface: production's real
+        ``PolicyCheckService`` builds the prompt and calls the scripted model, which answers
+        BLOCKED when every text is in it and otherwise fails with the 400 the e2e origin
+        answers a call no entry matches. ``get_products`` fails open on that failure, so a
+        text that never reached the model shows on the wire as products instead of
+        ``POLICY_VIOLATION``. Over e2e the origin grades the same texts on the prompt the
+        live server sends (``_e2e_set_policy_blocked_if_prompt_names``).
+        """
+        from src.services.policy_check_service import PolicyCheckService
+        from tests.e2e._scripted_llm import scripted_answer_model
+
+        model = scripted_answer_model({"status": "blocked", "reason": reason}, list(texts))
+        self.mock["policy_service"].return_value = PolicyCheckService(model=model)  # type: ignore[attr-defined]
 
     #: The platform's own AI key, once a scenario declares one (``ProductEnv.set_platform_ai_credential``).
     _platform_ai_key: str | None = None

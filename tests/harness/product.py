@@ -55,13 +55,19 @@ from tests.harness._realize import realize_e2e
 from tests.harness.admin_client import AdminOperatorMixin
 from tests.harness.database_faults import DatabaseFaultMixin
 from tests.harness.egress import EgressHatchMixin
+from tests.harness.publisher_authorization import PublisherAdagentsMixin
 
 if TYPE_CHECKING:
     from tests.e2e._scripted_llm import ScriptedFailure
 
 
-class ProductEnv(AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, IntegrationEnv):
+class ProductEnv(PublisherAdagentsMixin, AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, IntegrationEnv):
     """Integration test environment for _get_products_impl.
+
+    A property is authorized only by a publisher's stored adagents.json: a scenario writes
+    what each publisher serves and the seller ingests it through the operator's admin routes
+    on the env's own transport -- on e2e the live server fetches the file itself
+    (``PublisherAdagentsMixin``).
 
     Only mocks external services (policy, dynamic variants,
     AI ranking, property list resolution). Everything else is real:
@@ -136,6 +142,17 @@ class ProductEnv(AdminOperatorMixin, DatabaseFaultMixin, ProductMixin, Integrati
         if "brief" in kwargs:
             self._dispatched_brief = kwargs["brief"]
         return super().call_via(transport, **kwargs)
+
+    def save_policy_page(self, form: Mapping[str, str]) -> None:
+        """The operator saves the admin Policy page with *form*, as a browser posts it, on this env's transport.
+
+        In-process the admin app runs in this process; over e2e the form is posted to the
+        live server. Either way the save is the only writer of the tenant's policy here.
+        """
+        response = self.admin_request(self.tenant_id, "post", "policy/update", data=dict(form))
+        assert response.status_code == 302, (
+            f"the Policy page's save answered {response.status_code}: {response.data[:300]!r}"
+        )
 
     def _write_ranking_prompt(self, ranking_prompt: str) -> None:
         """Write ``tenant.product_ranking_prompt``, tagged with this env's nonce, and remember it.

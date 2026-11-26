@@ -1,0 +1,430 @@
+{% extends "base.html" %}
+
+{% block title %}Policy Settings - {{ tenant_name }}{% endblock %}
+
+{% block content %}
+<style>
+    /* View mode styles */
+    .view-mode .edit-only {
+        display: none !important;
+    }
+    .view-mode .form-check-input {
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    .view-mode .card {
+        background-color: #f8f9fa;
+    }
+    .view-mode .card-header {
+        background-color: #e9ecef;
+    }
+
+    /* Edit mode styles */
+    .edit-mode .view-only {
+        display: none !important;
+    }
+    .edit-mode .card {
+        border-color: #007bff;
+        box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25);
+    }
+    .edit-mode .card-header {
+        background-color: #007bff;
+        color: white;
+    }
+
+    /* List display in view mode */
+    .policy-list {
+        max-height: 200px;
+        overflow-y: auto;
+        background-color: white;
+        border: 1px solid #dee2e6;
+        border-radius: 0.25rem;
+        padding: 0.5rem;
+    }
+    .policy-list-item {
+        padding: 0.25rem 0;
+        border-bottom: 1px solid #f8f9fa;
+    }
+    .policy-list-item:last-child {
+        border-bottom: none;
+    }
+    .policy-count {
+        color: #6c757d;
+        font-weight: 500;
+    }
+</style>
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-12 d-flex justify-content-between align-items-center">
+            <div>
+                <h1>Policy Settings - {{ tenant_name }}</h1>
+                <nav aria-label="breadcrumb">
+                    <ol class="breadcrumb">
+                        <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}">Dashboard</a></li>
+                        <li class="breadcrumb-item active">Policy Settings</li>
+                    </ol>
+                </nav>
+            </div>
+            <div class="view-only">
+                <button type="button" class="btn btn-primary" onclick="enterEditMode()">
+                    <i class="fas fa-edit"></i> Edit Settings
+                </button>
+            </div>
+        </div>
+    </div>
+
+    {% if not policy_saved %}
+    <div class="row mt-3">
+        <div class="col-md-12">
+            <div class="alert alert-warning mb-0" id="no-policy-saved">
+                <strong>No policy saved.</strong> This tenant has not saved an advertising policy yet.
+                The form below starts from the baseline categories and tactics; nothing is stored until you save it.
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if not seller_ai_enabled %}
+    <div class="row mt-3">
+        <div class="col-md-12">
+            <div class="alert alert-warning mb-0">
+                <strong>AI Configuration Required.</strong> Policy checks run on your own AI provider and API key.
+                Without one, briefs are not checked. Configure one in
+                <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/settings/integrations">Settings → Integrations → AI Services</a>.
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div id="policy-container" class="view-mode">
+        <form action="{{ request.script_root }}/tenant/{{ tenant_id }}/policy/update" method="POST" id="policy-form">
+        <div class="row mt-4">
+            <!-- General Settings -->
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">General Settings</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" id="enabled" name="enabled"
+                                   {% if policy.enabled %}checked{% endif %}>
+                            <label class="form-check-label" for="enabled">
+                                Enable Policy Checks
+                            </label>
+                            <small class="form-text text-muted">
+                                When enabled, all advertising briefs will be checked against policy rules
+                            </small>
+                        </div>
+
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" id="require_manual_review" name="require_manual_review"
+                                   {% if policy.require_manual_review %}checked{% endif %}>
+                            <label class="form-check-label" for="require_manual_review">
+                                Require Manual Review
+                            </label>
+                            <small class="form-text text-muted">
+                                Create review tasks for policy violations instead of auto-rejecting
+                            </small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Pending Reviews -->
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h5 class="mb-0">Pending Reviews ({{ pending_reviews|length }})</h5>
+                    </div>
+                    <div class="card-body">
+                        {% if pending_reviews %}
+                            <div class="list-group">
+                                {% for review in pending_reviews[:5] %}
+                                <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/policy/review/{{ review.task_id }}"
+                                   class="list-group-item list-group-item-action">
+                                    <div class="d-flex w-100 justify-content-between">
+                                        <h6 class="mb-1">{{ review.brief[:50] }}...</h6>
+                                        <small>{{ review.created_at }}</small>
+                                    </div>
+                                    <small class="text-muted">Click to review</small>
+                                </a>
+                                {% endfor %}
+                            </div>
+                            {% if pending_reviews|length > 5 %}
+                                <div class="mt-2 text-center">
+                                    <small class="text-muted">and {{ pending_reviews|length - 5 }} more...</small>
+                                </div>
+                            {% endif %}
+                        {% else %}
+                            <p class="text-muted mb-0">No pending reviews</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Prohibited Categories -->
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">Prohibited Categories</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label for="default_prohibited_categories">Baseline Prohibited Categories <span class="policy-count view-only">({{ policy.default_prohibited_categories|length }})</span></label>
+                            <div class="view-only border rounded p-2 mb-3" style="background-color: #f8f9fa;">
+                                <small class="text-muted">Checked in every brief while policy checks are on:</small>
+                                <ul class="mb-0 small">
+                                {% for category in policy.default_prohibited_categories %}
+                                    <li>{{ category.replace('_', ' ').title() }}</li>
+                                {% endfor %}
+                                </ul>
+                            </div>
+                            <div class="edit-only mb-3">
+                                <textarea class="form-control" id="default_prohibited_categories" name="default_prohibited_categories"
+                                          rows="6" placeholder="Enter one category per line">{{ '\n'.join(policy.default_prohibited_categories) }}</textarea>
+                            </div>
+
+                            <label for="prohibited_categories">Additional Prohibited Categories <span class="policy-count view-only">({{ policy.prohibited_categories|length }})</span></label>
+
+                            <!-- View mode display -->
+                            <div class="view-only">
+                                {% if policy.prohibited_categories %}
+                                    <div class="policy-list">
+                                        {% for category in policy.prohibited_categories %}
+                                            <div class="policy-list-item">{{ category }}</div>
+                                        {% endfor %}
+                                    </div>
+                                {% else %}
+                                    <div class="text-muted">No additional categories configured</div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Edit mode input -->
+                            <div class="edit-only">
+                                <textarea class="form-control" id="prohibited_categories" name="prohibited_categories"
+                                          rows="10" placeholder="Enter one category per line">{{ '\n'.join(policy.prohibited_categories) }}</textarea>
+                                <small class="form-text text-muted">
+                                    Add custom categories specific to your publication
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Prohibited Tactics & Advertisers -->
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">Prohibited Tactics</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label for="default_prohibited_tactics">Baseline Prohibited Tactics <span class="policy-count view-only">({{ policy.default_prohibited_tactics|length }})</span></label>
+                            <div class="view-only border rounded p-2 mb-3" style="background-color: #f8f9fa;">
+                                <small class="text-muted">Checked in every brief while policy checks are on:</small>
+                                <ul class="mb-0 small">
+                                {% for tactic in policy.default_prohibited_tactics %}
+                                    <li>{{ tactic.replace('_', ' ').title() }}</li>
+                                {% endfor %}
+                                </ul>
+                            </div>
+                            <div class="edit-only mb-3">
+                                <textarea class="form-control" id="default_prohibited_tactics" name="default_prohibited_tactics"
+                                          rows="5" placeholder="Enter one tactic per line">{{ '\n'.join(policy.default_prohibited_tactics) }}</textarea>
+                            </div>
+
+                            <label for="prohibited_tactics">Additional Prohibited Tactics <span class="policy-count view-only">({{ policy.prohibited_tactics|length }})</span></label>
+
+                            <!-- View mode display -->
+                            <div class="view-only">
+                                {% if policy.prohibited_tactics %}
+                                    <div class="policy-list">
+                                        {% for tactic in policy.prohibited_tactics %}
+                                            <div class="policy-list-item">{{ tactic }}</div>
+                                        {% endfor %}
+                                    </div>
+                                {% else %}
+                                    <div class="text-muted">No additional tactics configured</div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Edit mode input -->
+                            <div class="edit-only">
+                                <textarea class="form-control" id="prohibited_tactics" name="prohibited_tactics"
+                                          rows="6" placeholder="Enter one tactic per line">{{ '\n'.join(policy.prohibited_tactics) }}</textarea>
+                                <small class="form-text text-muted">
+                                    Add tactics that violate your advertising standards
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h5 class="mb-0">Prohibited Advertisers</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label for="prohibited_advertisers">Blocked Domains/Companies <span class="policy-count view-only">({{ policy.prohibited_advertisers|length }})</span></label>
+
+                            <!-- View mode display -->
+                            <div class="view-only">
+                                {% if policy.prohibited_advertisers %}
+                                    <div class="policy-list">
+                                        {% for advertiser in policy.prohibited_advertisers %}
+                                            <div class="policy-list-item">{{ advertiser }}</div>
+                                        {% endfor %}
+                                    </div>
+                                {% else %}
+                                    <div class="text-muted">No advertisers blocked</div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Edit mode input -->
+                            <div class="edit-only">
+                                <textarea class="form-control" id="prohibited_advertisers" name="prohibited_advertisers"
+                                          rows="6" placeholder="Enter one advertiser/domain per line
+Example:
+spam-site.com
+competitor.com">{{ '\n'.join(policy.prohibited_advertisers) }}</textarea>
+                                <small class="form-text text-muted">
+                                    These advertisers will be blocked from advertising
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-3 edit-only">
+            <div class="col-md-12">
+                <button type="submit" class="btn btn-primary">Save All Policy Settings</button>
+                <button type="button" class="btn btn-secondary" onclick="exitEditMode()">Cancel</button>
+            </div>
+        </div>
+        </form>
+    </div>
+
+    <!-- Recent Policy Checks -->
+    <div class="row mt-5">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">Recent Policy Checks</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Principal</th>
+                                    <th>Status</th>
+                                    <th>Brief</th>
+                                    <th>Reason</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for check in recent_checks %}
+                                <tr>
+                                    <td>{{ check.timestamp }}</td>
+                                    <td>{{ check.principal_id }}</td>
+                                    <td>
+                                        {% if check.status == 'blocked' %}
+                                            <span class="badge badge-danger">Blocked</span>
+                                        {% elif check.status == 'restricted' %}
+                                            <span class="badge badge-warning">Restricted</span>
+                                        {% elif check.status == 'allowed' %}
+                                            <span class="badge badge-success">Allowed</span>
+                                        {% else %}
+                                            <span class="badge badge-secondary">{{ check.status }}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ check.brief[:50] }}...</td>
+                                    <td>{{ check.reason if check.reason else '-' }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                        {% if not recent_checks %}
+                            <p class="text-muted text-center">No policy checks recorded yet</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-4">
+        <div class="col-md-12">
+            <div class="alert alert-info">
+                <h5>How Policy Checks Work</h5>
+                <ul class="mb-0">
+                    <li><strong>AI-Powered Analysis:</strong> All advertising briefs are analyzed using AI to detect policy violations.</li>
+                    <li><strong>Baseline Policies:</strong> The baseline categories and tactics you save are part of every check.</li>
+                    <li><strong>Custom Policies:</strong> Add your own prohibited categories, tactics, and advertisers specific to your publication.</li>
+                    <li><strong>Manual Review:</strong> Enable to review violations before rejection, or disable for automatic blocking.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function enterEditMode() {
+    const container = document.getElementById('policy-container');
+    container.classList.remove('view-mode');
+    container.classList.add('edit-mode');
+
+    // Focus on first input
+    setTimeout(() => {
+        document.getElementById('enabled').focus();
+    }, 100);
+}
+
+function exitEditMode() {
+    const container = document.getElementById('policy-container');
+    container.classList.remove('edit-mode');
+    container.classList.add('view-mode');
+
+    // Reset form to original values (reload page to get fresh data)
+    if (confirm('Discard any unsaved changes?')) {
+        window.location.reload();
+    } else {
+        // Stay in edit mode if user cancels
+        container.classList.add('edit-mode');
+        container.classList.remove('view-mode');
+    }
+}
+
+// Add visual feedback when form is dirty
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('policy-form');
+    const formElements = form.querySelectorAll('input, textarea');
+    let formChanged = false;
+    let isSubmitting = false;
+
+    formElements.forEach(element => {
+        element.addEventListener('change', function() {
+            formChanged = true;
+        });
+    });
+
+    // Mark form as submitting when save button is clicked
+    form.addEventListener('submit', function() {
+        isSubmitting = true;
+    });
+
+    // Warn before leaving if form has changes (but not when submitting)
+    window.addEventListener('beforeunload', function(e) {
+        if (formChanged && !isSubmitting && document.getElementById('policy-container').classList.contains('edit-mode')) {
+            e.preventDefault();
+            e.returnValue = '';
+        }
+    });
+});
+</script>
+{% endblock %}

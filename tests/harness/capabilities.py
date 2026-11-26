@@ -1,7 +1,7 @@
 """CapabilitiesEnv — integration test environment for _get_adcp_capabilities_impl.
 
 Patches: adapter CLASS resolver + audit logger ONLY.
-Real: CapabilitiesUoW (publisher partners AND signing-key backing, in one
+Real: TrustRootUoW (authorizing publishers AND signing-key backing, in one
 session), the full response builder (all hit real DB).
 
 Production reads adapter default_channels/get_targeting_capabilities off a
@@ -49,6 +49,8 @@ from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from src.adapters.base import TargetingCapabilities
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
+from tests.harness.admin_client import AdminOperatorMixin
+from tests.harness.publisher_authorization import PublisherAdagentsMixin
 
 #: Default channels seeded on the adapter mock — matches the feature fixture
 #: comment ("fixture seeds channels 'display, social, ctv' on the adapter").
@@ -79,14 +81,6 @@ class IdentityMode(Enum):
 DERIVE_IDENTITY = IdentityMode.DERIVE
 OMIT_IDENTITY = IdentityMode.OMIT
 
-#: docker-compose.e2e.yml's adcp-server service, whose environment names the ONE
-#: KEK the LIVE SERVER CONTAINER holds. e2e_rest scenarios resolve a provisioned
-#: key through THAT container, not through this test process, so the runner's KEK
-#: must match it exactly -- a hardcoded literal that drifts from compose is
-#: precisely the KEK mismatch salesagent-dn4i's fix now correctly detects and
-#: refuses to sign with (previously masked by the bug that fix closed).
-_COMPOSE_SERVICE = "adcp-server"
-
 
 def mock_adapter_pricing_models() -> set[str]:
     """The pricing-model set the REAL ``MockAdServer`` adapter reports.
@@ -114,11 +108,11 @@ def _full_targeting_capabilities() -> TargetingCapabilities:
     return TargetingCapabilities(**{f.name: True for f in fields(TargetingCapabilities)})
 
 
-class CapabilitiesEnv(IntegrationEnv):
+class CapabilitiesEnv(PublisherAdagentsMixin, AdminOperatorMixin, IntegrationEnv):
     """Integration test environment for get_adcp_capabilities.
 
     Only mocks the adapter factory and the audit logger. Everything else is
-    real: real DB, real CapabilitiesUoW (publisher partners and signing-key
+    real: real DB, real TrustRootUoW (authorizing publishers and signing-key
     backing), real transport dispatch. Capabilities is a pure read — no adapter
     I/O beyond attribute access on the mock.
 
@@ -214,7 +208,7 @@ class CapabilitiesEnv(IntegrationEnv):
         setup against the identical production read
         (``media_buy.portfolio.primary_channels`` unions each product's effective
         channels -- src/core/helpers/channel_helpers.py). Its sibling
-        ``given_publisher_partnerships`` already seeds ``PublisherPartner`` this way,
+        ``given_publisher_partnerships`` already seeds publisher documents this way,
         which is why publisher_domains has always graded over a real transport
         while channels did not.
 
@@ -230,11 +224,20 @@ class CapabilitiesEnv(IntegrationEnv):
         product would not exercise it.
         """
         from src.core.database.models import Tenant
+        from src.core.media_channels import MEDIA_CHANNEL_VALUES
         from tests.factories import ProductFactory
+        from tests.factories.product import store_channel_residue
 
         tenant = self.get_session().get(Tenant, self._tenant_id)
         for channel in channels:
-            ProductFactory(tenant=tenant, channels=[channel])
+            # Channels only: an authorizing publisher would add a publisher to the portfolio
+            # the scenario did not declare.
+            if channel in MEDIA_CHANNEL_VALUES:
+                ProductFactory(tenant=tenant, channels=[channel], authorize_publisher=False)
+            else:
+                # Outside the enum, which the column refuses on write: only residue of the
+                # channel repair holds one (GH #1532).
+                store_channel_residue(ProductFactory(tenant=tenant, authorize_publisher=False), [channel])
         self._commit_factory_data()
 
     def declare_signing(
@@ -328,34 +331,11 @@ class CapabilitiesEnv(IntegrationEnv):
         salesagent-dn4i's production fix now correctly detects and refuses to sign
         with, instead of the previous bug silently masking it.
         """
-        import os
-        from pathlib import Path
-        from unittest.mock import patch
-
-        import yaml
-
         from src.core.database.repositories.signing_key import SigningKeyRepository
         from src.core.signing.keys import provision_signing_key
+        from tests.helpers.signing import hold_stack_kek
 
-        compose_path = Path(__file__).resolve().parents[2] / "docker-compose.e2e.yml"
-        service_env = yaml.safe_load(compose_path.read_text())["services"][_COMPOSE_SERVICE]["environment"]
-        kek_pointer = service_env["ADCP_SIGNING_KEY_PASSPHRASE_ENV"]
-        kek_value = service_env[kek_pointer]
-
-        for label, patcher in (
-            (
-                "kek_env",
-                patch.dict(os.environ, {"ADCP_SIGNING_KEY_PASSPHRASE_ENV": kek_pointer, kek_pointer: kek_value}),
-            ),
-            # The Settings object carrying `key_passphrase_env` is a process global
-            # (src.core.config._settings) and is already built by the time a Given runs, so
-            # it is dropped to make `get_settings()` re-read the environment just set above.
-            # The passphrase ITSELF needs no such reset: `SigningSettings.key_passphrase`
-            # resolves it through `secret_from_env` on every use.
-            ("settings_cache", patch("src.core.config._settings", None)),
-        ):
-            patcher.start()
-            self._guard(f"patch:signing_{label}", patcher.stop)
+        hold_stack_kek(self._guard)
 
         self._commit_factory_data()
         provision_signing_key(
@@ -413,6 +393,35 @@ class CapabilitiesEnv(IntegrationEnv):
         """
         self._adapter_mock.get_targeting_capabilities.return_value = TargetingCapabilities(**dims)
 
+    def _realize_gam_adapter_class(self) -> None:
+        """Point the tenant's ``AdapterConfig`` at Google Ad Manager (the existing upsert)."""
+        from tests.factories.core import set_adapter_type
+
+        set_adapter_type(self, self._tenant_id, "google_ad_manager")
+
+    @realize_e2e(_realize_gam_adapter_class)
+    def use_gam_adapter_class(self) -> None:
+        """Make the tenant a Google Ad Manager seller, and resolve its adapter class as production does.
+
+        In-process, the adapter-class patch delegates to production's
+        ``get_adapter_class_for_tenant``, which reads the ``AdapterConfig`` row this writes.
+        Three facts make that safe without GAM credentials or a stand-in network:
+
+        * ``get_adcp_capabilities`` reads only the adapter CLASS (``default_channels``,
+          ``get_supported_pricing_models``, the static ``get_targeting_capabilities``), so no
+          ``GoogleAdManager`` instance is built and nothing calls Google;
+        * for the same reason the row needs no GAM credentials;
+        * it is not ``onboard_gam`` (tests/utils/tenant_setup.py): that one writer of a GAM
+          seller's onboarding creates the ``AdapterConfig`` row the create path needs, and
+          fails on the primary key when the tenant already has one, as a tenant on the live
+          server does. This changes only ``adapter_type``, through ``set_adapter_type``'s
+          upsert, whether or not the row exists.
+        """
+        from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant
+
+        self._realize_gam_adapter_class()
+        self.mock["adapter"].side_effect = get_adapter_class_for_tenant
+
     def _realize_adapter_unavailable(self) -> None:
         """E2E realization: point the tenant at an ad server that does not exist.
 
@@ -445,16 +454,19 @@ class CapabilitiesEnv(IntegrationEnv):
         """
         self.mock["adapter"].side_effect = Exception("adapter unavailable (harness)")
 
-    @realize_e2e(
-        e2e_unsupported(
-            "the fault is 'iterating the adapter's default_channels raises', which is a property of "
-            "the in-process adapter object. Unlike 'unavailable' -- which get_adapter_class_for_tenant "
-            "honours from AdapterConfig.test_behavior -- production has no read that could make channel "
-            "ENUMERATION fail on a real adapter, and adding one would put a fault-injection branch in "
-            "production for a test's benefit. The non-cascade it grades is transport-independent "
-            "(one function's control flow in capabilities.py), so the in-process transports grade it fully"
-        )
-    )
+    def _realize_channel_enumeration_failure(self) -> None:
+        """E2E realization: the portfolio's channels cannot be enumerated, the adapter still resolves.
+
+        The channels are the union over the tenant's product catalog
+        (``_map_portfolio_channels``), so a failed catalog read is a channel-enumeration
+        failure the live server reaches with no production hook, while the adapter class
+        that also feeds pricing models and targeting resolves untouched.
+        """
+        from src.core.database.models import Product
+
+        self._fail_table_for_scenario(Product.__tablename__)
+
+    @realize_e2e(_realize_channel_enumeration_failure)
     def make_adapter_channel_enumeration_fail(self) -> None:
         """The adapter RESOLVES, but reading its channels raises.
 
@@ -548,23 +560,56 @@ class CapabilitiesEnv(IntegrationEnv):
         self.mock["idempotency_posture"] = patcher.start()
         self._guard("patch:idempotency_posture", patcher.stop)
 
-    @realize_e2e(
-        e2e_unsupported("no production DB fault hook; TenantConfigUoW read failure cannot be injected over real HTTP")
-    )
-    def break_tenant_config_db(self) -> None:
-        """Make the capabilities DB reads fail — production degrades to placeholder.
+    def _fail_table_for_scenario(self, table: str) -> None:
+        """Make every live-server read of *table* fail until env teardown: a real database fault.
 
-        Patches CapabilitiesUoW at the seller-capabilities service seam — the module
+        E2E only. The table is renamed, so the live server's next read of it raises
+        ``UndefinedTable`` and aborts its transaction, the way a deployment whose database
+        lost the table fails, with no production hook. It is renamed back on env teardown
+        (``_guard``), so the fault cannot outlive the scenario. ``lock_timeout`` makes a
+        rename that would wait on another backend fail loudly instead of hanging; it takes
+        one lock on one table, so it cannot join a lock cycle.
+        """
+        from sqlalchemy import text
+
+        renamed = f"{table}__harness_fault"
+        session = self.get_session()
+
+        def _rename(source: str, target: str) -> None:
+            session.rollback()
+            session.execute(text("SET LOCAL lock_timeout = '10s'"))
+            session.execute(text(f"ALTER TABLE {source} RENAME TO {target}"))
+            session.commit()
+
+        _rename(table, renamed)
+        self._guard(f"db:{table} renamed", lambda: _rename(renamed, table))
+
+    def _realize_tenant_config_db_failure(self) -> None:
+        """E2E realization: the capabilities session's first read fails in the database.
+
+        The publishers read is the first in that session, so its failure aborts the
+        transaction and every read after it fails too: the state the in-process patch
+        describes, reached in the live server's own database.
+        """
+        from src.core.database.models import Publisher
+
+        self._fail_table_for_scenario(Publisher.__tablename__)
+
+    @realize_e2e(_realize_tenant_config_db_failure)
+    def break_tenant_config_db(self) -> None:
+        """Make the capabilities DB reads fail — production omits portfolio.
+
+        Patches TrustRootUoW at the seller-capabilities service seam — the module
         that assembles the response and therefore opens the session — so BOTH reads it
-        owns fail: the publisher partners (placeholder domain) and, since #1291 D1, the
+        owns fail: the authorizing publisher domains (portfolio omitted) and, since #1291 D1, the
         signing-key backing (keyless posture, no identity block). Registered with
         ``_guard``, so it is stopped on ctx-independent env teardown along with
         everything else — including when a later ``__enter__`` step raises.
-        In-process only — no server-side DB-fault-injection surface exists (e2e branch
-        declares E2EUnsupportedSetup).
+        E2E: :meth:`_realize_tenant_config_db_failure` fails the live server's read in
+        its database instead.
         """
         patcher = patch(
-            "src.services.seller_capabilities.CapabilitiesUoW",
+            "src.services.seller_capabilities.TrustRootUoW",
             side_effect=Exception("tenant config DB failure (harness)"),
         )
         self.mock["tenant_config_uow"] = patcher.start()

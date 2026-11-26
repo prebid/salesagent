@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "components/secret_input.html" import secret_input %}
 
 {% block title %}{% if agent %}Edit{% else %}Add{% endif %} Creative Agent - {{ tenant_name }} - Sales Agent Admin{% endblock %}
 
@@ -67,19 +68,10 @@
                 <small>Select the authentication method required by your creative agent</small>
             </div>
 
-            <div class="form-group">
-                <label for="auth_credentials">Credentials</label>
-                <input type="password" id="auth_credentials" name="auth_credentials"
-                       value="{{ agent.auth_credentials if agent else '' }}"
-                       placeholder="Enter token or API key">
-                <small>
-                    {% if agent %}
-                    Leave blank to keep existing credentials. Enter a new value to update.
-                    {% else %}
-                    The token or API key for authenticating with the creative agent
-                    {% endif %}
-                </small>
-            </div>
+            {{ secret_input("auth_credentials", "Credentials", agent and agent.has_auth,
+                             placeholder="Enter token or API key",
+                             help=("Leave blank to keep the saved credentials, or enter a new value to replace them." if agent
+                                   else "The token or API key for authenticating with the creative agent")) }}
         </div>
 
         <div class="form-section" style="background: #f9fafb; padding: 1.5rem; border-radius: 6px;">

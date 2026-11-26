@@ -969,11 +969,7 @@ class MockAdServer(AdServerAdapter):
         )
 
         self.log(f"[DEBUG] MockAdapter: Returning {len(packages)} packages in response")
-        return self._build_create_success(
-            media_buy_id,
-            packages,
-            include_product_id=True,
-        )
+        return self._build_create_success(media_buy_id, packages)
 
     def add_creative_assets(
         self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
@@ -1553,98 +1549,6 @@ class MockAdServer(AdServerAdapter):
                     )
                 ],
             )
-
-    def get_config_ui_endpoint(self) -> str | None:
-        """Return the URL path for the mock adapter's configuration UI."""
-        return "/adapters/mock/config"
-
-    def register_ui_routes(self, app):
-        """Register Flask routes for the mock adapter configuration UI."""
-
-        from flask import render_template, request
-
-        @app.route("/adapters/mock/config/<tenant_id>/<product_id>", methods=["GET", "POST"])
-        def mock_product_config(tenant_id, product_id):
-            # Import here to avoid circular imports
-            from functools import wraps
-
-            from src.admin.utils import require_auth
-            from src.core.database.database_session import get_db_session
-            from src.core.database.models import Product
-
-            # Apply auth decorator manually
-            @require_auth()
-            @wraps(mock_product_config)
-            def wrapped_view():
-                from sqlalchemy import select
-
-                with get_db_session() as session:
-                    # Get product details
-                    stmt = select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)
-                    product_obj = session.scalars(stmt).first()
-
-                    if not product_obj:
-                        return "Product not found", 404
-
-                    product = {"product_id": product_id, "name": product_obj.name}
-
-                    # Get current config
-                    config = product_obj.implementation_config or {}
-
-                    if request.method == "POST":
-                        # Update configuration
-                        new_config = {
-                            "daily_impressions": int(request.form.get("daily_impressions", 100000)),
-                            "fill_rate": float(request.form.get("fill_rate", 85)),
-                            "ctr": float(request.form.get("ctr", 0.5)),
-                            "viewability_rate": float(request.form.get("viewability_rate", 70)),
-                            "latency_ms": int(request.form.get("latency_ms", 50)),
-                            "error_rate": float(request.form.get("error_rate", 0.1)),
-                            "test_mode": request.form.get("test_mode", "normal"),
-                            "price_variance": float(request.form.get("price_variance", 10)),
-                            "seasonal_factor": float(request.form.get("seasonal_factor", 1.0)),
-                            "verbose_logging": "verbose_logging" in request.form,
-                            "predictable_ids": "predictable_ids" in request.form,
-                            "delivery_simulation": {
-                                "enabled": "delivery_simulation_enabled" in request.form,
-                                "time_acceleration": int(request.form.get("time_acceleration", 3600)),
-                                "update_interval_seconds": float(request.form.get("update_interval_seconds", 1.0)),
-                            },
-                        }
-
-                        # Validate the configuration
-                        validation_errors = self.validate_product_config(new_config)
-                        if validation_errors:
-                            return render_template(
-                                "adapters/mock_product_config.html",
-                                tenant_id=tenant_id,
-                                product=product,
-                                config=config,
-                                error=validation_errors[0],
-                            )
-
-                        # Save to database
-                        product_obj.implementation_config = new_config
-                        session.commit()
-
-                        return render_template(
-                            "adapters/mock_product_config.html",
-                            tenant_id=tenant_id,
-                            product=product,
-                            config=new_config,
-                            success=True,
-                        )
-
-                    # Formats are not authored here: the product form authors the canonical
-                    # format_options, and format_ids is derived from them.
-                    return render_template(
-                        "adapters/mock_product_config.html",
-                        tenant_id=tenant_id,
-                        product=product,
-                        config=config,
-                    )
-
-            return wrapped_view()
 
     def validate_product_config(self, config: dict[str, Any]) -> tuple[bool, str | None]:
         """Validate mock adapter configuration."""

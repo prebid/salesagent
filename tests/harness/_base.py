@@ -105,6 +105,29 @@ def json_safe(value: Any) -> Any:
     return value
 
 
+def rest_body_from_kwargs(kwargs: dict[str, Any], flat_fields: tuple[str, ...]) -> dict[str, Any]:
+    """The REST body for a verb a step dispatches in either call shape.
+
+    Steps send some verbs as flat kwargs (scenarios grading how the route treats one wire
+    field) and others as a built ``req=<Request>(...)`` (the composite envs route on the
+    request type). A builder serving only the flat form returns ``{}`` for a ``req=``
+    dispatch, which the route reads as an unfiltered request: the REST leg then grades a
+    different request than the other transports.
+
+    Not ``BaseTestEnv.build_rest_body``: that dumps with ``exclude_none`` and returns ``{}``
+    for the flat form, so it can shape neither call.
+    """
+    req = kwargs.get("req")
+    if req is not None:
+        # exclude_unset, not exclude_none: a request model re-based on its library type
+        # inherits defaults of False rather than None (GetMediaBuysRequest.include_snapshot,
+        # GetMediaBuyDeliveryRequest.include_package_daily_breakdown), so exclude_none adds
+        # keys the caller never set. exclude_unset is "send only what was set", which is
+        # what the flat branch does too.
+        return req.model_dump(mode="json", exclude_unset=True)
+    return {key: kwargs[key] for key in flat_fields if kwargs.get(key) is not None}
+
+
 def _presents_a_credential(credential: Any) -> bool:
     """Whether a caller-supplied headers mapping actually carries a CREDENTIAL.
 
@@ -1633,9 +1656,10 @@ class BaseTestEnv:
         it selects are this env's own. That is the same property the e2e branch has
         always relied on.
         """
-        from tests.helpers.signing import VERIFIED_METRIC, samples_with
+        from tests.helpers.metrics import counter_total
+        from tests.helpers.signing import VERIFIED_METRIC
 
-        return int(sum(samples_with(VERIFIED_METRIC, keyid=self.signing.key_id).values()))
+        return int(counter_total(VERIFIED_METRIC, keyid=self.signing.key_id))
 
     def _realize_e2e_signature_failure_counts(self) -> dict[str, float]:
         """The same claim and the SAME EVENT, read across a process boundary.
@@ -1670,7 +1694,8 @@ class BaseTestEnv:
         (``src/core/metrics.py:325``): a failure is recorded before any key is resolved,
         so the code is the only label that says WHICH rule refused.
         """
-        from tests.helpers.signing import FAILED_METRIC, counter_samples
+        from tests.helpers.metrics import counter_samples
+        from tests.helpers.signing import FAILED_METRIC
 
         return _by_signature_code(counter_samples(FAILED_METRIC))
 
@@ -2847,7 +2872,8 @@ class BaseTestEnv:
         tenant: str | None = None,
         host_resolves_nothing: bool = False,
     ) -> Any:
-        """GET the agent card at *path*, naming the seller by *host* or by *tenant*.
+        """GET the agent card, or another root document such as adagents.json, at *path*,
+        naming the seller by *host* or by *tenant*.
 
         The card is not a registry tool, so it is not reachable through ``call_via``: it is a
         root endpoint that answers before any AdCP exchange and carries no envelope. A
@@ -2861,13 +2887,20 @@ class BaseTestEnv:
         Returns the ``requests``/``httpx`` style response, so a step can read
         ``status_code``, ``json()`` and ``text`` the same way on either side.
         """
-        headers = credential_headers(host=host, tenant=tenant, host_resolves_nothing=host_resolves_nothing)
+        return self.get_root(
+            path, headers=credential_headers(host=host, tenant=tenant, host_resolves_nothing=host_resolves_nothing)
+        )
+
+    def get_root(
+        self, path: str, *, headers: dict[str, str] | None = None, params: dict[str, str] | None = None
+    ) -> Any:
+        """GET a root endpoint: the in-process ASGI app, or real HTTP against the live stack."""
         if self.is_e2e:
             import httpx
 
-            assert self.e2e_config is not None, "fetch_agent_card()'s e2e branch needs env.e2e_config"
-            return httpx.get(f"{self.e2e_config.base_url}{path}", headers=headers, timeout=30)
-        return self.get_rest_client().get(path, headers=headers)
+            assert self.e2e_config is not None, "get_root()'s e2e branch needs env.e2e_config"
+            return httpx.get(f"{self.e2e_config.base_url}{path}", headers=headers, params=params, timeout=30)
+        return self.get_rest_client().get(path, headers=headers, params=params)
 
     def post_mcp_initialize(self, path: str) -> Any:
         """POST an MCP ``initialize`` to *path*, following no redirect, and return the response.
@@ -2896,13 +2929,14 @@ class BaseTestEnv:
         with preserved_global_app_state(), TestClient(app, follow_redirects=False) as client:
             return client.post(path, json=body, headers=headers)
 
-    def list_mcp_tools(self) -> dict[str, str | None]:
-        """Each MCP tool's advertised description, by name, as a client's ``tools/list`` answers.
+    def list_mcp_tools(self) -> dict[str, Any]:
+        """Each MCP tool as a client's ``tools/list`` answers it (an ``mcp.types.Tool``), by name.
 
         Like the card, ``tools/list`` is not a registry tool and so not reachable through
         ``call_via``. It runs over FastMCP's in-memory client against the server the MCP
-        transport dispatches to, so the answer is the MCP wire's, not a read of the registry.
-        In-process only: e2e serves no MCP transport to grade.
+        transport dispatches to, middleware chain included, so the answer is the MCP wire's,
+        not a read of the registry. The listing needs no credential. In-process only: e2e
+        serves no MCP transport to grade.
         """
         assert not self.is_e2e, "list_mcp_tools() reads the in-process MCP server; e2e dispatches no MCP"
         import asyncio
@@ -2911,9 +2945,11 @@ class BaseTestEnv:
 
         from src.core.main import mcp
 
-        async def _list() -> dict[str, str | None]:
+        self._commit_factory_data()
+
+        async def _list() -> dict[str, Any]:
             async with Client(mcp) as client:
-                return {tool.name: tool.description for tool in await client.list_tools()}
+                return {tool.name: tool for tool in await client.list_tools()}
 
         return asyncio.run(_list())
 
@@ -3330,8 +3366,9 @@ class IntegrationEnv(BaseTestEnv):
     #: opt-out is scoped to exactly the scenario that calls it.
     REST_RAISE_SERVER_EXCEPTIONS: bool = True
 
-    def ensure_tenant(self, **tenant_kwargs: Any) -> Any:
-        """Get-or-create this env's tenant row alone, with *tenant_kwargs* applied either way.
+    def ensure_tenant(self, tenant_id: str | None = None, **tenant_kwargs: Any) -> Any:
+        """Get-or-create a tenant row alone (this env's, unless *tenant_id* names another),
+        with *tenant_kwargs* applied either way.
 
         The tenant half of :meth:`setup_default_data`, for a setup that configures the
         SELLER and must not seed a principal: the factory derives a principal's token from
@@ -3345,9 +3382,10 @@ class IntegrationEnv(BaseTestEnv):
         from src.core.database.models import Tenant
         from tests.factories import TenantFactory
 
-        tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
+        tenant_id = self._tenant_id if tenant_id is None else tenant_id
+        tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if tenant is None:
-            return TenantFactory(tenant_id=self._tenant_id, **tenant_kwargs)
+            return TenantFactory(tenant_id=tenant_id, **tenant_kwargs)
         if tenant_kwargs:
             for column, value in tenant_kwargs.items():
                 setattr(tenant, column, value)
@@ -3355,13 +3393,19 @@ class IntegrationEnv(BaseTestEnv):
         return tenant
 
     def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]:
-        """Get-or-create default tenant + principal via factories.
+        """Get-or-create this env's own tenant + principal: :meth:`setup_party` with the env's ids."""
+        return self.setup_party(self._tenant_id, self._principal_id, **tenant_kwargs)
+
+    def setup_party(self, tenant_id: str, principal_id: str, **tenant_kwargs: Any) -> tuple[Any, Any]:
+        """Get-or-create a tenant + principal via factories, shaped the way production shapes them.
+
+        A scenario with several tenants calls this once per tenant rather than
+        building rows itself, so every tenant carries the rows production guarantees.
 
         Must be called inside the ``with env:`` block (factories are bound
         to the session during ``__enter__``).
 
-        Returns (tenant, principal) ORM instances. Uses self._tenant_id
-        and self._principal_id from constructor. Idempotent: reuses existing
+        Returns (tenant, principal) ORM instances. Idempotent: reuses existing
         rows rather than re-creating, so it is safe to call after the e2e
         ``__enter__`` auto-seed (``_seed_identity``) already created them.
 
@@ -3378,13 +3422,13 @@ class IntegrationEnv(BaseTestEnv):
         from src.core.database.models import Principal
         from tests.factories import AdapterConfigFactory, PrincipalFactory
 
-        tenant = self.ensure_tenant(**tenant_kwargs)
+        tenant = self.ensure_tenant(tenant_id, **tenant_kwargs)
 
         principal = self._session.scalars(
-            select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=self._principal_id)
+            select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
         ).first()
         if principal is None:
-            principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
+            principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
 
         # AN ``adapter_config`` ROW, because EVERY production tenant has one and a fixture
         # without one is state production cannot be in. Every creation path writes it --
@@ -3399,7 +3443,7 @@ class IntegrationEnv(BaseTestEnv):
         # not see it (salesagent-6d07f, salesagent-8mynh). The posture column is left at its
         # own server default (``false``); this seeds the ROW's existence, which is the fact
         # production guarantees, and states no policy a scenario did not ask for.
-        adapter_config = self._session.scalars(select(DBAdapterConfig).filter_by(tenant_id=self._tenant_id)).first()
+        adapter_config = self._session.scalars(select(DBAdapterConfig).filter_by(tenant_id=tenant_id)).first()
         if adapter_config is None:
             AdapterConfigFactory(tenant=tenant, adapter_type="mock")
             self._commit_factory_data()

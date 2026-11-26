@@ -8,14 +8,15 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.domain_routing import RoutingResult, route_landing_page
+from src.core.domain_routing import RoutingResult, is_served_host, route_landing_page
+from src.core.operator_errors import safe_error_message
 from src.landing import generate_tenant_landing_page
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ def _routed_page(headers: dict) -> tuple[RoutingResult, str | None, str | None]:
     try:
         return result, generate_tenant_landing_page(result.tenant), None
     except Exception as e:  # reported, not raised: a debug endpoint answers either way
-        return result, None, str(e)
+        return result, None, safe_error_message(e, "Landing page generation failed")
 
 
 # The routes on this router exist only where the deployment allows them: ``src/app.py``
@@ -47,11 +48,26 @@ def _routed_page(headers: dict) -> tuple[RoutingResult, str | None, str | None]:
 # exist at all. No per-request check: a route that is not mounted cannot be reached.
 debug_router = APIRouter()
 
+# Mounted the same way, when ``get_settings().runtime.tls_ask_enabled`` says so: only a
+# deployment behind an on-demand TLS proxy needs it.
+tls_ask_router = APIRouter()
+
 
 @router.get("/health")
 async def health(request: Request):
     """Health check endpoint."""
     return JSONResponse({"status": "healthy", "service": "mcp"})
+
+
+@tls_ask_router.get("/tls/ask", include_in_schema=False)
+def tls_ask(domain: str = "") -> Response:
+    """Reverse-proxy on-demand TLS gate: 200 if this deployment serves ``domain``, else 403.
+
+    Caddy's ``on_demand_tls { ask ... }`` calls this before requesting a certificate and
+    issues only on a 2xx. A database failure raises, and the resulting 500 is a refusal too.
+    Sync, so FastAPI runs the blocking lookup in its thread pool.
+    """
+    return Response(status_code=200 if is_served_host(domain) else 403)
 
 
 @debug_router.post("/_internal/reset-db-pool")
@@ -77,8 +93,7 @@ async def reset_db_pool(request: Request):
             }
         )
     except Exception as e:
-        logger.error(f"Failed to reset database state: {e}")
-        return JSONResponse({"error": f"Failed to reset: {str(e)}"}, status_code=500)
+        return JSONResponse({"error": safe_error_message(e, "Failed to reset")}, status_code=500)
 
 
 @debug_router.get("/debug/db-state")
@@ -136,8 +151,7 @@ async def debug_db_state(request: Request):
                 }
             )
     except Exception as e:
-        logger.error(f"Debug endpoint error: {e}", exc_info=True)
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": safe_error_message(e)}, status_code=500)
 
 
 @debug_router.get("/debug/tenant")
@@ -198,7 +212,7 @@ async def debug_landing(request: Request):
     if html_content is not None:
         return HTMLResponse(content=html_content)
     if render_error is not None:
-        return JSONResponse({"error": f"Landing page generation failed: {render_error}"}, status_code=500)
+        return JSONResponse({"error": render_error}, status_code=500)
     return JSONResponse({"error": "No tenant found"}, status_code=404)
 
 
@@ -257,5 +271,11 @@ async def health_config(request: Request):
         )
     except Exception as e:
         return JSONResponse(
-            {"status": "unhealthy", "service": "mcp", "component": "configuration", "error": str(e)}, status_code=500
+            {
+                "status": "unhealthy",
+                "service": "mcp",
+                "component": "configuration",
+                "error": safe_error_message(e, "Configuration validation failed"),
+            },
+            status_code=500,
         )

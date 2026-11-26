@@ -12,6 +12,7 @@ This module provides utilities for formatting:
 import logging
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -55,31 +56,20 @@ def format_date_for_gam(date_input: datetime | str) -> dict[str, Any]:
     return {"year": date_obj.year, "month": date_obj.month, "day": date_obj.day}
 
 
-def format_datetime_for_gam(datetime_input: datetime | str) -> dict[str, Any]:
+def format_datetime_for_gam(instant: datetime, time_zone: str) -> dict[str, Any]:
+    """GAM DateTime for the aware ``instant``: its wall clock in ``time_zone``, labelled with that zone.
+
+    GAM reads date, hour, minute and second in the zone ``timeZoneId`` names, so the
+    fields must be that zone's wall clock. ``zoneinfo`` applies a zone's daylight-saving
+    rule for every year, including after 2037, where ``pytz`` stays on standard time.
     """
-    Format datetime for GAM API DateTime object.
-
-    Args:
-        datetime_input: datetime object or ISO datetime string
-
-    Returns:
-        GAM DateTime object format
-    """
-    if isinstance(datetime_input, str):
-        dt_obj = datetime.fromisoformat(datetime_input.replace("Z", "+00:00"))
-    else:
-        dt_obj = datetime_input
-
-    # Ensure UTC timezone
-    if dt_obj.tzinfo is None:
-        dt_obj = dt_obj.replace(tzinfo=UTC)
-
+    local = instant.astimezone(ZoneInfo(time_zone))
     return {
-        "date": format_date_for_gam(dt_obj),
-        "hour": dt_obj.hour,
-        "minute": dt_obj.minute,
-        "second": dt_obj.second,
-        "timeZoneId": "UTC",  # GAM prefers explicit timezone
+        "date": format_date_for_gam(local),
+        "hour": local.hour,
+        "minute": local.minute,
+        "second": local.second,
+        "timeZoneId": time_zone,
     }
 
 

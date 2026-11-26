@@ -2,13 +2,11 @@
 E2E test for GAM network timezone discovery.
 
 Verifies that:
-1. The test network exposes a valid IANA timezone
+1. The configured network (``ToolingSettings.gam_suite_network``) exposes a valid IANA timezone
 2. GAMReportingService auto-detects it correctly
 3. The detected timezone is usable with pytz
 
-Test network: 23341594478 (XFP sandbox property)
-Note: Test networks cannot serve ads, so delivery/reporting data is always empty.
-      This test only validates the timezone discovery mechanism, not report content.
+This test only validates the timezone discovery mechanism, not report content.
 """
 
 import pytest

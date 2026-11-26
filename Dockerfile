@@ -2,7 +2,7 @@
 # Multi-stage build for smaller image
 # Cache bust: 2026-02-27
 ARG PYTHON_VERSION=3.12
-ARG PYTHON_BASE_DIGEST=sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf
+ARG PYTHON_BASE_DIGEST=sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 # Consumed by BuildKit for reproducible layer timestamps (PR 6 release pipeline).
 ARG SOURCE_DATE_EPOCH=0
 # Canonical uv version: .uv-version (CI reads the file; guard keeps this ARG in sync).
@@ -16,7 +16,7 @@ FROM --platform=$TARGETPLATFORM ghcr.io/astral-sh/uv:${UV_VERSION}@${UV_IMAGE_DI
 # binaries lag the latest Go patch, so their embedded stdlib fails the release
 # Trivy gate on freshly-published Go CVEs; building here keeps it current.
 # Digest is the multi-arch manifest list for golang:1.26-trixie (resolves per TARGETPLATFORM).
-FROM golang:1.26-trixie@sha256:68b7145ec43d1820b9a56704554b53d1520aa2a15cb5233e374188a31b2a1bce AS supercronic
+FROM golang:1.26-trixie@sha256:cff05dd6b81c901f2e8249eb6f91c69a60451d0f12c26bfef08e476a85b32d4d AS supercronic
 ENV CGO_ENABLED=0
 RUN go install github.com/aptible/supercronic@v0.2.46
 
@@ -84,10 +84,15 @@ RUN echo 'path-exclude /usr/share/doc/*' > /etc/dpkg/dpkg.cfg.d/01_nodoc && \
 # Install runtime dependencies including nginx (no gcc/libpq-dev/git — build deps stay in builder)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     nginx
+
+# The app runs from the uv-built /opt/venv; nothing in the runtime image uses the base
+# image's pip, and shipping it only carries pip's own CVEs into the image scan.
+RUN python -m pip uninstall -y pip
 
 # Install supercronic for cron jobs (container-friendly cron), built from source above.
 COPY --from=supercronic /go/bin/supercronic /usr/local/bin/supercronic
@@ -102,7 +107,10 @@ RUN echo "Cache bust: $CACHE_BUST"
 # Non-root runtime user (D34 — issue #1234 PR 5), created before the COPYs below so
 # they can set ownership with --chown. A `chown -R` in a later RUN would rewrite every
 # file into a new layer, storing /app and /opt/venv in the image twice.
-RUN groupadd -r -g 1001 app && useradd -r -u 1001 -g app -s /usr/sbin/nologin app
+# The user gets a home directory (-m): the GAM SDK (googleads -> zeep) creates its
+# WSDL cache under $HOME/.cache on its first service call, and a missing home makes
+# every GAM call fail with PermissionError.
+RUN groupadd -r -g 1001 app && useradd -r -m -d /home/app -u 1001 -g app -s /usr/sbin/nologin app
 
 # Copy application code
 COPY --chown=app:app . .

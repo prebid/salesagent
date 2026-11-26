@@ -134,7 +134,7 @@ def check_file(filepath: Path) -> list[str]:
         List of error messages (empty if no issues)
     """
     try:
-        code = filepath.read_text()
+        code = filepath.read_text(encoding="utf-8")
         tree = ast.parse(code, filename=str(filepath))
     except SyntaxError as e:
         return [f"{filepath}:{e.lineno}: Syntax error: {e.msg}"]

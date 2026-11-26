@@ -7,7 +7,7 @@ through the env's per-transport primitive, never a direct ``_impl`` call.*
 
 **Why this module exists rather than the liveness artifact.** The wire-grading §5
 declares two graders: the per-scenario ledgered/live partition pinned in
-``tests/integration/test_bdd_scenario_liveness_real_run.py:99-125`` — which
+``tests/collection/test_bdd_scenario_liveness_real_run.py`` — which
 solution-review pass 3 (P4) defers, and which the wire-grading work **must not
 modify** — and the REVERSION TEST, which pass-3 finding (d) requires to be *an
 EXECUTED step in the grader, not a prose procedure*. This module is that

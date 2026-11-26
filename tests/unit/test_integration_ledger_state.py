@@ -24,6 +24,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tests.helpers.ledger import load_ledger_nodeids
+from tests.unit._architecture_helpers import rel
 
 LEDGER = Path(__file__).parent.parent / "integration" / "known_failures.txt"
 
@@ -133,6 +134,6 @@ def test_every_entry_names_a_collectable_file() -> None:
     repo_root = Path(__file__).parent.parent.parent
     missing = sorted(
         {e.split("::", 1)[0] for e in load_ledger_nodeids(LEDGER)}
-        - {str(p.relative_to(repo_root)) for p in (repo_root / "tests" / "integration").glob("test_*.py")}
+        - {rel(p, repo_root) for p in (repo_root / "tests" / "integration").glob("test_*.py")}
     )
     assert not missing, "ledger entries name files that no longer exist:\n  " + "\n  ".join(missing)

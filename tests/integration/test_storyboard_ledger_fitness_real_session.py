@@ -6,7 +6,7 @@ nodeid, and ``test_storyboard_conformance._collect_checks`` enumerates only fail
 skips, so a check that GRADUATES stops being parametrized at all — it produces no test
 item, no xpass and no signal, and the entry becomes dead weight. An entry renamed
 upstream goes the same way. ``tests/bdd/e2e_rest_known_failures.txt`` has its own
-fitness function for the same reason (``tests/unit/test_e2e_rest_ledger_fitness.py::
+fitness function for the same reason (``tests/collection/test_e2e_rest_ledger_fitness.py::
 test_every_ledger_entry_resolves_to_a_collected_item``).
 
 Every case below drives a SYNTHETIC ledger, injected through
@@ -140,7 +140,7 @@ def _ledger_entries() -> list[ledger.LedgerCheckId]:
 def _write_ledger(tmp_path: Path, entries: list[ledger.LedgerCheckId]) -> dict[str, str]:
     """Write ``entries`` as a ledger file and return the env that points the loader at it."""
     path = tmp_path / "synthetic_known_failures.txt"
-    path.write_text("\n".join(_NODEID.format(e.format()) for e in entries) + "\n")
+    path.write_text("\n".join(_NODEID.format(e.format()) for e in entries) + "\n", encoding="utf-8")
     return {"STORYBOARD_LEDGER_PATH": str(path)}
 
 

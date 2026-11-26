@@ -25,7 +25,7 @@ from src.core.exceptions import AdCPSalesAgentError, AdCPValidationError
 from src.core.schemas import GetMediaBuyDeliveryResponse
 from src.core.tools.media_buy_delivery import delivery_for_media_buy
 from src.core.utils import utc_flight_start
-from src.core.webhooks.delivery import WebhookTaskContext
+from src.core.webhooks.delivery import SCHEDULER_SEQUENCE_TASK_TYPE, WebhookTaskContext
 from src.core.webhooks.registration import (
     REPORTING_STREAM_ID_FIELD,
     accept_push_notification_config,
@@ -288,7 +288,7 @@ class DeliveryWebhookScheduler:
                 one_day_ago = datetime.now(UTC) - timedelta(hours=24)
                 existing_stmt = select(WebhookDeliveryLog).where(
                     WebhookDeliveryLog.media_buy_id == media_buy.media_buy_id,
-                    WebhookDeliveryLog.task_type == "media_buy_delivery",
+                    WebhookDeliveryLog.task_type == SCHEDULER_SEQUENCE_TASK_TYPE,
                     WebhookDeliveryLog.notification_type == "scheduled",
                     WebhookDeliveryLog.status == "success",
                     WebhookDeliveryLog.created_at > one_day_ago,
@@ -321,12 +321,28 @@ class DeliveryWebhookScheduler:
                 )
                 return False
 
+            # reporting_delayed + expected_availability is the schema's pair for "data not yet
+            # available, expected at T". The circuit-breaker reporting_delayed carries no
+            # availability and is not held.
+            delayed = [
+                d.expected_availability
+                for d in delivery_response.media_buy_deliveries
+                if d.status == "reporting_delayed" and d.expected_availability is not None
+            ]
+            if delayed:
+                logger.info(
+                    "Holding daily delivery webhook for media buy %s: the ad server expects the period complete at %s",
+                    media_buy.media_buy_id,
+                    max(delayed),
+                )
+                return False
+
             # Get sequence number for this webhook (get max sequence + 1)
             sequence_number = 1
             try:
                 stmt = select(func.coalesce(func.max(WebhookDeliveryLog.sequence_number), 0)).where(
                     WebhookDeliveryLog.media_buy_id == media_buy.media_buy_id,
-                    WebhookDeliveryLog.task_type == "media_buy_delivery",
+                    WebhookDeliveryLog.task_type == SCHEDULER_SEQUENCE_TASK_TYPE,
                 )
                 max_seq = session.scalar(stmt)
                 sequence_number = (max_seq or 0) + 1
@@ -424,7 +440,7 @@ class DeliveryWebhookScheduler:
             # them, which is the point of taking a typed context at all.
             webhook_task = WebhookTaskContext(
                 task_id=media_buy.media_buy_id,
-                task_type="media_buy_delivery",
+                task_type=SCHEDULER_SEQUENCE_TASK_TYPE,
                 tenant_id=media_buy.tenant_id,
                 principal_id=media_buy.principal_id,
                 media_buy_id=media_buy.media_buy_id,

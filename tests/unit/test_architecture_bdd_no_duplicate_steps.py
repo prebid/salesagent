@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import rel
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # Threshold: flag when N or more functions share the same body.
@@ -107,9 +109,10 @@ _DUPLICATE_THRESHOLD = 2
 # and the two Givens that seeded only the deleted outlines, but that was not measured, so it
 # is recorded as a guess and not as a fact.
 #
-# 20 -> 19: the uc003 "should NOT contain an \"errors\" field" Then and its unregistered
-# then_media_buy.py twin ("should NOT have ...") shared a body. The twin's sentence is now a
-# second decorator on the uc003 function, so the group is gone rather than merged.
+# 20 -> 19: the two "errors" absence Thens ('NOT contain an "errors" field' in uc003, 'NOT have
+# an "errors" field' in then_media_buy.py) were one body, ``wire_absent(ctx, "errors")``. Both
+# are deleted and their feature lines bind to the one absence step, ``the response should NOT
+# contain "errors" field``, so the group is gone rather than merged.
 _DUPLICATE_GROUP_BASELINE = 19
 
 # Steps exempt from the 3+ identical-body scan (load-bearing: each suppresses a
@@ -142,7 +145,7 @@ _ALLOWED_DUPLICATES: set[str] = set()
 # disappearing is invisible to the group count. Neither number is hand-reasoned: both are what
 # the scan reports on this tree, and the guard's equality arm fails if either drifts.
 #
-# 41 -> 39: the two members of the "errors" field group recorded at the group baseline.
+# 41 -> 39: the two members of the "errors" absence group are deleted (see 20 -> 19 above).
 _DUPLICATE_MEMBER_BASELINE = 39
 
 
@@ -187,8 +190,8 @@ def _iter_step_functions() -> Iterator[tuple[ast.FunctionDef | ast.AsyncFunction
     for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
         if py_file.name.startswith("_"):
             continue
-        tree = ast.parse(py_file.read_text(), filename=str(py_file))
-        relative = str(py_file.relative_to(_BDD_STEPS_DIR.parent.parent))
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        relative = rel(py_file, _BDD_STEPS_DIR.parent.parent)
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_step_decorated(node):
                 yield node, relative, node.lineno

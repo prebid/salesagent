@@ -17,7 +17,7 @@
 # --subnet 223.255.255.0/26` succeeds once and the SECOND stack on the box fails
 # with "Pool overlaps with other one on this address space" — even for a
 # smaller slice inside the held range. This repo runs stacks concurrently BY
-# DESIGN (test-stack.sh sets COMPOSE_PROJECT_NAME="adcp-test-$$"; the CI box
+# DESIGN (test-stack.sh sets a per-run COMPOSE_PROJECT_NAME="adcp-test-<random>"; the CI box
 # runs several worktrees at once). Templating the value without shipping an
 # allocator just moves the collision to the default — every stack still asks
 # for the same slice.

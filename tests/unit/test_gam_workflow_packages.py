@@ -16,8 +16,8 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from src.adapters.base import AdapterCreateRequest
-from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, PackageRequest
+from tests.helpers.gam_client import build_gam_adapter
 
 
 @pytest.fixture
@@ -26,6 +26,7 @@ def mock_principal():
     principal = Mock()
     principal.name = "test_principal"
     principal.principal_id = "principal_123"
+    principal.platform_mappings = {"google_ad_manager": {"advertiser_id": "789"}}
     return principal
 
 
@@ -37,8 +38,13 @@ def mock_gam_config():
         "advertiser_id": "789",
         "trafficker_id": "456",
         "refresh_token": "test_token",
-        "manual_approval_operations": ["create_media_buy"],  # Enable manual approval
     }
+
+
+@pytest.fixture
+def adapter(mock_principal, mock_gam_config):
+    """The real GAM adapter over a stand-in client. Manual approval is off unless a test patches it on."""
+    return build_gam_adapter(MagicMock(), principal=mock_principal, config=mock_gam_config, tenant_id="tenant_123")
 
 
 @pytest.fixture
@@ -90,31 +96,6 @@ def sample_packages():
     ]
 
 
-def _build_gam_adapter(mock_principal):
-    """Construct a real GoogleAdManager with the OAuth client manager patched out.
-
-    Shared by the create-path raise-site test classes below so the adapter wiring
-    lives in one place.
-    """
-    config = {
-        "network_code": "123456",
-        "advertiser_id": "789",
-        "trafficker_id": "456",
-        "refresh_token": "test_token",
-    }
-    with patch("src.adapters.google_ad_manager.GAMClientManager") as mock_client_manager:
-        mock_client_manager.return_value.get_client.return_value = Mock()
-        return GoogleAdManager(
-            config=config,
-            principal=mock_principal,
-            network_code="123456",
-            advertiser_id="789",
-            trafficker_id="456",
-            tenant_id="tenant_123",
-            tenant_ai_config=None,
-        )
-
-
 _DEFAULT_PRODUCT = object()  # sentinel: build a product configured with inventory targeting
 
 
@@ -154,259 +135,191 @@ def _stub_product_session(mock_db_session, *, product=_DEFAULT_PRODUCT):
 class TestGAMManualApprovalPath:
     """Test GAM adapter manual approval path returns packages correctly."""
 
-    def test_manual_approval_returns_packages_with_package_ids(
-        self, mock_principal, mock_gam_config, sample_request, sample_packages
-    ):
+    def test_manual_approval_returns_packages_with_package_ids(self, adapter, sample_request, sample_packages):
         """Manual approval path must return packages with package_id for each package."""
-        # Arrange - Mock the client manager to avoid OAuth initialization
-        with patch("src.adapters.google_ad_manager.GAMClientManager") as mock_client_manager:
-            mock_client_manager.return_value.get_client.return_value = Mock()
+        # Mock _requires_manual_approval to return True
+        with (
+            patch.object(adapter, "_requires_manual_approval", return_value=True),
+            patch.object(adapter.workflow_manager, "create_manual_order_workflow_step") as mock_workflow,
+            patch("src.core.database.database_session.get_db_session") as mock_db_session,
+        ):
+            _stub_product_session(mock_db_session)
+            mock_workflow.return_value = "workflow_step_123"
 
-            adapter = GoogleAdManager(
-                config=mock_gam_config,
-                principal=mock_principal,
-                network_code="123456",
-                advertiser_id="789",
-                trafficker_id="456",
-                tenant_id="tenant_123",
+            # Act
+            start_time = datetime.now()
+            end_time = start_time + timedelta(days=30)
+            response = adapter.create_media_buy(
+                request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
+            )
+
+            # The returned packages ARE the requested ones: same ids, none dropped,
+            # none duplicated.
+            #
+            # Removed with them: `packages is not None`, `isinstance(..., list)` and
+            # a per-package `hasattr(pkg, "package_id") and pkg.package_id is not
+            # None`. Those cannot fail. `AdapterCreateResult.packages` is a required
+            # `list[ResponsePackage]` and `ResponsePackage.package_id` is a required
+            # `str`, so pydantic refuses the construction before any assertion runs —
+            # they graded the type system, not the adapter.
+            assert len(response.packages) == len(sample_packages)
+            assert {pkg.package_id for pkg in response.packages} == {pkg.package_id for pkg in sample_packages}
+
+            # Assert - the workflow step was opened. It is NOT on the result:
+            # AdapterCreateResult carries what the tool reads, and a step an
+            # adapter opens is tracked by the workflow tables.
+            mock_workflow.assert_called_once_with(
+                sample_request,
+                sample_packages,
+                start_time,
+                end_time,
+                response.media_buy_id,
+                order_name_template=None,
                 tenant_ai_config=None,
             )
 
-            # Mock _requires_manual_approval to return True
-            with (
-                patch.object(adapter, "_requires_manual_approval", return_value=True),
-                patch.object(adapter.workflow_manager, "create_manual_order_workflow_step") as mock_workflow,
-            ):
-                mock_workflow.return_value = "workflow_step_123"
-
-                # Act
-                start_time = datetime.now()
-                end_time = start_time + timedelta(days=30)
-                response = adapter.create_media_buy(
-                    request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
-                )
-
-                # The returned packages ARE the requested ones: same ids, none dropped,
-                # none duplicated.
-                #
-                # Removed with them: `packages is not None`, `isinstance(..., list)` and
-                # a per-package `hasattr(pkg, "package_id") and pkg.package_id is not
-                # None`. Those cannot fail. `AdapterCreateResult.packages` is a required
-                # `list[ResponsePackage]` and `ResponsePackage.package_id` is a required
-                # `str`, so pydantic refuses the construction before any assertion runs —
-                # they graded the type system, not the adapter.
-                assert len(response.packages) == len(sample_packages)
-                assert {pkg.package_id for pkg in response.packages} == {pkg.package_id for pkg in sample_packages}
-
-                # Assert - the workflow step was opened. It is NOT on the result:
-                # AdapterCreateResult carries what the tool reads, and a step an
-                # adapter opens is tracked by the workflow tables.
-                mock_workflow.assert_called_once_with(
-                    sample_request,
-                    sample_packages,
-                    start_time,
-                    end_time,
-                    response.media_buy_id,
-                    order_name_template=None,
-                    tenant_ai_config=None,
-                )
-
-    def test_manual_approval_failure_still_returns_packages(
-        self, mock_principal, mock_gam_config, sample_request, sample_packages
-    ):
+    def test_manual_approval_failure_still_returns_packages(self, adapter, sample_request, sample_packages):
         """Manual approval path must return packages even when workflow creation fails."""
         # Arrange
-        with patch("src.adapters.google_ad_manager.GAMClientManager") as mock_client_manager:
-            mock_client_manager.return_value.get_client.return_value = Mock()
+        # Mock workflow manager to fail
+        with (
+            patch.object(adapter, "_requires_manual_approval", return_value=True),
+            patch.object(adapter.workflow_manager, "create_manual_order_workflow_step") as mock_workflow,
+            patch("src.core.database.database_session.get_db_session") as mock_db_session,
+        ):
+            _stub_product_session(mock_db_session)
+            mock_workflow.return_value = None  # Simulate failure
 
-            adapter = GoogleAdManager(
-                config=mock_gam_config,
-                principal=mock_principal,
-                network_code="123456",
-                advertiser_id="789",
-                trafficker_id="456",
-                tenant_id="tenant_123",
-                tenant_ai_config=None,
-            )
+            # Act / Assert - workflow failure raises the typed AdCPWorkflowError,
+            # whose class identity carries the WORKFLOW_CREATION_FAILED taxonomy.
+            import pytest
 
-            # Mock workflow manager to fail
-            with (
-                patch.object(adapter, "_requires_manual_approval", return_value=True),
-                patch.object(adapter.workflow_manager, "create_manual_order_workflow_step") as mock_workflow,
-            ):
-                mock_workflow.return_value = None  # Simulate failure
+            from src.core.exceptions import AdCPWorkflowError
 
-                # Act / Assert - workflow failure raises the typed AdCPWorkflowError,
-                # whose class identity carries the WORKFLOW_CREATION_FAILED taxonomy.
-                import pytest
-
-                from src.core.exceptions import AdCPWorkflowError
-
-                start_time = datetime.now()
-                end_time = start_time + timedelta(days=30)
-                with pytest.raises(AdCPWorkflowError) as exc_info:
-                    adapter.create_media_buy(
-                        request=sample_request,
-                        packages=sample_packages,
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
-                assert exc_info.value.error_code == "WORKFLOW_CREATION_FAILED"
+            start_time = datetime.now()
+            end_time = start_time + timedelta(days=30)
+            with pytest.raises(AdCPWorkflowError) as exc_info:
+                adapter.create_media_buy(
+                    request=sample_request,
+                    packages=sample_packages,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            assert exc_info.value.error_code == "WORKFLOW_CREATION_FAILED"
 
 
 class TestGAMActivationWorkflowPath:
     """Test GAM adapter activation workflow path returns packages correctly."""
 
-    def test_activation_workflow_returns_packages_with_line_item_ids(
-        self, mock_principal, sample_request, sample_packages
-    ):
+    def test_activation_workflow_returns_packages_with_line_item_ids(self, adapter, sample_request, sample_packages):
         """Activation workflow path must return packages with package_id AND platform_line_item_id."""
         # Arrange - No manual approval, guaranteed line items trigger activation workflow
-        config = {
-            "network_code": "123456",
-            "advertiser_id": "789",
-            "trafficker_id": "456",
-            "refresh_token": "test_token",
-            # manual_approval_operations not set - automatic mode
-        }
 
-        with patch("src.adapters.google_ad_manager.GAMClientManager") as mock_client_manager:
-            mock_client_manager.return_value.get_client.return_value = Mock()
+        # Mock the order creation
+        mock_order_id = "order_123"
+        # production's create_line_items returns list[str] (orders.py str()-casts the
+        # GAM id), so the stand-in returns what the real manager returns
+        mock_line_item_ids = ["111", "222"]
 
-            adapter = GoogleAdManager(
-                config=config,
-                principal=mock_principal,
-                network_code="123456",
-                advertiser_id="789",
-                trafficker_id="456",
-                tenant_id="tenant_123",
-                tenant_ai_config=None,
+        with (
+            patch.object(adapter.orders_manager, "create_order") as mock_create_order,
+            patch.object(adapter.orders_manager, "create_line_items") as mock_create_line_items,
+            patch.object(adapter, "_check_order_has_guaranteed_items") as mock_check_guaranteed,
+            patch.object(adapter.workflow_manager, "create_activation_workflow_step") as mock_activation_workflow,
+            patch("src.core.database.database_session.get_db_session") as mock_db_session,
+        ):
+            # Setup mocks
+            mock_create_order.return_value = mock_order_id
+            mock_create_line_items.return_value = mock_line_item_ids
+            mock_check_guaranteed.return_value = (True, ["STANDARD"])  # Guaranteed line items
+            mock_activation_workflow.return_value = "activation_workflow_123"
+
+            # Mock database session - need to return products with inventory config
+            mock_session = MagicMock()
+            mock_db_session.return_value.__enter__.return_value = mock_session
+
+            # Create mock products with inventory targeting (required by validation)
+            mock_product = _make_configured_product()
+
+            # Simpler approach: Always return mock_product for .first(), empty for .all()
+            mock_result = Mock()
+            mock_result.first.return_value = mock_product
+            mock_result.all.return_value = []
+            mock_session.scalars.return_value = mock_result
+
+            # Act
+            start_time = datetime.now()
+            end_time = start_time + timedelta(days=30)
+            response = adapter.create_media_buy(
+                request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
             )
 
-            # Mock the order creation
-            mock_order_id = "order_123"
-            # production's create_line_items returns list[str] (orders.py str()-casts the
-            # GAM id), so the stand-in returns what the real manager returns
-            mock_line_item_ids = ["111", "222"]
+        # Same ids in, same ids out (see the note on the manual-approval test for
+        # the presence/type assertions removed here and why they could not fail).
+        assert len(response.packages) == len(sample_packages)
+        assert {pkg.package_id for pkg in response.packages} == {pkg.package_id for pkg in sample_packages}
 
-            with (
-                patch.object(adapter.orders_manager, "create_order") as mock_create_order,
-                patch.object(adapter.orders_manager, "create_line_items") as mock_create_line_items,
-                patch.object(adapter, "_check_order_has_guaranteed_items") as mock_check_guaranteed,
-                patch.object(adapter.workflow_manager, "create_activation_workflow_step") as mock_activation_workflow,
-                patch("src.core.database.database_session.get_db_session") as mock_db_session,
-            ):
-                # Setup mocks
-                mock_create_order.return_value = mock_order_id
-                mock_create_line_items.return_value = mock_line_item_ids
-                mock_check_guaranteed.return_value = (True, ["STANDARD"])  # Guaranteed line items
-                mock_activation_workflow.return_value = "activation_workflow_123"
+        # Assert - the activation step was opened for the guaranteed order. It is
+        # not on the result: the workflow tables track a step an adapter opens.
+        mock_activation_workflow.assert_called_once_with(mock_order_id, sample_packages)
+        assert response.media_buy_id == mock_order_id, "media_buy_id must match order ID"
 
-                # Mock database session - need to return products with inventory config
-                mock_session = MagicMock()
-                mock_db_session.return_value.__enter__.return_value = mock_session
-
-                # Create mock products with inventory targeting (required by validation)
-                mock_product = _make_configured_product()
-
-                # Simpler approach: Always return mock_product for .first(), empty for .all()
-                mock_result = Mock()
-                mock_result.first.return_value = mock_product
-                mock_result.all.return_value = []
-                mock_session.scalars.return_value = mock_result
-
-                # Act
-                start_time = datetime.now()
-                end_time = start_time + timedelta(days=30)
-                response = adapter.create_media_buy(
-                    request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
-                )
-
-            # Same ids in, same ids out (see the note on the manual-approval test for
-            # the presence/type assertions removed here and why they could not fail).
-            assert len(response.packages) == len(sample_packages)
-            assert {pkg.package_id for pkg in response.packages} == {pkg.package_id for pkg in sample_packages}
-
-            # Assert - the activation step was opened for the guaranteed order. It is
-            # not on the result: the workflow tables track a step an adapter opens.
-            mock_activation_workflow.assert_called_once_with(mock_order_id, sample_packages)
-            assert response.media_buy_id == mock_order_id, "media_buy_id must match order ID"
-
-            # Assert - each package carries the line item GAM created for it
-            assert response.platform_line_item_ids == {"pkg_001": "111", "pkg_002": "222"}
+        # Assert - each package carries the line item GAM created for it
+        assert response.platform_line_item_ids == {"pkg_001": "111", "pkg_002": "222"}
 
 
 class TestGAMSuccessPath:
     """Test GAM adapter success path (no workflow) returns packages correctly."""
 
-    def test_success_path_returns_packages_with_line_item_ids(self, mock_principal, sample_request, sample_packages):
+    def test_success_path_returns_packages_with_line_item_ids(self, adapter, sample_request, sample_packages):
         """Success path (no workflow) must return packages with package_id AND platform_line_item_id."""
         # Arrange - No manual approval, non-guaranteed line items (no activation workflow)
-        config = {
-            "network_code": "123456",
-            "advertiser_id": "789",
-            "trafficker_id": "456",
-            "refresh_token": "test_token",
-        }
 
-        with patch("src.adapters.google_ad_manager.GAMClientManager") as mock_client_manager:
-            mock_client_manager.return_value.get_client.return_value = Mock()
+        # Mock the order creation
+        mock_order_id = "order_456"
+        mock_line_item_ids = ["333", "444"]
 
-            adapter = GoogleAdManager(
-                config=config,
-                principal=mock_principal,
-                network_code="123456",
-                advertiser_id="789",
-                trafficker_id="456",
-                tenant_id="tenant_123",
-                tenant_ai_config=None,
+        with (
+            patch.object(adapter.orders_manager, "create_order") as mock_create_order,
+            patch.object(adapter.orders_manager, "create_line_items") as mock_create_line_items,
+            patch.object(adapter, "_check_order_has_guaranteed_items") as mock_check_guaranteed,
+            patch.object(adapter.workflow_manager, "create_activation_workflow_step") as mock_activation_workflow,
+            patch("src.core.database.database_session.get_db_session") as mock_db_session,
+        ):
+            # Setup mocks
+            mock_create_order.return_value = mock_order_id
+            mock_create_line_items.return_value = mock_line_item_ids
+            mock_check_guaranteed.return_value = (False, ["PRICE_PRIORITY"])  # Non-guaranteed
+
+            # Mock database session - need to return products with inventory config
+            mock_session = MagicMock()
+            mock_db_session.return_value.__enter__.return_value = mock_session
+
+            # Create mock products with inventory targeting (required by validation)
+            mock_product = _make_configured_product()
+
+            # Simpler approach: Always return mock_product for .first(), empty for .all()
+            mock_result = Mock()
+            mock_result.first.return_value = mock_product
+            mock_result.all.return_value = []
+            mock_session.scalars.return_value = mock_result
+
+            # Act
+            start_time = datetime.now()
+            end_time = start_time + timedelta(days=30)
+            response = adapter.create_media_buy(
+                request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
             )
 
-            # Mock the order creation
-            mock_order_id = "order_456"
-            mock_line_item_ids = ["333", "444"]
+        # Same ids in, same ids out (see the note on the manual-approval test for
+        # the presence/type assertions removed here and why they could not fail).
+        assert len(response.packages) == len(sample_packages)
+        assert {pkg.package_id for pkg in response.packages} == {pkg.package_id for pkg in sample_packages}
 
-            with (
-                patch.object(adapter.orders_manager, "create_order") as mock_create_order,
-                patch.object(adapter.orders_manager, "create_line_items") as mock_create_line_items,
-                patch.object(adapter, "_check_order_has_guaranteed_items") as mock_check_guaranteed,
-                patch.object(adapter.workflow_manager, "create_activation_workflow_step") as mock_activation_workflow,
-                patch("src.core.database.database_session.get_db_session") as mock_db_session,
-            ):
-                # Setup mocks
-                mock_create_order.return_value = mock_order_id
-                mock_create_line_items.return_value = mock_line_item_ids
-                mock_check_guaranteed.return_value = (False, ["PRICE_PRIORITY"])  # Non-guaranteed
-
-                # Mock database session - need to return products with inventory config
-                mock_session = MagicMock()
-                mock_db_session.return_value.__enter__.return_value = mock_session
-
-                # Create mock products with inventory targeting (required by validation)
-                mock_product = _make_configured_product()
-
-                # Simpler approach: Always return mock_product for .first(), empty for .all()
-                mock_result = Mock()
-                mock_result.first.return_value = mock_product
-                mock_result.all.return_value = []
-                mock_session.scalars.return_value = mock_result
-
-                # Act
-                start_time = datetime.now()
-                end_time = start_time + timedelta(days=30)
-                response = adapter.create_media_buy(
-                    request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
-                )
-
-            # Same ids in, same ids out (see the note on the manual-approval test for
-            # the presence/type assertions removed here and why they could not fail).
-            assert len(response.packages) == len(sample_packages)
-            assert {pkg.package_id for pkg in response.packages} == {pkg.package_id for pkg in sample_packages}
-
-            # Assert - no activation step on the success path, and the line items GAM
-            # created reach the tool under their package ids
-            mock_activation_workflow.assert_not_called()
-            assert response.platform_line_item_ids == {"pkg_001": "333", "pkg_002": "444"}
+        # Assert - no activation step on the success path, and the line items GAM
+        # created reach the tool under their package ids
+        mock_activation_workflow.assert_not_called()
+        assert response.platform_line_item_ids == {"pkg_001": "333", "pkg_002": "444"}
 
 
 class TestGAMAdapterErrorTaxonomy:
@@ -421,13 +334,9 @@ class TestGAMAdapterErrorTaxonomy:
     wire-mapping test and the GAM lifecycle integration suite.
     """
 
-    def test_line_item_creation_failure_raises_typed_line_item_error(
-        self, mock_principal, sample_request, sample_packages
-    ):
+    def test_line_item_creation_failure_raises_typed_line_item_error(self, adapter, sample_request, sample_packages):
         """A line-item creation failure raises AdCPLineItemError (LINE_ITEM_CREATION_FAILED)."""
         from src.core.exceptions import AdCPLineItemError
-
-        adapter = _build_gam_adapter(mock_principal)
 
         with (
             patch.object(adapter.orders_manager, "create_order", return_value="order_123"),
@@ -457,15 +366,13 @@ class TestGAMAdapterSeamPreservesClassification:
     the manager-level and wire-level tests both stayed green.
 
     Driving the real adapter, because the seam IS adapter code -- a mocked adapter
-    replaces exactly what is under test. Reuses ``_build_gam_adapter`` rather than
+    replaces exactly what is under test. Uses the ``adapter`` fixture rather than
     re-wiring the adapter here (salesagent-rys3u.8).
     """
 
-    def test_rate_limit_from_the_order_call_propagates_unchanged(self, mock_principal, sample_request, sample_packages):
+    def test_rate_limit_from_the_order_call_propagates_unchanged(self, adapter, sample_request, sample_packages):
         """A quota refusal beneath the seam reaches the caller still RATE_LIMITED."""
         from src.core.exceptions import AdCPRateLimitError
-
-        adapter = _build_gam_adapter(mock_principal)
 
         with (
             patch.object(
@@ -515,14 +422,10 @@ class TestGAMProductUnavailableRaiseSites:
             ("no_inventory_targeting", _make_product_without_inventory),
         ],
     )
-    def test_product_unavailable_raise_sites(
-        self, mock_principal, sample_request, sample_packages, condition, make_product
-    ):
+    def test_product_unavailable_raise_sites(self, adapter, sample_request, sample_packages, condition, make_product):
         """Both pre-order validation conditions raise AdCPProductUnavailableError
         (PRODUCT_UNAVAILABLE) at the actual production site."""
         from src.core.exceptions import AdCPProductUnavailableError
-
-        adapter = _build_gam_adapter(mock_principal)
 
         with patch("src.core.database.database_session.get_db_session") as mock_db_session:
             _stub_product_session(mock_db_session, product=make_product())

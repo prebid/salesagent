@@ -21,7 +21,13 @@ from src.core.tenant_context import TenantContext
 from src.services.ai.factory import AIProviderError
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
 from tests.e2e._scripted_llm import MODEL_UNAVAILABLE, ScriptedFailure
-from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories import (
+    AdvertisingPolicyFactory,
+    PricingOptionFactory,
+    PrincipalFactory,
+    ProductFactory,
+    TenantFactory,
+)
 from tests.harness._identity import make_identity
 from tests.harness.product import ProductEnv
 
@@ -307,7 +313,7 @@ class TestRankingFailureFailopen:
 class TestPolicyBlockedPipelineRejection:
     """Test BLOCKED policy raises error through _get_products_impl pipeline.
 
-    BDD scenario: T-UC-001-ext-a-blocked (S8)
+    BDD scenario: T-UC-001-inv-002 (S8, formerly Extension *a blocked)
     """
 
     @pytest.mark.asyncio
@@ -317,7 +323,7 @@ class TestPolicyBlockedPipelineRejection:
             tenant = TenantFactory(
                 tenant_id="pol-blocked",
                 subdomain="pol-blocked",
-                advertising_policy={"enabled": True},
+                advertising_policy=AdvertisingPolicyFactory(),
                 gemini_api_key="test-key",
             )
             PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -354,7 +360,7 @@ class TestRestrictedBriefManualReviewRejection:
             tenant = TenantFactory(
                 tenant_id="pol-restrict",
                 subdomain="pol-restrict",
-                advertising_policy={"enabled": True, "require_manual_review": True},
+                advertising_policy=AdvertisingPolicyFactory(require_manual_review=True),
                 gemini_api_key="test-key",
             )
             PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -382,7 +388,7 @@ class TestRestrictedBriefManualReviewRejection:
 class TestPolicyServiceFailopenPipeline:
     """Test policy service exception results in fail-open behavior.
 
-    BDD scenario: T-UC-001-ext-a-failopen (S10)
+    BDD scenario: T-UC-001-inv-002-4 (S10, formerly Extension *a fail-open)
     """
 
     @pytest.mark.asyncio
@@ -392,7 +398,7 @@ class TestPolicyServiceFailopenPipeline:
             tenant = TenantFactory(
                 tenant_id="pol-failopen",
                 subdomain="pol-failopen",
-                advertising_policy={"enabled": True},
+                advertising_policy=AdvertisingPolicyFactory(),
                 gemini_api_key="test-key",
             )
             PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -580,11 +586,11 @@ class TestBriefPolicyComplianceMatrix:
         error_substring,
     ):
         """Verify each row of the brief policy compliance matrix."""
-        adv_policy = {"enabled": policy_enabled}
-        if require_manual_review:
-            adv_policy["require_manual_review"] = True
-
-        tenant_kwargs = {"advertising_policy": adv_policy}
+        tenant_kwargs: dict[str, object] = {
+            "advertising_policy": AdvertisingPolicyFactory(
+                enabled=policy_enabled, require_manual_review=bool(require_manual_review)
+            )
+        }
         if has_api_key:
             tenant_kwargs["gemini_api_key"] = "test-key"
 
@@ -792,7 +798,7 @@ class TestPricingOptionXorNegativeCases:
 
 
 class TestProductConversionNegativeCardinality:
-    """Test product_conversion rejects products with 0 properties or pricing.
+    """Test product_conversion rejects products with 0 pricing options.
 
     BDD scenarios: T-UC-001-rule-007, T-UC-001-partition-product-arrays,
     T-UC-001-boundary-product-arrays (S21, S32, S39)
@@ -808,23 +814,6 @@ class TestProductConversionNegativeCardinality:
     (salesagent-ntwib). Deleting a red test removes no coverage.
     """
 
-    def test_zero_properties_raises_value_error(self):
-        """product_conversion with 0 properties -> ValueError."""
-        from src.core.product_conversion import convert_product_model_to_schema
-
-        mock_model = MagicMock()
-        mock_model.product_id = "bad_product"
-        mock_model.name = "Bad Product"
-        mock_model.description = "No properties"
-        mock_model.delivery_type = "guaranteed"
-        mock_model.format_contract = NamedFormats(
-            format_ids=({"agent_url": "https://example.com", "id": "display_300x250"},)
-        )
-        mock_model.effective_properties = []
-
-        with pytest.raises(ValueError, match="no publisher_properties"):
-            convert_product_model_to_schema(mock_model)
-
     def test_zero_pricing_options_raises_value_error(self):
         """product_conversion with 0 pricing_options -> ValueError."""
         from src.core.product_conversion import convert_product_model_to_schema
@@ -837,13 +826,13 @@ class TestProductConversionNegativeCardinality:
         mock_model.format_contract = NamedFormats(
             format_ids=({"agent_url": "https://example.com", "id": "display_300x250"},)
         )
-        mock_model.effective_properties = [
+        mock_model.resolve_publisher_properties.return_value = [
             {"publisher_domain": "test.com", "selection_type": "by_tag", "property_tags": ["all"]}
         ]
         mock_model.pricing_options = []
 
         with pytest.raises(ValueError, match="no pricing_options"):
-            convert_product_model_to_schema(mock_model)
+            convert_product_model_to_schema(mock_model, publisher_properties=[])
 
 
 # ---------------------------------------------------------------------------

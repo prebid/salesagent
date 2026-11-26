@@ -7,7 +7,7 @@
    on the kit's test counterparty.
 
 Revision ID: b8d3e5f1a207
-Revises: f7c2e8a13d64
+Revises: e36bcd73e4b0
 Create Date: 2026-10-11 09:00:00.000000
 
 """
@@ -21,7 +21,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b8d3e5f1a207"
-down_revision: str | Sequence[str] | None = "f7c2e8a13d64"
+down_revision: str | Sequence[str] | None = "e36bcd73e4b0"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

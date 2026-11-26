@@ -443,7 +443,7 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy success spec
     And the response should contain media_buy_id
-    And the response should NOT contain an "errors" field
+    And the response should NOT contain "errors" field
     # BR-RULE-018 INV-1: Success → no errors field
 
   @T-UC-003-atomic-error @invariant @BR-RULE-018
@@ -1007,6 +1007,91 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F1: System state unchanged
     # POST-F2: Error explains package not found
     # POST-F3: Suggestion for recovery
+
+  @T-UC-003-ext-l-assignment @extension @ext-l @error @post-f1 @post-f2 @post-f3
+  Scenario Outline: Package not found -- <array> assigns a creative to a package the media buy does not hold
+    Given a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value           |
+    | package_id | pkg_nonexistent |
+    And the package update references creative "cr_assignable" via <array>
+    And all referenced creative_ids exist in the creative library
+    And package "pkg_nonexistent" does not exist in the media buy
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "PACKAGE_NOT_FOUND"
+    And the response error field is packages[0].package_id
+    # LOCAL ADDITION. ext-l above grades the budget branch only; each array that writes a
+    # creative assignment is a second write site, and a package the buy does not hold was
+    # written as an assignment row naming it. error-code.json:179 at adcp@8d1d3244b (v3.2.7):
+    # PACKAGE_NOT_FOUND is "Referenced package does not exist within the specified media buy.
+    # Recovery: correctable (verify package_id within the media buy ...)". The member at fault
+    # is the entry's package_id (package-update.json:8-11, "Seller's ID of package to
+    # update"), so error.field names it (core/error.json:37-39, "Field path associated with
+    # the error in JSONPath-lite format (e.g., 'packages[0].targeting')"). The written spec at
+    # the same tag: update_media_buy.mdx:848 lists PACKAGE_NOT_FOUND, "Package doesn't exist",
+    # resolved by "Verify `package_id`"; compliance-error-codes.mdx:88 gives its recovery as
+    # "correctable"; and update_media_buy.mdx:24-29 makes the request "one atomic mutation"
+    # in which "No package, assignment, library creative, or MediaBuy field from the rejected
+    # update may change", so the refusal writes no assignment row.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx (L848: PACKAGE_NOT_FOUND, Package doesn't exist)
+    # @source repo=adcp ref=v3.2.7 path=docs/snippets/compliance-error-codes.mdx (L88: PACKAGE_NOT_FOUND is correctable)
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx (L24-29: one atomic mutation)
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/PACKAGE_NOT_FOUND
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/package_id
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json pointer=/properties/field
+
+    Examples: the two request members that write a creative assignment
+      | array                |
+      | creative_ids         |
+      | creative_assignments |
+
+  @T-UC-003-ext-l-inline-assignment @extension @ext-l @error @post-f1 @post-f2 @post-f3
+  Scenario: Package not found -- inline creatives for a package the media buy does not hold
+    Given a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value           |
+    | package_id | pkg_nonexistent |
+    And the package update includes inline creatives with valid content
+    And package "pkg_nonexistent" does not exist in the media buy
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "PACKAGE_NOT_FOUND"
+    And the response error field is packages[0].package_id
+    # LOCAL ADDITION. The third array that writes an assignment, refused by the same rule and
+    # naming the same member as the outline above.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/PACKAGE_NOT_FOUND
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json pointer=/properties/field
+
+  @T-UC-003-ext-l-inline-other-buy @extension @ext-l @error @post-f1 @post-f2 @post-f3
+  Scenario: Package not found -- inline creatives for a package another media buy of the Buyer holds
+    Given a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And another media buy of the Buyer holds package "pkg_other_buy"
+    And the request includes 1 package update with:
+    | field      | value         |
+    | package_id | pkg_other_buy |
+    And the package update includes inline creatives with valid content
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "PACKAGE_NOT_FOUND"
+    And the response error field is packages[0].package_id
+    # LOCAL ADDITION. The package exists in the tenant, on a buy the update does not name.
+    # error-code.json:179 at adcp@8d1d3244b (v3.2.7): PACKAGE_NOT_FOUND is "Referenced package
+    # does not exist within the specified media buy. Recovery: correctable (verify package_id
+    # within the media buy ...)", so a package of another buy is not found in this one. The
+    # inline sync resolves a package by its id across the tenant, and so assigned the creative
+    # to the other buy and the update completed.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/PACKAGE_NOT_FOUND
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json pointer=/properties/field
 
   @T-UC-003-ext-m @extension @ext-m @error @post-f1 @post-f2 @post-f3
   Scenario: Invalid placement IDs -- placement not valid for product
@@ -2219,6 +2304,36 @@ Feature: BR-UC-003 Update Media Buy
     # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx section="Package Update Object"
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/keyword_targets
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/geo_proximity/items/oneOf
+
+  @T-UC-003-ext-geo-disjoint @extension @error
+  Scenario Outline: Targeting overlay inclusion fields share no place - <case>
+    Given a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field             | value   |
+    | package_id        | pkg_001 |
+    And the package targeting_overlay is set to: <overlay>
+    And the package "pkg_001" exists in the media buy
+    And the tenant is configured for auto-approval
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the wire error INVALID_REQUEST details problems should be <records>
+    And the error should include "suggestion" field
+
+    Examples:
+      | case                   | overlay                                                                                 | records                                                |
+      | region outside country | {"geo_countries": ["CA"], "geo_regions": ["US-NY"]}                                     | [{"field": "geo_regions", "rejected_value": "US-NY"}] |
+      | DMA outside country    | {"geo_countries": ["CA"], "geo_metros": [{"system": "nielsen_dma", "values": ["501"]}]} | [{"field": "geo_metros", "rejected_value": "501"}]    |
+    # LOCALLY-ADDED beside the generated targeting-overlay outlines, whose
+    # `the result should be <outcome>` grades only the code and the suggestion.
+    # Inclusion fields combine with AND (docs/reference/migration/geo-targeting.mdx at
+    # v3.2.7); an overlay whose inclusion fields have no place in common can never
+    # deliver. The pin does not state this case. It is refused on update as on create
+    # (BR-UC-002 @T-UC-002-ext-f-geo-disjoint), with each field and code in
+    # details.problems (field, rejected_value).
 
   @T-UC-003-partition-start-time @partition @start_time
   Scenario Outline: Start time partition validation - <partition>

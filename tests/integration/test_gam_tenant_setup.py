@@ -26,7 +26,13 @@ sys.path.insert(0, str(project_root))
 @pytest.mark.integration
 @pytest.mark.requires_db
 class TestGAMTenantSetup:
-    """Test GAM tenant setup and configuration flow."""
+    """Test GAM tenant setup and configuration flow.
+
+    ``test_gam_adapter_initialization_without_network_code`` was removed. Its docstring
+    said the adapter starts without a network code; its body asserted the opposite, a
+    ``TypeError`` for omitting the constructor's required arguments, which is Python's
+    own arity check and passes whatever the adapter does.
+    """
 
     def test_admin_ui_network_detection_endpoint(self):
         """
@@ -97,43 +103,6 @@ class TestGAMTenantSetup:
 
                 # Verify OAuth2 client was refreshed to validate the token
                 mock_oauth_instance.Refresh.assert_called_once()
-
-    def test_gam_adapter_initialization_without_network_code(self):
-        """
-        Test that the GAM adapter can be initialized even without network code.
-
-        This ensures the adapter gracefully handles missing network codes
-        during the configuration phase.
-        """
-        from src.adapters.google_ad_manager import GoogleAdManager
-        from src.core.schemas import Principal
-
-        # Create principal with GAM platform mapping
-        principal = Principal(
-            principal_id="test_principal",
-            name="Test Advertiser",
-            platform_mappings={"google_ad_manager": "12345"},
-        )
-
-        # Config without network code (should not crash)
-        config = {
-            "refresh_token": "test_refresh_token",
-            # network_code is missing - should be handled gracefully
-        }
-
-        # After refactoring, network_code, advertiser_id, and trafficker_id are required
-        # This test needs to be updated to reflect the new constructor requirements
-        # We'll test with a TypeError being raised for missing required parameters
-
-        # This should raise a TypeError for missing required parameters
-        with pytest.raises(TypeError) as exc_info:
-            adapter = GoogleAdManager(
-                config=config,
-                principal=principal,
-                tenant_ai_config=None,
-            )
-
-        # Verify the error mentions the missing parameters
 
 
 if __name__ == "__main__":

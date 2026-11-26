@@ -36,6 +36,7 @@ plus the aggregate `CI / BDD Tests` status proxy (replacing PR3's single BDD job
 | `CI / Quickstart` | docker compose health |
 | `CI / Smoke Tests` | import smoke + skip-decorator guard |
 | `CI / Unit Tests` | unit + harness with coverage artifact |
+| `CI / Unit Tests (Windows)` | the same unit + harness run on windows-latest (a row of the `unit-tests` matrix; no coverage) |
 | `CI / Integration (creative)` | integration shard |
 | `CI / Integration (product)` | integration shard |
 | `CI / Integration (media-buy)` | integration shard |
@@ -73,7 +74,7 @@ uv run pytest $(uv run python scripts/ci/shard_paths.py bdd 1)
 
 **Load metric note:** greedy assignment balances Gherkin `Scenario` line counts (~920 total). Collected pytest items are much higher (~9×) because each scenario expands by `Examples:` rows and transport parametrization. Wall-clock is dominated by slow DB-heavy scenarios, not test volume — the reason 2 shards was chosen over 3–4.
 
-Structural guard: `tests/unit/test_architecture_ci_bdd_shard_manifest.py`.
+The partition is graded against the real run's collection in `tests/collection/test_architecture_ci_bdd_shard_partition.py`.
 
 ## Integration Test Shards
 
@@ -142,9 +143,13 @@ full monolith compile on warm CI runs.
 workflow runs on `push` to `main` and `workflow_dispatch`. It logs in to
 `ghcr.io` and calls `creative-agent-stack.sh publish`, which builds from the
 pinned tarball and pushes `ghcr.io/<repo>/adcp-creative-agent:${IMAGE_TAG}`.
-`IMAGE_TAG` is `${ADCP_PIN}-p<checksum>`, where the checksum covers the script's two
-patches to the agent source (the Fly size check and the MCP rate limit), so changing
-a patch publishes a new tag instead of reusing an image built without it.
+`IMAGE_TAG` is `${ADCP_PIN}-p<checksum>`, where the checksum covers the script's three
+patches to the agent source (the Fly size check, the MCP rate limit, and the dependency
+updates), so changing a patch publishes a new tag instead of reusing an image built without it.
+The dependency-update patch moves the agent's vulnerable npm packages, the base image's
+bundled npm and its Debian packages to fixed versions without bumping `ADCP_PIN`; the
+Trivy scan after publish shows what is left. It regenerates the lockfile as of a fixed
+date in the patch, so one tag always names one dependency tree.
 If the tag already exists, publish is a no-op. Publish failures fail the
 workflow loudly (unlike the test shard, which degrades gracefully).
 
@@ -273,15 +278,30 @@ credential blast radius on fork PRs).
 | Branch | `main` only (`if: github.ref == 'refs/heads/main'`) |
 | Environment | `gam-nightly` — create under **Settings → Environments**, restrict deployment branches to `main` |
 | Secret | `GAM_SERVICE_ACCOUNT_JSON` on the `gam-nightly` environment (not repo-level; unavailable to fork PRs) |
+| Variables | `GAM_SUITE_NETWORK_CODE`, `GAM_SUITE_ADVERTISER_ID`, `GAM_SUITE_AD_UNIT_IDS` on the `gam-nightly` environment: the network the tests book against, an advertiser on it, and comma-separated ACTIVE ad units on it |
+| Preflight | `scripts/gam_prerequisites_check.py --suite-network` before the tests; the job fails if the secret is unset or a check fails |
 | Command | `pytest tests/e2e/ -m requires_gam` (GHA Postgres service on :5435 for `gam_lifecycle_db`; tests that request `docker_services_e2e` still start the e2e stack via conftest) |
 | `DATABASE_URL` | `postgresql://adcp_user:secure_password_change_me@127.0.0.1:5435/postgres` — GHA `services.postgres` on host port 5435; `gam_lifecycle_db` creates ephemeral databases there |
 
 Failures notify repository watchers via GitHub's default workflow notifications.
 
-**Local equivalent** (requires credentials + Docker):
+**Local equivalent** (requires credentials + Docker). The network is configuration
+(`ToolingSettings.gam_suite_network`), all or nothing: each contributor names the network
+their suite books against. With no GAM setting at all the preflight prints
+`GAM: not configured` (`./run_all_tests.sh` prints it itself, without uv, when no `GAM_*`
+variable is set) and the GAM tests xfail as "this environment configures no GAM
+network"; with some of them, a test fails naming each one that is unset; with all of them the
+preflight prints `GAM: configured, network <code>` and the tests book against it.
+`./run_all_tests.sh` checks them first with the read-only preflight below
+(`--skip-gam-preflight` or `GAM_SUITE_PREFLIGHT_SKIP=1` runs the suites anyway), and the run
+records the outcome as `gam_network` in `meta.json`.
 
 ```bash
-export GAM_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}'
+export GAM_SERVICE_ACCOUNT_KEY_FILE=/path/to/key.json   # or GAM_SERVICE_ACCOUNT_JSON='{...}'
+export GAM_SUITE_NETWORK_CODE=<your suite network> GAM_SUITE_ADVERTISER_ID=<an advertiser on it>
+export GAM_SUITE_AD_UNIT_IDS=<ad unit>,<ad unit>         # ACTIVE ad units on it
+export ENCRYPTION_KEY=<the stack's key>                 # the key is stored encrypted, as the server stores it
+uv run python scripts/gam_prerequisites_check.py --suite-network
 export DATABASE_URL=postgresql://adcp_user:secure_password_change_me@127.0.0.1:5435/postgres
 uv run pytest tests/e2e/ -m requires_gam -v --timeout=300
 ```

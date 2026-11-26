@@ -33,7 +33,7 @@ from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import as_bool, drop_header_if
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
-from tests.factories.mint import mint
+from tests.factories.mint import mint, mint_id
 from tests.factories.request import OMIT
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 
@@ -522,19 +522,16 @@ def given_request_no_updatable_fields(ctx: dict) -> None:
     kwargs["media_buy_id"] = media_buy_id
 
 
-@given(parsers.parse("the request includes 1 package update with:"))
-def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> None:
-    """Add a package update to the request from a data table."""
-    import json
-
-    # product_id is intentionally accepted here so the immutable-field override
-    # reaches production. AdCPPackageUpdate forbids it (extra=forbid), so it is
-    # rejected — currently as VALIDATION_ERROR rather than the spec-expected
-    # INVALID_REQUEST (BR-RULE-198), so T-UC-003-ext-w is xfailed (#1417).
-    # canceled and start_time are package-update.json properties (adcp v3.2.7), sent as
-    # written: start_time's literal "asap" is the value the package-scope row exists to
-    # show refused (``not: {const: asap}``), so it is not resolved as a date token.
-    _supported_pkg_fields = {
+#: The package-update.json members a scenario table may set on one package.
+#: product_id is intentionally accepted so the immutable-field override reaches production.
+#: AdCPPackageUpdate forbids it (extra=forbid), so it is rejected -- currently as
+#: VALIDATION_ERROR rather than the spec-expected INVALID_REQUEST (BR-RULE-198), so
+#: T-UC-003-ext-w is xfailed (#1417). canceled and start_time are package-update.json
+#: properties (adcp v3.2.7), sent as written: start_time's literal "asap" is the value the
+#: package-scope row exists to show refused (``not: {const: asap}``), so it is not resolved
+#: as a date token.
+_SUPPORTED_PACKAGE_FIELDS = frozenset(
+    {
         "package_id",
         "budget",
         "paused",
@@ -543,30 +540,54 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
         "product_id",
         "canceled",
         "start_time",
+        "pacing",
     }
+)
+
+
+def _set_package_field(pkg_update: dict[str, Any], field: str, value: str) -> None:
+    """Set one package-update member from a scenario table cell, as a buyer would send it."""
+    import json
+
+    assert field in _SUPPORTED_PACKAGE_FIELDS, (
+        f"Unrecognized package field '{field}' in datatable — "
+        f"supported: {sorted(_SUPPORTED_PACKAGE_FIELDS)}. "
+        f"Add handling for '{field}' if it's a valid package update field."
+    )
+    if field == "budget":
+        pkg_update["budget"] = float(value)
+    elif field in ("paused", "canceled"):
+        pkg_update[field] = as_bool(value)
+    elif field in ("targeting_overlay", "catalogs"):
+        pkg_update[field] = json.loads(value)
+    else:
+        pkg_update[field] = value
+
+
+@given(parsers.parse("the request includes 1 package update with:"))
+def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> None:
+    """Add a package update to the request from a data table."""
     kwargs = _ensure_update_defaults(ctx)
     pkg_update: dict[str, Any] = {}
     # Skip header row if present (pytest-bdd datatables include header as first row)
-    rows = drop_header_if(datatable, "field")
-    for row in rows:
-        field, value = row[0].strip(), row[1].strip()
-        assert field in _supported_pkg_fields, (
-            f"Unrecognized package field '{field}' in datatable — "
-            f"supported: {sorted(_supported_pkg_fields)}. "
-            f"Add handling for '{field}' if it's a valid package update field."
-        )
-        if field == "package_id":
-            pkg_update["package_id"] = value
-        elif field == "budget":
-            pkg_update["budget"] = float(value)
-        elif field in ("paused", "canceled"):
-            pkg_update[field] = as_bool(value)
-        elif field in ("targeting_overlay", "catalogs"):
-            pkg_update[field] = json.loads(value)
-        elif field in ("product_id", "start_time"):
-            pkg_update[field] = value
+    for row in drop_header_if(datatable, "field"):
+        _set_package_field(pkg_update, row[0].strip(), row[1].strip())
     assert pkg_update, "Datatable produced empty package update — check table format"
     kwargs["packages"] = [pkg_update]
+
+
+@given("the request updates these packages, in order:")
+def given_package_updates_in_order(ctx: dict, datatable: list[list[str]]) -> None:
+    """Replace the request's packages with one update per package_id, members in table order.
+
+    Columns: ``package_id | field | value``; consecutive rows of one package_id build one update.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    packages: dict[str, dict[str, Any]] = {}
+    for row in drop_header_if(datatable, "package_id"):
+        package_id, field, value = (cell.strip() for cell in row)
+        _set_package_field(packages.setdefault(package_id, {"package_id": package_id}), field, value)
+    kwargs["packages"] = list(packages.values())
 
 
 @given(parsers.parse('the package "{package_id}" exists in the media buy'))
@@ -596,6 +617,23 @@ def given_package_exists(ctx: dict, package_id: str) -> None:
     env._commit_factory_data()
     ctx["existing_package"] = new_pkg
     _register_package(ctx, package_id, new_pkg)
+
+
+@given(parsers.parse('another media buy of the Buyer holds package "{label}"'))
+def given_other_buy_holds_package(ctx: dict, label: str) -> None:
+    """A second buy of the same buyer and tenant holds a package *label* names.
+
+    The update's own buy stays the target: only the label is registered. The package id
+    is unique in the tenant, so a lookup by id alone finds this buy's package and nothing
+    else.
+    """
+    from tests.factories import MediaBuyFactory, MediaPackageFactory
+
+    other_buy = MediaBuyFactory(tenant=ctx["tenant"], principal=ctx["principal"])
+    package = MediaPackageFactory(media_buy=other_buy, package_id=f"{label}_{other_buy.media_buy_id}")
+    ctx["env"]._commit_factory_data()
+    assert other_buy.media_buy_id != ctx["existing_media_buy"].media_buy_id, "the other buy is the update's own buy"
+    _register_package(ctx, label, package)
 
 
 @given(parsers.parse('the package "{package_id}" has stored targeting_overlay {overlay}'))
@@ -1341,20 +1379,6 @@ def then_response_has_sandbox(ctx: dict) -> None:
     assert isinstance(sandbox, bool), f"Expected sandbox to be bool, got {type(sandbox).__name__}: {sandbox!r}"
 
 
-@then('the response should NOT contain an "errors" field')
-@then('the response should NOT have an "errors" field')
-def then_no_errors_field(ctx: dict) -> None:
-    """Assert the response does not contain an 'errors' field at all.
-
-    Step text says 'NOT contain' — the key must be ABSENT, not merely null: an empty list
-    or a serialized null both mean the field exists. wire_absent encodes that distinction.
-
-    Asserted on the WIRE rather than on resp.model_dump(): a round-trip through the model
-    proves the serializer is self-consistent, not what the buyer actually received.
-    """
-    wire_absent(ctx, "errors")
-
-
 # Step 'the response should contain an "errors" array' is owned by
 # tests/bdd/steps/generic/then_media_buy.py, which grades the WIRE rejection
 # (``ctx["result"].assert_wire_error_is_schema_conformant()`` against pinned
@@ -1418,34 +1442,40 @@ def _assert_a2a_submitted_task_has_no_artifacts(ctx: dict) -> None:
     )
 
 
-@then(parsers.parse('the response should NOT contain "{field_name}" field'))
-def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
-    """Assert the response does NOT contain a given field.
+@then(
+    parsers.re(
+        r'(?:the response should NOT (?:contain|have an) "(?P<field_name>[a-z_]+)" field'
+        r"|(?P<path>[a-z_]+(?:\.[a-z_]+)+) should be omitted)"
+    )
+)
+def then_response_field_absent(ctx: dict, field_name: str | None, path: str | None) -> None:
+    """The ONE absence step: the member is not on the wire the buyer received.
 
-    BR-RULE-018 INV-1/INV-2: Success responses must not contain error fields,
-    and error responses must not contain success-specific fields. Both directions read
-    the REAL serialized wire — ``ctx["wire_response"]`` on success, the two-layer error
-    envelope on failure — never ``model_dump()``: media_buy_id and implementation_date
-    are not declared on UpdateMediaBuySubmitted, so a model-level check passes vacuously
-    and can never catch a wire regression (e.g. the A2A submitted payload leaking a
-    field). Absent-or-null on the wire satisfies "does NOT contain" (a null field is
-    not conveyed); a real value is a contract violation.
+    Two spellings, one assertion. ``the response should NOT contain "<field>" field`` names
+    a top-level key (``NOT have an "<field>" field`` is the same sentence, as the UC-005
+    catalog scenarios spell it); ``<dotted.path> should be omitted`` names a nested member. On success
+    both go through :func:`wire_absent`, which reads the REAL serialized wire and fails on a
+    serialized ``null`` as well as on a value: an omitted member is not sent at all.
+
+    BR-RULE-018 INV-1/INV-2: success responses must not contain error fields, and error
+    responses must not contain success-specific fields (media_buy_id and
+    implementation_date are not declared on UpdateMediaBuySubmitted, so a model-level check
+    passes vacuously). ``media_buy.portfolio``: publisher_domains is REQUIRED+minItems:1
+    (pinned v3.1.1 get-adcp-capabilities-response.json) whenever portfolio is present, so a
+    seller with no verified publisher, or one whose lookup failed, omits portfolio.
+    ``media_buy.portfolio.advertising_policies``: the pinned member is
+    ``{"type": "string"}`` with no null arm.
     """
-    # Success-path response — assert against the buyer-facing serialized wire.
-    response = payload_or_none(ctx)
-    if response is not None:
-        data = wire_dict(ctx)
-        assert data.get(field_name) is None, (
-            f"Response should NOT contain '{field_name}' field on the wire (BR-RULE-018), "
-            f"but found: {data.get(field_name)!r}"
-        )
+    member = field_name or path
+    assert member is not None
+    if payload_or_none(ctx) is not None:
+        wire_absent(ctx, member)
         _assert_a2a_submitted_task_has_no_artifacts(ctx)
         return
     # Error-path response (BR-RULE-018 INV-2) — the envelope the buyer received.
     envelope = ctx["result"].error_envelope()
-    assert envelope.get(field_name) is None, (
-        f"Error envelope should NOT contain '{field_name}' field "
-        f"(BR-RULE-018 INV-2), but found: {envelope.get(field_name)!r}"
+    assert member not in envelope, (
+        f"Error envelope should NOT contain '{member}' (BR-RULE-018 INV-2), but found: {envelope[member]!r}"
     )
 
 
@@ -1555,7 +1585,7 @@ def then_old_assignments_removed(ctx: dict, old_ids: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _inline_creative_payload(creative_id: str, name: str) -> dict[str, Any]:
+def _inline_creative_payload(creative_id: str, name: str, media_url: str | None = None) -> dict[str, Any]:
     """One valid inline display creative, as a package update's ``creatives`` item carries it.
 
     The ``asset_type`` discriminator comes from ``image_spec``: a hand-built asset map
@@ -1568,7 +1598,9 @@ def _inline_creative_payload(creative_id: str, name: str) -> dict[str, Any]:
         creative_id=creative_id,
         name=name,
         format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-        assets=named_format_assets("display_300x250_image", media_url=f"https://example.com/{creative_id}.png"),
+        assets=named_format_assets(
+            "display_300x250_image", media_url=media_url or f"https://example.com/{creative_id}.png"
+        ),
     )
 
 
@@ -1617,6 +1649,34 @@ def given_earlier_inline_creative(ctx: dict, package_id: str, creative_id: str) 
     """The package's prior creative arrived inline, as in the pin's storyboard
     (inline_creatives_without_sync: an inline creative, then a replacement inline update)."""
     _send_earlier_update(ctx, package_id, creatives=[_inline_creative_payload(creative_id, "Earlier inline creative")])
+
+
+@given(parsers.parse('the package update sends inline creative "{creative_id}" showing "{media_url}"'))
+def given_package_update_inline_creative_showing(ctx: dict, creative_id: str, media_url: str) -> None:
+    """The first package update carries this one inline creative, with this image."""
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["packages"][0]["creatives"] = [_inline_creative_payload(creative_id, "Inline Creative", media_url)]
+
+
+@then(
+    parsers.parse(
+        'the refusal is INVALID_STATE for creative "{creative_id}" on package "{package}" '
+        'of media buy "{label}" in status "{status}"'
+    )
+)
+def then_refusal_names_the_delivering_package(
+    ctx: dict, creative_id: str, package: str, label: str, status: str
+) -> None:
+    """The wire error is INVALID_STATE, and its details name the creative, the buy, the package and its status."""
+    ctx["result"].assert_wire_error(
+        "INVALID_STATE",
+        details={
+            "creative_id": creative_id,
+            "media_buy_id": _resolve_media_buy_id(ctx, label),
+            "package_id": _resolve_package_id(ctx, package),
+            "current_status": status,
+        },
+    )
 
 
 @given(parsers.parse('an earlier update gave package "{package_id}" the targeting_overlay {overlay}'))
@@ -1921,7 +1981,8 @@ def given_negative_keywords_remove_param(ctx: dict, nk_value: str) -> None:
 def given_targeting_overlay(ctx: dict, overlay_value: str) -> None:
     """Set the full targeting_overlay on the first package update.
 
-    Accepts a JSON object or '<not provided>' (omit the field).
+    Accepts a JSON object or '<not provided>' (omit the field). The create request's
+    overlay is ``the package targeting_overlay is {...}`` (given_media_buy.py).
     """
     import json
 
@@ -3093,7 +3154,7 @@ def given_approval_configuration(ctx: dict, boundary: str) -> None:
 @given("the buyer references a package_id that does not belong to the media buy")
 def given_unknown_package_reference(ctx: dict) -> None:
     """Choose a package_id the seeded buy does not hold."""
-    ctx["unknown_package_id"] = mint(f"pkg_not_on_buy_{uuid.uuid4().hex}")
+    ctx["unknown_package_id"] = mint_id("pkg_not_on_buy")
 
 
 @when("the Buyer Agent sends update_media_buy targeting the unknown package")
@@ -3412,7 +3473,7 @@ def given_update_response_shape(ctx: dict, shape: str, trigger: str | None = Non
 @then('the response payload should NOT contain a "sandbox" field')
 def then_payload_has_no_sandbox(ctx: dict) -> None:
     """The response the buyer received carries no sandbox member, on either branch."""
-    then_response_not_contain_field(ctx, "sandbox")
+    then_response_field_absent(ctx, "sandbox", None)
 
 
 def _assert_sandbox_flag_true(ctx: dict) -> None:
@@ -3441,13 +3502,13 @@ def _assert_terminal_failure_refusal(ctx: dict) -> None:
 def _assert_real_rejection(ctx: dict) -> None:
     """The seller's real budget refusal came back, and no success member did (not a silent ok)."""
     _assert_terminal_failure_refusal(ctx)
-    then_response_not_contain_field(ctx, "media_buy_id")
+    then_response_field_absent(ctx, "media_buy_id", None)
 
 
 def _assert_sandbox_forbidden(ctx: dict) -> None:
     """The terminal-failure arm forbids sandbox (update-media-buy-response.json oneOf/1 `not`)."""
     _assert_terminal_failure_refusal(ctx)
-    then_response_not_contain_field(ctx, "sandbox")
+    then_response_field_absent(ctx, "sandbox", None)
 
 
 _SANDBOX_OUTCOMES = {

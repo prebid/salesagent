@@ -45,7 +45,7 @@
                     <div style="font-weight: 600; font-size: 0.875rem;">{{ task.name }}</div>
                     <div style="font-size: 0.75rem; opacity: 0.9; margin-top: 0.125rem;">{{ task.description }}</div>
                     {% if task.action_url %}
-                    <a href="{{ request.script_root }}{{ task.action_url }}" style="display: inline-block; margin-top: 0.5rem; padding: 0.25rem 0.75rem; background: white; color: #667eea; border-radius: 6px; text-decoration: none; font-size: 0.75rem; font-weight: 600;">
+                    <a href="{{ request.script_root }}{{ task.action_url|safe_url }}" style="display: inline-block; margin-top: 0.5rem; padding: 0.25rem 0.75rem; background: white; color: #667eea; border-radius: 6px; text-decoration: none; font-size: 0.75rem; font-weight: 600;">
                         Configure →
                     </a>
                     {% elif task.details %}

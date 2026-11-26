@@ -68,16 +68,17 @@ function initInventoryTree(config) {
         container.innerHTML = '';
 
         if (showSearch) {
-            searchEl = _createElement('div', 'inventory-tree-search', `
+            searchEl = _createElement('div', 'inventory-tree-search');
+            searchEl.innerHTML = `
                 <div class="input-group input-group-sm mb-2">
                     <input type="text" class="form-control" placeholder="Search ad units..."
-                           id="${containerId}-search-input">
+                           id="${escapeHtml(containerId)}-search-input">
                     <button class="btn btn-outline-secondary" type="button"
-                            id="${containerId}-search-btn">Search</button>
+                            id="${escapeHtml(containerId)}-search-btn">Search</button>
                     <button class="btn btn-outline-secondary" type="button"
-                            id="${containerId}-clear-btn" style="display:none">Clear</button>
+                            id="${escapeHtml(containerId)}-clear-btn" style="display:none">Clear</button>
                 </div>
-            `);
+            `;
             container.appendChild(searchEl);
 
             const input = searchEl.querySelector('input');
@@ -97,16 +98,15 @@ function initInventoryTree(config) {
         }
 
         if (showStats) {
-            statsEl = _createElement('div', 'inventory-tree-stats mb-2', '');
+            statsEl = _createElement('div', 'inventory-tree-stats mb-2');
             container.appendChild(statsEl);
         }
 
-        truncationEl = _createElement('div', 'inventory-tree-truncation alert alert-warning py-1 px-2 mb-2 small',
-            '');
+        truncationEl = _createElement('div', 'inventory-tree-truncation alert alert-warning py-1 px-2 mb-2 small');
         truncationEl.style.display = 'none';
         container.appendChild(truncationEl);
 
-        treeEl = _createElement('div', 'inventory-tree-view', '');
+        treeEl = _createElement('div', 'inventory-tree-view');
         container.appendChild(treeEl);
     }
 
@@ -119,7 +119,7 @@ function initInventoryTree(config) {
         try {
             const data = await _fetchJson(apiUrl);
             if (data.error) {
-                _showError(treeEl, data.error);
+                _showError(treeEl, adminErrorText(data));
                 return;
             }
 
@@ -179,7 +179,7 @@ function initInventoryTree(config) {
             childrenContainer.innerHTML = '';
             _renderChildrenInto(units, childrenContainer, depth);
         } catch (err) {
-            childrenContainer.innerHTML = `<div class="tree-empty text-danger small">Error: ${err.message}</div>`;
+            childrenContainer.innerHTML = `<div class="tree-empty text-danger small">Error: ${escapeHtml(err.message)}</div>`;
         }
     }
 
@@ -390,12 +390,12 @@ function initInventoryTree(config) {
     // --- Stats rendering ---
     function _renderStats(data) {
         if (!statsEl) return;
-        const items = [
-            `<strong>${data.total_active_count || 0}</strong> ad units`,
-            `<strong>${data.placements || 0}</strong> placements`,
-            `<strong>${data.labels || 0}</strong> labels`,
-            `<strong>${data.custom_targeting_keys || 0}</strong> targeting keys`,
-            `<strong>${data.audience_segments || 0}</strong> segments`,
+        const itemsHtml = [
+            `<strong>${escapeHtml(data.total_active_count || 0)}</strong> ad units`,
+            `<strong>${escapeHtml(data.placements || 0)}</strong> placements`,
+            `<strong>${escapeHtml(data.labels || 0)}</strong> labels`,
+            `<strong>${escapeHtml(data.custom_targeting_keys || 0)}</strong> targeting keys`,
+            `<strong>${escapeHtml(data.audience_segments || 0)}</strong> segments`,
         ];
         const syncInfo = data.last_sync
             ? `Last sync: ${new Date(data.last_sync).toLocaleString()}`
@@ -403,8 +403,8 @@ function initInventoryTree(config) {
 
         statsEl.innerHTML = `
             <div class="d-flex flex-wrap gap-3 small text-muted">
-                ${items.map(i => `<span>${i}</span>`).join('')}
-                <span class="ms-auto">${syncInfo}</span>
+                ${itemsHtml.map(itemHtml => `<span>${itemHtml}</span>`).join('')}
+                <span class="ms-auto">${escapeHtml(syncInfo)}</span>
             </div>
         `;
     }
@@ -412,30 +412,29 @@ function initInventoryTree(config) {
     // --- Utility ---
     async function _fetchJson(url) {
         const resp = await fetch(url, { credentials: 'same-origin' });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        if (!resp.ok) throw new Error(adminErrorText(await resp.json()));
         return resp.json();
     }
 
-    function _createElement(tag, className, innerHTML) {
+    function _createElement(tag, className) {
         const el = document.createElement(tag);
         el.className = className;
-        el.innerHTML = innerHTML;
         return el;
     }
 
     function _showLoading(el, msg) {
         el.innerHTML = `<div class="tree-loading">
             <div class="spinner-border spinner-border-sm" role="status" style="margin-right: 0.5rem;"></div>
-            ${msg}
+            ${escapeHtml(msg)}
         </div>`;
     }
 
     function _showEmpty(el, msg) {
-        el.innerHTML = `<div class="tree-empty">${msg}</div>`;
+        el.innerHTML = `<div class="tree-empty">${escapeHtml(msg)}</div>`;
     }
 
     function _showError(el, msg) {
-        el.innerHTML = `<div class="tree-empty text-danger">${msg}</div>`;
+        el.innerHTML = `<div class="tree-empty text-danger">${escapeHtml(msg)}</div>`;
     }
 
     // --- Public API ---

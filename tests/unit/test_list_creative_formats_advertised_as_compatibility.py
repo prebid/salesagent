@@ -27,7 +27,7 @@ _SDK_PREREQUISITE_SENTENCE = "format_ids needed for sync_creatives"
 
 def _pinned_schema(relative: str) -> dict:
     major_minor = ".".join(adcp.get_adcp_spec_version().split(".")[:2])
-    return json.loads((Path(adcp.__file__).parent / "_schemas" / major_minor / relative).read_text())
+    return json.loads((Path(adcp.__file__).parent / "_schemas" / major_minor / relative).read_text(encoding="utf-8"))
 
 
 def _mcp_descriptions() -> dict[str, str | None]:

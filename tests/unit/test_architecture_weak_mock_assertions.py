@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions, rel
 
 ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = (ROOT / "tests",)
@@ -63,7 +63,7 @@ def _find_split_assertions(file_path: str) -> list[tuple[str, str, int]]:
     if not source_path.exists():
         return []
 
-    tree = ast.parse(source_path.read_text())
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
     violations = []
 
     for node in ast.walk(tree):
@@ -121,8 +121,8 @@ def _collect_split_assertion_violations() -> set[tuple[str, str]]:
     found: set[tuple[str, str]] = set()
     for scan_dir in SCAN_DIRS:
         for test_file in sorted(scan_dir.rglob("*.py")):
-            rel = str(test_file.relative_to(ROOT))
-            for f, fn, _line in _find_split_assertions(rel):
+            rel_path = rel(test_file, ROOT)
+            for f, fn, _line in _find_split_assertions(rel_path):
                 found.add((f, fn))
     return found
 
@@ -133,8 +133,8 @@ def _collect_bare_assertion_violations() -> set[tuple[str, str]]:
         for test_file in sorted(scan_dir.rglob("*.py")):
             if "test_architecture_" in test_file.name:
                 continue
-            rel = str(test_file.relative_to(ROOT))
-            for f, fn, _line in _find_bare_assertions(rel):
+            rel_path = rel(test_file, ROOT)
+            for f, fn, _line in _find_bare_assertions(rel_path):
                 found.add((f, fn))
     return found
 
@@ -206,7 +206,7 @@ def _find_bare_assertions(file_path: str) -> list[tuple[str, str, int]]:
     if not source_path.exists():
         return []
 
-    tree = ast.parse(source_path.read_text())
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
     violations = []
 
     for node in ast.walk(tree):

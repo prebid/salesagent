@@ -41,8 +41,9 @@ xdist shipping (workers ship on ``config.workeroutput``, the controller merges i
 ``pytest_testnodedown``), controller-only writing, the collect-only guard and the
 run-scope block. Each of those was re-read against that file rather than assumed.
 
-Writes ``$BDD_PAYLOAD_ARTIFACT`` (tox sets it per BDD env, under ``{toxworkdir}``;
-``run_all_tests.sh`` copies it into ``$RESULTS_DIR/payloads/``). It must NOT land
+Writes ``$BDD_PAYLOAD_ARTIFACT`` (tox sets it per BDD env, to
+``payloads/<env>.json`` under ``$SUITE_REPORT_DIR``, which ``run_all_tests.sh``
+points at its per-run ``$RESULTS_DIR``). It must NOT land
 at the ``test-results/`` root the way ``bdd_scenario_liveness.json`` does: that
 file is overwritten every run, which would destroy the "before" this gate needs.
 """
@@ -56,6 +57,7 @@ from typing import Any
 
 import pytest
 
+from tests._collection_manifest import write_artifact
 from tests.factories.mint import begin_test, install_declaration_recording, minted_forms
 from tests.harness._base import json_safe
 
@@ -355,7 +357,5 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         return
 
     _SHARDS.update(_RECORDS)
-    path = artifact_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
     artifact = {"run": _run_scope(session), "nodes": {k: _SHARDS[k] for k in sorted(_SHARDS)}}
-    path.write_text(json.dumps(artifact, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    write_artifact(artifact_path(), json.dumps(artifact, indent=2, sort_keys=False) + "\n")

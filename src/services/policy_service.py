@@ -80,9 +80,6 @@ class PolicySettings:
     # AI policy
     ai_policy: dict[str, Any] = field(default_factory=dict)
 
-    # Advertising policy
-    advertising_policy: dict[str, Any] = field(default_factory=dict)
-
     # Features
     enable_axe_signals: bool = False
     brand_manifest_policy: str = "public"
@@ -108,7 +105,6 @@ class PolicySettings:
             "creative_auto_approve_threshold": self.creative_auto_approve_threshold,
             "creative_auto_reject_threshold": self.creative_auto_reject_threshold,
             "ai_policy": self.ai_policy,
-            "advertising_policy": self.advertising_policy,
             "enable_axe_signals": self.enable_axe_signals,
             "brand_manifest_policy": self.brand_manifest_policy,
         }
@@ -176,7 +172,8 @@ class PolicyService:
             try:
                 PolicyService.validate_currency_code(currency.currency_code)
             except ValidationError as e:
-                errors[currency.currency_code] = e.errors.get("currency_code", str(e))
+                # validate_currency_code names the currency_code field in each refusal it raises.
+                errors[currency.currency_code] = e.errors["currency_code"]
                 continue
 
             # Validate numeric values
@@ -291,7 +288,6 @@ class PolicyService:
                 creative_auto_approve_threshold=tenant.creative_auto_approve_threshold or 0.9,
                 creative_auto_reject_threshold=tenant.creative_auto_reject_threshold or 0.1,
                 ai_policy=tenant.ai_policy or {},
-                advertising_policy=tenant.advertising_policy or {},
                 enable_axe_signals=tenant.enable_axe_signals or False,
                 brand_manifest_policy=tenant.brand_manifest_policy or "public",
             )
@@ -394,11 +390,6 @@ class PolicyService:
             if "ai_policy" in updates:
                 tenant.ai_policy = updates["ai_policy"]
                 attributes.flag_modified(tenant, "ai_policy")
-
-            # Update advertising policy
-            if "advertising_policy" in updates:
-                tenant.advertising_policy = updates["advertising_policy"]
-                attributes.flag_modified(tenant, "advertising_policy")
 
             # Update features
             if "enable_axe_signals" in updates:

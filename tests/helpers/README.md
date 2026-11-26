@@ -83,7 +83,9 @@ with get_db_session() as session:
 
 **Key differences from `create_test_product()`:**
 - Requires `tenant_id` parameter
-- Uses legacy database field names: `property_tags`, `property_ids`, `properties`
+- Uses the database field names: `property_tags`, `property_ids`, `properties`. With none given it stores
+  `default_publisher_properties()`, which a buyer is offered only where the tenant holds the verified
+  property `ONE_AUTHORIZED_PROPERTY` names (`tests/factories/product.py`)
 - Returns database model instance (not AdCP schema object)
 - Use for database operations, not API serialization
 
@@ -223,7 +225,7 @@ props = create_test_publisher_properties_by_tag()
 
 # Custom tags
 props = create_test_publisher_properties_by_tag(
-    publisher_domain="news.example.com",
+    publisher_domain="news.psatest.com",
     property_tags=["premium", "sports", "homepage"]
 )
 
@@ -242,7 +244,7 @@ from tests.helpers.adcp_factories import create_test_publisher_properties_by_id
 
 # Custom property IDs
 props = create_test_publisher_properties_by_id(
-    publisher_domain="news.example.com",
+    publisher_domain="news.psatest.com",
     property_ids=["homepage_slot_1", "article_sidebar"]
 )
 
@@ -371,7 +373,7 @@ def test_product_with_inventory_profile(integration_db):
             tenant_id="test_tenant",
             name="Premium Inventory",
             publisher_properties=[{
-                "publisher_domain": "news.example.com",
+                "publisher_domain": "news.psatest.com",
                 "property_tags": ["premium", "homepage"],
                 "selection_type": "by_tag",
             }],

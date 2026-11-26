@@ -18,13 +18,11 @@ from __future__ import annotations
 import ast
 import functools
 import importlib.util
-import json
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import uuid
 import warnings
 from collections.abc import Callable, Iterable, Iterator
@@ -32,6 +30,8 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import yaml
+
+from tests._collection_manifest import unpublished_env
 
 # ---------------------------------------------------------------------------
 # Repo-root anchor
@@ -48,8 +48,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src/core/tools", REPO_ROOT / "src/adapters"]
 
 
-def rel(path: Path) -> str:
-    """Return path relative to repo root for stable allowlist keys.
+def rel(path: Path, root: Path = REPO_ROOT) -> str:
+    """Return *path* relative to *root* (the repo root by default), ``/``-separated, for stable allowlist keys.
 
     A path outside the repo root has no stable key to give, so it returns its
     own absolute form rather than raising: every real caller scans repo paths,
@@ -58,7 +58,7 @@ def rel(path: Path) -> str:
     independently of whatever the repo happens to contain.
     """
     try:
-        return str(path.relative_to(REPO_ROOT))
+        return path.relative_to(root).as_posix()
     except ValueError:
         return str(path)
 
@@ -411,7 +411,7 @@ def read_source_roots(roots: Iterable[str]) -> dict[str, str]:
         for path in sorted((REPO_ROOT / root).rglob("*.py")):
             if is_untracked_repo_file(path):
                 continue
-            sources[str(path.relative_to(REPO_ROOT))] = path.read_text(encoding="utf-8")
+            sources[rel(path)] = path.read_text(encoding="utf-8")
     return sources
 
 
@@ -728,7 +728,7 @@ def extract_select_calls(
         lines from the select() call through the next ten lines (the full
         statement can span multiple lines).
     """
-    source_text = source_path.read_text()
+    source_text = source_path.read_text(encoding="utf-8")
     tree = ast.parse(source_text)
     lines = source_text.splitlines()
 
@@ -775,7 +775,7 @@ def find_raw_select_violations(
     repo = repo_root()
     violations: list[tuple[str, str, str, int]] = []
     for py_file in (repo / "src").rglob("*.py"):
-        rel_path = str(py_file.relative_to(repo))
+        rel_path = rel(py_file, repo)
         if skip(rel_path):
             continue
         tree = safe_parse(py_file)
@@ -811,7 +811,7 @@ def iter_architecture_guard_trees(
     """Yield ``(parsed_tree, repo_relative_path)`` for each ``test_architecture_*.py`` module."""
     repo = repo_root()
     skip = set(exempt or ())
-    for path in sorted((repo / "tests" / "unit").glob("test_architecture_*.py")):
+    for path in sorted((repo / "tests").glob("*/test_architecture_*.py")):
         rel = path.relative_to(repo)
         if rel in skip:
             continue
@@ -1086,19 +1086,15 @@ def python_version_pattern_map() -> dict[str, str]:
     }
 
 
-def _repo_relative(path: Path, repo: Path) -> str:
-    return str(path.relative_to(repo))
-
-
 def _github_yaml_candidate(path: Path, repo: Path) -> bool:
-    rel_path = _repo_relative(path, repo)
+    rel_path = rel(path, repo)
     return path.suffix in {".yml", ".yaml"} and (
         rel_path.startswith(".github/workflows/") or rel_path.startswith(".github/actions/")
     )
 
 
 def _python_anchor_candidate(path: Path, repo: Path) -> bool:
-    rel_path = _repo_relative(path, repo)
+    rel_path = rel(path, repo)
     if path.name.startswith("Dockerfile"):
         return True
     if path.name in _PYTHON_ANCHOR_NAMES:
@@ -1194,7 +1190,7 @@ def _postgres_scan_candidate(path: Path) -> bool:
     )
 
 
-_SETUP_UV_ACTION = re.compile(r"astral-sh/setup-uv@([0-9a-f]{40})")
+_FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _INSTALL_UV_ACTION = ".github/actions/_install-uv/action.yml"
 _HARDCODED_UV_VERSION_ENV_RE = re.compile(r'^\s*UV_VERSION:\s*["\']')
 _HARDCODED_PYTHON_VERSION_RE = re.compile(r"python-version:\s*['\"]?[0-9]")
@@ -1206,45 +1202,59 @@ def extract_dockerfile_python_version(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-def assert_setup_uv_single_pinned_source(pins: Iterable[tuple[Path, str]], repo: Path) -> None:
-    """Assert ``astral-sh/setup-uv`` is pinned in exactly one composite action file."""
-    pin_list = list(pins)
-    if not pin_list:
-        raise AssertionError("non-vacuity: no astral-sh/setup-uv references found")
-
+def _pins_by_file(pins: Iterable[tuple[Path, str]], repo: Path | None = None) -> dict[str, set[str]]:
     by_file: dict[str, set[str]] = {}
-    for path, pin in pin_list:
-        rel = str(path.relative_to(repo))
-        by_file.setdefault(rel, set()).add(pin)
+    for path, ref in pins:
+        key = rel(path, repo) if repo else path.as_posix()
+        by_file.setdefault(key, set()).add(ref)
+    return by_file
 
+
+def _render_pins(by_file: dict[str, set[str]]) -> str:
+    return "\n".join(f"  {path}: {sorted(refs)}" for path, refs in sorted(by_file.items()))
+
+
+def assert_single_sha_pin(pins: Iterable[tuple[Path, str]], action: str) -> None:
+    """Assert every ``(path, ref)`` pin of *action* is a full commit SHA, and that all are the same SHA."""
+    by_file = _pins_by_file(pins)
+    if not by_file:
+        raise AssertionError(f"non-vacuity: no {action} references found")
+    not_sha = {path: refs for path, refs in by_file.items() if any(not _FULL_SHA.fullmatch(ref) for ref in refs)}
+    if not_sha:
+        raise AssertionError(f"{action} must be pinned to a full commit SHA:\n{_render_pins(not_sha)}")
+    if len(set().union(*by_file.values())) > 1:
+        raise AssertionError(f"{action} is pinned to different SHAs:\n{_render_pins(by_file)}")
+
+
+def assert_setup_uv_single_pinned_source(pins: Iterable[tuple[Path, str]], repo: Path) -> None:
+    """Assert ``astral-sh/setup-uv`` is referenced from one composite action file and nowhere else.
+
+    The pin itself (full SHA, one value) is ``assert_single_sha_pin``'s rule, which
+    ``test_action_pinned_to_one_full_sha`` applies to setup-uv.
+    """
+    by_file = _pins_by_file(pins, repo)
     if set(by_file) != {_INSTALL_UV_ACTION}:
         raise AssertionError(
-            "astral-sh/setup-uv must be referenced only from "
-            f"{_INSTALL_UV_ACTION} — found pins in:\n"
-            + "\n".join(f"  {path}: {sorted(values)}" for path, values in sorted(by_file.items()))
-        )
-    if len(by_file[_INSTALL_UV_ACTION]) != 1:
-        raise AssertionError(
-            f"expected exactly one setup-uv pin in {_INSTALL_UV_ACTION}, got {sorted(by_file[_INSTALL_UV_ACTION])}"
+            f"astral-sh/setup-uv must be referenced only from {_INSTALL_UV_ACTION} — found pins in:\n"
+            + (_render_pins(by_file) or "  (none)")
         )
 
 
-def iter_setup_uv_action_pins(repo: Path) -> Iterator[tuple[Path, str]]:
-    """Yield (file_path, full_pin) for every ``astral-sh/setup-uv@<sha>`` reference."""
-    install_uv = repo / _INSTALL_UV_ACTION
-    if install_uv.is_file():
-        for m in _SETUP_UV_ACTION.finditer(install_uv.read_text(encoding="utf-8")):
-            yield install_uv, m.group(0)
+def iter_action_pins(repo: Path, action: str) -> Iterator[tuple[Path, str]]:
+    """Yield ``(file_path, ref)`` for every ``<action>@<ref>`` in a git-tracked YAML file.
 
+    *ref* is whatever follows ``@``, a SHA or a tag, so a tag ref is reported rather than skipped.
+    """
+    pattern = re.compile(rf"(?<![\w./-]){re.escape(action)}@([^\s'\"]+)")
     for path in iter_git_tracked_files(repo):
-        if path == install_uv or path.suffix not in {".yml", ".yaml"}:
+        if path.suffix not in {".yml", ".yaml"}:
             continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for m in _SETUP_UV_ACTION.finditer(text):
-            yield path, m.group(0)
+        for m in pattern.finditer(text):
+            yield path, m.group(1)
 
 
 def _iter_hardcoded_yaml_anchor(
@@ -1289,7 +1299,7 @@ def assert_adr008_target_version_pinned(anchors: Iterable[tuple[Path, str, str]]
     if not target_versions:
         raise AssertionError("non-vacuity: pyproject.toml target-version anchor must be scanned")
     drift = [
-        f"{path.relative_to(repo)}: {version}"
+        f"{rel(path, repo)}: {version}"
         for path, version, anchor_kind in anchors
         if anchor_kind == "target-version" and version != _ADR_008_TARGET_VERSION
     ]
@@ -1778,18 +1788,16 @@ def collect_bdd_node_ids_with_e2e_enabled(
 ) -> list[str]:
     """Collect pytest node ids under *target* with BDD_E2E_ENABLED=true.
 
-    Shared by the e2e_rest known-failures ledger fitness function and any
-    test asserting a specific scenario's transport parametrization —
-    same subprocess invocation, same env, same flags (-n0 satisfies the
-    BDD_E2E_ENABLED xdist guard; addopts is cleared so -q prints bare
-    nodeids).
+    For a test that compares two seeded collections of one module, which one real
+    run cannot answer: it has one seed. -n0 satisfies the BDD_E2E_ENABLED xdist
+    guard; addopts is cleared so -q prints bare nodeids.
 
     *randomly_seed* selects the collection ORDER. The default (``None``)
     disables pytest-randomly, which is what a caller asserting "this scenario
     is collected" wants: one stable order. A caller asserting that collection
     does not DEPEND on order passes two different seeds and compares — the
     suite runs with pytest-randomly live and a fresh seed per run
-    (``tox.ini`` [testenv:bdd_inprocess] does not pass ``-p no:randomly``), so
+    (``tox.ini`` [testenv:bdd-inprocess-s{1,2}] does not pass ``-p no:randomly``), so
     order-sensitive collection shows up there as a per-run flap.
     """
     order = ["-p", "no:randomly"] if randomly_seed is None else ["-p", "randomly", f"--randomly-seed={randomly_seed}"]
@@ -1807,7 +1815,7 @@ def collect_bdd_node_ids_with_e2e_enabled(
             "-n0",
         ],
         cwd=repo_root(),
-        env={**os.environ, "BDD_E2E_ENABLED": "true", "BDD_XDIST_N": "0"},
+        env={**unpublished_env(), "BDD_E2E_ENABLED": "true", "BDD_XDIST_N": "0"},
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -1827,7 +1835,7 @@ def scan_src(
 
     The one walk every src-scanning guard needs, so a guard supplies only what
     it detects. Files with no findings are omitted; keys are :func:`rel` spelling
-    (``str(path.relative_to(REPO_ROOT))``), and every suppression constant must
+    (``path.relative_to(REPO_ROOT).as_posix()``), and every suppression constant must
     be written in that same spelling.
 
     Suppression has two axes, and they are NOT the same rule:
@@ -1964,6 +1972,28 @@ AST_GREP_CONFIG = "sgconfig.yml"
 AST_GREP_RULE_DIR = ".ast-grep"
 
 
+def venv_ast_grep() -> Path:
+    """The venv-local ast-grep -- what ``uv run ast-grep`` resolves to, and nothing else.
+
+    Resolved next to ``sys.executable`` (``.exe`` on Windows) and NOWHERE ELSE, on purpose.
+    A PATH lookup would find a homebrew binary that exists on a developer machine and not
+    in CI, so a guard would pass locally while the ``quality-ci`` line it grades failed in
+    CI with command-not-found.
+
+    Absence FAILS, it does not skip: a skip is the same silent nothing-graded outcome as a
+    ``quality-ci`` line arranged to tolerate the binary's absence. The fix is to declare
+    ``ast-grep-cli`` in the pyproject dev group.
+    """
+    candidate = Path(sys.executable).parent / ("ast-grep.exe" if os.name == "nt" else "ast-grep")
+    assert candidate.exists(), (
+        f"{candidate} does not exist: ast-grep is not installed in this environment's venv. "
+        "Declare `ast-grep-cli` in the pyproject dev group so `uv run ast-grep` resolves -- "
+        "a binary on PATH is deliberately NOT used, because relying on it would let a guard "
+        "pass while the make quality-ci line fails in CI."
+    )
+    return candidate
+
+
 def stage_ast_grep_root(tmp_dir: Path) -> Path:
     """A disposable project root holding the REAL ``sgconfig.yml`` and ``.ast-grep/`` rules.
 
@@ -1988,7 +2018,7 @@ def write_ast_grep_probe(root: Path, rel_dir: str, source: str, *, stem: str = "
     rel_path = f"{rel_dir}/{stem}_{uuid.uuid4().hex}.py"
     path = root / rel_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(source)
+    path.write_text(source, encoding="utf-8")
     return rel_path
 
 
@@ -2035,131 +2065,3 @@ def runner_started_services(source: str) -> list[str]:
             started.append(token)
             break
     return started
-
-
-# ---------------------------------------------------------------------------
-# The one BDD collection that yields MARKER SETS (D25 helper home)
-#
-# Two guards need it and must not each have their own: test_architecture_env_route_agreement
-# grades whether the two env-route resolvers agree per collected scenario, and
-# test_architecture_route_xfail_census counts how many scenarios each setup-xfail route
-# claims. A second collector would drift about the ``BDD_E2E_ENABLED`` pop below, which
-# decides the SCOPE every count derived from it is quoted against (salesagent-8qela.151) --
-# three in-process transports or four.
-#
-# It lives here rather than in either test module because a module whose job is to BE a test
-# must not also be a helper library (test_architecture_no_cross_test_module_imports).
-# ---------------------------------------------------------------------------
-_BDD_SUITE_DIR = Path("tests/bdd")
-
-# The nested collection yields ~7.2k items today (7223 at authoring time).
-_MINIMUM_COLLECTED_ITEMS = 6000
-
-# BDD modules whose scenarios carry NO ``T-`` identity tag. They are outside the
-# join by construction — ``scenario_liveness._scenario_identifier`` returns None,
-# so no artifact record is ever written for them and no verdict is ever
-# published. Pinned as an exact set rather than skipped silently: a module
-# sliding into this bucket is a scenario losing its identity, which is a
-# regression, not a shrug.
-_MODULES_WITHOUT_SCENARIO_IDENTITY = frozenset(
-    {
-        "tests/bdd/test_get_products_inventory_profile.py",
-    }
-)
-
-# A pytest plugin, written to a tmp dir and loaded with -p, that dumps every
-# collected item's marker set — and, once the pinned accessor exists, the set
-# that accessor derives for the same node. `pytest_collection_finish` runs after
-# every `pytest_collection_modifyitems`, so the auto-applied entity markers
-# (tests/conftest.py) and conftest's own deselection are already reflected.
-_COLLECTOR_PLUGIN = """
-import importlib
-import json
-import os
-
-
-def pytest_collection_finish(session):
-    dotted = os.environ.get("LANE_F_ACCESSOR_MODULE") or ""
-    accessor = getattr(importlib.import_module(dotted), os.environ["LANE_F_ACCESSOR_NAME"]) if dotted else None
-    rows = []
-    for item in session.items:
-        rows.append(
-            {
-                "nodeid": item.nodeid,
-                "markers": sorted({m.name for m in item.iter_markers()}),
-                "derived": None if accessor is None else sorted(accessor(item)),
-            }
-        )
-    with open(os.environ["LANE_F_DUMP"], "w", encoding="utf-8") as handle:
-        json.dump(rows, handle)
-"""
-
-
-@functools.lru_cache(maxsize=1)
-def collect_bdd_items_with_markers() -> tuple[dict[str, Any], ...]:
-    """Every collected ``tests/bdd`` item with its marker set, from a real run.
-
-    PUBLIC because a second guard consumes it: ``test_architecture_route_xfail_census``
-    counts how many scenarios each setup-xfail route claims, and it needs the same
-    (nodeid, derived marker set) rows this already produces. A second collector would
-    drift about the ``BDD_E2E_ENABLED`` pop below, which decides the scope every count
-    is quoted against (salesagent-8qela.151).
-    """
-    repo = repo_root()
-    # A private dir per invocation: under xdist each worker runs its own nested
-    # collection, and two workers sharing one dump would race.
-    plugin_dir = Path(tempfile.mkdtemp(prefix="lane_f_collect_"))
-    (plugin_dir / "lane_f_collector.py").write_text(_COLLECTOR_PLUGIN, encoding="utf-8")
-    dump = plugin_dir / "collected.json"
-
-    env = dict(os.environ)
-    # The nested collection must not inherit the outer suite's e2e switch: with
-    # it on, scenarios additionally parametrize over e2e_rest and the collected
-    # marker sets stop being the in-process ones this grader reasons about.
-    env.pop("BDD_E2E_ENABLED", None)
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(plugin_dir), env.get("PYTHONPATH", "")]))
-    env["LANE_F_DUMP"] = str(dump)
-    from tests.unit._liveness_contract_pins import DERIVATION_ACCESSOR, accessor_dotted_module
-
-    env["LANE_F_ACCESSOR_NAME"] = DERIVATION_ACCESSOR
-    dotted = accessor_dotted_module()
-    if dotted is not None:
-        env["LANE_F_ACCESSOR_MODULE"] = dotted
-    env.setdefault("ADCP_TESTING", "true")
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            str(_BDD_SUITE_DIR),
-            "--collect-only",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-            "-p",
-            "no:randomly",
-            "-p",
-            "lane_f_collector",
-        ],
-        cwd=repo,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    context = f"stdout:\n{result.stdout[-4000:]}\nstderr:\n{result.stderr[-4000:]}"
-    assert result.returncode == 0, (
-        f"the nested `pytest --collect-only {_BDD_SUITE_DIR}` exited {result.returncode}. A partial collection would "
-        f"silently shrink this grader's input.\n{context}"
-    )
-    assert dump.is_file(), f"the nested `pytest --collect-only {_BDD_SUITE_DIR}` did not write {dump}.\n{context}"
-    rows = json.loads(dump.read_text(encoding="utf-8"))
-    shutil.rmtree(plugin_dir, ignore_errors=True)
-    # The suite collects ~7.2k items today. A floor well under that still catches
-    # a truncated collection, which would make every verdict below vacuous.
-    assert len(rows) > _MINIMUM_COLLECTED_ITEMS, (
-        f"the nested collection produced only {len(rows)} items (expected > {_MINIMUM_COLLECTED_ITEMS}) — "
-        f"the grader would be reasoning about a truncated suite.\n{context}"
-    )
-    return tuple(rows)

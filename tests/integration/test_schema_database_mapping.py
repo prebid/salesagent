@@ -21,7 +21,11 @@ from src.core.database.models import Product as ProductModel
 from src.core.product_conversion import convert_product_model_to_schema, default_reporting_capabilities
 from src.core.schemas import Principal as PrincipalSchema
 from src.core.schemas import Product
-from tests.factories.product import PricingOptionFactory, ProductFactory
+from tests.factories.product import (
+    ONE_AUTHORIZED_PROPERTY,
+    PricingOptionFactory,
+    ProductFactory,
+)
 from tests.helpers.adcp_factories import create_test_db_product
 from tests.utils.database_helpers import (
     create_tenant_with_timestamps,
@@ -96,7 +100,11 @@ class TestSchemaFieldMapping:
         # The primary assertion. An unbacked attribute read raises AttributeError out of
         # this call; a read that resolves but carries the wrong shape fails Product's own
         # validation. Both are the defect this module was opened for.
-        converted = convert_product_model_to_schema(product, adapter_type="mock")
+        converted = convert_product_model_to_schema(
+            product,
+            adapter_type="mock",
+            publisher_properties=product.resolve_publisher_properties(ONE_AUTHORIZED_PROPERTY),
+        )
 
         # A guard that grades less and stays green is the failure mode to design against,
         # and "it did not raise" is exactly that: a converter gutted to return only the
@@ -296,7 +304,7 @@ class TestSchemaFieldMapping:
                 "description",
                 "format_ids",
                 "delivery_type",
-                "property_tags",
+                "publisher_selections",
             ]
 
             conversion_data = {}
@@ -309,7 +317,7 @@ class TestSchemaFieldMapping:
             # Verify we got the expected data
             assert conversion_data["product_id"] == "conversion_test_001"
             assert conversion_data["name"] == "Conversion Test Product"
-            assert conversion_data["property_tags"] == ["all_inventory"]
+            assert conversion_data["publisher_selections"] == []
 
             # Test that unsafe field access (what caused the bug) fails predictably
             unsafe_fields = ["pricing", "cost_basis", "margin"]
@@ -351,7 +359,7 @@ class TestSchemaFieldMapping:
             "publisher_properties": [
                 {
                     "selection_type": "by_id",
-                    "publisher_domain": "example.com",
+                    "publisher_domain": "psatest.com",
                     "property_ids": ["all_inventory"],
                 }
             ],
@@ -491,8 +499,8 @@ class TestSchemaFieldMapping:
                 "publisher_properties": [
                     {
                         "selection_type": "by_id",
-                        "publisher_domain": "example.com",
-                        "property_ids": getattr(product, "property_tags", ["all_inventory"]),
+                        "publisher_domain": "psatest.com",
+                        "property_ids": ["psatest_com"],
                     }
                 ],
                 "pricing_options": [
@@ -544,7 +552,7 @@ class TestFieldAccessPatterns:
             "publisher_properties": [
                 {
                     "selection_type": "by_id",
-                    "publisher_domain": "example.com",
+                    "publisher_domain": "psatest.com",
                     "property_ids": ["all_inventory"],
                 }
             ],
@@ -601,7 +609,7 @@ class TestFieldAccessPatterns:
             "publisher_properties": [
                 {
                     "selection_type": "by_id",
-                    "publisher_domain": "example.com",
+                    "publisher_domain": "psatest.com",
                     "property_ids": ["all_inventory"],
                 }
             ],

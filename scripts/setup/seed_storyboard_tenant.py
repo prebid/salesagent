@@ -52,9 +52,9 @@ STORYBOARD_SUBDOMAIN = "storyboard"
 #: THE ORIGIN, PORT INCLUDED. This is the string the agent card publishes, and an A2A
 #: client connects to what the card says: advertising ``https://storyboard.adcp.test/a2a``
 #: for an agent listening on 8443 points every client at a closed port, which took the A2A
-#: conformance axis from 27 passing checks to zero. The port comes off at the two reads
-#: that want a hostname -- the tenant lookup and ``Tenant.primary_domain``, whose
-#: ``publisher_domain`` pattern admits no colon (``config_loader.hostname_of``).
+#: conformance axis from 27 passing checks to zero. The port comes off where a hostname is
+#: wanted: ``Tenant.virtual_host_name``, which the tenant lookup reads
+#: (``http_utils.hostname_of``).
 STORYBOARD_VIRTUAL_HOST = "storyboard.adcp.test:8443"
 
 #: The credential the runner presents. Distinct from the CI token because a principal
@@ -242,13 +242,12 @@ def seed_storyboard_tenant() -> str:
     from adcp.types import BrandReference
     from sqlalchemy import select
 
-    from scripts.setup.seed_products import canonical_declaration, seed_product
+    from scripts.setup.seed_products import canonical_declaration, seed_product, seed_verified_website
     from src.core.credentials import hash_token
     from src.core.database.database_session import get_db_session
     from src.core.database.models import (
         Account,
         AgentAccountAccess,
-        AuthorizedProperty,
         CurrencyLimit,
         Product,
         PropertyTag,
@@ -309,7 +308,6 @@ def seed_storyboard_tenant() -> str:
                     is_active=True,
                     authorized_emails=["storyboard@example.com"],
                     authorized_domains=None,
-                    policy_settings=None,
                     signals_agent_config=None,
                     ai_policy=None,
                     auto_approve_format_ids=["display_300x250_image", "display_728x90_image", "video_standard_30s"],
@@ -411,21 +409,7 @@ def seed_storyboard_tenant() -> str:
             )
 
         for domain in domains:
-            property_id = domain.replace(".", "_")
-            if not session.scalars(
-                select(AuthorizedProperty).filter_by(tenant_id=tenant_id, property_id=property_id)
-            ).first():
-                session.add(
-                    AuthorizedProperty(
-                        tenant_id=tenant_id,
-                        property_id=property_id,
-                        property_type="website",
-                        name=domain,
-                        identifiers=[{"type": "domain", "value": domain}],
-                        publisher_domain=domain,
-                        verification_status="verified",
-                    )
-                )
+            seed_verified_website(session, tenant_id, domain)
 
         try:
             session.commit()

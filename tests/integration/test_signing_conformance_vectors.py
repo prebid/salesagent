@@ -155,6 +155,7 @@ from tests.factories.principal import plaintext_token_for
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.app_state import preserved_global_app_state
 from tests.helpers.asgi_wire import WireResponse, build_scope, send_wire_request
+from tests.helpers.metrics import assert_counter_delta
 from tests.helpers.signing import (
     COUNTERPARTY_AGENT_URL,
     FAILED_METRIC,
@@ -162,7 +163,6 @@ from tests.helpers.signing import (
     VERIFIER_RESULT,
     declared_posture,
     rejection_code,
-    samples_with,
     signing_config,
     verifier_spy,
 )
@@ -204,17 +204,6 @@ _PRINCIPAL_ID = "b3_conformance_principal"
 _RATE_ABUSE_CAP = 3
 
 _ED25519_KEYID = "test-ed25519-2026"
-
-
-def _counter(metric: str, **labels: str) -> float:
-    """The total of *metric* across every sample whose labels include *labels*.
-
-    A label SUBSET rather than an exact key: ``request_signature_failed_total`` also
-    carries ``keyid`` (always the unresolved placeholder — a failure by definition may
-    not have resolved one), so pinning the full label tuple would make the assertion
-    fail on a label addition rather than on a behavior change.
-    """
-    return sum(samples_with(metric, **labels).values())
 
 
 _VECTORS = load_signing_vectors()
@@ -759,8 +748,12 @@ def test_negative_vector_is_rejected_with_the_spec_code(vector_id, integration_d
     app, portal = conformance_app
     plan = TRANSPLANT[vector_id]
 
-    with _vector_case(vector_id) as (_env, token, calls):
-        before = _counter(FAILED_METRIC, code=plan.expected_code, operation=plan.expected_operation)
+    with (
+        _vector_case(vector_id) as (_env, token, calls),
+        assert_counter_delta(
+            FAILED_METRIC, 1, why=vector_id, code=plan.expected_code, operation=plan.expected_operation
+        ),
+    ):
         response = _send(app, portal, vector_id, token)
 
         assert response.status_code == 401, (
@@ -770,12 +763,6 @@ def test_negative_vector_is_rejected_with_the_spec_code(vector_id, integration_d
             f"{vector_id}: wire challenge is {response.get('WWW-Authenticate')!r}, expected "
             f'Signature error="{plan.expected_code}". The header bytes are the graded artifact — '
             "a bare 401 is satisfied by the resolver refusing the bearer first."
-        )
-        after = _counter(FAILED_METRIC, code=plan.expected_code, operation=plan.expected_operation)
-        assert after - before == 1.0, (
-            f"{vector_id}: adcp_request_signature_failed_total"
-            f'{{code="{plan.expected_code}",operation="{plan.expected_operation}"}} moved by '
-            f"{after - before}, expected exactly 1"
         )
         if calls:
             assert _observed_operation(calls, response) == plan.expected_operation
@@ -854,8 +841,16 @@ def test_positive_vector_is_verified_by_the_real_verifier(vector_id, integration
     plan = TRANSPLANT[vector_id]
     keyid = str(_signature_params(_VECTORS[vector_id])["keyid"])
 
-    with _vector_case(vector_id) as (_env, token, calls):
-        before = _counter(VERIFIED_METRIC, keyid=keyid, operation=plan.expected_operation)
+    with (
+        _vector_case(vector_id) as (_env, token, calls),
+        assert_counter_delta(
+            VERIFIED_METRIC,
+            1,
+            why=f"{vector_id}: the counter is the observable that the verifier ACCEPTED, not merely that it ran",
+            keyid=keyid,
+            operation=plan.expected_operation,
+        ),
+    ):
         response = _send(app, portal, vector_id, token)
 
         assert rejection_code(response) is None, (
@@ -873,14 +868,6 @@ def test_positive_vector_is_verified_by_the_real_verifier(vector_id, integration
         assert signer.key_id == keyid, (
             f"{vector_id}: the verifier returned a VerifiedSigner for {signer.key_id!r}, but the "
             f"vector signed with {keyid!r}"
-        )
-
-        after = _counter(VERIFIED_METRIC, keyid=keyid, operation=plan.expected_operation)
-        assert after - before == 1.0, (
-            f"{vector_id}: adcp_request_signature_verified_total"
-            f'{{keyid="{keyid}",operation="{plan.expected_operation}"}} moved by {after - before}, '
-            "expected exactly 1 — the counter is the observable that the verifier ACCEPTED, "
-            "not merely that it ran"
         )
 
 
@@ -905,17 +892,18 @@ def test_replayed_nonce_vector(integration_db, conformance_app) -> None:
     keyid = str(_signature_params(_VECTORS[vector_id])["keyid"])
 
     with _vector_case(vector_id) as (_env, token, calls):
-        before = _counter(VERIFIED_METRIC, keyid=keyid, operation=plan.expected_operation)
-
-        first = _send(app, portal, vector_id, token)
-        assert rejection_code(first) is None, (
-            f"submission #1 was rejected with {rejection_code(first)!r}; 016 grades nothing unless "
-            "the first submission is ACCEPTED"
-        )
-        assert _counter(VERIFIED_METRIC, keyid=keyid, operation=plan.expected_operation) - before == 1.0, (
-            "submission #1 did not increment verified_total — it was not accepted by the verifier, "
-            "so the replay rejection below would prove nothing"
-        )
+        with assert_counter_delta(
+            VERIFIED_METRIC,
+            1,
+            why="submission #1 was not accepted by the verifier, so the replay rejection below would prove nothing",
+            keyid=keyid,
+            operation=plan.expected_operation,
+        ):
+            first = _send(app, portal, vector_id, token)
+            assert rejection_code(first) is None, (
+                f"submission #1 was rejected with {rejection_code(first)!r}; 016 grades nothing unless "
+                "the first submission is ACCEPTED"
+            )
 
         second = _send(app, portal, vector_id, token)
         assert second.status_code == 401

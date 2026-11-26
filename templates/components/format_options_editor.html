@@ -32,4 +32,22 @@
     <textarea id="format_options" name="format_options" rows="8"
               style="width: 100%; font-family: monospace; font-size: 0.85rem;"
               placeholder='[{"format_kind": "image", "params": {"width": 300, "height": 250}}]'>{{ authored_format_options }}</textarea>
+    {% if publisher_format_options %}
+    <details style="margin-top: 0.5rem;">
+        <summary>Format options your publishers declare in their <code>adagents.json</code></summary>
+        <p style="color: #666; font-size: 0.85rem; margin: 0.5rem 0;">
+            Reference one by its key alone; buyers are served the publisher's current
+            <code>format_kind</code> and <code>params</code>. The option must apply to a property this
+            product sells.
+        </p>
+        <ul style="font-size: 0.85rem;">
+            {% for option in publisher_format_options %}
+            <li>
+                <code>{"publisher_domain": "{{ option.publisher_domain }}", "format_option_id": "{{ option.format_option_id }}"}</code>
+                &mdash; {{ option.declaration.format_kind }} {{ option.declaration.params | tojson }}
+            </li>
+            {% endfor %}
+        </ul>
+    </details>
+    {% endif %}
 </div>

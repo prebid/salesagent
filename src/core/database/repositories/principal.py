@@ -17,15 +17,19 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import MediaBuy, Principal, PrincipalSigningKeyid
+from src.core.database.repositories.base import Repository
+from src.core.operator_errors import PrincipalNotFound
 
 
-class PrincipalRepository:
+class PrincipalRepository(Repository):
     """Read access to one tenant's principals.
 
     Args:
         session: SQLAlchemy session (caller manages lifecycle).
         tenant_id: Every query is scoped to this tenant.
     """
+
+    NOT_FOUND = PrincipalNotFound
 
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session

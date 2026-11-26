@@ -8,18 +8,73 @@ is set at construction time and injected into all queries automatically.
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection, Iterable
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from src.core.database.models import PricingOption, Product
-from src.core.format_satisfaction import refuse_outside_common_intersection
+from src.core.database.models import InventoryProfile, Product, Publisher, Tenant
+from src.core.database.repositories.base import Repository
+from src.core.format_satisfaction import FormatOptionsOutsideCommonIntersection, refuse_outside_common_intersection
+from src.core.operator_errors import ProductNotFound
+from src.core.publisher_format_catalog import PublisherCatalog, format_option_refusal
 
 logger = logging.getLogger(__name__)
 
 
-class ProductRepository:
+@dataclass(frozen=True)
+class OfferedProduct:
+    """A product buyers are offered, with the ``publisher_properties`` it names (#1845)."""
+
+    product: Product
+    publisher_properties: list[dict]
+
+
+def offered_products(products: Iterable[Product], catalog: PublisherCatalog) -> list[OfferedProduct]:
+    """The *products* buyers are offered: each naming a publisher that authorizes this agent.
+
+    *catalog* is what the tenant's publishers' stored adagents.json files authorize now
+    (``PublisherRepository.catalog``). AdCP 3.2.7 ``core/product.json`` requires
+    ``publisher_properties`` with ``minItems: 1``, and each entry names the publisher whose
+    adagents.json a buyer verifies the seller against
+    (``governance/property/authorized-properties.mdx``), so a product resolving to none has no
+    entry it can truthfully make. It is a seller-side configuration gap: logged, marked "Not
+    offered to buyers" on the admin products page, and left out here, so every reader that
+    goes through this function -- ``get_products``, the catalog, ``create_media_buy`` -- treats
+    it as unknown.
+    """
+    offered = []
+    for product in products:
+        publisher_properties = product.resolve_publisher_properties(catalog.refs)
+        refusal = offer_refusal(product, publisher_properties, catalog)
+        if refusal is None:
+            offered.append(OfferedProduct(product, publisher_properties))
+        else:
+            logger.warning("Product %s is not offered: %s", product.product_id, refusal)
+    return offered
+
+
+def offer_refusal(product: Product, publisher_properties: list[dict], catalog: PublisherCatalog) -> str | None:
+    """Why buyers are not offered *product*, or ``None`` when they are.
+
+    *publisher_properties* is what :meth:`Product.resolve_publisher_properties` resolved for it.
+    A product is also withheld when a format option it references by
+    ``{publisher_domain, format_option_id}`` does not resolve against a fresh publisher's
+    ``formats[]`` it sells: ``core/product.json`` ``format_options`` makes an unresolved
+    publisher format-option reference "fail closed" (``format_option_refusal``).
+    """
+    if not publisher_properties:
+        return (
+            "its property selection names no property a publisher's adagents.json authorizes this seller for. "
+            "Add the publisher under Publishers and refresh it."
+        )
+    authored = product.inventory_profile.format_options if product.inventory_profile_id else None
+    return format_option_refusal(authored or product.format_options, publisher_properties, catalog)
+
+
+class ProductRepository(Repository):
     """Tenant-scoped data access for Product.
 
     All queries filter by tenant_id automatically. Callers cannot bypass
@@ -32,6 +87,8 @@ class ProductRepository:
         session: SQLAlchemy session (caller manages lifecycle).
         tenant_id: Tenant scope for all queries.
     """
+
+    NOT_FOUND = ProductNotFound
 
     _IMMUTABLE_FIELDS: frozenset[str] = frozenset({"tenant_id", "product_id"})
 
@@ -103,20 +160,26 @@ class ProductRepository:
         )
         return list(self._session.scalars(stmt).all())
 
-    def list_all_with_inventory(self) -> list[Product]:
-        """Get all products with pricing, inventory profile, and tenant loaded.
+    def list_for_offer(self, product_ids: Collection[str] | None = None) -> list[Product]:
+        """The tenant's products, or only *product_ids*, loaded for :func:`offered_products` and conversion.
 
-        Used by get_product_catalog which needs full product data for conversion.
+        Pricing options, publisher selections (the product's and its inventory profile's),
+        and the tenant with its publishers' format catalogs are loaded eagerly, ordered by
+        product_id.
         """
         stmt = (
             select(Product)
             .options(
                 selectinload(Product.pricing_options),
-                selectinload(Product.inventory_profile),
-                selectinload(Product.tenant),
+                selectinload(Product.publisher_selections),
+                selectinload(Product.inventory_profile).selectinload(InventoryProfile.publisher_selections),
+                selectinload(Product.tenant).selectinload(Tenant.publishers).selectinload(Publisher.format_options),
             )
             .where(Product.tenant_id == self._tenant_id)
+            .order_by(Product.product_id)
         )
+        if product_ids is not None:
+            stmt = stmt.where(Product.product_id.in_(list(product_ids)))
         return list(self._session.scalars(stmt).all())
 
     def list_by_ids(self, product_ids: list[str]) -> list[Product]:
@@ -144,9 +207,10 @@ class ProductRepository:
         """Persist a new product within this tenant.
 
         The product.tenant_id must match the repository's tenant_id.
-        Raises ValueError if there is a tenant mismatch, or if the product sells several
-        publishers without placements and declares an option not all of them accept
-        (:func:`~src.core.format_satisfaction.refuse_outside_common_intersection`).
+        Raises ValueError if there is a tenant mismatch, and
+        :class:`~src.core.format_satisfaction.FormatOptionsOutsideCommonIntersection` if the
+        product sells several publishers without placements and declares an option not all of
+        them accept.
 
         Does NOT commit — the UoW handles that.
         """
@@ -154,8 +218,14 @@ class ProductRepository:
             raise ValueError(
                 f"Tenant mismatch: product.tenant_id={product.tenant_id!r} != repository tenant_id={self._tenant_id!r}"
             )
-        refuse_outside_common_intersection(product)
+        # Added before the check, so the pending product reads its tenant's publishers' format
+        # catalogs (``Product.format_contract``); a refused product leaves the session again.
         self._session.add(product)
+        try:
+            refuse_outside_common_intersection(product)
+        except FormatOptionsOutsideCommonIntersection:
+            self._session.expunge(product)
+            raise
         self._session.flush()
         return product
 
@@ -181,17 +251,3 @@ class ProductRepository:
         refuse_outside_common_intersection(product)
         self._session.flush()
         return product
-
-    # ------------------------------------------------------------------
-    # PricingOption queries
-    # ------------------------------------------------------------------
-
-    def get_all_pricing_options(self) -> list[PricingOption]:
-        """Get all pricing options for the tenant."""
-        return list(
-            self._session.scalars(
-                select(PricingOption).where(
-                    PricingOption.tenant_id == self._tenant_id,
-                )
-            ).all()
-        )

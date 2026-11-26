@@ -7,6 +7,7 @@ shared implementation pattern from CLAUDE.md.
 import logging
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from adcp.types import PropertyListReference
@@ -49,7 +50,6 @@ from src.core.schemas import (
     LibraryErrorSource,
     Product,  # Extends library Product
 )
-from src.core.validation_helpers import safe_parse_json_field
 from src.services.ai import AIServiceFactory
 from src.services.ai.factory import AIProviderError
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
@@ -81,6 +81,7 @@ def get_recommended_cpm(product: Product) -> float | None:
 
 
 # Import conversion utilities from dedicated module to avoid circular imports
+from src.core.database.repositories.product import offered_products
 from src.core.product_conversion import convert_product_model_to_schema
 
 
@@ -263,18 +264,16 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
 
     # Note: brand_manifest validation is handled by Pydantic schema, no need for runtime validation here
 
-    # Check policy compliance first (if enabled)
-    advertising_policy = safe_parse_json_field(tenant.advertising_policy, field_name="advertising_policy", default={})
-
-    # Only run policy checks if enabled in tenant settings
-    policy_check_enabled = advertising_policy.get("enabled", False)  # Default to False for new tenants
+    # Check policy compliance first (if enabled). No saved policy runs no check.
+    advertising_policy = tenant.advertising_policy
+    policy_check_enabled = advertising_policy is not None and advertising_policy.enabled
 
     # Extract brief text early - needed for policy checks, dynamic variants, and AI ranking
     brief_text = req.brief if req.brief else ""
     # What AI the seller configured, resolved once when the tenant was loaded.
     seller_ai = tenant.ai_config
 
-    if not policy_check_enabled:
+    if advertising_policy is None or not policy_check_enabled:
         # Skip policy checks if disabled
         policy_result = None
         logger.info(f"Policy checks disabled for tenant {tenant.tenant_id}")
@@ -294,15 +293,12 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         else:
             policy_service = PolicyCheckService(model=policy_model)
 
-            # Use advertising_policy settings for tenant-specific rules
-            tenant_policies = advertising_policy if advertising_policy else {}
-
             try:
                 policy_result = await policy_service.check_brief_compliance(
                     brief=brief_text,
                     promoted_offering=offering,  # Use extracted offering from brand
                     brand_manifest=None,  # the pinned SDK: brand_manifest replaced by brand; policy service still accepts None
-                    tenant_policies=tenant_policies if tenant_policies else None,
+                    tenant_policy=advertising_policy,
                 )
 
                 # Log successful policy check
@@ -368,7 +364,8 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     if (
         policy_result
         and policy_result.status == PolicyStatus.RESTRICTED
-        and advertising_policy.get("require_manual_review", False)
+        and advertising_policy is not None
+        and advertising_policy.require_manual_review
     ):
         # Log policy violation for audit trail and compliance
         audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
@@ -402,14 +399,18 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     from src.core.database.repositories.uow import ProductUoW
 
     with ProductUoW(tenant.tenant_id) as uow:
-        assert uow.products is not None
-        db_products = uow.products.list_all()
+        assert uow.publishers is not None
+        # Once per request: dynamic variants resolve their selectors against these too (#1845).
+        publisher_catalog = uow.publishers.catalog(datetime.now(UTC))
 
-        # Convert database Product models to AdCP Product schema
+        # Convert the offered database Product models to AdCP Product schema
         products = []
-        for product_obj in db_products:
+        for offered in uow.list_offered():
+            product_obj = offered.product
             try:
-                validated_product = convert_product_model_to_schema(product_obj, adapter_type=tenant_adapter_type)
+                validated_product = convert_product_model_to_schema(
+                    product_obj, adapter_type=tenant_adapter_type, publisher_properties=offered.publisher_properties
+                )
                 products.append(validated_product)
                 logger.debug(f"Successfully converted product {product_obj.product_id}")
             except AdCPSalesAgentError:
@@ -500,12 +501,14 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         if dynamic_variants:
             # Convert Product models to Product schemas for response
 
-            for variant_model in dynamic_variants:
-                # Convert database model to schema (returns library Product)
-                # Cast to our extended Product type for mypy compatibility
-                variant_schema = convert_product_model_to_schema(variant_model, adapter_type=tenant_adapter_type)
-                # Type: ignore - library Product is compatible with our extended Product at runtime
-                products.append(variant_schema)
+            for offered_variant in offered_products(dynamic_variants, publisher_catalog):
+                products.append(
+                    convert_product_model_to_schema(
+                        offered_variant.product,
+                        adapter_type=tenant_adapter_type,
+                        publisher_properties=offered_variant.publisher_properties,
+                    )
+                )
 
             logger.info(f"[GET_PRODUCTS] Added {len(dynamic_variants)} dynamic product variants")
     except (ImportError, RuntimeError, OSError) as e:
@@ -920,17 +923,13 @@ def get_product_catalog(tenant_id: str) -> list[Product]:
     """Get products for a tenant.
 
     Returns:
-        List of Product objects with full pricing options
+        List of Product objects with full pricing options: the products get_products offers,
+        read through the same ``list_offered``.
     """
     from src.core.database.repositories.uow import ProductUoW
 
     with ProductUoW(tenant_id) as uow:
-        assert uow.products is not None
-        products = uow.products.list_all_with_inventory()
-
-        # Use convert_product_model_to_schema for consistency
-        loaded_products = []
-        for product in products:
-            loaded_products.append(convert_product_model_to_schema(product))
-
-    return loaded_products
+        return [
+            convert_product_model_to_schema(offered.product, publisher_properties=offered.publisher_properties)
+            for offered in uow.list_offered()
+        ]

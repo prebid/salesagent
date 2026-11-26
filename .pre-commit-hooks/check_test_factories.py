@@ -170,7 +170,7 @@ def check_file(filepath: Path) -> list[dict]:
     if "adcp_factories.py" in str(filepath):
         return []
 
-    content = filepath.read_text()
+    content = filepath.read_text(encoding="utf-8")
     issues = []
 
     for pattern_rule in PATTERNS:

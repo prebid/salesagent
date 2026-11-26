@@ -15,6 +15,7 @@ from sqlalchemy import delete, select
 from src.admin.app import create_app
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, Principal, Tenant
+from src.core.tools.media_buy_create import CreativePushFailure
 from tests.factories import stamp_format_identity
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.media_buy_approval import (
@@ -299,7 +300,9 @@ def _seed_buy_held_on_one_creative(*, starts_in_days: int) -> _HeldBuy:
     Approving that creative is what unblocks the buy, and the unblocking runs the REAL
     ``execute_approved_media_buy`` — so the buy needs everything that callee
     reconstructs from (see ``seed_pending_buy``) and the creative needs assets the
-    pre-upload asset gate can read (see ``uploadable_creative``).
+    pre-upload asset gate can read (see ``uploadable_creative``). The creative is assigned to
+    the buy's own package, as every production writer assigns one: the approval reads each
+    assigned creative for the package it is assigned to.
     """
     from tests.factories import CreativeAssignmentFactory, CreativeFactory
 
@@ -310,7 +313,8 @@ def _seed_buy_held_on_one_creative(*, starts_in_days: int) -> _HeldBuy:
         principal=buy.principal,
         status="pending_review",
     )
-    CreativeAssignmentFactory(creative=creative, media_buy=buy.media_buy, package_id="pkg_unblock")
+    (package,) = buy.media_buy.packages
+    CreativeAssignmentFactory(creative=creative, media_buy=buy.media_buy, package_id=package.package_id)
     return _HeldBuy(buy, creative)
 
 
@@ -326,7 +330,7 @@ class TestCreativeApprovalRetroactivePush:
 
         with (
             patch(_SIDE_EFFECTS_PATCH),
-            patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+            patch(_PUSH_PATCH, return_value=None) as mock_push,
         ):
             response = client.post(
                 f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
@@ -350,7 +354,7 @@ class TestCreativeApprovalRetroactivePush:
 
         with (
             patch(_SIDE_EFFECTS_PATCH),
-            patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+            patch(_PUSH_PATCH, return_value=None) as mock_push,
         ):
             response = client.post(
                 f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
@@ -370,7 +374,7 @@ class TestCreativeApprovalRetroactivePush:
 
         with (
             patch(_SIDE_EFFECTS_PATCH),
-            patch(_PUSH_PATCH, return_value=(False, "GAM rejected the creative")),
+            patch(_PUSH_PATCH, return_value=CreativePushFailure("GAM rejected the creative")),
         ):
             response = client.post(
                 f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
@@ -391,7 +395,7 @@ class TestCreativeApprovalRetroactivePush:
 
         with (
             patch(_SIDE_EFFECTS_PATCH),
-            patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+            patch(_PUSH_PATCH, return_value=None) as mock_push,
         ):
             response = client.post(
                 f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
@@ -411,7 +415,7 @@ class TestCreativeApprovalRetroactivePush:
 
         with (
             patch(_SIDE_EFFECTS_PATCH),
-            patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+            patch(_PUSH_PATCH, return_value=None) as mock_push,
         ):
             response = client.post(
                 f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
@@ -435,7 +439,7 @@ class TestCreativeApprovalRetroactivePush:
 
         with (
             patch(_SIDE_EFFECTS_PATCH),
-            patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+            patch(_PUSH_PATCH, return_value=None) as mock_push,
         ):
             response = client.post(
                 f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
@@ -459,7 +463,7 @@ class TestCreativeApprovalRetroactivePush:
 
         with (
             patch(_SIDE_EFFECTS_PATCH),
-            patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+            patch(_PUSH_PATCH, return_value=None) as mock_push,
         ):
             response = client.post(
                 f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
