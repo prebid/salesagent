@@ -29,7 +29,7 @@ handed back to whoever supplied the URL, the pair is an internal host and port
 scanner (``building/by-layer/L1/security.mdx``, point 6: do not
 echo fetch errors back to the party that supplied the URL). The real reason is
 not lost — ``outbound_http`` logs it at WARNING before these functions return,
-and the log line below pins it to the URL and the field it came from.
+and the log line below pins it to the field and the URL's scheme and host.
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ from flask import Response, flash, jsonify, redirect
 from werkzeug.wrappers import Response as WerkzeugResponse
 
 from src.core.security.outbound_http import OutboundRequestBlocked, validate_url
+from src.core.webhook_validator import UNPARSEABLE_WEBHOOK_URL_FOR_LOG, url_for_record
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,9 @@ def _is_allowed(url: Any, label: str) -> bool:
     Answering both here keeps every call site free of its own shape check.
 
     The WARNING carries what the seam's own refusal cannot say — which form field
-    and which URL — so the two lines together are the whole story. The seam's half
+    and which scheme and host — so the two lines together are the whole story. Only
+    the scheme and host: a refused URL can be a posting credential (a Slack webhook
+    keeps its token in the path) or carry ``user:pass@`` or a query-string token. The seam's half
     is ``AdCPBlockedUrlError.REFUSAL_MESSAGE``, the one buyer-facing sentence, and
     it names neither. (This cited ``outbound_http._blocked``, a symbol with zero
     occurrences in ``src/``.)
@@ -69,7 +72,11 @@ def _is_allowed(url: Any, label: str) -> bool:
     try:
         validate_url(url)
     except OutboundRequestBlocked:
-        logger.warning("[SECURITY] Rejected %s at ingest: %r", label, url)
+        logger.warning(
+            "[SECURITY] Rejected %s at ingest: %s",
+            label,
+            url_for_record(url, keep_path=False) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
+        )
         return False
     return True
 
