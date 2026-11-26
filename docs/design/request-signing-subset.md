@@ -264,6 +264,25 @@ The half that landed with the narrowings: nothing now accepts a posture we do no
 `to_verifier_capability` is no longer a lossy projection — every bucket a tenant can declare
 is a field `VerifierCapability` carries, and `bucket_for` compensates for nothing.
 
+## 4. A signed request names its tenant by the `Host` alone — LANDED
+
+A request names its tenant by the `Host` or by `x-adcp-tenant`; a signed one (it carries
+`Signature` or `Signature-Input`, with or without a bearer) by the `Host` only
+(`resolved_identity._detect_tenant`). The tenant scopes the keyid lookup and the posture, and
+the header is not a covered component, so a party holding an undelivered signed request could
+change only the header and have it verified in any other tenant that onboarded the same keyid.
+security.mdx L1172-1174 forbids exactly that: a verifier "MUST NOT attribute identity,
+authorization, account selection, resource access, or task ownership on the basis of ...
+unsigned session-continuity or routing metadata". The `Host` is covered, through `@authority`
+(L1162). Covering the header instead is not available: "Signers MUST NOT cover additional
+headers without coordination" (L1168).
+
+A signed request whose `Host` names no tenant gets the refusal every request naming no seller
+gets, `TENANT_UNDEFINED` from `_addressed_tenant`. The spec does not decide between that and
+`request_signature_key_unknown`; L1629 gives the latter to a keyid missing from the signer's
+JWKS, which presupposes a tenant whose onboarding records were searched. One refusal path was
+kept. Graded by `@T-UC-006-local-signing-tenant-by-header`.
+
 ## What did not move, and why it looks like it should have
 
 `request_signature_key_origin_mismatch` and `_missing` keep their rows in
