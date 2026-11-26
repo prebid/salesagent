@@ -25,7 +25,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.core.database.models import AdapterConfig
+from src.core.database.models import AdapterConfig, Tenant
 from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError
 from src.core.operator_errors import GAMNotConnected
@@ -112,13 +112,18 @@ class AdapterConfigRepository:
                 or the row stores no network code or no credentials.
         """
         config = self.find_by_tenant()
-        if config is None or not config.gam_network_code or not self.has_gam_credentials(config):
+        if config is None or not self.is_gam_connected(config):
             raise GAMNotConnected(f"Tenant {self._tenant_id} has no GAM connection")
         return config
 
     # ------------------------------------------------------------------
     # Logic methods (pure — accept pre-loaded config, no DB)
     # ------------------------------------------------------------------
+
+    @classmethod
+    def is_gam_connected(cls, config: AdapterConfig) -> bool:
+        """Whether *config* is a GAM connection: a network code and credentials (``has_gam_credentials``)."""
+        return bool(config.gam_network_code) and cls.has_gam_credentials(config)
 
     @staticmethod
     def has_gam_credentials(config: AdapterConfig) -> bool:
@@ -193,6 +198,25 @@ class AdapterConfigRepository:
         """
         config = self.get_by_tenant()  # raises if missing
         config.custom_targeting_keys = keys
+
+
+def list_gam_connected_tenants(session: Session) -> list[tuple[Tenant, AdapterConfig]]:
+    """Every active tenant with a GAM connection, with its adapter configuration.
+
+    Cross-tenant by design, for the jobs that run over all GAM tenants. A tenant is
+    connected by the rule ``require_gam_config`` refuses by (``is_gam_connected``), so a
+    tenant on a service account is listed as one on an OAuth refresh token is.
+    """
+    stmt = (
+        select(Tenant, AdapterConfig)
+        .join(AdapterConfig, Tenant.tenant_id == AdapterConfig.tenant_id)
+        .where(Tenant.is_active, AdapterConfig.adapter_type == "google_ad_manager")
+    )
+    return [
+        (tenant, config)
+        for tenant, config in session.execute(stmt).tuples()
+        if AdapterConfigRepository.is_gam_connected(config)
+    ]
 
 
 def read_adapter_config(tenant_id: str) -> AdapterConfig | None:

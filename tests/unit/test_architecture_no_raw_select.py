@@ -256,7 +256,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/dynamic_pricing_service.py", "_calculate_product_pricing"),
     ("src/services/dynamic_products.py", "archive_expired_variants"),
     ("src/services/format_metrics_service.py", "_process_and_store_metrics"),
-    ("src/services/format_metrics_service.py", "aggregate_all_tenants"),
     # _update_adapter_config_targeting_keys removed — uses AdapterConfigRepository
     ("src/services/gam_inventory_service.py", "_upsert_inventory_item"),
     ("src/services/gam_inventory_service.py", "get_ad_unit_tree"),
