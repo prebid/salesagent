@@ -6,9 +6,7 @@ refusal is answered with is read off its class, so no scenario restates it.
 
 from __future__ import annotations
 
-import base64
 import json
-from urllib.parse import parse_qs
 
 from pytest_bdd import given, parsers, then, when
 
@@ -28,7 +26,7 @@ from tests.bdd.steps.domain.admin_unexpected_errors import (
 from tests.factories.product import FIRST_PUBLISHER_LEADERBOARD_KEY, PRODUCT_LOCAL_MREC, TWO_PUBLISHER_PROPERTIES
 from tests.harness.admin_client import BROWSER_PAGE_HEADERS
 from tests.helpers.admin_product_form import minimal_product_create_form, minimal_product_edit_form
-from tests.helpers.gam_credentials import service_account_email, service_account_json
+from tests.helpers.gam_credentials import service_account_email, service_account_json, token_request_issuer
 from tests.helpers.operator_refusals import operator_refusal_classes
 
 
@@ -432,14 +430,9 @@ def then_token_requested_as_service_account(ctx: dict) -> None:
     """A JWT-bearer grant whose assertion names the seeded account as its issuer (RFC 7523 section 2.1)."""
     bodies = _env(ctx).gam_token_endpoint().request_bodies()
     assert bodies, "No token request reached the service account's token endpoint"
-    form = parse_qs(bodies[0].decode())
-    assert form.get("grant_type") == ["urn:ietf:params:oauth:grant-type:jwt-bearer"], (
-        f"Not a JWT-bearer grant: {form!r}"
-    )
-    payload_segment = form["assertion"][0].split(".")[1]
-    claims = json.loads(base64.urlsafe_b64decode(payload_segment + "=" * (-len(payload_segment) % 4)))
+    issuer = token_request_issuer(bodies[0])
     expected = service_account_email(_SERVICE_ACCOUNT_PROJECT)
-    assert claims.get("iss") == expected, f"The assertion's issuer is {claims.get('iss')!r}, not {expected!r}"
+    assert issuer == expected, f"The assertion's issuer is {issuer!r}, not {expected!r}"
 
 
 @then("the JSON error is that tenant's orders sync failure with a reference")

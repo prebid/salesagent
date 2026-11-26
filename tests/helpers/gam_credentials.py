@@ -36,6 +36,23 @@ def service_account_email(project_id: str = "test-project") -> str:
     return f"test@{project_id}.iam.gserviceaccount.com"
 
 
+def token_request_issuer(body: bytes) -> str | None:
+    """The issuer a token request's body names: the ``iss`` claim of its JWT-bearer assertion (RFC 7523 section 2.1).
+
+    Fails if the body is not a JWT-bearer grant. The assertion's signature is not checked.
+    """
+    import base64
+    from urllib.parse import parse_qs
+
+    form = parse_qs(body.decode())
+    assert form.get("grant_type") == ["urn:ietf:params:oauth:grant-type:jwt-bearer"], (
+        f"Not a JWT-bearer grant: {form!r}"
+    )
+    payload_segment = form["assertion"][0].split(".")[1]
+    claims = json.loads(base64.urlsafe_b64decode(payload_segment + "=" * (-len(payload_segment) % 4)))
+    return claims.get("iss")
+
+
 def service_account_json(
     *, project_id: str = "test-project", token_uri: str = "https://oauth2.googleapis.com/token"
 ) -> str:
