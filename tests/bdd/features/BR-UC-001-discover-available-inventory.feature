@@ -635,7 +635,9 @@ Feature: BR-UC-001 Discover Available Inventory
     # INV-4 holds: ranking service fails, products returned unranked
     # Reading the seller's own AI configuration adds more ways ranking cannot run: a
     # configuration the model factory refuses to build, a stored row that does not parse,
-    # a row naming a provider with no key, and a provider endpoint that drops the connection.
+    # a row naming a provider with no key, a provider endpoint that drops the connection, and
+    # one whose answer the client cannot decode (an httpx2 error that google-genai and
+    # pydantic-ai leave unwrapped).
     # The scores are what a model WOULD answer, so ranking that ran on any credential would
     # drop the first product (below 0.1) and the catalog order would not hold. The platform's
     # own credential is declared because a seller who configured AI that cannot run gets no
@@ -645,6 +647,7 @@ Feature: BR-UC-001 Discover Available Inventory
       | failure                                                          |
       | the AI ranking service fails                                     |
       | the seller's AI provider drops the connection                    |
+      | the seller's AI provider answers a body that does not decode     |
       | the seller's ai_config is one the model factory refuses to build |
       | the seller's stored ai_config does not parse                     |
       | the seller's ai_config names a provider with no API key          |
