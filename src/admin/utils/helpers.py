@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import Mapping
@@ -46,16 +45,6 @@ def is_admin_production() -> bool:
 #: The blueprint name of the test-credential login path (src/admin/blueprints/test_auth.py).
 
 
-def parse_json_config(config_str):
-    """Parse JSON config string."""
-    if not config_str:
-        return {}
-    try:
-        return json.loads(config_str)
-    except (json.JSONDecodeError, TypeError):
-        return {}
-
-
 def get_tenant_config_from_db(tenant_id):
     """Get tenant configuration from database.
 
@@ -82,7 +71,6 @@ def get_tenant_config_from_db(tenant_id):
             "features": {},
             "creative_engine": {},
             "slack_webhook_url": tenant.slack_webhook_url or "",
-            "policy_settings": {},
         }
 
         # Build adapter config from relationship
@@ -130,12 +118,6 @@ def get_tenant_config_from_db(tenant_id):
             "auto_approve_formats": tenant.auto_approve_format_ids or [],
             "human_review_required": tenant.human_review_required,
         }
-
-        # Add policy settings
-        if tenant.policy_settings:
-            policy_settings = parse_json_config(tenant.policy_settings)
-            if policy_settings:
-                config["policy_settings"] = policy_settings
 
         return config
 

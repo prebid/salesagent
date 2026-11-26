@@ -18,15 +18,16 @@ The channels partitions (``@T-UC-001-partition-channels``) grade ``filters.chann
 products that do not satisfy"): a product declaring channels matches on them, one declaring
 none on the tenant ad server's defaults (GH #1532). No model runs in them.
 
-Every Then reads the WIRE (``wire_field``), never ``env.mock`` call args. The one fact with
-no wire surface, which of ``rank_products_async``'s two text arguments received the seller's
-prompt and which the buyer's brief, is graded where the call lands: inside the scripted
-model (``ProductEnv.set_ranking_scores``).
+Every Then reads the WIRE (``wire_field``), never ``env.mock`` call args. The two facts with
+no wire surface are graded where the call lands, inside the scripted model: which of
+``rank_products_async``'s two text arguments received the seller's prompt and which the
+buyer's brief (``ProductEnv.set_ranking_scores``), and whether the prohibitions the seller
+saved reached the policy prompt (``ProductMixin.set_policy_blocked_if_prompt_names``).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -34,7 +35,8 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps._outcome_helpers import assert_wire_rejection, wire_product_ids
 from tests.bdd.steps.domain.uc_get_products_inventory import given_tenant
 from tests.bdd.steps.generic._dispatch import dispatch_request
-from tests.factories import PricingOptionFactory, ProductFactory
+from tests.bdd.steps.generic._table import rows as table_rows
+from tests.factories import AdvertisingPolicyFactory, PricingOptionFactory, ProductFactory
 from tests.helpers.pinned_schema import recovery_by_code
 from tests.helpers.settings_injection import KEYLESS_AI_CONFIG
 
@@ -142,8 +144,53 @@ def given_tenant_with_a_product(ctx: dict) -> None:
 
 @given(parsers.re(r"the tenant has advertising_policy (?P<state>enabled|disabled)"))
 def given_advertising_policy(ctx: dict, state: str) -> None:
-    """``advertising_policy.enabled`` on the tenant, as the Admin UI's policy settings store it."""
-    ctx["env"].configure_tenant_field("advertising_policy", {"enabled": state == "enabled"})
+    """A complete saved policy with checks on or off, as the column stores it, nothing prohibited."""
+    ctx["env"].configure_tenant_field("advertising_policy", AdvertisingPolicyFactory(enabled=state == "enabled"))
+
+
+@given("the tenant has advertising_policy enabled with the prohibitions:")
+def given_advertising_policy_prohibiting(ctx: dict, datatable: Sequence[Sequence[object]]) -> None:
+    """A complete saved policy with checks on, holding each table row's entry in its list.
+
+    The entries are remembered for the scripted policy model, which grades that each one
+    reached the prompt (``set_policy_blocked_if_prompt_names``).
+    """
+    lists: dict[str, list[str]] = {}
+    for row in table_rows(datatable):
+        lists.setdefault(row["list"], []).append(row["entry"])
+    ctx["env"].configure_tenant_field("advertising_policy", AdvertisingPolicyFactory(enabled=True, **lists))
+    ctx["saved_prohibitions"] = [entry for entries in lists.values() for entry in entries]
+
+
+def _prohibited_advertiser(env: Any) -> str:
+    """The advertiser the operator prohibits on the Policy page: this scenario's own, by the env's nonce."""
+    return f"blocked-{env.scripted_nonce}.example"
+
+
+@given(
+    parsers.re(
+        r"the operator saves the Policy page with policy checks (?P<checks>on|off) and a prohibited advertiser of its own"
+    )
+)
+def given_operator_saves_policy_page(ctx: dict, checks: str) -> None:
+    """Every field of the Policy page's form, as a browser posts it: the save is the policy's only writer."""
+    form = {
+        "prohibited_advertisers": _prohibited_advertiser(ctx["env"]),
+        "prohibited_categories": "",
+        "prohibited_tactics": "",
+        "default_prohibited_categories": "",
+        "default_prohibited_tactics": "",
+    }
+    if checks == "on":
+        form["enabled"] = "on"
+    ctx["env"].save_policy_page(form)
+
+
+@given("the LLM blocks the brief only when the policy it is shown names that advertiser")
+def given_llm_blocks_on_saved_advertiser(ctx: dict) -> None:
+    """A BLOCKED verdict answers only a policy prompt that carries the advertiser the operator saved."""
+    env = ctx["env"]
+    env.set_policy_blocked_if_prompt_names([_prohibited_advertiser(env)])
 
 
 @given(parsers.parse("the seller's AI is configured {where}"))
@@ -161,6 +208,12 @@ def given_llm_blocks_the_brief(ctx: dict) -> None:
 def given_llm_allows_the_brief(ctx: dict) -> None:
     """The policy model returns an ALLOWED verdict if it is asked."""
     ctx["env"].set_policy_approved()
+
+
+@given("the LLM evaluates the brief as BLOCKED only when the prompt names every saved prohibition")
+def given_llm_blocks_on_saved_prohibitions(ctx: dict) -> None:
+    """The policy model blocks the brief if its prompt names every saved prohibition, and fails otherwise."""
+    ctx["env"].set_policy_blocked_if_prompt_names(ctx["saved_prohibitions"])
 
 
 @given("the LLM policy service is unavailable")
