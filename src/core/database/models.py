@@ -1,5 +1,6 @@
 """SQLAlchemy models for database schema."""
 
+import json
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
@@ -1864,6 +1865,8 @@ class AdapterConfig(Base):
         nullable=True,
         comment="Encrypted service account key. Required to authenticate AS the service account when calling GAM API. Partner must also add the email to their GAM for access.",
     )
+    # The stored key's client_email, set by the gam_service_account_json setter (pasted or
+    # auto-provisioned key alike); the column comment below predates pasted keys.
     gam_service_account_email: Mapped[str | None] = mapped_column(
         String(255),
         nullable=True,
@@ -1960,14 +1963,26 @@ class AdapterConfig(Base):
 
     @gam_service_account_json.setter
     def gam_service_account_json(self, value: str | None) -> None:
-        """Set encrypted GAM service account JSON."""
+        """Set encrypted GAM service account JSON, and ``gam_service_account_email`` with it.
+
+        The email is the key's ``client_email``: every writer of the key (pasted in the
+        admin UI or auto-provisioned) keeps the pair in step, and clearing the key clears
+        the email, so it never names a credential that is no longer stored.
+        """
         if not value:
             self._gam_service_account_json = None
+            self.gam_service_account_email = None
             return
 
         from src.core.utils.encryption import encrypt_api_key
 
         self._gam_service_account_json = encrypt_api_key(value)
+        try:
+            key_data = json.loads(value)
+        except json.JSONDecodeError:
+            key_data = None
+        client_email = key_data.get("client_email") if isinstance(key_data, dict) else None
+        self.gam_service_account_email = client_email if isinstance(client_email, str) and client_email else None
 
     @property
     def gam_refresh_token(self) -> str | None:
