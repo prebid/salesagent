@@ -8,15 +8,22 @@ Create Date: 2026-11-23 21:57:27.342308
 model has no defaults and forbids undeclared keys, so a row loads only when it holds every
 key. No row stored before this revision does: the Settings form never writes
 ``require_manual_review`` or ``description``, and it writes a list only when the form posts
-it. This revision completes every non-NULL row by adding each missing key with the value the
-old readers already gave its absence (``.get(key, default)``): ``enabled`` false, each list
-empty, ``require_manual_review`` false, ``description`` null. A key that holds JSON null is
-missing for this purpose, because no reader could use it. A NULL row stays NULL: it means the
-tenant saved no policy.
+it. This revision completes every non-NULL row by adding each missing key with the value
+``get_products`` already gave its absence (``.get(key, default)``): ``enabled`` false, each
+list empty, ``require_manual_review`` false, ``description`` null. A key that holds JSON null
+is missing for this purpose, because no reader could use it. A NULL row stays NULL: it means
+the tenant saved no policy.
+
+The Settings page before this revision read a missing ``enabled`` the other way. Its
+checkbox is checked for a non-empty policy unless ``enabled`` is false
+(``.get('enabled') != False``), and the next Business Rules save writes the checkbox back,
+so that save turned checks on. The completed row keeps what ``get_products`` enforced:
+checks off.
 
 Keeping the rows is an owner-approved exception to CLAUDE.md's "Do not preserve data across a
 migration" (#2694, part 1): each row is the policy an operator saved, and completing it
-changes no behavior, because every added value is the one the readers already assumed.
+changes no ``get_products`` behavior, because every added value is the one ``get_products``
+already assumed.
 
 A row this revision cannot complete without guessing aborts the upgrade, naming the row: a
 value that is not a JSON object, an undeclared key, or a declared key of the wrong type.
@@ -98,14 +105,16 @@ _COMPLETE_SQL = f"""
        AND advertising_policy IS DISTINCT FROM {_COMPLETED}
 """
 
-#: Drops each key whose value is the one ``upgrade`` adds, which is the value the readers
-#: before this revision give the key's absence.
+#: Drops each key whose value is the one ``upgrade`` adds, except ``enabled``, which stays.
+#: The Settings page before this revision reads a missing ``enabled`` as checks on, so
+#: dropping ``enabled: false`` would turn checks on at the next Business Rules save.
 _STRIP_SQL = f"""
     UPDATE tenants
        SET advertising_policy = (
            SELECT COALESCE(jsonb_object_agg(kv.key, kv.value), '{{}}'::jsonb)
              FROM jsonb_each(tenants.advertising_policy) AS kv(key, value)
-            WHERE ('{_COMPLETION}'::jsonb -> kv.key) IS DISTINCT FROM kv.value
+            WHERE kv.key = 'enabled'
+               OR ('{_COMPLETION}'::jsonb -> kv.key) IS DISTINCT FROM kv.value
        )
      WHERE jsonb_typeof(advertising_policy) = 'object'
 """
@@ -130,6 +139,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Return each row to the partial shape: drop every key that holds its completion value."""
+    """Return each row to the partial shape: drop every key but ``enabled`` that holds its completion value."""
     result = op.get_bind().execute(sa.text(_STRIP_SQL))
     logger.info("Stripped completion keys from %d stored advertising policy row(s).", result.rowcount)
