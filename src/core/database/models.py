@@ -1139,6 +1139,12 @@ class CreativeAssignment(Base):
             ["creatives.creative_id", "creatives.tenant_id", "creatives.principal_id"],
         ),
         ForeignKeyConstraint(["media_buy_id"], ["media_buys.media_buy_id"]),
+        # The package is one its buy holds (media_packages' primary key).
+        ForeignKeyConstraint(
+            ["media_buy_id", "package_id"],
+            ["media_packages.media_buy_id", "media_packages.package_id"],
+            name="fk_creative_assignments_package_composite",
+        ),
         Index("idx_creative_assignments_tenant", "tenant_id"),
         Index("idx_creative_assignments_creative", "creative_id"),
         Index("idx_creative_assignments_media_buy", "media_buy_id"),

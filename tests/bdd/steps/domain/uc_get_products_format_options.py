@@ -19,6 +19,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then
 
+from src.core.format_satisfaction import FormatOptionsOutsideCommonIntersection
 from tests.bdd.steps._outcome_helpers import wire_advisory_errors, wire_entry, wire_product_ids
 from tests.factories import PricingOptionFactory, ProductFactory
 from tests.factories.core import seed_property_tag_selection
@@ -695,13 +696,13 @@ def then_operator_product_announced(ctx: dict) -> None:
 def then_operator_product_refused(ctx: dict) -> None:
     """The form re-rendered with the common-intersection refusal, and get_products has no such product.
 
-    The refusal sentence is matched by its rule clause, so a form refused for another reason
-    (a missing price, an unresolved catalog option) does not pass. The accept scenario is the
+    The refusal is matched by its class's text, so a form refused for another reason (a
+    missing price, an unresolved catalog option) does not pass. The accept scenario is the
     control that the same form is otherwise complete.
     """
     response = ctx["admin_response"]
     assert response.status_code == 200, f"a refused form re-renders with 200, got {response.status_code}"
-    assert b"every format option must be accepted by all of them" in response.data, (
+    assert FormatOptionsOutsideCommonIntersection.MESSAGE.encode() in response.data, (
         "the form was not refused for an option not every publisher accepts"
     )
     assert _OPERATOR_PRODUCT_ID not in wire_product_ids(ctx), (

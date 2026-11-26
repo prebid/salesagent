@@ -92,11 +92,6 @@ def form_number[N: (int, float, Decimal)](
     return value
 
 
-def format_options_refusal(text: str) -> InvalidFormInput:
-    """The refusal of the ``format_options`` field, for *text*."""
-    return InvalidFormInput(FormIssue(FORMAT_OPTIONS, text))
-
-
 def selectors_or_refusal(field: str, selection: tuple[list[dict], str | None]) -> list[dict]:
     """The selectors of a ``(selectors, refusal)`` validator answer, or :class:`InvalidFormInput` for *field*.
 

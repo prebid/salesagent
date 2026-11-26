@@ -382,7 +382,9 @@ docker compose start app
 
 ## Upgrades and rollback
 
-Migrations run when the app starts, so an upgrade is: back up, build, switch.
+Migrations run when the app starts, so an upgrade is: back up, build, switch. First run the
+read-only [checks before an upgrade](single-tenant.md#checks-before-an-upgrade) for the migrations
+the new version carries.
 
 ```bash
 cd /opt/salesagent
