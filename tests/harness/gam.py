@@ -171,9 +171,10 @@ def _serve_from_the_publisher_origin(self: Any, bundle: bytes | None) -> str:
 
     ``publisher-origin`` serves a dialer only the files written under that dialer's address,
     and two processes fetch the bundle: the live server, on create, and this process, on a
-    seller's approval it runs itself. So the file is written under both addresses. With no
-    *bundle* nothing is written, and the path answers 404 (``publisher_authorization.py``): the
-    seller fetches no bundle there either.
+    seller's approval it runs itself. So the file is written under both addresses, whatever its
+    bytes: an HTML page written there is answered 200 like a zip. With no *bundle* nothing is
+    written, and the path answers 404 (``publisher_authorization.py``): the seller fetches no
+    bundle there either.
     """
     import shutil
     import socket
@@ -639,10 +640,11 @@ class GamSellerMixin:
 
     @realize_e2e(_serve_from_the_publisher_origin)
     def serve_html5_bundle(self, bundle: bytes | None) -> str:
-        """Serve *bundle* as a zip from a loopback origin over TLS; return its URL.
+        """Serve *bundle*'s bytes, whatever they are, as the zip from a loopback origin over TLS; return its URL.
 
         The buyer's bundle host, which the seller fetches the bundle from (``_reach_the_bundle_host``).
         With no *bundle* the host does not answer: it closes every connection before a status line.
+        Bytes that are no zip archive (an HTML page) are answered 200 all the same.
         """
         from tests.helpers.tls_material import start_tls_origin
 

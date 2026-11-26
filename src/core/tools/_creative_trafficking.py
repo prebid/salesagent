@@ -13,7 +13,10 @@ anything is booked. sync_creatives and update_media_buy reach it through
 Interim, folded into RFC #2529's ``plan(buy)``.
 """
 
+import io
 import logging
+import zipfile
+import zlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -555,52 +558,78 @@ async def _with_html5_bundles(
     *carriers* come back as they are when none is an html5 bundle or *adapter* uploads none.
 
     The create, the approval replay and the retroactive push call this before the ad server is
-    written to, so a bundle the seller cannot fetch is refused before anything is booked and the
-    upload does no I/O. Each bundle URL is fetched once, through the egress seam, as the buyer's
-    URL; a URL the seam refuses outright raises the seam's own refusal. A bundle the seam could
-    not deliver is a problem on each creative and package naming it:
-    adcp/_schemas/3.2/enums/error-code.json CREATIVE_VALIDATION_FAILED_GENERIC, "The creative
-    failed buyer-correctable validation, but the producer cannot classify the failure with a more
-    specific standard code ... Recovery: correctable". The problem carries no text, so the
-    buyer-facing message names no vendor and no internal id, as the same entry requires. The
-    error points where *named_packages* name the first one (:func:`_adapter_refusal`).
+    written to, so a bundle the seller cannot fetch or unpack is refused before anything is
+    booked and the upload does no I/O. Each bundle URL is fetched once (:func:`_fetched_bundle`),
+    and the first one refused raises.
     """
-    urls = {c.representation.url for c in carriers.values() if isinstance(c.representation, Html5BundleRepresentation)}
-    if not urls or not adapter.capabilities.uploads_html5_bundles:
+    naming: dict[str, list[CarrierKey]] = {}
+    for key, carrier in carriers.items():
+        if isinstance(carrier.representation, Html5BundleRepresentation):
+            naming.setdefault(carrier.representation.url, []).append(key)
+    if not naming or not adapter.capabilities.uploads_html5_bundles:
         return carriers
-    bundles = {url: await _fetched_bundle(url) for url in urls}
-    filled: dict[CarrierKey, CreativeToTraffic] = {}
-    problems: list[ErrorProblem] = []
-    for (package_id, creative_id), carrier in carriers.items():
-        representation = carrier.representation
-        if isinstance(representation, Html5BundleRepresentation):
-            bundle = bundles[representation.url]
-            if bundle is None:
-                problems.append(
-                    ErrorProblem(
-                        code=ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC,
-                        subject_type="creative",
-                        subject_id=creative_id,
-                        package_id=package_id,
-                    )
-                )
-                continue
-            carrier = carrier.model_copy(
+    filled = dict(carriers)
+    for url, keys in naming.items():
+        bundle = await _fetched_bundle(url, keys, named_packages)
+        for key in keys:
+            representation = filled[key].representation
+            filled[key] = filled[key].model_copy(
                 update={"representation": representation.model_copy(update={"bundle": bundle})}
             )
-        filled[(package_id, creative_id)] = carrier
-    if problems:
-        raise _adapter_refusal(problems, named_packages)
     return filled
 
 
-async def _fetched_bundle(url: str) -> bytes | None:
-    """The zip at the buyer's *url*, or None when the seam could not deliver it."""
+async def _fetched_bundle(url: str, naming: Sequence[CarrierKey], named_packages: Sequence[MediaPackage]) -> bytes:
+    """The zip archive at the buyer's *url*; or the refusal of each creative and package in *naming*.
+
+    Fetched through the egress seam, as the buyer's URL; a URL the seam refuses outright raises
+    the seam's own refusal. A body the seam could not deliver, or one that is no zip archive whose
+    every member reads back intact (an empty body, an HTML page, a corrupt archive), is refused:
+    adcp/_schemas/3.2/formats/canonical/html5.json, "Interactive HTML5 banner delivered as a zip
+    archive ... Receivers unpack the zip, validate internal structure, and serve from CDN". Each
+    is a problem on each creative and package naming the URL: adcp/_schemas/3.2/enums/
+    error-code.json CREATIVE_VALIDATION_FAILED_GENERIC, "The creative failed buyer-correctable
+    validation, but the producer cannot classify the failure with a more specific standard code
+    ... Recovery: correctable". The problem carries no text, so the buyer-facing message names no
+    vendor and no internal id, as the same entry requires. The error points where
+    *named_packages* name the first one (:func:`_adapter_refusal`).
+    """
     try:
-        return (await asend(url, method="GET", provenance=CounterpartyUrl())).content
+        content = (await asend(url, method="GET", provenance=CounterpartyUrl())).content
     except OutboundDeliveryFailed as failure:
         logger.warning(log_safe(f"[HTML5] Bundle {url} could not be fetched: {failure}"))
-        return None
+    else:
+        if _is_intact_zip(content):
+            return content
+        logger.warning(log_safe(f"[HTML5] Bundle {url} is not an intact zip archive"))
+    raise _adapter_refusal(
+        [
+            ErrorProblem(
+                code=ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC,
+                subject_type="creative",
+                subject_id=creative_id,
+                package_id=package_id,
+            )
+            for package_id, creative_id in naming
+        ],
+        named_packages,
+    )
+
+
+def _is_intact_zip(content: bytes) -> bool:
+    """Whether *content* is a zip archive whose every member reads back with its recorded CRC.
+
+    ``ZipFile`` refuses a body with no zip directory (``BadZipFile``), which is the check
+    ``zipfile.is_zipfile`` makes; ``testzip`` reads each member and names the first whose CRC or
+    header is wrong. A member that cannot be read at all raises instead: a corrupt deflate stream
+    (``zlib.error``), a truncated one (``EOFError``), an encrypted member (``RuntimeError``), an
+    unsupported compression method (``NotImplementedError``).
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            return archive.testzip() is None
+    except (zipfile.BadZipFile, zlib.error, EOFError, RuntimeError, NotImplementedError):
+        return False
 
 
 def _carriers_by_package_id(
