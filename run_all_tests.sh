@@ -259,8 +259,19 @@ fi
 # every genuinely later run, so `ls -t`-style "newest directory" lookups resolved to it
 # and reported an older run's totals — or an empty husk — under the current run's id.
 # Both clocks agree only in UTC.
-RESULTS_DIR="test-results/innet_$(date -u +%d%m%y_%H%M)"
-# Kept in step with scripts/audit/compare_payloads.py's PAYLOAD_SUBDIR.
+#
+# A FRESH directory, never a reused one. The suites write their reports straight into it
+# (SUITE_REPORT_DIR below), so in a directory another run of the same minute also uses,
+# that run's report would stand in for any suite this run never finished, and be graded
+# as this run's. Creating the directory is the reservation: `mkdir` without `-p` fails
+# when the directory exists, so of two runs that start in the same minute exactly one
+# creates it. The name has minute resolution and cassini reads it with a fullmatch, so
+# it cannot take a suffix: the other run waits for the next minute instead, which costs
+# at most a minute and only when two runs start in the same one.
+# Named and reserved after the GAM preflight below, so a run the preflight stops makes none.
+_name_results_dir() { RESULTS_DIR="test-results/innet_$(date -u +%d%m%y_%H%M)"; }
+# Kept in step with scripts/audit/compare_payloads.py's PAYLOAD_SUBDIR and with the
+# BDD_PAYLOAD_ARTIFACT paths in tox.ini.
 PAYLOAD_SUBDIR="payloads"
 # Kept in step with scripts/audit/run_report.py's STORYBOARD_SUBDIR.
 STORYBOARD_SUBDIR="storyboard"
@@ -313,7 +324,14 @@ if [ -n "${RUN_ALL_TESTS_STOP_AFTER_GAM_PREFLIGHT:-}" ]; then
     exit 0
 fi
 
-mkdir -p "$RESULTS_DIR"
+_name_results_dir
+mkdir -p test-results
+until mkdir "$RESULTS_DIR" 2>/dev/null; do
+    [ -e "$RESULTS_DIR" ] || { echo "cannot create $RESULTS_DIR" >&2; exit 1; }
+    echo "$RESULTS_DIR already exists; waiting for the next minute so this run's reports land in a fresh directory" >&2
+    sleep 5
+    _name_results_dir
+done
 mv "$_gam_preflight_log" "$RESULTS_DIR/gam_preflight.log"
 # The storyboard suite publishes the runner's per-protocol summary to
 # test-results/storyboard_summary_<protocol>.json (tests/storyboard/test_storyboard_conformance.py,
@@ -337,6 +355,19 @@ export PYTEST_COLLECTION_MANIFEST="${PYTEST_COLLECTION_MANIFEST:-/app/$RESULTS_D
 # sessions, which satisfy the coverage check and get merged into today's
 # measurement. See tests/bdd/scenario_liveness.sessions_dir().
 export BDD_LIVENESS_SESSIONS="${BDD_LIVENESS_SESSIONS:-/app/$RESULTS_DIR/liveness-sessions}"
+
+# Where every tox env writes its JSON report and each BDD env its payload capture
+# (tox.ini, {env:SUITE_REPORT_DIR:...}): this run's directory, on the `.:/app` bind
+# mount. A report is on the host the moment its suite finishes, so nothing that dies
+# afterwards can lose it: not a SIGKILLed supervisor (whose EXIT trap never runs), not a
+# SIGTERM (whose trap runs `down -v`), and not the Docker daemon (cassini-aixo). The
+# reports used to sit in the tox_data volume until one copy step after ALL suites, and a
+# run on noetis-b-vm whose daemon was OOM-killed finished its suites and published none.
+#
+# Not overridable, unlike the two above: the checks after the suites look for the
+# reports in $RESULTS_DIR, so a report written anywhere else is a suite that reported
+# nothing.
+export SUITE_REPORT_DIR="/app/$RESULTS_DIR"
 
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
 
@@ -776,7 +807,7 @@ fi
 # serial baseline, measured on a full in-network run of all 7 suites.
 echo "Running suites in-network (parallel): $SUITES"
 # Capture the suite exit code without aborting under `set -e` — reports must
-# still be extracted and the security audit must still run on a suite failure.
+# still be checked and the security audit must still run on a suite failure.
 RC=0
 # Best-effort backstop, NOT a guarantee: chmod only succeeds on paths this
 # user (the launcher) already owns -- it silently no-ops (EPERM, swallowed by
@@ -787,144 +818,45 @@ RC=0
 chmod -R g+w . 2>/dev/null || true
 chmod -R go-w .git 2>/dev/null || true
 
-# Delete every previous report BEFORE this run writes its own, and do it in
-# exactly ONE place. The suites' reports land in the tox_data VOLUME, not here
-# (see the extraction note below), and that volume is created and destroyed per
-# run -- so this purge is not what protects THIS path. It is defence in depth for
-# the host's ./.tox, which persists: a developer's earlier `tox -e ...` on the
-# host leaves JSON exactly where a future "simplification" of the extraction back
-# to `cp .tox/*.json` would find it and publish an older run's green numbers
-# under this run's id. Purging first makes that unrepresentable rather than
-# merely detectable.
-#
-# Blanket (`.tox/*.json`), not a $SUITES-scoped loop: a scoped loop leaves exactly
-# the not-run envs' reports sitting in `.tox/`, which is the class of staleness
-# documented at the copy below (`storyboard.json` republished for three runs). It
-# also bit `bdd`, which is swapped out for `bdd-inprocess-s*,bdd_e2e` whenever
-# E2E_WORKERS>0 (see above): a stale bdd.json from whenever `tox -e bdd` last ran
-# kept being republished -- one was a full DAY older than its directory-mates and
-# reported 6 failures against code that no longer existed, read as a live
-# regression. Purging wholesale plus copying per-suite closes both directions.
-rm -f .tox/*.json
+# Record WHICH suites this invocation runs, next to their reports, BEFORE they run.
+# Consumers cannot infer it: report timestamps do not separate "stale" from "ran early
+# in a long serial run" (measured: a genuine unit report was 16 min behind the newest, a
+# stale storyboard one 28 min -- overlapping bands, so any threshold misfires both
+# ways). Written first so a run killed mid-suite still names its roster, and cassini
+# reports the suites that never finished as MISSING rather than the roster as
+# unverifiable. The shard merge below rewrites it to what was published.
+printf '%s\n' "$SUITES" > "$RESULTS_DIR/.suites"
+# The BDD envs write their payload captures here. Created on the host, not by the
+# container: the container runs as root, and a root-owned directory under $RESULTS_DIR
+# is a nuisance for everything that reads this run afterwards.
+mkdir -p "$RESULTS_DIR/$PAYLOAD_SUBDIR"
 
 dc run --rm --use-aliases $E2E_ENV_ARGS tests tox -p -e "$SUITES" || RC=$?
 
-# tox writes per-suite JSON into /app/.tox, which is the `tox_data` NAMED VOLUME
-# (docker-compose.e2e.yml, restored along with the removal of the `tests.user`
-# pin -- as root the daemon-created root:root mountpoint is writable again, so
-# tox envs stay off the slow bind-mounted host tree). The HOST's ./.tox is
-# therefore empty, and the reports must be extracted FROM THE VOLUME with a
-# throwaway container before the cleanup trap's `down -v` destroys it.
+# Every suite this invocation ran must have left its report in $RESULTS_DIR, where tox
+# wrote it (SUITE_REPORT_DIR above). The directory is fresh, so a report found there is
+# this run's.
 #
-# Do NOT "simplify" this back to `cp .tox/*.json` (Aug 2026): that host-side
-# form belongs to the no-volume shape and, paired with the volume, copies
-# NOTHING -- and if a previous run left stale JSON on the host it silently
-# copies THOSE, producing a fresh, plausible, timestamped results directory
-# holding an older run's green numbers. That exact substitution was observed
-# live: two runs that executed ZERO suites still emitted full six-suite
-# "passing" report directories. The pairing is load-bearing; the volume mount
-# and this extraction have to move together.
-echo "Extracting JSON reports from the tox_data volume..."
-# Loud, not silent (Aug 2026): this used to be `2>/dev/null || true`, which
-# once ate a real failure completely silently -- a full 23-minute run
-# finished clean (exit 0, all 7 suites really passed, .tox/*.json all
-# present and correct) but test-results/ never got populated, with zero
-# trace of why. Re-mkdir defensively right before copying (idempotent, cheap
-# insurance against $RESULTS_DIR having been removed or never created for
-# any reason) and let a real failure actually say something instead of
-# vanishing 23 minutes of work without a trace.
+# Checked per suite by NAME, never by a `*.json` glob: a glob finds what exists and says
+# nothing about what does not, so a suite that RAN and died before writing its JSON
+# would read as "that suite simply wasn't in this run". A missing report for a suite
+# that did run is an error, not an omission, and its absence is exactly when it most
+# needs to be loud.
 #
-# Copy ONLY the suites THIS invocation ran, and name them EXPLICITLY -- never a
-# wholesale `*.json` glob. On the volume shape a wholesale glob cannot pick up a
-# PREVIOUS run's report (the volume is created and `down -v`-destroyed per run,
-# and COMPOSE_PROJECT_NAME is unique per run), so this is not about cross-run
-# staleness here. It is about the case the glob structurally cannot report: a
-# suite that RAN and died before writing its JSON. A glob copies what exists and
-# says nothing about what does not, so a dead suite leaves an omission that reads
-# as "that suite simply wasn't in this run".
-#
-# That failure mode is not hypothetical in the sibling host shape, where `.tox`
-# IS a persistent directory: `storyboard` is an opt-in env (not in tox's
-# env_list), so a bare `./run_all_tests.sh` never runs it -- yet three
-# consecutive runs published a storyboard.json from hours earlier, and the
-# numbers were read as this run's until an SDK version inside the report
-# contradicted the SDK that was actually installed. Naming the suites closes
-# both directions at once and keeps the two runners' contracts the same.
-#
-# A missing report for a suite that DID run is an error, not an omission: it
-# means the suite died before writing one, which is exactly when its absence
-# most needs to be loud.
-mkdir -p "$RESULTS_DIR"
-# Record WHICH suites this invocation ran, next to their reports. Consumers
-# cannot infer it: report timestamps do not separate "stale" from "ran early in
-# a long serial run" (measured: a genuine unit report was 16 min behind the
-# newest, a stale storyboard one 28 min — overlapping bands, so any threshold
-# misfires both ways). An explicit manifest is exact.
-printf '%s\n' "$SUITES" > "$RESULTS_DIR/.suites"
-# Every artifact tox writes lands in the VOLUME, so every one of them is
-# extracted by the SAME throwaway container, in one invocation: the per-suite
-# pytest reports and the BDD payload captures both live under /app/.tox. (The
-# storyboard runner's summaries are the exception, and are handled on the host
-# below -- they are written to test-results/ on the `.:/app` BIND mount, which
-# the host can already see.)
-#
-# The per-suite selection runs INSIDE the extraction container, against the
-# volume. Deliberately not a host-side `[ -f ".tox/$s.json" ]` test: the host's
-# ./.tox is empty under the volume shape, so a host-side existence check would
-# declare EVERY suite missing -- and if a developer's earlier host `tox` run left
-# JSON there, it would instead copy those and publish an older run's green
-# numbers under this run's id. The copy and the check must see the same
-# filesystem, and the only filesystem that holds this run's reports is /t.
-# stdout carries the missing-suite list; the container's stderr passes straight
-# through so a real `cp` error still says something.
-#
-# The dispatched-request payload artifacts (tests/bdd/payload_capture.py), one per
-# BDD suite, go in a SUBDIRECTORY rather than beside the reports: compare_runs.py
-# globs "*.json" at the top level and would read a payload artifact as a pytest
-# report, whose "tests" key is absent -- printing a phantom
-# "baseline 0 new 0 ... CLEAN" row instead of failing. Out of its glob is out of
-# its way. A BDD suite that produced no payload artifact is treated exactly like
-# a suite that produced no report, for the reason stated above: a suite that
-# produced none was not measured, and a gate whose "before" is silently absent
-# reads every later run as CLEAN.
-#
-# The subdirectory is created HERE, on the host, not by the container: the
-# container runs as root, and a root-owned directory under $RESULTS_DIR is a
-# nuisance for everything that reads this run afterwards. It only ever writes
-# files into a directory the launcher owns.
-mkdir -p "$RESULTS_DIR/$PAYLOAD_SUBDIR"
-_extract_rc=0
-_missing_reports=$(docker run --rm \
-    -v "${COMPOSE_PROJECT_NAME}_tox_data:/t:ro" \
-    -v "$(pwd)/${RESULTS_DIR}:/out" \
-    alpine sh -c '
-        missing="" payloads="/out/$2"
-        for s in $(printf "%s" "$1" | tr "," " "); do
-            if [ -f "/t/$s.json" ]; then
-                cp "/t/$s.json" /out/ || missing="$missing $s(copy-failed)"
-            else
-                missing="$missing $s"
-            fi
-            # Only the BDD suites emit a payload capture.
-            case "$s" in bdd*) ;; *) continue ;; esac
-            if [ -f "/t/${s}_payloads.json" ]; then
-                cp "/t/${s}_payloads.json" "$payloads/$s.json" \
-                    || missing="$missing $s(payload-copy-failed)"
-            else
-                missing="$missing $s(no-payload-artifact)"
-            fi
-        done
-        printf "%s" "$missing"
-    ' _ "$SUITES" "$PAYLOAD_SUBDIR") || _extract_rc=$?
-if [ "$_extract_rc" -ne 0 ]; then
-    echo "ERROR: failed to extract JSON reports into $RESULTS_DIR/ -- see error above." >&2
-    echo "       They are in the ${COMPOSE_PROJECT_NAME}_tox_data volume until this run's" >&2
-    echo "       cleanup trap runs \`down -v\`; copy them out now if you need them." >&2
-    # Fails the run for the same reason the missing-report arm below does. A dead
-    # extraction container copies NOTHING, so $_missing_reports comes back empty
-    # and that arm never fires -- leaving a run that measured nothing exiting 0.
-    if [ "$RC" -eq 0 ]; then RC=1; fi
-fi
+# The dispatched-request payload artifacts (tests/bdd/payload_capture.py), one per BDD
+# suite, live in a SUBDIRECTORY rather than beside the reports: compare_runs.py globs
+# "*.json" at the top level and would read a payload artifact as a pytest report, whose
+# "tests" key is absent -- printing a phantom "baseline 0 new 0 ... CLEAN" row instead
+# of failing. A BDD suite that produced no payload artifact is treated exactly like a
+# suite that produced no report: a gate whose "before" is silently absent reads every
+# later run as CLEAN.
+_missing_reports=""
+for _s in ${SUITES//,/ }; do
+    [ -f "$RESULTS_DIR/$_s.json" ] || _missing_reports="$_missing_reports $_s"
+    case "$_s" in
+        bdd*) [ -f "$RESULTS_DIR/$PAYLOAD_SUBDIR/$_s.json" ] || _missing_reports="$_missing_reports $_s(no-payload-artifact)" ;;
+    esac
+done
 
 # The storyboard runner's own summaries, one per protocol. They are the suite's SCORE:
 # the conformance suite materializes only failures and skips as pytest items, so
@@ -933,11 +865,10 @@ fi
 # run's provenance instead of being overwritten at test-results/ by the next run.
 # scripts/audit/run_report.py reads them from here.
 #
-# Copied on the HOST, unlike everything above: the runner publishes these to
-# test-results/ (tests/storyboard/test_storyboard_conformance.py,
-# _publish_summary), which is under the `.:/app` bind mount and therefore already
-# on the host filesystem. They are not in the tox_data volume, so the extraction
-# container cannot see them.
+# Copied AFTER the suites, unlike the reports above: the runner publishes these to
+# test-results/ (tests/storyboard/test_storyboard_conformance.py, _publish_summary),
+# not to SUITE_REPORT_DIR. That is on the `.:/app` bind mount too, so a dead
+# supervisor leaves them at test-results/ rather than losing them.
 case ",$SUITES," in
     *,storyboard,*)
         mkdir -p "$RESULTS_DIR/$STORYBOARD_SUBDIR"
@@ -963,8 +894,9 @@ esac
 # compare_runs and compare_payloads -- and each expects one per suite. Left as parts, one
 # failure would be counted twice and cassini would render three BDD rows for one suite.
 #
-# It runs on the HOST, over what the extraction above published: the extraction container
-# is alpine, with no python, and the reports leave the tox_data volume only there.
+# It runs on the HOST, over the shard reports tox wrote into $RESULTS_DIR. A run that dies
+# before it leaves the shard reports unmerged, and `.suites` still names the shards, so
+# they read as what they are.
 #
 # The hard-fail is the point. check_truncated_reports.py compares collected-deselected
 # against total PER FILE and is BLIND to a file that is absent: if a shard is OOM-killed
@@ -1007,7 +939,7 @@ if [ -n "$_missing_reports" ]; then
     if [ "$RC" -eq 0 ]; then RC=1; fi
 fi
 echo "Reports: $RESULTS_DIR/  (suites: $SUITES)"
-ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
+ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports)"
 
 # A truncated suite is a failed suite, and the whole point is that it must not
 # be mistakable for a green one. The predicate is shared with
@@ -1053,7 +985,7 @@ if [ "$RC" -ne 0 ] && ls "$RESULTS_DIR"/*.json >/dev/null 2>&1; then
                 echo "      test result -- the suites finished and wrote their reports first."
                 echo "      Look at the runner (daemon connection, container lifetime), not the tests." ;;
             *)
-                echo "      The failure is therefore OUTSIDE the suites: check the report-copy step"
+                echo "      The failure is therefore OUTSIDE the suites: check the report checks"
                 echo "      and the security audit above." ;;
         esac
         echo "      Exit code is left as-is on purpose: this is a diagnostic, not a downgrade."

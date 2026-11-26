@@ -36,6 +36,7 @@ from tests.bdd.steps._outcome_helpers import (
 from tests.bdd.steps.domain.uc006_sync_creatives import _CREATIVE_APPROVAL_MODES
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import bracket_list, comma_list
+from tests.factories import AdvertisingPolicyFactory
 from tests.harness.capabilities import DERIVE_IDENTITY, OMIT_IDENTITY, IdentityMode
 from tests.helpers import pinned_schema
 from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION
@@ -3168,7 +3169,7 @@ def given_advertising_policy_described(ctx: dict, description: str) -> None:
     same seeded state -- no test-only seam, and nothing for e2e to declare
     unsupported.
     """
-    ctx["env"].configure_tenant_field("advertising_policy", {"description": description})
+    ctx["env"].configure_tenant_field("advertising_policy", AdvertisingPolicyFactory(description=description))
 
 
 @given("the tenant declares no advertising policy")
@@ -3180,9 +3181,9 @@ def given_no_advertising_policy(ctx: dict) -> None:
 
 @given("the tenant declares an advertising policy with no description")
 def given_advertising_policy_without_description(ctx: dict) -> None:
-    """A policy document that carries no publishable member -- the boundary between
-    "no policy" and "a policy that says nothing"."""
-    ctx["env"].configure_tenant_field("advertising_policy", {"enabled": True})
+    """A complete policy whose description is null -- the boundary between "no policy"
+    and "a policy that says nothing"."""
+    ctx["env"].configure_tenant_field("advertising_policy", AdvertisingPolicyFactory(description=None))
 
 
 @then(parsers.parse('media_buy.portfolio.advertising_policies should equal "{expected}"'))

@@ -47,9 +47,11 @@ A script entry per question is one of:
   unreachable or crashing provider endpoint does.
 
 and may carry ``"require_text": "..."`` -- answer only a call whose user prompt contains that
-text; a call no entry matches is refused with 400. The ranking script uses it to grade which
-of the seller's prompt and the buyer's brief reached which slot of the prompt; see
-``ProductEnv.set_ranking_scores``.
+text, or, for a list, every text in it; a call no entry matches is refused with 400. The
+ranking script uses it to grade which of the seller's prompt and the buyer's brief reached
+which slot of the prompt (``ProductEnv.set_ranking_scores``), and a policy script to grade
+that the seller's saved prohibitions reached the prompt
+(``ProductMixin.set_policy_blocked_if_prompt_names``).
 
 Stdlib-only for the same reason as its siblings (``tests/e2e/_stdlib_json_http.py``): it
 runs on a bare ``python:3.12-slim`` compose service with no project dependencies.
@@ -111,10 +113,15 @@ class _ScriptStore:
         with self._lock:
             entries = list(self._entries.get(api_key, {}).get(question, []))
         for entry in reversed(entries):
-            required = entry.get("require_text")
-            if required is None or required in prompt:
+            if prompt_carries(prompt, entry.get("require_text")):
                 return entry, len(entries)
         return None, len(entries)
+
+
+def prompt_carries(prompt: str, require_text: str | list[str] | None) -> bool:
+    """Whether ``prompt`` contains ``require_text``: one text, or every text of a list."""
+    required = [require_text] if isinstance(require_text, str) else require_text or []
+    return all(text in prompt for text in required)
 
 
 def _gemini_error(status: int, message: str) -> dict:

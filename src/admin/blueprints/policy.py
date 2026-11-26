@@ -2,22 +2,50 @@
 
 import logging
 
-from flask import Blueprint, jsonify, redirect, render_template, request, url_for
-from sqlalchemy import select
+from flask import Blueprint, redirect, render_template, request, url_for
 
-from src.admin.utils import get_tenant_config_from_db, require_tenant_access
+from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.core.database.database_session import get_db_session
-from src.core.database.models import AuditLog, Tenant, UserRole
-from src.core.database.repositories.uow import WorkflowUoW
-from src.core.database.repositories.workflow import WorkflowRepository
-from src.core.json_validators import PolicySettingsModel
+from src.core.database.models import UserRole
+from src.core.database.repositories.uow import TenantConfigUoW, WorkflowUoW
 from src.core.operator_errors import OperatorRefusal, RecordNotFound
+from src.core.schemas.advertising_policy import AdvertisingPolicy
+from src.services.ai.factory import tenant_ai_enabled
 
 logger = logging.getLogger(__name__)
 
 # Create blueprint
 policy_bp = Blueprint("policy", __name__)
+
+#: The form's starting point for a tenant that has saved no policy: checks off, no
+#: prohibitions of its own, and these baseline lists for the operator to edit. Nothing is
+#: stored until the operator saves the form.
+UNSAVED_POLICY_FORM = AdvertisingPolicy(
+    enabled=False,
+    require_manual_review=False,
+    prohibited_advertisers=[],
+    prohibited_categories=[],
+    prohibited_tactics=[],
+    default_prohibited_categories=[
+        "illegal_content",
+        "hate_speech",
+        "violence",
+        "adult_content",
+        "misleading_health_claims",
+        "financial_scams",
+    ],
+    default_prohibited_tactics=[
+        "targeting_children_under_13",
+        "discriminatory_targeting",
+        "deceptive_claims",
+        "impersonation",
+        "privacy_violations",
+    ],
+    description=None,
+)
+
+#: How many of the tenant's latest policy checks the page lists.
+RECENT_POLICY_CHECKS = 20
 
 
 class PolicyReviewNotFound(RecordNotFound):
@@ -35,103 +63,84 @@ class InvalidReviewAction(OperatorRefusal):
 @policy_bp.route("/", methods=["GET"])
 @require_tenant_access()
 def index(tenant_id):
-    """View and manage policy settings for the tenant."""
-    with get_db_session() as db_session:
-        # Get tenant info
-        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        if not tenant:
-            return "Tenant not found", 404
+    """Show the tenant's saved advertising policy, its recent policy checks and its review queue.
 
+    A tenant with no saved policy sees the form at :data:`UNSAVED_POLICY_FORM` and a notice
+    that no policy is saved.
+    """
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None and uow.audit_logs is not None
+        tenant = uow.tenant_config.require(uow.tenant_config.get_tenant)
         tenant_name = tenant.name
+        policy = tenant.advertising_policy
+        # Policy checks run only on the seller's own AI configuration (products.py).
+        seller_ai_enabled = tenant_ai_enabled(tenant, platform_fallback=False)
+        recent_checks = [
+            {
+                "timestamp": log.timestamp,
+                "principal_id": log.principal_id,
+                "success": log.success,
+                "status": (log.details or {}).get("policy_status", "unknown"),
+                "brief": (log.details or {}).get("brief", ""),
+                "reason": (log.details or {}).get("reason", ""),
+            }
+            for log in uow.audit_logs.list_recent("policy_check", RECENT_POLICY_CHECKS)
+        ]
 
-        # Get tenant config using helper function
-        config = get_tenant_config_from_db(tenant_id)
-        if not config:
-            return "Tenant config not found", 404
-
-        # The stored policy over the baseline every tenant starts with
-        policy_settings = PolicySettingsModel.model_validate(config.get("policy_settings") or {})
-
-        # Get recent policy checks from audit log
-        stmt = (
-            select(AuditLog)
-            .filter_by(tenant_id=tenant_id, operation="policy_check")
-            .order_by(AuditLog.timestamp.desc())
-            .limit(20)
-        )
-        audit_logs = db_session.scalars(stmt).all()
-
-        recent_checks = []
-        for log in audit_logs:
-            details = log.details or {}
-            recent_checks.append(
-                {
-                    "timestamp": log.timestamp,
-                    "principal_id": log.principal_id,
-                    "success": log.success,
-                    "status": details.get("policy_status", "unknown"),
-                    "brief": details.get("brief", ""),
-                    "reason": details.get("reason", ""),
-                }
-            )
-
-        # The pending policy review queue: the same definition review_task settles.
-        pending_reviews = []
-        workflow_steps = WorkflowRepository(db_session, tenant_id).list_pending_policy_reviews()
-
-        for step in workflow_steps:
-            request_data = step.request_data or {}
-            pending_reviews.append(
-                {
-                    "task_id": step.step_id,
-                    "created_at": step.created_at,
-                    "brief": request_data.get("brief", ""),
-                    "advertiser": request_data.get("promoted_offering", ""),
-                }
-            )
+    # The pending policy review queue: the same definition review_task settles.
+    with WorkflowUoW(tenant_id) as uow:
+        assert uow.workflows is not None
+        pending_reviews = [
+            {
+                "task_id": step.step_id,
+                "created_at": step.created_at,
+                "brief": (step.request_data or {}).get("brief", ""),
+                "advertiser": (step.request_data or {}).get("promoted_offering", ""),
+            }
+            for step in uow.workflows.list_pending_policy_reviews()
+        ]
 
     return render_template(
-        "policy_settings_comprehensive.html",
+        "advertising_policy.html",
         tenant_id=tenant_id,
         tenant_name=tenant_name,
-        policy_settings=policy_settings,
+        policy_saved=policy is not None,
+        policy=policy or UNSAVED_POLICY_FORM,
+        seller_ai_enabled=seller_ai_enabled,
         recent_checks=recent_checks,
         pending_reviews=pending_reviews,
     )
+
+
+def _form_lines(field_name: str) -> list[str]:
+    """The non-empty lines of the form's textarea *field_name*, stripped."""
+    return [line.strip() for line in request.form.get(field_name, "").splitlines() if line.strip()]
 
 
 @policy_bp.route("/update", methods=["POST"])
 @require_tenant_access(role=UserRole.ADMIN)
 @log_admin_action("update_policy")
 def update(tenant_id):
-    """Update policy settings for the tenant."""
-    # Get current config
-    config = get_tenant_config_from_db(tenant_id)
-    if not config:
-        return jsonify({"error": "Tenant not found"}), 404
+    """Save the form as the tenant's complete advertising policy.
 
-    # Parse the form data for lists
-    def parse_textarea_lines(field_name):
-        """Parse textarea input into list of non-empty lines."""
-        text = request.form.get(field_name, "")
-        return [line.strip() for line in text.strip().split("\n") if line.strip()]
-
-    # The form's keys over the stored row; a key the tenant never saved keeps its default
-    policy_settings = {
-        **config.get("policy_settings", {}),
-        "enabled": request.form.get("enabled") == "on",
-        "require_manual_review": request.form.get("require_manual_review") == "on",
-        "prohibited_advertisers": parse_textarea_lines("prohibited_advertisers"),
-        "prohibited_categories": parse_textarea_lines("prohibited_categories"),
-        "prohibited_tactics": parse_textarea_lines("prohibited_tactics"),
-    }
-
-    # Update database
-    with get_db_session() as db_session:
-        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        if tenant:
-            tenant.policy_settings = policy_settings
-            db_session.commit()
+    The form edits every key but ``description``, which keeps its stored value.
+    """
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        tenant = uow.tenant_config.require(uow.tenant_config.get_tenant)
+        stored = tenant.advertising_policy
+        uow.tenant_config.save_advertising_policy(
+            AdvertisingPolicy(
+                enabled=request.form.get("enabled") == "on",
+                require_manual_review=request.form.get("require_manual_review") == "on",
+                prohibited_advertisers=_form_lines("prohibited_advertisers"),
+                prohibited_categories=_form_lines("prohibited_categories"),
+                prohibited_tactics=_form_lines("prohibited_tactics"),
+                default_prohibited_categories=_form_lines("default_prohibited_categories"),
+                default_prohibited_tactics=_form_lines("default_prohibited_tactics"),
+                description=stored.description if stored is not None else None,
+            )
+        )
 
     return redirect(url_for("policy.index", tenant_id=tenant_id))
 
