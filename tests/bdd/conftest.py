@@ -7175,16 +7175,9 @@ ENV_ROUTES: list[EnvRoute] = [
         seed=_seed_default_tenant_and_principal,
     ),
     EnvRoute(
-        tag="security-wire-error-safety",
-        # BR-SECURITY-001 grades that an UNTYPED exception cannot leak internals to
-        # the wire. It dispatches get_products, so it takes the UC-GET-PRODUCTS branch.
-        when=lambda m: any(t.startswith("T-SECURITY-001") for t in m),
-        env_builder=_build_product_env,
-    ),
-    EnvRoute(
         tag="security-tenant-isolation",
         # BR-SECURITY-002 grades that a credential resolves to exactly one tenant and one
-        # principal. It dispatches get_products, so like BR-SECURITY-001 it takes the
+        # principal. It dispatches get_products, so like UC-001 nfr-001 it takes the
         # UC-GET-PRODUCTS branch -- but it seeds its OWN two tenants rather than relying on
         # the branch's default one, because a single-tenant database cannot exhibit the leak
         # it is looking for.
@@ -7211,7 +7204,7 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="protocol-version-negotiation",
         # BR-PROTOCOL-001 grades that the BOUNDARY refuses a version pin this seller cannot
         # serve, on a tool that is not get_adcp_capabilities — the tool whose own negotiation
-        # was the only one that ever ran. It dispatches get_products, so like BR-SECURITY-001
+        # was the only one that ever ran. It dispatches get_products, so like UC-001 nfr-001
         # it takes the UC-GET-PRODUCTS branch.
         when=lambda m: any(t.startswith("T-PROTOCOL-001") for t in m),
         env_builder=_build_product_env,

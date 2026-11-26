@@ -71,7 +71,7 @@ def test_resolver_crash_is_not_reported_as_the_buyers_validation_error(integrati
         # and recovery=transient — unchanged by the reversal — tells the buyer what to do
         # about it, which is what AdCP 3.1.1 core/error.json makes the decode path for a code
         # outside the published enum. No internal detail reaches the wire: the message is
-        # CODE_TABLE's generic sentence, which BR-SECURITY-001 grades separately.
+        # CODE_TABLE's generic sentence, which UC-001 nfr-001 grades separately.
         result.assert_wire_error(
             "INTERNAL_ERROR",
             recovery="transient",

@@ -1,14 +1,15 @@
-"""Domain step definitions for BR-SECURITY-001 (#1587 / salesagent-prkv.18).
+"""Domain step definitions for the wire-safety obligation (#1587 / salesagent-prkv.18).
 
 Formalizes, as a Gherkin scenario graded across a2a/mcp/rest, the
 obligation that an untyped exception raised inside a dispatched skill's
 business logic never puts its own text on the buyer-facing wire.
-AdCP 3.1.1 v3.1.1:docs/building/operating/transport-errors.mdx,
-Security Considerations MUST-NOT list (L659-L670).
+AdCP 3.2.7 v3.2.7:docs/building/operating/transport-errors.mdx,
+Security Considerations, Seller Requirements ("Implementations MUST NOT include", L707).
+Carried by T-UC-001-nfr-001 (BR-UC-001-discover-available-inventory.feature), which
+replaced the hand-authored BR-SECURITY-001 feature (#2710).
 
-Given: "a tenant is configured for product discovery" is reused from
-    tests/bdd/steps/domain/uc_get_products_inventory.py (already registered
-    as a pytest-bdd step by that module) — not redefined here.
+Given: the tenant comes from the BR-UC-001 Background; this module adds only
+    the fault-injection Given below.
 When: dispatch_request(ctx, ...) — the ONE sanctioned writer of ctx["result"].
 Then: TWO assertions, both required (neither alone closes the gap) —
     positively pins the observation to THIS injected fault via the server-side

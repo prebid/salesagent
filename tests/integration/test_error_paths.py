@@ -39,7 +39,7 @@ this file used to carry, and those are gone for good:
 What did NOT move is below. ``_envelope_response`` in src/app.py resolves identity
 best-effort from the request (``_best_effort_rest_identity``) purely so the REST
 boundary can feed the tenant-scoped sinks that MCP and A2A already feed. BDD grades
-the wire envelope and BR-SECURITY-001 grades the boundary LOG via caplog; neither
+the wire envelope and UC-001 nfr-001 grades the boundary LOG via caplog; neither
 grades the persisted audit row, and no other test in the tree asserts an
 ``audit_logs`` entry with ``adapter_id == "rest_boundary"``. Deleting this class
 would have made that whole best-effort identity path unobserved.

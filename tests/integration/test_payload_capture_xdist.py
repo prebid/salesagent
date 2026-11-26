@@ -34,7 +34,7 @@ from tests._collection_manifest import unpublished_env
 #: run exercises both the recorded and the deliberately-empty row.
 _MODULES = [
     "tests/bdd/test_codes001_open_vocabulary.py",
-    "tests/bdd/test_security001_wire_error_safety.py",
+    "tests/bdd/test_security002_tenant_isolation.py",
     "tests/bdd/test_uc002_manual_overrides.py",
 ]
 
