@@ -288,9 +288,13 @@ kept. Graded by `@T-UC-006-local-signing-tenant-by-header`.
 posture, because its derived identity is `http` and a non-empty bucket obliges an `https`
 `brand_json_url`, so those requests name no seller and are refused before the checklist. They
 were reachable only through the header. `test_signing_conformance_vectors.py` now asserts that
-refusal for them, and their `@authority` canonicalization stays graded at L1
-(`tests/unit/test_url_canonicalization_vectors.py`). The storyboard runner already reports
-them ungradable over HTTP.
+refusal for them (`test_routing_refuses_a_host_that_names_no_seller`), which grades the
+routing, not the verifier rule. The verifier rules stay graded below the router: 031's
+unbracketed `Host` by `tests/unit/test_signing_raw_wire_gaps.py`
+(`test_malformed_host_authority_is_a_target_uri_refusal_not_a_header_one[unbracketed-ipv6
+(negative/031)]`), and the IPv6 authorities by the `canonicalization.json` cases
+`ipv6-host-hex-lowercased` and `ipv6-host-with-port`. The storyboard runner already reports
+all four ungradable over HTTP.
 
 ## What did not move, and why it looks like it should have
 

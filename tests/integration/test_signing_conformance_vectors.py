@@ -228,10 +228,15 @@ _SELLER_HOST = "seller.example.com"
 #: host with a signing posture: ``canonical_agent_url`` derives ``http`` for it, and every
 #: one of these vectors declares a non-empty ``required_for``, which obliges an ``https``
 #: ``identity.brand_json_url``. The request is therefore refused ``TENANT_UNDEFINED`` before
-#: the checklist runs. NOT dropped: :func:`test_a_host_naming_no_seller_is_refused_before_the_verifier`
-#: drives each and asserts the refusal and the non-arrival. Their ``@authority``
-#: canonicalization is graded at L1 (``tests/unit/test_url_canonicalization_vectors.py``),
-#: and the storyboard runner reports them ungradable over HTTP.
+#: the checklist runs. NOT dropped: :func:`test_routing_refuses_a_host_that_names_no_seller`
+#: drives each and asserts the refusal and the non-arrival. The verifier rules they grade
+#: stay graded below the router: 031's unbracketed ``Host`` by
+#: ``tests/unit/test_signing_raw_wire_gaps.py::test_malformed_host_authority_is_a_target_uri_refusal_not_a_header_one``
+#: (``unbracketed-ipv6 (negative/031)``), and the IPv6 authorities the positives canonicalize
+#: by the ``canonicalization.json`` cases ``ipv6-host-hex-lowercased`` and
+#: ``ipv6-host-with-port`` (``tests/unit/test_url_canonicalization_vectors.py``). The
+#: storyboard runner skips all four over HTTP (031 ``transport_ungradable``, the positives
+#: ``mcp_mode_flattens_url_edges``).
 _HOST_NAMES_NO_SELLER = sorted(vid for vid in TRANSPLANT if "." not in hostname_of(_wire_host(vid)))
 
 #: The rows whose wire URL names no ``TOOLS[...].rest`` binding, so the router 404s them
@@ -954,7 +959,7 @@ def test_every_vector_is_accounted_for() -> None:
     :func:`test_negative_vector_is_rejected_with_the_spec_code` (plus
     :func:`test_replayed_nonce_vector` for ``016``),
     :func:`test_unrouted_rows_never_reach_the_verifier`, and
-    :func:`test_a_host_naming_no_seller_is_refused_before_the_verifier`. The counts are LITERAL so that
+    :func:`test_routing_refuses_a_host_that_names_no_seller`. The counts are LITERAL so that
     a row moving between groups has to be moved here too, with a reason.
     """
     assert len(_POSITIVES) == 15, _POSITIVES
@@ -1064,8 +1069,20 @@ def test_unrouted_rows_never_reach_the_verifier(vector_id, integration_db, confo
 
 
 @pytest.mark.parametrize("vector_id", _HOST_NAMES_NO_SELLER)
-def test_a_host_naming_no_seller_is_refused_before_the_verifier(vector_id, integration_db, conformance_app) -> None:
+def test_routing_refuses_a_host_that_names_no_seller(vector_id, integration_db, conformance_app) -> None:
     """An IPv6-literal ``Host`` names no seller: 421 TENANT_UNDEFINED, and the checklist never runs.
+
+    THIS GRADES THE ROUTING REFUSAL, NOT THE VERIFIER RULE THE VECTOR NAMES. The vectors
+    expect a verifier outcome. ``negative/031``, at
+    ``dist/compliance/3.2.7/test-vectors/request-signing/negative/031-malformed-host-authority.json``
+    L28-31 (adcp ``v3.2.7``, 8d1d3244b): ``"expected_outcome": {"success": false,
+    "error_code": "request_target_uri_malformed", "failed_step": 10}``. The three positives
+    expect ``"success": true``. This seller answers earlier: it names a signed request's
+    tenant by the ``Host`` alone, no tenant can be served at a dotless host with a signing
+    posture (:data:`_HOST_NAMES_NO_SELLER`), so the request names no seller and is refused
+    before any verifier runs. What it answers is what is asserted here. The storyboard
+    runner reports all four ungradable over HTTP (031 ``transport_ungradable``), and the
+    verifier rules stay graded below the router (see :data:`_HOST_NAMES_NO_SELLER`).
 
     The coverage boundary for :data:`_HOST_NAMES_NO_SELLER`, asserted rather than assumed.
     The seller has declared the vector's posture at :data:`_SELLER_HOST`; the request dials
