@@ -255,6 +255,11 @@ _ABSENT_RECORD_REQUESTS: dict[str, tuple[str, str, dict[str, str] | None]] = {
     "workflow step": ("post", "/tenant/{tenant}/workflows/bdd_absent_context/steps/bdd_absent_step/approve", {}),
     "GAM order": ("get", "/api/tenant/{tenant}/orders/bdd_absent_order", None),
     "sync job": ("get", "/tenant/{tenant}/gam/sync-status/bdd_absent_sync", None),
+    "inventory assignment": (
+        "delete",
+        f"/tenant/{{tenant}}/products/bdd_absent_product/inventory/{_ABSENT_ROW_ID}",
+        None,
+    ),
 }
 
 

@@ -455,14 +455,15 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the JSON error is the "<refusal>" refusal
 
     Examples:
-      | record        | refusal              |
-      | principal     | PrincipalNotFound    |
-      | product       | ProductNotFound      |
-      | creative      | CreativeNotFound     |
-      | signals agent | SignalsAgentNotFound |
-      | workflow step | WorkflowStepNotFound |
-      | GAM order     | OrderNotFound        |
-      | sync job      | SyncJobNotFound      |
+      | record               | refusal                     |
+      | principal            | PrincipalNotFound           |
+      | product              | ProductNotFound             |
+      | creative             | CreativeNotFound            |
+      | signals agent        | SignalsAgentNotFound        |
+      | workflow step        | WorkflowStepNotFound        |
+      | GAM order            | OrderNotFound               |
+      | sync job             | SyncJobNotFound             |
+      | inventory assignment | InventoryAssignmentNotFound |
 
   @T-ADMIN-REFUSAL-037 @json @authorized-domains
   Scenario: An authorized domain the tenant already authorizes is refused as a conflict
