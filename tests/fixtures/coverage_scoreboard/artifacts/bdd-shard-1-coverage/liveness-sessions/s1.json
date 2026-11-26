@@ -1,0 +1,16 @@
+{"run": {"target": ["tests/bdd"], "selection": "", "markers": "", "workers_missing": []}, "scenarios": [
+ {"scenario_id": "T-UC-900-green", "steps_bound": true, "harness_wired": true, "observations": [
+  {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_green[mcp]", "outcome": "passed", "reason": null, "reason_category": "live", "steps_executed": true},
+  {"transport": "rest", "nodeid": "tests/bdd/test_demo.py::test_green[rest]", "outcome": "passed", "reason": null, "reason_category": "live", "steps_executed": true}]},
+ {"scenario_id": "T-UC-900-split", "steps_bound": true, "harness_wired": true, "observations": [
+  {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_split[mcp]", "outcome": "passed", "reason": null, "reason_category": "live", "steps_executed": true}]},
+ {"scenario_id": "T-UC-900-gap", "steps_bound": true, "harness_wired": true, "ledgered": true, "observations": [
+  {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_gap[mcp-a]", "outcome": "xfailed", "reason": "production gap", "reason_category": "ledgered", "steps_executed": true, "strict": true},
+  {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_gap[mcp-b]", "outcome": "xfailed", "reason": "production gap", "reason_category": "ledgered", "steps_executed": true, "strict": true}]},
+ {"scenario_id": "T-UC-900-dormant", "steps_bound": false, "unbound_steps": ["Then nothing is bound"], "harness_wired": false, "observations": [
+  {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_dormant[mcp]", "outcome": "xfailed", "reason": "no step definition", "reason_category": "no_steps_bound", "steps_executed": false, "strict": false}]},
+ {"scenario_id": "T-UC-900-parked", "steps_bound": true, "harness_wired": true, "observations": [
+  {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_parked[mcp-a]", "outcome": "passed", "reason": null, "reason_category": "live", "steps_executed": true}]},
+ {"scenario_id": "T-UC-900-red", "steps_bound": true, "harness_wired": true, "observations": [
+  {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_red[mcp]", "outcome": "failed", "reason": null, "reason_category": "live", "steps_executed": true}]}
+]}

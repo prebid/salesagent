@@ -261,6 +261,7 @@ def test_scenario_liveness_to_dict_shape() -> None:
                 "reason": "Step definition not found: a step",
                 "reason_category": "no_steps_bound",
                 "steps_executed": False,
+                "strict": None,
             }
         ],
     }

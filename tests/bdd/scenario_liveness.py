@@ -67,6 +67,9 @@ from pytest_bdd.scenario import get_step_function
 from scripts.audit import storyboard_spec
 from scripts.ci import shard_split
 from tests._collection_manifest import (
+    IncompleteLivenessRun,
+    merge_record,
+    merged_records,
     read_artifacts,
     relative_target,
     required_dir,
@@ -106,7 +109,7 @@ class Observation:
 
     transport: str
     nodeid: str
-    outcome: str  # "passed" | "failed" | "xfailed"
+    outcome: str  # "passed" | "failed" | "xfailed" | "skipped"
     reason: str | None
     reason_category: str  # "live" | "no_steps_bound" | "harness_not_wired" | "ledgered"
     #: MEASURED: at least one step body of this (scenario, transport) run began
@@ -116,6 +119,11 @@ class Observation:
     #: False, whatever its reason string says. This is the structural fact
     #: ``harness_wired`` is derived from; the reason string is metadata.
     steps_executed: bool = False
+    #: For an ``xfailed`` outcome: whether an XPASS would fail the run. True only
+    #: when an ``xfail`` marker with ``strict`` (or the ``xfail_strict`` ini default)
+    #: produced it; an imperative ``pytest.xfail()`` or a conftest auto-xfail cannot
+    #: XPASS, so it records False. None for every other outcome.
+    strict: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -125,6 +133,7 @@ class Observation:
             "reason": self.reason,
             "reason_category": self.reason_category,
             "steps_executed": self.steps_executed,
+            "strict": self.strict,
         }
 
 
@@ -394,7 +403,13 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Any:
     # direction that inflates measured coverage.
     typed = _classify_exception(call.excinfo)
     category = typed if typed is not None else _classify_reason(reason)
-    outcome_name = "passed" if report.passed else ("xfailed" if reason is not None else "failed")
+    # A call-phase ``pytest.skip()`` is a skip, not a failure (it used to record "failed").
+    if report.passed:
+        outcome_name = "passed"
+    elif reason is not None:
+        outcome_name = "xfailed"
+    else:
+        outcome_name = "skipped" if report.skipped else "failed"
     record.record_observation(
         Observation(
             transport=_transport_name(item),
@@ -403,8 +418,17 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Any:
             reason=reason,
             reason_category=category,
             steps_executed=item.nodeid in _STEPS_RAN,
+            strict=_xfail_strict(item) if outcome_name == "xfailed" else None,
         )
     )
+
+
+def _xfail_strict(item: pytest.Item) -> bool:
+    """Whether *item*'s xfail marker is strict; False when no marker produced the xfail."""
+    marker = item.get_closest_marker("xfail")
+    if marker is None:
+        return False
+    return bool(marker.kwargs.get("strict", item.config.getini("xfail_strict")))
 
 
 def artifact_path() -> Path:
@@ -421,52 +445,12 @@ def _is_xdist_worker(config: pytest.Config) -> bool:
     return hasattr(config, "workeroutput")
 
 
-def _merge_record(into: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
-    """Merge one scenario's shard into another. The rule is stated, not implied.
-
-    ``record_observation``'s precedence is NOT associative across shards, so each
-    field's combine is named explicitly:
-
-    * ``observations``  — concatenated; every transport a shard saw is real.
-    * ``steps_bound``   — AND. One shard finding an unbound step is decisive.
-    * ``unbound_steps`` — union, order-stable.
-    * ``ledgered``      — OR. Ledgered anywhere is ledgered.
-    * ``harness_wired`` — tri-state with False DOMINANT: an observed
-      not-wired beats a live/ledgered observation elsewhere, and ``None``
-      (unknown) survives only if no shard ever resolved it.
-    * ``tags`` / ``marker_names`` — union; they are properties of the scenario,
-      identical on every shard that saw it.
-
-    Shards cross the process boundary as DICTS (decision 4): execnet ships basic
-    types only, so dataclasses cannot travel and must not be reconstructed here.
-    """
-    merged = dict(into)
-    merged["observations"] = list(into.get("observations", [])) + list(other.get("observations", []))
-    merged["steps_bound"] = bool(into.get("steps_bound", True)) and bool(other.get("steps_bound", True))
-    seen_steps = list(into.get("unbound_steps", []))
-    for step in other.get("unbound_steps", []):
-        if step not in seen_steps:
-            seen_steps.append(step)
-    merged["unbound_steps"] = seen_steps
-    merged["ledgered"] = bool(into.get("ledgered", False)) or bool(other.get("ledgered", False))
-    wired_values = [into.get("harness_wired"), other.get("harness_wired")]
-    if False in wired_values:
-        merged["harness_wired"] = False
-    elif True in wired_values:
-        merged["harness_wired"] = True
-    else:
-        merged["harness_wired"] = None
-    for key in ("tags", "marker_names"):
-        merged[key] = sorted(set(into.get(key, [])) | set(other.get(key, [])))
-    return merged
-
-
 def _merge_shard(shard: list[dict[str, Any]]) -> None:
     """Fold one worker's records into the controller's ``_SHARDS``."""
     for record in shard:
         scenario_id = record["scenario_id"]
         existing = _SHARDS.get(scenario_id)
-        _SHARDS[scenario_id] = record if existing is None else _merge_record(existing, record)
+        _SHARDS[scenario_id] = record if existing is None else merge_record(existing, record)
 
 
 def pytest_testnodedown(node: Any, error: Any) -> None:
@@ -639,16 +623,6 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         write_artifact(Path(sessions) / _session_filename(artifact["run"]), body)
 
 
-class IncompleteLivenessRun(RuntimeError):
-    """The session files on disk do not add up to a measurement of the suite.
-
-    Raised rather than returning what was found. A consumer handed a partial
-    artifact asks its question of a partial population and passes, which is the
-    failure this whole artifact exists to prevent -- and is what the single
-    fixed write path produced for as long as the suite was sharded.
-    """
-
-
 def _project_in_process(record: dict[str, Any]) -> dict[str, Any]:
     """One scenario, as the in-process transports alone measured it.
 
@@ -688,40 +662,11 @@ def _project_in_process(record: dict[str, Any]) -> dict[str, Any]:
 def load_run(directory: str | Path) -> dict[str, Any]:
     """Every scenario the real run measured, merged across sessions.
 
-    Folds the per-session files with the same `_merge_record` the controller
-    already uses for workers, then projects each scenario onto the in-process
-    transports.
-
-    A FILTERED session is skipped rather than refused: on the fast path
-    `[testenv:bdd_e2e]` always writes one (`-k e2e_rest`) beside the shards, so
-    refusing on its presence would red every such run. Skipping it and letting
-    the coverage check below decide is the single-valued rule. The exclusion is
-    still load-bearing -- bdd_e2e's TARGET is the whole tree, so a path-only
-    check would accept it, and its in-process projection is empty for every
-    scenario at once.
+    Which sessions are admitted, the refusal of a partial set, and the fold are
+    ``tests._collection_manifest.merged_records`` -- the one owner, shared with the
+    coverage scoreboard. This projects each merged scenario onto the in-process
+    transports: the in-network observations it admits from the filtered ``bdd_e2e``
+    session are dropped here, and the record-level fields re-derived without them.
     """
-    merged: dict[str, dict[str, Any]] = {}
-    covered: set[str] = set()
-    for path, payload in read_artifacts(directory):
-        scope = payload.get("run", {})
-        if scope.get("selection") or scope.get("markers"):
-            continue
-        missing = scope.get("workers_missing") or []
-        if missing:
-            raise IncompleteLivenessRun(
-                f"{path.name} was written by a session whose workers {missing} shut down "
-                "without shipping their records, so the scenarios they ran are absent from "
-                "it. The file is a partial measurement wearing a whole run's target list."
-            )
-        covered.update(scope.get("target", []))
-        for record in payload.get("scenarios", []):
-            existing = merged.get(record["scenario_id"])
-            merged[record["scenario_id"]] = record if existing is None else _merge_record(existing, record)
-
-    if not shard_split.targets_cover_suite("bdd", covered, repo_root=_REPO_ROOT):
-        raise IncompleteLivenessRun(
-            f"the liveness sessions in {directory} cover {sorted(covered) or 'nothing'}, "
-            "which does not account for every BDD module. A partial measurement cannot "
-            "be graded as the suite."
-        )
+    merged = merged_records(read_artifacts(directory), directory, repo_root=_REPO_ROOT)
     return {"scenarios": {k: _project_in_process(v) for k, v in merged.items()}}

@@ -1,0 +1,139 @@
+name: Coverage Scoreboard
+
+# Publishes the BDD coverage scoreboard (scripts/audit/coverage_scoreboard.py) for the
+# newest successful CI run on main, as scoreboard.json + scoreboard.md on the orphan
+# branch `coverage-scoreboard`. The Prebid docs site reads it from
+#   https://raw.githubusercontent.com/prebid/salesagent/coverage-scoreboard/scoreboard.json
+#
+# Polled on a schedule rather than triggered by `workflow_run`: zizmor flags that
+# trigger as dangerous, and the allowlist in .github/zizmor.yml only shrinks. A run
+# whose scoreboard is already published is a no-op, so polling costs one API call.
+on:
+  schedule:
+    - cron: '41 */3 * * *'
+  workflow_dispatch:
+    inputs:
+      run-id:
+        description: 'CI run id to publish (default: newest successful CI run on main)'
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: coverage-scoreboard
+  cancel-in-progress: false
+
+jobs:
+  # Decides whether there is anything to publish. Holds read access only, so a poll that
+  # finds the newest run already published never runs with contents: write.
+  pick:
+    name: Pick the CI run
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read  # find the CI run
+      contents: read  # read the published scoreboard.json
+    outputs:
+      id: ${{ steps.run.outputs.id }}
+      sha: ${{ steps.run.outputs.sha }}
+      fresh: ${{ steps.run.outputs.fresh }}
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
+
+      - name: Pick the CI run
+        id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REQUESTED: ${{ inputs.run-id }}
+          BRANCH: coverage-scoreboard
+        run: |
+          set -euo pipefail
+          run_id="$REQUESTED"
+          if [ -z "$run_id" ]; then
+            run_id=$(gh run list -R "$REPO" --workflow ci.yml --branch main --event push \
+              --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          fi
+          if ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
+            echo "::error::no CI run to publish (got '${run_id}')"
+            exit 1
+          fi
+          sha=$(gh api "repos/$REPO/actions/runs/$run_id" --jq '.head_sha')
+          published=$(gh api "repos/$REPO/contents/scoreboard.json?ref=$BRANCH" --jq '.content' 2>/dev/null \
+            | base64 -d 2>/dev/null | jq -r '.run_id // empty' 2>/dev/null || true)
+          echo "id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          if [ "$published" = "$run_id" ]; then
+            echo "Run $run_id is already published."
+            echo "fresh=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "fresh=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    name: Publish coverage scoreboard
+    needs: pick
+    if: needs.pick.outputs.fresh == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read  # download the CI run's BDD artifacts
+      contents: write  # push the coverage-scoreboard branch, and nothing else
+    env:
+      BRANCH: coverage-scoreboard
+      RUN_ID: ${{ needs.pick.outputs.id }}
+      SHA: ${{ needs.pick.outputs.sha }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
+
+      # The feature files the artifacts were measured against: the run's own commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.pick.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bdd-*
+          path: ${{ runner.temp }}/bdd-artifacts
+          run-id: ${{ needs.pick.outputs.id }}
+          github-token: ${{ github.token }}
+
+      # The generator imports scripts/audit/storyboard_spec, which needs the project
+      # dependencies (adcp, pyyaml): set up the way every other job that imports
+      # project code does.
+      - uses: ./.github/actions/_setup-env
+
+      - name: Generate the scoreboard
+        env:
+          ARTIFACTS: ${{ runner.temp }}/bdd-artifacts
+        run: |
+          set -euo pipefail
+          uv run python scripts/audit/coverage_scoreboard.py --artifacts "$ARTIFACTS" --out "$RUNNER_TEMP/scoreboard" \
+            --commit "$SHA" --run-id "$RUN_ID" --repository "$REPO" --markdown | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # One commit on an orphan branch, force-pushed: the branch holds the current
+      # scoreboard only, so its history never grows. No other ref is touched.
+      - name: Push to the coverage-scoreboard branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/scoreboard"
+          git init -q -b "$BRANCH"
+          git add scoreboard.json scoreboard.md
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -q -m "chore: coverage scoreboard for ${SHA} (CI run ${RUN_ID})"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git -c http.extraheader="AUTHORIZATION: basic $auth" \
+            push --force "https://github.com/${REPO}.git" "HEAD:refs/heads/${BRANCH}"
