@@ -26,7 +26,6 @@ from src.core.tools.media_buy_list import _compute_status
 if TYPE_CHECKING:
     from src.core.database.models import MediaBuy
 
-from sqlalchemy import select
 
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -267,12 +266,10 @@ def _affected_package(
     (``media_buy_list.py:274``).
     """
     assert uow.media_buys is not None
-    # The tolerant accessor, deliberately: a media buy whose packages live only in
-    # ``raw_request`` has no ``media_packages`` row, and the creative branches above
-    # accept that today (they read the row for a product_id and carry on without one).
-    # Reporting what IS known about such a package is right; refusing an update that
-    # succeeded, because the projection could not find a row, would not be. The branches
-    # that DO require a row keep their own ``get_package_or_raise`` pre-check.
+    # The tolerant accessor, deliberately: refusing an update that succeeded, because the
+    # projection could not find a row, would be wrong. The branches that require a row
+    # refuse before writing (``get_package_or_raise``, directly or through
+    # ``_package_product``), so by here a package they touched has one.
     stored = uow.media_buys.get_package(media_buy_id, package_id)
     config = (stored.package_config or {}) if stored is not None else {}
     stored_budget = float(stored.budget) if stored is not None and stored.budget is not None else None
@@ -544,15 +541,20 @@ def _patched_overlay(package: MediaPackage | None, overlay: TargetingInput) -> T
     return TargetingInput.model_validate(kept | {name: getattr(overlay, name) for name in overlay.model_fields_set})
 
 
-def _package_product(uow: "MediaBuyUoW", media_buy_id: str, package_id: str) -> "DBProduct | None":
+def _package_product(uow: "MediaBuyUoW", media_buy_id: str, package_id: str, pkg_index: int) -> "DBProduct | None":
     """The product a held package was bought on, or None when its config names none.
 
     One lookup for the three branches that replace a package's creatives: each grades the
     creatives against this product and then asks it whether the package is still covered.
+    A package the buy does not hold is refused PACKAGE_NOT_FOUND naming the entry's
+    ``package_id``: each branch writes assignment rows for it, and an assignment's package
+    is a foreign key to the buy's own packages.
     """
     assert uow.media_buys is not None and uow.products is not None
-    package = uow.media_buys.get_package(media_buy_id, package_id)
-    product_id = package.package_config.get("product_id") if package and package.package_config else None
+    package = uow.media_buys.get_package_or_raise(
+        media_buy_id, package_id, field=package_field_path("package_id", pkg_index)
+    )
+    product_id = package.package_config.get("product_id") if package.package_config else None
     return uow.products.get_by_id(product_id) if product_id else None
 
 
@@ -1220,7 +1222,7 @@ def _update_media_buy_impl(
 
                         # Validate creatives (existence, status, format) via the
                         # shared helper so the rules match the creative_assignments path.
-                        product = _package_product(uow, actual_media_buy_id, pkg_update.package_id)
+                        product = _package_product(uow, actual_media_buy_id, pkg_update.package_id, pkg_index)
                         _validate_creatives_for_assignment(
                             pkg_update.creative_ids,
                             uow=uow,
@@ -1280,6 +1282,10 @@ def _update_media_buy_impl(
                         # Validate package_id is provided
                         if not pkg_update.package_id:
                             raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
+                        # The package first, in THIS buy: the sync below finds a package by its
+                        # id across the tenant, and would assign the creatives to another buy's.
+                        inline_media_buy_id = uow.media_buys.get_by_id_or_raise(req.media_buy_id).media_buy_id
+                        inline_product = _package_product(uow, inline_media_buy_id, pkg_update.package_id, pkg_index)
 
                         # Sync creatives (upload/update)
                         # Built through the SAME builder the three transports use, rather
@@ -1361,7 +1367,6 @@ def _update_media_buy_impl(
                         # The sync above assigned the new bodies; the inline ones they
                         # replace are unassigned here, and library assignments -- the
                         # creative_ids / creative_assignments set -- are left as they are.
-                        inline_media_buy_id = uow.media_buys.get_by_id_or_raise(req.media_buy_id).media_buy_id
                         _replace_package_assignments(
                             uow,
                             inline_media_buy_id,
@@ -1381,7 +1386,7 @@ def _update_media_buy_impl(
                             uow.assignments,
                             inline_media_buy_id,
                             pkg_update.package_id,
-                            _package_product(uow, inline_media_buy_id, pkg_update.package_id),
+                            inline_product,
                             field=package_field_path("creatives", pkg_index),
                         )
 
@@ -1403,7 +1408,7 @@ def _update_media_buy_impl(
                         # building any assignment rows — otherwise a not-found creative_id
                         # would surface as a composite-FK IntegrityError. Same rules as the
                         # creative_ids path via the shared helper.
-                        ca_product = _package_product(uow, actual_media_buy_id, pkg_update.package_id)
+                        ca_product = _package_product(uow, actual_media_buy_id, pkg_update.package_id, pkg_index)
                         _validate_creatives_for_assignment(
                             [ca.creative_id for ca in pkg_update.creative_assignments],
                             uow=uow,
@@ -1419,36 +1424,20 @@ def _update_media_buy_impl(
                             if ca.placement_ids:
                                 all_requested_placement_ids.update(ca.placement_ids)
 
-                        if all_requested_placement_ids:
-                            # Get package to find product_id
-                            pkg_record = uow.media_buys.get_package_or_raise(actual_media_buy_id, pkg_update.package_id)
-
-                            product_id = (
-                                pkg_record.package_config.get("product_id") if pkg_record.package_config else None
-                            )
-
-                            if product_id:
-                                # Get product's placements
-                                prod_stmt = select(DBProduct).where(
-                                    DBProduct.tenant_id == tenant.tenant_id,
-                                    DBProduct.product_id == product_id,
+                        # Judged against the package's product, read once above (ca_product).
+                        if all_requested_placement_ids and ca_product is not None:
+                            if ca_product.placements:
+                                available_placement_ids: set[str] = {
+                                    str(p.get("placement_id")) for p in ca_product.placements if p.get("placement_id")
+                                }
+                                invalid_ids = all_requested_placement_ids - available_placement_ids
+                                if invalid_ids:
+                                    raise AdCPValidationError(field="creative_assignments[].placement_ids")
+                            else:
+                                # Product doesn't define placements, so placement targeting not supported
+                                raise AdCPCapabilityNotSupportedError(
+                                    details=CapabilityRefusalDetails(product_id=ca_product.product_id),
                                 )
-                                product_obj = session.scalars(prod_stmt).first()
-
-                                if product_obj and product_obj.placements:
-                                    available_placement_ids: set[str] = {
-                                        str(p.get("placement_id"))
-                                        for p in product_obj.placements
-                                        if p.get("placement_id")
-                                    }
-                                    invalid_ids = all_requested_placement_ids - available_placement_ids
-                                    if invalid_ids:
-                                        raise AdCPValidationError(field="creative_assignments[].placement_ids")
-                                elif product_obj and not product_obj.placements:
-                                    # Product doesn't define placements, so placement targeting not supported
-                                    raise AdCPCapabilityNotSupportedError(
-                                        details=CapabilityRefusalDetails(product_id=product_id),
-                                    )
 
                         updated_assignments = []
                         new_assignments_created = []

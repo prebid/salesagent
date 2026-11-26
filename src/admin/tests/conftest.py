@@ -80,7 +80,6 @@ def mock_tenant():
     tenant.enable_axe_signals = True
     tenant.auto_approve_format_ids = ["display_300x250"]
     tenant.human_review_required = False
-    tenant.policy_settings = '{"enabled": false}'
     return tenant
 
 

@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     from pydantic_ai import Agent
 
+    from src.core.schemas.advertising_policy import AdvertisingPolicy
+
 
 class PolicyAnalysis(BaseModel):
     """Structured output from AI policy analysis."""
@@ -57,32 +59,28 @@ def create_policy_agent(model: str) -> Agent[None, PolicyAnalysis]:
     )
 
 
-def build_policy_prompt(text: str, tenant_policies: dict | None = None) -> str:
+def build_policy_prompt(text: str, tenant_policy: AdvertisingPolicy | None = None) -> str:
     """Build the user prompt for policy analysis.
 
     Args:
         text: The advertising brief text to analyze
-        tenant_policies: Optional tenant-specific policy configuration
+        tenant_policy: The advertising policy the seller saved, whose prohibitions the
+            prompt names
 
     Returns:
         Formatted prompt string
     """
     prompt_parts = [f"Analyze this advertising brief:\n\n{text}"]
 
-    if tenant_policies:
+    if tenant_policy is not None:
         rules_text = []
 
-        # Default prohibited categories and tactics are enforced for all
-        default_categories = tenant_policies.get("default_prohibited_categories", [])
-        default_tactics = tenant_policies.get("default_prohibited_tactics", [])
+        # The default prohibitions are enforced alongside the seller's own.
+        all_prohibited_categories = tenant_policy.default_prohibited_categories + tenant_policy.prohibited_categories
+        all_prohibited_tactics = tenant_policy.default_prohibited_tactics + tenant_policy.prohibited_tactics
 
-        # Combine default and custom policies
-        all_prohibited_advertisers = tenant_policies.get("prohibited_advertisers", [])
-        all_prohibited_categories = default_categories + tenant_policies.get("prohibited_categories", [])
-        all_prohibited_tactics = default_tactics + tenant_policies.get("prohibited_tactics", [])
-
-        if all_prohibited_advertisers:
-            rules_text.append(f"Prohibited advertisers/domains: {', '.join(all_prohibited_advertisers)}")
+        if tenant_policy.prohibited_advertisers:
+            rules_text.append(f"Prohibited advertisers/domains: {', '.join(tenant_policy.prohibited_advertisers)}")
 
         if all_prohibited_categories:
             rules_text.append(f"Prohibited content categories: {', '.join(all_prohibited_categories)}")
@@ -99,21 +97,21 @@ def build_policy_prompt(text: str, tenant_policies: dict | None = None) -> str:
 async def check_policy_compliance(
     agent: Agent[None, PolicyAnalysis],
     text: str,
-    tenant_policies: dict | None = None,
+    tenant_policy: AdvertisingPolicy | None = None,
 ) -> PolicyAnalysis:
     """Run policy compliance check using the agent.
 
     Args:
         agent: The policy check agent
         text: Text to analyze (brief + brand info)
-        tenant_policies: Optional tenant-specific policies
+        tenant_policy: The advertising policy the seller saved
 
     Returns:
         PolicyAnalysis with compliance result
     """
     from src.services.ai.factory import run_agent
 
-    prompt = build_policy_prompt(text, tenant_policies)
+    prompt = build_policy_prompt(text, tenant_policy)
     # A provider failure raises AIProviderError; the caller (get_products) fails open on it.
     result = await run_agent(agent, prompt)
     # pydantic-ai 1.x uses .output for structured data

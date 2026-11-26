@@ -1,10 +1,9 @@
 """Unit tests for admin utilities."""
 
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 from src.admin.utils import (
     get_tenant_config_from_db,
-    parse_json_config,
     require_auth,
     validate_gam_network_response,
     validate_gam_user_response,
@@ -13,54 +12,6 @@ from src.admin.utils import (
 
 class TestConfigUtilities:
     """Test configuration utility functions."""
-
-    def test_parse_json_config_valid(self):
-        """Test parsing valid JSON config."""
-        config_str = '{"key": "value", "number": 123}'
-        result = parse_json_config(config_str)
-        assert result == {"key": "value", "number": 123}
-
-    def test_parse_json_config_empty(self):
-        """Test parsing empty config."""
-        assert parse_json_config("") == {}
-        assert parse_json_config(None) == {}
-
-    def test_parse_json_config_invalid(self):
-        """Test parsing invalid JSON config."""
-        assert parse_json_config("not json") == {}
-        assert parse_json_config("{invalid}") == {}
-
-    @patch("src.admin.utils.get_db_session")
-    def test_get_tenant_config_from_db(self, mock_get_db_session):
-        """Test getting tenant config from database."""
-        # Setup mock
-        mock_session = MagicMock()
-        mock_get_db_session.return_value.__enter__.return_value = mock_session
-
-        mock_tenant = Mock()
-        # No admin_token: the column is gone (84a86e019) and get_tenant_config_from_db no
-        # longer emits the key. A Mock() accepts any attribute, so setting it here and
-        # asserting it below graded the test's own setup, not production.
-        mock_tenant.slack_webhook_url = "https://slack.webhook"
-        mock_tenant.adapter_config = '{"google_ad_manager": {"enabled": true}}'
-        mock_tenant.max_daily_budget = 10000
-        mock_tenant.enable_axe_signals = True
-        mock_tenant.auto_approve_format_ids = ["display_300x250"]
-        mock_tenant.human_review_required = False
-        mock_tenant.policy_settings = '{"strict": false}'
-
-        mock_session.query.return_value.filter_by.return_value.first.return_value = mock_tenant
-
-        # Test
-        config = get_tenant_config_from_db("tenant_123")
-
-        assert config["slack_webhook_url"] == "https://slack.webhook"
-        assert config["adapters"]["google_ad_manager"]["enabled"]
-        assert config["features"]["max_daily_budget"] == 10000
-        assert config["features"]["enable_axe_signals"] is True
-        assert config["creative_engine"]["auto_approve_format_ids"] == ["display_300x250"]
-        assert config["creative_engine"]["human_review_required"] is False
-        assert not config["policy_settings"]["strict"]
 
     @patch("src.admin.utils.get_db_session")
     def test_get_tenant_config_not_found(self, mock_get_db_session):

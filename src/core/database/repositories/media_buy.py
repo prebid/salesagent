@@ -276,8 +276,8 @@ class MediaBuyRepository(SessionEffectsMixin):
             )
         ).first()
 
-    def get_package_or_raise(self, media_buy_id: str, package_id: str) -> MediaPackage:
-        """Get a package or raise ``AdCPPackageNotFoundError``.
+    def get_package_or_raise(self, media_buy_id: str, package_id: str, *, field: str | None = None) -> MediaPackage:
+        """Get a package or raise ``AdCPPackageNotFoundError``, naming *field* when given.
 
         Collapses the package fetch-and-raise guard duplicated across the update
         tool. Coexists with ``get_package`` for callers that tolerate ``None``.
@@ -288,6 +288,7 @@ class MediaBuyRepository(SessionEffectsMixin):
 
             raise AdCPPackageNotFoundError(
                 details=EntityRefDetails(package_id=package_id, media_buy_id=media_buy_id),
+                field=field,
             )
         return package
 

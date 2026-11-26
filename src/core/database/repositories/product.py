@@ -16,7 +16,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from src.core.database.models import InventoryProfile, Product, Publisher, Tenant
-from src.core.format_satisfaction import refuse_outside_common_intersection
+from src.core.database.repositories.base import Repository
+from src.core.format_satisfaction import FormatOptionsOutsideCommonIntersection, refuse_outside_common_intersection
+from src.core.operator_errors import ProductNotFound
 from src.core.publisher_format_catalog import PublisherCatalog, format_option_refusal
 
 logger = logging.getLogger(__name__)
@@ -72,7 +74,7 @@ def offer_refusal(product: Product, publisher_properties: list[dict], catalog: P
     return format_option_refusal(authored or product.format_options, publisher_properties, catalog)
 
 
-class ProductRepository:
+class ProductRepository(Repository):
     """Tenant-scoped data access for Product.
 
     All queries filter by tenant_id automatically. Callers cannot bypass
@@ -85,6 +87,8 @@ class ProductRepository:
         session: SQLAlchemy session (caller manages lifecycle).
         tenant_id: Tenant scope for all queries.
     """
+
+    NOT_FOUND = ProductNotFound
 
     _IMMUTABLE_FIELDS: frozenset[str] = frozenset({"tenant_id", "product_id"})
 
@@ -207,9 +211,10 @@ class ProductRepository:
         """Persist a new product within this tenant.
 
         The product.tenant_id must match the repository's tenant_id.
-        Raises ValueError if there is a tenant mismatch, or if the product sells several
-        publishers without placements and declares an option not all of them accept
-        (:func:`~src.core.format_satisfaction.refuse_outside_common_intersection`).
+        Raises ValueError if there is a tenant mismatch, and
+        :class:`~src.core.format_satisfaction.FormatOptionsOutsideCommonIntersection` if the
+        product sells several publishers without placements and declares an option not all of
+        them accept.
 
         Does NOT commit — the UoW handles that.
         """
@@ -222,7 +227,7 @@ class ProductRepository:
         self._session.add(product)
         try:
             refuse_outside_common_intersection(product)
-        except ValueError:
+        except FormatOptionsOutsideCommonIntersection:
             self._session.expunge(product)
             raise
         self._session.flush()

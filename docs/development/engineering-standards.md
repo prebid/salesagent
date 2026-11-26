@@ -102,6 +102,15 @@ there.
   correcting an incomplete review.
 - **Ask for what these standards require** — tests, guards, docs — not
   for coverage of hypothetical cases.
+- **Converge.** A re-review grades what changed since the last round
+  and whether the blockers already raised are resolved. It does not
+  reopen code an earlier round accepted, and it does not turn a refinement
+  of a helper, type or seam the change itself introduced into a new
+  blocker unless that code behaves wrongly. Once the change delivers the
+  issue's outcome, its tests can fail, and no must-fix finding remains,
+  approve it and name everything else as a follow-up. A change that keeps
+  growing round after round to satisfy review is drifting from its issue;
+  land the outcome and move the rest to follow-up issues.
 
 ## Put logic in its layer
 

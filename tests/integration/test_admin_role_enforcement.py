@@ -23,7 +23,7 @@ from src.core.database.models import (
     User,
     UserRole,
 )
-from tests.helpers.admin_session import tenant_user_session
+from tests.helpers.admin_session import tenant_user_client
 from tests.utils.database_helpers import tenant_rows
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -63,9 +63,8 @@ def rbac_tenant(integration_db):
 
 
 def _client_as(app, role):
-    client = app.test_client()
     # signed in through SSO, which disable-setup-mode requires of its caller
-    tenant_user_session(client, EMAILS[role], auth_method="oidc")
+    client = tenant_user_client(app, EMAILS[role], auth_method="oidc")
     with client.session_transaction() as sess:
         sess["tenant_id"] = TENANT_ID  # an SSO sign-in is bound to the tenant it was made for
     return client

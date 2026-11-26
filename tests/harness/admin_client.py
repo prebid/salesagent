@@ -14,6 +14,8 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
+from bs4 import BeautifulSoup
+
 from tests.helpers.admin_session import (
     admin_session_payload,
     admin_test_app,
@@ -87,6 +89,21 @@ class AdminResponse:
         if self._json_data is not None:
             return self._json_data
         return json.loads(self._data)
+
+    def flashes(self) -> list[tuple[str, str]]:
+        """``(category, message)`` per flash ``base.html`` rendered into this page, in order.
+
+        :meth:`AdminClient.submit` follows the redirect, so a flash arrives rendered into the
+        page the browser lands on rather than waiting in the session.
+        """
+        alerts = BeautifulSoup(self._data, "html.parser").select(".flash-messages > .alert")
+        return [
+            (
+                next(css.removeprefix("alert-") for css in alert["class"] if css.startswith("alert-")),
+                alert.find(string=True, recursive=False).strip(),
+            )
+            for alert in alerts
+        ]
 
     @classmethod
     def from_flask(cls, response: Any) -> AdminResponse:
@@ -207,14 +224,14 @@ class AdminClient:
         """POST the form *data* to *path* as a browser does, and GET the page its redirect names, flash included.
 
         *from_page* is the page the form is on, sent as the browser's ``Referer``: the page an
-        answer goes back to. A path is a page on this server; a URL with a scheme is another
-        site's page. Without it the request names no page to go back to. A form that answers
+        answer goes back to. A value that starts with ``/`` is a path on this server; anything
+        else is sent as given. Without it the request names no page to go back to. A form that answers
         without a redirect (it re-rendered with an error) is returned as is. *browser_headers*
         say how the browser asks for a page, :data:`BROWSER_PAGE_HEADERS` by default.
         """
         headers: dict[str, str | None] = dict(BROWSER_PAGE_HEADERS if browser_headers is None else browser_headers)
         if from_page is not None:
-            headers["Referer"] = from_page if urlsplit(from_page).scheme else f"{self.origin}{from_page}"
+            headers["Referer"] = f"{self.origin}{from_page}" if from_page.startswith("/") else from_page
         response = self.request("post", path, data=data, headers=headers)
         location = response.headers.get("location")
         if not location:

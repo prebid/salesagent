@@ -31,6 +31,13 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 45
+    # The network the GAM tests book against (ToolingSettings.gam_suite_network), from the
+    # gam-nightly environment's variables. The credential, its secret, reaches only the two
+    # steps that read it.
+    env:
+      GAM_SUITE_NETWORK_CODE: ${{ vars.GAM_SUITE_NETWORK_CODE }}
+      GAM_SUITE_ADVERTISER_ID: ${{ vars.GAM_SUITE_ADVERTISER_ID }}
+      GAM_SUITE_AD_UNIT_IDS: ${{ vars.GAM_SUITE_AD_UNIT_IDS }}
     services:
       postgres:
         image: postgres:17-alpine
@@ -46,23 +53,24 @@ jobs:
         ports:
           - 5435:5432
     steps:
-      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-      - name: Verify GAM credentials secret
+      - name: Check the GAM suite network
         env:
           GAM_SERVICE_ACCOUNT_JSON: ${{ secrets.GAM_SERVICE_ACCOUNT_JSON }}
         run: |
           set -euo pipefail
+          # With no GAM setting the preflight passes and the GAM tests xfail; the nightly exists to run them.
           if [ -z "${GAM_SERVICE_ACCOUNT_JSON}" ]; then
             echo "::error::GAM_SERVICE_ACCOUNT_JSON is not configured. Add it to the gam-nightly environment (Settings → Environments → gam-nightly → Environment secrets; restrict deployment branches to main)."
             exit 1
           fi
-          uv run python -c 'import json, os; json.loads(os.environ["GAM_SERVICE_ACCOUNT_JSON"])'
+          uv run python scripts/gam_prerequisites_check.py --suite-network
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/e2e/

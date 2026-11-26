@@ -61,10 +61,10 @@
             </div>
 
             <!-- Response Data (if available) -->
-            {% if step.response_data %}
+            {% if response_data %}
             <div style="background: white; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
                 <h2 style="margin-top: 0; font-size: 1.25rem;">Response Data</h2>
-                <pre style="background: #f9fafb; padding: 1rem; border-radius: 6px; overflow-x: auto; font-size: 0.875rem; max-height: 400px;">{{ step.response_data | tojson(indent=2) }}</pre>
+                <pre style="background: #f9fafb; padding: 1rem; border-radius: 6px; overflow-x: auto; font-size: 0.875rem; max-height: 400px;">{{ response_data | tojson(indent=2) }}</pre>
             </div>
             {% endif %}
 

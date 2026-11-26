@@ -52,9 +52,9 @@ Feature: UC-010 get_adcp_capabilities — the seller publishes its advertising p
     Then the response is compliant with the get_adcp_capabilities spec
     And the response should include media_buy.portfolio with publisher_domains "news-psatest.com"
     And media_buy.portfolio.advertising_policies should be omitted
-    # The column holds a document, and only its "description" member is publishable. A
-    # policy row that carries other keys but no description has nothing to say on the
-    # wire, and an empty string would be a published policy of "" rather than none.
+    # The column holds the complete policy, and only its "description" member is
+    # publishable. A policy whose description is null has nothing to say on the wire, and
+    # an empty string would be a published policy of "" rather than none.
 
   @T-UC-010-local-advertising-policy-no-verified-publisher @main-flow @partition @boundary
   Scenario: a seller no publisher has verified does not publish its declared policy

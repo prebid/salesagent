@@ -14,7 +14,6 @@ import json
 import logging
 import os
 import secrets
-from urllib.parse import unquote, urlsplit
 
 from authlib.integrations.flask_client import OAuth
 from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, session, url_for
@@ -25,7 +24,7 @@ from src.admin.auth_utils import OAUTH_CALLBACK_ERRORS, extract_user_info
 from src.admin.blueprints.core import get_tenant_from_hostname
 from src.admin.gam_utils import GAMOAuthNotConfigured
 from src.admin.utils import is_super_admin, require_tenant_access
-from src.admin.utils.helpers import clear_session_identity
+from src.admin.utils.helpers import clear_session_identity, local_path
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, UserRole
@@ -34,6 +33,7 @@ from src.core.domain_config import (
     get_sales_agent_url,
     get_super_admin_domain,
 )
+from src.core.logging_config import log_safe
 from src.core.operator_errors import safe_error_message
 from src.core.security.outbound_http import OutboundError
 from src.services.google_oauth_client import exchange_authorization_code
@@ -45,28 +45,14 @@ auth_bp = Blueprint("auth", __name__)
 
 
 def _safe_redirect(url: str | None, fallback: str) -> str:
-    """Return *url* only if it is a safe local path, otherwise *fallback*.
-
-    Rejects anything with a scheme, a netloc, a leading // or \\,
-    a backslash anywhere, or anything that does not start with /.
-    Also rejects after URL-decoding to defeat encoded bypass attempts.
-    """
+    """*url* when it is a path on this site (:func:`~src.admin.utils.helpers.local_path`), else *fallback*."""
     if not url:
         return fallback
-
-    decoded = unquote(url).strip()
-    parts = urlsplit(decoded)
-    if (
-        parts.scheme
-        or parts.netloc
-        or decoded.startswith(("//", "\\\\"))
-        or "\\" in decoded
-        or not decoded.startswith("/")
-    ):
+    path = local_path(url)
+    if path is None:
         logger.warning("[SECURITY] Rejected unsafe redirect URL: %r", url)
         return fallback
-
-    return decoded
+    return path
 
 
 # Well-known OIDC discovery URLs for common providers
@@ -472,7 +458,8 @@ def _back_to_login(message: str, tenant_context: str | None) -> Response:
 @auth_bp.route("/auth/google/callback")
 def google_callback():
     """Handle Google OAuth callback - simplified version."""
-    logger.debug("google_callback hit, args=%s", dict(request.args))
+    # Argument names only: the values include the authorization code and state.
+    logger.debug("google_callback hit, args=%s", sorted(request.args))
 
     oauth = current_app.oauth if hasattr(current_app, "oauth") else None
     if not oauth:
@@ -785,8 +772,14 @@ def gam_callback():
     error = request.args.get("error")
 
     # Log all callback parameters for debugging
-    logger.info(f"GAM OAuth callback received - code present: {bool(code)}, state: {state}, error: {error}")
-    logger.debug(f"GAM OAuth callback full args: {dict(request.args)}")
+    # Never the code or state values: the code is a credential until redeemed.
+    logger.info(
+        "GAM OAuth callback received - code present: %s, state present: %s, error: %s",
+        bool(code),
+        bool(state),
+        log_safe(error),
+    )
+    logger.debug("GAM OAuth callback arg names: %s", sorted(request.args))
 
     # The flow's context lives only in the session that started it. Popped
     # first so a nonce is consumed whatever the outcome of this callback.

@@ -21,6 +21,7 @@ from src.admin.form_validation import form_number, json_object_body, required_va
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import caller_reads_json
+from src.admin.utils.secret_fields import KEEP, submitted_secret
 from src.admin.utils.url_policy import redirect_if_url_blocked
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -483,38 +484,42 @@ def update_adapter(tenant_id):
 @log_admin_action("update_slack")
 @require_tenant_access(role=UserRole.ADMIN)
 def update_slack(tenant_id):
-    """Update Slack integration settings."""
-    webhook_url = request.form.get("slack_webhook_url", "").strip()
-    audit_webhook_url = request.form.get("slack_audit_webhook_url", "").strip()
+    """Update Slack integration settings.
 
-    # Both are stored now and posted to later, so both are graded by
-    # ingest-time egress policy. An empty value clears the webhook.
+    The webhook URLs are posting credentials, so they are write-only secret fields
+    (``submitted_secret``): a blank field keeps the stored URL, and a URL is removed only
+    through its "clear" checkbox.
+    """
     integrations_page = url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations")
-    if webhook_url and (blocked := redirect_if_url_blocked(webhook_url, "Slack webhook URL", integrations_page)):
-        return blocked
-
-    if audit_webhook_url and (
-        blocked := redirect_if_url_blocked(audit_webhook_url, "Slack audit webhook URL", integrations_page)
+    columns: dict[str, str | None] = {}
+    for field, label in (
+        ("slack_webhook_url", "Slack webhook URL"),
+        ("slack_audit_webhook_url", "Slack audit webhook URL"),
     ):
-        return blocked
+        change = submitted_secret(request.form, field)
+        if change is KEEP:
+            continue
+        # Stored now and posted to later, so a new URL is graded by ingest-time egress policy.
+        if change is not None and (blocked := redirect_if_url_blocked(change, label, integrations_page)):
+            return blocked
+        columns[field] = change
+
+    if not columns:
+        flash("Slack settings unchanged", "info")
+        return redirect(integrations_page)
 
     with get_db_session() as db_session:
         repository = TenantConfigRepository(db_session, tenant_id)
-        updated = repository.update_tenant(
-            slack_webhook_url=webhook_url or None,
-            slack_audit_webhook_url=audit_webhook_url or None,
-        )
-        if not updated:
-            flash("Tenant not found", "error")
-            return redirect(url_for("core.index"))
-
+        if not repository.update_tenant(**columns):
+            raise TenantNotFound(f"Tenant {tenant_id}")
+        tenant = repository.get_tenant()
+        enabled = bool(tenant and (tenant.slack_webhook_url or tenant.slack_audit_webhook_url))
         db_session.commit()
 
-        if webhook_url or audit_webhook_url:
-            flash("Slack integration updated successfully", "success")
-        else:
-            flash("Slack integration disabled", "info")
-
+    if enabled:
+        flash("Slack integration updated successfully", "success")
+    else:
+        flash("Slack integration disabled", "info")
     return redirect(integrations_page)
 
 
@@ -526,7 +531,6 @@ def update_ai(tenant_id):
     provider = request.form.get("ai_provider", "gemini").strip()
     model = request.form.get("ai_model", "").strip()
     api_key = request.form.get("ai_api_key", "").strip()
-    logfire_token = request.form.get("logfire_token", "").strip()
 
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
@@ -556,12 +560,8 @@ def update_ai(tenant_id):
         if existing_config.get("settings"):
             new_config["settings"] = existing_config["settings"]
 
-        # Handle Logfire token: use new one if provided, otherwise keep existing
-        # Skip placeholder value that indicates existing token
-        if logfire_token and logfire_token != "••••••••":
-            new_config["logfire_token"] = logfire_token
-        elif existing_config.get("logfire_token"):
-            new_config["logfire_token"] = existing_config["logfire_token"]
+        # No logfire_token: a tenant token is not used. Logfire export is configured once,
+        # for the whole process, from the deployment's own LOGFIRE_TOKEN.
 
         # Update the tenant
         tenant.ai_config = new_config
@@ -705,37 +705,6 @@ def ai_refusal_for(status_code: int | None) -> type[OperatorRefusal] | None:
     if status_code is None or not 400 <= status_code < 500:
         return None
     return _AI_REFUSAL_BY_STATUS.get(status_code, AIProviderRefusedRequest)
-
-
-@settings_bp.route("/ai/test-logfire", methods=["POST"])
-@require_tenant_access()
-def test_logfire_connection(tenant_id):
-    """Test Logfire connection with provided token."""
-    [logfire_token] = required_values(json_object_body(), "logfire_token")
-
-    # A dependency of this app (pyproject.toml), so it is always importable.
-    import logfire
-
-    # No token is refused here: logfire.configure accepts any string and checks the token
-    # on a background thread, where it only warns. What it does raise
-    # (LogfireConfigError) is about this deployment's own Logfire settings, not the
-    # operator's token, so the admin error handler answers it as an unexpected failure.
-    logfire.configure(
-        token=logfire_token,
-        service_name="adcp-sales-agent-test",
-    )
-
-    # Send a test span to verify the token works
-    with logfire.span("test_connection", _level="info") as span:
-        span.set_attribute("test", True)
-        span.set_attribute("tenant_id", tenant_id)
-
-    return jsonify(
-        {
-            "success": True,
-            "message": "Logfire connection successful! Check your Logfire dashboard for the test span.",
-        }
-    )
 
 
 @settings_bp.route("/ai/models", methods=["GET"])
@@ -1092,43 +1061,6 @@ def parse_form_data_to_policy_updates(form_data) -> dict[str, Any]:
 
         if ai_policy:
             updates["ai_policy"] = ai_policy
-
-    # Parse advertising policy
-    advertising_policy_fields = [
-        "policy_check_enabled",
-        "default_prohibited_categories",
-        "default_prohibited_tactics",
-        "prohibited_categories",
-        "prohibited_tactics",
-        "prohibited_advertisers",
-    ]
-    if any(field in form_data for field in advertising_policy_fields):
-        advertising_policy: dict[str, Any] = {}
-
-        if "policy_check_enabled" in form_data:
-            advertising_policy["enabled"] = form_data.get("policy_check_enabled") in [True, "true", "on", 1, "1"]
-        elif "policy_check_enabled" not in form_data:
-            # Checkbox not present means unchecked
-            advertising_policy["enabled"] = False
-
-        # Parse list fields (newline-separated)
-        for field_name in [
-            "default_prohibited_categories",
-            "default_prohibited_tactics",
-            "prohibited_categories",
-            "prohibited_tactics",
-            "prohibited_advertisers",
-        ]:
-            if field_name in form_data:
-                field_str = form_data.get(field_name, "").strip()
-                if field_str:
-                    items = [line.strip() for line in field_str.split("\n") if line.strip()]
-                    advertising_policy[field_name] = items
-                else:
-                    advertising_policy[field_name] = []
-
-        if advertising_policy:
-            updates["advertising_policy"] = advertising_policy
 
     # Parse product ranking prompt
     if "product_ranking_prompt" in form_data:

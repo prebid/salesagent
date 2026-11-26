@@ -32,6 +32,7 @@ import pytest
 from sqlalchemy import select
 
 from src.core.database.models import InventoryProfile, Product
+from src.core.format_satisfaction import FormatOptionsOutsideCommonIntersection
 from src.core.product_conversion import convert_product_model_to_schema
 from tests.factories import (
     InventoryProfileFactory,
@@ -467,7 +468,7 @@ def test_a_publishers_option_carrying_more_than_its_key_is_refused(operator, sel
 # form and the inventory-profile save have no buyer-facing step, so these grade them. Each
 # accept row differs from the refusal in one thing: one publisher, or placements published.
 
-_INTERSECTION_REFUSAL = b"every format option must be accepted by all of them"
+_INTERSECTION_REFUSAL = FormatOptionsOutsideCommonIntersection.MESSAGE.encode()
 _INCLUDED_PLACEMENT = [StoredPlacementFactory(mode="included")]
 
 

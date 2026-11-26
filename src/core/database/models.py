@@ -46,6 +46,7 @@ from src.core.exceptions import AdCPConfigurationError, AdCPPersistedStateError
 from src.core.http_utils import canonical_publisher_domain, is_publisher_domain
 from src.core.json_validators import PLACEMENTS_ARE_EXPLICIT_CHECK, PLACEMENTS_ARE_EXPLICIT_SQL, JSONValidatorMixin
 from src.core.operator_errors import InvalidDomainNameError
+from src.core.schemas.advertising_policy import AdvertisingPolicy
 
 # The ONE NotificationConfig, whose authentication block is the one Authentication class
 # (src/core/schemas/notification.py): a stored row reads back as the same type the request
@@ -123,7 +124,6 @@ class Tenant(Base, JSONValidatorMixin):
     # salesagent-b8gf9).
     auto_approve_format_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     human_review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    policy_settings: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     supported_billing: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)  # BR-RULE-059
     # Default FALSE: a seller advertises sandbox support by configuring it, never
     # by the absence of configuration. A true-by-default column made every
@@ -151,8 +151,9 @@ class Tenant(Base, JSONValidatorMixin):
     ai_policy: Mapped[dict | None] = mapped_column(
         JSONType, nullable=True, comment="AI review policy configuration with confidence thresholds"
     )
-    advertising_policy: Mapped[dict | None] = mapped_column(
-        JSONType,
+    # The complete policy the operator saved; NULL means the tenant saved none.
+    advertising_policy: Mapped[AdvertisingPolicy | None] = mapped_column(
+        JSONType(model=AdvertisingPolicy),
         nullable=True,
         comment="Advertising policy configuration with prohibited categories, tactics, and advertisers",
     )
@@ -442,7 +443,7 @@ class Product(Base, JSONValidatorMixin):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Type hint: countries list
     countries: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
-    # Advertising channels (e.g., ["display", "video", "native"])
+    # Advertising channels: MediaChannel values (e.g., ["display", "olv", "ctv"])
     channels: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     # Type hint: implementation config dict
     implementation_config: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
@@ -1138,6 +1139,12 @@ class CreativeAssignment(Base):
             ["creatives.creative_id", "creatives.tenant_id", "creatives.principal_id"],
         ),
         ForeignKeyConstraint(["media_buy_id"], ["media_buys.media_buy_id"]),
+        # The package is one its buy holds (media_packages' primary key).
+        ForeignKeyConstraint(
+            ["media_buy_id", "package_id"],
+            ["media_packages.media_buy_id", "media_packages.package_id"],
+            name="fk_creative_assignments_package_composite",
+        ),
         Index("idx_creative_assignments_tenant", "tenant_id"),
         Index("idx_creative_assignments_creative", "creative_id"),
         Index("idx_creative_assignments_media_buy", "media_buy_id"),
