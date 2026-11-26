@@ -343,5 +343,20 @@ class CreativeAssignmentFactory(ParentRowsFactory):
         factory.SubFactory(MediaBuyFactory, tenant=factory.SelfAttribute("..creative.tenant")),
         routed_from="creative",
     )
-    package_id = factory.Sequence(lambda n: f"pkg_{n:04d}")
     weight = 100
+
+    @classmethod
+    def _adjust_kwargs(cls, **kwargs: Any) -> dict[str, Any]:
+        """Name a package the buy holds, as production assigns one.
+
+        An assignment's package is a foreign key to media_packages. A buy the factory built or
+        the caller passed supplies its lowest package id, so a multi-package buy picks the same
+        one. A buy named by id is not at hand to read, so its caller names the package too.
+        """
+        kwargs = super()._adjust_kwargs(**kwargs)
+        if kwargs.get("package_id") is None:
+            media_buy = kwargs.get("media_buy")
+            if media_buy is None:
+                raise TypeError(f"{cls.__name__} reads no package off a media_buy named by id: pass package_id")
+            kwargs["package_id"] = min(package.package_id for package in media_buy.packages)
+        return kwargs

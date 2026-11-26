@@ -65,7 +65,7 @@ NAMED_BY_ID = {
     "principal": lambda w: PrincipalFactory(tenant_id="t1", principal_id="p2"),
     "gam inventory": lambda w: GAMInventoryFactory(tenant_id="t1"),
     "creative assignment": lambda w: CreativeAssignmentFactory(
-        tenant_id="t1", creative_id="c1", principal_id="p1", media_buy_id="mb1"
+        tenant_id="t1", creative_id="c1", principal_id="p1", media_buy_id="mb1", package_id="pkg_001"
     ),
     "media package": lambda w: MediaPackageFactory(
         media_buy_id="mb1", package_id="pkg_new", package_config={"product_id": "prod1"}
@@ -101,6 +101,10 @@ PARTLY_NAMED = {
         lambda w: CreativeAssignmentFactory(tenant_id="t1", creative_id="c1", principal_id="p1"),
         "media_buy_id",
     ),
+    "package of a media buy named by id": (
+        lambda w: CreativeAssignmentFactory(tenant_id="t1", creative_id="c1", principal_id="p1", media_buy_id="mb1"),
+        "package_id",
+    ),
     "product without tenant_id": (lambda w: PricingOptionFactory(product_id="prod1"), "tenant_id"),
 }
 
@@ -135,12 +139,13 @@ def test_a_parent_passed_as_an_object_supplies_its_ids(world):
     grant = AgentAccountAccessFactory(tenant=world.tenant, principal=world.principal, account=world.account)
     assignment = CreativeAssignmentFactory(creative=world.creative, media_buy=world.media_buy)
     assert (grant.tenant_id, grant.principal_id, grant.account_id) == ("t1", "p1", "a1")
-    assert (assignment.tenant_id, assignment.creative_id, assignment.principal_id, assignment.media_buy_id) == (
-        "t1",
-        "c1",
-        "p1",
-        "mb1",
-    )
+    assert (
+        assignment.tenant_id,
+        assignment.creative_id,
+        assignment.principal_id,
+        assignment.media_buy_id,
+        assignment.package_id,
+    ) == ("t1", "c1", "p1", "mb1", "pkg_001")
 
 
 def test_a_media_buy_adds_only_its_own_rows(world):

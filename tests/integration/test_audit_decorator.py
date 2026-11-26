@@ -55,7 +55,7 @@ def test_decorator_logs_successful_action(integration_db):
 
 @pytest.mark.requires_db
 def test_decorator_filters_password_fields(integration_db):
-    """Verify decorator excludes password fields from audit logs."""
+    """A declared field with a secret's name is still left out; the declared others are kept."""
     with get_db_session() as db_session:
         tenant = Tenant(
             tenant_id="test_tenant_2",
@@ -70,7 +70,7 @@ def test_decorator_filters_password_fields(integration_db):
     app.secret_key = "test"
 
     @app.route("/test/<tenant_id>", methods=["POST"])
-    @log_admin_action("update_settings")
+    @log_admin_action("update_settings", audit_fields=("name", "password", "email"))
     def test_route(tenant_id):
         return "success"
 
@@ -117,7 +117,7 @@ def test_decorator_filters_sensitive_json_fields(integration_db):
     app.secret_key = "test"
 
     @app.route("/test/<tenant_id>", methods=["POST"])
-    @log_admin_action("api_call")
+    @log_admin_action("api_call", audit_fields=("username", "api_key", "access_token", "webhook_secret", "data"))
     def test_route(tenant_id):
         return "success"
 
@@ -209,7 +209,7 @@ def test_decorator_truncates_long_values(integration_db):
     app.secret_key = "test"
 
     @app.route("/test/<tenant_id>", methods=["POST"])
-    @log_admin_action("long_value_test")
+    @log_admin_action("long_value_test", audit_fields=("description",))
     def test_route(tenant_id):
         return "success"
 

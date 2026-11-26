@@ -30,15 +30,6 @@ def create_tenant(args):
     admin_email = args.admin_email
     authorized_emails = [admin_email] if admin_email else []
 
-    # Policy settings
-    policy_settings = {
-        "enabled": True,
-        "require_manual_review": False,
-        "prohibited_advertisers": [],
-        "prohibited_categories": [],
-        "prohibited_tactics": [],
-    }
-
     with get_db_session() as session:
         # Check if tenant exists (use SQLAlchemy 2.0 syntax)
         from sqlalchemy import select
@@ -63,7 +54,6 @@ def create_tenant(args):
             enable_axe_signals=True,
             auto_approve_format_ids=auto_approve_format_ids,
             human_review_required=human_review_required,
-            policy_settings=policy_settings,
             authorized_domains=json.dumps(authorized_domains) if authorized_domains else None,
             authorized_emails=json.dumps(authorized_emails) if authorized_emails else None,
             is_active=True,

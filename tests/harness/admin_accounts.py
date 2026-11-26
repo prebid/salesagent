@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Account, Tenant
 from tests.harness.admin_client import AdminClient, AdminResponse
+from tests.helpers.admin_session import admin_session_payload
 from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
 
 
@@ -47,6 +48,10 @@ class AdminTransport(StrEnum):
 
     INTEGRATION = "admin_integration"  # Flask test_client, in-process
     E2E = "e2e_admin"  # requests.Session against the live stack
+
+
+def _product_edit_path(tenant_id: str, product_id: str) -> str:
+    return f"/tenant/{tenant_id}/products/{product_id}/edit"
 
 
 class AdminAccountEnv:
@@ -99,8 +104,9 @@ class AdminAccountEnv:
         self._database_faults: list[tuple[str, str]] = []
         #: The in-process scripted model origin (:meth:`script_ai_connection_test`), once started.
         self._llm_origin: str | None = None
-        #: What ``__exit__`` closes besides the client: the in-process origin and its variable.
-        self._llm_cleanups = ExitStack()
+        #: What ``__exit__`` closes besides the client: the in-process origin and its variable,
+        #: and every deployment setting a Given patched onto this process's settings.
+        self._in_process_cleanups = ExitStack()
 
     @property
     def mode(self) -> str:
@@ -138,7 +144,7 @@ class AdminAccountEnv:
 
     def _cleanup(self) -> None:
         """Release what ``_setup`` and the scenario's steps left behind."""
-        self._llm_cleanups.close()
+        self._in_process_cleanups.close()
         self._llm_origin = None
         self._drop_database_faults()
         self._cleanup_accounts()
@@ -175,9 +181,40 @@ class AdminAccountEnv:
                 UserFactory(tenant=tenant, email=email, role="admin")
         self.client.authenticate(self._tenant_id, tenant_user=email)
 
+    def authenticate_as_super_admin_checked_at(self, email: str, checked_at: float | None) -> None:
+        """State the session a sign-in as *email* left, whose super-admin answer was cached at *checked_at*.
+
+        *email* need be on no configured list: until the cache is older than
+        ``SUPER_ADMIN_RECHECK_SECONDS`` the session alone says it is a super admin.
+        """
+        self.client.state_session(admin_session_payload(self._tenant_id, email=email, checked_at=checked_at))
+
     def clear_auth(self) -> None:
         """Clear the authenticated session."""
         self.client.clear_auth()
+
+    # ── The deployment ────────────────────────────────────────────────────
+    #
+    # A fact the live stack's server already has (docker-compose.e2e.yml sets it on
+    # adcp-server, and the feature names the same value, so the two change together) is
+    # patched onto this process's settings only, which the app reads on each request.
+
+    def _patch_in_process_setting(self, field: str, value: object) -> None:
+        if self._mode == "e2e":
+            return
+        from unittest.mock import patch
+
+        from src.core.config import get_settings
+
+        self._in_process_cleanups.enter_context(patch.object(get_settings().runtime, field, value))
+
+    def name_super_admin_domain(self, domain: str) -> None:
+        """Make *domain* the deployment's ``SUPER_ADMIN_DOMAIN``."""
+        self._patch_in_process_setting("super_admin_domain", domain)
+
+    def serve_many_tenants(self) -> None:
+        """Make this a multi-tenant deployment (``ADCP_MULTI_TENANT``), which lists its tenants to a super admin."""
+        self._patch_in_process_setting("adcp_multi_tenant", True)
 
     # ── Routes ────────────────────────────────────────────────────────────
 
@@ -262,8 +299,14 @@ class AdminAccountEnv:
 
     def submit_product_edit(self, tenant_id: str, product_id: str, form_data: dict[str, Any]) -> AdminResponse:
         """POST *tenant_id*'s product *product_id* edit form as a browser does from its page."""
-        path = f"/tenant/{tenant_id}/products/{product_id}/edit"
+        path = _product_edit_path(tenant_id, product_id)
         return self.client.submit(path, form_data, from_page=path)
+
+    def post_product_edit_as_script(self, tenant_id: str, product_id: str, form_data: dict[str, Any]) -> AdminResponse:
+        """POST *tenant_id*'s product *product_id* edit form as a script does: a form body, ``Accept: application/json``."""
+        return self.client.request(
+            "post", _product_edit_path(tenant_id, product_id), data=form_data, headers={"Accept": "application/json"}
+        )
 
     def submit_inventory_profile_add(self, form_data: dict[str, Any]) -> AdminResponse:
         """POST the add-profile form as a browser does from the inventory page, and follow the answer."""
@@ -516,13 +559,23 @@ class AdminAccountEnv:
         with self._seeding() as (_, tenant):
             ProductFactory(tenant=tenant, product_id=product_id, inventory_profile_id=row_id)
 
-    def seed_product(self, product_id: str, *, tenant_id: str) -> None:
-        """Store a product *product_id* of *tenant_id* with one fixed CPM pricing option, as its edit form shows it."""
+    def seed_product(self, product_id: str, *, tenant_id: str, **columns: Any) -> None:
+        """Store a product *product_id* of *tenant_id* with one fixed CPM pricing option, as its edit form shows it.
+
+        *columns* are further ``ProductFactory`` fields.
+        """
         from tests.factories import PricingOptionFactory, ProductFactory
 
         with self._seeding(tenant_id) as (_, tenant):
-            product = ProductFactory(tenant=tenant, product_id=product_id)
+            product = ProductFactory(tenant=tenant, product_id=product_id, **columns)
             PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
+
+    def catalog_first_publisher_leaderboard(self, tenant_id: str) -> None:
+        """Both publishers of ``TWO_PUBLISHER_PROPERTIES`` authorize *tenant_id*, and the first catalogs a leaderboard."""
+        from tests.factories.product import catalog_first_publisher_leaderboard
+
+        with self._seeding(tenant_id) as (_, tenant):
+            catalog_first_publisher_leaderboard(tenant)
 
     def onboard_gam(self, *, tenant_id: str | None = None, service_account_email: str | None = None) -> None:
         """Leave *tenant_id* (this env's tenant by default) with the rows GAM onboarding writes.
@@ -753,7 +806,26 @@ class AdminAccountEnv:
 
     def fetch_tenant_route(self, tenant_id: str, path: str, body: dict[str, Any] | None = None) -> AdminResponse:
         """POST *body* (none: ``{}``) to *tenant_id*'s ``/tenant/<id>/<path>``, as its page's script does with fetch()."""
-        return self.client.request("post", f"/tenant/{tenant_id}/{path}", json=body or {})
+        return self.fetch("post", f"/tenant/{tenant_id}/{path}", body or {})
+
+    def fetch(self, method: str, path: str, body: dict[str, Any] | None = None) -> AdminResponse:
+        """Send *method* to *path* as a page's script does with fetch(): *body* as JSON, if any, and ``Accept: */*``."""
+        return self.client.request(method, path, json=body, headers={"Accept": "*/*"})
+
+    def open_admin_home(self) -> AdminResponse:
+        """GET ``/admin/``, the page a sign-in lands on."""
+        return self.client.request("get", "/admin/")
+
+    def submit_tenant_form(self, tenant_id: str, path: str, form_data: dict[str, str]) -> AdminResponse:
+        """POST *form_data* to *tenant_id*'s ``/tenant/<id>/<path>`` as a browser's form post from no page."""
+        return self.client.submit(f"/tenant/{tenant_id}/{path}", form_data)
+
+    def authorized_domains_of(self, tenant_id: str) -> list[str]:
+        """The domains *tenant_id* authorizes, as stored."""
+        with get_db_session() as session:
+            tenant = session.get(Tenant, tenant_id)
+            assert tenant is not None, f"no tenant {tenant_id!r}"
+            return list(tenant.authorized_domains)
 
     def post_ai_connection_test(self, body: Any) -> AdminResponse:
         """POST *body* as JSON to this tenant's AI connection test, as the settings page does with fetch()."""
@@ -785,6 +857,10 @@ class AdminAccountEnv:
 
             from tests.e2e.scripted_llm_origin_service import run_scripted_llm_origin
 
-            self._llm_origin = self._llm_cleanups.enter_context(run_scripted_llm_origin(host="127.0.0.1", port=0))
-            self._llm_cleanups.enter_context(patch.dict(os.environ, {"GOOGLE_GEMINI_BASE_URL": self._llm_origin}))
+            self._llm_origin = self._in_process_cleanups.enter_context(
+                run_scripted_llm_origin(host="127.0.0.1", port=0)
+            )
+            self._in_process_cleanups.enter_context(
+                patch.dict(os.environ, {"GOOGLE_GEMINI_BASE_URL": self._llm_origin})
+            )
         return self._llm_origin

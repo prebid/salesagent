@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
     import pytest
 
-    from src.core.config import LimitSettings, RuntimeSettings
+    from src.core.config import IntegrationSettings, LimitSettings, RuntimeSettings
 
 # Where the platform's AI credential comes from. With PYDANTIC_AI_PROVIDER unset the
 # platform provider is Google, so GEMINI_API_KEY is the key that counts; the others are
@@ -117,6 +117,14 @@ def inject_runtime(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> Runtime
     accumulating, restored at teardown -- e.g. ``sales_agent_domain="agent.example.com"``.
     """
     return _inject(monkeypatch, "runtime", overrides)
+
+
+def inject_integrations(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> IntegrationSettings:
+    """Put ``overrides`` on the cached settings' :class:`IntegrationSettings` and return it.
+
+    Same contract as :func:`inject_limits` -- e.g. ``logfire_token="pylf_v1_us_platform"``.
+    """
+    return _inject(monkeypatch, "integrations", overrides)
 
 
 class PlatformAICredential:

@@ -24,7 +24,8 @@ from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, UserRole
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.operator_errors import ConnectionTestFailed, StateConflict, TenantNotFound, best_effort_call
+from src.core.database.repositories.uow import TenantConfigUoW
+from src.core.operator_errors import ConnectionTestFailed, StateConflict, best_effort_call
 from src.services.ai.factory import tenant_ai_enabled
 from src.services.setup_checklist_service import SetupChecklistService
 from src.services.slack_notifier import SlackNotifier
@@ -294,17 +295,14 @@ def tenant_settings(tenant_id, section=None):
         stmt = select(CurrencyLimit).filter_by(tenant_id=tenant_id).order_by(CurrencyLimit.currency_code)
         currency_limits = db_session.scalars(stmt).all()
 
-        # Whether each AI feature can run for this seller, as the feature itself decides:
-        # policy checks only on the seller's own credential, ranking and review with the
-        # platform's as fallback (src/services/ai/factory.py).
+        # Whether ranking and review can run for this seller, with the platform's credential
+        # as fallback (src/services/ai/factory.py). The Policy page asks the same of policy checks.
         ai_enabled = tenant_ai_enabled(tenant)
-        seller_ai_enabled = tenant_ai_enabled(tenant, platform_fallback=False)
 
         # Get AI configuration for template
         ai_config = tenant.ai_config or {}
         current_provider = ai_config.get("provider", "")
         current_model = ai_config.get("model", "")
-        has_logfire = bool(ai_config.get("logfire_token"))
 
         # Get setup checklist status
         setup_status = _setup_status_tile(tenant_id)
@@ -318,10 +316,8 @@ def tenant_settings(tenant_id, section=None):
             "tenant_settings.html",
             tenant=tenant,
             ai_enabled=ai_enabled,
-            seller_ai_enabled=seller_ai_enabled,
             current_provider=current_provider,
             current_model=current_model,
-            has_logfire=has_logfire,
             tenant_id=tenant_id,
             section=section or "general",
             active_adapter=active_adapter,
@@ -338,6 +334,7 @@ def tenant_settings(tenant_id, section=None):
             admin_port=admin_port,
             is_production=is_production,
             script_name=script_name,
+            favicon_extensions=sorted(ALLOWED_FAVICON_EXTENSIONS),
             authorized_domains=authorized_domains,
             authorized_emails=authorized_emails,
             product_count=product_count,
@@ -357,7 +354,7 @@ def tenant_settings(tenant_id, section=None):
 
 @tenants_bp.route("/<tenant_id>/update", methods=["POST"])
 @log_admin_action("update")
-@require_tenant_access()
+@require_tenant_access(role=UserRole.ADMIN)
 def update(tenant_id):
     """Update tenant settings."""
     # Sanitize form data
@@ -399,55 +396,55 @@ class SlackWebhookNotConfigured(StateConflict):
 @require_tenant_access()
 def test_slack(tenant_id):
     """Test Slack webhook."""
-    with get_db_session() as db_session:
-        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        if not tenant:
-            raise TenantNotFound(f"Tenant {tenant_id}")
+    # The message is sent after the read's transaction ends: a rollback cannot undo it.
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        tenant = uow.tenant_config.require(uow.tenant_config.get_tenant)
+        webhook_url, tenant_name = tenant.slack_webhook_url, tenant.name
 
-        if not tenant.slack_webhook_url:
-            raise SlackWebhookNotConfigured(f"Slack test for tenant {tenant_id}: no webhook stored")
+    if not webhook_url:
+        raise SlackWebhookNotConfigured(f"Slack test for tenant {tenant_id}: no webhook stored")
 
-        # One Block Kit owner: the route does not assemble its own blocks or dial the
-        # egress seam itself, because that duplicates slack_notifier and skips its
-        # retry/record bookkeeping.
-        #
-        # max_retries=1 is deliberate: a test notification that silently sends three
-        # times is worse than one that fails visibly.
-        sent = SlackNotifier(webhook_url=tenant.slack_webhook_url).send_message(
-            text=f"🎉 Test message from Prebid Sales Agent for {tenant.name}",
-            blocks=[
-                {
-                    "type": "section",
-                    "text": {
+    # One Block Kit owner: the route does not assemble its own blocks or dial the
+    # egress seam itself, because that duplicates slack_notifier and skips its
+    # retry/record bookkeeping.
+    #
+    # max_retries=1 is deliberate: a test notification that silently sends three
+    # times is worse than one that fails visibly.
+    sent = SlackNotifier(webhook_url=webhook_url).send_message(
+        text=f"🎉 Test message from Prebid Sales Agent for {tenant_name}",
+        blocks=[
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*Test Notification*\nThis is a test message from the Prebid Sales Agent for *{tenant_name}*."
+                    ),
+                },
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
                         "type": "mrkdwn",
-                        "text": (
-                            f"*Test Notification*\nThis is a test message from the "
-                            f"Prebid Sales Agent for *{tenant.name}*."
-                        ),
-                    },
-                },
-                {
-                    "type": "context",
-                    "elements": [
-                        {
-                            "type": "mrkdwn",
-                            "text": f"Sent at {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}",
-                        }
-                    ],
-                },
-            ],
-            tenant_id=tenant.tenant_id,
-            max_retries=1,
+                        "text": f"Sent at {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                    }
+                ],
+            },
+        ],
+        tenant_id=tenant_id,
+        max_retries=1,
+    )
+
+    if not sent:
+        # Fixed text: Slack's own response body is a counterparty response and is
+        # never echoed back to the operator.
+        raise ConnectionTestFailed(
+            f"Slack test for tenant {tenant_id}: delivery failed", details=("Slack webhook delivery failed",)
         )
 
-        if not sent:
-            # Fixed text: Slack's own response body is a counterparty response and is
-            # never echoed back to the operator.
-            raise ConnectionTestFailed(
-                f"Slack test for tenant {tenant_id}: delivery failed", details=("Slack webhook delivery failed",)
-            )
-
-        return jsonify({"success": True, "message": "Test message sent successfully"})
+    return jsonify({"success": True, "message": "Test message sent successfully"})
 
 
 @tenants_bp.route("/<tenant_id>/deactivate", methods=["POST"])
@@ -538,7 +535,7 @@ def media_buys_list(tenant_id):
                 for package in media_buy.raw_request["packages"]:
                     product_id = package.get("product_id")
                     if product_id:
-                        stmt = select(Product).filter_by(product_id=product_id)
+                        stmt = select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)
                         product = db_session.scalars(stmt).first()
                         if product:
                             product_names.append(product.name)
@@ -573,9 +570,33 @@ def auth_settings(tenant_id):
     return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
 
-# Constants for favicon upload
-ALLOWED_FAVICON_EXTENSIONS = {"ico", "png", "svg", "jpg", "jpeg"}
+#: The favicon formats an upload accepts, each with the leading bytes it starts with (the
+#: extension alone proves nothing). Raster formats only: an SVG is a document that can carry
+#: script, and an uploaded favicon is served from the admin origin.
+_FAVICON_SIGNATURES = {
+    "ico": b"\x00\x00\x01\x00",
+    "png": b"\x89PNG\r\n\x1a\n",
+    "jpg": b"\xff\xd8\xff",
+    "jpeg": b"\xff\xd8\xff",
+}
+ALLOWED_FAVICON_EXTENSIONS = frozenset(_FAVICON_SIGNATURES)
+#: What an upload may have left on disk: the allowed formats, and an SVG from before SVG was refused.
+_STORED_FAVICON_EXTENSIONS = ALLOWED_FAVICON_EXTENSIONS | {"svg"}
 MAX_FAVICON_SIZE = 1 * 1024 * 1024  # 1MB
+
+
+def _favicon_content_matches(ext: str, head: bytes) -> bool:
+    """Whether a file's first bytes are those of the image format its extension names."""
+    signature = _FAVICON_SIGNATURES.get(ext)
+    return signature is not None and head.startswith(signature)
+
+
+def _remove_stored_favicons(tenant_favicon_dir: str) -> None:
+    """Delete every favicon file an upload may have left in *tenant_favicon_dir*."""
+    for ext in _STORED_FAVICON_EXTENSIONS:
+        path = os.path.join(tenant_favicon_dir, f"favicon.{ext}")
+        if os.path.exists(path):
+            os.remove(path)
 
 
 def _get_favicon_upload_dir() -> str:
@@ -591,12 +612,13 @@ def _allowed_favicon_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_FAVICON_EXTENSIONS
 
 
-def _is_safe_favicon_path(base_dir: str, tenant_id: str) -> bool:
-    """Validate that the tenant favicon path doesn't escape the base directory."""
-    tenant_dir = os.path.join(base_dir, tenant_id)
+def _tenant_favicon_dir(base_dir: str, tenant_id: str) -> str | None:
+    """Return the resolved favicon directory for *tenant_id*, or None if it escapes *base_dir*."""
     resolved_base = os.path.realpath(base_dir)
-    resolved_tenant = os.path.realpath(tenant_dir)
-    return resolved_tenant.startswith(resolved_base + os.sep)
+    resolved_tenant = os.path.realpath(os.path.join(base_dir, tenant_id))
+    if resolved_tenant.startswith(resolved_base + os.sep):
+        return resolved_tenant
+    return None
 
 
 def _is_valid_favicon_url(url: str) -> bool:
@@ -640,26 +662,27 @@ def upload_favicon(tenant_id):
         flash(f"File too large. Maximum size: {MAX_FAVICON_SIZE // 1024}KB", "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
 
+    ext = file.filename.rsplit(".", 1)[1].lower()
+    head = file.read(8)
+    file.seek(0)
+    if not _favicon_content_matches(ext, head):
+        flash("The file is not a valid ICO, PNG or JPEG image", "error")
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
+
     # Create tenant-specific favicon directory
     upload_dir = _get_favicon_upload_dir()
-    if not _is_safe_favicon_path(upload_dir, tenant_id):
+    tenant_favicon_dir = _tenant_favicon_dir(upload_dir, tenant_id)
+    if tenant_favicon_dir is None:
         logger.error(f"Path traversal attempt detected for tenant: {tenant_id}")
         flash("Invalid tenant ID", "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="account"))
-    tenant_favicon_dir = os.path.join(upload_dir, tenant_id)
     os.makedirs(tenant_favicon_dir, exist_ok=True)
 
-    # Get the file extension
-    ext = file.filename.rsplit(".", 1)[1].lower()
     # Save as favicon.{ext} in the tenant's directory
     filename = f"favicon.{ext}"
     filepath = os.path.join(tenant_favicon_dir, filename)
 
-    # Remove any existing favicon files for this tenant
-    for old_ext in ALLOWED_FAVICON_EXTENSIONS:
-        old_file = os.path.join(tenant_favicon_dir, f"favicon.{old_ext}")
-        if os.path.exists(old_file):
-            os.remove(old_file)
+    _remove_stored_favicons(tenant_favicon_dir)
 
     # Save the new favicon
     file.save(filepath)
@@ -724,12 +747,9 @@ def remove_favicon(tenant_id):
         # If it's an uploaded file, try to delete it
         if tenant.favicon_url and tenant.favicon_url.startswith("/static/favicons/"):
             upload_dir = _get_favicon_upload_dir()
-            if _is_safe_favicon_path(upload_dir, tenant_id):
-                tenant_favicon_dir = os.path.join(upload_dir, tenant_id)
-                for ext in ALLOWED_FAVICON_EXTENSIONS:
-                    filepath = os.path.join(tenant_favicon_dir, f"favicon.{ext}")
-                    if os.path.exists(filepath):
-                        os.remove(filepath)
+            tenant_favicon_dir = _tenant_favicon_dir(upload_dir, tenant_id)
+            if tenant_favicon_dir is not None:
+                _remove_stored_favicons(tenant_favicon_dir)
             else:
                 logger.error(f"Path traversal attempt detected for tenant: {tenant_id}")
 
