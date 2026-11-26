@@ -287,6 +287,18 @@ def when_get_products_with_brief(ctx: dict) -> None:
     dispatch_request(ctx, brief=ctx["env"].scripted_brief(_BRIEF))
 
 
+@when("the Buyer Agent sends a get_products request with a brief and no buying_mode")
+def when_get_products_with_brief_and_no_mode(ctx: dict) -> None:
+    """Dispatch get_products with a brief and, as the wording claims, no ``buying_mode``.
+
+    Checks the absence on the request it sends: the factory baseline defaults ``buying_mode`` to
+    "brief", and a request built from it would grade brief mode under this title.
+    """
+    request = {"brief": ctx["env"].scripted_brief(_BRIEF)}
+    assert "buying_mode" not in request, f"the scenario claims no buying_mode, but the request sends one: {request!r}"
+    dispatch_request(ctx, **request)
+
+
 @when(parsers.parse("the Buyer Agent sends a get_products request with channels filter {partition}"))
 def when_get_products_with_channels_filter(ctx: dict, partition: str) -> None:
     """Dispatch get_products filtering on one channel, on none, or on a list the schema refuses."""
@@ -356,3 +368,33 @@ def then_full_catalog_in_catalog_order(ctx: dict) -> None:
     expected = ctx["catalog"]
     actual = wire_product_ids(ctx)
     assert actual == expected, f"Expected the catalog {expected} in catalog order, got {actual}"
+
+
+# ── BR-RULE-079: buying_mode ────────────────────────────────────────
+#
+# get-products-request.json at the pinned 3.2.7 types ``buying_mode`` as the enum brief /
+# wholesale / refine. A request without it keeps the pre-v3 default to brief (#2710 D1).
+# Every row also sends a brand, the search criterion the seller's own check wants when a
+# mode sends no brief.
+
+_REFINE = [{"scope": "request", "ask": "more video inventory"}]
+
+#: The fields each row sends besides the brand, by the wording of its When.
+_BUYING_MODE_ROWS: dict[str, dict[str, Any]] = {
+    "buying_mode=auction, brief present": {"buying_mode": "auction", "brief": _BRIEF},
+    # ext-d: the companion rules, written in get-products-request.json's field descriptions.
+    "buying_mode=brief, no brief field": {"buying_mode": "brief"},
+    "buying_mode=wholesale, brief present": {"buying_mode": "wholesale", "brief": _BRIEF},
+    "buying_mode=wholesale, refine present": {"buying_mode": "wholesale", "refine": _REFINE},
+    "buying_mode=refine, no refine array": {"buying_mode": "refine"},
+    "buying_mode=refine, brief present, refine present": {"buying_mode": "refine", "brief": _BRIEF, "refine": _REFINE},
+    "buying_mode=brief, brief present, refine present": {"buying_mode": "brief", "brief": _BRIEF, "refine": _REFINE},
+    # A request without a mode is judged as brief (#2710 D1), so brief's ruled-out refine is refused.
+    "buying_mode omitted, brief present, refine present": {"brief": _BRIEF, "refine": _REFINE},
+}
+
+
+@when(parsers.re(r"the Buyer Agent sends a get_products request with (?P<row>buying_mode[= ].+)$"))
+def when_get_products_buying_mode(ctx: dict, row: str) -> None:
+    """Dispatch get_products with a brand and the mode and companions the row names."""
+    dispatch_request(ctx, brand={"domain": "acme.com"}, **_BUYING_MODE_ROWS[row])
