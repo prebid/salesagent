@@ -283,6 +283,15 @@ gets, `TENANT_UNDEFINED` from `_addressed_tenant`. The spec does not decide betw
 JWKS, which presupposes a tenant whose onboarding records were searched. One refusal path was
 kept. Graded by `@T-UC-006-local-signing-tenant-by-header`.
 
+**Cost to the in-process vector run.** Four vectors dial an IPv6-literal `Host` (positive
+011, 012, 015 and negative 031). No tenant can be served at a dotless host with a signing
+posture, because its derived identity is `http` and a non-empty bucket obliges an `https`
+`brand_json_url`, so those requests name no seller and are refused before the checklist. They
+were reachable only through the header. `test_signing_conformance_vectors.py` now asserts that
+refusal for them, and their `@authority` canonicalization stays graded at L1
+(`tests/unit/test_url_canonicalization_vectors.py`). The storyboard runner already reports
+them ungradable over HTTP.
+
 ## What did not move, and why it looks like it should have
 
 `request_signature_key_origin_mismatch` and `_missing` keep their rows in
