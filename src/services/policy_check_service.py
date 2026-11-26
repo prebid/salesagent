@@ -9,6 +9,7 @@ from adcp.types.domains.brand_discovery import Brand  # TODO: no stable alias in
 from pydantic import BaseModel, Field
 
 from src.core.schemas import Product
+from src.core.schemas.advertising_policy import AdvertisingPolicy
 from src.services.ai.agents.policy_agent import (
     check_policy_compliance,
     create_policy_agent,
@@ -62,7 +63,7 @@ class PolicyCheckService:
         brief: str,
         promoted_offering: str | None = None,
         brand_manifest: Brand | str | None = None,
-        tenant_policies: dict | None = None,
+        tenant_policy: AdvertisingPolicy | None = None,
     ) -> PolicyCheckResult:
         """Check if an advertising brief complies with policies.
 
@@ -70,7 +71,7 @@ class PolicyCheckService:
             brief: The advertising brief description
             promoted_offering: DEPRECATED: Use brand_manifest instead (still supported)
             brand_manifest: Brand model or URL string (preferred over promoted_offering)
-            tenant_policies: Optional tenant-specific policy overrides
+            tenant_policy: The advertising policy the seller saved, whose prohibitions the check enforces
 
         Returns:
             PolicyCheckResult with compliance status and details
@@ -109,7 +110,7 @@ class PolicyCheckService:
 
         # Use AI analysis when available
         if self.ai_enabled and self._agent:
-            analysis = await check_policy_compliance(self._agent, full_context, tenant_policies)
+            analysis = await check_policy_compliance(self._agent, full_context, tenant_policy)
             return PolicyCheckResult(
                 status=PolicyStatus(analysis.status),
                 reason=analysis.reason,

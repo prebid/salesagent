@@ -113,7 +113,7 @@ def test_an_outsider_cannot_read_the_policy_page(seeded, test_admin_app):
 
 def _policy(env):
     env.get_session().expire_all()
-    return env.get_one(Tenant, tenant_id=TENANT_ID).policy_settings
+    return env.get_one(Tenant, tenant_id=TENANT_ID).advertising_policy
 
 
 @pytest.mark.parametrize("email", [EMAILS[UserRole.VIEWER], EMAILS[UserRole.MANAGER], OUTSIDER])
@@ -125,7 +125,7 @@ def test_only_a_tenant_admin_may_update_the_policy(seeded, test_admin_app, email
     assert _client(test_admin_app, email).post(url, data=form).status_code == 403
     assert _policy(env) == before
     assert _client(test_admin_app, EMAILS[UserRole.ADMIN]).post(url, data=form).status_code == 302
-    assert _policy(env)["prohibited_advertisers"] == ["blocked.example"]
+    assert _policy(env).prohibited_advertisers == ["blocked.example"]
 
 
 @pytest.mark.parametrize("action", ["", "bogus", None])

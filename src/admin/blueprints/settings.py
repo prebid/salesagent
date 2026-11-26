@@ -1062,43 +1062,6 @@ def parse_form_data_to_policy_updates(form_data) -> dict[str, Any]:
         if ai_policy:
             updates["ai_policy"] = ai_policy
 
-    # Parse advertising policy
-    advertising_policy_fields = [
-        "policy_check_enabled",
-        "default_prohibited_categories",
-        "default_prohibited_tactics",
-        "prohibited_categories",
-        "prohibited_tactics",
-        "prohibited_advertisers",
-    ]
-    if any(field in form_data for field in advertising_policy_fields):
-        advertising_policy: dict[str, Any] = {}
-
-        if "policy_check_enabled" in form_data:
-            advertising_policy["enabled"] = form_data.get("policy_check_enabled") in [True, "true", "on", 1, "1"]
-        elif "policy_check_enabled" not in form_data:
-            # Checkbox not present means unchecked
-            advertising_policy["enabled"] = False
-
-        # Parse list fields (newline-separated)
-        for field_name in [
-            "default_prohibited_categories",
-            "default_prohibited_tactics",
-            "prohibited_categories",
-            "prohibited_tactics",
-            "prohibited_advertisers",
-        ]:
-            if field_name in form_data:
-                field_str = form_data.get(field_name, "").strip()
-                if field_str:
-                    items = [line.strip() for line in field_str.split("\n") if line.strip()]
-                    advertising_policy[field_name] = items
-                else:
-                    advertising_policy[field_name] = []
-
-        if advertising_policy:
-            updates["advertising_policy"] = advertising_policy
-
     # Parse product ranking prompt
     if "product_ranking_prompt" in form_data:
         prompt_value = form_data.get("product_ranking_prompt", "").strip()

@@ -5,6 +5,7 @@ import uuid
 from datetime import UTC, datetime
 
 from flask import Blueprint, jsonify, request
+from pydantic import ValidationError
 from sqlalchemy import delete, func, select
 
 from src.admin.auth_helpers import require_api_key_auth
@@ -23,7 +24,10 @@ from src.core.database.models import (
 )
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.http_utils import validate_virtual_host
+from src.core.operator_errors import FormIssue, InvalidFormInput
+from src.core.schemas.advertising_policy import AdvertisingPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,34 @@ def _require_allowed_webhook_urls(data: dict) -> None:
     for field_name, field_label in _WEBHOOK_URL_FIELDS.items():
         if url := data.get(field_name):
             require_allowed_url(url, field_label)
+
+
+#: The key this API took the policy under before ``advertising_policy`` (GH #2697). Nothing
+#: enforced what it stored, so a caller still sending it is refused, not silently ignored.
+_RETIRED_POLICY_KEY = "policy_settings"
+
+
+def _requested_advertising_policy(data: dict) -> AdvertisingPolicy | None:
+    """The complete policy *data* sends as ``advertising_policy``, or ``None`` when it sends none.
+
+    Validated here, at the edge, so nothing past it handles the policy as a dict. A policy
+    that is not a complete ``AdvertisingPolicy`` and a request that still sends the retired
+    key are both refused with ``InvalidFormInput`` (400), naming the field.
+    """
+    if _RETIRED_POLICY_KEY in data:
+        raise InvalidFormInput(
+            FormIssue(
+                _RETIRED_POLICY_KEY,
+                f"{_RETIRED_POLICY_KEY} is not accepted: send the complete policy as advertising_policy",
+            )
+        )
+    if "advertising_policy" not in data:
+        return None
+    document = data["advertising_policy"]
+    try:
+        return AdvertisingPolicy.model_validate(document)
+    except ValidationError as e:
+        raise InvalidFormInput(*FormIssue.from_validation_error("advertising_policy", e, document)) from e
 
 
 @tenant_management_api.route("/health", methods=["GET"])
@@ -134,6 +166,7 @@ def create_tenant():
         data["virtual_host"] = validate_virtual_host(data["virtual_host"])
 
         _require_allowed_webhook_urls(data)
+        advertising_policy = _requested_advertising_policy(data)
 
         # Generate tenant ID
         tenant_id = f"tenant_{uuid.uuid4().hex[:8]}"
@@ -188,7 +221,6 @@ def create_tenant():
             hitl_webhook_url=data.get("hitl_webhook_url"),
             auto_approve_format_ids=data.get("auto_approve_format_ids", ["display_300x250_image"]),
             human_review_required=data.get("human_review_required", True),
-            policy_settings=data.get("policy_settings", {}),
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
             # Set default measurement provider (Publisher Ad Server)
@@ -223,6 +255,8 @@ def create_tenant():
         )
         if conflict is not None:
             return conflict
+        if advertising_policy is not None:
+            TenantConfigRepository(db_session, tenant_id).save_advertising_policy(advertising_policy)
 
         # Create adapter config
         adapter_type = data["ad_server"]
@@ -347,7 +381,10 @@ def get_tenant(tenant_id):
                 "hitl_webhook_url": tenant.hitl_webhook_url,
                 "auto_approve_formats": (tenant.auto_approve_format_ids if tenant.auto_approve_format_ids else []),
                 "human_review_required": bool(tenant.human_review_required),
-                "policy_settings": tenant.policy_settings if tenant.policy_settings else {},
+                # The policy the operator saved on the Policy page, or None for none saved.
+                "advertising_policy": (
+                    tenant.advertising_policy.model_dump(mode="json") if tenant.advertising_policy else None
+                ),
             },
         }
 
@@ -404,6 +441,7 @@ def update_tenant(tenant_id):
         data = request.get_json()
 
         _require_allowed_webhook_urls(data)
+        advertising_policy = _requested_advertising_policy(data)
 
         # Update fields based on provided data
         if "name" in data:
@@ -434,8 +472,9 @@ def update_tenant(tenant_id):
             tenant.auto_approve_format_ids = data["auto_approve_format_ids"]
         if "human_review_required" in data:
             tenant.human_review_required = data["human_review_required"]
-        if "policy_settings" in data:
-            tenant.policy_settings = data["policy_settings"]
+
+        if advertising_policy is not None:
+            TenantConfigRepository(db_session, tenant_id).save_advertising_policy(advertising_policy)
 
         # Always update the updated_at timestamp
         tenant.updated_at = datetime.now(UTC)

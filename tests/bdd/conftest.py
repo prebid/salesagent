@@ -6466,7 +6466,7 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
     # `@T-UC-001-*` scenario xfailed with "No harness wired for UC-001" — the
     # catch-all that exists for UCs whose harness does not exist yet, standing in
     # for a harness that has existed all along. Adding the row binds nothing on
-    # its own: the generated BR-UC-001 feature carries 121 scenarios and NO
+    # its own: the generated BR-UC-001 feature carries 119 scenarios and NO
     # `scenarios()` call binds it whole, so the only collected UC-001 scenarios
     # are the ones test_uc001_discover_available_inventory.py binds by name.
     "UC-001": EnvRoute(tag="UC-001", env_builder=_build_product_env),
