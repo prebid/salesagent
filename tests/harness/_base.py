@@ -3561,6 +3561,16 @@ class IntegrationEnv(BaseTestEnv):
         """
         return self._tenant_id
 
+    @property
+    def principal_id(self) -> str | None:
+        """The principal this env presents on the wire — public so tests never read ``env._principal_id``.
+
+        The sibling of :attr:`tenant_id`: a step that seeds the caller's Principal row, or
+        checks a persisted row names the caller, reads it here so it follows the env's
+        default and any ``switch_principal`` instead of restating a literal.
+        """
+        return self._principal_id
+
     def get_session(self) -> Session:
         """Return the env-bound SQLAlchemy session for read-back assertions.
 

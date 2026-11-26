@@ -105,8 +105,8 @@ def given_tenant(ctx: dict) -> None:
     get_or_create(
         ctx["env"],
         Principal,
-        {"principal_id": "test_principal", "tenant_id": "test_tenant"},
-        lambda: PrincipalFactory(tenant=tenant, principal_id="test_principal"),
+        {"principal_id": ctx["env"].principal_id, "tenant_id": "test_tenant"},
+        lambda: PrincipalFactory(tenant=tenant, principal_id=ctx["env"].principal_id),
     )
     ctx["tenant"] = tenant
 

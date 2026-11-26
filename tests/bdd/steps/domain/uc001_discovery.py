@@ -32,7 +32,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import assert_wire_rejection, wire_product_ids
+from tests.bdd.steps._outcome_helpers import assert_wire_rejection, sole_audit_row, wire_product_ids
 from tests.bdd.steps.domain.uc_get_products_inventory import given_tenant
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import rows as table_rows
@@ -356,3 +356,45 @@ def then_full_catalog_in_catalog_order(ctx: dict) -> None:
     expected = ctx["catalog"]
     actual = wire_product_ids(ctx)
     assert actual == expected, f"Expected the catalog {expected} in catalog order, got {actual}"
+
+
+# ── NFR-003: the audit trail a get_products call leaves (#2710) ─────
+#
+# Audit logging is implementation-only: no AdCP obligation and no storyboard grades it.
+# The rows are read from ``audit_logs`` (``env.get_audit_logs``), which is the audit
+# authority on every transport, e2e_rest included. Each scenario starts with that table
+# empty for its tenant, and the Givens write through factories, which audit nothing, so
+# every row read here came from the request under test.
+
+
+@then("the request should be logged with timestamp, principal_id, and request parameters")
+def then_request_audited(ctx: dict) -> None:
+    """The get_products row: when, who, and the summary of what was asked (brief, no filters, no brand)."""
+    details = sole_audit_row(ctx, "get_products").details or {}
+    expected = {
+        "brief_length": len(ctx["env"].scripted_brief(_BRIEF)),
+        "has_filters": False,
+        "has_brand": False,
+    }
+    actual = {key: details.get(key) for key in expected}
+    assert actual == expected, f"Expected request summary {expected} in the audit row, got {details}"
+
+
+@then("the response should be logged with status and product count")
+def then_response_audited(ctx: dict) -> None:
+    """The get_products row records success and the number of products the buyer received."""
+    row = sole_audit_row(ctx, "get_products")
+    assert row.success is True, f"Expected the get_products audit row to record success, got {row.success!r}"
+    received = len(wire_product_ids(ctx))
+    logged = (row.details or {}).get("product_count")
+    assert logged == received, f"Audit row logs product_count={logged!r}; the buyer received {received} products"
+
+
+@then("policy check results should be logged (operation: policy_check)")
+def then_policy_check_audited(ctx: dict) -> None:
+    """The policy_check row records the ALLOWED verdict the seller's policy model gave this brief."""
+    row = sole_audit_row(ctx, "policy_check")
+    details = row.details or {}
+    assert row.success is True, f"Expected the policy_check audit row to record success, got {row.success!r}"
+    assert details.get("policy_status") == "allowed", f"Expected policy_status 'allowed', got {details}"
+    assert details.get("brief") == ctx["env"].scripted_brief(_BRIEF), f"policy_check row logs another brief: {details}"
