@@ -82,13 +82,20 @@ class SchemaDependencies(LibraryAdCPBaseModel):
         return model
 
 
-def narrowed_from(parent: type[BaseModel], name: str) -> Any:
+_KEEP_DEFAULT: Any = object()
+
+
+def narrowed_from(parent: type[BaseModel], name: str, *, default: Any = _KEEP_DEFAULT) -> Any:
     """``parent``'s declaration of field ``name``, for a subclass that narrows its type.
 
     Assign it as the redeclared field's value; the subclass's annotation replaces the type and
-    everything else is the parent's.
+    everything else is the parent's. ``default``, when given, replaces the parent's default, so a
+    field the pin requires can be made optional and keep the pin's description.
     """
-    return copy(parent.model_fields[name])
+    field = copy(parent.model_fields[name])
+    if default is not _KEEP_DEFAULT:
+        field.default = default
+    return field
 
 
 def build_as_local(local: type[BaseModel], value: Any) -> Any:

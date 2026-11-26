@@ -155,7 +155,6 @@ class TestTenantIsolation:
                 ad_server="mock",
                 auto_approve_format_ids=[],
                 human_review_required=False,
-                policy_settings={},
             )
             tenant2 = create_tenant_with_timestamps(
                 tenant_id=tenant2_data["tenant_id"],
@@ -165,7 +164,6 @@ class TestTenantIsolation:
                 ad_server="mock",
                 auto_approve_format_ids=[],
                 human_review_required=False,
-                policy_settings={},
             )
             session.add(tenant1)
             session.add(tenant2)

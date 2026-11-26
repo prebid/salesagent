@@ -1713,76 +1713,13 @@ REJECT - Creative cannot be approved:
                     </div>
                 </div>
 
-                <!-- Advertising Policy Section -->
+                <!-- Advertising Policy: edited on the Policy page alone -->
                 <div class="form-section">
                     <h3>Advertising Policy</h3>
-                    <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1rem;">
-                        Configure which types of advertisers and content are permitted on your inventory
+                    <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 0;">
+                        Which advertisers and content your inventory accepts is set on the
+                        <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/policy/">Policy page</a>.
                     </p>
-
-                    <div class="form-group">
-                        <label for="policy_check_enabled">
-                            <input type="checkbox" id="policy_check_enabled" name="policy_check_enabled"
-                                   {% if tenant.advertising_policy and tenant.advertising_policy.get('enabled') != False %}checked{% endif %}>
-                            Enable automated advertising policy checks
-                        </label>
-                        <small>AI-powered analysis of advertiser briefs during product discovery</small>
-                    </div>
-
-                    <div id="advertising-policy-config" style="{% if tenant.advertising_policy and tenant.advertising_policy.get('enabled') == False %}display: none;{% endif %}">
-                        {% if not seller_ai_enabled %}
-                        <div class="alert alert-warning" style="padding: 0.75rem; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; margin-bottom: 1rem;">
-                            <strong>⚠️ AI Configuration Required</strong>
-                            <p style="margin: 0.5rem 0 0;">Advertising policy checks require your own AI provider and API key to function. Without it, all campaigns will be allowed by default. Please configure one in <a href="#" onclick="event.preventDefault(); switchSettingsSection('integrations')">Integrations → AI Services</a>.</p>
-                        </div>
-                        {% endif %}
-
-                        <div class="form-group">
-                            <label for="default_prohibited_categories">Baseline Protected Categories</label>
-                            <textarea id="default_prohibited_categories" name="default_prohibited_categories" class="form-control" rows="5"
-                                      placeholder="Enter one category per line">{{ (tenant.advertising_policy.get('default_prohibited_categories', []) if tenant.advertising_policy else ['Targeting of vulnerable populations (children, elderly, disabled)', 'Discriminatory content based on protected characteristics', 'Illegal products/services', 'Misleading or deceptive claims', 'Harmful content that could exploit users'])|join('\n') }}</textarea>
-                            <small>Core policy categories that apply to all campaigns. These are always enforced when policy checks are enabled. Edit to match your standards.</small>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="default_prohibited_tactics">Baseline Prohibited Tactics</label>
-                            <textarea id="default_prohibited_tactics" name="default_prohibited_tactics" class="form-control" rows="3"
-                                      placeholder="Enter one tactic per line">{{ (tenant.advertising_policy.get('default_prohibited_tactics', []) if tenant.advertising_policy else ['Clickbait or sensationalist content', 'False urgency or scarcity claims', 'Hidden or deceptive pricing'])|join('\n') }}</textarea>
-                            <small>Core advertising tactics that are never permitted. Edit to match your standards.</small>
-                        </div>
-
-                        <hr style="margin: 1.5rem 0; border: 0; border-top: 1px solid #e5e7eb;">
-
-                        <div class="form-group">
-                            <label for="prohibited_categories">Additional Prohibited Categories</label>
-                            <textarea id="prohibited_categories" name="prohibited_categories" class="form-control" rows="4"
-                                      placeholder="Enter one category per line (e.g., tobacco, gambling, adult content)">{{ (tenant.advertising_policy.get('prohibited_categories', []) if tenant.advertising_policy else [])|join('\n') }}</textarea>
-                            <small>Additional content categories to block beyond the baseline. Examples: tobacco, gambling, cannabis, alcohol, political ads, cryptocurrency.</small>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="prohibited_tactics">Additional Prohibited Tactics</label>
-                            <textarea id="prohibited_tactics" name="prohibited_tactics" class="form-control" rows="3"
-                                      placeholder="Enter one tactic per line">{{ (tenant.advertising_policy.get('prohibited_tactics', []) if tenant.advertising_policy else [])|join('\n') }}</textarea>
-                            <small>Additional advertising tactics to prohibit beyond the baseline.</small>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="prohibited_advertisers">Blocked Advertisers/Domains</label>
-                            <textarea id="prohibited_advertisers" name="prohibited_advertisers" class="form-control" rows="3"
-                                      placeholder="Enter one domain or advertiser name per line (e.g., competitor.com)">{{ (tenant.advertising_policy.get('prohibited_advertisers', []) if tenant.advertising_policy else [])|join('\n') }}</textarea>
-                            <small>Specific advertisers or domains to block. One per line.</small>
-                        </div>
-
-                        <div style="background: #eff6ff; padding: 1rem; border-radius: 8px; border-left: 4px solid #2563eb; margin-top: 1rem; font-size: 0.875rem;">
-                            <strong>How It Works:</strong>
-                            <ul style="margin: 0.5rem 0 0 1.5rem;">
-                                <li>AI analyzes each campaign brief against your baseline + additional rules</li>
-                                <li>Returns: <strong>Allowed</strong>, <strong>Restricted</strong>, or <strong>Blocked</strong></li>
-                                <li>Without Gemini API key: All campaigns allowed by default (policy checks disabled)</li>
-                            </ul>
-                        </div>
-                    </div>
                 </div>
 
                 <!-- Product Ranking Section -->

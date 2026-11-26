@@ -1,5 +1,6 @@
 {
   "src": 16,
   "tests": 35,
-  "scripts": 0
+  "scripts": 0,
+  ".claude/scripts": 0
 }

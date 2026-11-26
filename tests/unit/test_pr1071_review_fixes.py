@@ -45,7 +45,6 @@ class TestDeliveryLoopErrorHandling:
         tenant = {
             "tenant_id": "test",
             "brand_manifest_policy": "public",
-            "advertising_policy": {},
         }
         identity = PrincipalFactory.make_identity(
             principal_id="p1",
@@ -149,7 +148,6 @@ class TestBrandExtractionFromPydanticModel:
         tenant = {
             "tenant_id": "test",
             "brand_manifest_policy": "require_brand",
-            "advertising_policy": {},
         }
         identity = PrincipalFactory.make_identity(
             principal_id="p1",
@@ -192,7 +190,6 @@ class TestAuditLogBrandFieldName:
         tenant = {
             "tenant_id": "test",
             "brand_manifest_policy": "public",
-            "advertising_policy": {},
         }
         identity = PrincipalFactory.make_identity(
             principal_id="p1",
