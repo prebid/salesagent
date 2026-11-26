@@ -230,6 +230,23 @@ def test_cloud_metadata_address_is_refused(seam_call, monkeypatch):
     assert_blocked(seam_call, METADATA_URL)
 
 
+# ``urllib.parse`` cannot parse this: urlsplit raises ``ValueError: Invalid IPv6 URL``.
+MALFORMED_URL = "https://[::1/webhook"
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_unparsable_url_is_refused_rather_than_raising(seam_call, monkeypatch):
+    """A URL the stdlib cannot parse is a refusal, not a ValueError (GH #2706).
+
+    Every caller of the seam catches ``OutboundRequestBlocked`` and nothing else, so a
+    ``ValueError`` from the parse escaped each of them as an unhandled error.
+    ``validate_url`` is graded against these two by the ``https-unparsable`` row of
+    ``PRE_CONNECTION_CASES``.
+    """
+    set_flags(monkeypatch)
+    assert_blocked(seam_call, MALFORMED_URL)
+
+
 # ---------------------------------------------------------------------------
 # 3. The private-range escape hatch (GH #1757: the SCHEME hatch is gone
 #    entirely — https is required unconditionally, no flag relaxes it)
@@ -830,6 +847,7 @@ PRE_CONNECTION_CASES = {
     "https-unresolvable-host": (lambda origin: "https://no-such-host.invalid/webhook", {}),
     "https-loopback": (lambda origin: f"https://127.0.0.1:{origin.port}/", {}),
     "cloud-metadata": (lambda origin: METADATA_URL, {}),
+    "https-unparsable": (lambda origin: MALFORMED_URL, {}),
     "cloud-metadata-private-hatch-open": (lambda origin: METADATA_URL, {"private": True}),
     "http-loopback-private-hatch-only": (lambda origin: f"{origin.base_url}/webhook", {"private": True}),
     # "http-loopback-insecure-hatch-only" and "http-loopback-both-hatches" were
