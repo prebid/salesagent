@@ -36,7 +36,6 @@ def test_tenant(integration_db):
             ad_server="gam",
             auto_approve_format_ids=[],
             human_review_required=False,
-            policy_settings={},
             authorized_emails=["test@example.com"],
         )
         session.add(tenant)

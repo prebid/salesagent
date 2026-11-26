@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0](https://github.com/prebid/salesagent/compare/v3.0.1...v3.1.0) (2026-11-23)
+
+
+### Features
+
+* add atomic scheduler webhook sequence reservations ([#2548](https://github.com/prebid/salesagent/issues/2548)) ([2973172](https://github.com/prebid/salesagent/commit/2973172f2ce24f20f8052841e9f2643ddd398ba1))
+
+
+### Bug Fixes
+
+* **admin:** channel picker offers only MediaChannel values; repair stored channels [[#1532](https://github.com/prebid/salesagent/issues/1532)] ([#2450](https://github.com/prebid/salesagent/issues/2450)) ([7a9590a](https://github.com/prebid/salesagent/commit/7a9590add1f96ef46dad1b9855403039adc16ec4))
+* **admin:** delete is_tenant_admin, which filtered on a User.is_admin column that never existed ([#2689](https://github.com/prebid/salesagent/issues/2689)) ([4248cbb](https://github.com/prebid/salesagent/commit/4248cbbbb6b65ce0b8b725195ba1b41f2b23f0d9))
+* **admin:** enforce tenant user roles ([#2566](https://github.com/prebid/salesagent/issues/2566)) ([fbd0855](https://github.com/prebid/salesagent/commit/fbd0855e27f462b835f6583e8594928757731c43))
+* **admin:** keep the policy the Policy page saves, and sign the Logfire test in as an admin ([#2691](https://github.com/prebid/salesagent/issues/2691)) ([b407f04](https://github.com/prebid/salesagent/commit/b407f04175a5e0aa4135d3e6b93144d6be9099e3))
+* **admin:** link the Accounts and Signing Keys pages from tenant navigation ([#2625](https://github.com/prebid/salesagent/issues/2625)) ([0d2078e](https://github.com/prebid/salesagent/commit/0d2078ea899112b1ba00c139331e397aeb42c314))
+* **admin:** prove tenant membership on five tenant-scoped admin routes [[#2203](https://github.com/prebid/salesagent/issues/2203)] ([#2231](https://github.com/prebid/salesagent/issues/2231)) ([f9db74e](https://github.com/prebid/salesagent/commit/f9db74e58f10432ba13667a5fb5a5cdfcad31369))
+* **admin:** put the six GAM reporting routes on require_tenant_access [[#2204](https://github.com/prebid/salesagent/issues/2204)] ([#2322](https://github.com/prebid/salesagent/issues/2322)) ([6e7933d](https://github.com/prebid/salesagent/commit/6e7933d67bee992eed47d6b5e3e168a5b92b75bc))
+* **admin:** setup checklist's AI task follows the tenant's AI configuration ([#2627](https://github.com/prebid/salesagent/issues/2627)) ([c47c3f8](https://github.com/prebid/salesagent/commit/c47c3f88ea6e1d085b2b983e869c96b9f38a4a61))
+* **admin:** signing-keys page and setup checklist tell a lost KEK apart from a revoked key ([#2626](https://github.com/prebid/salesagent/issues/2626)) ([1e40b2e](https://github.com/prebid/salesagent/commit/1e40b2e2dd1ff1e2b9fa7fa9440cb452022f5ec1))
+* **admin:** stop returning exception text in admin error responses ([#2571](https://github.com/prebid/salesagent/issues/2571)) ([0990ad2](https://github.com/prebid/salesagent/commit/0990ad27ffd72046742070b842b5158bb7db64e3))
+* **ci:** sign release images by name and digest, not the dropped image_tags output ([#2574](https://github.com/prebid/salesagent/issues/2574)) ([6b14bd4](https://github.com/prebid/salesagent/commit/6b14bd4d909d6c3cfc4259ed4b80144acb7fbc42))
+* **ci:** update vulnerable dependencies in the creative-agent image ([#2570](https://github.com/prebid/salesagent/issues/2570)) ([56abb65](https://github.com/prebid/salesagent/commit/56abb65f2acfd97ad99943a20321fa9f54b78966))
+* isolate per-buy failures in media buy status scheduler ([#1719](https://github.com/prebid/salesagent/issues/1719)) ([ec4c83f](https://github.com/prebid/salesagent/commit/ec4c83f1fe7f71d6feded91deede810aa675f447))
+* keep every log record on one line through the formatters ([#2569](https://github.com/prebid/salesagent/issues/2569)) ([581c59c](https://github.com/prebid/salesagent/commit/581c59c99eb83e6fdfaa1fa8e528f6fc24e4b321))
+* **test-stack:** give each stack a unique name and reap its network ([#2674](https://github.com/prebid/salesagent/issues/2674)) ([85f40cd](https://github.com/prebid/salesagent/commit/85f40cde72363c3d0933ad1aeae13193622e307c))
+* **test:** stub docker in the run_all_tests contract test ([#2588](https://github.com/prebid/salesagent/issues/2588)) ([d82e7a1](https://github.com/prebid/salesagent/commit/d82e7a1be07949031cc17722cc38d6ebecdb576e))
+
+
+### Documentation
+
+* add scope and review norms for agents ([#2642](https://github.com/prebid/salesagent/issues/2642)) ([1b6d088](https://github.com/prebid/salesagent/commit/1b6d088611b452e1b1b80588c4c0403922930f8e))
+* correct the Admin UI test documentation ([#2632](https://github.com/prebid/salesagent/issues/2632)) ([b4e4b46](https://github.com/prebid/salesagent/commit/b4e4b46dba7ae0e493a221fe3d30ca0b1d95d413))
+* correct the Admin UI troubleshooting entries ([#2635](https://github.com/prebid/salesagent/issues/2635)) ([5e442e8](https://github.com/prebid/salesagent/commit/5e442e8aac1f1bb8c1e96145985b216add515b05))
+* correct the existing user guides against the templates ([#2631](https://github.com/prebid/salesagent/issues/2631)) ([56c4647](https://github.com/prebid/salesagent/commit/56c46470c4a2ace34723a14ad2528a17937d8dc0))
+* describe the admin access checks as the code applies them ([#2630](https://github.com/prebid/salesagent/issues/2630)) ([0ddf3b6](https://github.com/prebid/salesagent/commit/0ddf3b63d8296ddcd66938db5de57a4875651335))
+* fix stale ports, menu names, and the MCP client example ([#2629](https://github.com/prebid/salesagent/issues/2629)) ([c34782e](https://github.com/prebid/salesagent/commit/c34782e51e4dcbba1ae86e0f865ada365afaca83))
+* forbid line-number references in living docs ([#2612](https://github.com/prebid/salesagent/issues/2612)) ([a77edd5](https://github.com/prebid/salesagent/commit/a77edd519c79db9777a2f0636f0e3712a83e912d))
+* make the first sign-in of every deployment guide work ([#2634](https://github.com/prebid/salesagent/issues/2634)) ([4da336c](https://github.com/prebid/salesagent/commit/4da336c33b6006bcd0ad76c295525473d4a0db44))
+* trim CLAUDE.md from 54K to 37K — rules without narratives ([#2578](https://github.com/prebid/salesagent/issues/2578)) ([24b9895](https://github.com/prebid/salesagent/commit/24b98958fa25251122813218c8cbfb953ee45751))
+
 ## [3.0.1](https://github.com/prebid/salesagent/compare/v3.0.0...v3.0.1) (2026-11-18)
 
 

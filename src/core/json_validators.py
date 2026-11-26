@@ -58,17 +58,6 @@ class TargetingTemplateModel(BaseModel):
     custom_parameters: dict[str, Any] | None = None
 
 
-class PolicySettingsModel(BaseModel):
-    """Model for tenant.policy_settings."""
-
-    enabled: bool = Field(default=False)
-    require_approval: bool = Field(default=False)
-    max_daily_budget: float | None = Field(None, gt=0)
-    blocked_categories: list[str] = Field(default_factory=list)
-    allowed_advertisers: list[str] = Field(default_factory=list)
-    custom_rules: dict[str, Any] = Field(default_factory=dict)
-
-
 class DeliveryDataModel(BaseModel):
     """Model for gam_line_items.delivery_data."""
 
@@ -188,25 +177,6 @@ class JSONValidatorMixin:
         # Validate using Pydantic
         validated = TargetingTemplateModel(**value)
         return validated.model_dump(mode="json", exclude_none=True)
-
-    @validates("policy_settings")
-    def validate_policy_settings(self, key, value):
-        """Validate policy_settings field structure."""
-        if value is None:
-            return {}
-
-        if isinstance(value, str):
-            try:
-                value = json.loads(value)
-            except json.JSONDecodeError:
-                raise ValueError(f"{key} must be valid JSON")
-
-        if not isinstance(value, dict):
-            raise ValueError(f"{key} must be a dictionary")
-
-        # Validate using Pydantic
-        validated = PolicySettingsModel(**value)
-        return validated.model_dump(mode="json")
 
     @validates("delivery_data")
     def validate_delivery_data(self, key, value):

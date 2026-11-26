@@ -8,6 +8,7 @@ from src.core.schemas import GetProductsRequest
 from src.services.ai import AIServiceFactory
 from src.services.ai.config import DEFAULT_GOOGLE_MODEL, TenantAIConfig
 from src.services.policy_check_service import PolicyCheckResult, PolicyCheckService, PolicyStatus
+from tests.factories import AdvertisingPolicyFactory
 from tests.helpers.adcp_factories import create_test_brand_manifest, create_test_product
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -75,13 +76,11 @@ class TestAIPolicyAnalysis:
         """Test AI respects tenant-specific policies."""
         from src.services.ai.agents.policy_agent import PolicyAnalysis
 
-        tenant_policies = {
-            "custom_rules": {
-                "prohibited_advertisers": ["badcompany.com"],
-                "prohibited_categories": ["competitor_products"],
-                "prohibited_tactics": ["comparative advertising"],
-            }
-        }
+        tenant_policy = AdvertisingPolicyFactory(
+            prohibited_advertisers=["badcompany.com"],
+            prohibited_categories=["competitor_products"],
+            prohibited_tactics=["comparative advertising"],
+        )
 
         # Mock the check_policy_compliance function to return a blocked response
         mock_analysis = PolicyAnalysis(
@@ -93,7 +92,7 @@ class TestAIPolicyAnalysis:
 
         with patch("src.services.policy_check_service.check_policy_compliance", return_value=mock_analysis):
             result = await policy_service_with_ai.check_brief_compliance(
-                "Compare our product to competitor_brand", tenant_policies=tenant_policies
+                "Compare our product to competitor_brand", tenant_policy=tenant_policy
             )
 
         assert result.status == PolicyStatus.BLOCKED
