@@ -41,10 +41,11 @@ def test_a_known_tenant_gets_its_catalog(admin_client, tenant):
 
     response = admin_client.get(f"/api/formats/list?tenant_id={tenant.tenant_id}")
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert response.get_json() == {"agents": {}, "total_formats": 0}
 ```
 
-In a new module, use the `admin_client` fixture from [`conftest.py`](conftest.py) and import the session helpers from `tests.helpers.admin_session`. Some older modules build their own application and keep a private `_auth_session` copy. Do not copy that pattern.
+In a new module, use the `admin_client` fixture from [`conftest.py`](conftest.py) and import the session helpers from `tests.helpers.admin_session`. The fixture wraps `admin_test_app()` from the same helper module. That function builds the application from the settings the test process holds, so a setting that a test patched also applies to the application. Some older modules build their own application and keep a private `_auth_session` copy. Do not copy that pattern.
 
 ## Run the tests
 

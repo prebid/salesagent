@@ -2,8 +2,10 @@
 
 Drives ``GET /api/tenant/<tenant_id>/revenue-chart``, ``GET /api/tenant/<tenant_id>/products``,
 ``GET /api/tenant/<tenant_id>/products/suggestions``, ``GET,POST /tenant/<tenant_id>/policy/rules``
-and ``POST /auth/oidc/test/<tenant_id>`` (#2203), and the six GAM reporting routes of
-``src/adapters/gam_reporting_api.py`` (#2204), on the two admin transports ``AdminAccountEnv``
+and ``POST /auth/oidc/test/<tenant_id>`` (#2203), the six GAM reporting routes of
+``src/admin/blueprints/gam_reporting_api.py`` (#2204), ``GET /tenant/<tenant_id>/media-buys``,
+which names products from the tenant's own catalogue, and the Policy page with the admin-only
+``POST /tenant/<tenant_id>/policy/update`` that saves it (#2692), on the two admin transports ``AdminAccountEnv``
 already provides — Flask ``test_client`` (integration) and ``requests.Session`` against the
 Docker stack (e2e) — and seeds the tenants, memberships, catalogue and media buys the
 scenarios grade.
@@ -33,6 +35,7 @@ seeding and read-backs are methods of the env.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import ExitStack
 from decimal import Decimal
 from typing import Any, NamedTuple
@@ -40,12 +43,13 @@ from urllib.parse import urlsplit
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, UserRole
+from src.core.schemas.advertising_policy import AdvertisingPolicy
 from src.services.default_products import get_default_products
 from tests.factories import MediaBuyFactory, ProductFactory, TenantFactory, UserFactory
 from tests.factories.mint import mint_id
 from tests.harness.admin_accounts import AdminAccountEnv
 from tests.harness.admin_client import AdminResponse
-from tests.helpers.admin_session import member_session_payload, no_configured_super_admins
+from tests.helpers.admin_session import cached_super_admin, member_session_payload, no_configured_super_admins
 from tests.utils.database_helpers import bound_factory_session, delete_tenant, tenant_row_counts
 
 #: The identity the scenarios log in as: a tenant user, never a super admin. Both transports
@@ -74,6 +78,23 @@ GAM_ADVERTISER_ID = "12345"
 class TenantScopedRoute(NamedTuple):
     path: str
     methods: tuple[str, ...]
+    #: The form a POST to the route carries; an empty one when the route names none.
+    form: Mapping[str, str] | None = None
+
+
+#: Every field of the Policy page's form, filled in as an operator saves it: both checks on,
+#: and each list differing from the baseline the page offers a tenant with no saved policy,
+#: so a page showing these values is showing the saved policy. Each list is one entry per
+#: line, which is how the page renders a list back into its textarea.
+POLICY_FORM: dict[str, str] = {
+    "enabled": "on",
+    "require_manual_review": "on",
+    "prohibited_advertisers": "blocked.example\ncompetitor.example",
+    "prohibited_categories": "gambling",
+    "prohibited_tactics": "false urgency",
+    "default_prohibited_categories": "illegal_content\nhate_speech",
+    "default_prohibited_tactics": "impersonation",
+}
 
 
 _GAM_API = "/api/tenant/{tenant_id}"
@@ -95,6 +116,9 @@ ROUTES: dict[str, TenantScopedRoute] = {
     "GAM principal summary API": TenantScopedRoute(
         f"{_GAM_API}/principals/{{principal_id}}/gam/reporting/summary", ("GET",)
     ),
+    "media buys page": TenantScopedRoute("/tenant/{tenant_id}/media-buys", ("GET",)),
+    "policy page": TenantScopedRoute("/tenant/{tenant_id}/policy/", ("GET",)),
+    "policy update route": TenantScopedRoute("/tenant/{tenant_id}/policy/update", ("POST",), POLICY_FORM),
 }
 
 #: Where a scenario may say a route redirected to, keyed by the name the Gherkin uses. The
@@ -113,13 +137,16 @@ class TargetTenant(NamedTuple):
     principal_id: str
     principal_name: str
     products_payload: list[dict[str, str]]
+    media_buy_id: str
+    #: The product id the buy's request packages name: one the tenant's own catalogue does not hold.
+    media_buy_product_id: str
 
 
 class TenantState(NamedTuple):
-    """What a request can change for a tenant: how many rows it holds per table, and its policy settings."""
+    """What a request can change for a tenant: how many rows it holds per table, and its advertising policy."""
 
     row_counts: dict[str, int]
-    policy_settings: Any
+    advertising_policy: AdvertisingPolicy | None
 
 
 def _seed_member(tenant: Tenant, email: str, *, role: UserRole, is_active: bool = True) -> None:
@@ -229,17 +256,30 @@ class AdminTenantScopingEnv(AdminAccountEnv):
                     "delivery_type": product.delivery_type,
                 }
             ]
+            (package,) = buy.raw_request["packages"]
+            assert package["product_id"] != product.product_id, "the buy must name a product id the tenant lacks"
             self._target = TargetTenant(
-                tenant.tenant_id, buy.principal.principal_id, buy.principal.name, products_payload
+                tenant.tenant_id,
+                buy.principal.principal_id,
+                buy.principal.name,
+                products_payload,
+                buy.media_buy_id,
+                package["product_id"],
             )
         return self._target
+
+    def seed_product_of_other_tenant(self, name: str) -> None:
+        """Another tenant's product named *name*, under the product id the target tenant's media buy names."""
+        with bound_factory_session():
+            other = TenantFactory(tenant_id=self._new_tenant_id("other"))
+            ProductFactory(tenant=other, product_id=self.target.media_buy_product_id, name=name)
 
     def target_state(self) -> TenantState:
         """The target tenant's state now, read from the database."""
         with get_db_session() as session:
             tenant = session.get(Tenant, self.target.tenant_id)
             assert tenant is not None
-            return TenantState(tenant_row_counts(session, tenant.tenant_id), tenant.policy_settings)
+            return TenantState(tenant_row_counts(session, tenant.tenant_id), tenant.advertising_policy)
 
     @property
     def state_before_request(self) -> TenantState:
@@ -264,17 +304,15 @@ class AdminTenantScopingEnv(AdminAccountEnv):
     def login_as_super_admin_of_other_tenant(self) -> None:
         """A super admin signed in at a fresh home tenant, with no row in the target (#2204, AC4 as amended).
 
-        The session is the deployment sign-in's (``auth_method=None``), as for the members above:
-        a tenant-SSO session is scoped to its own tenant, so it could not reach the target.
-
-        The session carries the two keys ``is_super_admin()`` caches after a configured super
-        admin's first check (``_cache_admin_status`` in ``src/admin/utils/helpers.py``), so the
-        grant reads the same on both transports without touching the stack's
-        ``SUPER_ADMIN_EMAILS``.
+        The session carries the keys ``is_super_admin()`` caches after a configured super
+        admin's first check (``cached_super_admin``), so the grant reads the same on both
+        transports without touching the stack's ``SUPER_ADMIN_EMAILS``. It is the deployment's
+        own (Google) sign-in, as every member session here is: a session from a tenant's SSO
+        is bound to that tenant and is never a super admin (``session_is_tenant_scoped``).
         """
         home_tenant_id = self._new_home_tenant(with_member=True)
         payload = member_session_payload(MEMBER_EMAIL, home_tenant_id, auth_method=None)
-        self.client.state_session({**payload, "is_super_admin": True, "admin_email": MEMBER_EMAIL})
+        self.client.state_session({**payload, **cached_super_admin(MEMBER_EMAIL)})
 
     def _new_home_tenant(self, *, with_member: bool) -> str:
         """A tenant the session is logged in against. Never the target, so the bypass cannot fire."""
@@ -306,6 +344,10 @@ class AdminTenantScopingEnv(AdminAccountEnv):
         return self.client.request(
             method,
             path,
-            data={} if method == "POST" else None,
+            data=dict(route.form or {}) if method == "POST" else None,
             headers={"Accept": "application/json"} if asks_for_json or path.startswith("/api/") else None,
         )
+
+    def reload_policy_page(self) -> AdminResponse:
+        """The target tenant's Policy page as the current caller loads it now, as a browser does."""
+        return self.client.request("GET", ROUTES["policy page"].path.format(tenant_id=self.target.tenant_id))

@@ -300,20 +300,16 @@ docker compose exec postgres psql -U adcp_user adcp -c \
   "SELECT tenant_id, role, is_active FROM users WHERE email='you@example.com';"
 ```
 
-The Admin UI admits a signed-in address in either of the following cases:
+**Cause**: your address is neither a super admin nor an active user of the
+tenant. [Super admin check](../security.md#super-admin-check) and
+[Tenant access guard](../security.md#tenant-access-guard) describe both
+checks. The checks ignore `SUPER_ADMIN_DOMAIN` (singular). A session from a
+tenant's own SSO never counts as a super admin and reaches no other tenant, as
+[Super admins](../security.md#super-admins) explains.
 
-- The address is a super admin. `SUPER_ADMIN_EMAILS` lists it,
-  `SUPER_ADMIN_DOMAINS` lists its domain, or a super admin row in the database
-  lists either. The access checks ignore `SUPER_ADMIN_DOMAIN` (singular).
-- The tenant has an active user row for the address. An admin adds one on the
-  **Users & Access** page. A sign-in through the deployment's OAuth client
-  adds one when the tenant authorizes the address or its domain.
-
-A sign-in through the tenant's own SSO checks only the tenant's user rows and
-authorized domains. A `403` page can also come from the role check; see
-[Your role does not allow this](#your-role-does-not-allow-this). The
-[security guide](../security.md#super-admin-check) lists the sources that the
-super admin check reads, in order.
+**Fix**: ask an admin of the tenant, or a super admin, to add your address on
+the **Users & Access** page. A `403` page can also come from the role check;
+see [Your role does not allow this](#your-role-does-not-allow-this).
 
 ### OAuth callback 404
 
@@ -322,17 +318,8 @@ sign-in request. A 404 at that address means that the URI names a host or a
 path that doesn't reach the Admin UI. To see the URI, read the `redirect_uri`
 parameter in the address of Google's sign-in page.
 
-The app builds the URI as follows:
-
-- When you set `GOOGLE_OAUTH_REDIRECT_URI`, the app sends it, except for a
-  tenant sign-in outside production.
-- Otherwise, outside production, as in the local Docker stack, the app builds
-  the URI from the address you opened. That is
-  `http://localhost:8000/admin/auth/google/callback` under `/admin/`, and
-  `http://localhost:8000/auth/google/callback` at the root.
-- Otherwise, in production, a tenant sign-in sends
-  `https://<SALES_AGENT_DOMAIN>/admin/auth/google/callback`. The deployment-wide
-  sign-in sends the host you opened, followed by `/admin/auth/google/callback`.
+[Deployment OAuth](../deployment/environment-variables.md#deployment-oauth)
+describes how the app builds the URI for each kind of sign-in.
 
 Correct `GOOGLE_OAUTH_REDIRECT_URI` or `SALES_AGENT_DOMAIN`, or route the path
 to the app in your proxy, so that the URI reaches this deployment. Register the
@@ -490,28 +477,28 @@ as strings, not numbers:
 
 ### Blank page or 500 error
 
+When a request fails with an error that the app doesn't expect, the Admin UI
+shows a message that ends with `The details have been logged (reference <code>).`
+Find the log line with that code:
+
 ```bash
-# Check the Flask error in the logs
-docker compose logs adcp-server | grep ERROR
+docker compose logs adcp-server | grep "<code>"
 ```
 
-Flask logs an unhandled exception at the `ERROR` level, with its traceback. The
-app writes each log record on one line, so the matching line holds the whole
-traceback, with `\n` between the frames.
+The app logs the error at the `ERROR` level, with its traceback. It writes each
+log record on one line, so the matching line holds the whole traceback, with
+`\n` between the frames. When the page shows no reference, search the logs for
+`ERROR`.
 
 ### Your role does not allow this
 
-**Symptoms**: a page or an action in the Admin UI fails with `403`. A request
-from a page script, or to a JSON route, gets the body
-`{"error": "Your role does not allow this"}`. Otherwise, a page load or a form
-post gets the default `403 Forbidden` page, which doesn't show the message.
+**Symptoms**: a page or an action in the Admin UI fails with `403`. A page load
+or a form post gets the default `403 Forbidden` page, which doesn't show the
+message. Any other request, such as one from a page script or from `curl`, gets
+the body `{"success": false, "error": "Your role does not allow this"}`.
 
-**Cause**: `require_tenant_access` reads the role on your user row in the
-tenant on every request, and that role doesn't permit the request. A `viewer`
-can't send a `POST`, `PUT`, `PATCH`, or `DELETE` request. Only an `admin`
-reaches the admin-only routes, such as users and roles, authorized domains and
-emails, setup mode, and the SSO configuration. A super admin passes every role
-check.
+**Cause**: the role on your user row in the tenant doesn't permit the request.
+[Tenant users](../security.md#tenant-users) lists what each role can do.
 
 To confirm the cause, find the refusal in the logs:
 
@@ -519,25 +506,20 @@ To confirm the cause, find the refusal in the logs:
 docker compose logs adcp-server | grep "Refused"
 ```
 
-The line reads `Refused <method> <path> for tenant <tenant_id>: role <role>`.
+The line reads `Refused <method> <path> for tenant <tenant_id>: role too low`.
 
 **Fix**: ask an admin of the tenant, or a super admin, to change your role on
 the **Users & Access** page.
-[Admin UI authentication and permissions](admin-ui-authentication.md#the-access-model)
-describes what each role permits.
 
 ### Cross-origin request refused
 
 **Symptoms**: saving a form, or another change in the Admin UI, fails with
-`403`. The response is the default `403 Forbidden` page with the text
-"Cross-origin request refused".
+`403`. A form post gets the default `403 Forbidden` page with the text
+"Cross-origin request refused". A request from a page script gets the body
+`{"success": false, "error": "Forbidden"}`.
 
-**Cause**: before any view runs, the cross-site request check in
-`src/admin/csrf.py` inspects each `POST`, `PUT`, `PATCH`, and `DELETE` request.
-It refuses one that doesn't come from the Admin UI's own origin. The check
-reads the browser's `Sec-Fetch-Site` header. When a browser doesn't send that
-header, the check compares the `Origin` header with the scheme and host of the
-request.
+**Cause**: the request didn't come from the Admin UI's own origin, so the
+cross-site request check refused it.
 
 To confirm the cause, find the refusal in the logs:
 
@@ -553,15 +535,12 @@ Read the two values as follows:
   another site, or on a sibling subdomain, sent the request. Open the Admin UI
   at its own address, and repeat the change from its page.
 - `Sec-Fetch-Site=None`, with an `Origin` equal to the address in your browser:
-  the app sees a different scheme or host than the browser used. In
-  production, `ProxyFix` takes the scheme from `X-Forwarded-Proto` and the host
-  from `X-Forwarded-Host`.
+  the app sees a different scheme or host than the browser used.
 
-**Fix**: in the second case, configure the reverse proxy to send both
-`X-Forwarded-Proto` and `X-Forwarded-Host`, with the scheme and host that the
-browser used.
+**Fix**: in the second case, correct the forwarded headers that the reverse
+proxy sends.
 [Cross-site request forgery](../security.md#cross-site-request-forgery)
-describes the check.
+describes the check and the headers that the proxy must send.
 
 ### Activity feed not updating
 

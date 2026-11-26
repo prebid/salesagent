@@ -24,7 +24,7 @@ from src.admin.blueprints.products import (
     _refuse_unresolved_format_options,
 )
 from src.admin.form_validation import (
-    format_options_refusal,
+    FORMAT_OPTIONS,
     parse_json_field,
     refuse_a_stale_selection,
     selectors_or_refusal,
@@ -287,7 +287,9 @@ def add_inventory_profile(tenant_id: str):
             catalog = _publisher_catalog(prop_session, tenant_id)
             format_options = _parse_authored_format_options(form_data.get("format_options"))
             if not format_options:
-                raise format_options_refusal("At least one canonical format declaration (format_options) is required")
+                raise InvalidFormInput(
+                    FormIssue(FORMAT_OPTIONS, "At least one canonical format declaration (format_options) is required")
+                )
 
             if property_mode in {"tags", "property_ids"} | _JSON_MODES:
                 publisher_properties = _selectors_from_form(catalog.refs, property_mode)
@@ -424,7 +426,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             # The profile supplies its linked products' contract and publisher properties,
             # so each of them is held to the common-intersection rule as its own save is.
             for linked in profile.products:
-                refuse_outside_common_intersection(linked, format_options_refusal)
+                refuse_outside_common_intersection(linked)
 
             # Count products using this profile before commit
             product_count = (

@@ -26,22 +26,24 @@ following pages:
 - **Settings** - Configure the tenant
 
 The sales agent records delivery webhooks in a separate delivery log, which the **Webhooks**
-page does not read.
+page does not read. Known issue: [#2604](https://github.com/prebid/salesagent/issues/2604).
 
-The settings page has a navigation menu. **Setup Checklist** and **Users & Access** open
-separate pages, and each other entry opens a section of the settings page. The menu has the
-following entries:
+The settings page has a navigation menu. **Setup Checklist**, **Users & Access**,
+**Signing Keys**, and **Buyer Accounts** open separate pages, and each other entry opens a
+section of the settings page. The menu has the following entries:
 
 - **Account** - Organization name, branding, custom domain, and authorized domains and emails
 - **Setup Checklist** - Every setup task and whether it is complete, including the critical tasks that must be complete before the tenant can take orders
 - **Users & Access** - Users, allowed domains, and single sign-on (SSO)
 - **Ad Server** - The ad server adapter and its connection
-- **Policies & Workflows** - Budget controls, brand manifest policy, naming conventions, measurement providers, approval workflow, creative review, advertising policy, and product ranking
+- **Policies & Workflows** - Budget controls, brand manifest policy, naming conventions, measurement providers, approval workflow, creative review, and product ranking. The section links to the **Policy** page (`/tenant/<tenant_id>/policy/`), where the advertising policy is set
 - **Integrations** - Slack, AI services, creative agents, and signals agents
+- **Signing Keys** - The RFC 9421 keys that the tenant signs with, published at `/.well-known/jwks.json`
 - **Publishers** - The publishers you represent
 - **Products** - The product catalog
 - **Inventory** - For a Google Ad Manager tenant, the inventory sync status and links to the inventory browser and the targeting browser
 - **Advertisers** - Principals, the first characters of each API token, and token rotation
+- **Buyer Accounts** - Buyers' accounts, with their brand, operator, billing, and status
 - **Danger Zone** - Deactivation of the sales agent, hidden in single-tenant mode
 
 In multi-tenant mode, `/admin` opens the **Accounts** page for a super admin. The page lists
@@ -49,24 +51,14 @@ every active tenant, 50 per page, and has a **Create New Account** button.
 
 ## Access levels
 
-The Admin UI recognizes two kinds of user:
+The Admin UI has two kinds of user: a super admin, who reaches every tenant, and a tenant
+user, who reaches one tenant with a viewer, manager, or admin role. On the tenant's
+**Users & Access** page, you add a user by email address, and you revoke a user's access
+by deactivating the user.
 
-- **Super admin** - An address listed in `SUPER_ADMIN_EMAILS`, or an address in a domain listed in `SUPER_ADMIN_DOMAINS`. A super admin reaches every tenant and passes every role check.
-- **Tenant user** - An active user on the tenant's **Users & Access** page. You add a user by email address, or admit a whole email domain. A tenant user reaches that tenant only.
-
-A tenant user's role decides what that user can do in the tenant:
-
-- **Viewer** - Opens pages. The role check refuses its `POST`, `PUT`, `PATCH`, and `DELETE` requests.
-- **Manager** - Changes settings, products, and campaigns, but not the admin-only pages.
-- **Admin** - Also manages users and roles, authorized domains and emails, Setup Mode, SSO,
-  and the deactivation of the tenant.
-
-**Users & Access** adds a user as a viewer unless an admin picks another role. Someone who
-signs in from an authorized domain or email without an invitation becomes an admin. To
-revoke access, deactivate the user on **Users & Access**.
-
-See [SSO setup](sso-setup.md) for configuring authentication, and
-[Security and authentication](../security.md) for how the Admin UI checks access.
+[Super admins](../security.md#super-admins) and [Tenant users](../security.md#tenant-users)
+describe who counts as a super admin, what each role can do, and who can sign in without
+an invitation. See [SSO setup](sso-setup.md) for configuring authentication.
 
 ## Guides
 
@@ -80,39 +72,8 @@ See [SSO setup](sso-setup.md) for configuring authentication, and
 
 ## Connect AI agents
 
-Once configured, AI agents connect via MCP:
-
-```python
-import uuid
-
-from fastmcp.client import Client, StreamableHttpTransport
-
-# The Admin UI shows an advertiser's token once: when you add the advertiser
-# (Settings > Advertisers > Add Advertiser) or rotate its token.
-transport = StreamableHttpTransport(
-    url="https://your-domain.com/mcp/",
-    headers={"Authorization": "Bearer your-principal-token"}
-)
-
-async with Client(transport=transport) as client:
-    # List available products
-    products = await client.call_tool("get_products", {"brief": "video ads"})
-
-    # Create a media buy. Each package names a product and one of its pricing options.
-    result = await client.call_tool("create_media_buy", {
-        # A fresh UUID v4 per request; resend the same key only to retry the identical payload.
-        "idempotency_key": str(uuid.uuid4()),
-        "account": {"account_id": "acc_123"},  # from sync_accounts or list_accounts
-        "brand": {"domain": "acme.example"},
-        "start_time": "2030-02-01T00:00:00Z",  # ISO 8601, or "asap"
-        "end_time": "2030-02-28T23:59:59Z",
-        "packages": [{
-            "product_id": "prod_123",
-            "pricing_option_id": "cpm_usd_fixed",  # from the product's pricing_options
-            "budget": 10000
-        }]
-    })
-```
+An AI agent connects over MCP with an advertiser's API token, as
+[MCP client configuration](advertisers.md#mcp-client-configuration) shows.
 
 ## Related documentation
 

@@ -276,7 +276,9 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
   @T-ADMIN-REFUSAL-015 @browser @referrer
   Scenario Outline: A refusal from a page the browser reads as another site's is shown on the error page
     # Only a same-site path is gone back to. A browser reads //host and /\host as another
-    # site, so a Referer whose path starts with either names no page here.
+    # site, so a Referer whose path starts with either names no page here, nor one whose
+    # path does once URL-decoded. Nor does a Referer that is not this site's origin followed
+    # by a path, such as one a URL parser would refuse.
     When the operator submits the create tenant form from the page "<page>" with:
       | field        | value                               |
       | name         | Refused Host Seller                 |
@@ -291,6 +293,10 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
       | https://elsewhere.example/create_tenant    |
       | //elsewhere.example/create_tenant          |
       | /\\elsewhere.example/create_tenant         |
+      | /%2F%2Felsewhere.example/create_tenant     |
+      | //[elsewhere.example/create_tenant         |
+      | /%2F[elsewhere.example/create_tenant       |
+      | http://[elsewhere.example/create_tenant    |
 
   # A form the seller cannot save is refused with InvalidFormInput: its MESSAGE says the
   # form was refused, and each issue names a refused field in text the validator wrote,
@@ -399,6 +405,24 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
       | text              |
       | AI not configured |
 
+  # core/product.json format_options: a product that spans several publishers and omits
+  # placements[] "MUST therefore be the common intersection accepted across every selected
+  # publisher/property scope". The repository and the product and profile forms refuse a
+  # product outside it with one class, whose details name the product and each option scoped
+  # to one publisher.
+  @T-ADMIN-REFUSAL-042 @json @product-form @format-options
+  Scenario: A product edit that scopes a format option to one of the product's two publishers is refused
+    Given another tenant of this seller
+    And that tenant has a product "two_publishers" sold across two publishers
+    When a script saves that product's edit form adding the first publisher's leaderboard option
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "FormatOptionsOutsideCommonIntersection" refusal
+    And the JSON details are:
+      | text                                                               |
+      | Product: two_publishers                                            |
+      | Scoped to one publisher: leaderboard (first-publisher-psatest.com) |
+
   @T-ADMIN-REFUSAL-032 @json @inventory-sync
   Scenario: Resetting a stuck sync when no sync is running is refused
     Given another tenant of this seller
@@ -421,6 +445,25 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the JSON response has "success" as false
     And the JSON error is the "TenantNotFound" refusal
 
+  # Each kind of record has one RecordNotFound subclass, named by the repository for that kind
+  # and raised by its require() when the lookup finds no row. Its MESSAGE is the answer.
+  @T-ADMIN-REFUSAL-040 @json @record-not-found
+  Scenario Outline: A request for a <record> that does not exist is refused as not found
+    When a page's script asks for a <record> that does not exist
+    Then the page returns status 404
+    And the JSON response has "success" as false
+    And the JSON error is the "<refusal>" refusal
+
+    Examples:
+      | record        | refusal              |
+      | principal     | PrincipalNotFound    |
+      | product       | ProductNotFound      |
+      | creative      | CreativeNotFound     |
+      | signals agent | SignalsAgentNotFound |
+      | workflow step | WorkflowStepNotFound |
+      | GAM order     | OrderNotFound        |
+      | sync job      | SyncJobNotFound      |
+
   @T-ADMIN-REFUSAL-037 @json @authorized-domains
   Scenario: An authorized domain the tenant already authorizes is refused as a conflict
     Given another tenant of this seller, authorizing the domain "authorized.bdd-refusals.example"
@@ -428,6 +471,43 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     Then the page returns status 409
     And the JSON response has "success" as false
     And the JSON error is the "DomainAlreadyAuthorized" refusal
+
+  # The deployment's SUPER_ADMIN_DOMAIN is the operator's own, and no tenant may authorize
+  # it. Both test deployments name operator.bdd-refusals.example: docker-compose.e2e.yml on
+  # the live stack, and the Given on the app in this process. The refusal compares the
+  # domain as it would be stored (lower-cased, no trailing dot), so every spelling of it is
+  # refused, on every page that authorizes a domain.
+  @T-ADMIN-REFUSAL-038 @json @authorized-domains @super-admin-domain
+  Scenario Outline: The users page refuses the deployment's super-admin domain, however it is spelled - <spelling>
+    Given the deployment's super-admin domain is "operator.bdd-refusals.example"
+    And another tenant of this seller, authorizing the domain "authorized.bdd-refusals.example"
+    When the users page adds the authorized domain "<spelling>" to that tenant
+    Then the page returns status 400
+    And the JSON response has "success" as false
+    And the JSON error is the "SuperAdminDomainRefused" refusal
+    And that tenant authorizes only the domain "authorized.bdd-refusals.example"
+
+    Examples:
+      | spelling                       |
+      | operator.bdd-refusals.example  |
+      | Operator.BDD-Refusals.Example  |
+      | operator.bdd-refusals.example. |
+
+  @T-ADMIN-REFUSAL-039 @browser @authorized-domains @super-admin-domain
+  Scenario Outline: The settings page refuses the deployment's super-admin domain, however it is spelled - <spelling>
+    Given the deployment's super-admin domain is "operator.bdd-refusals.example"
+    And another tenant of this seller, authorizing the domain "authorized.bdd-refusals.example"
+    When the settings page's form adds the authorized domain "<spelling>" to that tenant, from no page
+    Then the page returns status 400
+    And the page is the error page
+    And the page shows the "SuperAdminDomainRefused" refusal
+    And that tenant authorizes only the domain "authorized.bdd-refusals.example"
+
+    Examples:
+      | spelling                       |
+      | operator.bdd-refusals.example  |
+      | Operator.BDD-Refusals.Example  |
+      | operator.bdd-refusals.example. |
 
   @T-ADMIN-REFUSAL-034 @json @authorized-domains
   Scenario: An authorized domain that names no domain is refused for that field

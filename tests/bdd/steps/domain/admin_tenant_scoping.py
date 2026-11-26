@@ -12,13 +12,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from bs4 import BeautifulSoup
 from pytest_bdd import given, parsers, then, when
 
 from src.core.database.models import UserRole
 from tests.bdd.steps.domain.admin_accounts import _require_admin_page
+from tests.harness.admin_inventory_profile import rendered_form
 from tests.harness.admin_tenant_scoping import (
     ACTIVE_BUY_BUDGET,
     NON_MATCHING_ROW_ROLE,
+    POLICY_FORM,
     REDIRECTS,
     expected_suggestions_body,
     redirect_path,
@@ -68,6 +71,15 @@ def given_caller_active_member_with_role(ctx: dict, role: str) -> None:
     _env(ctx).login_with_target_membership(is_active=True, role=UserRole(role))
 
 
+@given(
+    parsers.parse(
+        'another tenant holds a product named "{name}" under the product id the target tenant\'s media buy names'
+    )
+)
+def given_other_tenant_product(ctx: dict, name: str) -> None:
+    _env(ctx).seed_product_of_other_tenant(name)
+
+
 @given("the caller is a super admin of a different tenant with no membership in the target tenant")
 def given_caller_super_admin_elsewhere(ctx: dict) -> None:
     """Logged in as a super admin at another tenant; the target holds no User row for the caller."""
@@ -108,10 +120,23 @@ def then_redirect_to_tenant_page(ctx: dict, page: str) -> None:
 
 @then("the target tenant's stored data is unchanged")
 def then_target_unchanged(ctx: dict) -> None:
-    """A rejected request leaves the tenant holding the rows and the policy settings the request found."""
+    """A rejected request leaves the tenant's stored data as the request found it.
+
+    The env says what that data is (``target_state``): here the tenant's row counts and
+    advertising policy; for the publisher routes (``PublisherAuthorizationEnv``) every column
+    of its publisher rows and of what was derived from them.
+    """
     env = _env(ctx)
     before, after = env.state_before_request, env.target_state()
     assert after == before, f"The request changed the target tenant: {before!r} became {after!r}"
+
+
+@then(parsers.parse('the media buys page lists the target tenant\'s media buy with no product named "{name}"'))
+def then_media_buys_page_omits_product(ctx: dict, name: str) -> None:
+    """The buy's row is on the page (the page shows its id's first 12 characters), and *name* is nowhere on it."""
+    html = _require_admin_page(ctx).data.decode()
+    assert f"{_env(ctx).target.media_buy_id[:12]}..." in html, "the page does not list the target tenant's media buy"
+    assert name not in html, f"the page names {name!r}, a product the target tenant does not hold"
 
 
 @then("the revenue chart lists the target tenant's active media buy")
@@ -136,3 +161,28 @@ def then_suggestions_are_defaults(ctx: dict) -> None:
     body = _require_admin_page(ctx).get_json()
     expected = expected_suggestions_body()
     assert body == expected, f"Expected {expected!r}, got {body!r}"
+
+
+@then("the reloaded policy page of the target tenant shows the posted policy form")
+def then_reloaded_policy_page_shows_posted_form(ctx: dict) -> None:
+    """Loaded again, the Policy page's form submits exactly what was posted: the saved policy is the one shown.
+
+    Graded through the page, not the database: the defect of #2692 was on the read side,
+    where the page rendered its defaults over whatever the save had stored.
+    """
+    shown = rendered_form(_env(ctx).reload_policy_page())
+    expected = {name: [value] for name, value in POLICY_FORM.items()}
+    assert shown == expected, f"Expected the form {expected!r}, got {shown!r}"
+
+
+@then("the policy page says the tenant has saved no policy, with policy checks off")
+def then_policy_page_has_no_saved_policy(ctx: dict) -> None:
+    """The "no policy saved" notice is on the page, and its form starts with both checks unticked."""
+    page = _require_admin_page(ctx)
+    notice = BeautifulSoup(page.data, "html.parser").find(id="no-policy-saved")
+    assert notice is not None, "the page does not say that no policy is saved"
+    form = rendered_form(page)
+    assert (form.get("enabled"), form.get("require_manual_review")) == (None, None), (
+        f"Expected both checks off, got enabled={form.get('enabled')!r}, "
+        f"require_manual_review={form.get('require_manual_review')!r}"
+    )

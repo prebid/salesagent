@@ -100,17 +100,20 @@ An approval by the AI review starts neither.
 
 ## Notifications
 
-The sales agent reports review activity through Slack and webhooks. It sends no email.
+The sales agent reports activity through Slack and webhooks. It sends no email.
 
 - **Slack**: Set **Task Notifications Webhook URL** under
-  **Settings > Integrations > Slack Integration**. The channel gets a notice when a user
-  approves or rejects a creative, and when an AI review after an upload finishes. In
-  **Require human approval** mode, it also gets a notice for each creative that waits for
-  review.
+  **Settings > Integrations > Slack Integration**. The channel gets a notice when a media
+  buy waits for approval, is created, or fails, and when the Google Ad Manager or
+  Broadstreet adapter needs a person to act on an order. For creatives, it gets a notice
+  when a user approves or rejects a creative, and when an AI review after an upload
+  finishes. In **Require human approval** mode, it also gets a notice for each creative
+  that waits for review.
 - **Buyer webhook**: A buyer that sends `push_notification_config` with `sync_creatives`
   gets one webhook call per creative that waited for review. The call lists that creative.
   It comes when a user approves the creative, or when the AI review approves or rejects it.
-  A rejection by a user sends no call.
+  A rejection by a user sends no call. Known issue:
+  [#2241](https://github.com/prebid/salesagent/issues/2241).
 
 ## Creative formats
 

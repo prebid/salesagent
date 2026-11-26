@@ -291,24 +291,6 @@ Feature: BR-UC-001 Discover Available Inventory
     # POST-S5: Status is completed
     # POST-S10: Buyer receives only requested fields
 
-  @T-UC-001-ext-a @extension @ext-a @error @analysis-2026-03-09 @schema-v3.1
-  Scenario: Extension *a - brief blocked by advertising policy
-    Given the Buyer is authenticated with a valid principal_id
-    And the tenant has an advertising_policy configured and enabled
-    And the brief content violates the advertising policy (LLM returns BLOCKED)
-    When the Buyer Agent sends a get_products request with:
-    | field        | value                               |
-    | buying_mode  | brief                               |
-    | brief        | Tobacco advertising for teens        |
-    Then the operation should fail with error code "POLICY_VIOLATION"
-    And the error code should be "POLICY_VIOLATION"
-    And the error should include "suggestion" field
-    And the suggestion should contain "revise" or "comply"
-    # POST-F1: System state is unchanged
-    # POST-F2: Buyer knows brief violated policy
-    # POST-F3: Buyer knows to revise brief
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
-
   @T-UC-001-ext-a-restricted @extension @ext-a @error @analysis-2026-03-09 @schema-v3.1
   Scenario: Extension *a - brief restricted with manual review required
     Given the Buyer is authenticated with a valid principal_id
@@ -325,19 +307,6 @@ Feature: BR-UC-001 Discover Available Inventory
     # POST-F2: Buyer knows brief was restricted
     # POST-F3: Buyer knows how to revise
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
-
-  @T-UC-001-ext-a-failopen @extension @ext-a @degradation @analysis-2026-03-09 @schema-v3.1
-  Scenario: Extension *a - policy service unavailable (fail-open)
-    Given the Buyer is authenticated with a valid principal_id
-    And the tenant has an advertising_policy configured
-    And the policy LLM service is unavailable
-    When the Buyer Agent sends a get_products request with:
-    | field        | value                               |
-    | buying_mode  | brief                               |
-    | brief        | Standard display campaign            |
-    Then the response status should be "completed"
-    And the response should contain "products" array
-    # Policy check fails open - request proceeds normally
 
   @T-UC-001-ext-b @extension @ext-b @error @analysis-2026-03-09 @schema-v3.1
   Scenario: Extension *b - authentication required but caller is anonymous
@@ -455,6 +424,9 @@ Feature: BR-UC-001 Discover Available Inventory
     # INV-1 violated: policy enabled and brief content is BLOCKED
     # The check runs on the seller's own AI configuration, wherever the seller stored it:
     # ai_config is the column the Admin UI writes, gemini_api_key the legacy one.
+    # Folds in Extension *a "brief blocked by advertising policy" (@T-UC-001-ext-a, #2696):
+    # the same outcome on the same trigger. Its suggestion-text assertions are dropped,
+    # because the suggestion is a function of the code through CODE_TABLE.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
     Examples:
@@ -509,6 +481,9 @@ Feature: BR-UC-001 Discover Available Inventory
     # INV-4 holds: policy service unavailable, fail-open
     # The check runs only on the seller's own AI configuration, so the seller has one: with
     # none, the check is skipped (INV-3) and "unavailable" is never reached.
+    # Folds in Extension *a "policy service unavailable (fail-open)"
+    # (@T-UC-001-ext-a-failopen, #2696), whose "completed with a products array" this
+    # scenario's whole-catalog assertion subsumes.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
   @T-UC-001-inv-002-5 @invariant @BR-RULE-002 @analysis-2026-03-09 @schema-v3.1
@@ -521,13 +496,47 @@ Feature: BR-UC-001 Discover Available Inventory
     # INV-5 holds: policy evaluation returns ALLOWED
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json
 
-  @T-UC-001-inv-002-6 @invariant @BR-RULE-002 @analysis-2026-05-25 @schema-v3.1
-  Scenario: BR-RULE-002 INV-6 holds - policy requires human review, plan escalated
-    Given the tenant has advertising_policy enabled
-    And the resolved policy has "requires_human_review" set to true
-    When the Buyer Agent sends a get_products request
-    Then the plan should be escalated for human review regardless of the enforcement level
-    # INV-6 holds: requires_human_review escalates regardless of must/should/may (v3.1 governance)
+  @T-UC-001-inv-002-prohibitions @invariant @BR-RULE-002 @schema-v3.1 @implementation-only
+  Scenario: BR-RULE-002 - the saved prohibitions reach the policy model
+    Given the tenant has advertising_policy enabled with the prohibitions:
+      | list                          | entry                       |
+      | prohibited_advertisers        | rival-brand.example         |
+      | prohibited_categories         | saved-category-gambling     |
+      | prohibited_tactics            | saved-tactic-fake-urgency   |
+      | default_prohibited_categories | saved-default-category-hate |
+      | default_prohibited_tactics    | saved-default-tactic-spoof  |
+    And the seller's AI is configured in ai_config
+    And the LLM evaluates the brief as BLOCKED only when the prompt names every saved prohibition
+    When the Buyer Agent sends a get_products request with a brief
+    Then the operation should fail with error code "POLICY_VIOLATION"
+    # The verdict is decided inside the scripted policy model, from the prompt production
+    # sent it: a prompt that names every entry above is BLOCKED, and any other prompt fails
+    # the model call, which get_products fails open on (INV-4) and answers with products.
+    # So POLICY_VIOLATION on the wire means each saved list reached the model.
+    # advertising_policy is implementation-only (not in AdCP 3.2.7); POLICY_VIOLATION is in
+    # the pinned enums/error-code.json.
+
+  # Local scenarios (#2697): the policy an operator saves on the admin Policy page is the
+  # policy get_products checks a brief against. Implementation-only: AdCP has no
+  # advertising-policy object, and no storyboard grades it; POLICY_VIOLATION is in the
+  # pinned error-code enum. The scripted model blocks a brief only when the policy rules it
+  # is shown name the advertiser the operator saved, so a block shows the saved lists reached
+  # the check, and checks saved off show the saved flag decides whether the check runs.
+  @T-UC-001-inv-002-7 @invariant @BR-RULE-002 @implementation-only
+  Scenario: BR-RULE-002 - get_products enforces the policy saved on the Policy page
+    Given the seller's AI is configured in ai_config
+    And the operator saves the Policy page with policy checks on and a prohibited advertiser of its own
+    And the LLM blocks the brief only when the policy it is shown names that advertiser
+    When the Buyer Agent sends a get_products request with a brief
+    Then the operation should fail with error code "POLICY_VIOLATION"
+
+  @T-UC-001-inv-002-8 @invariant @BR-RULE-002 @implementation-only
+  Scenario: BR-RULE-002 - get_products skips the check when the Policy page saved it off
+    Given the seller's AI is configured in ai_config
+    And the operator saves the Policy page with policy checks off and a prohibited advertiser of its own
+    And the LLM blocks the brief only when the policy it is shown names that advertiser
+    When the Buyer Agent sends a get_products request with a brief
+    Then the request should proceed to product discovery without policy check
 
   @T-UC-001-inv-003-2v @invariant @BR-RULE-003 @analysis-2026-03-09 @schema-v3.1 @implementation-only
   Scenario: BR-RULE-003 INV-2 violated - principal NOT in allowed list
@@ -1121,36 +1130,53 @@ Feature: BR-UC-001 Discover Available Inventory
   @T-UC-001-partition-channels @partition @channels @analysis-2026-03-09 @schema-v3.1
   Scenario Outline: channels partition validation - <partition>
     Given the Buyer is authenticated with a valid principal_id
+    And the catalog also holds "prod_olv" declaring the channel olv
+    And the catalog also holds "prod_retail_media" declaring the channel retail_media
     When the Buyer Agent sends a get_products request with channels filter <partition>
     Then the filter result should be <outcome>
+    # The Background's product, prod_a_banner, declares no channels, so it offers the tenant
+    # ad server's defaults (MockAdServer.default_channels: display, olv, streaming_audio,
+    # social); a product that declares channels offers exactly those. A declared product
+    # matched on the defaults instead would come back for display, social and streaming_audio,
+    # and would not for retail_media, which no default names (GH #1532). The outcomes name the
+    # exact products; their order is not graded.
+    # The invalid rows break the request schema (an item outside enums/channels.json, an
+    # empty array under minItems 1), which the pinned error-code enum calls INVALID_REQUEST:
+    # "violates schema constraints". The storyboard step
+    # media_buy_seller/product_filter_behavior get_filtered_brief_products grades the same
+    # filter with a controller-seeded catalog.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-filters.json pointer=/properties/channels
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-products-request.json pointer=/properties/filters/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_REQUEST
 
     Examples: Valid partitions
-      | partition            | outcome                                |
-      | display              | products matching display returned     |
-      | olv                  | products matching olv returned         |
-      | social               | products matching social returned      |
-      | search               | products matching search returned      |
-      | ctv                  | products matching ctv returned         |
-      | linear_tv            | products matching linear_tv returned   |
-      | radio                | products matching radio returned       |
-      | streaming_audio      | products matching streaming_audio returned |
-      | podcast              | products matching podcast returned     |
-      | dooh                 | products matching dooh returned        |
-      | ooh                  | products matching ooh returned         |
-      | print                | products matching print returned       |
-      | cinema               | products matching cinema returned      |
-      | email                | products matching email returned       |
-      | gaming               | products matching gaming returned      |
-      | retail_media         | products matching retail_media returned|
-      | influencer           | products matching influencer returned  |
-      | affiliate            | products matching affiliate returned   |
-      | product_placement    | products matching product_placement returned |
-      | not_provided         | all channels returned                  |
+      | partition              | outcome                                             |
+      | display                | products prod_a_banner                              |
+      | olv                    | products prod_a_banner, prod_olv                    |
+      | social                 | products prod_a_banner                              |
+      | search                 | no products                                         |
+      | ctv                    | no products                                         |
+      | linear_tv              | no products                                         |
+      | radio                  | no products                                         |
+      | streaming_audio        | products prod_a_banner                              |
+      | podcast                | no products                                         |
+      | dooh                   | no products                                         |
+      | ooh                    | no products                                         |
+      | print                  | no products                                         |
+      | cinema                 | no products                                         |
+      | email                  | no products                                         |
+      | gaming                 | no products                                         |
+      | retail_media           | products prod_retail_media                          |
+      | influencer             | no products                                         |
+      | affiliate              | no products                                         |
+      | product_placement      | no products                                         |
+      | sponsored_intelligence | no products                                         |
+      | not_provided           | products prod_a_banner, prod_olv, prod_retail_media |
 
     Examples: Invalid partitions
-      | partition            | outcome                                |
-      | unknown_channel      | error: unknown channel value            |
-      | empty_array          | error: channels minItems 1 violated     |
+      | partition       | outcome                                          |
+      | unknown_channel | error INVALID_REQUEST naming filters.channels[0] |
+      | empty_array     | error INVALID_REQUEST naming filters.channels    |
 
   @T-UC-001-boundary-buying-mode @boundary @buying_mode @analysis-2026-03-09 @schema-v3.1
   Scenario Outline: buying_mode boundary validation - <boundary_point>

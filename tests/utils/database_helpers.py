@@ -4,7 +4,7 @@ Provides consistent patterns for creating test database objects with proper
 timestamp handling and field validation to prevent common test issues.
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from src.core.database.models import (
     AdapterConfig,
     AuditLog,
+    Base,
     Context,
     Creative,
     CreativeAssignment,
@@ -197,9 +198,9 @@ def bound_factory_session() -> Iterator[Session]:
         session.close()
 
 
-#: The models :func:`delete_tenant_rows` deletes by ``tenant_id``, children before the rows
-#: they reference and ``Tenant`` last. ONE statement of what a tenant's rows are, so a
-#: teardown and a before/after snapshot cannot disagree. A table that is not listed loses
+#: The models :func:`delete_tenant_rows` deletes by ``tenant_id``. ONE statement of what a
+#: tenant's rows are, so a teardown and a before/after snapshot cannot disagree. The order
+#: of the deletes comes from the foreign keys in the model metadata, not from this tuple. A table that is not listed loses
 #: its rows with the tenant when its foreign key cascades; when it does not, the delete of
 #: ``Tenant`` fails, and the model belongs here.
 TENANT_SCOPED_MODELS = (
@@ -230,6 +231,24 @@ def tenant_row_counts(session: Session, tenant_id: str) -> dict[str, int]:
     }
 
 
+def tenant_rows(session: Session, tenant_id: str, models: Iterable[type[Base]]) -> tuple[list[tuple[Any, ...]], ...]:
+    """Every column of each row *tenant_id* holds in *models*, model by model, in a stable order.
+
+    For a before/after comparison of what a request may write. ``updated_at`` is left out:
+    it moves with any write and says nothing a column does not.
+    """
+    return tuple(
+        sorted(
+            (
+                tuple((key, getattr(row, key)) for key in model.__table__.columns.keys() if key != "updated_at")
+                for row in session.scalars(select(model).filter_by(tenant_id=tenant_id))
+            ),
+            key=repr,
+        )
+        for model in models
+    )
+
+
 def delete_tenant(tenant_id: str) -> None:
     """Delete tenant *tenant_id* and its rows from the database the current engine points at."""
     from src.core.database.database_session import get_engine
@@ -251,8 +270,8 @@ def delete_tenant_rows(session: Session, tenant_id: str) -> None:
     migrations built, the ``tenant_id`` FK of ``products``, ``media_buys``, ``creatives``,
     ``users`` and ``audit_logs`` is ``NO ACTION``, while ``models.py`` declares
     ``ON DELETE CASCADE`` on each. That model/migration drift is a real, pre-existing bug
-    (out of scope to fix here), and reading the model metadata instead of the migrations
-    is what would make this teardown silently incomplete. ``adapter_config``,
+    (out of scope to fix here), and trusting the cascades the model metadata declares
+    instead of the migrations is what would make this teardown silently incomplete. ``adapter_config``,
     ``property_tags``, ``pricing_options`` and ``contexts`` DO carry a real cascade in
     their creating migrations; they are deleted anyway, because an explicit delete of an
     already-cascaded row is a harmless no-op and depending on which half of a known
@@ -260,22 +279,29 @@ def delete_tenant_rows(session: Session, tenant_id: str) -> None:
 
     ``ObjectWorkflowMapping`` and ``WorkflowStep`` have no ``tenant_id`` at all, so
     they are reached through ``contexts``.
+
+    The ORDER comes from the model metadata: ``reversed(Base.metadata.sorted_tables)``
+    puts every table before the tables its foreign keys reference, so a new foreign key
+    between two of these tables needs no edit here. Only the WHICH-rows predicate per
+    table is stated by hand.
     """
     context_ids = select(Context.context_id).where(Context.tenant_id == tenant_id)
     step_ids = select(WorkflowStep.step_id).where(WorkflowStep.context_id.in_(context_ids))
-    session.execute(delete(ObjectWorkflowMapping).where(ObjectWorkflowMapping.step_id.in_(step_ids)))
-    session.execute(delete(WorkflowStep).where(WorkflowStep.context_id.in_(context_ids)))
     # ``media_packages`` has no tenant_id and its FK to media_buys carries no cascade,
-    # so a created media buy is unreachable from the tenant-scoped deletes below.
+    # so a created media buy's packages are reached through its buys.
     media_buy_ids = select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == tenant_id)
-    session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id.in_(media_buy_ids)))
     # ``PricingOption`` is deliberately NOT deleted directly: the
     # ``prevent_empty_pricing_options`` trigger REFUSES to remove a product's last
     # pricing option while that product still exists, and explicitly allows the same
     # row to go via the product's cascade. The composite FK's ``ON DELETE CASCADE``
     # (migration c3b75d304773) is real, so deleting ``Product`` takes it.
-    for model in TENANT_SCOPED_MODELS:
-        session.execute(delete(model).where(model.tenant_id == tenant_id))
+    which_rows = {model.__table__: model.tenant_id == tenant_id for model in TENANT_SCOPED_MODELS}
+    which_rows[ObjectWorkflowMapping.__table__] = ObjectWorkflowMapping.step_id.in_(step_ids)
+    which_rows[WorkflowStep.__table__] = WorkflowStep.context_id.in_(context_ids)
+    which_rows[MediaPackage.__table__] = MediaPackage.media_buy_id.in_(media_buy_ids)
+    for table in reversed(Base.metadata.sorted_tables):
+        if table in which_rows:
+            session.execute(delete(table).where(which_rows[table]))
 
 
 @contextmanager

@@ -39,13 +39,13 @@ For where adapters sit in the overall system, see [Architecture](../../developme
 ## Quick start
 
 1. In the Admin UI's inventory browser, click **Sync All** to sync the GAM inventory.
-2. Under **Settings** > **Products**, click **Add New** to open the product form. When the tenant has no product, the button reads **Create Product**.
+2. Open the product form, as [Create a product](../../user-guide/products.md#create-a-product) describes.
 3. Under **Inventory Configuration**, click **Browse Ad Units** or **Browse Placements** and select the inventory.
-4. Add at least one pricing option. The first pricing option sets the delivery type: a fixed price is guaranteed, and an auction price is non-guaranteed.
+4. Set the pricing options. The first pricing option sets the delivery type: a fixed price is guaranteed, and an auction price is non-guaranteed.
 5. Click **Create Product**. The system generates a default GAM configuration from the delivery type and the formats, and stores it with the inventory you selected.
 6. Create a media buy. The adapter creates the GAM line items from the stored configuration. If a product has no configuration at media buy time, the system generates defaults then.
 
-For every section of the product form, see [Product management](../../user-guide/products.md).
+For the sections of the product form that are not specific to GAM, such as the pricing options and the publisher properties, see [Product form](../../user-guide/products.md#product-form).
 
 ## Configuration workflow
 
@@ -91,15 +91,17 @@ Non-guaranteed products:
 
 A tenant that uses GAM gets the GAM product form. You set a product's GAM settings on that form when you create or edit the product. The form has the following GAM controls:
 
-- **Inventory Configuration**: An inventory profile, or the ad units and placements that you select with **Browse Ad Units** and **Browse Placements**. The form stores a manual selection in `targeted_ad_unit_ids` and `targeted_placement_ids`.
+- **Inventory Configuration**: An inventory profile, which supplies the ad units, the placements, the creative formats, and the publisher properties, or the ad units and placements that you select with **Browse Ad Units** and **Browse Placements**. The form stores a manual selection in `targeted_ad_unit_ids` and `targeted_placement_ids`.
 - **Include child ad units in targeting**: A checkbox that the form stores in `include_descendants`.
 - **Custom Targeting (Optional)**: Key-value targeting that the form stores in `custom_targeting_keys`.
 
 **Browse Ad Units** and **Browse Placements** stay inactive until you sync the GAM inventory.
 
-The **GAM Line Item Configuration** section of the form has no input. The adapter selects the line item type of each package, as [Line item type selection](#line-item-type-selection) describes, and books the default priority of that type.
+To create an inventory profile, open **Settings > Inventory**, click **Browse Inventory**, and click **Create Profile** on the **Inventory Profiles** tab. The form's own **Create New** button does nothing. Known issue: [#2678](https://github.com/prebid/salesagent/issues/2678).
 
-A product starts with the generated defaults. The form has no control for the other fields, such as `line_item_type`, `frequency_caps`, `creative_rotation_type`, and `delivery_rate_type`. To set one of them, edit the `implementation_config` column of the product's row in the `products` table. When you edit a product, the form keeps the stored fields that it does not show.
+The **GAM Line Item Configuration** section of the form has no input. The adapter selects the line item type of each package, as [Line item type selection](#line-item-type-selection) describes, and books that type's priority, which [Priority](#priority) lists.
+
+A product starts with the generated defaults. The form has no control for the other fields, such as `line_item_type`, `frequency_caps`, `creative_rotation_type`, and `delivery_rate_type`. When you edit a product, the form keeps the stored fields that it does not show.
 
 ### Validation
 
@@ -149,8 +151,8 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 
 - **Field**: `priority` (required)
 - **Type**: Integer, 1-16, where 1 is the highest priority
-- **Defaults**: 6 for guaranteed, 10 for non-guaranteed
-- **Behavior**: Validation requires the field, but the adapter does not read it. The adapter books each line item at the default priority of its line item type. The defaults are 4 for `SPONSORSHIP`, 8 for `STANDARD`, 12 for `PRICE_PRIORITY`, `BULK`, and `NETWORK`, and 16 for `HOUSE`.
+- **Stored default**: 6 for guaranteed, 10 for non-guaranteed. `generate_default_config()` stores it.
+- **Booked priority**: Validation requires the field, but the adapter does not read it. Known issue: [#2374](https://github.com/prebid/salesagent/issues/2374). The adapter books each line item at the priority of its line item type: 4 for `SPONSORSHIP`, 8 for `STANDARD`, 12 for `PRICE_PRIORITY`, `BULK`, and `NETWORK`, and 16 for `HOUSE`.
 
 #### Creative placeholders
 
@@ -304,7 +306,7 @@ For the automated end-to-end stack, see [E2E testing](../../development/e2e-test
 ### "Product ... has invalid GAM configuration"
 
 - **Cause**: `validate_config()` rejects the product's stored `implementation_config` at media buy creation. The message ends with the reason, for example `Missing required GAM field: priority`.
-- **Fix**: Correct that field in the product's stored `implementation_config`. The product form has no control for `priority`, `line_item_type`, or `creative_placeholders`.
+- **Fix**: The Admin UI cannot correct these fields on an existing product. The product form has no control for `priority`, `line_item_type`, or `creative_placeholders`, and saving the form keeps their stored values. A product created with the form starts with valid values for all three.
 
 ### Inventory picker not loading
 

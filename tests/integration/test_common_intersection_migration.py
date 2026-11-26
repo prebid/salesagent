@@ -12,17 +12,16 @@ rows inserted as that schema stores them.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import pytest
-from sqlalchemy import text
 
 from tests.integration.migration_helpers import (
     reset_to_revision,
     run_alembic_upgrade,
     seed_inventory_profile,
-    stored_format_options,
+    seed_product,
+    stored_column,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -42,10 +41,6 @@ _TWO = [{"publisher_domain": d, "selection_type": "all"} for d in ("first-psates
 _PLACEMENT = [{"kind": "seller_inline", "mode": "included", "placement_id": "hero", "name": "Hero"}]
 
 
-def _json(value: Any) -> str | None:
-    return None if value is None else json.dumps(value)
-
-
 def _insert_profile(engine, profile_id: str, format_options: Any, publisher_properties: Any) -> int:
     return seed_inventory_profile(
         engine,
@@ -59,27 +54,17 @@ def _insert_profile(engine, profile_id: str, format_options: Any, publisher_prop
 def _insert_product(
     engine, product_id: str, format_options: Any, properties: Any, *, placements: Any = None, profile: int | None = None
 ) -> None:
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO products (tenant_id, product_id, name, description, delivery_type, targeting_template, "
-                "format_options, properties, property_tags, placements, inventory_profile_id) VALUES (:tid, :pid, "
-                ":pid, 'test', 'guaranteed', '{}'::jsonb, CAST(:options AS jsonb), CAST(:properties AS jsonb), "
-                "CAST(:tags AS jsonb), CAST(:placements AS jsonb), :profile)"
-            ),
-            {
-                "tid": _TENANT,
-                "pid": product_id,
-                "options": _json(format_options),
-                "properties": _json(properties),
-                "tags": None if properties is not None else '["all_inventory"]',
-                "placements": _json(placements),
-                "profile": profile,
-            },
-        )
-
-
-_options = stored_format_options
+    seed_product(
+        engine,
+        tenant_id=_TENANT,
+        product_id=product_id,
+        inventory_profile_id=profile,
+        format_ids=None,
+        format_options=format_options,
+        properties=properties,
+        property_tags=None if properties is not None else ["all_inventory"],
+        placements=placements,
+    )
 
 
 def test_the_upgrade_keeps_the_common_intersection_where_the_contract_is_stored(migration_db):
@@ -99,7 +84,7 @@ def test_the_upgrade_keeps_the_common_intersection_where_the_contract_is_stored(
     run_alembic_upgrade(db_url, _REVISION)
 
     products = {
-        product_id: _options(engine, "products", "product_id", product_id)
+        product_id: stored_column(engine, "products", "format_options", product_id=product_id)
         for product_id in (
             "two_publishers",
             "one_publisher",
@@ -117,5 +102,7 @@ def test_the_upgrade_keeps_the_common_intersection_where_the_contract_is_stored(
         # A profile with no canonical arm leaves the product's own declarations as the contract.
         "linked_to_legacy_profile": [_LOCAL],
     }
-    assert _options(engine, "inventory_profiles", "id", shared) == [_LOCAL]
-    assert _options(engine, "products", "product_id", "linked") is None, "the profile's product was rewritten instead"
+    assert stored_column(engine, "inventory_profiles", "format_options", id=shared) == [_LOCAL]
+    assert stored_column(engine, "products", "format_options", product_id="linked") is None, (
+        "the profile's product was rewritten instead"
+    )

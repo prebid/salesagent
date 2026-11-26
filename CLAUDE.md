@@ -13,6 +13,7 @@ This guide surfaces the repository-specific rules for the Prebid Sales Agent cod
 - **Database changes**: Reach the data through a repository inside a Unit of Work → Use `JSONType` for JSON columns → Create migration with `alembic revision`
 - **Any feature or bug fix**: TDD — the failing test comes first, and every change is gated by `make quality` (full cycles in `.claude/rules/workflows/tdd-workflow.md` and `bug-reporting.md`)
 - **Refactorings**: additionally run `tox -e integration` and verify imports with `uv run python -c "from module import thing"` — pre-commit hooks can't catch import errors
+- **Scope and review**: read [engineering-standards.md § Keep the change to that outcome](docs/development/engineering-standards.md#keep-the-change-to-that-outcome) and [§ Review the change](docs/development/engineering-standards.md#review-the-change) before opening or reviewing a pull request
 
 ### Key files to know
 - `src/core/main.py` — MCP server and tool registration
@@ -28,7 +29,7 @@ This guide surfaces the repository-specific rules for the Prebid Sales Agent cod
 
 **DRY is a correctness requirement, equivalent to type safety or test integrity — not "premature optimization," and not "refactoring beyond what was asked."**
 
-- If you write a block of logic that is structurally similar to a block already in the codebase (same pattern, different variables), you **MUST** extract a shared helper function
+- If you write a block of logic that is structurally similar to a block already in the codebase (same pattern, different variables), you **MUST** extract a shared helper function. Pre-existing duplicates elsewhere are paid down through `.duplication-baseline`, not folded into an unrelated change.
 - If you are asked to refactor duplicated code, that is a **bug fix**, not an "improvement"
 - **NEVER** cite "avoid over-engineering" or "keep it simple" to justify leaving duplicated logic in place
 - Duplicated code is a defect. It means the next person who fixes a bug in one copy misses the other copy, and it has caused real bugs in this codebase
@@ -104,7 +105,7 @@ pin and for the bump procedure. The CI guard at
 **Any change to AdCP/protocol BEHAVIOR** — a tool's request/response contract, error emission, idempotency, governance, or capabilities — **must cite, before you write the code, the authoritative spec section + version that mandates it, plus the conformance storyboard step that grades it** (or note "ungraded"). Record the citation in the PR description and/or the planning note.
 
 - **Which version is authoritative:** the version the repo PINS — *unless* there is active work to comply with a different target version (a bump/migration in flight), in which case that TARGET version is the pin. Confirm which applies first.
-- **Where the spec lives** (`github.com/adcontextprotocol/adcp`): the written spec at `docs/building/by-layer/L<0-4>/*.mdx`, read at the pinned tag (idempotency, auth and error taxonomy are all in `L1/security.mdx`) — there is NO `dist/docs/<version>/` for the pinned version, `dist/docs/` stops at `3.1.0`; the graded, executable contract does keep a version-numbered root, at `dist/compliance/<version>/<area>/*.yaml` (`domains/`, `protocols/`, `universal/`, `test-kits/` — there are no yaml files directly under `<version>/`). That writing is NOT vendored — the venv carries only `_schemas/` — so read it at the tag the INSTALLED SDK reports, derived in the same command rather than typed:
+- **Where the spec lives** (`github.com/adcontextprotocol/adcp`): the written spec at `docs/building/by-layer/L<0-4>/*.mdx`, read at the pinned tag (idempotency, auth and error taxonomy are all in `L1/security.mdx`). A task's own error codes are in its task reference, `docs/<domain>/task-reference/<task>.mdx`, under "Error Handling", and each code's recovery is in `docs/snippets/compliance-error-codes.mdx` — there is NO `dist/docs/<version>/` for the pinned version, `dist/docs/` stops at `3.1.0`; the graded, executable contract does keep a version-numbered root, at `dist/compliance/<version>/<area>/*.yaml` (`domains/`, `protocols/`, `universal/`, `test-kits/` — there are no yaml files directly under `<version>/`). That writing is NOT vendored — the venv carries only `_schemas/` — so read it at the tag the INSTALLED SDK reports, derived in the same command rather than typed:
 
     SPEC=$(uv run python -c 'import adcp; print(adcp.get_adcp_spec_version())')
     gh api "repos/adcontextprotocol/adcp/contents/docs/building/by-layer/L1/security.mdx?ref=v$SPEC" --jq '.content' | base64 -d

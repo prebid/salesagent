@@ -19,6 +19,7 @@ from tests.factories.account import (
 )
 from tests.factories.core import (
     AdapterConfigFactory,
+    AdvertisingPolicyFactory,
     CreativeAgentFactory,
     CurrencyLimitFactory,
     GAMInventoryFactory,
@@ -111,6 +112,7 @@ __all__ = [
     "OMIT",
     "AccountFactory",
     "AdapterConfigFactory",
+    "AdvertisingPolicyFactory",
     "AgentAccountAccessFactory",
     "BusinessEntityFactory",
     "CollectionListReferenceFactory",

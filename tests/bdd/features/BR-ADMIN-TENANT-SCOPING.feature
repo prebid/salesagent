@@ -1,10 +1,10 @@
 # Hand-authored feature — not compiled from adcp-req
-# Admin UI BDD scenarios for tenant scoping of admin routes (prebid/salesagent#2203, #2204)
+# Admin UI BDD scenarios for tenant scoping of admin routes (prebid/salesagent#2203, #2204, #2692)
 
 Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
   As a publisher operating one tenant
   I want every admin route that names my tenant in its URL to check that the caller belongs to it and holds the role the route asks for
-  So that a user of another tenant cannot read my revenue, catalogue, policy pages or GAM reports or start a sign-in test on my tenant, and a member of my tenant needs the admin role to start one
+  So that a user of another tenant cannot read my revenue, catalogue, policy pages or GAM reports, start a sign-in test or save my advertising policy, and a member of my tenant needs the admin role to do either
 
   # A route that takes <tenant_id> from the URL must prove the caller belongs to
   # that tenant. Four admin routes carried only require_auth(), which checks that
@@ -40,6 +40,11 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
   # target tenant, the caller's row in another tenant, and the caller's inactive row.
   # Admin passes the role check of every route here, so only the membership lookup can
   # refuse on those rows, and a lookup that matched one of them would let the caller in.
+  #
+  # The policy update route (#2692) is a POST that asks for the admin role too: it saves the
+  # tenant's advertising policy, which get_products enforces. A POST to it carries every field
+  # of the Policy page's form, so a refused save that wrote anything changes the stored policy.
+  # T-ADMIN-SCOPE-016 seeds an admin there, and T-ADMIN-SCOPE-017 a manager and a viewer.
   #
   # tests/integration/test_admin_role_enforcement.py grades the role on the routes of
   # its ADMIN_ONLY_ROUTES table, which the OIDC test page is not in.
@@ -79,10 +84,11 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
     And the target tenant's stored data is unchanged
 
     Examples:
-      | method | route             |
-      | GET    | policy rules page |
-      | POST   | policy rules page |
-      | POST   | OIDC test page    |
+      | method | route               |
+      | GET    | policy rules page   |
+      | POST   | policy rules page   |
+      | POST   | OIDC test page      |
+      | POST   | policy update route |
 
   @T-ADMIN-SCOPE-003 @auth @edge-case
   Scenario Outline: A member of another tenant receives JSON 403 from the tenant APIs
@@ -112,10 +118,11 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
     And the target tenant's stored data is unchanged
 
     Examples:
-      | method | route             |
-      | GET    | policy rules page |
-      | POST   | policy rules page |
-      | POST   | OIDC test page    |
+      | method | route               |
+      | GET    | policy rules page   |
+      | POST   | policy rules page   |
+      | POST   | OIDC test page      |
+      | POST   | policy update route |
 
   @T-ADMIN-SCOPE-005 @auth @edge-case
   Scenario Outline: An inactive membership in the target tenant receives JSON 403 from the tenant APIs
@@ -145,10 +152,11 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
     And the target tenant's stored data is unchanged
 
     Examples:
-      | method | route             |
-      | GET    | policy rules page |
-      | POST   | policy rules page |
-      | POST   | OIDC test page    |
+      | method | route               |
+      | GET    | policy rules page   |
+      | POST   | policy rules page   |
+      | POST   | OIDC test page      |
+      | POST   | policy update route |
 
   @T-ADMIN-SCOPE-007 @auth @main-flow
   Scenario: An active member reads the tenant's revenue chart
@@ -243,3 +251,48 @@ Feature: BR-ADMIN-TENANT-SCOPING Tenant-scoped admin routes prove membership
       | GAM country breakdown API   | GAM reporting is only available for tenants using Google Ad Manager |
       | GAM ad unit breakdown API   | GAM reporting is only available for tenants using Google Ad Manager |
       | GAM principal summary API   | Principal does not have a GAM advertiser ID configured              |
+
+  # The media buys page names the products each buy's packages name. The buyer chose those
+  # ids, so the page looks them up in the target tenant's catalogue alone
+  # (tenants.media_buys_list): an id another tenant uses must not put that tenant's product
+  # name on this page. The seeded buy names a product id the target's catalogue lacks. The
+  # name holds no character HTML escapes, so its absence from the page is not an escape.
+  @T-ADMIN-SCOPE-015 @auth @edge-case
+  Scenario: The media buys page names no product of another tenant
+    Given another tenant holds a product named "Product of another tenant" under the product id the target tenant's media buy names
+    And the caller is an active member of the target tenant
+    When the caller sends GET to the media buys page of the target tenant
+    Then the page returns status 200
+    And the media buys page lists the target tenant's media buy with no product named "Product of another tenant"
+
+  # #2692: the Policy page saves the tenant's advertising_policy, the column get_products
+  # enforces, and shows it back. The defect was on the read side (the page rendered its
+  # defaults over the stored row), so the saved values are read back through the page.
+  @T-ADMIN-SCOPE-016 @auth @main-flow
+  Scenario: An admin saves the policy form and the reloaded policy page shows the saved policy
+    Given the caller is an active member of the target tenant with the admin role
+    When the caller sends POST to the policy update route of the target tenant
+    Then the page redirects to the policy page of the target tenant
+    And the reloaded policy page of the target tenant shows the posted policy form
+
+  @T-ADMIN-SCOPE-017 @auth @edge-case
+  Scenario Outline: A member below the admin role is refused the policy update route
+    Given the caller is an active member of the target tenant with the <role> role
+    When the caller sends POST to the policy update route of the target tenant, asking for JSON
+    Then the page returns status 403
+    And the JSON response has "error" as "Your role does not allow this"
+    And the target tenant's stored data is unchanged
+
+    Examples:
+      | role    |
+      | manager |
+      | viewer  |
+
+  # The seeded tenant has saved no policy (advertising_policy is NULL). The page says so,
+  # and its form starts with both checks off: nothing is stored until an admin saves it.
+  @T-ADMIN-SCOPE-018 @auth @main-flow
+  Scenario: A member of a tenant that has saved no policy sees that on the policy page
+    Given the caller is an active member of the target tenant
+    When the caller sends GET to the policy page of the target tenant
+    Then the page returns status 200
+    And the policy page says the tenant has saved no policy, with policy checks off
