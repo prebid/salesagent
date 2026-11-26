@@ -20,6 +20,7 @@ from tests.bdd.steps.domain.admin_accounts import (
 )
 from tests.bdd.steps.domain.admin_inventory_profiles import IMAGE_300X250, _modal_form
 from tests.bdd.steps.domain.admin_unexpected_errors import _other_tenant_id, script_accept
+from tests.factories.product import FIRST_PUBLISHER_LEADERBOARD_KEY, PRODUCT_LOCAL_MREC, TWO_PUBLISHER_PROPERTIES
 from tests.harness.admin_client import BROWSER_PAGE_HEADERS
 from tests.helpers.admin_product_form import minimal_product_create_form, minimal_product_edit_form
 from tests.helpers.operator_refusals import operator_refusal_classes
@@ -115,6 +116,27 @@ def given_other_tenant_has_product(ctx: dict) -> None:
     tenant_id = _other_tenant_id(ctx)
     ctx["admin_product_id"] = f"edit_probe_{tenant_id}"
     _env(ctx).seed_product(ctx["admin_product_id"], tenant_id=tenant_id)
+
+
+@given(parsers.parse('that tenant has a product "{product_id}" sold across two publishers'))
+def given_other_tenant_has_two_publisher_product(ctx: dict, product_id: str) -> None:
+    """No placements and one product-local option; the first publisher catalogs a leaderboard the second does not."""
+    env, tenant_id = _env(ctx), _other_tenant_id(ctx)
+    env.catalog_first_publisher_leaderboard(tenant_id)
+    env.seed_product(
+        product_id,
+        tenant_id=tenant_id,
+        format_ids=None,
+        format_options=[PRODUCT_LOCAL_MREC],
+        properties=TWO_PUBLISHER_PROPERTIES,
+    )
+    ctx["admin_product_id"] = product_id
+
+
+@when("a script saves that product's edit form adding the first publisher's leaderboard option")
+def when_script_adds_first_publisher_leaderboard(ctx: dict) -> None:
+    form = minimal_product_edit_form(format_options=json.dumps([PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD_KEY]))
+    ctx["admin_page"] = _env(ctx).post_product_edit_as_script(_other_tenant_id(ctx), ctx["admin_product_id"], form)
 
 
 @when("the operator submits that product's edit form from its page with:")

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import Mapping
 from functools import wraps
 from typing import TYPE_CHECKING, Literal, NamedTuple, NoReturn, TypeVar
+from urllib.parse import unquote
 
 from flask import abort, g, has_request_context, jsonify, make_response, redirect, request, session, url_for
 from sqlalchemy import select
@@ -45,16 +45,6 @@ def is_admin_production() -> bool:
 #: The blueprint name of the test-credential login path (src/admin/blueprints/test_auth.py).
 
 
-def parse_json_config(config_str):
-    """Parse JSON config string."""
-    if not config_str:
-        return {}
-    try:
-        return json.loads(config_str)
-    except (json.JSONDecodeError, TypeError):
-        return {}
-
-
 def get_tenant_config_from_db(tenant_id):
     """Get tenant configuration from database.
 
@@ -81,7 +71,6 @@ def get_tenant_config_from_db(tenant_id):
             "features": {},
             "creative_engine": {},
             "slack_webhook_url": tenant.slack_webhook_url or "",
-            "policy_settings": {},
         }
 
         # Build adapter config from relationship
@@ -129,12 +118,6 @@ def get_tenant_config_from_db(tenant_id):
             "auto_approve_formats": tenant.auto_approve_format_ids or [],
             "human_review_required": tenant.human_review_required,
         }
-
-        # Add policy settings
-        if tenant.policy_settings:
-            policy_settings = parse_json_config(tenant.policy_settings)
-            if policy_settings:
-                config["policy_settings"] = policy_settings
 
         return config
 
@@ -382,6 +365,25 @@ def caller_reads_json() -> bool:
         return False
     accept = request.accept_mimetypes
     return not accept["text/html"] > accept["application/json"]
+
+
+def local_path(url: str | None) -> str | None:
+    """*url* when it is a path on this site, else ``None``.
+
+    A path on this site starts with exactly one ``/`` and holds no backslash: browsers read
+    ``//host`` and ``/\\host`` as another site. Nothing is parsed: a value that starts with one
+    ``/`` names no scheme or host. Browsers drop a tab or newline from a URL, so ``/\t/host``
+    is ``//host`` to them, and a value holding either is refused. The URL-decoded form is held
+    to the same test, so an encoded ``%2F%2Fhost`` is refused too. The result is *url* as
+    given, not decoded, so it names the same page.
+    """
+    if not url:
+        return None
+    for form in (url, unquote(url)):
+        if not form.startswith("/") or form.startswith("//") or any(c in form for c in "\\\t\r\n"):
+            return None
+    # A constant "/" followed by the rest: the result is always a path on this host.
+    return "/" + url[1:]
 
 
 def json_failure(message: str, status: int, fields: Mapping[str, object] | None = None) -> Response:

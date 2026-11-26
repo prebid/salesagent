@@ -13,6 +13,7 @@ import re
 import pytest
 from sqlalchemy.exc import OperationalError
 
+from src.admin.utils.helpers import local_path
 from src.admin.utils.operator_errors import _same_site_referrer
 from src.core.operator_errors import safe_error_message
 
@@ -76,7 +77,7 @@ def test_references_differ_per_call():
     ("referrer", "method", "full_path", "expected"),
     [
         ("http://localhost/tenant/t1/products?page=2", "POST", "/x?", "/tenant/t1/products?page=2"),
-        ("https://localhost/tenant/t1/settings", "POST", "/x?", "/tenant/t1/settings"),
+        ("HTTP://LOCALHOST/tenant/t1/settings", "POST", "/x?", "/tenant/t1/settings"),
         # A form that posts to its own page goes back to it; a GET of the failed URL would loop.
         ("http://localhost/create_tenant", "POST", "/create_tenant?", "/create_tenant"),
         ("http://localhost/tenant/t1/settings", "GET", "/tenant/t1/settings?", None),
@@ -87,10 +88,14 @@ def test_references_differ_per_call():
         ("http://localhost//evil.example/page", "POST", "/x?", None),
         ("http://localhost/\\evil.example/page", "POST", "/x?", None),
         ("http://localhost/page?next=\\evil.example", "POST", "/x?", None),
+        ("https://localhost/tenant/t1/settings", "POST", "/x?", None),
+        ("http://localhost.evil.example/page", "POST", "/x?", None),
+        ("http://localhost", "POST", "/x?", None),
+        ("http://[localhost/page", "POST", "/x?", None),
     ],
     ids=[
         "path-and-query",
-        "https",
+        "origin-case",
         "form-posting-to-its-own-page",
         "failed-get-of-itself",
         "no-referrer",
@@ -100,10 +105,58 @@ def test_references_differ_per_call():
         "double-slash-path",
         "backslash-path",
         "backslash-query",
+        "other-scheme",
+        "host-as-prefix",
+        "origin-without-path",
+        "unparseable",
     ],
 )
 def test_same_site_referrer(referrer, method, full_path, expected):
-    assert _same_site_referrer(referrer, "localhost", method, full_path) == expected
+    assert _same_site_referrer(referrer, "http://localhost", method, full_path) == expected
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("/tenant/t1/products?page=2", "/tenant/t1/products?page=2"),
+        # Returned as given: decoding %26 would turn one query value into two.
+        ("/search?q=a%26b", "/search?q=a%26b"),
+        (None, None),
+        ("", None),
+        ("tenant/t1", None),
+        ("https://evil.example/page", None),
+        ("//evil.example/page", None),
+        ("/\\evil.example/page", None),
+        ("/page?next=\\evil.example", None),
+        ("/\t/evil.example/page", None),
+        ("/%2F%2Fevil.example/page", None),
+        ("/%2Fevil.example/page", None),
+        ("/%5Cevil.example/page", None),
+        ("%2F%2Fevil.example/page", None),
+        ("//[", None),
+        ("/\n/evil.example/page", None),
+    ],
+    ids=[
+        "path-and-query",
+        "encoded-query-kept",
+        "none",
+        "empty",
+        "relative",
+        "absolute-url",
+        "double-slash",
+        "slash-backslash",
+        "backslash-in-query",
+        "tab-between-slashes",
+        "encoded-double-slash",
+        "encoded-second-slash",
+        "encoded-backslash",
+        "encoded-leading-slashes",
+        "unparseable",
+        "newline-between-slashes",
+    ],
+)
+def test_local_path(url, expected):
+    assert local_path(url) == expected
 
 
 def test_an_operator_refusal_must_declare_its_message():

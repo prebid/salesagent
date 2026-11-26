@@ -140,8 +140,8 @@ class TestGuardMetaTests:
         assert [h[1] for h in self._scan_source(src)] == ["AuditLog.details"]
 
     def test_positive_attribute_assignment(self):
-        src = "import json\ntenant.policy_settings = json.dumps({'enabled': True})\n"
-        assert [h[1] for h in self._scan_source(src)] == [".policy_settings"]
+        src = "import json\ntenant.ai_policy = json.dumps({'enabled': True})\n"
+        assert [h[1] for h in self._scan_source(src)] == [".ai_policy"]
 
     def test_positive_conditional_expression(self):
         """The public.py shape: json.dumps([x]) if x else None."""
@@ -180,5 +180,5 @@ class TestGuardMetaTests:
         column NAME on a non-ORM object is flagged even though no DB write
         occurs — kept deliberately, since JSONType column names are
         distinctive and a false positive is a rename away."""
-        src = "import json\nview_model.policy_settings = json.dumps({})\n"
-        assert [h[1] for h in self._scan_source(src)] == [".policy_settings"]
+        src = "import json\nview_model.ai_policy = json.dumps({})\n"
+        assert [h[1] for h in self._scan_source(src)] == [".ai_policy"]
