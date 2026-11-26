@@ -28,9 +28,14 @@ Database:
 Authentication:
 
 - [Which layer rejected the request](#authentication-issues) — decision tree
+- ["Authentication not configured" on the login page](#the-login-page-offers-no-way-to-sign-in)
+- [Google shows `redirect_uri_mismatch`](#google-shows-error-400-redirect_uri_mismatch)
+- [Google allows only test users](#google-restricts-the-app-to-test-users)
 - ["Access denied" when logging in to the Admin UI](#access-denied-in-the-admin-ui)
 - [404 after the Google OAuth redirect](#oauth-callback-404)
 - [Login loops back to the OAuth screen](#oauth-redirect-loop)
+- [`TENANT_UNDEFINED`: no seller is served at the address](#no-seller-is-served-at-the-address-this-request-named)
+- [`AUTH_MISSING` on an agent call](#agent-calls-are-refused-with-auth_missing)
 - [Rejected with a valid token](#rejected-with-a-valid-token)
 - [MCP requests rejected as unauthorized](#invalid-token-for-the-mcp-api)
 - [A2A requests rejected as unauthenticated](#a2a-authentication-failed)
@@ -121,6 +126,16 @@ Migrations run automatically at startup: the `db-init` service runs
 `python scripts/ops/migrate.py` and `adcp-server` waits for it to complete.
 A migration error therefore appears in `docker compose logs db-init`.
 
+The stack names its volume `adcp_postgres_data`, so it does not share a
+volume with other Postgres containers. If a stale database from an earlier
+run is the problem, remove this stack's volumes and start fresh, which
+deletes the local database:
+
+```bash
+docker compose down -v
+docker compose up -d
+```
+
 ### Import errors after `docker compose up`
 
 **Symptoms**: `ModuleNotFoundError: No module named 'flask'` or
@@ -148,11 +163,19 @@ to move it:
 
 ```bash
 # Find the process holding the port
-lsof -i :8000
+lsof -i :8000                    # macOS / Linux
+netstat -ano | findstr :8000     # Windows
 
 # Or start the stack on a different host port
 CONDUCTOR_PORT=8001 docker compose up -d
 ```
+
+To keep the new port, set `CONDUCTOR_PORT=8001` in `.env` instead. Everything
+that names port 8000 then uses the new port: the Admin UI and agent URLs, and
+the two redirect URIs registered on the OAuth client in
+[quickstart step 2](../quickstart.md#2-create-a-google-oauth-client).
+Sign-in fails with `redirect_uri_mismatch` until the client lists the URIs
+with the new port.
 
 The `ADCP_SALES_PORT` variable (default `8080`) is the app's port inside the
 Compose network, behind the proxy. Changing it doesn't resolve a host port
@@ -273,15 +296,54 @@ middleware order make this work.
 flowchart TD
     Fail["Authentication fails"] --> Which{"Which entry point?"}
     Which -->|"Admin UI (browser)"| UI{"What do you see?"}
+    UI -->|"Authentication not configured"| NoClient["Put the OAuth client in .env:\nsee The login page offers no way to sign in"]
+    UI -->|"Error 400: redirect_uri_mismatch"| Mismatch["Register both redirect URIs:\nsee Google shows redirect_uri_mismatch"]
+    UI -->|"Access blocked, or test users only"| TestUsers["Add yourself as a test user:\nsee Google restricts the app to test users"]
     UI -->|"Access denied, a 403 page,\nor no account to select"| Denied["Check the super admin lists\nand your user rows:\nsee Access denied in the Admin UI"]
     UI -->|"404 after Google login"| CB["Fix the redirect URI:\nsee OAuth callback 404"]
     UI -->|"Login loops"| Loop["Check your SSO access\nand the session cookie:\nsee OAuth redirect loop"]
     UI -->|"Your role does\nnot allow this"| Role["Ask a tenant admin to change\nyour role: see Your role\ndoes not allow this"]
     UI -->|"Cross-origin\nrequest refused"| Origin["Check the proxy headers:\nsee Cross-origin request refused"]
-    Which -->|"MCP / REST / A2A\n(Authorization: Bearer)"| MCP{"Does the token's hash match\na principal of the tenant\nthe request addressed?"}
+    Which -->|"MCP / REST / A2A"| Code{"Which error code?"}
+    Code -->|"TENANT_UNDEFINED (421)"| NoSeller["Name the tenant:\nsee No seller is served at the address this request named"]
+    Code -->|"AUTH_MISSING"| Missing["Send Authorization: Bearer:\nsee Agent calls are refused with AUTH_MISSING"]
+    Code -->|"AUTH_INVALID"| MCP{"Does the token's hash match\na principal of the tenant\nthe request addressed?"}
     MCP -->|No| Token["Rotate the token in the Admin UI:\nsee Invalid token for the MCP API"]
     MCP -->|Yes| Active["Check the tenant is active:\nsee Rejected with a valid token"]
 ```
+
+### The login page offers no way to sign in
+
+The page says "Authentication not configured" when the application has no
+OAuth client. Check that `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (or the
+`OAUTH_*` variables) are in `.env` (see
+[Which file holds secrets](../security.md#which-file-holds-secrets)). Then
+recreate the containers and check that the value arrived:
+
+```bash
+docker compose up -d --force-recreate
+docker compose exec adcp-server printenv GOOGLE_CLIENT_ID
+```
+
+### Google shows "Error 400: redirect_uri_mismatch"
+
+The redirect URI the application sent is not registered on the OAuth client.
+The error details page shows the URI that was sent (for example
+`http://localhost:8000/auth/google/callback`). Add it to **Authorized
+redirect URIs** on the client exactly as shown, including the port, with
+`http` rather than `https` locally. The URI depends on the path the browser
+came in on, so register both local URIs listed in
+[quickstart step 2](../quickstart.md#2-create-a-google-oauth-client).
+A production deployment behind the bundled nginx sends
+`https://your-domain.com/admin/auth/google/callback`, and
+`GOOGLE_OAUTH_REDIRECT_URI`, when set, replaces the URI the application
+builds. Changes in the console can take a few minutes to apply.
+
+### Google restricts the app to test users
+
+Google says the app is restricted to test users, or that access is blocked:
+the OAuth consent screen is External and in "Testing". Add your Google
+account under **Google Auth Platform > Audience > Test users**.
 
 ### Access denied in the Admin UI
 
@@ -308,8 +370,10 @@ tenant's own SSO never counts as a super admin and reaches no other tenant, as
 [Super admins](../security.md#super-admins) explains.
 
 **Fix**: ask an admin of the tenant, or a super admin, to add your address on
-the **Users & Access** page. A `403` page can also come from the role check;
-see [Your role does not allow this](#your-role-does-not-allow-this).
+the **Users & Access** page. On your own local stack, add the address to
+`SUPER_ADMIN_EMAILS` in `.env`, run `docker compose up -d --force-recreate`,
+and sign in again. A `403` page can also come from the role check; see
+[Your role does not allow this](#your-role-does-not-allow-this).
 
 ### OAuth callback 404
 
@@ -350,6 +414,43 @@ again. If the loop continues, look for one of the following causes:
   each other's cookies. The local Docker stack always sets the key, because
   `docker-compose.yml` falls back to a fixed development value.
 
+### No seller is served at the address this request named
+
+The agent's request named no tenant this deployment serves. The error code is
+`TENANT_UNDEFINED` (HTTP 421, recovery `terminal`). Earlier releases returned
+`CONFIGURATION_ERROR` "no tenant context" for the same condition.
+
+- Name the tenant as [quickstart step 7](../quickstart.md#7-connect-an-ai-agent)
+  describes: a `Host` that matches the tenant's `virtual_host`, or
+  `x-adcp-tenant` when no tenant claims the `Host`.
+- Check that the tenant exists: `docker compose logs db-init` shows the
+  migrations completing and "Default tenant ready".
+- Behind a custom domain or subdomain, check the tenant's **Custom Domain** in
+  the Admin UI (stored as `virtual_host`), and that the proxy in front passes
+  the original `Host` header through. The
+  [multi-tenant guide](../deployment/multi-tenant.md) describes how a request
+  names its tenant.
+- Behind Approximated: the app never reads `Apx-Incoming-Host`, so check the
+  edge: that nginx is in front and its `$tenant_host` map folded the vendor
+  header into the `Host` the app received.
+- On a deployment with `ADCP_TESTING=true` (the only one that mounts the debug
+  routes), `/debug/tenant` reports the `Host` that arrived and the tenant it
+  resolved.
+
+### Agent calls are refused with `AUTH_MISSING`
+
+The call had no `Authorization: Bearer <token>` header. `get_products` needs
+one too unless the tenant's **Brand Context Requirement** (**Settings >
+Policies & Workflows**) is set to "Public". Create an advertiser in the Admin
+UI to get a token (see
+[API Token](../user-guide/advertisers.md#api-token)).
+
+The server reads the credential from `Authorization: Bearer` only. A token sent
+in `x-adcp-auth` counts as none, and that is where the `adcp` command-line
+client (`uvx adcp ... --auth <token>`) sends it, so its calls get
+`AUTH_MISSING` too. Use the script in
+[quickstart step 7](../quickstart.md#7-connect-an-ai-agent) instead.
+
 ### Rejected with a valid token
 
 **Symptoms**: the token is correct, but the server still rejects the request.
@@ -360,24 +461,17 @@ docker compose exec postgres psql -U adcp_user adcp -c \
   "SELECT is_active FROM tenants WHERE tenant_id='your_tenant_id';"
 ```
 
-The server reads the credential from `Authorization: Bearer` only. It does not
-recognize `x-adcp-auth`, so a request that sends only the alias presents
-nothing and gets `AUTH_MISSING`. The server identifies the tenant from the
-host before it looks the token up, and it looks the token up only inside that
-tenant. A token issued for one tenant is therefore `AUTH_INVALID` on another.
+The server identifies the tenant from the request before it looks the token up, and it looks the token up only inside that
+tenant. A token issued for one tenant is therefore `AUTH_INVALID` on another:
+send the `Host` of the tenant that issued it, as in
+[quickstart step 7](../quickstart.md#7-connect-an-ai-agent).
 The [request lifecycle](request-lifecycle.md) document describes the exact
 order.
 
 ### Invalid token for the MCP API
 
-The Admin UI shows an advertiser's full API token once: when you create the
-advertiser, and when you rotate its token. The **Advertisers** section of the
-tenant settings shows only the token's first characters. The database holds
-only a hash of each token (`principals.token_hash`), so you cannot read a lost
-token back. To get a full token, click the rotate button next to the token in
-the advertiser's row, and copy the token from the dialog that opens. The
-previous token stops working immediately, so give the replacement to every
-client that used it.
+A lost token cannot be retrieved; rotate it as described in
+[API Token](../user-guide/advertisers.md#api-token).
 
 ### A2A authentication failed
 
@@ -386,6 +480,7 @@ Send the token as a Bearer token in the `Authorization` header:
 ```bash
 curl -X POST http://localhost:8000/a2a \
   -H "Authorization: Bearer ${ADCP_AUTH_TOKEN}" \
+\
   -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "method": "message/send", ...}'
 ```
@@ -394,11 +489,8 @@ curl -X POST http://localhost:8000/a2a \
 
 ### Tool not found
 
-List the tools the server actually registers:
-
-```bash
-uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
-```
+List the tools the server actually registers with the `list_tools` variant
+of the script in [quickstart step 7](../quickstart.md#7-connect-an-ai-agent).
 
 If a tool is missing, check its registration in `src/core/main.py` and its
 implementation under `src/core/tools/`:
@@ -420,9 +512,10 @@ docker compose exec postgres psql -U adcp_user adcp -c \
   "SELECT COUNT(*) FROM products WHERE tenant_id='your_tenant_id';"
 ```
 
-Create products through the Admin UI. A product requires the tenant to have a
-USD `CurrencyLimit` and the `all_inventory` property tag — see the tenant
-setup dependencies in the repository `CLAUDE.md`.
+Create products through the Admin UI. A product needs a currency and an
+authorized publisher first;
+[quickstart step 6](../quickstart.md#6-use-the-default-tenant-or-create-one)
+lists the steps in order.
 
 ### Contract validation errors
 
@@ -589,8 +682,8 @@ with this error, for example an inventory sync. **Test Connection**,
    docker compose exec adcp-server env | grep GAM_OAUTH
    ```
 
-2. If they're missing, add them to the `.env` file, which `docker-compose.yml`
-   reads:
+2. If missing, add them to `.env` (see
+   [Which file holds secrets](../security.md#which-file-holds-secrets)):
 
    ```bash
    GAM_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
@@ -608,10 +701,10 @@ with this error, for example an inventory sync. **Test Connection**,
    `http://localhost:8000/auth/gam/callback` at the root. In production, the
    app uses `https://<SALES_AGENT_DOMAIN>/admin/auth/gam/callback`.
 
-4. Recreate the containers so that they read the changed `.env` file:
+4. Recreate the containers so they read `.env` again (`restart` does not):
 
    ```bash
-   docker compose up -d
+   docker compose up -d --force-recreate
    ```
 
 5. Verify the configuration:
@@ -818,6 +911,7 @@ The following table maps HTTP errors to their usual cause.
 |-------|-------|----------|
 | `401 Unauthorized` | Invalid token | Check the `Authorization: Bearer` header |
 | `404 Not Found` | Wrong endpoint | Check the URL and method |
+| `421 Misdirected Request` (`TENANT_UNDEFINED`) | The request named no tenant this deployment serves | See [No seller is served at the address this request named](#no-seller-is-served-at-the-address-this-request-named) |
 | `422 Validation Error` | Invalid request | Check the request schema |
 | `400 Invalid ID format` | Malformed IDs | Ensure IDs match the expected pattern |
 | `500 Internal Error` | Server error | Check the server logs |

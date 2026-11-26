@@ -3,28 +3,12 @@
 These are the reference patterns for MCP tools and A2A integration. Read them before you add
 or modify a tool.
 
-## MCP client usage
-```python
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
+## MCP client usage (smoke test against the local stack)
 
-headers = {"Authorization": "Bearer your_token"}
-transport = StreamableHttpTransport(url="http://localhost:8000/mcp/", headers=headers)
-client = Client(transport=transport)
+Use the script in [quickstart step 7](../../../docs/quickstart.md#7-connect-an-ai-agent).
 
-async with client:
-    products = await client.tools.get_products(brief="video ads")
-    result = await client.tools.create_media_buy(product_ids=["prod_1"], ...)
-```
-
-## CLI testing
-```bash
-# List available tools
-uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
-
-# A real token is shown once, when the advertiser is created (or rotated) in Admin UI -> Advertisers
-uvx adcp http://localhost:8000/mcp/ --auth <real-token> get_products '{"brief":"video"}'
-```
+Do not use `uvx adcp ... --auth <token>` against this server; see
+[Agent calls are refused with `AUTH_MISSING`](../../../docs/development/troubleshooting.md#agent-calls-are-refused-with-auth_missing).
 
 ## Transport boundary: one path to every implementation (critical pattern #5)
 

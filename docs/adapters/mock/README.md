@@ -229,47 +229,19 @@ this configuration.
 
 ### 1. Create a tenant that uses the mock adapter
 
-```bash
-docker compose exec adcp-server python scripts/setup/setup_tenant.py "Test Publisher" \
-  --adapter mock \
-  --subdomain test-pub
-```
-
-This creates the tenant, its mock adapter configuration, currency limits for
-USD, EUR, and GBP, and a default principal named `<tenant_id>_default`. The
-command prints the principal's access token — copy it. The tenant starts with
-no products; create them in the Admin UI (`http://localhost:8000/admin/`)
-before calling `get_products`.
+The `default` tenant of the local stack already uses the mock adapter. For
+another one, use `scripts/setup/setup_tenant.py` as in
+[Creating a tenant from the command line](../../quickstart.md#creating-a-tenant-from-the-command-line);
+the mock adapter is its default.
 
 ### 2. Retrieve a token later
 
-In the Admin UI, open the tenant's advertisers list and copy the API token. The
-database holds only a hash of each token, so you cannot read one back from
-`principals`: use the token the command printed when the advertiser was
-created, or rotate it in the Admin UI.
+A lost token cannot be read back; rotate it as described in
+[API Token](../../user-guide/advertisers.md#api-token).
 
 ### 3. Call the server
 
-Over MCP with the Python client:
-
-```python
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
-
-headers = {"Authorization": "Bearer your_principal_token"}
-transport = StreamableHttpTransport(url="http://localhost:8000/mcp/", headers=headers)
-client = Client(transport=transport)
-
-async with client:
-    products = await client.tools.get_products(brief="video ads")
-```
-
-Or from the command line:
-
-```bash
-uvx adcp http://localhost:8000/mcp/ --auth <principal-token> list_tools
-uvx adcp http://localhost:8000/mcp/ --auth <principal-token> get_products '{"brief":"video"}'
-```
+Run the script in [quickstart step 7](../../quickstart.md#7-connect-an-ai-agent).
 
 The A2A server serves the same tools at `http://localhost:8000/a2a`, and the
 REST routes serve them at `/api/v1` — see

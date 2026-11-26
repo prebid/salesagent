@@ -28,11 +28,9 @@ For a minimal working deployment:
 ```bash
 # Required
 DATABASE_URL=postgresql://user:password@host:5432/adcp
+ENCRYPTION_KEY=your-fernet-key   # the image entrypoint refuses to start without it; see Security
 
-# Required to store secrets, such as a tenant's SSO client secret
-ENCRYPTION_KEY=your-fernet-key
-
-# Required for the first sign-in: the deployment's OAuth client and a super admin
+# Required for the first sign-in to the Admin UI (there is no password login)
 GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-client-secret
 SUPER_ADMIN_EMAILS=you@example.com
@@ -41,7 +39,7 @@ SUPER_ADMIN_EMAILS=you@example.com
 GEMINI_API_KEY=your-key
 ```
 
-After the first sign-in, each tenant configures its own SSO in the Admin UI. See [Authentication](#authentication).
+[Deployment OAuth](#deployment-oauth) explains what the sign-in variables are for.
 
 ## Authentication
 
@@ -61,9 +59,8 @@ See the [SSO setup guide](../user-guide/sso-setup.md) for detailed instructions.
 
 New tenants start with `auth_setup_mode=true`. Setup Mode lets a tenant complete an OIDC
 login *before* its SSO is enabled, so you can verify a provider before committing to it.
-It grants no credentials of its own — the first administrator signs in with the
-deployment's own OAuth (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` or the generic
-`OAUTH_*` variables) plus `SUPER_ADMIN_EMAILS`.
+It grants no credentials of its own; see [Deployment OAuth](#deployment-oauth) for how the
+first administrator signs in.
 
 Once SSO is configured and tested, sign in through **Sign in with SSO** and disable Setup Mode from the Users & Access page. After that, **Sign in with SSO** works only while the tenant's SSO is enabled.
 
@@ -225,8 +222,8 @@ in every deployment: properties come only from it.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CREATE_DEMO_TENANT` | `false` | **Local testing only.** Creates a "Demo Sales Agent" tenant with the mock adapter. Do NOT use in production. |
-| `CREATE_SAMPLE_DATA` | `false` | Create sample products, media buys, and related records (requires the demo tenant) |
+| `CREATE_DEMO_TENANT` | `false` | Has no effect with `docker-compose.yml` or in single-tenant mode, where the migration step creates the `default` tenant first. The [quickstart](../quickstart.md#about-create_demo_tenant) explains when it applies. Do not use in production. |
+| `CREATE_SAMPLE_DATA` | `false` | Create sample products, media buys, and related records. Applies only where `CREATE_DEMO_TENANT` does |
 
 ### Security
 

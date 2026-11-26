@@ -68,8 +68,9 @@ an invitation. See [SSO setup](sso-setup.md) for configuring authentication.
 
 ## Connect AI agents
 
-An AI agent connects over MCP with an advertiser's API token, as
-[MCP client configuration](advertisers.md#mcp-client-configuration) shows.
+An AI agent connects over MCP with an advertiser's token (see
+[API token](advertisers.md#api-token)). [Quickstart step 7](../quickstart.md#7-connect-an-ai-agent)
+has a runnable first call.
 
 ## Related documentation
 

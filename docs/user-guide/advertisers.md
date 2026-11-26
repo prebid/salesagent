@@ -20,9 +20,10 @@ characters.
 ### API token
 
 Each advertiser gets a unique API token, sent as `Authorization: Bearer <token>` on every
-transport. The database keeps a hash of the token and the token's first 12 characters. The
-Admin UI shows the full token once, when you create the advertiser. The advertisers list
-shows the first characters of each token so you can tell them apart, never the whole token.
+transport. The database keeps a hash of the token (`principals.token_hash`) and the token's
+first 12 characters. The Admin UI shows the full token once, in the confirmation message
+after you create the advertiser, so copy it then. The advertisers list shows the first
+characters of each token so you can tell them apart, never the whole token.
 
 If a token is lost or compromised, rotate it:
 
@@ -66,20 +67,8 @@ advertiser can do the following:
 
 ## MCP client configuration
 
-Advertisers connect via MCP using their token:
-
-```python
-from fastmcp.client import Client, StreamableHttpTransport
-
-transport = StreamableHttpTransport(
-    url="https://your-domain.com/mcp/",
-    headers={"Authorization": "Bearer advertiser-api-token"}
-)
-
-async with Client(transport=transport) as client:
-    # Advertiser can now call MCP tools
-    products = await client.call_tool("get_products", {})
-```
+Give the advertiser its token and the first call in
+[quickstart step 7](../quickstart.md#7-connect-an-ai-agent).
 
 ## Notifications
 

@@ -34,32 +34,18 @@ and for the bump procedure. The pin is enforced by a CI guard
 | I want to... | Start here |
 |--------------|------------|
 | **Deploy my own sales agent** (publisher) | [Quickstart Guide](docs/quickstart.md) |
-| **Evaluate or develop locally** | [Quick Start](#quick-start-evaluation) below |
+| **Evaluate locally** | [Quickstart Guide](docs/quickstart.md) |
+| **Develop the sales agent** | [Getting Started](docs/development/GETTING_STARTED.md) |
 | **Run a multi-tenant platform** | [Deployment Guide](docs/deployment/multi-tenant.md) |
 
 ---
 
-## Quick Start (Evaluation)
+## Quick Start
 
-Try the sales agent locally:
-
-```bash
-# Clone and start
-git clone https://github.com/prebid/salesagent.git
-cd salesagent
-docker compose up -d
-
-# Test the MCP interface
-uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
-uvx adcp http://localhost:8000/mcp/ --auth test-token get_products '{"brief":"video"}'
-```
-
-Access services at http://localhost:8000:
-- **Admin UI:** `/admin`. Sign in with Google as one of the `SUPER_ADMIN_EMAILS` addresses; there is no password login. See [first-time setup](docs/quickstart.md#first-time-setup).
-- **MCP Server:** `/mcp/`
-- **A2A Server:** `/a2a`
-
-For production deployment, see the [Quickstart Guide](docs/quickstart.md).
+The [Quickstart Guide](docs/quickstart.md) runs the sales agent locally with Docker Compose,
+from cloning the repository through signing in to the Admin UI and making a first
+`get_products` call from an AI agent. Sign-in is Google OAuth (or another OIDC provider)
+only, so the guide sets up an OAuth client before the first start.
 
 ---
 
@@ -139,13 +125,18 @@ Add to your Claude config (`~/Library/Application Support/Claude/claude_desktop_
   "mcpServers": {
     "adcp": {
       "command": "uvx",
-      "args": ["mcp-remote", "http://localhost:8000/mcp/", "--header", "Authorization: Bearer YOUR_TOKEN"]
+      "args": [
+        "mcp-remote", "http://localhost:8000/mcp/",
+        "--header", "Authorization: Bearer YOUR_TOKEN"
+      ]
     }
   }
 }
 ```
 
-Your token is shown once, when the advertiser is created in Admin UI → Advertisers; rotate it there if it is lost.
+Replace `YOUR_TOKEN` with a token of an advertiser of the `default` tenant
+([API Token](docs/user-guide/advertisers.md#api-token)). To reach another tenant, see
+[quickstart step 7](docs/quickstart.md#7-connect-an-ai-agent).
 
 ---
 
@@ -158,7 +149,7 @@ docker compose logs adcp-server | head -50
 
 **GAM OAuth error?**
 - Verify `GAM_OAUTH_CLIENT_ID` and `GAM_OAUTH_CLIENT_SECRET` in `.env`
-- Restart: `docker compose restart`
+- Recreate the containers so they read `.env` again: `docker compose up -d --force-recreate`
 
 **More help:** [Troubleshooting Guide](docs/development/troubleshooting.md)
 
@@ -259,10 +250,9 @@ a buyer sent it; the only difference between them is the tenant's adapter.
 
 ## Using the MCP Client
 
-An AI agent connects with the `fastmcp` client and calls the AdCP tools by name:
-`client.call_tool("get_products", {...})`, then `client.call_tool("create_media_buy", {...})`.
-The [quick start guide](docs/quickstart.md#connecting-an-ai-agent) has the complete example,
-including the headers a local call needs and a `create_media_buy` payload the server accepts.
+Make a first call with the script in
+[quickstart step 7](docs/quickstart.md#7-connect-an-ai-agent). The other tools take the request shapes in the
+[AdCP specification](https://github.com/adcontextprotocol/adcp).
 
 ## Project Structure
 

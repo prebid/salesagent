@@ -12,7 +12,7 @@ This document is the reference for the security architecture of the sales agent:
 - [Security testing requirements](#security-testing-requirements)
 - [OAuth cross-domain authentication](#oauth-cross-domain-authentication) — why cross-domain login fails, and the workaround
 - [Generic OIDC provider support](#generic-oidc-provider-support) — configuration for any OIDC provider, or Google OAuth
-- [Secrets configuration](#secrets-configuration) — the secrets file and handling practices
+- [Secrets configuration](#secrets-configuration) — which file holds secrets, and handling practices
 
 ## Admin authentication architecture
 
@@ -308,7 +308,7 @@ The following list shows discovery URLs for common providers:
 When you create the OAuth application in your identity provider, use the following settings:
 
 - **Application type**: Web application
-- **Redirect URI**: locally, register both `http://localhost:8000/admin/auth/google/callback` and `http://localhost:8000/auth/google/callback`. In production, register `https://your-domain/admin/auth/google/callback`, or the value of `GOOGLE_OAUTH_REDIRECT_URI`.
+- **Redirect URIs**: locally, the two URIs in [quickstart step 2](quickstart.md#2-create-a-google-oauth-client). In production behind the bundled nginx, `https://your-domain/admin/auth/google/callback`, or the value of `GOOGLE_OAUTH_REDIRECT_URI`.
 - **Scopes**: At minimum `openid`, `email`, and `profile`
 - **Grant type**: Authorization Code
 
@@ -333,13 +333,19 @@ When multiple OAuth configurations exist, the system uses them in the following 
 
 ## Secrets configuration
 
-### The secrets file
+### Which file holds secrets
 
-The Docker Compose files read secrets from files that `.gitignore` excludes.
-`docker-compose.yml` reads `.env`. `docker-compose.multi-tenant.yml` reads `.env` and then
-`.env.secrets`, so a value in `.env.secrets` wins there.
+The application reads every setting, secrets included, from its environment. Which file
+puts them there depends on the compose file:
 
-Create your `.env` file:
+- `docker-compose.yml`, the local stack in the [quickstart](quickstart.md), reads `.env`
+  only. A value written to `.env.secrets` never reaches the application.
+- `docker-compose.multi-tenant.yml` reads `.env` and then `.env.secrets`, so it can keep
+  secrets in a file of their own.
+- A production deployment sets them through its platform's secret store (for example
+  `fly secrets set`), not a file.
+
+For `docker-compose.multi-tenant.yml`, create `.env.secrets`:
 
 ```bash
 # API Keys
@@ -368,13 +374,7 @@ GAM_OAUTH_CLIENT_SECRET=your-gam-client-secret
 SUPER_ADMIN_DOMAINS=example.com
 ```
 
-### Benefits of a secrets file
-
-A secrets file provides the following benefits:
-
-- **Gitignore protection**: `.gitignore` excludes `.env` and `.env.secrets`, so neither file
-  reaches the repository.
-- **Workspace isolation**: Each workspace can have different secrets.
+Both `.env` and `.env.secrets` are listed in `.gitignore`, so neither is committed.
 
 ### Security best practices
 

@@ -83,14 +83,15 @@ Each release publishes a full version tag plus rolling major and major.minor tag
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `ENCRYPTION_KEY` | Yes | Fernet key that encrypts stored secrets, such as a tenant's SSO client secret; the image's entrypoint refuses to start without it |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | For sign-in | The deployment's own OAuth client. `OAUTH_DISCOVERY_URL`, `OAUTH_CLIENT_ID`, and `OAUTH_CLIENT_SECRET` configure any OIDC provider instead |
 | `SUPER_ADMIN_EMAILS` | For sign-in | Comma-separated super admin addresses. `SUPER_ADMIN_DOMAINS` names whole email domains instead |
-| `ENCRYPTION_KEY` | Yes | Fernet key that encrypts stored secrets, such as a tenant's SSO client secret |
 | `FLASK_SECRET_KEY` | Yes | Long random value that signs session cookies |
-| `CREATE_DEMO_TENANT` | No | Set to `true` for initial setup with demo data |
 | `GEMINI_API_KEY` | No | For AI-powered creative review |
 
-The first sign-in uses the deployment's own OAuth client and a super admin address. After it, each tenant configures its own SSO on the **Users & Access** page.
+[Deployment OAuth](environment-variables.md#deployment-oauth) explains what the sign-in
+variables are for. `CREATE_DEMO_TENANT` has no effect in single-tenant mode; see
+[About `CREATE_DEMO_TENANT`](../quickstart.md#about-create_demo_tenant).
 
 For a complete list including GAM integration and all optional settings, see the **[environment variables reference](environment-variables.md)**.
 
@@ -104,10 +105,10 @@ cd salesagent
 cp .env.template .env
 # Edit .env with your configuration
 docker compose up -d
-
-# Verify
-curl http://localhost:8000/health
 ```
+
+Wait for `adcp-server` to report `(healthy)` before the first request; see
+[quickstart step 4](../quickstart.md#4-start-the-stack).
 
 ## Services and ports
 
@@ -188,12 +189,9 @@ which lets you complete an OIDC login for it before its SSO is switched on.
 Sign in with the deployment's own OAuth — set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
 (or the generic `OAUTH_*` variables) and put your address in `SUPER_ADMIN_EMAILS`.
 
-On the Docker Compose stack, register both of the following redirect URIs with that OAuth
-client before you sign in. [Deployment OAuth](environment-variables.md#deployment-oauth)
-explains why it needs both.
-
-- `http://localhost:8000/admin/auth/google/callback`
-- `http://localhost:8000/auth/google/callback`
+On the Docker Compose stack, register the two redirect URIs in
+[quickstart step 2](../quickstart.md#2-create-a-google-oauth-client) with that OAuth client
+before you sign in.
 
 **To complete setup:**
 
@@ -210,16 +208,10 @@ again, because a tenant's SSO never grants super admin.
 The [SSO setup guide](../user-guide/sso-setup.md) has provider-specific instructions.
 [Security and authentication](../security.md) covers how sessions and secrets are handled.
 
-### Local testing with demo data
+### Local testing without an ad server
 
-For local development without a real ad server:
-
-```bash
-# Add to .env for local testing only - NOT for production
-CREATE_DEMO_TENANT=true
-```
-
-This creates a "Demo Sales Agent" tenant with a mock adapter, sample currencies, and test data for exploring features.
+The [quickstart](../quickstart.md) runs the stack locally. Its `default` tenant uses the Mock
+adapter, which simulates an ad server.
 
 ## Custom domain configuration
 

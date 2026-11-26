@@ -192,7 +192,7 @@ def main():
         print("To use GAM with OAuth authentication:")
         print("  1. Go to https://console.cloud.google.com/apis/credentials")
         print("  2. Create OAuth 2.0 Client ID (Web application)")
-        print("  3. Add redirect URI: http://localhost:8001/tenant/callback/gam")
+        print("  3. Add redirect URI: http://localhost:8000/admin/auth/gam/callback")
         print("  4. Set credentials in .env file:")
         print("     GAM_OAUTH_CLIENT_ID=your-client-id")
         print("     GAM_OAUTH_CLIENT_SECRET=your-client-secret")

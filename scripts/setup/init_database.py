@@ -89,10 +89,10 @@ def init_db(exit_on_error=False):
 ║  No demo tenant created (CREATE_DEMO_TENANT=false)                       ║
 ║                                                                          ║
 ║  To create a tenant:                                                     ║
-║  • Sign up via Admin UI: http://localhost:8001                           ║
-║  • Or use CLI:                                                           ║
-║    python -m scripts.setup.setup_tenant "My Publisher" --adapter mock    ║
-║    python -m scripts.setup.setup_tenant "My Publisher" --adapter gam     ║
+║  • Sign up via Admin UI: http://localhost:8000/admin                     ║
+║  • Or use the CLI (docs/quickstart.md, step 6):                          ║
+║    python -m scripts.setup.setup_tenant "My Publisher" \\                ║
+║      --virtual-host <host>                                               ║
 ║                                                                          ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
@@ -351,7 +351,7 @@ def init_db(exit_on_error=False):
 ║  A default tenant has been created for quick start:              ║
 ║                                                                  ║
 ║  🏢 Tenant: Default Publisher                                    ║
-║  🌐 URL: http://localhost:8080                                   ║
+║  🌐 Admin UI: http://localhost:8000/admin                        ║
 ║                                                                  ║
 ║  🔑 Default Advertiser Token (Authorization: Bearer):            ║
 ║     test-token                                                   ║
@@ -360,11 +360,9 @@ def init_db(exit_on_error=False):
 ║     • Acme Corp: acme_corp_token                                 ║
 ║     • Purina: purina_token                                       ║
 ║                                                                  ║
-║  💡 To create additional tenants:                                ║
-║     python scripts/setup/setup_tenant.py "Publisher Name"        ║
+║  💡 First agent call: docs/quickstart.md step 7                  ║
 ║                                                                  ║
-║  📚 To use with a different tenant:                              ║
-║     http://[subdomain].localhost:8080                            ║
+║  📚 To create additional tenants: docs/quickstart.md, step 6     ║
 ║                                                                  ║
 ╚══════════════════════════════════════════════════════════════════╝
                 """
@@ -376,25 +374,17 @@ def init_db(exit_on_error=False):
 ║                        🚀 ADCP SALES AGENT READY                         ║
 ╠══════════════════════════════════════════════════════════════════════════╣
 ║                                                                          ║
-║  ⚡ TEST IT NOW:                                                         ║
-║                                                                          ║
-║  # List available tools                                                  ║
-║  uvx adcp http://localhost:8080/mcp/ --auth test-token list_tools        ║
-║                                                                          ║
-║  # Search for products (syntax: <url> --auth <token> <tool> '<json>')    ║
-║  uvx adcp http://localhost:8080/mcp/ --auth test-token \\                ║
-║    get_products '{"brief":"video"}'                                      ║
+║  ⚡ TEST IT NOW: the script in docs/quickstart.md step 7, with           ║
+║     Authorization: Bearer test-token                                     ║
 ║                                                                          ║
 ╠══════════════════════════════════════════════════════════════════════════╣
 ║                                                                          ║
 ║  🏢 Default Tenant: Default Publisher                                    ║
 ║  🔑 Principal Token: test-token                                          ║
-║  🌐 Admin UI: http://localhost:8001                                      ║
-║     Login: test_super_admin@example.com / test123                        ║
+║  🌐 Admin UI: http://localhost:8000/admin                                ║
+║     Sign in with Google as a SUPER_ADMIN_EMAILS address                  ║
 ║                                                                          ║
-║  📚 Create your own tenant:                                              ║
-║     docker-compose exec adcp-server python \\                            ║
-║       -m scripts.setup.setup_tenant "My Publisher" --adapter mock        ║
+║  📚 Create your own tenant: docs/quickstart.md, step 6                   ║
 ║                                                                          ║
 ╚══════════════════════════════════════════════════════════════════════════╝
                 """
@@ -409,10 +399,10 @@ def init_db(exit_on_error=False):
                 f"""
 ✅ Database ready ({tenant_count} tenant(s))
 
-⚡ Quick test: uvx adcp http://localhost:8080/mcp/ --auth test-token list_tools
+⚡ First agent call: docs/quickstart.md step 7
 
-🌐 Admin UI: http://localhost:8001
-   Login: test_super_admin@example.com / test123
+🌐 Admin UI: http://localhost:8000/admin
+   Sign in with Google as a SUPER_ADMIN_EMAILS address
 """
             )
 

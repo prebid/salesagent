@@ -170,8 +170,8 @@ AUTHENTICATION TOKENS
 Principal Token (for MCP/A2A API):
    {principal_token}
 
-Copy and use with:
-   uvx adcp http://localhost:8080/mcp/ --auth {principal_token} list_tools
+It is shown only now. Use it in the script from docs/quickstart.md step 7, with
+   Host: {args.virtual_host}
 {gam_note}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -179,7 +179,7 @@ Copy and use with:
 Access Control:
 {access_info}
 
-Admin UI: http://localhost:8001
+Admin UI: http://localhost:8000/tenant/{tenant_id}
    {f"Login as {admin_email} to manage this publisher" if admin_email else "Login with your Google account to manage this publisher"}
 
 Next Steps:
