@@ -26,6 +26,12 @@ from sqlalchemy.sql import func
 
 from src.core.database.jsonb_append import jsonb_list
 from src.core.database.models import AdapterConfig, Tenant, User, UserRole
+from src.core.database.repositories.base import Repository
+from src.core.domain_config import get_super_admin_domain
+from src.core.http_utils import authorized_domain
+from src.core.json_validators import checked_authorized_domain
+from src.core.operator_errors import SuperAdminDomainRefused, TenantNotFound
+from src.core.schemas.advertising_policy import AdvertisingPolicy
 
 AuthorizedListColumn = Literal["authorized_domains", "authorized_emails"]
 AddOutcome = Literal["added", "duplicate", "missing_tenant"]
@@ -45,7 +51,7 @@ class UserChange(NamedTuple):
     is_active: bool = False
 
 
-class TenantConfigRepository:
+class TenantConfigRepository(Repository):
     """Tenant-scoped access for configuration models.
 
     All queries filter by tenant_id automatically. Callers cannot bypass
@@ -55,6 +61,8 @@ class TenantConfigRepository:
         session: SQLAlchemy session (caller manages lifecycle).
         tenant_id: Tenant scope for all queries.
     """
+
+    NOT_FOUND = TenantNotFound
 
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session
@@ -112,6 +120,15 @@ class TenantConfigRepository:
         tenant.updated_at = datetime.now(UTC)
         return True
 
+    def save_advertising_policy(self, policy: AdvertisingPolicy) -> bool:
+        """Store *policy* as the tenant's complete advertising policy, the one ``get_products`` enforces.
+
+        The one writer of the column: the admin Policy page and the tenant management API
+        both save through here. Returns ``False`` when the tenant does not exist; the caller
+        owns the transaction and commits.
+        """
+        return self.update_tenant(advertising_policy=policy)
+
     # ------------------------------------------------------------------
     # Authorized-list mutation (atomic)
     # ------------------------------------------------------------------
@@ -132,8 +149,20 @@ class TenantConfigRepository:
         return jsonb_list(getattr(Tenant, column))
 
     def add_to_authorized_list(self, column: AuthorizedListColumn, value: str) -> AddOutcome:
-        """Atomically append ``value`` to the tenant's list if not present."""
+        """Atomically append ``value`` to the tenant's list if not present.
+
+        An authorized domain must be a domain name (``checked_authorized_domain``): this UPDATE
+        bypasses the ORM validator that checks a whole-list assignment. It must also not be the
+        deployment's ``SUPER_ADMIN_DOMAIN``, compared in the form it would be stored in. Every
+        page that lets a tenant add a domain appends through here; a whole-list assignment is
+        the operator's own (tenant creation, the management API, the single-tenant bootstrap,
+        which seeds ``SUPER_ADMIN_DOMAINS``), so this refusal is not on the column.
+        """
         col_j = self._authorized_list_col(column)
+        if column == "authorized_domains":
+            value = checked_authorized_domain(value)
+            if value == authorized_domain(get_super_admin_domain()):
+                raise SuperAdminDomainRefused(f"Tenant {self._tenant_id} authorizing the super-admin domain {value}")
         elem = func.jsonb_build_array(literal(value))
         stmt = (
             update(Tenant)

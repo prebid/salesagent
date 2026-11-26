@@ -3,15 +3,16 @@
 import json
 import logging
 
-from flask import Blueprint, jsonify, render_template, request, session
+from flask import Blueprint, jsonify, render_template, request
 from sqlalchemy import String, func, or_, select
 
 from src.admin.form_validation import json_object_body
-from src.admin.utils import execute_limited, get_tenant_config_from_db, require_auth, require_tenant_access
+from src.admin.utils import execute_limited, get_tenant_config_from_db, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Tenant
+from src.core.database.repositories.gam_order import GAMOrderRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.services.background_sync_service import start_inventory_sync_background
 
@@ -334,15 +335,10 @@ def inventory_browser(tenant_id):
     )
 
 
-# FIXME(#2233): inline session["tenant_id"] compare stands in for require_tenant_access.
 @inventory_bp.route("/tenant/<tenant_id>/orders")
-@require_auth()
+@require_tenant_access()
 def orders_browser(tenant_id):
     """Display GAM orders browser page."""
-    # Check access
-    if session.get("role") != "super_admin" and session.get("tenant_id") != tenant_id:
-        return "Access denied", 403
-
     with get_db_session() as db_session:
         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
@@ -456,10 +452,8 @@ def get_orders(tenant_id):
 def get_order_details(tenant_id, order_id):
     """Get details for a specific order."""
     with get_db_session() as db_session:
-        order = db_session.scalars(select(GAMOrder).filter_by(tenant_id=tenant_id, order_id=order_id)).first()
-
-        if not order:
-            return jsonify({"error": "Order not found"}), 404
+        orders = GAMOrderRepository(db_session, tenant_id)
+        order = orders.require(orders.get, order_id)
 
         # Get line items count (would need GAMLineItem model)
         # stmt = select(GAMLineItem).filter_by(
@@ -492,15 +486,10 @@ def get_order_details(tenant_id, order_id):
         )
 
 
-# FIXME(#2233): inline session["tenant_id"] compare stands in for require_tenant_access.
 @inventory_bp.route("/tenant/<tenant_id>/check-inventory-sync")
-@require_auth()
+@require_tenant_access()
 def check_inventory_sync(tenant_id):
     """Check if GAM inventory has been synced for this tenant."""
-    # Check access
-    if session.get("role") != "super_admin" and session.get("tenant_id") != tenant_id:
-        return jsonify({"error": "Access denied"}), 403
-
     with get_db_session() as db_session:
         # Count inventory items
         inventory_count = db_session.scalar(
@@ -530,18 +519,10 @@ def check_inventory_sync(tenant_id):
         )
 
 
-# FIXME(#2233): inline session["role"] check stands in for require_tenant_access.
 @inventory_bp.route("/tenant/<tenant_id>/analyze-ad-server")
-@require_auth()
+@require_tenant_access()
 def analyze_ad_server_inventory(tenant_id):
     """Analyze ad server to discover audiences, formats, and placements."""
-    # Check access
-    if session.get("role") == "viewer":
-        return jsonify({"error": "Access denied"}), 403
-
-    if session.get("role") == "tenant_admin" and session.get("tenant_id") != tenant_id:
-        return jsonify({"error": "Access denied"}), 403
-
     # Get tenant config to determine adapter
     config = get_tenant_config_from_db(tenant_id)
     if not config:

@@ -23,7 +23,13 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories import (
+    AdvertisingPolicyFactory,
+    PricingOptionFactory,
+    PrincipalFactory,
+    ProductFactory,
+    TenantFactory,
+)
 from tests.harness.transport import Transport
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -67,7 +73,7 @@ def test_a_defect_in_the_policy_check_fails_the_request(integration_db, defect, 
 
     with ProductEnv() as env:
         _seed(env)
-        env.configure_tenant_field("advertising_policy", {"enabled": True})
+        env.configure_tenant_field("advertising_policy", AdvertisingPolicyFactory())
         env.set_ranking_disabled()
         # The real service on the seller's model; only the prompt builder is broken.
         env.mock["policy_service"].side_effect = lambda model: PolicyCheckService(model=model)

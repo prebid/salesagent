@@ -10,6 +10,7 @@ DECORATOR ORDER CONVENTION:
 This order ensures we only log actions by authorized users.
 """
 
+import re
 from collections.abc import Callable
 from functools import wraps
 from typing import Any
@@ -18,6 +19,7 @@ from flask import g, request, session
 
 from src.core.exceptions import AdCPSalesAgentError
 from src.core.operator_errors import best_effort
+from src.core.webhook_validator import UNPARSEABLE_WEBHOOK_URL_FOR_LOG, url_for_record
 
 #: The attribute ``log_admin_action`` sets on the wrapper it returns: the operation name.
 #: ``functools.wraps`` copies it to every outer wrapper. scripts/generate_admin_route_reference.py
@@ -28,101 +30,108 @@ AUDIT_OPERATION_ATTRIBUTE = "audit_operation"
 #: under a reference by the admin error handler; its text never reaches the audit log.
 _RAISED_MESSAGE = "The action failed with an error; the server log has the details"
 
-# Sensitive field patterns to exclude from audit logs
-_SENSITIVE_PATTERNS = frozenset(
-    {
-        "password",
-        "passwd",
-        "pwd",
-        "secret",
-        "secret_key",
-        "webhook_secret",
-        "signing_secret",
-        "token",
-        "access_token",
-        "refresh_token",
-        "bearer_token",
-        "api_token",
-        "auth_token",
-        "key",
-        "api_key",
-        "apikey",
-        "private_key",
-        "public_key",
-        "priv_key",
-        "credential",
-        "credentials",
-        "authorization",
-        "auth",
-        "bearer",
-        "oauth",
-        "oauth_token",
-        "oauth_secret",
-        "cert",
-        "certificate",
-    }
+# Which field names mark a secret. Names are normalised first (see _normalize_field_name),
+# then a name is sensitive if it CONTAINS one of these...
+_SENSITIVE_SUBSTRINGS = (
+    "password",
+    "passwd",
+    "passphrase",
+    "secret",
+    "token",
+    "credential",
+    "webhook",
+    "api_key",
+    "apikey",
+    "private_key",
+    "key_json",
+    "keyfile",
+    "service_account",
+    "authorization",
+    "bearer",
+    "cookie",
+    "signature",
+    "database_url",
+    "connection_string",
 )
 
-_SENSITIVE_SUFFIXES = ("_secret", "_token", "_key", "_password", "_credential", "_pwd")
+# ...or has one of these as a whole ``_``-separated word, so a short marker such as ``key``
+# or ``dsn`` does not match inside an unrelated word (``keyword``, ``adsnetwork``).
+_SENSITIVE_WORDS = frozenset({"key", "auth", "oauth", "cert", "certificate", "dsn", "jwt", "pwd"})
+
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+_MAX_VALUE_LENGTH = 100
+# Deliberate ceilings: an audit row is a summary of what was submitted, not a copy of it.
+# Containers nested deeper than this, and items past the cap, are left out.
+_MAX_DEPTH = 4
+_MAX_ITEMS = 50
+
+
+def _normalize_field_name(field_name: str) -> str:
+    """``xApiKey``, ``X-Api-Key`` and ``x api key`` all become ``x_api_key``."""
+    return re.sub(r"[-\s.]+", "_", _CAMEL_BOUNDARY.sub("_", field_name.strip())).lower()
 
 
 def _is_sensitive_field(field_name: str) -> bool:
-    """Check if field name indicates sensitive data.
+    """Whether a field with this name may hold a secret."""
+    name = _normalize_field_name(field_name)
+    return any(part in name for part in _SENSITIVE_SUBSTRINGS) or not _SENSITIVE_WORDS.isdisjoint(name.split("_"))
 
-    Args:
-        field_name: Name of the field to check
 
-    Returns:
-        True if field is likely to contain sensitive data
+def _sanitize_value(value: Any) -> Any:
+    """A scalar as an audit row may hold it.
+
+    ``None``, booleans and numbers are kept. Anything else becomes a string cut to 100
+    characters, and an http(s) URL is first reduced by the one URL reducer
+    (:func:`~src.core.webhook_validator.url_for_record`).
     """
-    lower_field = field_name.lower()
-
-    # Check exact matches
-    if lower_field in _SENSITIVE_PATTERNS:
-        return True
-
-    # Check suffixes
-    if lower_field.endswith(_SENSITIVE_SUFFIXES):
-        return True
-
-    return False
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    text = str(value).strip()
+    if text.lower().startswith(("http://", "https://")):
+        text = url_for_record(text, keep_path=False) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG
+    return text[:_MAX_VALUE_LENGTH]
 
 
-def _sanitize_value(value: Any) -> str:
-    """Sanitize and truncate value for audit log storage.
+def _redact(value: Any, depth: int = 0) -> Any:
+    """*value* with every sensitive-named key dropped at every level of nesting.
 
-    Args:
-        value: Value to sanitize
-
-    Returns:
-        Sanitized string (max 100 characters)
+    A container is walked, never ``str()``-ed: the repr of a dict carries its secret
+    values whatever its own key is called. Scalars go through :func:`_sanitize_value`.
     """
-    value_str = str(value)
-    return value_str[:100] if len(value_str) > 100 else value_str
+    if isinstance(value, dict):
+        if depth >= _MAX_DEPTH:
+            return "[omitted]"
+        return {
+            str(key): _redact(item, depth + 1)
+            for key, item in list(value.items())[:_MAX_ITEMS]
+            if not _is_sensitive_field(str(key))
+        }
+    if isinstance(value, list | tuple):
+        if depth >= _MAX_DEPTH:
+            return "[omitted]"
+        return [_redact(item, depth + 1) for item in value[:_MAX_ITEMS]]
+    return _sanitize_value(value)
 
 
-def _extract_safe_request_data() -> dict[str, str]:
-    """Extract non-sensitive data from request (form or JSON).
+def _declared_request_fields(audit_fields: tuple[str, ...]) -> dict[str, Any]:
+    """The submitted values of the fields a route named in ``audit_fields``, and nothing else.
 
-    Returns:
-        Dictionary of safe field names to sanitized values
+    The body is NOT copied by default: what reaches a row every tenant user reads is what the
+    route declared, so an undeclared field, whatever its name, never gets there.
     """
-    safe_fields: dict[str, str] = {}
-
-    # Form data
+    if not audit_fields:
+        return {}
     if request.form:
-        for key, value in request.form.items():
-            if not _is_sensitive_field(key):
-                safe_fields[key] = _sanitize_value(value)
-
-    # JSON data
+        submitted: Any = request.form
     elif request.is_json:
-        json_data = request.get_json() or {}
-        for key, value in json_data.items():
-            if not _is_sensitive_field(key):
-                safe_fields[key] = _sanitize_value(value)
-
-    return safe_fields
+        submitted = request.get_json(silent=True)
+    else:
+        return {}
+    # A JSON body that is not an object (a list, a string) has no fields to pick.
+    if not hasattr(submitted, "get"):
+        return {}
+    return {name: submitted.get(name) for name in audit_fields if name in submitted}
 
 
 def _get_or_create_audit_logger(tenant_id: str):
@@ -189,13 +198,20 @@ def _apply_handled_failure(success: bool, error_message: str | None) -> tuple[bo
 def log_admin_action(
     operation_name: str,
     extract_details: Callable[..., dict[str, Any]] | None = None,
+    audit_fields: tuple[str, ...] = (),
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator to log admin UI actions to audit_logs table.
+
+    Every tenant user, viewers included, reads the rows this writes, so nothing from the
+    request body is stored unless the route names it, and the assembled ``details`` are
+    redacted once (secret-named keys dropped at every level, URLs reduced) before writing.
 
     Args:
         operation_name: Name of the operation (e.g., "update_tenant_settings")
         extract_details: Optional function to extract details from request/response
                         Signature: extract_details(result, **kwargs) -> dict
+        audit_fields: Request fields (form or top-level JSON) to copy into
+                      ``details["request_data"]`` on a POST. Empty by default: no body.
 
     Usage:
         @log_admin_action("update_tenant_settings")
@@ -266,11 +282,8 @@ def log_admin_action(
                                 if isinstance(extracted, dict):
                                     details.update(extracted)
 
-                        # Add request data for POST requests (sanitized)
-                        if request.method == "POST":
-                            safe_fields = _extract_safe_request_data()
-                            if safe_fields:
-                                details["request_data"] = safe_fields
+                        if request.method == "POST" and (declared := _declared_request_fields(audit_fields)):
+                            details["request_data"] = declared
 
                         audit_logger.log_operation(
                             operation=operation_name,
@@ -278,7 +291,7 @@ def log_admin_action(
                             principal_id=user_email,
                             adapter_id="admin_ui",
                             success=success,
-                            details=details,
+                            details=_redact(details),
                             error=error_message,
                             tenant_id=tenant_id,
                         )

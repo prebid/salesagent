@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
+import time
 from collections.abc import Mapping
 from functools import wraps
 from typing import TYPE_CHECKING, Literal, NamedTuple, NoReturn, TypeVar
+from urllib.parse import unquote
 
 from flask import abort, g, has_request_context, jsonify, make_response, redirect, request, session, url_for
 from sqlalchemy import select
@@ -17,7 +18,7 @@ from werkzeug.exceptions import Forbidden
 from src.admin.csrf import SAFE_METHODS
 from src.core.config import get_settings, split_csv
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant, User, UserRole
+from src.core.database.models import Tenant, UserRole
 from src.core.database.repositories.tenant_management_config import TenantManagementConfigRepository
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.logging_config import log_safe
@@ -42,16 +43,6 @@ def is_admin_production() -> bool:
 
 
 #: The blueprint name of the test-credential login path (src/admin/blueprints/test_auth.py).
-
-
-def parse_json_config(config_str):
-    """Parse JSON config string."""
-    if not config_str:
-        return {}
-    try:
-        return json.loads(config_str)
-    except (json.JSONDecodeError, TypeError):
-        return {}
 
 
 def get_tenant_config_from_db(tenant_id):
@@ -80,7 +71,6 @@ def get_tenant_config_from_db(tenant_id):
             "features": {},
             "creative_engine": {},
             "slack_webhook_url": tenant.slack_webhook_url or "",
-            "policy_settings": {},
         }
 
         # Build adapter config from relationship
@@ -129,13 +119,11 @@ def get_tenant_config_from_db(tenant_id):
             "human_review_required": tenant.human_review_required,
         }
 
-        # Add policy settings
-        if tenant.policy_settings:
-            policy_settings = parse_json_config(tenant.policy_settings)
-            if policy_settings:
-                config["policy_settings"] = policy_settings
-
         return config
+
+
+#: How long a cached super-admin answer in the session is trusted before it is checked again.
+SUPER_ADMIN_RECHECK_SECONDS = 300
 
 
 class SuperAdminGrants(NamedTuple):
@@ -183,6 +171,7 @@ _IDENTITY_SESSION_KEYS = (
     "role",
     "is_super_admin",
     "admin_email",
+    "admin_checked_at",
     "is_tenant_admin",
     "available_tenants",
 )
@@ -242,9 +231,12 @@ def is_super_admin(email):
 
     email_lower = email.lower()
 
-    # 0. Check session cache first (if available) to avoid redundant checks
+    # 0. Check session cache first (if available) to avoid redundant checks. The cache is
+    # trusted for SUPER_ADMIN_RECHECK_SECONDS only, so a super admin removed from the
+    # configured lists loses access within that time rather than for the session's life.
     try:
-        if session.get("is_super_admin") and session.get("admin_email") == email_lower:
+        fresh = time.time() - float(session.get("admin_checked_at", 0)) < SUPER_ADMIN_RECHECK_SECONDS
+        if fresh and session.get("is_super_admin") and session.get("admin_email") == email_lower:
             logger.debug(f"Super admin access granted via session cache: {email}")
             return True
     except (RuntimeError, KeyError):
@@ -268,40 +260,12 @@ def _cache_admin_status(email, is_admin):
     try:
         session["is_super_admin"] = is_admin
         session["admin_email"] = email
+        session["admin_checked_at"] = time.time()
         if is_admin:
             logger.debug(f"Admin status cached in session: {email}")
     except (RuntimeError, KeyError):
         # Session not available or read-only
         pass
-
-
-def is_tenant_admin(email, tenant_id=None):
-    """Check if user is a tenant admin.
-
-    Args:
-        email: User's email address
-        tenant_id: Optional tenant ID to check admin status for specific tenant
-
-    Returns:
-        bool: True if user is a tenant admin
-    """
-    if not email:
-        return False
-
-    # Super admins are implicitly tenant admins
-    if is_super_admin(email):
-        return True
-
-    # Check if user is a tenant admin in the database
-    with get_db_session() as db_session:
-        stmt = select(User).filter_by(email=email.lower(), is_active=True, is_admin=True)
-
-        if tenant_id:
-            # Check for specific tenant
-            stmt = stmt.filter_by(tenant_id=tenant_id)
-
-        user = db_session.scalars(stmt).first()
-        return user is not None
 
 
 #: The attribute an access decorator sets on the wrapper it returns: the check, as its module,
@@ -411,6 +375,25 @@ def caller_reads_json() -> bool:
     return not accept["text/html"] > accept["application/json"]
 
 
+def local_path(url: str | None) -> str | None:
+    """*url* when it is a path on this site, else ``None``.
+
+    A path on this site starts with exactly one ``/`` and holds no backslash: browsers read
+    ``//host`` and ``/\\host`` as another site. Nothing is parsed: a value that starts with one
+    ``/`` names no scheme or host. Browsers drop a tab or newline from a URL, so ``/\t/host``
+    is ``//host`` to them, and a value holding either is refused. The URL-decoded form is held
+    to the same test, so an encoded ``%2F%2Fhost`` is refused too. The result is *url* as
+    given, not decoded, so it names the same page.
+    """
+    if not url:
+        return None
+    for form in (url, unquote(url)):
+        if not form.startswith("/") or form.startswith("//") or any(c in form for c in "\\\t\r\n"):
+            return None
+    # A constant "/" followed by the rest: the result is always a path on this host.
+    return "/" + url[1:]
+
+
 def json_failure(message: str, status: int, fields: Mapping[str, object] | None = None) -> Response:
     """The admin app's one JSON failure body: *fields*, then ``success`` and ``error``, which no field can replace."""
     return make_response(jsonify({**(fields or {}), "success": False, "error": message}), status)
@@ -482,10 +465,45 @@ def tenant_access(tenant_id: str, role: UserRole, method: str) -> TenantAccess:
     return "member"
 
 
-def require_tenant_access(*, role: UserRole = UserRole.VIEWER):
-    """Decorator to require tenant access for routes.
+def tenant_access_refusal(tenant_id: str, *, role: UserRole = UserRole.VIEWER):
+    """The answer refusing the current caller access to *tenant_id*, or ``None`` when it may proceed.
 
-    A tenant user must also hold a role that permits the request (:func:`role_permits`);
+    :func:`tenant_access` decides; this answers. :func:`require_tenant_access` applies it to
+    a route whose URL names the tenant, and a view that takes the tenant from a query
+    parameter or a body calls it directly. A missing sign-in is answered (JSON for a caller
+    that reads it, else the tenant's login page); a refusal is raised as a 403, which the
+    admin error handler answers.
+    """
+    logger.info(
+        f"Auth check - tenant: {log_safe(tenant_id)}, method: {request.method}, "
+        f"has_session: {'user' in session}, has_cookies: {bool(request.cookies)}, session_keys: {list(session.keys())}"
+    )
+
+    access = tenant_access(tenant_id, role, request.method)
+
+    if access == "setup_session":
+        g.user = session["test_user"]
+    elif access == "unauthenticated":
+        if (refusal := _json_refusal(401, "Authentication required")) is not None:
+            return refusal
+        # Redirect to tenant-specific login (preserves tenant context)
+        return redirect(url_for("auth.tenant_login", tenant_id=tenant_id, next=request.url))
+    elif access == "not_a_member":
+        _forbid("Access denied")
+    elif access == "role_refused":
+        logger.warning(
+            "Refused %s %s for tenant %s: role too low",
+            log_safe(request.method),
+            log_safe(request.path),
+            log_safe(tenant_id),
+        )
+        _forbid("Your role does not allow this")
+    return None
+
+
+def require_tenant_access(*, role: UserRole = UserRole.VIEWER):
+    """Decorator applying :func:`tenant_access_refusal` to a route whose URL names the tenant.
+
     *role* is the least role the route needs, so ``role=UserRole.ADMIN`` limits it to
     tenant admins. Super admins pass regardless. Each refusal is answered in the form the
     caller reads (:func:`caller_reads_json`): JSON, or for a browser the login redirect or
@@ -495,39 +513,17 @@ def require_tenant_access(*, role: UserRole = UserRole.VIEWER):
     def decorator(f):
         @wraps(f)
         def decorated_function(tenant_id, *args, **kwargs):
-            # Debug logging for SSE authentication issues
-            from flask import request
-
-            has_session = "user" in session
-            has_cookies = bool(request.cookies)
-            logger.info(
-                f"Auth check - tenant: {tenant_id}, method: {request.method}, has_session: {has_session}, has_cookies: {has_cookies}, session_keys: {list(session.keys())}"
-            )
-
-            access = tenant_access(tenant_id, role, request.method)
-
-            if access == "setup_session":
-                g.user = session["test_user"]
-            elif access == "unauthenticated":
-                if (refusal := _json_refusal(401, "Authentication required")) is not None:
-                    return refusal
-                # Redirect to tenant-specific login (preserves tenant context)
-                return redirect(url_for("auth.tenant_login", tenant_id=tenant_id, next=request.url))
-            elif access == "not_a_member":
-                _forbid("Access denied")
-            elif access == "role_refused":
-                logger.warning(
-                    "Refused %s %s for tenant %s: role too low",
-                    log_safe(request.method),
-                    log_safe(request.path),
-                    log_safe(tenant_id),
-                )
-                _forbid("Your role does not allow this")
+            if (refusal := tenant_access_refusal(tenant_id, role=role)) is not None:
+                return refusal
             return f(tenant_id, *args, **kwargs)
 
         setattr(
             decorated_function, ACCESS_CHECK_ATTRIBUTE, f"{__name__}.require_tenant_access(role=UserRole.{role.name})"
         )
+        # The least role, read by tests/integration/test_admin_role_enforcement.py to list the
+        # admin-only routes. ``functools.wraps`` copies the attribute onto any decorator
+        # stacked outside this one.
+        decorated_function.__dict__["tenant_access_role"] = role
         return decorated_function
 
     return decorator

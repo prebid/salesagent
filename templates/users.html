@@ -581,7 +581,7 @@
             {% for domain in authorized_domains %}
             <span class="tag" data-domain="{{ domain }}">
                 {{ domain }}
-                <span class="tag-remove" onclick="removeDomain('{{ domain }}')">&times;</span>
+                <span class="tag-remove" onclick="removeDomain({{ domain|tojson|forceescape }})">&times;</span>
             </span>
             {% endfor %}
         </div>
@@ -673,8 +673,7 @@
 </div>
 
 <script>
-const tenantId = '{{ tenant_id }}';
-const scriptRoot = '{{ request.script_root }}' || '';
+const tenantId = {{ tenant_id|tojson }};
 
 // Domain management
 document.getElementById('add-domain-form').addEventListener('submit', async function(e) {
@@ -700,7 +699,7 @@ document.getElementById('add-domain-form').addEventListener('submit', async func
             const tag = document.createElement('span');
             tag.className = 'tag';
             tag.dataset.domain = domain;
-            tag.innerHTML = `${domain} <span class="tag-remove" onclick="removeDomain('${domain}')">&times;</span>`;
+            tag.innerHTML = `${escapeHtml(domain)} <span class="tag-remove" onclick="removeDomain(${jsArg(domain)})">&times;</span>`;
             domainList.appendChild(tag);
 
             document.getElementById('domain').value = '';
@@ -980,8 +979,8 @@ if (enableSetupBtn) {
 // Show SSO access warning if configured but no users/domains
 function updateSsoAccessWarning(oidcConfigured) {
     const warning = document.getElementById('sso-access-warning');
-    const hasUsers = {{ users|length }} > 0;
-    const hasDomains = {{ authorized_domains|length }} > 0;
+    const hasUsers = {{ users|length|tojson }} > 0;
+    const hasDomains = {{ authorized_domains|length|tojson }} > 0;
 
     if (oidcConfigured && !hasUsers && !hasDomains) {
         warning.style.display = 'block';

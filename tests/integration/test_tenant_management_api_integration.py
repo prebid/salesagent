@@ -90,6 +90,37 @@ def test_tenant(integration_db):
         session.commit()
 
 
+#: A tenant the policy cases create: the required fields and nothing else.
+_POLICY_TENANT = {
+    "name": "Policy Publisher",
+    "subdomain": "policy-publisher",
+    "virtual_host": "policy-publisher.adcp.test",
+    "ad_server": "mock",
+    "creator_email": "ops@policy-publisher.example",
+}
+
+#: A complete AdvertisingPolicy, as the API takes and returns it.
+_POLICY = {
+    "enabled": True,
+    "require_manual_review": True,
+    "prohibited_advertisers": ["blocked.example"],
+    "prohibited_categories": ["gambling"],
+    "prohibited_tactics": ["false urgency"],
+    "default_prohibited_categories": ["illegal_content"],
+    "default_prohibited_tactics": ["impersonation"],
+    "description": "No gambling, no blocked.example",
+}
+
+
+def _assert_names_only(body: dict, field: str, named: str) -> None:
+    """*body* is the form refusal, every issue is on *field*, and one issue's text names *named*."""
+    from src.core.operator_errors import InvalidFormInput
+
+    assert (body["success"], body["error"]) == (False, InvalidFormInput.MESSAGE), body
+    assert {issue["field"] for issue in body["issues"]} == {field}, body
+    assert any(named in issue["text"] for issue in body["issues"]), body
+
+
 class TestTenantManagementAPIIntegration:
     """Integration tests for Tenant Management API."""
 
@@ -217,6 +248,106 @@ class TestTenantManagementAPIIntegration:
         assert detail["settings"]["authorized_emails"] == ["ops@authlist.com", "eng@authlist.com"]
         assert detail["settings"]["authorized_domains"] == ["authlist.com", "eng.authlist.com"]
 
+    @pytest.mark.parametrize("domains", [["a',alert(1),'.example"], "authlist.com", [42]])
+    def test_an_authorized_domains_list_that_is_not_domain_names_is_a_400(self, client, mock_api_key_auth, domains):
+        """The column refuses it at assignment with an OperatorRefusal; the API answers 400 with its message."""
+        from src.core.operator_errors import InvalidDomainNameError
+
+        headers = {"X-Tenant-Management-API-Key": mock_api_key_auth}
+        create = client.post(
+            "/api/v1/tenant-management/tenants",
+            headers=headers,
+            json={
+                "name": "Bad Domains",
+                "subdomain": "bad-domains",
+                "virtual_host": "bad-domains.adcp.test",
+                "ad_server": "mock",
+                "authorized_emails": ["ops@authlist.com"],
+                "authorized_domains": domains,
+            },
+        )
+        assert create.status_code == 400
+        assert create.json == {"success": False, "error": InvalidDomainNameError.MESSAGE}
+
+        created = client.post(
+            "/api/v1/tenant-management/tenants",
+            headers=headers,
+            json={
+                "name": "Good Domains",
+                "subdomain": "good-domains",
+                "virtual_host": "good-domains.adcp.test",
+                "ad_server": "mock",
+                "authorized_domains": ["authlist.com"],
+            },
+        )
+        assert created.status_code == 201
+        tenant_id = created.json["tenant_id"]
+        update = client.put(
+            f"/api/v1/tenant-management/tenants/{tenant_id}", headers=headers, json={"authorized_domains": domains}
+        )
+        assert update.status_code == 400
+        assert update.json == {"success": False, "error": InvalidDomainNameError.MESSAGE}
+        detail = client.get(f"/api/v1/tenant-management/tenants/{tenant_id}", headers=headers).json
+        assert detail["settings"]["authorized_domains"] == ["authlist.com"]
+
+    def test_a_policy_sent_on_create_is_returned_and_put_replaces_it(self, client, mock_api_key_auth):
+        """POST stores the complete policy it is sent, GET returns it, and PUT replaces it whole."""
+        headers = {"X-Tenant-Management-API-Key": mock_api_key_auth}
+        created = client.post(
+            "/api/v1/tenant-management/tenants",
+            headers=headers,
+            json={**_POLICY_TENANT, "advertising_policy": _POLICY},
+        )
+        assert created.status_code == 201, created.json
+        url = f"/api/v1/tenant-management/tenants/{created.json['tenant_id']}"
+        assert client.get(url, headers=headers).json["settings"]["advertising_policy"] == _POLICY
+
+        replacement = {**_POLICY, "enabled": False, "prohibited_advertisers": [], "description": None}
+        assert client.put(url, headers=headers, json={"advertising_policy": replacement}).status_code == 200
+        assert client.get(url, headers=headers).json["settings"]["advertising_policy"] == replacement
+
+    def test_an_incomplete_policy_is_a_400_naming_the_field(self, client, mock_api_key_auth):
+        """A policy missing a key is refused on POST and on PUT, and PUT leaves the stored one."""
+        headers = {"X-Tenant-Management-API-Key": mock_api_key_auth}
+        incomplete = {key: value for key, value in _POLICY.items() if key != "require_manual_review"}
+
+        refused = client.post(
+            "/api/v1/tenant-management/tenants",
+            headers=headers,
+            json={**_POLICY_TENANT, "advertising_policy": incomplete},
+        )
+        assert refused.status_code == 400
+        _assert_names_only(refused.json, "advertising_policy", "advertising_policy.require_manual_review")
+
+        created = client.post(
+            "/api/v1/tenant-management/tenants",
+            headers=headers,
+            json={**_POLICY_TENANT, "advertising_policy": _POLICY},
+        )
+        url = f"/api/v1/tenant-management/tenants/{created.json['tenant_id']}"
+        update = client.put(url, headers=headers, json={"advertising_policy": incomplete})
+        assert update.status_code == 400
+        _assert_names_only(update.json, "advertising_policy", "advertising_policy.require_manual_review")
+        assert client.get(url, headers=headers).json["settings"]["advertising_policy"] == _POLICY
+
+    def test_policy_settings_is_a_400_naming_advertising_policy(self, client, mock_api_key_auth):
+        """The retired key is refused on POST and on PUT, with advertising_policy named as its replacement."""
+        headers = {"X-Tenant-Management-API-Key": mock_api_key_auth}
+        refused = client.post(
+            "/api/v1/tenant-management/tenants",
+            headers=headers,
+            json={**_POLICY_TENANT, "policy_settings": {"enabled": True}},
+        )
+        assert refused.status_code == 400
+        _assert_names_only(refused.json, "policy_settings", "advertising_policy")
+
+        created = client.post("/api/v1/tenant-management/tenants", headers=headers, json=_POLICY_TENANT)
+        url = f"/api/v1/tenant-management/tenants/{created.json['tenant_id']}"
+        update = client.put(url, headers=headers, json={"policy_settings": {"enabled": True}})
+        assert update.status_code == 400
+        _assert_names_only(update.json, "policy_settings", "advertising_policy")
+        assert client.get(url, headers=headers).json["settings"]["advertising_policy"] is None
+
     def test_duplicate_subdomain_returns_409(self, client, mock_api_key_auth):
         """A subdomain that is already taken answers 409, not 500.
 
@@ -304,6 +435,8 @@ class TestTenantManagementAPIIntegration:
         assert data["ad_server"] == "google_ad_manager"
         assert "settings" in data
         assert "adapter_config" in data
+        # Creating a tenant saves no advertising policy: the operator saves one on the Policy page.
+        assert data["settings"]["advertising_policy"] is None
 
         # Verify adapter config
         assert data["adapter_config"]["adapter_type"] == "google_ad_manager"

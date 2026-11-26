@@ -62,7 +62,13 @@ from src.core.product_conversion import convert_product_model_to_schema
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import GetProductsRequest
 from src.services.ai.factory import AIProviderError
-from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories import (
+    AdvertisingPolicyFactory,
+    PricingOptionFactory,
+    PrincipalFactory,
+    ProductFactory,
+    TenantFactory,
+)
 from tests.factories.principal import plaintext_token_for
 from tests.harness._base import INVALID_TOKEN, IntegrationEnv
 from tests.helpers.credentials import credential_headers
@@ -565,13 +571,13 @@ class TestExtensionA:
             # PERMISSION_DENIED says the CALLER is not authorized. Different subjects.
             # The failure shape is defined for this task: get-products-response.json's
             # `status == "failed"` branch requires errors[]. Graded on every transport by
-            # @T-UC-001-ext-a / @T-UC-001-inv-002 in
+            # @T-UC-001-inv-002 (which folds in Extension *a) in
             # tests/bdd/features/BR-UC-001-discover-available-inventory.feature.
             with raises_adcp(AdCPPolicyViolationError):
                 await _call_get_products(
                     brief="tobacco advertising campaign",
                     tenant_overrides={
-                        "advertising_policy": {"enabled": True},
+                        "advertising_policy": AdvertisingPolicyFactory(),
                         "gemini_api_key": "test-key",
                     },
                 )
@@ -600,10 +606,7 @@ class TestExtensionA:
                 await _call_get_products(
                     brief="craft beer advertising",
                     tenant_overrides={
-                        "advertising_policy": {
-                            "enabled": True,
-                            "require_manual_review": True,
-                        },
+                        "advertising_policy": AdvertisingPolicyFactory(require_manual_review=True),
                         "gemini_api_key": "test-key",
                     },
                 )
@@ -623,7 +626,7 @@ class TestExtensionA:
             result = await _call_get_products(
                 brief="safe advertising",
                 tenant_overrides={
-                    "advertising_policy": {"enabled": True},
+                    "advertising_policy": AdvertisingPolicyFactory(),
                     "gemini_api_key": "test-key",
                 },
             )
@@ -640,8 +643,8 @@ class TestExtensionA:
         authors no text (``AdCPSalesAgentError.__init__`` is keyword-only with no
         ``message``), so the buyer-facing message and suggestion come from CODE_TABLE.
         What the buyer is owed is the code and an actionable recovery, which is also what
-        @T-UC-001-ext-a grades ("the error should include suggestion field"). The old
-        name promised the LLM reason and then asserted nothing at all.
+        @T-UC-001-inv-002 grades (its recovery comes from the pinned error-code enum). The
+        old name promised the LLM reason and then asserted nothing at all.
         """
         with patch("src.core.tools.products.PolicyCheckService") as MockService:
             from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
@@ -659,7 +662,7 @@ class TestExtensionA:
                 await _call_get_products(
                     brief="online gambling ads",
                     tenant_overrides={
-                        "advertising_policy": {"enabled": True},
+                        "advertising_policy": AdvertisingPolicyFactory(),
                         "gemini_api_key": "test-key",
                     },
                 )
@@ -1067,7 +1070,7 @@ class TestEmptyResults:
             result = await _call_get_products(
                 brief="policy test",
                 tenant_overrides={
-                    "advertising_policy": {"enabled": True},
+                    "advertising_policy": AdvertisingPolicyFactory(),
                     "gemini_api_key": "test-key",
                 },
             )

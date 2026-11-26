@@ -109,6 +109,10 @@ services:
       # against api.anthropic.com and letting the consumer fail open.
       ANTHROPIC_BASE_URL: http://scripted-llm:8080
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
+      # The operator's own domain, which no tenant may authorize.
+      # BR-ADMIN-OPERATOR-REFUSALS.feature and tests/ui/test_admin_error_answers.py name
+      # this value, so the three change together.
+      SUPER_ADMIN_DOMAIN: "operator.bdd-refusals.example"
       ADCP_TESTING: ${ADCP_TESTING:-true}
       # The status-sweep scenarios run their own tick. At the 60-second default the
       # server's scheduler can flip the unpoisoned siblings first, and the scenario
@@ -890,8 +894,23 @@ services:
       # to prevent. Measured live: run innet_020926_1010 wrote its sessions to
       # the fallback path, not the per-run one.
       BDD_LIVENESS_SESSIONS: "${BDD_LIVENESS_SESSIONS:-}"
+      # Where every tox env writes its JSON report (tox.ini, {env:SUITE_REPORT_DIR:...}).
+      # run_all_tests.sh points it at its per-run results directory on the bind mount, so
+      # a finished suite's report survives a dead supervisor or daemon (cassini-aixo). The
+      # default is the container's own {toxworkdir}, never empty: an empty value would
+      # put every report at /<suite>.json.
+      SUITE_REPORT_DIR: "${SUITE_REPORT_DIR:-/app/.tox}"
       GEMINI_API_KEY: ${GEMINI_API_KEY:-test_key}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}  # TEST ONLY — never use in production
+      # The Google Ad Manager network the GAM tests run against (ToolingSettings.gam_suite_network),
+      # passed through from the host that run_all_tests.sh's preflight checked. No default:
+      # unset here, the GAM tests fail naming the setting. A key FILE is mounted below and
+      # named by its in-container path; the server never reads any of these.
+      GAM_SERVICE_ACCOUNT_JSON: "${GAM_SERVICE_ACCOUNT_JSON:-}"
+      GAM_SERVICE_ACCOUNT_KEY_FILE: "${GAM_SERVICE_ACCOUNT_KEY_FILE:+/run/gam-service-account.json}"
+      GAM_SUITE_NETWORK_CODE: "${GAM_SUITE_NETWORK_CODE:-}"
+      GAM_SUITE_ADVERTISER_ID: "${GAM_SUITE_ADVERTISER_ID:-}"
+      GAM_SUITE_AD_UNIT_IDS: "${GAM_SUITE_AD_UNIT_IDS:-}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -914,6 +933,9 @@ services:
       - single-request-reopen
     volumes:
       - .:/app
+      # The GAM service-account key file, when the host names one (GAM_SERVICE_ACCOUNT_KEY_FILE
+      # above). /dev/null stands in when it names none, and the variable is then unset in here.
+      - ${GAM_SERVICE_ACCOUNT_KEY_FILE:-/dev/null}:/run/gam-service-account.json:ro
       # Restored with the removal of the `user:` pin above (Aug 2026), matching
       # main. It had been dropped because a fresh named volume's mountpoint is
       # created root:root by the daemon before the container process starts,
@@ -924,14 +946,10 @@ services:
       # over -- which is the same principle ADCP_LOG_DIR applies to the server's
       # logs above.
       #
-      # LOAD-BEARING, and not only for ownership: run_all_tests.sh reads the
-      # per-suite JSON reports OUT of this volume
-      # (`docker run -v "${COMPOSE_PROJECT_NAME}_tox_data:/t:ro" ... cp /t/*.json`).
-      # Remove the mount and that extraction silently copies whatever stale
-      # ./.tox JSON the host happens to hold, emitting a fresh timestamped
-      # results directory full of a PREVIOUS run's green numbers -- observed
-      # live on two runs that executed zero suites. The mount and that
-      # extraction have to move together.
+      # Reports do NOT live here. The volume is deleted by the runner's
+      # `down -v`, and a report left in it was lost whenever the supervisor died
+      # before copying it out (cassini-cuhw). Each env writes its report to
+      # SUITE_REPORT_DIR above instead, on the bind mount.
       - tox_data:/app/.tox  # keep tox envs off the bind-mounted host tree
     working_dir: /app
     # venv lives at /opt/venv (UV_PROJECT_ENVIRONMENT in Dockerfile.test), outside
@@ -1100,7 +1118,7 @@ networks:
   # succeeds once and the SECOND stack on the box fails with "Pool overlaps with
   # other one on this address space" — even for a /28 inside the held /24. This
   # repo runs stacks concurrently BY DESIGN (scripts/test-stack.sh sets
-  # COMPOSE_PROJECT_NAME="adcp-test-$$"), so the allocator hands each stack a
+  # a per-run COMPOSE_PROJECT_NAME="adcp-test-<random>"), so the allocator hands each stack a
   # DISJOINT slice the same way it hands out host ports.
   #
   # SIZED FROM THE PEAK CONTAINER COUNT, not guessed. A full run is NOT the 8

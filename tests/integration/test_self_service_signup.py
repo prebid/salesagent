@@ -22,6 +22,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User
 from src.core.database.repositories.principal import PrincipalRepository
 from tests.harness._base import IntegrationEnv
+from tests.helpers.admin_session import tenant_user_session
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -384,10 +385,21 @@ class TestSelfServiceSignupFlow:
                 enable_axe_signals=True,
                 human_review_required=True,
             )
+            # The page is for the publisher who just signed up: a user of the tenant it names.
+            test_tenant.users.append(
+                User(
+                    user_id="completiontest_admin",
+                    email="owner@completiontest.example",
+                    name="Completion Owner",
+                    role="admin",
+                    is_active=True,
+                )
+            )
             db_session.add(test_tenant)
             db_session.commit()
 
         try:
+            tenant_user_session(client, "owner@completiontest.example")
             response = client.get("/signup/complete?tenant_id=completiontest")
             assert response.status_code == 200
             assert b"Welcome to AdCP Sales Agent!" in response.data

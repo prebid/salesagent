@@ -228,6 +228,7 @@ class TestInitTripwire:
         rotation that writes one without the other lands exactly here.
         """
         from src.core.exceptions import AdCPConfigurationError
+        from src.core.signing.provider import PublishedJwkMismatch
         from tests.factories import SigningKeyFactory, TenantFactory
 
         tenant_id = "sk_trip_t1"
@@ -235,22 +236,18 @@ class TestInitTripwire:
             tenant = TenantFactory(tenant_id=tenant_id)
             repo = signing_key_repo(env, tenant_id)
 
-            row_a = provision_key(repo, tenant_id, "adcp-real-a")
-            row_b = provision_key(repo, tenant_id, "adcp-real-b")
+            provision_key(repo, tenant_id, "adcp-real-a")
 
-            # A row holding A's key material while publishing B's public half —
-            # exactly the state a half-completed rotation leaves behind.
-            SigningKeyFactory(
-                tenant=tenant,
-                kid="adcp-drifted",
-                alg=row_b.alg,
-                public_jwk={**row_b.public_jwk, "kid": "adcp-drifted"},
-                private_key_pem_encrypted=row_a.private_key_pem_encrypted,
-            )
+            # A row whose PEM decrypts under the deployment KEK but publishes a JWK
+            # it does not derive — exactly the state a half-completed rotation
+            # leaves behind. The trait differs from a healthy row in key material
+            # only, so the tripwire refuses for changed material, not an alg drift.
+            SigningKeyFactory(tenant=tenant, kid="adcp-drifted", material_changed=True)
             now = just_after_provisioning()
 
-            with pytest.raises(AdCPConfigurationError):
+            with pytest.raises(AdCPConfigurationError) as refused:
                 resolve_provider(repo, tenant_id, now=now, kid="adcp-drifted")
+            assert isinstance(refused.value.internal_detail, PublishedJwkMismatch)
 
             # Control: the untouched rows still resolve, so the tripwire is
             # discriminating between drifted and healthy, not failing everything.

@@ -25,7 +25,9 @@ from src.core.database.models import (
     Principal,
     Product,
 )
+from src.core.database.repositories.base import Repository
 from src.core.database.repositories.effects import SessionEffectsMixin
+from src.core.operator_errors import CreativeNotFound
 from src.core.schemas import (
     CreativeFormatIdentity,
     CreativeStatus,
@@ -81,7 +83,7 @@ def _assignment_count_of(creative: type[Creative]) -> SQLColumnExpression[int]:
     )
 
 
-class CreativeRepository(SessionEffectsMixin):
+class CreativeRepository(SessionEffectsMixin, Repository):
     """Tenant-scoped data access for Creative.
 
     All queries filter by tenant_id automatically. Callers cannot bypass
@@ -94,6 +96,8 @@ class CreativeRepository(SessionEffectsMixin):
         session: SQLAlchemy session (caller manages lifecycle).
         tenant_id: Tenant scope for all queries.
     """
+
+    NOT_FOUND = CreativeNotFound
 
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session
