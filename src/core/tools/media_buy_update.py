@@ -40,6 +40,7 @@ from src.core.exceptions import (
     AdCPNotCancellableError,
     AdCPValidationError,
 )
+from src.core.format_resolver import seller_format_catalogue
 from src.core.format_satisfaction import FormatSatisfaction, creative_refusal, creative_satisfies
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
@@ -950,6 +951,38 @@ def _update_media_buy_impl(
     step = None
 
     with ctx_manager.audit_workflow_step_failure_ctx(lambda: step):
+        # The context, the workflow step and the format catalogue come before the unit opens,
+        # because each one ends an open unit's transaction. ``get_or_create_context`` and
+        # ``create_workflow_step`` commit and close the ContextManager's cached session, which
+        # can be the unit's own session (#2682). The catalogue is read through
+        # ``get_db_session()``, whose exit closes the unit's session (#1644). Inside the unit,
+        # either one released the revision lock ``_refuse_stale_revision`` takes before any
+        # write it guards, and the catalogue read rolled back the writes flushed before it
+        # (#2647). A request the unit refuses therefore leaves a workflow step, which the
+        # fence above marks failed.
+        persistent_ctx = ctx_manager.get_or_create_context(
+            tenant_id=tenant.tenant_id,
+            principal_id=principal_id,
+            context_id=None,
+            is_async=True,
+        )
+        # In the async path this is only None when a buyer-supplied context_id does not
+        # resolve: a not-found condition, not a transient adapter outage.
+        if persistent_ctx is None:
+            raise AdCPContextNotFoundError(details=EntityRefDetails(context_id=None), field="context_id")
+        step = ctx_manager.create_workflow_step(
+            context_id=persistent_ctx.context_id,
+            step_type="tool_call",
+            owner="principal",
+            status="in_progress",
+            tool_name="update_media_buy",
+            request_data=req,
+        )
+        # Only a package's inline creatives read it (the joined sync_creatives below).
+        inline_creative_catalogue = (
+            seller_format_catalogue(tenant.tenant_id) if any(pkg.creatives for pkg in req.packages or ()) else None
+        )
+
         # Single UoW for entire update operation — one session, one transaction
         with MediaBuyUoW(tenant.tenant_id) as uow:
             assert uow.media_buys is not None
@@ -991,7 +1024,7 @@ def _update_media_buy_impl(
                 )
 
             # After the terminal refusal, which keeps its own answer for a re-cancel, and before
-            # the workflow step and any adapter call.
+            # any adapter call.
             _refuse_cancellation(req, _current_status)
 
             _requested = _requested_actions(req)
@@ -1007,43 +1040,14 @@ def _update_media_buy_impl(
                         field="media_buy_id",
                     )
 
-            # Create or get persistent context and workflow step
-            # (ctx_manager + step were hoisted before the try block so the
-            # AdCPSalesAgentError / Exception handlers can mark the step as failed)
-            ctx_id = None
-            persistent_ctx = None
-
-            persistent_ctx = ctx_manager.get_or_create_context(
-                tenant_id=tenant.tenant_id,
-                principal_id=principal_id,  # Now guaranteed to be str
-                context_id=ctx_id,
-                is_async=True,
-            )
-
-            # Verify persistent_ctx is not None. In the async path this is
-            # only None when a buyer-supplied context_id does not resolve —
-            # a not-found condition, not a transient adapter outage.
-            if persistent_ctx is None:
-                raise AdCPContextNotFoundError(details=EntityRefDetails(context_id=ctx_id), field="context_id")
-
-            # Create workflow step for this tool call
-            step = ctx_manager.create_workflow_step(
-                context_id=persistent_ctx.context_id,  # Now safe to access
-                step_type="tool_call",
-                owner="principal",
-                status="in_progress",
-                tool_name="update_media_buy",
-                request_data=req,
-            )
-
             principal = identity.principal
 
             # The config row is read on this unit's session. get_adapter would read it in a
             # session of its own, and the first get_db_session() inside an open unit closes the
             # unit's session: the revision lock _refuse_stale_revision took would go with it,
-            # before any write it guards (#1644, #2647). The lock then holds until the writes,
-            # except on the thread whose cached ContextManager session is the unit's session:
-            # get_or_create_context and create_workflow_step above commit and close it (#2682).
+            # before any write it guards (#1644, #2647). The step's result is still recorded
+            # inside the unit, after the last write: on the thread whose cached ContextManager
+            # session is the unit's session, that record commits and closes it (#2682).
             assert uow.adapter_configs is not None
             adapter = build_adapter(identity, uow.adapter_configs.find_by_tenant())
             today = date.today()
@@ -1350,6 +1354,7 @@ def _update_media_buy_impl(
                             principal_id=principal_id,
                             tenant=tenant,
                             uow=uow.join(CreativeUoW),
+                            catalogue=inline_creative_catalogue,
                         )
 
                         # Check for sync errors

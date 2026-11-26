@@ -2,7 +2,7 @@
 
 Patches: MediaBuyUoW, _verify_principal,
          get_context_manager, build_adapter, get_audit_logger,
-         ensure_tenant_context, get_db_session.
+         seller_format_catalogue, ensure_tenant_context, get_db_session.
 
 Usage::
 
@@ -21,6 +21,7 @@ Available mocks via env.mock:
     "ctx_mgr"   -- get_context_manager mock
     "adapter"   -- build_adapter mock
     "audit"     -- get_audit_logger mock
+    "catalogue" -- seller_format_catalogue mock (fetched before the unit for inline creatives)
     "db"        -- get_db_session mock
 
 Fluent API:
@@ -99,6 +100,7 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         "ctx_mgr": f"{_MODULE}.get_context_manager",
         "adapter": f"{_MODULE}.build_adapter",
         "audit": f"{_MODULE}.get_audit_logger",
+        "catalogue": f"{_MODULE}.seller_format_catalogue",
         "db": f"{_DB_MODULE}.get_db_session",
     }
 
