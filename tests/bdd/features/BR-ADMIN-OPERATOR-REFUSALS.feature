@@ -385,8 +385,10 @@ Feature: BR-ADMIN-OPERATOR-REFUSALS Expected refusals in the admin app
     And the answer does not carry GAM's fault text
 
   # The operator picked a network from several, so detection asks GAM who the refresh token's
-  # user is on it. The deployment's GAM OAuth client and Google's token exchange are stand-ins
-  # too (AdminAccountEnv.serve_gam_oauth_client): graded in-process only, as above.
+  # user is on it. In-process, the deployment's GAM OAuth client and Google's token exchange
+  # are stand-ins (AdminAccountEnv.serve_gam_oauth_client). On e2e the Given declares itself
+  # unsupported, even with a GAM network configured: no setting carries an OAuth client or a
+  # refresh token, and googleads sends the refresh to Google's own token endpoint.
   @T-ADMIN-REFUSAL-044 @json @gam-oauth @gam
   Scenario: A GAM network detection whose user lookup GAM refuses is answered as a failed GAM call
     Given another tenant of this seller

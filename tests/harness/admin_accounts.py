@@ -51,10 +51,12 @@ class AdminTransport(StrEnum):
     E2E = "e2e_admin"  # requests.Session against the live stack
 
 
-#: Why a Given that stands in for Google Ad Manager has no live-server realization.
-_NO_STAND_IN_GAM_ON_E2E = e2e_unsupported(
-    "the live server has no stand-in Google Ad Manager network, and CI has no GAM network "
-    "to call instead (#2583): a GAM call there would call Google"
+#: Why the deployment's GAM OAuth client has no live-server realization. A configured GAM
+#: network does not supply one: its settings carry a service-account key.
+_NO_GAM_OAUTH_CLIENT_ON_E2E = e2e_unsupported(
+    "the live server has no GAM OAuth client and no refresh token for it: no setting carries "
+    "either, and googleads exchanges a refresh token at Google's fixed token endpoint, so no "
+    "stand-in can answer that exchange"
 )
 
 #: What Google answers the network lookup of a service-account key for a network that key
@@ -946,7 +948,7 @@ class AdminAccountEnv:
         client = stub_gam_client(**network_answers)
         self._in_process_cleanups.enter_context(patch(GAM_CLIENT_PATCH["gam_client"], return_value=client))
 
-    @realize_e2e(_NO_STAND_IN_GAM_ON_E2E)
+    @realize_e2e(_NO_GAM_OAUTH_CLIENT_ON_E2E)
     def serve_gam_oauth_client(self) -> None:
         """The deployment has a GAM OAuth client, and Google accepts every refresh token for it, until ``__exit__``.
 
