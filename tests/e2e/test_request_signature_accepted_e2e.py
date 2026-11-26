@@ -147,24 +147,14 @@ before/after window spanning two legs reads 2 and a window around either can be
 satisfied by the other. Each leg below passes an explicit distinct ``key_id=``, and the
 label match filters on it — that uniqueness is what makes "exactly 1" a real claim.
 
-**Two traps in ``signed_headers``, both closed below.**
-
-1. It signs ``f"{origin}{path}"``. ``src.core.signing.capture._target_uri`` (:226-249)
-   rebuilds the authority from the ``Host`` header nginx forwards verbatim and the
-   scheme from ``X-Forwarded-Proto``, and ``_run_verifier`` passes that reconstructed
-   ``exchange.url`` to the SDK rather than letting ``verify_starlette_request`` derive
-   its own. So the signed origin must be the real TLS netloc INCLUDING the port. Hence
-   the ``origin=`` argument.
-2. ``request_headers`` unconditionally injects ``x-adcp-tenant: "sig_tenant"``, an
-   in-process tenant id that does not exist in the e2e database. ``_detect_tenant``
-   (``src/core/resolved_identity.py`` :230) resolves the ``Host`` header FIRST and only
-   falls back to that hint, so this tenant does resolve either way here — but a header
-   asserting a DIFFERENT tenant than the one being addressed is a lie inside the signed
-   byte range, and one reordering of that ladder away from loading the wrong tenant,
-   reading an empty posture, collapsing the bucket to ``none`` and taking the
-   :333-335 UNVERIFIED pass-through: a green 2xx with zero verification, this module's
-   own disease. Overridden with ``extra={"x-adcp-tenant": _TENANT_ID}``
-   (``headers.update(extra)`` wins the merge).
+**One trap in ``signed_headers``, closed below.** It signs ``f"{origin}{path}"``.
+``src.core.signing.capture._target_uri`` (:226-249) rebuilds the authority from the
+``Host`` header nginx forwards verbatim and the scheme from ``X-Forwarded-Proto``, and
+``_run_verifier`` passes that reconstructed ``exchange.url`` to the SDK rather than letting
+``verify_starlette_request`` derive its own. So the signed origin must be the real TLS netloc
+INCLUDING the port. Hence the ``origin=`` argument, whose authority is also the ``Host`` sent:
+a signed request names its tenant by the ``Host`` alone (``_detect_tenant``), and the tenant
+is provisioned at that netloc.
 
 **Host-routing collision.** ``ix_tenants_virtual_host`` is UNIQUE and every signing
 e2e module provisions at the SAME TLS netloc. A distinct ``_TENANT_ID``/``_SLUG``
@@ -184,9 +174,9 @@ go red when the thing it grades is broken. Four mutations must be run by hand an
 observed results recorded HERE, replacing this paragraph, before the leg is called
 green:
 
-1. revert the ``x-adcp-tenant`` override on the accepted leg -> the metric delta must
-   go to 0 WHILE the three controls still pass. That is the proof the metric is
-   load-bearing rather than redundant with them;
+1. sign the accepted leg under a kid the counterparty does not publish -> the metric
+   delta must go to 0 WHILE the three controls still pass. That is the proof the metric
+   is load-bearing rather than redundant with them;
 2. point leg (iv) at ``brand.json`` instead of ``brand-unlisted.json`` -> it must stop
    401ing;
 3. un-tamper leg (ii) -> it must stop 401ing;
@@ -376,13 +366,9 @@ async def test_a_signed_request_from_a_walked_counterparty_is_accepted_and_count
             # Content-Type is signed as well as sent: signed_headers hands the SAME
             # header mapping to the signer and to the caller, so the signature covers
             # the bytes the server reads AND the header that tells it how to read them.
-            #
-            # Trap 2 (module docstring): request_headers injects the in-process
-            # "sig_tenant" hint, which names a tenant that does not exist in this
-            # database. Override it with the tenant actually being addressed.
-            extra={"x-adcp-tenant": _TENANT_ID, "Content-Type": "application/json"},
+            extra={"Content-Type": "application/json"},
             key_id=kid,
-            # Trap 1: the signature covers @target-uri, and capture._target_uri rebuilds
+            # The trap: the signature covers @target-uri, and capture._target_uri rebuilds
             # the authority from the Host header nginx forwards verbatim — port included.
             origin=signed_origin,
         )

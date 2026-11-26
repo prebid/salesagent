@@ -124,11 +124,6 @@ COUNTERPARTY_KID = "buyer-request-signing-1"
 #: both the current map and a map that reads ``signature_code``.
 UNRESOLVABLE_AGENT_URL = "https://unreachable.invalid/a2a"
 
-#: The origin the in-process ASGI client dials. ``httpx``'s ASGI transport defaults to
-#: ``http://testserver``, and the signature covers ``@target-uri``, so a request signed
-#: against any other origin fails on its merits before the behavior under test is reached.
-WIRE_ORIGIN = "http://testserver"
-
 
 def wire_origin(url: str) -> str:
     """The scheme+authority of *url* — what a signature's ``@target-uri`` covers.
@@ -147,6 +142,21 @@ def wire_origin(url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc.decode()}"
 
 
+def tenant_origin(origin: str, virtual_host: str) -> str:
+    """*origin* with its host replaced by the tenant's, keeping the scheme and the port.
+
+    A signed request names its tenant by the ``Host`` alone, so it dials the tenant's own
+    host. The scheme and port stay the dialed origin's because they say how the deployment
+    is reached (the e2e front's port, say), not which seller it is; the tenant lookup
+    matches the host name with the port aside (``tenant_lookup._same_host``).
+    """
+    import httpx
+
+    dialed = httpx.URL(origin)
+    host = httpx.URL(f"//{virtual_host}").host
+    return wire_origin(str(dialed.copy_with(host=host)))
+
+
 #: The seller tenant and the buyer's principal within it. Shared so the three
 #: in-process suites address the same rows. An env that SIGNS no longer takes its
 #: identity from here — it signs as its OWN tenant/principal
@@ -163,9 +173,21 @@ SIGNING_PRINCIPAL_ID = "sig_principal"
 #: deliberately derives ``http`` for localhost and single-label hosts, so on the default
 #: integration host every declaration :func:`declared_posture` writes would be REFUSED —
 #: and the suites would grade the refusal path while reading like they graded the
-#: declared one. Requests still reach this tenant by the ``x-adcp-tenant`` header
-#: (:func:`request_headers`), so the host is identity, not routing.
+#: declared one. It is also how a request reaches this tenant: :func:`request_headers`
+#: sends it as the ``Host``, because a signed request names its tenant by the ``Host``
+#: alone (``resolved_identity._detect_tenant``).
 SIGNING_AGENT_HOST = "seller-signing.example.com"
+
+#: The origin the in-process suites sign for and dial: :data:`SIGNING_AGENT_HOST` over the
+#: ASGI client's plain http. The signature covers ``@target-uri`` and ``@authority``, and
+#: the capture rebuilds both from the ``Host`` the request carries, so the ``Host`` sent
+#: is this origin's authority (:func:`request_headers`) rather than the client's default
+#: ``testserver``, which names no tenant.
+WIRE_ORIGIN = f"http://{SIGNING_AGENT_HOST}"
+
+#: The origin the in-process ASGI client dials when a request sets no ``Host`` of its own.
+#: ``httpx``'s ASGI transport defaults to it, and no tenant is served at it.
+ASGI_CLIENT_ORIGIN = "http://testserver"
 
 #: The ``get_adcp_capabilities`` AdCP surface. Auth-optional, so any 401 seen on it came
 #: from the verifier and not from the route's own auth dependency — which is why the
@@ -1469,9 +1491,29 @@ def tampered_signing_body(raw: bytes) -> bytes:
     return raw + b" "
 
 
-def request_headers(token: str | None, extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Wire headers: tenant hint + optional bearer + whatever the test adds."""
-    headers = credential_headers(token=token, tenant=SIGNING_TENANT_ID)
+def request_headers(
+    token: str | None,
+    extra: dict[str, str] | None = None,
+    *,
+    origin: str = WIRE_ORIGIN,
+    tenant_header: str | None = None,
+) -> dict[str, str]:
+    """Wire headers: the ``Host`` of *origin* + optional bearer + whatever the test adds.
+
+    The ``Host`` is *origin*'s authority because that is what names the tenant: a signed
+    request is routed by its ``Host`` alone, and an unsigned one sent beside it must differ
+    from it by the signature and nothing else. *tenant_header* adds ``x-adcp-tenant`` beside
+    that ``Host``, for the one case that grades the header: a signed request whose ``Host``
+    names no tenant and whose header does.
+    """
+    import httpx
+
+    headers = credential_headers(
+        token=token,
+        host=httpx.URL(origin).netloc.decode(),
+        tenant=tenant_header,
+        host_resolves_nothing=tenant_header is not None,
+    )
     if extra:
         headers.update(extra)
     return headers
@@ -1538,10 +1580,11 @@ def signed_headers(
     extra: dict[str, str] | None = None,
     key_id: str = COUNTERPARTY_KID,
     origin: str = WIRE_ORIGIN,
+    tenant_header: str | None = None,
 ) -> dict[str, str]:
     """The full header set for one signed request to *path* at *origin*.
 
-    Merges the wire headers a signed request carries anyway (tenant hint, bearer,
+    Merges the wire headers a signed request carries anyway (the ``Host``, bearer,
     whatever the case needs) with the signature over exactly those headers and *body*
     — the ordering the signature depends on, since the base covers ``content-digest``
     and the headers the signer chose to sign. Every signing suite built this merge by
@@ -1563,8 +1606,12 @@ def signed_headers(
     Widened here rather than by inlining :func:`sign_wire_request` at the e2e call site
     for the reason this function's own docstring gives: a second copy of the merge that
     signs a slightly different URL looks like a verifier bug.
+
+    The ``Host`` sent is *origin*'s authority (:func:`request_headers`), so the request
+    names the tenant served at *origin* and the ``@authority`` the capture reads is the one
+    signed. *tenant_header* is :func:`request_headers`'.
     """
-    base = request_headers(token, extra)
+    base = request_headers(token, extra, origin=origin, tenant_header=tenant_header)
     return {
         **base,
         **sign_wire_request(

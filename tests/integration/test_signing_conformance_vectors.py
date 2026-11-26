@@ -149,6 +149,7 @@ import pytest
 from adcp.signing.canonical import build_signature_base, parse_signature_input_header, split_structured_field
 from adcp.signing.digest import content_digest_matches
 
+from src.core.http_utils import hostname_of
 from tests.factories import PrincipalFactory, TenantFactory
 from tests.factories.account import seed_default_account
 from tests.factories.principal import plaintext_token_for
@@ -196,7 +197,6 @@ pytestmark = [pytest.mark.requires_db, pytest.mark.xdist_group("adcp_replay")]
 #: (see the ``xdist_group`` note above). The counterparty it signs AS is the
 #: shared one — same ``agent_url``, same key origin, same jwks_uri.
 _TENANT_ID = "b3_conformance_tenant"
-_AGENT_HOST = "b3-conformance-seller.example.com"
 _PRINCIPAL_ID = "b3_conformance_principal"
 
 #: ``negative/020``'s cap, carried by this test principal's grading record so it reaches
@@ -340,6 +340,15 @@ def _signature_params(vector: dict[str, Any]) -> dict[str, Any]:
         return {}
 
 
+def _wire_host(vector_id: str) -> str:
+    """The ``Host`` this vector puts on the wire: its own where it ships one, else its URL's."""
+    shipped = _VECTORS[vector_id]["request"]["headers"]
+    return next(
+        (value for name, value in shipped.items() if name.lower() == "host"),
+        urlsplit(TRANSPLANT[vector_id].wire_url).netloc,
+    )
+
+
 def _wire_headers(vector_id: str, token: str | None) -> list[tuple[str, str]]:
     """The header LIST that goes on the wire, in order, repeats preserved.
 
@@ -352,16 +361,15 @@ def _wire_headers(vector_id: str, token: str | None) -> list[tuple[str, str]]:
     ships its own (``positive/015``, ``negative/031``) that line IS the graded input and goes
     on the wire alone: synthesising a second would turn ``031``'s malformed authority into a
     repeated-``Host`` refusal, a different check.
-    ``x-adcp-tenant`` names the tenant for the IPv6 and IDN authorities that name
-    none. NEITHER is a covered component in ANY vector, so neither can disturb a
-    signature; the same is true of ``Authorization``, which is why the credential can
-    be added without re-signing anything on its account.
+    That ``Host`` is also what names the tenant (:func:`_wire_host`): a signed request
+    names its tenant by the ``Host`` alone, so the tenant is seeded at the host the vector
+    dials. ``Authorization`` is not a covered component in ANY vector, which is why the
+    credential can be added without re-signing anything on its account.
     """
-    plan = TRANSPLANT[vector_id]
     shipped = _VECTORS[vector_id]["request"]["headers"]
-    headers: list[tuple[str, str]] = [("x-adcp-tenant", _TENANT_ID)]
+    headers: list[tuple[str, str]] = []
     if not any(name.lower() == "host" for name in shipped):
-        headers.insert(0, ("host", urlsplit(plan.wire_url).netloc))
+        headers.append(("host", _wire_host(vector_id)))
     if token is not None:
         headers.append(("Authorization", f"Bearer {token}"))
     headers.extend(shipped.items())
@@ -477,7 +485,7 @@ def conformance_app() -> Iterator[tuple[Any, Any]]:
         yield app, client.portal
 
 
-def _seed_tenant() -> Any:
+def _seed_tenant(vector_id: str) -> Any:
     """The SELLER, which exists whether or not this vector's caller authenticated.
 
     Seeded for every vector since #1291 D1, because the posture is now a REAL stored
@@ -485,12 +493,14 @@ def _seed_tenant() -> Any:
     caller carries no principal token (``negative/001``, ``/027``, ``/028``) still need a
     seller to have declared one.
 
-    ``virtual_host`` is DOTTED so ``canonical_agent_url`` derives ``https://``: a
-    non-empty bucket obliges an ``identity.brand_json_url`` that the pin fixes to
-    ``^https://``, so on a single-label host the declaration would be refused and every
-    vector would grade the refusal path instead of the checklist.
+    Served at the host the vector dials (:func:`_wire_host`, port aside), because a signed
+    request names its tenant by the ``Host`` alone. That host is DOTTED for every vector
+    graded here, so ``canonical_agent_url`` derives ``https://``: a non-empty bucket obliges
+    an ``identity.brand_json_url`` that the pin fixes to ``^https://``, so on a single-label
+    host the declaration would be refused and the vector would grade the refusal path
+    instead of the checklist.
     """
-    return TenantFactory(tenant_id=_TENANT_ID, subdomain="seller", virtual_host=_AGENT_HOST)
+    return TenantFactory(tenant_id=_TENANT_ID, subdomain="seller", virtual_host=hostname_of(_wire_host(vector_id)))
 
 
 def _account_natural_keys_named_by_vectors() -> set[tuple[str, str | None, bool | None]]:
@@ -698,7 +708,7 @@ def _vector_case(vector_id: str) -> Iterator[tuple[BareIntegrationEnv, str | Non
         pairs = pairs + [(_ED25519_KEYID, f"b3-cap-{index:02d}") for index in range(_RATE_ABUSE_CAP)]
 
     with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-        tenant = _seed_tenant()
+        tenant = _seed_tenant(vector_id)
         token = _seed_principal(tenant, plan, vector) if plan.credential is Credential.PRINCIPAL_TOKEN else None
         if token is not None:
             # Tied to the principal because the grant has to name one. The three vectors

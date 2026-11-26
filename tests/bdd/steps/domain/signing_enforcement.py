@@ -155,6 +155,19 @@ def given_seller_onboarded_buyer_key(ctx: dict) -> None:
     ctx["env"].onboard_signing_keyid()
 
 
+@given("the Buyer Agent names the seller by x-adcp-tenant on a host that serves no seller")
+def given_buyer_names_seller_by_tenant_header(ctx: dict) -> None:
+    """Send the request to the transport's default host, naming the seller by ``x-adcp-tenant``.
+
+    ONE variable from the Host-routed request: the signature, the key, the body and the
+    onboarding are the same. security.mdx L1172-1174: a verifier "MUST NOT attribute
+    identity, authorization, account selection, resource access, or task ownership on the
+    basis of ... unsigned ... routing metadata". The header is not a covered component; the
+    ``Host`` is, through ``@authority``.
+    """
+    ctx["env"].name_tenant_by_header()
+
+
 @given("the Buyer Agent's signing key was onboarded only by another seller")
 def given_buyer_key_onboarded_by_another_seller(ctx: dict) -> None:
     """Onboard the Buyer Agent's keyid in a DIFFERENT tenant, and nowhere on this seller.

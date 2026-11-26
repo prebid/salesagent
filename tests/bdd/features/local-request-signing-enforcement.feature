@@ -37,6 +37,8 @@
 # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/test-kits/signed-requests-runner.yaml pointer=L48-L69
 # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/test-kits/signed-requests-runner.yaml pointer=L146-L164
 # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1481
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1162
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1172-L1174
 Feature: Inbound request-signature enforcement on an AdCP operation (local)
 
   @T-UC-006-local-signing-required-unsigned @request-signing @error-path @invariant
@@ -269,6 +271,28 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # agent's agents[] entry, and "Discovery MAY come from prior onboarding". The seller
     # recorded the keyid against the Buyer's agent URL; the keys come from the agent's own
     # origin. The signature is the only credential (L1456, L746-747).
+
+  @T-UC-006-local-signing-tenant-by-header @request-signing @error-path @invariant
+  Scenario: a signed request that names its seller only by x-adcp-tenant is refused
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller onboarded the Buyer Agent's signing key
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer has no authentication credentials
+    And the Buyer Agent signs the request
+    And the Buyer Agent names the seller by x-adcp-tenant on a host that serves no seller
+    When the Buyer Agent syncs the creative
+    Then the response contains error code TENANT_UNDEFINED
+    And the error recovery should be "terminal"
+    # ONE variable apart from the scenario above: the request dials a host that serves no
+    # seller and names the tenant by the x-adcp-tenant header. security.mdx @ v3.2.7
+    # L1172-1174: a verifier "MUST NOT attribute identity, authorization, account
+    # selection, resource access, or task ownership on the basis of ... unsigned ...
+    # routing metadata". The header is not a covered component, so a party holding an
+    # undelivered signed request could point it at any tenant that onboarded the same
+    # keyid. The Host is covered, through @authority (L1162). A signed request therefore
+    # names its seller by the Host alone, and one whose Host names none gets the refusal
+    # every request naming no seller gets.
 
   @T-UC-006-local-signing-onboarded-other-tenant @request-signing @error-path @invariant
   Scenario: a keyid onboarded only by another seller is not resolved
