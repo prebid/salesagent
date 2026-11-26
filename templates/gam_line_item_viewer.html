@@ -47,7 +47,7 @@
     <!-- Loading indicator -->
     <div id="loading" class="alert alert-info" style="display: none;">
         <div class="spinner-border spinner-border-sm me-2" role="status"></div>
-        Loading line item data from GAM...
+        Loading the stored line item...
     </div>
 
     <!-- Error display -->
@@ -295,7 +295,7 @@ window.addEventListener('DOMContentLoaded', function() {
 
 async function fetchCustomTargetingMappings() {
     try {
-        const response = await fetch(scriptRoot + '/api/tenant/' + {{ tenant_id|tojson }} + '/gam/custom-targeting-keys', {
+        const response = await fetch(scriptRoot + '/tenant/' + {{ tenant_id|tojson }} + '/gam/api/custom-targeting-keys', {
             method: 'GET',
             credentials: 'include',
             headers: {
@@ -337,7 +337,7 @@ async function loadLineItem() {
 
     try {
         console.log('Fetching line item from API...');
-        const response = await fetch(`${scriptRoot}/api/tenant/${ {{ tenant_id|tojson }} }/gam/line-item/${lineItemId}`, {
+        const response = await fetch(`${scriptRoot}/tenant/${ {{ tenant_id|tojson }} }/gam/api/line-item/${lineItemId}`, {
             method: 'GET',
             credentials: 'include',
             headers: {
@@ -391,7 +391,7 @@ function displayLineItemData(data) {
         displayBasicInfo(data.line_item);
 
         console.log('Calling displayOrderInfo...');
-        displayOrderInfo(data.order);
+        displayOrderInfo(data.line_item);
 
         console.log('Calling displayPricingInfo...');
         displayPricingInfo(data.line_item);
@@ -441,90 +441,52 @@ function displayBasicInfo(lineItem) {
     tbody.innerHTML = `
         <tr><td><strong>Line Item ID:</strong></td><td>${escapeHtml(orNA(lineItem.id))}</td></tr>
         <tr><td><strong>Name:</strong></td><td>${escapeHtml(orNA(lineItem.name))}</td></tr>
-        <tr><td><strong>Type:</strong></td><td>${escapeHtml(orNA(lineItem.lineItemType))}</td></tr>
+        <tr><td><strong>Type:</strong></td><td>${escapeHtml(orNA(lineItem.type))}</td></tr>
         <tr><td><strong>Status:</strong></td><td><span class="badge bg-${escapeHtml(getStatusBadgeClass(lineItem.status))}">${escapeHtml(orNA(lineItem.status))}</span></td></tr>
         <tr><td><strong>Priority:</strong></td><td>${escapeHtml(orNA(lineItem.priority))}</td></tr>
-        <tr><td><strong>External ID:</strong></td><td>${escapeHtml(orNA(lineItem.externalId))}</td></tr>
     `;
 }
 
-function displayOrderInfo(order) {
-    const tbody = document.getElementById('orderInfo');
-    if (!order) {
-        tbody.innerHTML = '<tr><td>Order information not available</td></tr>';
-        return;
-    }
-
-    tbody.innerHTML = `
-        <tr><td><strong>Order ID:</strong></td><td>${escapeHtml(orNA(order.id))}</td></tr>
-        <tr><td><strong>Order Name:</strong></td><td>${escapeHtml(orNA(order.name))}</td></tr>
-        <tr><td><strong>Advertiser:</strong></td><td>${escapeHtml(orNA(order.advertiserId))}</td></tr>
-        <tr><td><strong>Trafficker:</strong></td><td>${escapeHtml(orNA(order.traffickerId))}</td></tr>
-        <tr><td><strong>Status:</strong></td><td><span class="badge bg-${escapeHtml(getStatusBadgeClass(order.status))}">${escapeHtml(orNA(order.status))}</span></td></tr>
+function displayOrderInfo(lineItem) {
+    document.getElementById('orderInfo').innerHTML = `
+        <tr><td><strong>Order ID:</strong></td><td>${escapeHtml(orNA(lineItem.order_id))}</td></tr>
     `;
 }
 
 function displayPricingInfo(lineItem) {
     const tbody = document.getElementById('pricingInfo');
-    let cpm = 0;
-    if (lineItem.costPerUnit && lineItem.costPerUnit.microAmount) {
-        cpm = lineItem.costPerUnit.microAmount / 1000000;
-    }
-
-    // Get delivery stats if available
-    let impressionsDelivered = 0;
-    let clicksDelivered = 0;
-    if (lineItem.stats && lineItem.stats.impressionsDelivered) {
-        impressionsDelivered = lineItem.stats.impressionsDelivered;
-        clicksDelivered = lineItem.stats.clicksDelivered || 0;
-    }
-
-    // Calculate delivery percentage
-    const goal = lineItem.unitsBought || 0;
+    // The stored cost per unit is in currency units, not GAM micros.
+    const cpm = lineItem.cost_per_unit || 0;
+    const impressionsDelivered = lineItem.impressions_delivered || 0;
+    const clicksDelivered = lineItem.clicks_delivered || 0;
+    const goal = lineItem.goal_units || 0;
     const deliveryPercentage = goal > 0 ? (impressionsDelivered / goal * 100).toFixed(1) : 0;
 
     tbody.innerHTML = `
-        <tr><td><strong>Cost Type:</strong></td><td>${escapeHtml(lineItem.costType)}</td></tr>
+        <tr><td><strong>Cost Type:</strong></td><td>${escapeHtml(orNA(lineItem.cost_type))}</td></tr>
         <tr><td><strong>CPM:</strong></td><td>$${escapeHtml(cpm.toFixed(2))}</td></tr>
+        <tr><td><strong>Goal Type:</strong></td><td>${escapeHtml(orNA(lineItem.goal_type))}</td></tr>
         <tr><td><strong>Units Bought (Goal):</strong></td><td>${escapeHtml(goal.toLocaleString())}</td></tr>
         <tr><td><strong>Impressions Delivered:</strong></td><td>${escapeHtml(impressionsDelivered.toLocaleString())} (${escapeHtml(deliveryPercentage)}%)</td></tr>
         <tr><td><strong>Clicks Delivered:</strong></td><td>${escapeHtml(clicksDelivered.toLocaleString())}</td></tr>
+        <tr><td><strong>CTR:</strong></td><td>${escapeHtml(orNA(lineItem.ctr))}</td></tr>
         <tr><td><strong>Total Budget:</strong></td><td>$${escapeHtml(((goal) * cpm / 1000).toFixed(2))}</td></tr>
         <tr><td><strong>Spent (Est.):</strong></td><td>$${escapeHtml(((impressionsDelivered) * cpm / 1000).toFixed(2))}</td></tr>
-        <tr><td><strong>Discount:</strong></td><td>${escapeHtml(lineItem.discount || 0)}%</td></tr>
-        <tr><td><strong>Value Cost Per Unit:</strong></td><td>${lineItem.valueCostPerUnit ? `$${escapeHtml((lineItem.valueCostPerUnit.microAmount / 1000000).toFixed(2))}` : 'N/A'}</td></tr>
     `;
 }
 
 function displayScheduleInfo(lineItem) {
     const tbody = document.getElementById('scheduleInfo');
 
-    function formatDateTime(dt) {
-        if (!dt) return 'N/A';
-
-        // Handle ISO string format (e.g., "2023-07-25T19:33:00")
-        if (typeof dt === 'string') {
-            const date = new Date(dt);
-            if (!isNaN(date.getTime())) {
-                return date.toLocaleString();
-            }
-            return dt; // Return as-is if not a valid date string
-        }
-
-        // Handle GAM object format with nested date/time
-        if (dt.date) {
-            return `${dt.date.year}-${String(dt.date.month).padStart(2, '0')}-${String(dt.date.day).padStart(2, '0')} ${String(dt.hour || 0).padStart(2, '0')}:${String(dt.minute || 0).padStart(2, '0')}`;
-        }
-
-        return 'N/A';
+    // The route answers ISO 8601 strings (e.g. "2023-07-25T19:33:00+00:00") or null.
+    function formatDateTime(iso) {
+        return iso ? new Date(iso).toLocaleString() : 'N/A';
     }
 
     tbody.innerHTML = `
-        <tr><td><strong>Start Date:</strong></td><td>${escapeHtml(formatDateTime(lineItem.startDateTime))}</td></tr>
-        <tr><td><strong>End Date:</strong></td><td>${escapeHtml(formatDateTime(lineItem.endDateTime))}</td></tr>
-        <tr><td><strong>Delivery Rate Type:</strong></td><td>${escapeHtml(lineItem.deliveryRateType)}</td></tr>
-        <tr><td><strong>Creation Date:</strong></td><td>${escapeHtml(formatDateTime(lineItem.creationDateTime))}</td></tr>
-        <tr><td><strong>Last Modified:</strong></td><td>${escapeHtml(formatDateTime(lineItem.lastModifiedDateTime))}</td></tr>
+        <tr><td><strong>Start Date:</strong></td><td>${escapeHtml(formatDateTime(lineItem.start_date))}</td></tr>
+        <tr><td><strong>End Date:</strong></td><td>${escapeHtml(formatDateTime(lineItem.end_date))}</td></tr>
+        <tr><td><strong>Last Synced:</strong></td><td>${escapeHtml(formatDateTime(lineItem.last_synced))}</td></tr>
     `;
 }
 
