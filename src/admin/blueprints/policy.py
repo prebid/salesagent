@@ -2,184 +2,145 @@
 
 import logging
 
-from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
-from sqlalchemy import select
+from flask import Blueprint, redirect, render_template, request, url_for
 
-from src.admin.utils import get_tenant_config_from_db, require_tenant_access
+from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.core.audit_logger import AuditLogger
-from src.core.database.database_session import get_db_session
-from src.core.database.models import AuditLog, Context, Tenant, UserRole, WorkflowStep
+from src.core.database.models import UserRole
+from src.core.database.repositories.uow import TenantConfigUoW, WorkflowUoW
+from src.core.operator_errors import OperatorRefusal, RecordNotFound
+from src.core.schemas.advertising_policy import AdvertisingPolicy
+from src.services.ai.factory import tenant_ai_enabled
 
 logger = logging.getLogger(__name__)
 
 # Create blueprint
 policy_bp = Blueprint("policy", __name__)
 
+#: The form's starting point for a tenant that has saved no policy: checks off, no
+#: prohibitions of its own, and these baseline lists for the operator to edit. Nothing is
+#: stored until the operator saves the form.
+UNSAVED_POLICY_FORM = AdvertisingPolicy(
+    enabled=False,
+    require_manual_review=False,
+    prohibited_advertisers=[],
+    prohibited_categories=[],
+    prohibited_tactics=[],
+    default_prohibited_categories=[
+        "illegal_content",
+        "hate_speech",
+        "violence",
+        "adult_content",
+        "misleading_health_claims",
+        "financial_scams",
+    ],
+    default_prohibited_tactics=[
+        "targeting_children_under_13",
+        "discriminatory_targeting",
+        "deceptive_claims",
+        "impersonation",
+        "privacy_violations",
+    ],
+    description=None,
+)
+
+#: How many of the tenant's latest policy checks the page lists.
+RECENT_POLICY_CHECKS = 20
+
+
+class PolicyReviewNotFound(RecordNotFound):
+    """The step is not in this tenant's pending policy review queue (or another reviewer just settled it)."""
+
+    MESSAGE = "Policy review task not found"
+
+
+class InvalidReviewAction(OperatorRefusal):
+    """The review form posted an action other than approve or reject."""
+
+    MESSAGE = "Choose approve or reject"
+
 
 @policy_bp.route("/", methods=["GET"])
 @require_tenant_access()
 def index(tenant_id):
-    """View and manage policy settings for the tenant."""
-    with get_db_session() as db_session:
-        # Get tenant info
-        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        if not tenant:
-            return "Tenant not found", 404
+    """Show the tenant's saved advertising policy, its recent policy checks and its review queue.
 
+    A tenant with no saved policy sees the form at :data:`UNSAVED_POLICY_FORM` and a notice
+    that no policy is saved.
+    """
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None and uow.audit_logs is not None
+        tenant = uow.tenant_config.require(uow.tenant_config.get_tenant)
         tenant_name = tenant.name
+        policy = tenant.advertising_policy
+        # Policy checks run only on the seller's own AI configuration (products.py).
+        seller_ai_enabled = tenant_ai_enabled(tenant, platform_fallback=False)
+        recent_checks = [
+            {
+                "timestamp": log.timestamp,
+                "principal_id": log.principal_id,
+                "success": log.success,
+                "status": (log.details or {}).get("policy_status", "unknown"),
+                "brief": (log.details or {}).get("brief", ""),
+                "reason": (log.details or {}).get("reason", ""),
+            }
+            for log in uow.audit_logs.list_recent("policy_check", RECENT_POLICY_CHECKS)
+        ]
 
-        # Get tenant config using helper function
-        config = get_tenant_config_from_db(tenant_id)
-        if not config:
-            return "Tenant config not found", 404
-
-        # Define default policies that all publishers start with
-        default_policies = {
-            "enabled": True,
-            "require_manual_review": False,
-            "default_prohibited_categories": [
-                "illegal_content",
-                "hate_speech",
-                "violence",
-                "adult_content",
-                "misleading_health_claims",
-                "financial_scams",
-            ],
-            "default_prohibited_tactics": [
-                "targeting_children_under_13",
-                "discriminatory_targeting",
-                "deceptive_claims",
-                "impersonation",
-                "privacy_violations",
-            ],
-            "prohibited_advertisers": [],
-            "prohibited_categories": [],
-            "prohibited_tactics": [],
-        }
-
-        # Get tenant policy settings, using defaults where not specified
-        tenant_policies = config.get("policy_settings", {})
-        policy_settings = default_policies.copy()
-        policy_settings.update(tenant_policies)
-
-        # Get recent policy checks from audit log
-        stmt = (
-            select(AuditLog)
-            .filter_by(tenant_id=tenant_id, operation="policy_check")
-            .order_by(AuditLog.timestamp.desc())
-            .limit(20)
-        )
-        audit_logs = db_session.scalars(stmt).all()
-
-        recent_checks = []
-        for log in audit_logs:
-            details = log.details or {}
-            recent_checks.append(
-                {
-                    "timestamp": log.timestamp,
-                    "principal_id": log.principal_id,
-                    "success": log.success,
-                    "status": details.get("policy_status", "unknown"),
-                    "brief": details.get("brief", ""),
-                    "reason": details.get("reason", ""),
-                }
-            )
-
-        # Get pending policy review tasks
-        # Query workflow steps instead of tasks (tasks table was removed)
-        # WorkflowStep has no tenant_id column — must join through Context for tenant isolation
-        from src.core.database.models import Context as DBContext
-
-        pending_reviews = []
-        stmt = (
-            select(WorkflowStep)
-            .join(DBContext)
-            .where(
-                DBContext.tenant_id == tenant_id,
-                WorkflowStep.step_type == "policy_review",
-                WorkflowStep.status == "pending",
-            )
-            .order_by(WorkflowStep.created_at.desc())
-        )
-        workflow_steps = db_session.scalars(stmt).all()
-
-        for step in workflow_steps:
-            request_data = step.request_data or {}
-            pending_reviews.append(
-                {
-                    "task_id": step.step_id,
-                    "created_at": step.created_at,
-                    "brief": request_data.get("brief", ""),
-                    "advertiser": request_data.get("promoted_offering", ""),
-                }
-            )
+    # The pending policy review queue: the same definition review_task settles.
+    with WorkflowUoW(tenant_id) as uow:
+        assert uow.workflows is not None
+        pending_reviews = [
+            {
+                "task_id": step.step_id,
+                "created_at": step.created_at,
+                "brief": (step.request_data or {}).get("brief", ""),
+                "advertiser": (step.request_data or {}).get("promoted_offering", ""),
+            }
+            for step in uow.workflows.list_pending_policy_reviews()
+        ]
 
     return render_template(
-        "policy_settings_comprehensive.html",
+        "advertising_policy.html",
         tenant_id=tenant_id,
         tenant_name=tenant_name,
-        policy_settings=policy_settings,
+        policy_saved=policy is not None,
+        policy=policy or UNSAVED_POLICY_FORM,
+        seller_ai_enabled=seller_ai_enabled,
         recent_checks=recent_checks,
         pending_reviews=pending_reviews,
     )
+
+
+def _form_lines(field_name: str) -> list[str]:
+    """The non-empty lines of the form's textarea *field_name*, stripped."""
+    return [line.strip() for line in request.form.get(field_name, "").splitlines() if line.strip()]
 
 
 @policy_bp.route("/update", methods=["POST"])
 @require_tenant_access(role=UserRole.ADMIN)
 @log_admin_action("update_policy")
 def update(tenant_id):
-    """Update policy settings for the tenant."""
-    # Get current config
-    config = get_tenant_config_from_db(tenant_id)
-    if not config:
-        return jsonify({"error": "Tenant not found"}), 404
+    """Save the form as the tenant's complete advertising policy.
 
-    # Parse the form data for lists
-    def parse_textarea_lines(field_name):
-        """Parse textarea input into list of non-empty lines."""
-        text = request.form.get(field_name, "")
-        return [line.strip() for line in text.strip().split("\n") if line.strip()]
-
-    # Update policy settings
-    policy_settings = {
-        "enabled": request.form.get("enabled") == "on",
-        "require_manual_review": request.form.get("require_manual_review") == "on",
-        "prohibited_advertisers": parse_textarea_lines("prohibited_advertisers"),
-        "prohibited_categories": parse_textarea_lines("prohibited_categories"),
-        "prohibited_tactics": parse_textarea_lines("prohibited_tactics"),
-        # Keep default policies (they don't change from form)
-        "default_prohibited_categories": config.get("policy_settings", {}).get(
-            "default_prohibited_categories",
-            [
-                "illegal_content",
-                "hate_speech",
-                "violence",
-                "adult_content",
-                "misleading_health_claims",
-                "financial_scams",
-            ],
-        ),
-        "default_prohibited_tactics": config.get("policy_settings", {}).get(
-            "default_prohibited_tactics",
-            [
-                "targeting_children_under_13",
-                "discriminatory_targeting",
-                "deceptive_claims",
-                "impersonation",
-                "privacy_violations",
-            ],
-        ),
-    }
-
-    config["policy_settings"] = policy_settings
-
-    # Update database
-    with get_db_session() as db_session:
-        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-        if tenant:
-            tenant.policy_settings = policy_settings
-            db_session.commit()
+    The form edits every key but ``description``, which keeps its stored value.
+    """
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        tenant = uow.tenant_config.require(uow.tenant_config.get_tenant)
+        stored = tenant.advertising_policy
+        uow.tenant_config.save_advertising_policy(
+            AdvertisingPolicy(
+                enabled=request.form.get("enabled") == "on",
+                require_manual_review=request.form.get("require_manual_review") == "on",
+                prohibited_advertisers=_form_lines("prohibited_advertisers"),
+                prohibited_categories=_form_lines("prohibited_categories"),
+                prohibited_tactics=_form_lines("prohibited_tactics"),
+                default_prohibited_categories=_form_lines("default_prohibited_categories"),
+                default_prohibited_tactics=_form_lines("default_prohibited_tactics"),
+                description=stored.description if stored is not None else None,
+            )
+        )
 
     return redirect(url_for("policy.index", tenant_id=tenant_id))
 
@@ -193,65 +154,37 @@ def rules(tenant_id):
 
 @policy_bp.route("/review/<task_id>", methods=["GET", "POST"])
 @require_tenant_access()
-@log_admin_action("review_policy_task")
+@log_admin_action("review_policy_task", extract_details=lambda r, **kw: {"task_id": kw.get("task_id")})
 def review_task(tenant_id, task_id):
-    """Review and approve/reject a policy review task."""
-    with get_db_session() as db_session:
+    """Review and approve/reject a pending policy review task.
+
+    Only a ``policy_review`` step still ``pending`` is reachable here; any other step of
+    the tenant (a media buy or creative approval, an ad server step) answers 404, so this
+    route cannot settle a decision that belongs to another workflow. Any user of the tenant
+    may read the form; the POST that decides needs a manager (``role_permits``), as the
+    media buy, creative and workflow approval routes do.
+    """
+    with WorkflowUoW(tenant_id) as uow:
+        assert uow.workflows is not None
+        step = uow.workflows.get_pending_policy_review(task_id)
+        if step is None:
+            raise PolicyReviewNotFound(task_id)
+
         if request.method == "POST":
-            # Handle approval/rejection
             action = request.form.get("action")
-            notes = request.form.get("notes", "")
-
-            # Get the workflow step (tenant-scoped via Context join)
-            stmt = (
-                select(WorkflowStep)
-                .join(Context, WorkflowStep.context_id == Context.context_id)
-                .filter(Context.tenant_id == tenant_id, WorkflowStep.step_id == task_id)
-            )
-            step = db_session.scalars(stmt).first()
-
-            if not step:
-                return "Task not found", 404
-
-            # Update status based on action
-            if action == "approve":
-                step.status = "completed"
-                step.response_data = {"approved": True, "notes": notes}
-            elif action == "reject":
-                step.status = "failed"
-                step.response_data = {"approved": False, "notes": notes}
-
-            db_session.commit()
-
-            # Log the action
-            audit_logger = AuditLogger()
-            audit_logger.log(
-                tenant_id=tenant_id,
-                operation="policy_review",
-                principal_id=session.get("user"),
-                success=True,
-                details={"task_id": task_id, "action": action, "notes": notes},
-            )
-
+            if action not in ("approve", "reject"):
+                raise InvalidReviewAction(action)
+            # Conditional on the queue, so a step another reviewer settled meanwhile is not rewritten.
+            if not uow.workflows.settle_pending_policy_review(
+                task_id, approved=action == "approve", notes=request.form.get("review_notes", "")
+            ):
+                raise PolicyReviewNotFound(task_id)
             return redirect(url_for("policy.index", tenant_id=tenant_id))
-
-        # GET request - show review form
-        stmt = (
-            select(WorkflowStep)
-            .join(Context, WorkflowStep.context_id == Context.context_id)
-            .filter(Context.tenant_id == tenant_id, WorkflowStep.step_id == task_id)
-        )
-        step = db_session.scalars(stmt).first()
-
-        if not step:
-            return "Task not found", 404
-
-        request_data = step.request_data or {}
 
         return render_template(
             "policy_review.html",
             tenant_id=tenant_id,
             task_id=task_id,
-            task_details=request_data,
+            details=step.request_data or {},
             created_at=step.created_at,
         )

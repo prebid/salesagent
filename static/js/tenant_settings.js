@@ -126,21 +126,14 @@ function formatJSON() {
 }
 
 // Test Slack
+// The route tests the SAVED webhook (the page never holds it), so nothing is sent.
 function testSlack() {
-    const webhookUrl = document.getElementById('slack_webhook_url').value;
-    if (!webhookUrl) {
-        alert('Please enter a webhook URL first');
-        return;
-    }
-
     fetch(`${scriptRoot}/tenant/${config.tenantId}/test_slack`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-            webhook_url: webhookUrl
-        })
+        body: JSON.stringify({})
     })
     .then(response => response.json())
     .then(data => {
@@ -1277,16 +1270,6 @@ function updateApprovalModeUI() {
     }
 }
 
-// Update advertising policy UI (show/hide config when checkbox toggled)
-function updateAdvertisingPolicyUI() {
-    const policyCheckEnabled = document.getElementById('policy_check_enabled');
-    const policyConfigSection = document.getElementById('advertising-policy-config');
-
-    if (policyCheckEnabled && policyConfigSection) {
-        policyConfigSection.style.display = policyCheckEnabled.checked ? 'block' : 'none';
-    }
-}
-
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     // Generate A2A code if section exists
@@ -1297,13 +1280,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initialize approval mode UI
     if (document.getElementById('approval_mode')) {
         updateApprovalModeUI();
-    }
-
-    // Initialize advertising policy UI
-    if (document.getElementById('policy_check_enabled')) {
-        updateAdvertisingPolicyUI();
-        // Add event listener for checkbox toggle
-        document.getElementById('policy_check_enabled').addEventListener('change', updateAdvertisingPolicyUI);
     }
 
     // Check for in-progress sync on page load

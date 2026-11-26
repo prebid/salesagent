@@ -47,7 +47,6 @@ class TestSessionManagement:
                 authorized_emails=["admin@test.com"],
                 authorized_domains=["test.com"],
                 auto_approve_format_ids=["display_300x250"],
-                policy_settings={"enabled": True},
             )
             session.add(tenant)
             session.commit()
@@ -71,7 +70,6 @@ class TestSessionManagement:
                     subdomain=tenant_id.lower(),
                     virtual_host=vhost_for(tenant_id.lower()),
                     authorized_emails=[],
-                    policy_settings={},
                     created_at=now,
                     updated_at=now,
                 )
@@ -100,7 +98,6 @@ class TestSessionManagement:
                 subdomain="test3",
                 virtual_host="test3.adcp.test",
                 authorized_emails=[],
-                policy_settings={},
                 created_at=now,
                 updated_at=now,
             )
@@ -127,7 +124,6 @@ class TestSessionManagement:
                 defaults={
                     "name": "Created Tenant",
                     "authorized_emails": [],
-                    "policy_settings": {},
                     "virtual_host": "test4.adcp.test",
                 },
                 tenant_id="test4",
@@ -212,7 +208,6 @@ class TestJSONValidation:
                 authorized_emails=["test@example.com"],  # Valid array
                 authorized_domains=["example.com"],  # Valid array
                 auto_approve_format_ids=["display_300x250"],  # Valid array
-                policy_settings={"enabled": True},  # Valid object
                 created_at=now,
                 updated_at=now,
             )
@@ -222,10 +217,6 @@ class TestJSONValidation:
             # Retrieve and verify
             retrieved = session.scalars(select(Tenant).filter_by(tenant_id="json_test")).first()
             assert retrieved.authorized_emails == ["test@example.com"]
-            # PolicySettingsModel adds default values
-            assert retrieved.policy_settings["enabled"] is True
-            assert "require_approval" in retrieved.policy_settings  # Default added
-            assert "blocked_categories" in retrieved.policy_settings  # Default added
 
     def test_principal_platform_mappings(self, test_db):
         """Test Principal platform_mappings validation."""
@@ -238,7 +229,6 @@ class TestJSONValidation:
                 subdomain="test",
                 virtual_host="json-principal.adcp.test",
                 authorized_emails=[],
-                policy_settings={},
                 created_at=now,
                 updated_at=now,
             )
@@ -326,7 +316,6 @@ class TestIntegration:
                     authorized_emails=["admin@workflow.com"],
                     authorized_domains=["workflow.com"],
                     auto_approve_format_ids=["display_300x250", "video_16x9"],
-                    policy_settings={"enabled": True, "require_approval": False, "max_daily_budget": 10000.0},
                     created_at=now,
                     updated_at=now,
                 )
@@ -379,7 +368,6 @@ class TestIntegration:
             t = session.scalars(select(Tenant).filter_by(tenant_id="workflow_test")).first()
             assert t is not None
             assert t.auto_approve_format_ids == ["display_300x250", "video_16x9"]
-            assert t.policy_settings["max_daily_budget"] == 10000.0
 
             # Check product
             p = session.scalars(select(Product).filter_by(product_id="prod_1")).first()

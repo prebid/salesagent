@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import Mapping
 from functools import wraps
 from typing import TYPE_CHECKING, Literal, NamedTuple, NoReturn, TypeVar
+from urllib.parse import unquote
 
 from flask import abort, g, has_request_context, jsonify, make_response, redirect, request, session, url_for
 from sqlalchemy import select
@@ -18,7 +18,7 @@ from werkzeug.exceptions import Forbidden
 from src.admin.csrf import SAFE_METHODS
 from src.core.config import get_settings, split_csv
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant, User, UserRole
+from src.core.database.models import Tenant, UserRole
 from src.core.database.repositories.tenant_management_config import TenantManagementConfigRepository
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.logging_config import log_safe
@@ -43,16 +43,6 @@ def is_admin_production() -> bool:
 
 
 #: The blueprint name of the test-credential login path (src/admin/blueprints/test_auth.py).
-
-
-def parse_json_config(config_str):
-    """Parse JSON config string."""
-    if not config_str:
-        return {}
-    try:
-        return json.loads(config_str)
-    except (json.JSONDecodeError, TypeError):
-        return {}
 
 
 def get_tenant_config_from_db(tenant_id):
@@ -81,7 +71,6 @@ def get_tenant_config_from_db(tenant_id):
             "features": {},
             "creative_engine": {},
             "slack_webhook_url": tenant.slack_webhook_url or "",
-            "policy_settings": {},
         }
 
         # Build adapter config from relationship
@@ -129,12 +118,6 @@ def get_tenant_config_from_db(tenant_id):
             "auto_approve_formats": tenant.auto_approve_format_ids or [],
             "human_review_required": tenant.human_review_required,
         }
-
-        # Add policy settings
-        if tenant.policy_settings:
-            policy_settings = parse_json_config(tenant.policy_settings)
-            if policy_settings:
-                config["policy_settings"] = policy_settings
 
         return config
 
@@ -285,35 +268,6 @@ def _cache_admin_status(email, is_admin):
         pass
 
 
-def is_tenant_admin(email, tenant_id=None):
-    """Check if user is a tenant admin.
-
-    Args:
-        email: User's email address
-        tenant_id: Optional tenant ID to check admin status for specific tenant
-
-    Returns:
-        bool: True if user is a tenant admin
-    """
-    if not email:
-        return False
-
-    # Super admins are implicitly tenant admins
-    if is_super_admin(email):
-        return True
-
-    # Check if user is a tenant admin in the database
-    with get_db_session() as db_session:
-        stmt = select(User).filter_by(email=email.lower(), is_active=True, is_admin=True)
-
-        if tenant_id:
-            # Check for specific tenant
-            stmt = stmt.filter_by(tenant_id=tenant_id)
-
-        user = db_session.scalars(stmt).first()
-        return user is not None
-
-
 def require_auth(admin_only=False):
     """Decorator to require authentication for routes."""
 
@@ -411,6 +365,25 @@ def caller_reads_json() -> bool:
         return False
     accept = request.accept_mimetypes
     return not accept["text/html"] > accept["application/json"]
+
+
+def local_path(url: str | None) -> str | None:
+    """*url* when it is a path on this site, else ``None``.
+
+    A path on this site starts with exactly one ``/`` and holds no backslash: browsers read
+    ``//host`` and ``/\\host`` as another site. Nothing is parsed: a value that starts with one
+    ``/`` names no scheme or host. Browsers drop a tab or newline from a URL, so ``/\t/host``
+    is ``//host`` to them, and a value holding either is refused. The URL-decoded form is held
+    to the same test, so an encoded ``%2F%2Fhost`` is refused too. The result is *url* as
+    given, not decoded, so it names the same page.
+    """
+    if not url:
+        return None
+    for form in (url, unquote(url)):
+        if not form.startswith("/") or form.startswith("//") or any(c in form for c in "\\\t\r\n"):
+            return None
+    # A constant "/" followed by the rest: the result is always a path on this host.
+    return "/" + url[1:]
 
 
 def json_failure(message: str, status: int, fields: Mapping[str, object] | None = None) -> Response:
