@@ -1,0 +1,4 @@
+{"run": {"target": ["tests/bdd"], "selection": "green", "markers": "", "workers_missing": []}, "scenarios": [
+ {"scenario_id": "T-UC-900-green", "steps_bound": true, "harness_wired": true, "observations": [
+  {"transport": "mcp", "nodeid": "tests/bdd/test_demo.py::test_green[mcp]", "outcome": "failed", "reason": null, "reason_category": "live", "steps_executed": true}]}
+]}

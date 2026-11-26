@@ -46,6 +46,11 @@ import re
 #: validates (it was in one hand-written copy of this vocabulary, and nowhere in the tree).
 NODEID_TRANSPORTS: tuple[str, ...] = ("e2e_rest", "admin_integration", "a2a", "mcp", "rest")
 
+#: The members of ``NODEID_TRANSPORTS`` that dispatch over a real socket to a running server.
+#: Only the in-network session (``[testenv:bdd_e2e]``, ``-k e2e_*``) measures them, so a reader
+#: folding that FILTERED session admits it for these transports and nothing else.
+IN_NETWORK_TRANSPORTS: frozenset[str] = frozenset(t for t in NODEID_TRANSPORTS if t.startswith("e2e_"))
+
 #: ``e2e_rest`` is listed before ``rest`` for readability only -- it is NOT what
 #: disambiguates them, and a comment claiming otherwise was wrong. A regex matches at the
 #: earliest POSITION before it consults alternation order, and the ``rest`` inside

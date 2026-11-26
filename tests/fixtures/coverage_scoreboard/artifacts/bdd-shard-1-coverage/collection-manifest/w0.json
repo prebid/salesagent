@@ -1,0 +1,8 @@
+{"target": ["tests/bdd/test_demo.py"], "filter": "", "e2e_enabled": false, "worker": "gw0", "rows": [
+ {"nodeid": "tests/bdd/test_demo.py::test_unrun[mcp]", "markers": ["T-UC-900-unrun"], "derived": [], "selected": true},
+ {"nodeid": "tests/bdd/test_demo.py::test_green[mcp]", "markers": ["T-UC-900-green"], "derived": [], "selected": true},
+ {"nodeid": "tests/bdd/test_demo.py::test_split[mcp]", "markers": ["T-UC-900-split"], "derived": [], "selected": true},
+ {"nodeid": "tests/bdd/test_demo.py::test_parked[mcp-a]", "markers": ["T-UC-900-parked"], "derived": [], "selected": true},
+ {"nodeid": "tests/bdd/test_demo.py::test_parked[mcp-b]", "markers": ["T-UC-900-parked"], "derived": [], "selected": true},
+ {"nodeid": "tests/bdd/test_demo.py::test_unbound[mcp]", "markers": ["T-UC-900-unbound"], "derived": [], "selected": false}
+]}

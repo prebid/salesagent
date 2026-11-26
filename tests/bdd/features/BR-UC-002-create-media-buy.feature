@@ -511,7 +511,7 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent reads the created media buy back with get_media_buys
     Then the read media buy's name on the wire is "Spring flight - Q2 / North"
 
-  @T-UC-002-media-buy-name @extension
+  @T-UC-002-media-buy-name-absent @extension
   Scenario: A media buy created with no name reads back with none
     Given a valid create_media_buy request
     And the account exists and is active

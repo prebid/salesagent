@@ -548,7 +548,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     And the error recovery should be "transient"
     And no media buy is persisted for the tenant
 
-  @T-UC-FORMAT-SATISFACTION-agent-outage @format_satisfaction @requires_db
+  @T-UC-FORMAT-SATISFACTION-agent-outage-unnamed @format_satisfaction @requires_db
   Scenario: a creative agent that does not answer is skipped when no selector names it
     Given the seller declares a canonical format option "fixed_300x250"
     And a creative agent the seller configured does not answer

@@ -28,7 +28,7 @@ from typing import Any
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 
-from scripts.audit import storyboard_spec  # noqa: E402
+from scripts.audit import run_identity, storyboard_spec  # noqa: E402
 
 #: Where ``run_all_tests.sh storyboard`` leaves the runner's per-protocol summary.
 RESULTS_GLOB = "test-results/*/storyboard/summary_*.json"
@@ -55,13 +55,14 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     declares. It stays in the signature because ``run_cli`` supplies the one
     argument shape every audit script here takes.
 
-    Scores come from ONE run directory — the newest that contains any summary.
-    Pooling protocols across runs would put an mcp figure from one execution
-    beside an a2a figure from another and print them as a pair.
+    Scores come from ONE run directory — the newest that contains any summary, as
+    ``run_identity.newest_run`` orders runs. Pooling protocols across runs would put
+    an mcp figure from one execution beside an a2a figure from another and print
+    them as a pair.
     """
     del adcp
     summaries = sorted(repo.glob(RESULTS_GLOB))
-    newest = max((p.parent.parent for p in summaries), default=None, key=lambda d: d.name)
+    newest = run_identity.newest_run(repo / "test-results", "storyboard/summary_*.json")
     chosen = [p for p in summaries if newest is not None and p.parent.parent == newest]
     return {
         "run": newest.name if newest else None,

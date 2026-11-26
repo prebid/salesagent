@@ -70,11 +70,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from functools import cache
 from pathlib import Path
 from typing import Any
 
+from scripts.ci import shard_split
+from tests.helpers.bdd_transport import IN_NETWORK_TRANSPORTS
 from tests.helpers.marker_names import derive_marker_names
 
 _OUT_DIR = os.environ.get("PYTEST_COLLECTION_MANIFEST")
@@ -123,6 +125,136 @@ def write_artifact(path: Path, body: str) -> None:
 def read_artifacts(directory: str | Path) -> list[tuple[Path, dict[str, Any]]]:
     """Every per-session file in ``directory``, in a stable order."""
     return [(path, json.loads(path.read_text(encoding="utf-8"))) for path in sorted(Path(directory).glob("*.json"))]
+
+
+class IncompleteLivenessRun(RuntimeError):
+    """The session files on disk do not add up to a measurement of the suite.
+
+    Raised rather than returning what was found. A consumer handed a partial
+    artifact asks its question of a partial population and passes, which is the
+    failure this whole artifact exists to prevent -- and is what the single
+    fixed write path produced for as long as the suite was sharded.
+    """
+
+
+def whole_suite_sessions(
+    sessions: Iterable[tuple[Path, dict[str, Any]]], where: str | Path, repo_root: Path | None = None
+) -> list[tuple[Path, dict[str, Any]]]:
+    """The unfiltered liveness sessions, refused unless together they measured every BDD module.
+
+    A FILTERED session (``-k``/``-m``) is skipped rather than refused: on the fast path
+    ``[testenv:bdd_e2e]`` always writes one (``-k e2e_rest``) beside the shards, so
+    refusing on its presence would red every such run. It is still excluded from the
+    coverage judgement -- bdd_e2e's TARGET is the whole tree, so a path-only check
+    would accept it alone. A session whose xdist workers shipped nothing is refused.
+    """
+    kept: list[tuple[Path, dict[str, Any]]] = []
+    covered: set[str] = set()
+    for path, payload in sessions:
+        scope = payload.get("run", {})
+        # Checked before the filter skip: ``merged_records`` admits a filtered session's
+        # in-network rows, so a filtered session that lost a worker is partial too.
+        missing = scope.get("workers_missing") or []
+        if missing:
+            raise IncompleteLivenessRun(
+                f"{path.name} was written by a session whose workers {missing} shut down "
+                "without shipping their records, so the scenarios they ran are absent from "
+                "it. The file is a partial measurement wearing a whole run's target list."
+            )
+        if scope.get("selection") or scope.get("markers"):
+            continue
+        covered.update(scope.get("target", []))
+        kept.append((path, payload))
+    if not shard_split.targets_cover_suite("bdd", covered, repo_root=repo_root):
+        raise IncompleteLivenessRun(
+            f"the liveness sessions in {where} cover {sorted(covered) or 'nothing'}, "
+            "which does not account for every BDD module. A partial measurement cannot "
+            "be graded as the suite."
+        )
+    return kept
+
+
+def merge_record(into: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
+    """Merge one scenario's liveness record into another. The rule is stated, not implied.
+
+    ``ScenarioLiveness.record_observation``'s precedence is NOT associative across shards,
+    so each field's combine is named explicitly:
+
+    * ``observations``  — concatenated; every transport a shard saw is real.
+    * ``steps_bound``   — AND. One shard finding an unbound step is decisive.
+    * ``unbound_steps`` — union, order-stable.
+    * ``ledgered``      — OR. Ledgered anywhere is ledgered.
+    * ``harness_wired`` — tri-state with False DOMINANT: an observed
+      not-wired beats a live/ledgered observation elsewhere, and ``None``
+      (unknown) survives only if no shard ever resolved it.
+    * ``tags`` / ``marker_names`` — union; they are properties of the scenario,
+      identical on every shard that saw it.
+
+    Records cross the process boundary as DICTS: execnet ships basic types only, so
+    dataclasses cannot travel and must not be reconstructed here. It lives here, beside
+    ``whole_suite_sessions``, so a reader outside pytest (the coverage scoreboard) folds
+    sessions with the same rule the liveness plugin's controller uses for workers.
+    """
+    merged = dict(into)
+    merged["observations"] = list(into.get("observations", [])) + list(other.get("observations", []))
+    merged["steps_bound"] = bool(into.get("steps_bound", True)) and bool(other.get("steps_bound", True))
+    seen_steps = list(into.get("unbound_steps", []))
+    for step in other.get("unbound_steps", []):
+        if step not in seen_steps:
+            seen_steps.append(step)
+    merged["unbound_steps"] = seen_steps
+    merged["ledgered"] = bool(into.get("ledgered", False)) or bool(other.get("ledgered", False))
+    wired_values = [into.get("harness_wired"), other.get("harness_wired")]
+    if False in wired_values:
+        merged["harness_wired"] = False
+    elif True in wired_values:
+        merged["harness_wired"] = True
+    else:
+        merged["harness_wired"] = None
+    for key in ("tags", "marker_names"):
+        merged[key] = sorted(set(into.get(key, [])) | set(other.get(key, [])))
+    return merged
+
+
+def _in_network_only(record: dict[str, Any]) -> dict[str, Any] | None:
+    """A filtered session's record, kept for its in-network observations only; None if it has none.
+
+    A record that also carried other transports had its ``ledgered``/``harness_wired``
+    derived from observations dropped here, so those fall back to the merge's neutral values.
+    """
+    kept = [o for o in record.get("observations", []) if o.get("transport") in IN_NETWORK_TRANSPORTS]
+    if not kept:
+        return None
+    if len(kept) == len(record.get("observations", [])):
+        return record
+    return {**record, "observations": kept, "ledgered": False, "harness_wired": None}
+
+
+def merged_records(
+    sessions: Iterable[tuple[Path, dict[str, Any]]], where: str | Path, repo_root: Path | None = None
+) -> dict[str, dict[str, Any]]:
+    """One record per scenario id, folded from exactly the sessions this admits.
+
+    Admitted: every session ``whole_suite_sessions`` keeps (it refuses a set that lost a
+    worker or misses a BDD module), and from each FILTERED session only its in-network
+    observations (``IN_NETWORK_TRANSPORTS``). In CI the only filtered session is
+    ``[testenv:bdd_e2e]`` (``-k e2e_*``), the one producer of those transports; any other
+    ``-k``/``-m`` session contributes nothing, so a stray narrowed run cannot change an
+    outcome after the set was validated.
+    """
+    sessions = list(sessions)
+    kept = whole_suite_sessions(sessions, where, repo_root=repo_root)
+    kept_ids = {id(payload) for _, payload in kept}
+    merged: dict[str, dict[str, Any]] = {}
+    for _, payload in sessions:
+        whole = id(payload) in kept_ids
+        for record in payload.get("scenarios", []):
+            admitted = record if whole else _in_network_only(record)
+            if admitted is None:
+                continue
+            existing = merged.get(admitted["scenario_id"])
+            merged[admitted["scenario_id"]] = admitted if existing is None else merge_record(existing, admitted)
+    return merged
 
 
 def required_dir(variable: str, refusal: type[Exception], consequence: str) -> Path:
@@ -243,7 +375,7 @@ class ManifestNotFound(RuntimeError):
 
 
 def load(
-    directory: str | Path,
+    directory: str | Path | Iterable[str | Path],
     *,
     target: list[str] | None = None,
     filter: str | None = None,  # noqa: A002 - matches the record's own field name
@@ -255,10 +387,12 @@ def load(
     ``target=None`` means any target, which is what a caller wants when the
     record it needs is a shard whose path list moves as files are added.
     ``filter=""`` demands an UNFILTERED record and is not satisfied by a
-    filtered one.
+    filtered one. ``directory`` may be several directories (one per downloaded shard
+    artifact), read as one population.
     """
+    directories = [directory] if isinstance(directory, str | Path) else list(directory)
     records = []
-    for _, record in read_artifacts(directory):
+    for _, record in (found for one in directories for found in read_artifacts(one)):
         if target is not None and record.get("target") != sorted(target):
             continue
         if filter is not None and record.get("filter", "") != filter:
@@ -269,7 +403,7 @@ def load(
 
     if not records:
         raise ManifestNotFound(
-            f"no collection record in {directory} matches "
+            f"no collection record in {', '.join(map(str, directories))} matches "
             f"target={target!r} filter={filter!r} e2e_enabled={e2e_enabled!r}. "
             "This artifact is written by a real pytest session with "
             "PYTEST_COLLECTION_MANIFEST set; a suite that never ran wrote none."
