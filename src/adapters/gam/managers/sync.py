@@ -110,11 +110,7 @@ class GAMSyncManager:
             inventory_service._save_inventory_to_db(self.tenant_id, discovery)
 
             # Update sync job with results
-            sync_job.status = "completed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.summary = json.dumps(summary)
-            db_session.commit()
+            self._complete_sync_job(db_session, sync_job, summary)
 
         logger.info(f"Inventory sync completed for tenant {self.tenant_id}: {summary}")
         return {
@@ -163,11 +159,7 @@ class GAMSyncManager:
             }
 
             # Update sync job with results
-            sync_job.status = "completed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.summary = json.dumps(summary)
-            db_session.commit()
+            self._complete_sync_job(db_session, sync_job, summary)
 
         logger.info(f"Orders sync completed for tenant {self.tenant_id}: {summary}")
         return {
@@ -219,11 +211,7 @@ class GAMSyncManager:
             combined_summary["duration_seconds"] = (end_time - start_time).total_seconds()
 
             # Update sync job with results
-            sync_job.status = "completed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.summary = json.dumps(combined_summary)
-            db_session.commit()
+            self._complete_sync_job(db_session, sync_job, combined_summary)
 
         logger.info(f"Full sync completed for tenant {self.tenant_id}: {combined_summary}")
         return {
@@ -277,11 +265,7 @@ class GAMSyncManager:
             inventory_service._save_inventory_to_db(self.tenant_id, discovery)
 
             # Update sync job with results
-            sync_job.status = "completed"
-            # TODO: SyncJob.completed_at should use Mapped[datetime] not Mapped[DateTime]
-            sync_job.completed_at = datetime.now(UTC)
-            sync_job.summary = json.dumps(summary)
-            db_session.commit()
+            self._complete_sync_job(db_session, sync_job, summary)
 
         logger.info(f"Selective sync completed for tenant {self.tenant_id}: {summary}")
         return {
@@ -466,24 +450,28 @@ class GAMSyncManager:
         Returns:
             Created sync job instance
         """
-        sync_id = f"sync_{self.tenant_id}_{sync_type}_{int(datetime.now(UTC).timestamp())}"
+        # Imported here for the reason src.services.sync_jobs gives.
+        from src.core.database.repositories.sync_job import SyncJobRepository
 
-        sync_job = SyncJob(
-            sync_id=sync_id,
-            tenant_id=self.tenant_id,
-            adapter_type="google_ad_manager",
+        sync_id = f"sync_{self.tenant_id}_{sync_type}_{int(datetime.now(UTC).timestamp())}"
+        sync_job = SyncJobRepository(db_session, self.tenant_id).start(
+            sync_id,
             sync_type=sync_type,
             status="pending",
-            started_at=datetime.now(UTC),
             triggered_by=triggered_by,
             triggered_by_id=f"{triggered_by}_sync",
         )
-
-        db_session.add(sync_job)
         db_session.commit()
 
         logger.info(f"Created sync job {sync_id} for tenant {self.tenant_id}")
         return sync_job
+
+    def _complete_sync_job(self, db_session: Session, sync_job: SyncJob, summary: dict[str, Any]) -> None:
+        """Record *sync_job* completed with *summary*, and commit."""
+        from src.core.database.repositories.sync_job import SyncJobRepository
+
+        SyncJobRepository(db_session, self.tenant_id).complete(sync_job.sync_id, summary)
+        db_session.commit()
 
     def get_sync_stats(self, db_session: Session, hours: int = 24) -> dict[str, Any]:
         """Get sync statistics for the tenant.

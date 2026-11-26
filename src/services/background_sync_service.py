@@ -111,15 +111,13 @@ def start_inventory_sync_background(
                 raise SyncAlreadyRunning(tenant_id, existing_sync.sync_id, started_at_value)
 
         # Create new sync job
-        sync_id = f"sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"
+        from src.core.database.repositories.sync_job import SyncJobRepository
 
-        sync_job = SyncJob(
-            sync_id=sync_id,
-            tenant_id=tenant_id,
-            adapter_type=adapter_type,
+        sync_id = f"sync_{tenant_id}_{int(datetime.now(UTC).timestamp())}"
+        SyncJobRepository(db, tenant_id).start(
+            sync_id,
             sync_type="inventory",
-            status="running",
-            started_at=datetime.now(UTC),
+            adapter_type=adapter_type,
             triggered_by="admin_ui",
             triggered_by_id="system",
             progress={
@@ -129,7 +127,6 @@ def start_inventory_sync_background(
                 "audience_segment_limit": audience_segment_limit,
             },
         )
-        db.add(sync_job)
         db.commit()
 
     # Start background thread
@@ -428,7 +425,7 @@ def _run_sync_thread(
         }
 
         # Mark complete
-        _mark_sync_complete(sync_id, result)
+        _mark_sync_complete(tenant_id, sync_id, result)
         logger.info(f"[{sync_id}] Sync completed successfully")
 
         # Invalidate inventory tree cache after successful sync
@@ -465,21 +462,14 @@ def _update_sync_progress(sync_id: str, progress_data: dict[str, Any]):
         logger.warning(f"Failed to update sync progress: {e}")
 
 
-def _mark_sync_complete(sync_id: str, summary: dict[str, Any]):
+def _mark_sync_complete(tenant_id: str, sync_id: str, summary: dict[str, Any]):
     """Mark sync as completed with summary."""
+    from src.core.database.repositories.sync_job import SyncJobRepository
+
     try:
         with get_db_session() as db:
-            import json
-
-            stmt = select(SyncJob).where(SyncJob.sync_id == sync_id)
-            sync_job = db.scalars(stmt).first()
-            if sync_job:
-                sync_job.status = "completed"
-                # SQLAlchemy DateTime column accepts datetime objects
-                sync_job.completed_at = datetime.now(UTC)
-                # Convert summary dict to JSON string (summary field is Text, not JSON)
-                sync_job.summary = json.dumps(summary) if summary else None
-                db.commit()
+            SyncJobRepository(db, tenant_id).complete(sync_id, summary)
+            db.commit()
     except Exception as e:
         logger.error(f"Failed to mark sync complete: {e}")
 

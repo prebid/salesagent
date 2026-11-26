@@ -119,15 +119,12 @@ def start_order_approval_background(
                 raise ValueError(f"Approval already running for order {order_id}: {approval.sync_id}")
 
         # Create new approval job
-        approval_id = f"approval_{order_id}_{int(datetime.now(UTC).timestamp())}"
+        from src.core.database.repositories.sync_job import SyncJobRepository
 
-        approval_job = SyncJob(
-            sync_id=approval_id,
-            tenant_id=tenant_id,
-            adapter_type="google_ad_manager",
+        approval_id = f"approval_{order_id}_{int(datetime.now(UTC).timestamp())}"
+        SyncJobRepository(db, tenant_id).start(
+            approval_id,
             sync_type="order_approval",
-            status="running",
-            started_at=datetime.now(UTC),
             triggered_by="order_creation",
             triggered_by_id=media_buy_id,
             progress={
@@ -140,7 +137,6 @@ def start_order_approval_background(
                 "phase": "Starting approval polling",
             },
         )
-        db.add(approval_job)
         db.commit()
 
     # Reserve the stop signal BEFORE starting the thread, so a cancel racing the
@@ -331,17 +327,12 @@ def _mark_approval_complete(
     media_buy_id: str,
 ):
     """Mark approval as completed and send webhook notification."""
+    from src.core.database.repositories.sync_job import SyncJobRepository
+
     try:
         with get_db_session() as db:
-            import json
-
-            stmt = select(SyncJob).where(SyncJob.sync_id == approval_id)
-            approval_job = db.scalars(stmt).first()
-            if approval_job:
-                approval_job.status = "completed"
-                approval_job.completed_at = datetime.now(UTC)
-                approval_job.summary = json.dumps(summary) if summary else None
-                db.commit()
+            SyncJobRepository(db, tenant_id).complete(approval_id, summary)
+            db.commit()
 
         # Send webhook notification
         if webhook_url:
